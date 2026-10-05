@@ -78,6 +78,16 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertFalse(NoritoBridgeLoader.hasRequiredExports(resolving: { !required.contains($0) }))
     }
 
+    func testAdmissionRequiresNoRetiredKagemushaBridgeExport() {
+        // The bridge exports no KAGEMUSHA symbol, so a fresh bridge that lacks
+        // every connect_norito_kagemusha_* export must still pass admission.
+        XCTAssertTrue(NoritoBridgeLoader.hasRequiredExports(resolving: { symbol in
+            !symbol.hasPrefix("connect_norito_kagemusha_")
+        }))
+        // The bridge no longer defines status -311, so it maps to an unknown status.
+        XCTAssertEqual(NativeBridgeError.fromStatus(-311), .unknown(-311))
+    }
+
     func testExpectedBridgeAbiVersionIsTwentyFiveForPackagedArtifacts() {
         XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 25)
         XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 25)

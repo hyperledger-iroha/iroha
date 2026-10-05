@@ -409,10 +409,6 @@ object ParliamentApiV1 {
         "ContractLifecycleGovernance",
         "ContractEmergencyHold",
         "GlobalDataTriggerPermissionGovernance",
-        "KagemushaVerifierPolicyInstall",
-        "KagemushaVerifierReleaseInstall",
-        "KagemushaVerifierReleaseActivate",
-        "KagemushaVerifierReleaseRetire",
     )
 
     /** Exact first-release actions admitted by contract-lifecycle governance proposals. */

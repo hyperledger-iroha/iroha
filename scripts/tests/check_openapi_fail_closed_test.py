@@ -181,236 +181,24 @@ def test_native_status_schema_accepts_the_rust_corpus_and_rejects_noncanonical_f
         assert not validator.is_valid(changed), changed
 
 
-def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
-    """The released proposal union must expose all three certified registry transitions."""
+def test_parliament_proposal_union_is_closed_and_matches_the_shared_fixture() -> None:
+    """The released proposal union exposes exactly the shared first-release kinds."""
 
     spec = json.loads(OPENAPI_AUTHORITIES[0].read_bytes())
     schemas = spec["components"]["schemas"]
-    kinds = [
-        branch["properties"]["kind"]["const"]
-        for branch in schemas["GovernanceParliamentProposalKindV1"]["oneOf"]
-    ]
+    branches = schemas["GovernanceParliamentProposalKindV1"]["oneOf"]
+    kinds = [branch["properties"]["kind"]["const"] for branch in branches]
     fixture = json.loads(
         (REPO_ROOT / "fixtures/governance/parliament_api_v1.json").read_bytes()
     )
     assert kinds == fixture["proposal_kinds"]
-    assert len(kinds) == len(set(kinds)) == 14
-
-    validator = Draft202012Validator(
-        {"$ref": "#/components/schemas/GovernanceParliamentProposalKindV1",
-         "components": spec["components"]}
-    )
-    proposal = {
-        "kind": "KagemushaVerifierPolicyInstall",
-        "payload": {
-            "proposal_operator": "canonical-account-id",
-            "network_id": f"hash:{'A' * 64}#ABCD",
-            "expected_predecessor": {
-                "version": 1,
-                "authority_policy": None,
-                "active_release_id": None,
-                "releases": [],
-            },
-            "authority_policy": {
-                "version": 1,
-                "authority_set_id": [1] + [0] * 31,
-                "threshold": 1,
-                "authorized_signers": [f"ed0120{'A' * 64}"],
-            },
-        },
-    }
-    assert validator.is_valid(proposal)
-    for field in proposal["payload"]:
-        mutated = copy.deepcopy(proposal)
-        del mutated["payload"][field]
-        assert not validator.is_valid(mutated), field
-    for mutation in (
-        {"expected_predecessor": {"version": 1, "authority_policy": None,
-                                  "active_release_id": None, "releases": [{}]}},
-        {"expected_predecessor": {"version": 1, "authority_policy": {},
-                                  "active_release_id": None, "releases": []}},
-        {"authority_policy": {"version": 1, "authority_set_id": [0] * 32,
-                              "threshold": 1, "authorized_signers": ["ed0120"]}},
-        {"authority_policy": {"version": 1, "authority_set_id": [1] + [0] * 31,
-                              "threshold": 33, "authorized_signers": ["ed0120"]}},
-        {"authority_policy": {"version": 1, "authority_set_id": [1] + [0] * 31,
-                              "threshold": 1, "authorized_signers": ["ed0120", "ed0120"]}},
-        {"unknown": None},
-    ):
-        mutated = copy.deepcopy(proposal)
-        mutated["payload"].update(mutation)
-        assert not validator.is_valid(mutated), mutation
-
-    release_schema_name = "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1"
-    release_payload = schemas[release_schema_name]
-    assert release_payload["additionalProperties"] is False
-    assert set(release_payload["required"]) == {
-        "proposal_operator", "network_id", "expected_predecessor",
-        "manifest", "receipt", "attestation",
-    }
-    assert set(release_payload["properties"]) == set(release_payload["required"])
-
-    # Every nested release-evidence record has exact named fields. A raw JSON
-    # value here would conceal missing certificate or qualification bindings.
-    visited = set()
-
-    def assert_typed(schema: dict) -> None:
-        if "$ref" in schema:
-            name = schema["$ref"].removeprefix("#/components/schemas/")
-            assert name in schemas and name != "JsonValue"
-            if name not in visited:
-                visited.add(name)
-                assert_typed(schemas[name])
-            return
-        assert schema
-        if "oneOf" in schema:
-            for branch in schema["oneOf"]:
-                assert_typed(branch)
-            return
-        if schema.get("type") == "object":
-            assert schema["additionalProperties"] is False
-            assert set(schema["required"]) == set(schema["properties"])
-            for child in schema["properties"].values():
-                assert_typed(child)
-        elif schema.get("type") == "array":
-            assert "items" in schema
-            assert_typed(schema["items"])
-        else:
-            assert schema.get("type") in {"string", "integer", "null"}
-
-    assert_typed({"$ref": f"#/components/schemas/{release_schema_name}"})
-    assert "GovernanceKagemushaReleaseManifestV1" in visited
-    assert "GovernanceKagemushaInternalValidationReceiptV1" in visited
-    assert "GovernanceKagemushaReleaseAttestationV1" in visited
-    assert "GovernanceKagemushaProfileQualificationV1" in visited
-    assert "GovernanceKagemushaGovernedVerifierRegistryV1" in visited
-    activation_schema_name = "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1"
-    activation_payload = schemas[activation_schema_name]
-    assert set(activation_payload["required"]) == {
-        "proposal_operator", "network_id", "expected_predecessor", "successor_release_id",
-    }
-    assert set(activation_payload["properties"]) == set(activation_payload["required"])
-    assert_typed({"$ref": f"#/components/schemas/{activation_schema_name}"})
-    retirement_schema_name = "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1"
-    retirement_payload = schemas[retirement_schema_name]
-    assert set(retirement_payload["required"]) == {
-        "proposal_operator", "network_id", "expected_predecessor", "standby_release_id",
-    }
-    assert set(retirement_payload["properties"]) == set(retirement_payload["required"])
-    assert_typed({"$ref": f"#/components/schemas/{retirement_schema_name}"})
-
-
-    # The matching data-model test pins this JSON to the canonical Norito
-    # instruction fixture, so this checks the real complete serialized value.
-    release = json.loads(
-        (REPO_ROOT / "fixtures/governance/kagemusha_verifier_release_install_v1.json").read_bytes()
-    )
-    assert release["kind"] == "KagemushaVerifierReleaseInstall"
-    assert validator.is_valid(release)
-    manifest_schema = schemas["GovernanceKagemushaReleaseManifestV1"]
-    assert set(manifest_schema["properties"]) == set(release["payload"]["manifest"])
-    profile_schema = schemas["GovernanceKagemushaHardwareProfileV1"]
-    profile = release["payload"]["manifest"]["enabled_profiles"][0]["hardware_profile"]
-    assert set(profile_schema["properties"]) == set(profile)
-    assert profile_schema["properties"]["capability_mask"]["maximum"] == (1 << 32) - 1
-    for missing in ("network_id", "purpose"):
-        mutated = copy.deepcopy(release)
-        del mutated["payload"]["manifest"][missing]
-        assert not validator.is_valid(mutated), missing
-    mutated = copy.deepcopy(release)
-    del mutated["payload"]["manifest"]["enabled_profiles"][0]["hardware_profile"]["app_attestation_authority_policy_digest"]
-    assert not validator.is_valid(mutated)
-    purpose_validator = Draft202012Validator({
-        "$ref": "#/components/schemas/GovernanceKagemushaReleasePurposeV1",
-        "components": spec["components"],
-    })
-    experiment = {"kind": "testnet_experiment", "value": {
-        "asset_identity_digest": [1] * 32, "asset_incarnation": [2] * 32,
-        "asset_scale": 9, "liability_pool_id": [3] * 32,
-    }}
-    assert purpose_validator.is_valid(experiment)
-    for missing in experiment["value"]:
-        mutated = copy.deepcopy(experiment)
-        del mutated["value"][missing]
-        assert not purpose_validator.is_valid(mutated), missing
-    for invalid in ("production", {"kind": "production"},
-                    {"kind": "production", "value": {}},
-                    {"kind": "production", "value": None, "unknown": None},
-                    {"kind": "testnet_experiment", "value": None},
-                    {"kind": "testnet_experiment", "value": {**experiment["value"], "asset_scale": 29}},
-                    {"kind": "testnet_experiment", "value": {**experiment["value"], "unknown": None}}):
-        assert not purpose_validator.is_valid(invalid), invalid
-    for path in (
-        ("payload", "receipt", "evidence_closure"),
-        ("payload", "manifest", "enabled_profiles"),
-        ("payload", "manifest", "network_id"),
-        ("payload", "manifest", "purpose"),
-        ("payload", "attestation", "approvals"),
-    ):
-        mutated = copy.deepcopy(release)
-        target = mutated
-        for member in path[:-1]:
-            target = target[member]
-        del target[path[-1]]
-        assert not validator.is_valid(mutated), path
-    experiment = copy.deepcopy(release)
-    experiment["payload"]["manifest"]["purpose"] = {
-        "kind": "testnet_experiment",
-        "value": {
-            "asset_identity_digest": [1] * 32,
-            "asset_incarnation": [2] * 32,
-            "asset_scale": 28,
-            "liability_pool_id": [3] * 32,
-        },
-    }
-    assert validator.is_valid(experiment)
-    for purpose in (
-        {"kind": "production", "value": {}},
-        {"kind": "testnet_experiment", "value": None},
-        {"kind": "production"},
-        {"kind": "unknown", "value": None},
-    ):
-        mutated = copy.deepcopy(release)
-        mutated["payload"]["manifest"]["purpose"] = purpose
-        assert not validator.is_valid(mutated), purpose
-    experiment["payload"]["manifest"]["purpose"]["value"]["asset_scale"] = 29
-    assert not validator.is_valid(experiment)
-    mutated = copy.deepcopy(release)
-    mutated["payload"]["receipt"]["unexpected"] = None
-    assert not validator.is_valid(mutated)
-    mutated = copy.deepcopy(release)
-    mutated["payload"]["attestation"]["approvals"][0]["signature"] = "abc"
-    assert not validator.is_valid(mutated)
-
-    activation = json.loads(
-        (REPO_ROOT / "fixtures/governance/kagemusha_verifier_release_activate_v1.json").read_bytes()
-    )
-    assert activation["kind"] == "KagemushaVerifierReleaseActivate"
-    assert validator.is_valid(activation)
-    for member in ("expected_predecessor", "successor_release_id"):
-        mutated = copy.deepcopy(activation)
-        del mutated["payload"][member]
-        assert not validator.is_valid(mutated), member
-    mutated = copy.deepcopy(activation)
-    mutated["payload"]["unexpected"] = None
-    assert not validator.is_valid(mutated)
-    mutated = copy.deepcopy(activation)
-    mutated["payload"]["successor_release_id"] = "abc"
-    assert not validator.is_valid(mutated)
-
-    retirement = json.loads(
-        (REPO_ROOT / "fixtures/governance/kagemusha_verifier_release_retire_v1.json").read_bytes()
-    )
-    assert retirement["kind"] == "KagemushaVerifierReleaseRetire"
-    assert validator.is_valid(retirement)
-    for member in retirement_payload["required"]:
-        mutated = copy.deepcopy(retirement)
-        del mutated["payload"][member]
-        assert not validator.is_valid(mutated), member
-    for member, value in [("standby_release_id", "abc"), ("unexpected", None), ("successor_release_id", retirement["payload"]["standby_release_id"])]:
-        mutated = copy.deepcopy(retirement)
-        mutated["payload"][member] = value
-        assert not validator.is_valid(mutated), member
+    assert len(kinds) == len(set(kinds)) == 10
+    for branch in branches:
+        assert branch["additionalProperties"] is False
+        assert set(branch["required"]) == set(branch["properties"]) == {"kind", "payload"}
+        payload_ref = branch["properties"]["payload"]["$ref"]
+        assert payload_ref.removeprefix("#/components/schemas/") in schemas
+    assert not any(name.startswith("GovernanceParliamentProposalPayloadKagemusha") for name in schemas)
 
 
 def test_openapi_authority_parser_rejects_duplicate_members() -> None:

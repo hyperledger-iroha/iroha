@@ -290,7 +290,6 @@ impl<'state> StateBlock<'state> {
             prev_commit_topology: prev_committed_topology,
             lane_incarnation_activation_heights,
             kagemusha_v1_runtime_verifier,
-            kagemusha_registry_transition_authorization,
             zk: _,
             nexus,
             pending_da_commitments,
@@ -495,12 +494,12 @@ impl<'state> StateBlock<'state> {
                 TransactionsBlockError::ExecutionDeferred(reason)
             }
         })?;
-        // Canonical governance may advance before this process loads successor verifier
-        // artifacts. Validate the original registry and local cache independently here;
-        // the exact transition token below still owns every consensus registry mutation.
-        // The actual top-up/redemption entry points must match this original governed
-        // registry before proof verification and defer stale/missing artifacts locally.
-        // No local key reload, clone, or role rebinding occurs during publication.
+        // Validate the original registry and local cache independently here. No
+        // instruction or Parliament effect owns a registry mutation, so publication
+        // refuses any change below. The actual top-up/redemption entry points must
+        // match this original registry before proof verification and defer
+        // stale/missing artifacts locally. No local key reload, clone, or role
+        // rebinding occurs during publication.
         let verifier: &dyn std::any::Any = kagemusha_v1_runtime_verifier.as_ref();
         let runtime_check = world
             .kagemusha_verifier_registry
@@ -518,37 +517,12 @@ impl<'state> StateBlock<'state> {
             return Err(TransactionsBlockError::KagemushaVerifierAuthority);
         }
         let predecessor = state_ref.world.kagemusha_verifier_registry.view();
-        let successor = world.kagemusha_verifier_registry.get();
-        match (
-            successor != predecessor.get(),
-            kagemusha_registry_transition_authorization.as_ref(),
-        ) {
-            (false, None) => {}
-            (true, Some(authorization)) => {
-                let proposal = world.governance_proposals.get(&authorization.proposal_id());
-                let attempt = world.parliament_attempts.get(&authorization.attempt_id());
-                if let Err(reason) = authorization.validate_for_state_commit(
-                    state_ref.network_id,
-                    block_height,
-                    predecessor.get(),
-                    successor,
-                    proposal,
-                    attempt,
-                ) {
-                    error!(
-                        block_height,
-                        reason, "KAGEMUSHA registry transition has no exact certified State owner"
-                    );
-                    return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);
-                }
-            }
-            (true, None) | (false, Some(_)) => {
-                error!(
-                    block_height,
-                    "KAGEMUSHA registry transition and its Parliament authorization disagree"
-                );
-                return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);
-            }
+        if world.kagemusha_verifier_registry.get() != predecessor.get() {
+            error!(
+                block_height,
+                "KAGEMUSHA registry changed without any State transition owner"
+            );
+            return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);
         }
         drop(predecessor);
         if tiered_snapshot.is_none() {

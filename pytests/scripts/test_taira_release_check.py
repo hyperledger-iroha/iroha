@@ -1336,7 +1336,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_both_scopes_require_retired_epoch_command_rejection(self):
         required = (
-            'kagemusha::tests::parser_rejects_epoch_key_derivation_commands',
+            'tests::parser_rejects_retired_kagemusha_commands',
         )
         self.assertEqual(gate.HARNESS_TARGETS["kagami"][3],
                          ["-p", "iroha_kagami", "--bin", "kagami"])

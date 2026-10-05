@@ -7653,10 +7653,6 @@ fn validate_domain_endorsement_index(world: &World) -> Result<(), json::Error> {
 #[path = "deserialize_world_domain_endorsement_tests.rs"]
 mod domain_endorsement_persistence_tests;
 
-#[cfg(test)]
-#[path = "deserialize_world_kagemusha_registry_tests.rs"]
-mod kagemusha_registry_persistence_tests;
-
 /// A decoded snapshot is quarantined canonical data until same-pool admission and the
 /// separately authenticated current/revert chain cuts validate its authority graph.
 #[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]

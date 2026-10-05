@@ -1792,7 +1792,6 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "hex",
- "iroha",
  "iroha_accel",
  "iroha_core",
  "iroha_core_privacy",
@@ -1801,7 +1800,6 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
- "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_torii_shared",
@@ -1810,9 +1808,7 @@ dependencies = [
  "jni 0.21.1",
  "libc",
  "norito",
- "p256",
  "rand 0.9.4",
- "sha2",
  "sorafs_car",
  "sorafs_chunker",
  "sorafs_manifest",
@@ -4702,7 +4698,6 @@ dependencies = [
  "hex",
  "http",
  "iroha_config_base",
- "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
@@ -4903,6 +4898,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.18",
  "toml 0.9.12+spec-1.1.0",
+ "zeroize",
 ]
 
 [[package]]

@@ -247,7 +247,3 @@ impl<'state> CapturedGovernedRegistry<'state> {
         ))
     }
 }
-
-#[cfg(test)]
-#[path = "governed_registry_source_tests.rs"]
-mod tests;

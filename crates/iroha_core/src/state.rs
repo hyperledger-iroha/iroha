@@ -10396,11 +10396,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
@@ -10421,11 +10417,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the SCCP v1 governance proposal when the proposal represents SCCP governance.
@@ -10446,11 +10438,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
@@ -10471,11 +10459,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the validation-fee policy payload when present.
@@ -10496,11 +10480,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the validation-fee payout lifecycle payload when present.
@@ -10521,11 +10501,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the exact Musubi Parliament action retained by this proposal.
@@ -10546,11 +10522,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
 }
@@ -12612,9 +12584,6 @@ pub struct StateBlockFields<'state> {
     /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this block.
     pub kagemusha_v1_runtime_verifier:
         Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
-    /// Single-use Parliament registry-transition authorization retained until publication.
-    kagemusha_registry_transition_authorization:
-        Option<crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1>,
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
@@ -13941,13 +13910,6 @@ pub struct StateTransaction<'block, 'state> {
     /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this transaction.
     pub kagemusha_v1_runtime_verifier:
         Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
-    /// Parent block's single-use Parliament registry-transition authorization.
-    block_kagemusha_registry_transition_authorization: &'block mut Option<
-        crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1,
-    >,
-    /// Transaction-local authorization that disappears on failed execution.
-    pending_kagemusha_registry_transition_authorization:
-        Option<crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier snapshot exposed through the display sysvar.
@@ -14152,24 +14114,6 @@ pub struct StateTransaction<'block, 'state> {
     accounts_snapshot_cache: OnceCell<Arc<Vec<AccountId>>>,
 }
 impl<'block, 'state> StateTransaction<'block, 'state> {
-    /// Retain a certified registry transition only in this transaction until apply.
-    pub(crate) fn stage_kagemusha_registry_transition(
-        &mut self,
-        authorization: crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1,
-    ) -> Result<(), &'static str> {
-        if self
-            .pending_kagemusha_registry_transition_authorization
-            .is_some()
-            || self
-                .block_kagemusha_registry_transition_authorization
-                .is_some()
-        {
-            return Err("KAGEMUSHA registry already has a staged Parliament transition");
-        }
-        self.pending_kagemusha_registry_transition_authorization = Some(authorization);
-        Ok(())
-    }
-
     /// Return whether execution is currently inside a scheduled or data-trigger body.
     #[inline]
     pub(crate) const fn is_trigger_execution_active(&self) -> bool {
@@ -37489,9 +37433,6 @@ impl<'state> StateBlock<'state> {
             content: fields.content.clone(),
             settlement: fields.settlement.clone(),
             kagemusha_v1_runtime_verifier: Arc::clone(&fields.kagemusha_v1_runtime_verifier),
-            block_kagemusha_registry_transition_authorization: &mut fields
-                .kagemusha_registry_transition_authorization,
-            pending_kagemusha_registry_transition_authorization: None,
             settlement_engine: fields.settlement_engine.clone(),
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,
@@ -37743,7 +37684,6 @@ impl<'state> StateBlock<'state> {
             || this.pending_da_commitments.is_some()
             || this.pending_da_pin_intents.is_some()
             || this.pending_autoscale_lifecycle.is_some()
-            || this.kagemusha_registry_transition_authorization.is_some()
             || this.autoscale_sample_history_dirty
             || this.canonical_runtime.is_dirty()
             || !this.pending_nexus_fee_receipt_source_ids.is_empty()
@@ -41428,9 +41368,6 @@ impl StateTransaction<'_, '_> {
             || self.canonical_runtime.touched_value().is_some()
             || !self.fastpq_source_quota.allows_apply()
             || !self.pending_transfer_transcripts.is_empty()
-            || self
-                .pending_kagemusha_registry_transition_authorization
-                .is_some()
         {
             *self.block_execution_output_plan =
                 Some(output_capacity::ExecutionOutputPlanState::Poisoned);
@@ -41483,14 +41420,6 @@ impl StateTransaction<'_, '_> {
             Some("transaction execution-effect owner does not authorize application")
         } else if self.world.execution_deferral.borrow().is_some() {
             Some("transaction execution was locally deferred")
-        } else if self
-            .pending_kagemusha_registry_transition_authorization
-            .is_some()
-            && self
-                .block_kagemusha_registry_transition_authorization
-                .is_some()
-        {
-            Some("transaction already retains a Kagemusha registry transition authorization")
         } else {
             None
         };
@@ -41539,8 +41468,6 @@ impl StateTransaction<'_, '_> {
             pending_lane_lifecycle,
             zk,
             block_zk,
-            block_kagemusha_registry_transition_authorization,
-            pending_kagemusha_registry_transition_authorization,
             block_privacy_budget,
             privacy_budget_after_block,
             block_sccp_verifier_work,
@@ -41597,9 +41524,6 @@ impl StateTransaction<'_, '_> {
         }
         canonical_runtime.apply();
         *block_zk = zk;
-        if let Some(authorization) = pending_kagemusha_registry_transition_authorization {
-            *block_kagemusha_registry_transition_authorization = Some(authorization);
-        }
         *block_privacy_budget = privacy_budget_after_block;
         *block_sccp_verifier_work = sccp_verifier_work_after_block;
         if let Some(lane_id) = current_lane_id {

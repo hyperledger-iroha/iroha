@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 95_376;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 94_820;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "a963450ba4fdd2ab8704362e08661752b210f86adeecdefa73a56025260530f7";
+    "d3aaf90d8522b6c272f90637bfb251b287e7672dfc44feea59932a0179c84bf2";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"
@@ -1751,10 +1751,6 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "ContractLifecycleGovernance",
             "ContractEmergencyHold",
             "GlobalDataTriggerPermissionGovernance",
-            "KagemushaVerifierPolicyInstall",
-            "KagemushaVerifierReleaseInstall",
-            "KagemushaVerifierReleaseActivate",
-            "KagemushaVerifierReleaseRetire",
         ]
     );
     let proposal_payload_refs = proposal_variants
@@ -1783,10 +1779,6 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "#/components/schemas/GovernanceParliamentProposalPayloadContractLifecycleV1",
             "#/components/schemas/GovernanceParliamentProposalPayloadContractEmergencyHoldV1",
             "#/components/schemas/GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionV1",
-            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierPolicyInstallV1",
-            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1",
-            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1",
-            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1",
         ]
     );
     for payload_ref in proposal_payload_refs {

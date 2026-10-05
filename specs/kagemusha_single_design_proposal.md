@@ -1220,8 +1220,10 @@ production State proving still has rejection paths. A Receive consumer now
 exists and must be reused where applicable. There is no demonstrated complete
 phone implementation of this consolidated design, or measured end-to-end
 2-second proof exchange. The single-parity wrap Ω is unbuilt and unmeasured.
-σ has been measured only with a smaller core than §3 now specifies, so σ, Ω,
-Payment and CreditStatus sizes and the 2 s target remain to be measured. The
+σ_send and σ_recv have been measured with the §3 core (3,296 bytes each), but
+σ_send does not yet carry the blacklist non-membership, quota and lease checks, so
+σ_send with those controls, Ω, Payment and CreditStatus sizes and the 2 s target
+remain to be measured. The
 source inventory identifies those exact boundaries.
 
 No build, device experiment, live payment, deployment or implementation-code

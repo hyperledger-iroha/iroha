@@ -1232,10 +1232,6 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -8828,15 +8824,6 @@ pub mod tests {
             TypeId::of::<
                 iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
             >(),
-            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1>(
-            ),
-            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>(
-            ),
-            TypeId::of::<
-                iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
-            >(),
-            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>(
-            ),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle>(),
         ];

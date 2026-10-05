@@ -242,7 +242,6 @@ def _capabilities() -> dict[str, Any]:
             "CONTRACT_LIFECYCLE_GOVERNANCE",
             "DEPLOY_CONTRACT",
             "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
-            "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
             "MUSUBI_REGISTRY_GOVERNANCE",
             "RUNTIME_UPGRADE",
             "SCCP_ROUTE_GOVERNANCE",

@@ -25,7 +25,6 @@ use iroha_data_model::{
         self, CustomInstruction, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox,
         RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox, SetAssetKeyValue,
         SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox, UnregisterBox, Upgrade,
-        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         mint_burn::BurnBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
@@ -968,8 +967,6 @@ pub(crate) enum ExplorerInstructionKind {
     SetParameter,
     Upgrade,
     Log,
-    KagemushaTopUp,
-    KagemushaRedemption,
     Custom,
 }
 impl ExplorerInstructionKind {
@@ -988,8 +985,6 @@ impl ExplorerInstructionKind {
             Self::SetParameter => "SetParameter",
             Self::Upgrade => "Upgrade",
             Self::Log => "Log",
-            Self::KagemushaTopUp => "KagemushaTopUp",
-            Self::KagemushaRedemption => "KagemushaRedemption",
             Self::Custom => "Custom",
         }
     }
@@ -1011,8 +1006,6 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "setparameter" | "set_parameter" => Ok(Self::SetParameter),
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
-            "kagemushatopup" | "kagemusha_top_up" => Ok(Self::KagemushaTopUp),
-            "kagemusharedemption" | "kagemusha_redemption" => Ok(Self::KagemushaRedemption),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -1116,10 +1109,6 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {
                 ExplorerInstructionKind::Log
-            } else if any.downcast_ref::<TopUpKagemushaV1>().is_some() {
-                ExplorerInstructionKind::KagemushaTopUp
-            } else if any.downcast_ref::<RedeemKagemushaV1>().is_some() {
-                ExplorerInstructionKind::KagemushaRedemption
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -1239,8 +1228,6 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::SetParameter => set_parameter_payload(instruction),
         ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
         ExplorerInstructionKind::Log => log_payload(instruction),
-        ExplorerInstructionKind::KagemushaTopUp => kagemusha_top_up_payload(instruction),
-        ExplorerInstructionKind::KagemushaRedemption => kagemusha_redemption_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1418,68 +1405,6 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     let log = instruction.as_any().downcast_ref::<Log>()?;
     let value = json::to_value(log).ok()?;
     Some(instruction_variant_value("Log", value))
-}
-fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<TopUpKagemushaV1>()?;
-    let request = &isi.request;
-    let mut value = Map::new();
-    value.insert(
-        "asset".to_string(),
-        json::to_value(&request.asset).unwrap_or(Value::Null),
-    );
-    value.insert(
-        "amount_atomic_units".to_string(),
-        Value::String(request.amount.to_string()),
-    );
-    value.insert(
-        "asset_scale".to_string(),
-        Value::Number(u64::from(request.scale).into()),
-    );
-    value.insert(
-        "credit_id".to_string(),
-        Value::String(hex::encode(request.credit_id)),
-    );
-    value.insert(
-        "operation_id".to_string(),
-        Value::String(hex::encode(request.operation_id)),
-    );
-    Some(instruction_variant_value(
-        "KagemushaTopUp",
-        Value::Object(value),
-    ))
-}
-fn kagemusha_redemption_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<RedeemKagemushaV1>()?;
-    let request = &isi.request;
-    let mut value = Map::new();
-    value.insert(
-        "terminal_nullifier".to_string(),
-        Value::String(hex::encode(request.voucher.statement.terminal_nullifier)),
-    );
-    value.insert(
-        "recipient".to_string(),
-        Value::String(request.voucher.statement.beneficiary.to_string()),
-    );
-    value.insert(
-        "asset".to_string(),
-        json::to_value(&request.voucher.statement.lifecycle.asset).unwrap_or(Value::Null),
-    );
-    value.insert(
-        "amount_atomic_units".to_string(),
-        Value::String(request.voucher.statement.amount.to_string()),
-    );
-    value.insert(
-        "asset_scale".to_string(),
-        Value::Number(u64::from(request.voucher.statement.lifecycle.scale).into()),
-    );
-    value.insert(
-        "operation_id".to_string(),
-        Value::String(hex::encode(request.operation_id)),
-    );
-    Some(instruction_variant_value(
-        "KagemushaRedemption",
-        Value::Object(value),
-    ))
 }
 fn custom_payload(instruction: &InstructionBox) -> Option<Value> {
     let custom = instruction.as_any().downcast_ref::<CustomInstruction>()?;
@@ -2942,31 +2867,32 @@ mod tests {
     use super::*;
     use nonzero_ext::nonzero;
     #[test]
-    fn instruction_kind_filter_accepts_kagemusha_v1_camelcase_and_snake_case() {
-        assert_eq!(
-            "KagemushaTopUp"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 top-up kind"),
-            ExplorerInstructionKind::KagemushaTopUp
-        );
-        assert_eq!(
-            "kagemusha_top_up"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 top-up kind"),
-            ExplorerInstructionKind::KagemushaTopUp
-        );
-        assert_eq!(
-            "KagemushaRedemption"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 redemption kind"),
-            ExplorerInstructionKind::KagemushaRedemption
-        );
-        assert_eq!(
-            "kagemusha_redemption"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 redemption kind"),
-            ExplorerInstructionKind::KagemushaRedemption
-        );
+    fn instruction_kind_filter_accepts_camelcase_and_snake_case() {
+        for raw in ["SetKeyValue", "set_key_value"] {
+            assert_eq!(
+                raw.parse::<ExplorerInstructionKind>()
+                    .expect("set-key-value kind"),
+                ExplorerInstructionKind::SetKeyValue
+            );
+        }
+        for raw in ["ExecuteTrigger", "execute_trigger"] {
+            assert_eq!(
+                raw.parse::<ExplorerInstructionKind>()
+                    .expect("execute-trigger kind"),
+                ExplorerInstructionKind::ExecuteTrigger
+            );
+        }
+        for retired in [
+            "KagemushaTopUp",
+            "kagemusha_top_up",
+            "KagemushaRedemption",
+            "kagemusha_redemption",
+        ] {
+            assert!(
+                retired.parse::<ExplorerInstructionKind>().is_err(),
+                "{retired} is not an explorer instruction kind"
+            );
+        }
     }
     #[test]
     fn history_cursor_is_snapshot_filter_visibility_and_route_bound() {

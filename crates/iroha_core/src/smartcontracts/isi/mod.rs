@@ -595,12 +595,6 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
     >,
-    dispatch_instruction::<
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1
-    >,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,

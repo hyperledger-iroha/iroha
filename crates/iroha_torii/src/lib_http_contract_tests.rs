@@ -772,154 +772,6 @@ mod matched_route_metadata_tests {
 }
 
 #[cfg(test)]
-mod kagemusha_cache_policy_tests {
-    use super::enforce_kagemusha_cache_policy;
-    use axum::{
-        Router,
-        body::Body,
-        extract::Path,
-        http::{Request, StatusCode, header},
-        response::IntoResponse as _,
-        routing::{get, post},
-    };
-    use tower::ServiceExt as _;
-    #[tokio::test]
-    async fn every_operation_status_outcome_is_no_store() {
-        let router = Router::new()
-            .route(
-                "/v1/kagemusha/operations/{operation_id}",
-                get(|Path(operation_id): Path<String>| async move {
-                    match operation_id.as_str() {
-                        "invalid" => StatusCode::BAD_REQUEST,
-                        "missing" => StatusCode::NOT_FOUND,
-                        "inconsistent" => StatusCode::SERVICE_UNAVAILABLE,
-                        _ => StatusCode::OK,
-                    }
-                }),
-            )
-            .route(
-                "/v1/kagemusha/readiness",
-                get(|| async move {
-                    (
-                        [(header::CACHE_CONTROL, "public, max-age=86400")],
-                        StatusCode::OK,
-                    )
-                        .into_response()
-                }),
-            )
-            .route(
-                "/v1/kagemusha/top-up",
-                post(|| async {
-                    (
-                        [(header::CACHE_CONTROL, "public, max-age=86400")],
-                        StatusCode::ACCEPTED,
-                    )
-                }),
-            )
-            .route(
-                "/v1/kagemusha/redeem",
-                post(|| async {
-                    (
-                        [(header::CACHE_CONTROL, "public, max-age=86400")],
-                        StatusCode::SERVICE_UNAVAILABLE,
-                    )
-                }),
-            )
-            .route("/health", get(|| async { StatusCode::NOT_FOUND }))
-            .layer(axum::middleware::from_fn(enforce_kagemusha_cache_policy));
-        for (operation_id, status) in [
-            ("known", StatusCode::OK),
-            ("invalid", StatusCode::BAD_REQUEST),
-            ("missing", StatusCode::NOT_FOUND),
-            ("inconsistent", StatusCode::SERVICE_UNAVAILABLE),
-        ] {
-            let response = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(format!("/v1/kagemusha/operations/{operation_id}"))
-                        .body(Body::empty())
-                        .expect("request"),
-                )
-                .await
-                .expect("response");
-            assert_eq!(response.status(), status, "operation_id={operation_id}");
-            assert_eq!(
-                response.headers().get(header::CACHE_CONTROL),
-                Some(&axum::http::HeaderValue::from_static("no-store")),
-                "operation_id={operation_id}"
-            );
-        }
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/kagemusha/readiness")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&axum::http::HeaderValue::from_static(
-                "private, max-age=0, must-revalidate"
-            ))
-        );
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/kagemusha/readiness?asset_definition_id=legacy")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&axum::http::HeaderValue::from_static(
-                "private, max-age=0, must-revalidate"
-            ))
-        );
-        for (path, status) in [
-            ("/v1/kagemusha/top-up", StatusCode::ACCEPTED),
-            ("/v1/kagemusha/redeem", StatusCode::SERVICE_UNAVAILABLE),
-        ] {
-            let response = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(axum::http::Method::POST)
-                        .uri(path)
-                        .body(Body::empty())
-                        .expect("request"),
-                )
-                .await
-                .expect("response");
-            assert_eq!(response.status(), status, "path={path}");
-            assert_eq!(
-                response.headers().get(header::CACHE_CONTROL),
-                Some(&axum::http::HeaderValue::from_static("no-store")),
-                "path={path}"
-            );
-        }
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/health")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
-    }
-}
-
-#[cfg(test)]
 mod content_type_utf8_tests {
     use super::{normalize_json_content_type, normalize_json_response_content_type};
     use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
@@ -1161,7 +1013,7 @@ mod response_negotiation_middleware_tests {
         request
             .extensions_mut()
             .insert(MatchedRouteMetadata::from_descriptor(
-                route_catalog::kagemusha::READINESS,
+                route_catalog::core::API_VERSION,
             ));
         let response = router.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
@@ -1768,17 +1620,17 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppQueryValidation {
                         code: "operation_id_invalid",
-                        message: "KAGEMUSHA operation id must be non-zero.".to_owned(),
+                        message: "Operation id must be non-zero.".to_owned(),
                     }
                     .into_response()
                 }),
             )
             .route(
-                "/forbidden-kagemusha-auth",
+                "/forbidden-auth-header",
                 get(|| async {
                     Error::AppForbidden {
-                        code: "kagemusha_auth_header_unsupported",
-                        message: "KAGEMUSHA commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
+                        code: "auth_header_unsupported",
+                        message: "This route authenticates through its signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
                     }
                     .into_response()
                 }),
@@ -1788,7 +1640,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppConflict {
                         code: "operation_id_conflict",
-                        message: "KAGEMUSHA operation id is already bound to a different request."
+                        message: "Operation id is already bound to a different request."
                             .to_owned(),
                     }
                     .into_response()
@@ -1798,8 +1650,8 @@ mod typed_error_contract_tests {
                 "/missing-operation",
                 get(|| async {
                     Error::AppNotFound {
-                        code: "kagemusha_operation_not_found",
-                        message: "KAGEMUSHA operation is unknown on this Torii node.".to_owned(),
+                        code: "operation_not_found",
+                        message: "Operation is unknown on this Torii node.".to_owned(),
                     }
                     .into_response()
                 }),
@@ -1836,25 +1688,25 @@ mod typed_error_contract_tests {
                     "/invalid-operation",
                     StatusCode::BAD_REQUEST,
                     "operation_id_invalid",
-                    "KAGEMUSHA operation id must be non-zero.",
+                    "Operation id must be non-zero.",
                 ),
                 (
-                    "/forbidden-kagemusha-auth",
+                    "/forbidden-auth-header",
                     StatusCode::FORBIDDEN,
-                    "kagemusha_auth_header_unsupported",
-                    "KAGEMUSHA commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.",
+                    "auth_header_unsupported",
+                    "This route authenticates through its signed request body; X-Iroha canonical auth headers are not accepted.",
                 ),
                 (
                     "/conflicting-operation",
                     StatusCode::CONFLICT,
                     "operation_id_conflict",
-                    "KAGEMUSHA operation id is already bound to a different request.",
+                    "Operation id is already bound to a different request.",
                 ),
                 (
                     "/missing-operation",
                     StatusCode::NOT_FOUND,
-                    "kagemusha_operation_not_found",
-                    "KAGEMUSHA operation is unknown on this Torii node.",
+                    "operation_not_found",
+                    "Operation is unknown on this Torii node.",
                 ),
                 (
                     "/missing-asset",
@@ -1922,7 +1774,7 @@ mod typed_error_contract_tests {
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
             assert!(
                 !response.headers().contains_key("x-iroha-reject-code"),
-                "an unmatched route must not claim kagemusha_operation_not_found; accept={accept}"
+                "an unmatched route must not claim operation_not_found; accept={accept}"
             );
             let body = body_bytes(response).await;
             let envelope: ErrorEnvelope = if accept == "application/json" {

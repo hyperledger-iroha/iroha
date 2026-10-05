@@ -361,9 +361,9 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 400;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 396;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 400;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 396;
         #[cfg(not(feature = "governance"))]
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 378;
         let registry_source = include_str!("registry.rs");
@@ -415,7 +415,7 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "cf317f943c61b42bcb49f944bc006c2bc668812523f392884cbe97812af1aa05";
+            "14025d26bb09cfa26a1a79988bbc708899d72a4b66a065753d68795bc9aa91ab";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
             "e6fc7d5b775f6909a95e1658fc396c2eb536a9c521cebac2af847b52ca3f4d4b";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
@@ -1484,7 +1484,8 @@ mod tests {
             "iroha.offline.kagemusha.taira_canary.authorize.v1".to_owned(),
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierPolicyInstallV1".to_owned(),
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseInstallV1".to_owned(),
-            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1".to_owned(),
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1"
+                .to_owned(),
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseRetireV1".to_owned(),
             "iroha.offline.device_attestation.register".to_owned(),
             "iroha.instruction.v1::offline::SetOfflineDeviceAttestationPolicy".to_owned(),

@@ -1037,16 +1037,15 @@ def require_parliament_commit_publication(state: str) -> None:
         "verifier,state_ref.network_id,)})",
         "returnErr(TransactionsBlockError::KagemushaVerifierAuthority);",
         "letpredecessor=state_ref.world.kagemusha_verifier_registry.view();",
-        "authorization.validate_for_state_commit(",
+        "ifworld.kagemusha_verifier_registry.get()!=predecessor.get(){",
         "returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);",
-        "(true,None)|(false,Some(_))=>{",
         "drop(predecessor);",
     )
     authority_positions = [kagemusha.find(token) for token in authority_checks]
     if (
         any(position < 0 for position in authority_positions)
         or authority_positions != sorted(authority_positions)
-        or kagemusha.count("returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);") != 2
+        or kagemusha.count("returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);") != 1
     ):
         raise RuntimeError(f"{path}: KAGEMUSHA authority must reject unowned transitions before publication")
     geometry = section(compact, "ifletErr(err)=geometry_result{", "autoscale_start.elapsed()", path)

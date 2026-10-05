@@ -66,10 +66,6 @@ export const PARLIAMENT_PROPOSAL_KINDS_V1 = Object.freeze([
   "ContractLifecycleGovernance",
   "ContractEmergencyHold",
   "GlobalDataTriggerPermissionGovernance",
-  "KagemushaVerifierPolicyInstall",
-  "KagemushaVerifierReleaseInstall",
-  "KagemushaVerifierReleaseActivate",
-  "KagemushaVerifierReleaseRetire",
 ]);
 
 // Closed ContractLifecycleGovernance action inventory in wire-tag order.

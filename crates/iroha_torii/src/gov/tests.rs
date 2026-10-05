@@ -52,10 +52,6 @@ fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
             "CONTRACT_LIFECYCLE_GOVERNANCE",
             "CONTRACT_EMERGENCY_HOLD",
             "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
-            "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
-            "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
-            "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
-            "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
         ]
     );
 }

@@ -935,7 +935,7 @@ def _replace_propagated_refusal(commit: str, call: str, anchor: str) -> str:
     "duplicate_publisher", "early_telemetry", "missing_cfg",
     "hash_prepare_refusal", "commit_lock_early_drop", "commit_lock_after_prepare",
     "state_commit_unlock_before_publication", "effect_owner_declared_after_commit_lock",
-    "kagemusha_runtime_refusal", "kagemusha_certificate_check", "kagemusha_unowned_refusal",
+    "kagemusha_runtime_refusal", "kagemusha_registry_change_check", "kagemusha_unowned_refusal",
 ))
 def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
     mutation: str, monkeypatch: pytest.MonkeyPatch,
@@ -1002,15 +1002,14 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
         anchor = "return Err(TransactionsBlockError::KagemushaVerifierAuthority);"
         assert commit.count(anchor) == 1
         changed = commit.replace(anchor, "", 1)
-    elif mutation == "kagemusha_certificate_check":
-        anchor = "authorization.validate_for_state_commit("
+    elif mutation == "kagemusha_registry_change_check":
+        anchor = "if world.kagemusha_verifier_registry.get() != predecessor.get() {"
         assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, "authorization.unchecked_commit(", 1)
+        changed = commit.replace(anchor, "if false {", 1)
     elif mutation == "kagemusha_unowned_refusal":
         anchor = "return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);"
-        assert commit.count(anchor) == 2
-        offset = commit.rfind(anchor)
-        changed = commit[:offset] + commit[offset:].replace(anchor, "", 1)
+        assert commit.count(anchor) == 1
+        changed = commit.replace(anchor, "", 1)
     elif mutation == "world_drop":
         changed = commit.replace("world.publish_prepared();", "drop(world);", 1)
     elif mutation == "hash_drop":
