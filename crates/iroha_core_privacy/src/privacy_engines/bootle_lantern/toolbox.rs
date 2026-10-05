@@ -1104,15 +1104,10 @@ fn ternary_dot(row: &[i8], vector: &[u64]) -> u64 {
         })
 }
 fn add_mod(lhs: u64, rhs: u64) -> u64 {
-    u64::try_from((u128::from(lhs) + u128::from(rhs)) % u128::from(PROOF_MODULUS_V1))
-        .expect("reduced residue fits u64")
+    iroha_fhe::modular::add_mod_u64(lhs, rhs, PROOF_MODULUS_V1)
 }
 fn sub_mod(lhs: u64, rhs: u64) -> u64 {
-    if lhs >= rhs {
-        lhs - rhs
-    } else {
-        PROOF_MODULUS_V1 - (rhs - lhs)
-    }
+    iroha_fhe::modular::sub_mod_u64(lhs, rhs, PROOF_MODULUS_V1)
 }
 #[cfg(test)]
 fn mul_mod(lhs: u64, rhs: u64) -> u64 {

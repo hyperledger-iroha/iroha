@@ -1323,8 +1323,124 @@ fn genesis_public_args(
     args
 }
 
-async fn run_genesis_public_command(binary: &Path, arguments: &[String]) -> Result<()> {
-    let status = timeout(
+/// Fixed phase labels selected by maintained callers, never by argv or paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativePublicCommandPhase {
+    GenesisDkg,
+    GenesisInstall,
+    RotationDkg,
+    RotationFinalize,
+}
+impl NativePublicCommandPhase {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::GenesisDkg => "genesis_dkg",
+            Self::GenesisInstall => "genesis_install",
+            Self::RotationDkg => "rotation_dkg",
+            Self::RotationFinalize => "rotation_finalize",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativePublicCommandOutcome {
+    Success,
+    InvalidInput,
+    InvalidCustody,
+    Crypto,
+    Height,
+    Deadline,
+    Io,
+    Session,
+    LocalDkg,
+    Journal,
+    GenesisBundle,
+    Export,
+    Attempt,
+    PendingAttempt,
+    UnknownExit,
+    Signaled,
+    UnknownStatus,
+    ProcessIoFailure,
+    Timeout,
+}
+impl NativePublicCommandOutcome {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::InvalidInput => "invalid_input",
+            Self::InvalidCustody => "invalid_custody",
+            Self::Crypto => "crypto",
+            Self::Height => "height",
+            Self::Deadline => "deadline",
+            Self::Io => "io",
+            Self::Session => "session",
+            Self::LocalDkg => "local_dkg",
+            Self::Journal => "journal",
+            Self::GenesisBundle => "genesis_bundle",
+            Self::Export => "export",
+            Self::Attempt => "attempt",
+            Self::PendingAttempt => "pending_attempt",
+            Self::UnknownExit => "unknown_exit",
+            Self::Signaled => "signaled",
+            Self::UnknownStatus => "unknown_status",
+            Self::ProcessIoFailure => "process_io_failure",
+            Self::Timeout => "timeout",
+        }
+    }
+}
+
+fn native_public_command_completed_outcome(
+    code: Option<i32>,
+    signal: Option<i32>,
+) -> NativePublicCommandOutcome {
+    match (code, signal) {
+        (Some(0), None) => NativePublicCommandOutcome::Success,
+        (Some(70), None) => NativePublicCommandOutcome::InvalidInput,
+        (Some(71), None) => NativePublicCommandOutcome::InvalidCustody,
+        (Some(72), None) => NativePublicCommandOutcome::Crypto,
+        (Some(73), None) => NativePublicCommandOutcome::Height,
+        (Some(74), None) => NativePublicCommandOutcome::Deadline,
+        (Some(75), None) => NativePublicCommandOutcome::Io,
+        (Some(76), None) => NativePublicCommandOutcome::Session,
+        (Some(77), None) => NativePublicCommandOutcome::LocalDkg,
+        (Some(78), None) => NativePublicCommandOutcome::Journal,
+        (Some(79), None) => NativePublicCommandOutcome::GenesisBundle,
+        (Some(80), None) => NativePublicCommandOutcome::Export,
+        (Some(81), None) => NativePublicCommandOutcome::Attempt,
+        (Some(82), None) => NativePublicCommandOutcome::PendingAttempt,
+        (Some(code), None) if (0..=255).contains(&code) => NativePublicCommandOutcome::UnknownExit,
+        (None, Some(signal)) if signal > 0 => NativePublicCommandOutcome::Signaled,
+        _ => NativePublicCommandOutcome::UnknownStatus,
+    }
+}
+
+// This projection contains only fixed literals and numeric operating-system status.
+// Worker classes require an authenticated Source pair; foreign exit codes prove no cause.
+// It describes one command outcome; it never establishes ceremony or H5 success.
+fn native_public_command_status_line(
+    phase: NativePublicCommandPhase,
+    outcome: NativePublicCommandOutcome,
+    exit_code: Option<i32>,
+    signal: Option<i32>,
+) -> String {
+    let exit_code = exit_code.map_or_else(|| "none".to_owned(), |code| code.to_string());
+    let signal = signal.map_or_else(|| "none".to_owned(), |value| value.to_string());
+    format!(
+        "iroha-native-public-command-v1 phase={} outcome={} exit_code={} signal={}",
+        phase.label(),
+        outcome.label(),
+        exit_code,
+        signal,
+    )
+}
+
+async fn run_genesis_public_command(
+    binary: &Path,
+    arguments: &[String],
+    phase: NativePublicCommandPhase,
+) -> Result<()> {
+    let waited = timeout(
         PROCESS_TIMEOUT,
         tokio::process::Command::new(binary)
             .args(arguments)
@@ -1335,7 +1451,24 @@ async fn run_genesis_public_command(binary: &Path, arguments: &[String]) -> Resu
             .kill_on_drop(true)
             .status(),
     )
-    .await??;
+    .await;
+    let (outcome, exit_code, signal) = match &waited {
+        Ok(Ok(status)) => {
+            use std::os::unix::process::ExitStatusExt as _;
+            (
+                native_public_command_completed_outcome(status.code(), status.signal()),
+                status.code(),
+                status.signal(),
+            )
+        }
+        Ok(Err(_)) => (NativePublicCommandOutcome::ProcessIoFailure, None, None),
+        Err(_) => (NativePublicCommandOutcome::Timeout, None, None),
+    };
+    eprintln!(
+        "{}",
+        native_public_command_status_line(phase, outcome, exit_code, signal)
+    );
+    let status = waited??;
     ensure!(
         status.success(),
         "native genesis public command failed: {status}"
@@ -1966,7 +2099,12 @@ where
         "--output".to_owned(),
         public_bundle_path.display().to_string(),
     ]);
-    run_genesis_public_command(&binary, &assemble_args).await?;
+    run_genesis_public_command(
+        &binary,
+        &assemble_args,
+        NativePublicCommandPhase::GenesisDkg,
+    )
+    .await?;
 
     let mut signatures = Vec::with_capacity(3);
     for seat in outputs.iter().take(3) {
@@ -2011,7 +2149,12 @@ where
         "--output".to_owned(),
         install_instruction_path.display().to_string(),
     ]);
-    run_genesis_public_command(&binary, &install_args).await?;
+    run_genesis_public_command(
+        &binary,
+        &install_args,
+        NativePublicCommandPhase::GenesisInstall,
+    )
+    .await?;
     Ok(DisposableGenesisDkgOutput {
         public_session: assembled,
         seats: outputs,
@@ -2213,7 +2356,12 @@ where
         "--output".to_owned(),
         public_bundle_path.display().to_string(),
     ]);
-    run_genesis_public_command(&binary, &assemble_args).await?;
+    run_genesis_public_command(
+        &binary,
+        &assemble_args,
+        NativePublicCommandPhase::RotationDkg,
+    )
+    .await?;
 
     let faults = (authorizing_seats.len() - 1) / 3;
     let quorum = authorizing_seats.len() - faults;
@@ -2254,7 +2402,12 @@ where
         "--output".to_owned(),
         finalization_instruction_path.display().to_string(),
     ]);
-    run_genesis_public_command(&binary, &finalize_args).await?;
+    run_genesis_public_command(
+        &binary,
+        &finalize_args,
+        NativePublicCommandPhase::RotationFinalize,
+    )
+    .await?;
     Ok(DisposableRotationDkgOutput {
         public_session: assembled,
         seats: outputs,
@@ -2594,6 +2747,105 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
     #[tokio::test(flavor = "current_thread")]
     async fn native_genesis_peer_seat_hands_read_only_phases_to_owned_child() {
         observe_native_peer_phase_handoff(true).await;
+    }
+
+    #[test]
+    fn native_public_command_projection_is_exact_and_body_free() {
+        use super::{
+            NativePublicCommandOutcome as Outcome, NativePublicCommandPhase as Phase,
+            native_public_command_completed_outcome, native_public_command_status_line,
+        };
+        let expected = [
+            Outcome::InvalidInput,
+            Outcome::InvalidCustody,
+            Outcome::Crypto,
+            Outcome::Height,
+            Outcome::Deadline,
+            Outcome::Io,
+            Outcome::Session,
+            Outcome::LocalDkg,
+            Outcome::Journal,
+            Outcome::GenesisBundle,
+            Outcome::Export,
+            Outcome::Attempt,
+            Outcome::PendingAttempt,
+        ];
+        for (code, outcome) in (70..=82).zip(expected) {
+            assert_eq!(
+                native_public_command_completed_outcome(Some(code), None),
+                outcome
+            );
+            let line =
+                native_public_command_status_line(Phase::GenesisInstall, outcome, Some(code), None);
+            assert_eq!(
+                line,
+                format!(
+                    "iroha-native-public-command-v1 phase=genesis_install outcome={} exit_code={} signal=none",
+                    outcome.label(),
+                    code
+                )
+            );
+        }
+        assert_eq!(
+            native_public_command_completed_outcome(Some(0), None),
+            Outcome::Success
+        );
+        for code in [1, 2, 69, 83, 101, 255] {
+            assert_eq!(
+                native_public_command_completed_outcome(Some(code), None),
+                Outcome::UnknownExit
+            );
+        }
+        assert_eq!(
+            native_public_command_completed_outcome(None, Some(15)),
+            Outcome::Signaled
+        );
+        for (code, signal) in [
+            (None, None),
+            (Some(0), Some(15)),
+            (Some(70), Some(15)),
+            (Some(82), Some(15)),
+            (Some(-1), None),
+            (Some(256), None),
+            (None, Some(0)),
+            (None, Some(-1)),
+        ] {
+            assert_eq!(
+                native_public_command_completed_outcome(code, signal),
+                Outcome::UnknownStatus
+            );
+        }
+        assert_eq!(
+            native_public_command_status_line(
+                Phase::GenesisInstall,
+                Outcome::GenesisBundle,
+                Some(79),
+                None
+            ),
+            "iroha-native-public-command-v1 phase=genesis_install outcome=genesis_bundle exit_code=79 signal=none"
+        );
+        assert_eq!(
+            native_public_command_status_line(Phase::GenesisDkg, Outcome::Timeout, None, None),
+            "iroha-native-public-command-v1 phase=genesis_dkg outcome=timeout exit_code=none signal=none"
+        );
+        assert_eq!(
+            native_public_command_status_line(
+                Phase::RotationDkg,
+                Outcome::ProcessIoFailure,
+                None,
+                None
+            ),
+            "iroha-native-public-command-v1 phase=rotation_dkg outcome=process_io_failure exit_code=none signal=none"
+        );
+        assert_eq!(
+            native_public_command_status_line(
+                Phase::RotationFinalize,
+                Outcome::Signaled,
+                None,
+                Some(15)
+            ),
+            "iroha-native-public-command-v1 phase=rotation_finalize outcome=signaled exit_code=none signal=15"
+        );
     }
 
     #[test]

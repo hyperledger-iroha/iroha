@@ -69,7 +69,6 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiExplorerDuration))]
 [JsonSerializable(typeof(ToriiExplorerTransactionRejection))]
 [JsonSerializable(typeof(ToriiExplorerTransactionDetail))]
-[JsonSerializable(typeof(ToriiExplorerInstructionJson))]
 [JsonSerializable(typeof(ToriiExplorerInstructionBox))]
 [JsonSerializable(typeof(ToriiExplorerInstruction))]
 [JsonSerializable(typeof(ToriiExplorerHealthSnapshot))]

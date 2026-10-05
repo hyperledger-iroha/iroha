@@ -2942,7 +2942,7 @@
    "function": "iroha_explorer_instructions_query_tool",
    "name": "iroha.explorer.instructions.query",
    "effect": "read",
-   "description": "Query Explorer instructions. Fields: authority, created_at, kind, box, box.encoded, box.framed_sha256, box.json, transaction_hash, transaction_status, block, index. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors account, asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"transaction_hash\",\"kind\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "description": "Query Explorer instructions. Fields: authority, created_at, kind, box, box.wire_id, box.framed_sha256, box.instruction, transaction_hash, transaction_status, block, index. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors account, asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"transaction_hash\",\"kind\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "POST",
    "path_template": "/v1/explorer/instructions/query",
    "input_schema": {
@@ -2966,7 +2966,7 @@
    "function": "iroha_explorer_instructions_latest_query_tool",
    "name": "iroha.explorer.instructions.latest.query",
    "effect": "read",
-   "description": "Query Explorer instructions.latest. Fields: authority, created_at, kind, box, box.encoded, box.framed_sha256, box.json, transaction_hash, transaction_status, block, index. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors account, asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"transaction_hash\",\"kind\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "description": "Query Explorer instructions.latest. Fields: authority, created_at, kind, box, box.wire_id, box.framed_sha256, box.instruction, transaction_hash, transaction_status, block, index. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors account, asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"transaction_hash\",\"kind\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "POST",
    "path_template": "/v1/explorer/instructions/latest/query",
    "input_schema": {

@@ -295,6 +295,14 @@ impl norito::json::JsonSerialize for TriggerCompletedSnapshot<'_> {
 }
 impl Default for Sandbox {
     fn default() -> Self {
+        Self::with_genesis_fastpq_source_policy(None)
+    }
+}
+impl Sandbox {
+    /// Construct a sandbox whose optional finite source policy is enacted by its signed genesis.
+    pub(super) fn with_genesis_fastpq_source_policy(
+        source_policy: Option<iroha_data_model::parameter::FastpqSourcePolicyV1>,
+    ) -> Self {
         let mut world = {
             let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
             let asset_def = {
@@ -339,6 +347,11 @@ impl Default for Sandbox {
         // original State. Apply its signed genesis before ordinary Network
         // execution; the real producer also supplies its resolver checkpoint.
         let mut config = TestChainConfig::new(world, 0);
+        if let Some(profile) = source_policy {
+            config.genesis_parameters.push(Parameter::Block(
+                iroha_data_model::parameter::BlockParameter::FastpqSource(profile),
+            ));
+        }
         config.chain_id = CHAIN_ID.clone();
         config.genesis_key = iroha_crypto::KeyPair::from_private_key(GENESIS_ACCOUNT.key.clone())
             .expect("original Sandbox genesis key");

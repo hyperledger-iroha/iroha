@@ -1938,6 +1938,12 @@ fn apply_zk_x509_root_append_v1(
         .privacy_root_heads
         .insert(plan.head_key, plan.next_head);
 }
+// TODO(X.6): take this verdict from the canonical interval definition
+// (`PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())`
+// containing the block second). The predicate below is the same on every block
+// second within the RFC 5280 calendar; it is pinned as a `deferred` site in
+// specs/zk_x509_presentation_interval_sites.json and compared with the
+// definition by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.
 fn validate_zk_x509_crl_freshness_v1(
     record: PrivacyZkX509CrlRecordV1,
     block_timestamp_ms: u64,

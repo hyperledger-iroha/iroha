@@ -8,7 +8,6 @@
 //! committed chain snapshot and the caller's visible dataspace set; transaction and instruction
 //! continuations use authorized entrypoint hashes rather than physical block offsets.
 use crate::{
-    account_literal,
     json_macros::{JsonDeserialize, JsonSerialize},
     routing::DataspaceReadVisibility,
 };
@@ -16,37 +15,28 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    HasMetadata, Identifiable, ValidationFail,
+    HasMetadata, Identifiable,
     account::{AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
-    block::{BlockHeader, SignedBlock},
     domain::Domain,
     isi::{
-        self, CustomInstruction, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox,
-        RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox, SetAssetKeyValue,
-        SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox, UnregisterBox, Upgrade,
-        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
+        CustomInstruction, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
+        RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox, SetAssetKeyValue, SetKeyValueBox,
+        SetParameter, TransferAssetBatch, TransferBox, UnregisterBox, Upgrade,
         mint_burn::BurnBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
     nft::{NftEntry, NftId},
     rwa::{RwaEntry, RwaId, RwaParentRef},
     sorafs_uri::SorafsUri,
-    transaction::{
-        error::TransactionRejectionReason,
-        executable::Executable,
-        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
-    },
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::{metadata::Metadata, name::Name};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_torii_shared::qr::{EcLevel, QrCode, QrError};
 use mv::storage::StorageReadOnly;
-use norito::{
-    codec::Encode,
-    json::{self, Map, Value},
-};
+use norito::json::{self, Map, Value};
 use sha2::{Digest as _, Sha256};
 use std::{
     fmt,
@@ -335,21 +325,19 @@ fn encode_explorer_history_cursor(
     {
         return Err(ExplorerCursorError::InvalidKey);
     }
-    let mut frame = Vec::with_capacity(EXPLORER_HISTORY_CURSOR_FRAME_BYTES);
-    frame.extend_from_slice(&EXPLORER_HISTORY_CURSOR_MAGIC);
-    frame.push(collection.tag());
-    frame.extend_from_slice(&cursor.snapshot_height.to_be_bytes());
-    frame.extend_from_slice(&cursor.snapshot_hash);
-    frame.extend_from_slice(&filter_digest);
-    frame.extend_from_slice(&visibility_digest);
-    frame.extend_from_slice(&cursor.position.height.to_be_bytes());
-    match cursor.position.entrypoint_hash {
-        Some(entrypoint_hash) => frame.extend_from_slice(entrypoint_hash.as_ref()),
-        None => frame.extend_from_slice(&[0; 32]),
+    let mut frame = [0_u8; EXPLORER_HISTORY_CURSOR_FRAME_BYTES];
+    frame[..4].copy_from_slice(&EXPLORER_HISTORY_CURSOR_MAGIC);
+    frame[4] = collection.tag();
+    frame[5..13].copy_from_slice(&cursor.snapshot_height.to_be_bytes());
+    frame[13..45].copy_from_slice(&cursor.snapshot_hash);
+    frame[45..77].copy_from_slice(&filter_digest);
+    frame[77..109].copy_from_slice(&visibility_digest);
+    frame[109..117].copy_from_slice(&cursor.position.height.to_be_bytes());
+    if let Some(hash) = cursor.position.entrypoint_hash {
+        frame[117..149].copy_from_slice(hash.as_ref());
     }
-    frame.extend_from_slice(&cursor.position.instruction_index.to_be_bytes());
-    debug_assert_eq!(frame.len(), EXPLORER_HISTORY_CURSOR_FRAME_BYTES);
-    Ok(URL_SAFE_NO_PAD.encode(frame))
+    frame[149..153].copy_from_slice(&cursor.position.instruction_index.to_be_bytes());
+    explorer_base64_frame(&frame)
 }
 
 /// Decode and scope-check a snapshot-bound history cursor.
@@ -362,10 +350,11 @@ pub(crate) fn decode_explorer_history_cursor(
     if encoded.is_empty() || encoded.len() > EXPLORER_HISTORY_CURSOR_MAX_ENCODED_BYTES {
         return Err(ExplorerCursorError::InvalidFrame);
     }
-    let frame = URL_SAFE_NO_PAD
-        .decode(encoded.as_bytes())
+    let mut frame = [0_u8; EXPLORER_HISTORY_CURSOR_FRAME_BYTES];
+    let decoded_len = URL_SAFE_NO_PAD
+        .decode_slice(encoded.as_bytes(), &mut frame)
         .map_err(|_| ExplorerCursorError::InvalidEncoding)?;
-    if URL_SAFE_NO_PAD.encode(&frame) != encoded {
+    if decoded_len != frame.len() || explorer_base64_frame(&frame)? != encoded {
         return Err(ExplorerCursorError::InvalidEncoding);
     }
     if frame.len() != EXPLORER_HISTORY_CURSOR_FRAME_BYTES
@@ -572,7 +561,7 @@ pub(crate) struct ExplorerAssetDefinitionDto<'world> {
     pub owned_by: &'world AccountId,
     pub assets: u32,
     pub total_quantity: &'world Quantity,
-    pub locked_quantity: Option<Quantity>,
+    pub locked_quantity: Option<&'world Quantity>,
     pub circulating_quantity: Option<Quantity>,
 }
 impl<'world> ExplorerAssetDefinitionDto<'world> {
@@ -828,73 +817,6 @@ pub(crate) struct ExplorerRwasPage<'world> {
     pub items: Vec<ExplorerRwaDto<'world>>,
 }
 #[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerBlockDto {
-    pub hash: String,
-    pub height: u64,
-    pub created_at: String,
-    pub prev_block_hash: Option<String>,
-    pub transactions_hash: Option<String>,
-    pub transactions_rejected: u32,
-    pub transactions_total: u32,
-}
-impl ExplorerBlockDto {
-    #[cfg(test)]
-    pub(crate) fn from_block(block: &SignedBlock) -> Self {
-        Self::from_block_with_visibility(block, |_| true)
-    }
-
-    pub(crate) fn from_block_with_visibility(
-        block: &SignedBlock,
-        mut is_visible: impl FnMut(usize) -> bool,
-    ) -> Self {
-        let header = block.header();
-        let visible_indices = (0..block.network_entrypoint_count())
-            .filter(|index| is_visible(*index))
-            .collect::<Vec<_>>();
-        let transactions_rejected = if block.has_results() {
-            visible_indices
-                .iter()
-                .filter(|index| {
-                    block
-                        .network_output_at(u32::try_from(**index).unwrap_or(u32::MAX))
-                        .is_some_and(|(_, output)| output.result.is_err())
-                })
-                .count()
-        } else {
-            0
-        };
-        Self {
-            hash: block.hash().to_string(),
-            height: header.height().get(),
-            created_at: block_created_at(header.creation_time()),
-            prev_block_hash: header.prev_block_hash().map(|hash| hash.to_string()),
-            transactions_hash: header.merkle_root().map(|hash| hash.to_string()),
-            transactions_rejected: saturating_usize_to_u32(transactions_rejected),
-            transactions_total: saturating_usize_to_u32(visible_indices.len()),
-        }
-    }
-    pub(crate) fn from_hash_only(
-        height: u64,
-        hash: HashOf<BlockHeader>,
-        prev_block_hash: Option<HashOf<BlockHeader>>,
-    ) -> Self {
-        Self {
-            hash: hash.to_string(),
-            height,
-            created_at: String::new(),
-            prev_block_hash: prev_block_hash.map(|hash| hash.to_string()),
-            transactions_hash: None,
-            transactions_rejected: 0,
-            transactions_total: 0,
-        }
-    }
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerBlocksPage {
-    pub pagination: ExplorerHistoryCursorMeta,
-    pub items: Vec<ExplorerBlockDto>,
-}
-#[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerNetworkMetricsDto {
     pub peers: u64,
     pub domains: u64,
@@ -903,55 +825,14 @@ pub(crate) struct ExplorerNetworkMetricsDto {
     pub transactions_accepted: u64,
     pub transactions_rejected: u64,
     pub block: u64,
-    pub block_created_at: Option<String>,
+    pub block_created_at: Option<crate::explorer_history::HistoryTime>,
     pub finalized_block: u64,
     pub avg_commit_time: Option<ExplorerDurationDto>,
     pub avg_block_time: Option<ExplorerDurationDto>,
 }
 #[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerTransactionDto {
-    pub authority: String,
-    pub hash: String,
-    pub block: u64,
-    pub created_at: String,
-    pub executable: String,
-    pub status: String,
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerTransactionDetailDto {
-    pub authority: String,
-    pub hash: String,
-    pub block: u64,
-    pub created_at: String,
-    pub executable: String,
-    pub status: String,
-    pub rejection_reason: Option<ExplorerTransactionRejectionDto>,
-    pub executable_payload: Value,
-    pub metadata: Value,
-    pub nonce: Option<u64>,
-    pub signature: String,
-    pub time_to_live: Option<ExplorerDurationDto>,
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerTransactionRejectionDto {
-    pub encoded: String,
-    pub json: Value,
-    pub message: String,
-}
-#[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerDurationDto {
     pub ms: u64,
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerTransactionsPage {
-    pub pagination: ExplorerHistoryCursorMeta,
-    pub items: Vec<ExplorerTransactionDto>,
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerLatestTransactionsResponse {
-    pub sampled_at: String,
-    pub pagination: ExplorerHistoryCursorMeta,
-    pub items: Vec<ExplorerTransactionDto>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExplorerInstructionKind {
@@ -968,8 +849,6 @@ pub(crate) enum ExplorerInstructionKind {
     SetParameter,
     Upgrade,
     Log,
-    KagemushaTopUp,
-    KagemushaRedemption,
     Custom,
 }
 impl ExplorerInstructionKind {
@@ -988,8 +867,6 @@ impl ExplorerInstructionKind {
             Self::SetParameter => "SetParameter",
             Self::Upgrade => "Upgrade",
             Self::Log => "Log",
-            Self::KagemushaTopUp => "KagemushaTopUp",
-            Self::KagemushaRedemption => "KagemushaRedemption",
             Self::Custom => "Custom",
         }
     }
@@ -1011,47 +888,16 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "setparameter" | "set_parameter" => Ok(Self::SetParameter),
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
-            "kagemushatopup" | "kagemusha_top_up" => Ok(Self::KagemushaTopUp),
-            "kagemusharedemption" | "kagemusha_redemption" => Ok(Self::KagemushaRedemption),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
     }
 }
 #[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerInstructionBoxDto {
-    pub encoded: String,
-    pub framed_sha256: String,
-    pub json: Value,
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerInstructionDto {
-    pub authority: String,
-    pub created_at: String,
-    pub kind: String,
-    #[norito(rename = "box")]
-    pub r#box: ExplorerInstructionBoxDto,
-    pub transaction_hash: String,
-    pub transaction_status: String,
-    pub block: u64,
-    pub index: u32,
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerInstructionsPage {
-    pub pagination: ExplorerHistoryCursorMeta,
-    pub items: Vec<ExplorerInstructionDto>,
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerLatestInstructionsResponse {
-    pub sampled_at: String,
-    pub pagination: ExplorerHistoryCursorMeta,
-    pub items: Vec<ExplorerInstructionDto>,
-}
-#[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerHealthDto {
     pub head_height: u64,
-    pub head_created_at: Option<String>,
-    pub sampled_at: String,
+    pub head_created_at: Option<crate::explorer_history::HistoryTime>,
+    pub sampled_at: crate::explorer_history::HistoryTime,
 }
 pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstructionKind {
     let wire_id = instruction_wire_id(instruction);
@@ -1116,10 +962,6 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {
                 ExplorerInstructionKind::Log
-            } else if any.downcast_ref::<TopUpKagemushaV1>().is_some() {
-                ExplorerInstructionKind::KagemushaTopUp
-            } else if any.downcast_ref::<RedeemKagemushaV1>().is_some() {
-                ExplorerInstructionKind::KagemushaRedemption
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -1129,468 +971,6 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
 fn instruction_wire_id(instruction: &InstructionBox) -> &str {
     iroha_data_model::isi::instruction_wire_id(instruction)
         .expect("explorer instruction must have a canonical V1 wire identifier")
-}
-fn instruction_variant_from_wire_id(wire_id: &str) -> &str {
-    wire_id.rsplit("::").next().unwrap_or(wire_id)
-}
-fn instruction_display_kind(instruction: &InstructionBox, kind: ExplorerInstructionKind) -> String {
-    if kind != ExplorerInstructionKind::Custom {
-        return kind.as_str().to_string();
-    }
-    let variant = instruction_variant_from_wire_id(instruction_wire_id(instruction));
-    if variant.eq_ignore_ascii_case("CustomInstruction") || variant.trim().is_empty() {
-        return ExplorerInstructionKind::Custom.as_str().to_string();
-    }
-    variant.to_string()
-}
-#[cfg(test)]
-pub(crate) fn instruction_dto_with_kind(
-    tx: &SignedTransaction,
-    block_height: u64,
-    result: &TransactionResult,
-    instruction: &InstructionBox,
-    kind: ExplorerInstructionKind,
-    index: u32,
-) -> ExplorerInstructionDto {
-    instruction_dto_with_kind_and_hash(
-        tx,
-        tx.hash_as_entrypoint(),
-        block_height,
-        result,
-        instruction,
-        kind,
-        index,
-    )
-}
-pub(crate) fn instruction_dto_with_kind_and_hash(
-    tx: &SignedTransaction,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    block_height: u64,
-    result: &TransactionResult,
-    instruction: &InstructionBox,
-    kind: ExplorerInstructionKind,
-    index: u32,
-) -> ExplorerInstructionDto {
-    ExplorerInstructionDto {
-        authority: account_literal::display_literal(tx.authority()),
-        created_at: duration_to_rfc3339(tx.creation_time()),
-        kind: instruction_display_kind(instruction, kind),
-        r#box: instruction_box_dto(instruction, kind),
-        transaction_hash: entrypoint_hash.to_string(),
-        transaction_status: transaction_status_label(result).to_string(),
-        block: block_height,
-        index,
-    }
-}
-fn instruction_box_dto(
-    instruction: &InstructionBox,
-    kind: ExplorerInstructionKind,
-) -> ExplorerInstructionBoxDto {
-    ExplorerInstructionBoxDto {
-        encoded: instruction_encoded_hex(instruction),
-        framed_sha256: instruction_framed_sha256(instruction),
-        json: instruction_json_payload(instruction, kind),
-    }
-}
-fn instruction_encoded_hex(instruction: &InstructionBox) -> String {
-    let bytes = instruction.dyn_encode();
-    format!("0x{}", hex::encode(bytes))
-}
-fn instruction_framed_sha256(instruction: &InstructionBox) -> String {
-    let (_, framed) = iroha_data_model::isi::framed_instruction_payload(instruction)
-        .expect("registered explorer instruction must use canonical Norito framing");
-    format!("0x{}", hex::encode(Sha256::digest(framed)))
-}
-fn instruction_json_payload(instruction: &InstructionBox, kind: ExplorerInstructionKind) -> Value {
-    let mut map = Map::new();
-    map.insert("kind".to_string(), Value::String(kind.as_str().to_string()));
-    map.insert(
-        "payload".to_string(),
-        structured_instruction_payload(instruction, kind),
-    );
-    map.insert(
-        "wire_id".to_string(),
-        Value::String(instruction_wire_id(instruction).to_string()),
-    );
-    map.insert(
-        "encoded".to_string(),
-        Value::String(hex::encode(instruction.dyn_encode())),
-    );
-    Value::Object(map)
-}
-fn structured_instruction_payload(
-    instruction: &InstructionBox,
-    kind: ExplorerInstructionKind,
-) -> Value {
-    if let Some(payload) = propose_sccp_route_governance_payload(instruction) {
-        return payload;
-    }
-    match kind {
-        ExplorerInstructionKind::Register => register_payload(instruction),
-        ExplorerInstructionKind::Unregister => unregister_payload(instruction),
-        ExplorerInstructionKind::Mint => mint_payload(instruction),
-        ExplorerInstructionKind::Burn => burn_payload(instruction),
-        ExplorerInstructionKind::Transfer => transfer_payload(instruction),
-        ExplorerInstructionKind::SetKeyValue => set_key_value_payload(instruction),
-        ExplorerInstructionKind::RemoveKeyValue => remove_key_value_payload(instruction),
-        ExplorerInstructionKind::Grant => grant_payload(instruction),
-        ExplorerInstructionKind::Revoke => revoke_payload(instruction),
-        ExplorerInstructionKind::ExecuteTrigger => execute_trigger_payload(instruction),
-        ExplorerInstructionKind::SetParameter => set_parameter_payload(instruction),
-        ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
-        ExplorerInstructionKind::Log => log_payload(instruction),
-        ExplorerInstructionKind::KagemushaTopUp => kagemusha_top_up_payload(instruction),
-        ExplorerInstructionKind::KagemushaRedemption => kagemusha_redemption_payload(instruction),
-        ExplorerInstructionKind::Custom => custom_payload(instruction),
-    }
-    .unwrap_or_else(|| fallback_structured_payload(instruction))
-}
-fn propose_sccp_route_governance_payload(instruction: &InstructionBox) -> Option<Value> {
-    let proposal = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>(
-    )?;
-    let mut value = Map::new();
-    value.insert(
-        "proposal".to_owned(),
-        json::to_value(&proposal.proposal).ok()?,
-    );
-    Some(instruction_variant_value(
-        "ProposeSccpRouteGovernance",
-        Value::Object(value),
-    ))
-}
-fn fallback_instruction_payload(instruction: &InstructionBox) -> Value {
-    let mut object = Map::new();
-    object.insert(
-        "wire_id".to_string(),
-        Value::String(instruction_wire_id(instruction).to_string()),
-    );
-    object.insert(
-        "encoded".to_string(),
-        Value::String(hex::encode(instruction.dyn_encode())),
-    );
-    Value::Object(object)
-}
-fn fallback_structured_payload(instruction: &InstructionBox) -> Value {
-    instruction_variant_value(
-        instruction_variant_from_wire_id(instruction_wire_id(instruction)),
-        fallback_instruction_payload(instruction),
-    )
-}
-fn register_payload(instruction: &InstructionBox) -> Option<Value> {
-    let register = instruction.as_any().downcast_ref::<RegisterBox>()?;
-    let (variant, value) = match register {
-        RegisterBox::Peer(inner) => ("Peer", json::to_value(inner).ok()?),
-        RegisterBox::Domain(inner) => ("Domain", json::to_value(inner).ok()?),
-        RegisterBox::Account(inner) => ("Account", json::to_value(inner).ok()?),
-        RegisterBox::AssetDefinition(inner) => ("AssetDefinition", json::to_value(inner).ok()?),
-        RegisterBox::Nft(inner) => ("Nft", json::to_value(inner).ok()?),
-        RegisterBox::Role(inner) => ("Role", json::to_value(inner).ok()?),
-        RegisterBox::Trigger(inner) => ("Trigger", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn unregister_payload(instruction: &InstructionBox) -> Option<Value> {
-    let unregister = instruction.as_any().downcast_ref::<UnregisterBox>()?;
-    let (variant, value) = match unregister {
-        UnregisterBox::Peer(inner) => ("Peer", json::to_value(inner).ok()?),
-        UnregisterBox::Domain(inner) => ("Domain", json::to_value(inner).ok()?),
-        UnregisterBox::Account(inner) => ("Account", json::to_value(inner).ok()?),
-        UnregisterBox::AssetDefinition(inner) => ("AssetDefinition", json::to_value(inner).ok()?),
-        UnregisterBox::Nft(inner) => ("Nft", json::to_value(inner).ok()?),
-        UnregisterBox::Role(inner) => ("Role", json::to_value(inner).ok()?),
-        UnregisterBox::Trigger(inner) => ("Trigger", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn mint_payload(instruction: &InstructionBox) -> Option<Value> {
-    let mint = instruction.as_any().downcast_ref::<MintBox>()?;
-    let (variant, value) = match mint {
-        MintBox::Asset(inner) => ("Asset", json::to_value(inner).ok()?),
-        MintBox::TriggerRepetitions(inner) => ("TriggerRepetitions", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn burn_payload(instruction: &InstructionBox) -> Option<Value> {
-    let burn = instruction.as_any().downcast_ref::<BurnBox>()?;
-    let (variant, value) = match burn {
-        BurnBox::Asset(inner) => ("Asset", json::to_value(inner).ok()?),
-        BurnBox::TriggerRepetitions(inner) => ("TriggerRepetitions", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn transfer_payload(instruction: &InstructionBox) -> Option<Value> {
-    if let Some(batch) = instruction.as_any().downcast_ref::<TransferAssetBatch>() {
-        let value = json::to_value(batch).ok()?;
-        return Some(instruction_variant_value("AssetBatch", value));
-    }
-    let transfer = instruction.as_any().downcast_ref::<TransferBox>()?;
-    let (variant, value) = match transfer {
-        TransferBox::Domain(inner) => ("Domain", json::to_value(inner).ok()?),
-        TransferBox::AssetDefinition(inner) => ("AssetDefinition", json::to_value(inner).ok()?),
-        TransferBox::Asset(inner) => ("Asset", json::to_value(inner).ok()?),
-        TransferBox::Nft(inner) => ("Nft", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn set_key_value_payload(instruction: &InstructionBox) -> Option<Value> {
-    if let Some(asset) = instruction.as_any().downcast_ref::<SetAssetKeyValue>() {
-        let value = json::to_value(asset).ok()?;
-        return Some(instruction_variant_value("Asset", value));
-    }
-    let setter = instruction.as_any().downcast_ref::<SetKeyValueBox>()?;
-    let (variant, value) = match setter {
-        SetKeyValueBox::Domain(inner) => ("Domain", json::to_value(inner).ok()?),
-        SetKeyValueBox::Account(inner) => ("Account", json::to_value(inner).ok()?),
-        SetKeyValueBox::AssetDefinition(inner) => ("AssetDefinition", json::to_value(inner).ok()?),
-        SetKeyValueBox::Nft(inner) => ("Nft", json::to_value(inner).ok()?),
-        SetKeyValueBox::Trigger(inner) => ("Trigger", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn remove_key_value_payload(instruction: &InstructionBox) -> Option<Value> {
-    if let Some(asset) = instruction.as_any().downcast_ref::<RemoveAssetKeyValue>() {
-        let value = json::to_value(asset).ok()?;
-        return Some(instruction_variant_value("Asset", value));
-    }
-    let remover = instruction.as_any().downcast_ref::<RemoveKeyValueBox>()?;
-    let (variant, value) = match remover {
-        RemoveKeyValueBox::Domain(inner) => ("Domain", json::to_value(inner).ok()?),
-        RemoveKeyValueBox::Account(inner) => ("Account", json::to_value(inner).ok()?),
-        RemoveKeyValueBox::AssetDefinition(inner) => {
-            ("AssetDefinition", json::to_value(inner).ok()?)
-        }
-        RemoveKeyValueBox::Nft(inner) => ("Nft", json::to_value(inner).ok()?),
-        RemoveKeyValueBox::Trigger(inner) => ("Trigger", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn grant_payload(instruction: &InstructionBox) -> Option<Value> {
-    let grant = instruction.as_any().downcast_ref::<GrantBox>()?;
-    let (variant, value) = match grant {
-        GrantBox::Permission(inner) => ("PermissionToAccount", json::to_value(inner).ok()?),
-        GrantBox::Role(inner) => ("RoleToAccount", json::to_value(inner).ok()?),
-        GrantBox::RolePermission(inner) => ("PermissionToRole", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn revoke_payload(instruction: &InstructionBox) -> Option<Value> {
-    let revoke = instruction.as_any().downcast_ref::<RevokeBox>()?;
-    let (variant, value) = match revoke {
-        RevokeBox::Permission(inner) => ("PermissionFromAccount", json::to_value(inner).ok()?),
-        RevokeBox::Role(inner) => ("RoleFromAccount", json::to_value(inner).ok()?),
-        RevokeBox::RolePermission(inner) => ("PermissionFromRole", json::to_value(inner).ok()?),
-    };
-    Some(instruction_variant_value(variant, value))
-}
-fn execute_trigger_payload(instruction: &InstructionBox) -> Option<Value> {
-    let exec = instruction.as_any().downcast_ref::<ExecuteTrigger>()?;
-    let value = json::to_value(exec).ok()?;
-    Some(instruction_variant_value("ExecuteTrigger", value))
-}
-fn set_parameter_payload(instruction: &InstructionBox) -> Option<Value> {
-    let parameter = instruction.as_any().downcast_ref::<SetParameter>()?;
-    let value = json::to_value(parameter).ok()?;
-    Some(instruction_variant_value("SetParameter", value))
-}
-fn upgrade_payload(instruction: &InstructionBox) -> Option<Value> {
-    if let Some(propose) = instruction.as_any().downcast_ref::<ProposeRuntimeUpgrade>() {
-        let value = json::to_value(propose).ok()?;
-        return Some(instruction_variant_value("ProposeRuntimeUpgrade", value));
-    }
-    if let Some(activate) = instruction
-        .as_any()
-        .downcast_ref::<ActivateRuntimeUpgrade>()
-    {
-        let value = json::to_value(activate).ok()?;
-        return Some(instruction_variant_value("ActivateRuntimeUpgrade", value));
-    }
-    if let Some(cancel) = instruction.as_any().downcast_ref::<CancelRuntimeUpgrade>() {
-        let value = json::to_value(cancel).ok()?;
-        return Some(instruction_variant_value("CancelRuntimeUpgrade", value));
-    }
-    let upgrade = instruction.as_any().downcast_ref::<Upgrade>()?;
-    let value = json::to_value(upgrade).ok()?;
-    Some(instruction_variant_value("Upgrade", value))
-}
-fn log_payload(instruction: &InstructionBox) -> Option<Value> {
-    let log = instruction.as_any().downcast_ref::<Log>()?;
-    let value = json::to_value(log).ok()?;
-    Some(instruction_variant_value("Log", value))
-}
-fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<TopUpKagemushaV1>()?;
-    let request = &isi.request;
-    let mut value = Map::new();
-    value.insert(
-        "asset".to_string(),
-        json::to_value(&request.asset).unwrap_or(Value::Null),
-    );
-    value.insert(
-        "amount_atomic_units".to_string(),
-        Value::String(request.amount.to_string()),
-    );
-    value.insert(
-        "asset_scale".to_string(),
-        Value::Number(u64::from(request.scale).into()),
-    );
-    value.insert(
-        "credit_id".to_string(),
-        Value::String(hex::encode(request.credit_id)),
-    );
-    value.insert(
-        "operation_id".to_string(),
-        Value::String(hex::encode(request.operation_id)),
-    );
-    Some(instruction_variant_value(
-        "KagemushaTopUp",
-        Value::Object(value),
-    ))
-}
-fn kagemusha_redemption_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<RedeemKagemushaV1>()?;
-    let request = &isi.request;
-    let mut value = Map::new();
-    value.insert(
-        "terminal_nullifier".to_string(),
-        Value::String(hex::encode(request.voucher.statement.terminal_nullifier)),
-    );
-    value.insert(
-        "recipient".to_string(),
-        Value::String(request.voucher.statement.beneficiary.to_string()),
-    );
-    value.insert(
-        "asset".to_string(),
-        json::to_value(&request.voucher.statement.lifecycle.asset).unwrap_or(Value::Null),
-    );
-    value.insert(
-        "amount_atomic_units".to_string(),
-        Value::String(request.voucher.statement.amount.to_string()),
-    );
-    value.insert(
-        "asset_scale".to_string(),
-        Value::Number(u64::from(request.voucher.statement.lifecycle.scale).into()),
-    );
-    value.insert(
-        "operation_id".to_string(),
-        Value::String(hex::encode(request.operation_id)),
-    );
-    Some(instruction_variant_value(
-        "KagemushaRedemption",
-        Value::Object(value),
-    ))
-}
-fn custom_payload(instruction: &InstructionBox) -> Option<Value> {
-    let custom = instruction.as_any().downcast_ref::<CustomInstruction>()?;
-    let parsed = json::parse_value(custom.payload.get())
-        .unwrap_or_else(|_| Value::String(custom.payload.get().clone()));
-    Some(instruction_variant_value("Custom", parsed))
-}
-fn instruction_variant_value(variant: &str, value: Value) -> Value {
-    let mut map = Map::new();
-    map.insert("variant".to_string(), Value::String(variant.to_string()));
-    map.insert("value".to_string(), value);
-    Value::Object(map)
-}
-fn encode_norito_hex_prefixed<T: Encode>(value: &T) -> String {
-    let bytes = Encode::encode(value);
-    format!("0x{}", hex::encode(bytes))
-}
-fn executable_label(executable: &Executable) -> &'static str {
-    match executable {
-        Executable::Instructions(_) => "Instructions",
-        Executable::ContractCall(_) => "ContractCall",
-        Executable::Ivm(_) => "Ivm",
-        Executable::IvmProved(_) => "IvmProved",
-        Executable::Batch(_) => "Batch",
-    }
-}
-fn usize_to_value(value: usize) -> Value {
-    Value::Number(u64::try_from(value).unwrap_or(u64::MAX).into())
-}
-fn executable_payload(executable: &Executable) -> Value {
-    match executable {
-        Executable::Instructions(instructions) => {
-            let mut map = Map::new();
-            map.insert(
-                "instruction_count".to_string(),
-                usize_to_value(instructions.len()),
-            );
-            Value::Object(map)
-        }
-        Executable::ContractCall(invocation) => {
-            norito::json::to_value(invocation).unwrap_or(Value::Null)
-        }
-        Executable::Ivm(bytecode) => {
-            let mut map = Map::new();
-            map.insert(
-                "bytecode_len".to_string(),
-                usize_to_value(bytecode.size_bytes()),
-            );
-            Value::Object(map)
-        }
-        Executable::IvmProved(proved) => {
-            let mut map = Map::new();
-            map.insert(
-                "bytecode_len".to_string(),
-                usize_to_value(proved.bytecode.size_bytes()),
-            );
-            map.insert(
-                "overlay_count".to_string(),
-                usize_to_value(proved.overlay.len()),
-            );
-            map.insert(
-                "events_commitment".to_string(),
-                Value::String(proved.events_commitment.to_string()),
-            );
-            map.insert(
-                "gas_policy_commitment".to_string(),
-                Value::String(proved.gas_policy_commitment.to_string()),
-            );
-            Value::Object(map)
-        }
-        Executable::Batch(items) => {
-            let mut map = Map::new();
-            map.insert("item_count".to_string(), usize_to_value(items.len()));
-            map.insert(
-                "instruction_count".to_string(),
-                usize_to_value(
-                    items
-                        .iter()
-                        .filter(|item| {
-                            matches!(
-                                item,
-                                iroha_data_model::transaction::ExecutableBatchItem::Instruction(_)
-                            )
-                        })
-                        .count(),
-                ),
-            );
-            map.insert(
-                "contract_call_count".to_string(),
-                usize_to_value(
-                    items
-                        .iter()
-                        .filter(|item| {
-                            matches!(
-                                item,
-                                iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_)
-                            )
-                        })
-                        .count(),
-                ),
-            );
-            Value::Object(map)
-        }
-    }
-}
-fn transaction_status_label(result: &TransactionResult) -> &'static str {
-    if result.as_ref().is_ok() {
-        "Committed"
-    } else {
-        "Rejected"
-    }
 }
 fn duration_to_rfc3339(duration: Duration) -> String {
     const FALLBACK: &str = "1970-01-01T00:00:00Z";
@@ -1607,120 +987,20 @@ pub(crate) fn now_rfc3339() -> String {
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
-fn duration_ms(duration: Duration) -> u64 {
-    duration.as_millis().try_into().unwrap_or(u64::MAX)
+pub(crate) fn explorer_history_key_text<T: json::JsonSerialize + ?Sized>(
+    value: &T,
+) -> Result<String, ExplorerCursorError> {
+    explorer_checked_key_text(value, EXPLORER_CURSOR_MAX_KEY_BYTES)
 }
-fn ttl_to_dto(ttl: Option<Duration>) -> Option<ExplorerDurationDto> {
-    ttl.map(|value| ExplorerDurationDto {
-        ms: duration_ms(value),
-    })
+pub(crate) fn explorer_history_scalar_text(value: u64) -> Result<String, ExplorerCursorError> {
+    let encoded = json::to_json_bounded_boxed(&value, 20)
+        .map_err(|_| ExplorerCursorError::ByteLimitExceeded)?;
+    String::from_utf8(encoded.into_vec()).map_err(|_| ExplorerCursorError::InvalidKey)
 }
-#[cfg(test)]
-pub(crate) fn transaction_summary_dto(
-    tx: &SignedTransaction,
-    block_height: u64,
-    result: &TransactionResult,
-) -> ExplorerTransactionDto {
-    transaction_summary_dto_with_hash(tx, tx.hash_as_entrypoint(), block_height, result)
-}
-pub(crate) fn transaction_summary_dto_with_hash(
-    tx: &SignedTransaction,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    block_height: u64,
-    result: &TransactionResult,
-) -> ExplorerTransactionDto {
-    ExplorerTransactionDto {
-        authority: account_literal::display_literal(tx.authority()),
-        hash: entrypoint_hash.to_string(),
-        block: block_height,
-        created_at: duration_to_rfc3339(tx.creation_time()),
-        executable: executable_label(tx.instructions()).to_string(),
-        status: transaction_status_label(result).to_string(),
-    }
-}
-#[cfg(test)]
-pub(crate) fn transaction_detail_dto(
-    tx: &SignedTransaction,
-    block_height: u64,
-    result: &TransactionResult,
-) -> ExplorerTransactionDetailDto {
-    transaction_detail_dto_with_hash(tx, tx.hash_as_entrypoint(), block_height, result)
-}
-pub(crate) fn transaction_detail_dto_with_hash(
-    tx: &SignedTransaction,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    block_height: u64,
-    result: &TransactionResult,
-) -> ExplorerTransactionDetailDto {
-    ExplorerTransactionDetailDto {
-        authority: account_literal::display_literal(tx.authority()),
-        hash: entrypoint_hash.to_string(),
-        block: block_height,
-        created_at: duration_to_rfc3339(tx.creation_time()),
-        executable: executable_label(tx.instructions()).to_string(),
-        status: transaction_status_label(result).to_string(),
-        rejection_reason: result
-            .as_ref()
-            .err()
-            .map(|reason| ExplorerTransactionRejectionDto {
-                encoded: encode_norito_hex_prefixed(reason),
-                json: norito::json::to_value(reason).unwrap_or(Value::Null),
-                message: format_rejection_reason_message(reason),
-            }),
-        executable_payload: executable_payload(tx.instructions()),
-        metadata: metadata_to_json(tx.metadata()),
-        nonce: tx.nonce().map(|nonce| nonce.get().into()),
-        signature: hex::encode(tx.signature().payload().payload()),
-        time_to_live: ttl_to_dto(tx.time_to_live()),
-    }
-}
-fn format_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut message = error.to_string();
-    let mut source = error.source();
-    while let Some(next) = source {
-        let piece = next.to_string();
-        if !piece.is_empty() {
-            if !message.is_empty() {
-                message.push_str(": ");
-            }
-            message.push_str(&piece);
-        }
-        source = next.source();
-    }
-    message
-}
-fn format_validation_fail_message(fail: &ValidationFail) -> String {
-    match fail {
-        ValidationFail::InstructionFailed(error) => {
-            format!(
-                "Instruction execution failed: {}",
-                format_instruction_execution_error_message(error)
-            )
-        }
-        _ => fail.to_string(),
-    }
-}
-fn format_instruction_execution_error_message(
-    error: &isi::error::InstructionExecutionError,
-) -> String {
-    match error {
-        isi::error::InstructionExecutionError::Find(find_error) => find_error.to_string(),
-        isi::error::InstructionExecutionError::Repetition(repetition_error) => {
-            repetition_error.to_string()
-        }
-        _ => error.to_string(),
-    }
-}
-fn format_rejection_reason_message(reason: &TransactionRejectionReason) -> String {
-    match reason {
-        TransactionRejectionReason::Validation(fail) => {
-            format!(
-                "Validation failed: {}",
-                format_validation_fail_message(fail)
-            )
-        }
-        _ => format_error_chain(reason),
-    }
+pub(crate) fn explorer_history_literal_text(value: &str) -> Result<String, ExplorerCursorError> {
+    let mut bytes = explorer_exact_vec(value.len(), EXPLORER_CURSOR_MAX_KEY_BYTES)?;
+    bytes.extend_from_slice(value.as_bytes());
+    String::from_utf8(bytes).map_err(|_| ExplorerCursorError::InvalidKey)
 }
 fn explorer_checked_key_text<T: json::JsonSerialize + ?Sized>(
     value: &T,
@@ -1738,6 +1018,12 @@ fn explorer_checked_key_text<T: json::JsonSerialize + ?Sized>(
         .skip_string_bounded(max_bytes)
         .map_err(|_| ExplorerCursorError::InvalidKey)?;
     json::from_slice::<String>(&encoded).map_err(|_| ExplorerCursorError::ByteLimitExceeded)
+}
+/// Borrow one optional selector as the checked JSON serializer hashed by
+/// [`explorer_filter_digest`]: an unsizing coercion, never an owned copy.
+fn explorer_filter<T: json::JsonSerialize>(value: Option<&T>) -> Option<&dyn json::JsonSerialize> {
+    let value: &dyn json::JsonSerialize = value?;
+    Some(value)
 }
 fn explorer_filter_digest(
     collection: ExplorerCursorCollection,
@@ -2214,8 +1500,8 @@ pub(crate) fn accounts_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Accounts,
         &[
-            domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
-            definition_filter.map(|value| -> &dyn json::JsonSerialize { value }),
+            explorer_filter(domain_filter),
+            explorer_filter(definition_filter),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2323,7 +1609,7 @@ pub(crate) fn domains_page_for_filters<'world>(
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Domains,
-        &[owned_by.map(|value| -> &dyn json::JsonSerialize { value })],
+        &[explorer_filter(owned_by)],
         visibility.visible_route_set_digest(),
         byte_budget,
     )?;
@@ -2395,8 +1681,8 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::AssetDefinitions,
         &[
-            owning_domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
-            owner_filter.map(|value| -> &dyn json::JsonSerialize { value }),
+            explorer_filter(owning_domain_filter),
+            explorer_filter(owner_filter),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2494,9 +1780,9 @@ pub(crate) fn assets_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Assets,
         &[
-            owned_by.map(|value| -> &dyn json::JsonSerialize { value }),
-            definition_filter.map(|value| -> &dyn json::JsonSerialize { value }),
-            asset_filter.map(|value| -> &dyn json::JsonSerialize { value }),
+            explorer_filter(owned_by),
+            explorer_filter(definition_filter),
+            explorer_filter(asset_filter),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2621,10 +1907,7 @@ pub(crate) fn nfts_page_for_filters<'world>(
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Nfts,
-        &[
-            owned_by.map(|value| -> &dyn json::JsonSerialize { value }),
-            domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
-        ],
+        &[explorer_filter(owned_by), explorer_filter(domain_filter)],
         visibility.visible_route_set_digest(),
         byte_budget,
     )?;
@@ -2719,10 +2002,7 @@ pub(crate) fn rwas_page_for_filters<'world>(
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Rwas,
-        &[
-            owned_by.map(|value| -> &dyn json::JsonSerialize { value }),
-            domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
-        ],
+        &[explorer_filter(owned_by), explorer_filter(domain_filter)],
         visibility.visible_route_set_digest(),
         byte_budget,
     )?;
@@ -2809,6 +2089,48 @@ pub(crate) fn block_created_at(duration: Duration) -> String {
 fn saturating_usize_to_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
+/// Commit Explorer fixture lots through `RegisterRwa`, the only writer of the RWA table and
+/// its owner index. Each lot is `(domain, owner, quantity)`; the domain and the owner must
+/// already exist. Identifiers are generated, so callers read them back from the World.
+#[cfg(test)]
+pub(crate) fn register_rwa_lots_for_tests(
+    state: &iroha_core::state::State,
+    lots: &[(&DomainId, &AccountId, u32)],
+) {
+    use iroha_core::smartcontracts::Execute as _;
+    use iroha_data_model::{
+        block::BlockHeader,
+        isi::rwa::RegisterRwa,
+        rwa::{NewRwa, RwaControlPolicy},
+    };
+    let height = std::num::NonZeroU64::new(1).expect("fixture height is non-zero");
+    let mut block = state.block(BlockHeader::new(height, None, None, 0, 0));
+    let mut transaction = block.transaction();
+    // A generated identifier is derived from the entrypoint hash and a per-transaction ordinal.
+    transaction.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+        [0xB1; iroha_crypto::Hash::LENGTH],
+    ));
+    for (index, &(domain, owner, quantity)) in lots.iter().enumerate() {
+        RegisterRwa {
+            rwa: NewRwa::new(
+                domain.clone(),
+                Quantity::from(quantity),
+                iroha_primitives::numeric::NumericSpec::integer(),
+                format!("https://example.org/lot/{index}"),
+                None,
+                Metadata::default(),
+                Vec::new(),
+                RwaControlPolicy::default(),
+            ),
+        }
+        .execute(owner, &mut transaction)
+        .expect("register fixture lot");
+    }
+    transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit fixture lots");
+}
 #[cfg(test)]
 mod tests {
     use iroha_core::state::World;
@@ -2825,7 +2147,7 @@ mod tests {
         transaction::{
             error::TransactionRejectionReason,
             executable::{ContractInvocation, Executable},
-            signed::TransactionBuilder,
+            signed::{SignedTransaction, TransactionBuilder, TransactionResult},
         },
         trigger::DataTriggerSequence,
     };
@@ -2942,31 +2264,32 @@ mod tests {
     use super::*;
     use nonzero_ext::nonzero;
     #[test]
-    fn instruction_kind_filter_accepts_kagemusha_v1_camelcase_and_snake_case() {
-        assert_eq!(
-            "KagemushaTopUp"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 top-up kind"),
-            ExplorerInstructionKind::KagemushaTopUp
-        );
-        assert_eq!(
-            "kagemusha_top_up"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 top-up kind"),
-            ExplorerInstructionKind::KagemushaTopUp
-        );
-        assert_eq!(
-            "KagemushaRedemption"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 redemption kind"),
-            ExplorerInstructionKind::KagemushaRedemption
-        );
-        assert_eq!(
-            "kagemusha_redemption"
-                .parse::<ExplorerInstructionKind>()
-                .expect("KAGEMUSHA V1 redemption kind"),
-            ExplorerInstructionKind::KagemushaRedemption
-        );
+    fn instruction_kind_filter_accepts_camelcase_and_snake_case() {
+        for raw in ["SetKeyValue", "set_key_value"] {
+            assert_eq!(
+                raw.parse::<ExplorerInstructionKind>()
+                    .expect("set-key-value kind"),
+                ExplorerInstructionKind::SetKeyValue
+            );
+        }
+        for raw in ["ExecuteTrigger", "execute_trigger"] {
+            assert_eq!(
+                raw.parse::<ExplorerInstructionKind>()
+                    .expect("execute-trigger kind"),
+                ExplorerInstructionKind::ExecuteTrigger
+            );
+        }
+        for retired in [
+            "KagemushaTopUp",
+            "kagemusha_top_up",
+            "KagemushaRedemption",
+            "kagemusha_redemption",
+        ] {
+            assert!(
+                retired.parse::<ExplorerInstructionKind>().is_err(),
+                "{retired} is not an explorer instruction kind"
+            );
+        }
     }
     #[test]
     fn history_cursor_is_snapshot_filter_visibility_and_route_bound() {
@@ -3093,7 +2416,7 @@ mod tests {
     }
     #[test]
     fn explorer_cursor_is_canonical_collection_and_filter_bound() {
-        let filters: [Option<&dyn json::JsonSerialize>; 2] = [Some(&"wonderland.universal"), None];
+        let filters = [explorer_filter(Some(&"wonderland.universal")), None];
         let visibility_digest = [0x11; 32];
         let digest = explorer_filter_digest(
             ExplorerCursorCollection::Accounts,
@@ -3116,8 +2439,7 @@ mod tests {
         .expect("canonical account cursor")
         .expect("cursor key");
         assert_eq!(decoded, ALICE_ID.clone());
-        let other_filters: [Option<&dyn json::JsonSerialize>; 2] =
-            [Some(&"garden.universal"), None];
+        let other_filters = [explorer_filter(Some(&"garden.universal")), None];
         let other_digest = explorer_filter_digest(
             ExplorerCursorCollection::Accounts,
             &other_filters,
@@ -3504,8 +2826,8 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id": (def_id.to_string()), "owning_domain":null, "mintable":"Once", "logo":null,
-                "metadata":{"ticker":"ROSE"}, "owned_by": (ALICE_ID.to_string()), "assets":7,
+                "id":(def_id.to_string()), "owning_domain":null, "mintable":"Once", "logo":null,
+                "metadata":{"ticker":"ROSE"}, "owned_by":(ALICE_ID.to_string()), "assets":7,
                 "total_quantity":"100", "locked_quantity":null, "circulating_quantity":null
             }),
         );
@@ -3527,8 +2849,8 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id": (asset_id.to_string()), "definition_id": (asset_id.definition().to_string()),
-                "account_id": (ALICE_ID.to_string()), "value":"42"
+                "id":(asset_id.to_string()), "definition_id":(asset_id.definition().to_string()),
+                "account_id":(ALICE_ID.to_string()), "value":"42"
             }),
         );
     }
@@ -3564,7 +2886,7 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id": (nft_id.to_string()), "owned_by": (ALICE_ID.to_string()), "metadata":{"artist":"Alice"}
+                "id":(nft_id.to_string()), "owned_by":(ALICE_ID.to_string()), "metadata":{"artist":"Alice"}
             }),
         );
     }
@@ -3621,9 +2943,9 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id": (id.to_string()), "owned_by": (ALICE_ID.to_string()), "quantity":"7", "held_quantity":"2",
+                "id":(id.to_string()), "owned_by":(ALICE_ID.to_string()), "quantity":"7", "held_quantity":"2",
                 "primary_reference":"https://example.org/certificate", "status":"held", "is_frozen":true,
-                "metadata":{}, "parents":[{"rwa": (id.to_string()),"quantity":"3"}]
+                "metadata":{}, "parents":[{"rwa":(id.to_string()),"quantity":"3"}]
             }),
         );
         let many = vec![parent; 2048];
@@ -3706,7 +3028,10 @@ mod tests {
             expected.update(value.as_bytes());
         }
         expected.update([0x11; 32]);
-        let filters: [Option<&dyn json::JsonSerialize>; 2] = [Some(&domain), Some(&*ALICE_ID)];
+        let filters = [
+            explorer_filter(Some(&domain)),
+            explorer_filter(Some(&*ALICE_ID)),
+        ];
         assert_eq!(
             explorer_filter_digest(
                 ExplorerCursorCollection::Accounts,
@@ -3731,6 +3056,513 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn explorer_filter_borrows_the_selector_and_keeps_absence() {
+        let domain = DomainId::try_new("vault", "universal").unwrap();
+        let borrowed = explorer_filter(Some(&domain)).expect("present selector");
+        assert!(std::ptr::addr_eq(
+            std::ptr::from_ref(borrowed),
+            std::ptr::from_ref(&domain)
+        ));
+        assert_eq!(
+            json::to_json(borrowed).unwrap(),
+            json::to_json(&domain).unwrap()
+        );
+        assert!(explorer_filter::<DomainId>(None).is_none());
+        let absent = [explorer_filter::<DomainId>(None)];
+        let present = [explorer_filter(Some(&domain))];
+        assert_ne!(
+            explorer_filter_digest(ExplorerCursorCollection::Domains, &absent, [0; 32], 1024)
+                .unwrap(),
+            explorer_filter_digest(ExplorerCursorCollection::Domains, &present, [0; 32], 1024)
+                .unwrap(),
+        );
+    }
+    /// Byte budget of the selector-binding page fixtures.
+    const SELECTOR_PAGE_BUDGET: usize = 64 * 1024;
+    /// Listed key texts with the pagination of one world-collection page.
+    type SelectorPage = Result<(Vec<String>, ExplorerCursorMeta), ExplorerCursorError>;
+    /// The decoded JSON text of one identifier, taken from the ordinary serializer and not
+    /// from the selector helper under test.
+    fn canonical_text<T: json::JsonSerialize>(value: &T) -> String {
+        match json::to_value(value).expect("identifier JSON") {
+            Value::String(text) => text,
+            other => panic!("an identifier must serialize as one JSON string, got {other:?}"),
+        }
+    }
+    /// Independent oracle for the world cursor issued to a global reader: the collection
+    /// tag, each selector's presence flag and text in route order, the visibility digest
+    /// and the last listed key.
+    fn selector_cursor_oracle(
+        collection: ExplorerCursorCollection,
+        selectors: &[Option<String>],
+        key: &str,
+    ) -> String {
+        let mut digest = Sha256::new();
+        digest.update(EXPLORER_CURSOR_FILTER_DOMAIN);
+        digest.update([collection.tag()]);
+        digest.update(
+            u32::try_from(selectors.len())
+                .expect("selector count fits u32")
+                .to_be_bytes(),
+        );
+        for selector in selectors {
+            match selector {
+                Some(text) => {
+                    digest.update([1]);
+                    digest.update(
+                        u32::try_from(text.len())
+                            .expect("selector length fits u32")
+                            .to_be_bytes(),
+                    );
+                    digest.update(text.as_bytes());
+                }
+                None => digest.update([0]),
+            }
+        }
+        digest.update(DataspaceReadVisibility::all_for_tests().visible_route_set_digest());
+        encode_explorer_cursor(collection, digest.finalize().into(), key).expect("oracle cursor")
+    }
+    /// Page two records one at a time under one selector combination and return the query
+    /// that carries its continuation cursor. The cursor must equal the oracle for exactly
+    /// `selectors` and must resume under the same combination.
+    #[track_caller]
+    fn issue_selector_bound_cursor(
+        collection: ExplorerCursorCollection,
+        selectors: &[Option<String>],
+        expected: [&str; 2],
+        page: impl Fn(&ExplorerCursorQuery) -> SelectorPage,
+    ) -> ExplorerCursorQuery {
+        let (listed, pagination) = page(&ExplorerCursorQuery {
+            cursor: None,
+            limit: 1,
+        })
+        .expect("first page");
+        assert_eq!(listed, [expected[0]]);
+        assert!(pagination.has_more);
+        let cursor = pagination.next_cursor.expect("continuation cursor");
+        assert_eq!(
+            cursor,
+            selector_cursor_oracle(collection, selectors, expected[0]),
+            "the cursor must bind exactly these selectors in route order"
+        );
+        let resume = ExplorerCursorQuery {
+            cursor: Some(cursor),
+            limit: 1,
+        };
+        let (listed, pagination) = page(&resume).expect("resumed page");
+        assert_eq!(listed, [expected[1]]);
+        assert!(!pagination.has_more);
+        assert!(pagination.next_cursor.is_none());
+        resume
+    }
+    /// A cursor replayed under another selector combination is out of scope.
+    #[track_caller]
+    fn assert_out_of_selector_scope(page: SelectorPage) {
+        assert_eq!(page.err(), Some(ExplorerCursorError::ScopeMismatch));
+    }
+    /// A World in which the selectors of the world collections match two records each.
+    struct SelectorWorld {
+        world: World,
+        /// Owned by ALICE.
+        alpha: DomainId,
+        /// Owned by ALICE.
+        beta: DomainId,
+        /// Owned by BOB.
+        gamma: DomainId,
+        /// Owned by ALICE in `alpha`; held by ALICE and by BOB.
+        coin: AssetDefinitionId,
+        /// Owned by ALICE in `alpha`; held by ALICE and by BOB.
+        gem: AssetDefinitionId,
+    }
+    /// The four balances of [`SelectorWorld`] in committed key order.
+    fn selector_world_assets(fixture: &SelectorWorld) -> [AssetId; 4] {
+        let mut assets = [
+            AssetId::new(fixture.coin.clone(), ALICE_ID.clone()),
+            AssetId::new(fixture.coin.clone(), BOB_ID.clone()),
+            AssetId::new(fixture.gem.clone(), ALICE_ID.clone()),
+            AssetId::new(fixture.gem.clone(), BOB_ID.clone()),
+        ];
+        assets.sort();
+        assets
+    }
+    fn selector_world() -> SelectorWorld {
+        let domain = |name: &str| DomainId::try_new(name, "universal").expect("fixture domain");
+        let (alpha, beta, gamma) = (domain("alpha"), domain("beta"), domain("gamma"));
+        let definition_id = |name: &str| {
+            AssetDefinitionId::derive_from_components(
+                alpha.clone(),
+                name.parse().expect("fixture asset name"),
+            )
+        };
+        let (coin, gem) = (definition_id("coin"), definition_id("gem"));
+        let definition = |id: &AssetDefinitionId, name: &str| {
+            AssetDefinition::numeric(
+                id.clone(),
+                name.to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(alpha.clone()),
+            )
+            .build(&ALICE_ID)
+        };
+        let balance = |id: &AssetDefinitionId, holder: &AccountId, quantity: u32| {
+            iroha_data_model::asset::Asset::new(
+                AssetId::new(id.clone(), holder.clone()),
+                Quantity::from(quantity),
+            )
+        };
+        let nft = |id: &str, owner: &AccountId| {
+            iroha_data_model::nft::Nft::new(id.parse().expect("fixture NFT"), Metadata::default())
+                .build(owner)
+        };
+        let world = World::with_assets(
+            [
+                Domain::new(alpha.clone()).build(&ALICE_ID),
+                Domain::new(beta.clone()).build(&ALICE_ID),
+                Domain::new(gamma.clone()).build(&BOB_ID),
+            ],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [definition(&coin, "coin"), definition(&gem, "gem")],
+            [
+                balance(&coin, &ALICE_ID, 5),
+                balance(&coin, &BOB_ID, 7),
+                balance(&gem, &ALICE_ID, 3),
+                balance(&gem, &BOB_ID, 2),
+            ],
+            [
+                nft("one$alpha.universal", &ALICE_ID),
+                nft("two$alpha.universal", &ALICE_ID),
+                nft("three$gamma.universal", &BOB_ID),
+            ],
+        );
+        SelectorWorld {
+            world,
+            alpha,
+            beta,
+            gamma,
+            coin,
+            gem,
+        }
+    }
+    #[test]
+    fn accounts_page_binds_domain_and_definition_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |domain: Option<&DomainId>,
+                    definition: Option<&AssetDefinitionId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            accounts_page_for_filters(&view, domain, definition, &all, query, SELECTOR_PAGE_BUDGET)
+                .map(|page| {
+                    let listed = page.items.iter().map(|item| canonical_text(item.id));
+                    (listed.collect(), page.pagination)
+                })
+        };
+        let mut accounts = [ALICE_ID.clone(), BOB_ID.clone()];
+        accounts.sort();
+        let accounts = accounts.map(|account| canonical_text(&account));
+        let expected = [accounts[0].as_str(), accounts[1].as_str()];
+
+        // Both accounts hold `coin`.
+        let by_definition = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Accounts,
+            &[None, Some(canonical_text(&fixture.coin))],
+            expected,
+            |query| page(None, Some(&fixture.coin), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.gem), &by_definition));
+        assert_out_of_selector_scope(page(None, None, &by_definition));
+        assert_out_of_selector_scope(page(
+            Some(&fixture.alpha),
+            Some(&fixture.coin),
+            &by_definition,
+        ));
+
+        let unfiltered = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Accounts,
+            &[None, None],
+            expected,
+            |query| page(None, None, query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.coin), &unfiltered));
+
+        // The fixture binds no account to a domain, so a domain selector lists nothing and
+        // issues no cursor. Replay the cursor the route would issue under it instead.
+        let by_domain = ExplorerCursorQuery {
+            cursor: Some(selector_cursor_oracle(
+                ExplorerCursorCollection::Accounts,
+                &[Some(canonical_text(&fixture.alpha)), None],
+                expected[0],
+            )),
+            limit: 1,
+        };
+        let (listed, pagination) = page(Some(&fixture.alpha), None, &by_domain)
+            .expect("the domain selector accepts its own cursor");
+        assert!(listed.is_empty());
+        assert!(!pagination.has_more);
+        assert_out_of_selector_scope(page(Some(&fixture.beta), None, &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&fixture.alpha), Some(&fixture.coin), &by_domain));
+    }
+    #[test]
+    fn domains_page_binds_the_owner_selector_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>, query: &ExplorerCursorQuery| -> SelectorPage {
+            domains_page_for_filters(&view, owner, &all, query, SELECTOR_PAGE_BUDGET).map(|page| {
+                let listed = page.items.iter().map(|item| canonical_text(item.id));
+                (listed.collect(), page.pagination)
+            })
+        };
+        let mut owned = [fixture.alpha.clone(), fixture.beta.clone()];
+        owned.sort();
+        let owned = owned.map(|domain| canonical_text(&domain));
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Domains,
+            &[Some(canonical_text(&*ALICE_ID))],
+            [owned[0].as_str(), owned[1].as_str()],
+            |query| page(Some(&ALICE_ID), query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), &by_owner));
+        assert_out_of_selector_scope(page(None, &by_owner));
+    }
+    #[test]
+    fn asset_definitions_page_binds_domain_and_owner_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |domain: Option<&DomainId>,
+                    owner: Option<&AccountId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            asset_definitions_page_for_filters(
+                &view,
+                domain,
+                owner,
+                &all,
+                query,
+                SELECTOR_PAGE_BUDGET,
+            )
+            .map(|page| {
+                let listed = page.items.iter().map(|item| canonical_text(item.id));
+                (listed.collect(), page.pagination)
+            })
+        };
+        let mut definitions = [fixture.coin.clone(), fixture.gem.clone()];
+        definitions.sort();
+        let definitions = definitions.map(|definition| canonical_text(&definition));
+        let expected = [definitions[0].as_str(), definitions[1].as_str()];
+
+        let by_domain = issue_selector_bound_cursor(
+            ExplorerCursorCollection::AssetDefinitions,
+            &[Some(canonical_text(&fixture.alpha)), None],
+            expected,
+            |query| page(Some(&fixture.alpha), None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&fixture.gamma), None, &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&fixture.alpha), Some(&ALICE_ID), &by_domain));
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::AssetDefinitions,
+            &[None, Some(canonical_text(&*ALICE_ID))],
+            expected,
+            |query| page(None, Some(&ALICE_ID), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&BOB_ID), &by_owner));
+        assert_out_of_selector_scope(page(None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&fixture.alpha), Some(&ALICE_ID), &by_owner));
+    }
+    #[test]
+    fn assets_page_binds_owner_definition_and_asset_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>,
+                    definition: Option<&AssetDefinitionId>,
+                    asset: Option<&AssetId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            assets_page_for_filters(
+                &view,
+                owner,
+                definition,
+                asset,
+                &all,
+                query,
+                SELECTOR_PAGE_BUDGET,
+            )
+            .map(|page| {
+                let listed = page.items.iter().map(|item| canonical_text(item.id));
+                (listed.collect(), page.pagination)
+            })
+        };
+        let assets = selector_world_assets(&fixture);
+        let texts = |keep: &dyn Fn(&AssetId) -> bool| -> Vec<String> {
+            let kept = assets.iter().filter(|asset| keep(asset));
+            kept.map(canonical_text).collect()
+        };
+
+        let held_by_alice = texts(&|asset| asset.account() == &*ALICE_ID);
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Assets,
+            &[Some(canonical_text(&*ALICE_ID)), None, None],
+            [held_by_alice[0].as_str(), held_by_alice[1].as_str()],
+            |query| page(Some(&ALICE_ID), None, None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), None, None, &by_owner));
+        assert_out_of_selector_scope(page(None, None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&fixture.coin), None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), None, Some(&assets[3]), &by_owner));
+
+        let coins = texts(&|asset| asset.definition() == &fixture.coin);
+        let by_definition = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Assets,
+            &[None, Some(canonical_text(&fixture.coin)), None],
+            [coins[0].as_str(), coins[1].as_str()],
+            |query| page(None, Some(&fixture.coin), None, query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.gem), None, &by_definition));
+        assert_out_of_selector_scope(page(None, None, None, &by_definition));
+        assert_out_of_selector_scope(page(
+            Some(&ALICE_ID),
+            Some(&fixture.coin),
+            None,
+            &by_definition,
+        ));
+
+        // An exact-asset selector lists at most one record and so issues no cursor. Replay
+        // the cursor the route would issue under it after a preceding key instead.
+        let (first, last) = (&assets[0], &assets[3]);
+        let by_asset = ExplorerCursorQuery {
+            cursor: Some(selector_cursor_oracle(
+                ExplorerCursorCollection::Assets,
+                &[None, None, Some(canonical_text(last))],
+                &canonical_text(first),
+            )),
+            limit: 1,
+        };
+        let (listed, pagination) = page(None, None, Some(last), &by_asset)
+            .expect("the asset selector accepts its own cursor");
+        assert_eq!(listed, [canonical_text(last)]);
+        assert!(!pagination.has_more);
+        assert_out_of_selector_scope(page(None, None, Some(&assets[1]), &by_asset));
+        assert_out_of_selector_scope(page(None, None, None, &by_asset));
+        assert_out_of_selector_scope(page(None, Some(last.definition()), None, &by_asset));
+    }
+    #[test]
+    fn nfts_page_binds_owner_and_domain_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>,
+                    domain: Option<&DomainId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            nfts_page_for_filters(&view, owner, domain, &all, query, SELECTOR_PAGE_BUDGET).map(
+                |page| {
+                    let listed = page.items.iter().map(|item| canonical_text(item.id));
+                    (listed.collect(), page.pagination)
+                },
+            )
+        };
+        let mut nfts: [NftId; 2] = ["one$alpha.universal", "two$alpha.universal"]
+            .map(|id| id.parse().expect("fixture NFT"));
+        nfts.sort();
+        let nfts = nfts.map(|nft| canonical_text(&nft));
+        let expected = [nfts[0].as_str(), nfts[1].as_str()];
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Nfts,
+            &[Some(canonical_text(&*ALICE_ID)), None],
+            expected,
+            |query| page(Some(&ALICE_ID), None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), None, &by_owner));
+        assert_out_of_selector_scope(page(None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&fixture.alpha), &by_owner));
+
+        let by_domain = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Nfts,
+            &[None, Some(canonical_text(&fixture.alpha))],
+            expected,
+            |query| page(None, Some(&fixture.alpha), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.gamma), &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&fixture.alpha), &by_domain));
+    }
+    #[test]
+    fn rwas_page_binds_owner_and_domain_selectors_into_its_cursor() {
+        let SelectorWorld {
+            world,
+            alpha,
+            gamma,
+            ..
+        } = selector_world();
+        let state = iroha_core::state::State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        register_rwa_lots_for_tests(
+            &state,
+            &[
+                (&alpha, &ALICE_ID, 7),
+                (&alpha, &ALICE_ID, 9),
+                (&gamma, &BOB_ID, 5),
+            ],
+        );
+        let view = state.world_view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>,
+                    domain: Option<&DomainId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            rwas_page_for_filters(&view, owner, domain, &all, query, SELECTOR_PAGE_BUDGET).map(
+                |page| {
+                    let listed = page.items.iter().map(|item| item.id.0.to_string());
+                    (listed.collect(), page.pagination)
+                },
+            )
+        };
+        // `RegisterRwa` generates the identifiers: read ALICE's two `alpha` lots back from
+        // the primary table, which iterates in key order.
+        let lots: Vec<String> = view
+            .rwas_iter()
+            .filter(|lot| lot.value().owned_by == *ALICE_ID && lot.id().domain() == &alpha)
+            .map(|lot| lot.id().to_string())
+            .collect();
+        assert_eq!(lots.len(), 2);
+        assert_eq!(view.rwas_iter().count(), 3);
+        let expected = [lots[0].as_str(), lots[1].as_str()];
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Rwas,
+            &[Some(canonical_text(&*ALICE_ID)), None],
+            expected,
+            |query| page(Some(&ALICE_ID), None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), None, &by_owner));
+        assert_out_of_selector_scope(page(None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&alpha), &by_owner));
+
+        let by_domain = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Rwas,
+            &[None, Some(canonical_text(&alpha))],
+            expected,
+            |query| page(None, Some(&alpha), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&gamma), &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&alpha), &by_domain));
     }
     #[test]
     fn explorer_selection_admits_exact_layout_before_projecting() {
@@ -3793,11 +3625,14 @@ mod tests {
                 ),
             ],
         );
-        let dto = ExplorerBlockDto::from_block(&block);
+        let dto = crate::explorer_history::HistoryBlockRow::from_block(&block, |_| true);
         assert_eq!(dto.height, 3);
         assert_eq!(dto.transactions_total, 1);
         assert_eq!(dto.transactions_rejected, 1);
-        assert_eq!(dto.created_at, "2023-11-14T22:13:20Z");
+        assert_eq!(
+            json::to_value(&dto.created_at).unwrap().as_str(),
+            Some("2023-11-14T22:13:20Z")
+        );
         assert!(dto.transactions_hash.is_some());
     }
     #[test]
@@ -3808,11 +3643,12 @@ mod tests {
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x22; iroha_crypto::Hash::LENGTH],
         ));
-        let dto = ExplorerBlockDto::from_hash_only(2, hash, Some(prev_hash));
+        let dto =
+            crate::explorer_history::HistoryBlockRow::from_hash_only(2, hash, Some(prev_hash));
         assert_eq!(dto.height, 2);
-        assert_eq!(dto.hash, hash.to_string());
-        assert_eq!(dto.prev_block_hash, Some(prev_hash.to_string()));
-        assert_eq!(dto.created_at, "");
+        assert_eq!(dto.hash, hash);
+        assert_eq!(dto.prev_block_hash, Some(prev_hash));
+        assert_eq!(json::to_value(&dto.created_at).unwrap().as_str(), Some(""));
         assert_eq!(dto.transactions_hash, None);
         assert_eq!(dto.transactions_rejected, 0);
         assert_eq!(dto.transactions_total, 0);
@@ -3867,7 +3703,7 @@ mod tests {
                 ),
             ],
         );
-        let dto = ExplorerBlockDto::from_block(&block);
+        let dto = crate::explorer_history::HistoryBlockRow::from_block(&block, |_| true);
         assert_eq!(dto.height, 4);
         assert_eq!(dto.transactions_total, 1);
         assert_eq!(dto.transactions_rejected, 1);
@@ -3881,7 +3717,7 @@ mod tests {
     #[test]
     fn network_metrics_json_serializes_valid_timestamp_once() {
         let timestamp = "2026-02-16T17:14:37.843Z";
-        let dto = ExplorerNetworkMetricsDto {
+        let mut dto = ExplorerNetworkMetricsDto {
             peers: 4,
             domains: 8,
             accounts: 258,
@@ -3889,176 +3725,30 @@ mod tests {
             transactions_accepted: 405,
             transactions_rejected: 61,
             block: 422,
-            block_created_at: Some(timestamp.to_string()),
+            block_created_at: Some(crate::explorer_history::HistoryTime(Duration::from_millis(
+                1771262077843,
+            ))),
             finalized_block: 422,
             avg_commit_time: Some(ExplorerDurationDto { ms: 302 }),
             avg_block_time: Some(ExplorerDurationDto { ms: 877_364 }),
         };
-        let bytes = norito::json::to_vec(&dto).expect("metrics dto should serialize");
-        let encoded = String::from_utf8(bytes).expect("metrics payload should be utf-8");
-        assert!(
-            norito::json::from_str::<Value>(&encoded).is_ok(),
-            "serialized metrics json must be parseable"
-        );
+        let bytes = norito::json::to_json_bounded_boxed(&dto, 4096)
+            .expect("metrics dto should serialize within its finite response");
+        let encoded = std::str::from_utf8(&bytes).expect("metrics payload should be utf-8");
+        let payload = norito::json::from_str::<Value>(&encoded)
+            .expect("serialized metrics json must be parseable");
+        assert_eq!(payload["block_created_at"].as_str(), Some(timestamp));
         assert_eq!(
             encoded.matches(timestamp).count(),
             1,
             "timestamp should appear exactly once in serialized payload"
         );
+        assert!(norito::json::to_json_bounded_boxed(&dto, encoded.len() - 1).is_err());
+        dto.block_created_at = None;
+        let payload = norito::json::to_value(&dto).expect("metrics without a finalized block");
+        assert!(payload["block_created_at"].is_null());
     }
-    #[test]
-    fn transaction_summary_reflects_status() {
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-        .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let dto = transaction_summary_dto(&tx, 5, &result);
-        assert_eq!(dto.block, 5);
-        assert_eq!(dto.authority, ALICE_ID.to_string());
-        assert_eq!(dto.status, "Committed");
-    }
-    #[test]
-    fn transaction_detail_includes_rejection_reason() {
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "purpose".parse().unwrap(),
-            json::Value::String("test".into()),
-        );
-        let mut builder = TransactionBuilder::new(
-            test_network_id(),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-        .with_metadata(metadata);
-        builder.set_creation_time(StdDuration::from_millis(1_700_000_000));
-        builder
-            .set_ttl(StdDuration::from_secs(30))
-            .set_nonce(NonZeroU32::new(7).expect("nonce"));
-        let tx = builder.sign(ALICE_KEYPAIR.private_key());
-        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
-        let result = TransactionResult::new(Err(rejection));
-        let dto = transaction_detail_dto(&tx, 12, &result);
-        assert_eq!(dto.block, 12);
-        assert_eq!(dto.status, "Rejected");
-        assert_eq!(dto.authority, ALICE_ID.to_string());
-        assert_eq!(dto.nonce, Some(7));
-        assert!(dto.time_to_live.is_some());
-        assert_eq!(
-            dto.metadata.get("purpose").and_then(Value::as_str),
-            Some("test")
-        );
-        assert!(dto.rejection_reason.is_some());
-        let serialized = json::to_value(dto.rejection_reason.as_ref().expect("rejection reason"))
-            .expect("rejection reason dto should serialize");
-        match serialized {
-            Value::Object(map) => {
-                assert!(map.contains_key("encoded"));
-                assert!(map.contains_key("message"));
-                assert!(!map.contains_key("scale"));
-                let message = map
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .expect("message should be serialized as string");
-                assert!(
-                    message.contains("Validation failed"),
-                    "message should include the root rejection reason"
-                );
-                assert!(
-                    message.contains("Operation is too complex"),
-                    "message should include the nested validation detail"
-                );
-            }
-            _ => panic!("rejection reason should serialize into object"),
-        }
-    }
-    #[test]
-    fn transaction_detail_includes_repetition_error_context_in_message() {
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-        .sign(ALICE_KEYPAIR.private_key());
-        let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
-            isi::error::InstructionExecutionError::Repetition(isi::error::RepetitionError {
-                instruction: isi::InstructionType::Register,
-                id: iroha_data_model::IdBox::DomainId(
-                    DomainId::try_new("acme", "universal").expect("domain id"),
-                ),
-            }),
-        ));
-        let result = TransactionResult::new(Err(rejection));
-        let dto = transaction_detail_dto(&tx, 21, &result);
-        let message = dto
-            .rejection_reason
-            .as_ref()
-            .map(|reason| reason.message.as_str())
-            .expect("rejection message should be present");
-        assert!(
-            message.contains("Validation failed: Instruction execution failed"),
-            "message should preserve validation and instruction context"
-        );
-        assert!(
-            message.contains("acme"),
-            "message should include repeated identifier details"
-        );
-    }
-    #[test]
-    fn transaction_detail_includes_contract_call_argument_record() {
-        let network_id = test_network_id();
-        let contract_address =
-            ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
-                .expect("contract address");
-        let arguments = vec![0x4b, 0x4f, 0x54, 0x4f];
-        let tx = TransactionBuilder::new(
-            network_id,
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address: contract_address.clone(),
-            expected_code_hash: iroha_crypto::Hash::prehashed([0_u8; 32]),
-            entrypoint: "contribute".to_string(),
-            arguments: Some(
-                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
-                    arguments.clone(),
-                )
-                .expect("bounded argument fixture"),
-            ),
-        }))
-        .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let dto = transaction_detail_dto(&tx, 9, &result);
-        assert_eq!(dto.executable, "ContractCall");
-        match dto.executable_payload {
-            Value::Object(map) => {
-                assert_eq!(
-                    map.get("contract_address").and_then(Value::as_str),
-                    Some(contract_address.as_ref())
-                );
-                assert_eq!(
-                    map.get("entrypoint").and_then(Value::as_str),
-                    Some("contribute")
-                );
-                let encoded = map
-                    .get("arguments")
-                    .and_then(Value::as_array)
-                    .expect("contract argument record should be serialized as bytes");
-                let actual = encoded
-                    .iter()
-                    .map(|value| value.as_u64().expect("argument byte") as u8)
-                    .collect::<Vec<_>>();
-                assert_eq!(actual, arguments);
-            }
-            other => panic!("unexpected executable payload: {other:?}"),
-        }
-    }
+    include!("explorer_history_projection_tests.rs");
     #[test]
     fn instruction_kind_classifies_register_and_transfer() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
@@ -4081,199 +3771,5 @@ mod tests {
             instruction_kind(&transfer_box),
             ExplorerInstructionKind::Transfer
         );
-    }
-    #[test]
-    fn fallback_structured_payload_uses_wire_variant_for_unmapped_isi() {
-        let instruction: InstructionBox = iroha_data_model::isi::AddSignatory::new(
-            ALICE_ID.clone(),
-            ALICE_KEYPAIR.public_key().clone(),
-        )
-        .into();
-        let kind = instruction_kind(&instruction);
-        assert_eq!(kind, ExplorerInstructionKind::Custom);
-        let dto = instruction_box_dto(&instruction, kind);
-        match dto.json {
-            Value::Object(mut map) => {
-                let payload = map.remove("payload").expect("payload");
-                assert_eq!(
-                    payload
-                        .get("variant")
-                        .and_then(Value::as_str)
-                        .expect("variant"),
-                    "AddSignatory"
-                );
-                assert!(
-                    payload
-                        .get("value")
-                        .and_then(|value| value.get("wire_id"))
-                        .and_then(Value::as_str)
-                        .expect("wire_id")
-                        .contains("AddSignatory")
-                );
-            }
-            _ => panic!("instruction payload should be a structured object"),
-        }
-    }
-    #[test]
-    fn instruction_dto_uses_wire_variant_for_unmapped_isi_kind() {
-        let instruction: InstructionBox = iroha_data_model::isi::AddSignatory::new(
-            ALICE_ID.clone(),
-            ALICE_KEYPAIR.public_key().clone(),
-        )
-        .into();
-        let kind = instruction_kind(&instruction);
-        assert_eq!(kind, ExplorerInstructionKind::Custom);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(core::iter::once(instruction.clone()))
-        .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let dto = instruction_dto_with_kind(&tx, 7, &result, &instruction, kind, 0);
-        assert_eq!(dto.kind, "AddSignatory");
-        let serialized = json::to_value(&dto).expect("instruction dto should serialize");
-        let Value::Object(fields) = serialized else {
-            panic!("instruction dto should serialize into an object");
-        };
-        assert!(fields.contains_key("box"));
-        assert!(!fields.contains_key("r#box"));
-    }
-    #[test]
-    fn instruction_box_dto_wraps_payload_and_encoded() {
-        let register = Register::domain(iroha_data_model::domain::Domain::new(
-            DomainId::try_new("payload", "universal").expect("domain id"),
-        ));
-        let instruction: InstructionBox = register.into();
-        let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Register);
-        assert!(dto.encoded.starts_with("0x"));
-        let (_, framed) = iroha_data_model::isi::framed_instruction_payload(&instruction)
-            .expect("registered instruction should frame");
-        assert_eq!(
-            dto.framed_sha256,
-            format!("0x{}", hex::encode(Sha256::digest(framed)))
-        );
-        let serialized = json::to_value(&dto).expect("instruction box dto should serialize");
-        match serialized {
-            Value::Object(map) => {
-                assert!(map.contains_key("encoded"));
-                assert!(map.contains_key("framed_sha256"));
-                assert!(!map.contains_key("scale"));
-            }
-            _ => panic!("instruction box dto should serialize into object"),
-        }
-        match dto.json {
-            Value::Object(map) => {
-                assert_eq!(
-                    map.get("kind")
-                        .and_then(Value::as_str)
-                        .expect("kind string"),
-                    "Register"
-                );
-                assert!(map.contains_key("payload"));
-                assert!(map.contains_key("wire_id"));
-                assert!(map.contains_key("encoded"));
-            }
-            _ => panic!("instruction payload should serialize into object"),
-        }
-    }
-    #[test]
-    fn custom_instruction_payload_preserves_json_body() {
-        let mut args = Map::new();
-        args.insert("foo".to_string(), Value::from(1_u64));
-        let mut root = Map::new();
-        root.insert("kind".to_string(), Value::String("Demo".to_string()));
-        root.insert("args".to_string(), Value::Object(args));
-        let payload = iroha_primitives::json::Json::new(Value::Object(root));
-        let custom = CustomInstruction::new(payload);
-        let instruction: InstructionBox = custom.into();
-        let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Custom);
-        match dto.json {
-            Value::Object(mut map) => {
-                let kind_value = map.remove("kind").expect("kind string");
-                assert_eq!(kind_value.as_str().expect("kind string"), "Custom");
-                let payload = map
-                    .remove("payload")
-                    .expect("payload")
-                    .get("value")
-                    .cloned()
-                    .expect("value key");
-                assert!(payload.get("args").is_some());
-            }
-            _ => panic!("custom payload should be a structured object"),
-        }
-    }
-    #[test]
-    fn sccp_governance_instruction_payload_exposes_exact_typed_proposal() {
-        use iroha_data_model::sccp::governance::{
-            SccpFreezeLightClientActionV1, SccpGovernanceActionV1, SccpGovernanceBaseRevisionV1,
-            SccpGovernanceProposalV1, SccpGovernanceSubjectV1,
-        };
-        let network = iroha_data_model::bridge::SccpNetworkV1::TonMainnet;
-        let proposal = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
-            proposal: SccpGovernanceProposalV1 {
-                network_id: test_network_id(),
-                base_revisions: vec![SccpGovernanceBaseRevisionV1 {
-                    subject: SccpGovernanceSubjectV1::LightClient(network),
-                    revision: 3,
-                }],
-                actions: vec![SccpGovernanceActionV1::FreezeLightClient(
-                    SccpFreezeLightClientActionV1 { network },
-                )],
-            },
-        };
-        let mut expected = Map::new();
-        expected.insert(
-            "proposal".to_owned(),
-            json::to_value(&proposal.proposal).expect("proposal should serialize"),
-        );
-        let instruction: InstructionBox = proposal.into();
-        let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Custom);
-        let Value::Object(root) = dto.json else {
-            panic!("instruction JSON should be an object");
-        };
-        assert_eq!(root.get("kind").and_then(Value::as_str), Some("Custom"));
-        assert_eq!(
-            root.get("wire_id").and_then(Value::as_str),
-            Some("iroha.instruction.v1::governance::ProposeSccpRouteGovernance")
-        );
-        let payload = root
-            .get("payload")
-            .and_then(Value::as_object)
-            .expect("typed payload object");
-        assert_eq!(
-            payload.get("variant").and_then(Value::as_str),
-            Some("ProposeSccpRouteGovernance")
-        );
-        assert_eq!(payload.get("value"), Some(&Value::Object(expected)));
-        let serialized = json::to_json(&root).expect("explorer JSON should serialize");
-        assert!(!serialized.contains("private_key"));
-        assert!(!serialized.contains("secret"));
-        assert!(!serialized.contains("mnemonic"));
-    }
-    #[test]
-    fn instruction_dto_carries_index() {
-        let register = Register::domain(iroha_data_model::domain::Domain::new(
-            DomainId::try_new("index_test", "universal").expect("domain id"),
-        ));
-        let instruction = InstructionBox::from(register);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(core::iter::once(instruction.clone()))
-        .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let dto = instruction_dto_with_kind(
-            &tx,
-            5,
-            &result,
-            &instruction,
-            ExplorerInstructionKind::Register,
-            7,
-        );
-        assert_eq!(dto.index, 7);
     }
 }

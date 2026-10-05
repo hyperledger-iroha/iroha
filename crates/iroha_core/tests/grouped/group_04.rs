@@ -2,6 +2,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../fx_routing_review.rs"]
 mod fx_routing_review;
+#[path = "../../src/manifest_signing_test_support.rs"]
+mod manifest_signing_test_support;
 #[path = "../pin_registry.rs"]
 mod pin_registry;
 #[path = "../quarantine_lane.rs"]

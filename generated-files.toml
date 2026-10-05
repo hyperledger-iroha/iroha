@@ -501,6 +501,23 @@ inputs = [
 check = "python3 scripts/gen_syscall_doc.py --check"
 
 [[generated]]
+name = "ivm-proof-coverage-inventory"
+kind = "file"
+outputs = ["crates/ivm/docs/proof_coverage_inventory.json"]
+generator = "cargo run --locked -p ivm --features dev-tools --bin gen_proof_coverage_inventory -- --write"
+generator_sources = [
+  "crates/ivm/src/bin/gen_proof_coverage_inventory.rs",
+  "crates/ivm/src/bin/support/mod.rs",
+]
+inputs = [
+  "crates/ivm/src/proof_coverage.rs",
+  "crates/ivm/src/proof_coverage/*.rs",
+  "crates/ivm/src/host.rs",
+  "crates/ivm_abi/src/**/*.rs",
+]
+check = "cargo run --locked -p ivm --features dev-tools --bin gen_proof_coverage_inventory -- --check"
+
+[[generated]]
 name = "norito-rpc-fixtures"
 kind = "file"
 outputs = [

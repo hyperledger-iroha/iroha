@@ -179,6 +179,104 @@ fn wait_until(what: &str, limit: Duration, mut done: impl FnMut() -> bool) {
     }
 }
 
+fn backend_owners_released(fakes: &Fakes) -> bool {
+    Arc::strong_count(&fakes.records) == 1
+        && Arc::strong_count(&fakes.bodies) == 1
+        && Arc::strong_count(&fakes.blocks) == 1
+        && Arc::strong_count(&fakes.net) == 1
+        && Arc::strong_count(&fakes.exec.state) == 1
+        && Arc::strong_count(&fakes.observer) == 1
+}
+
+fn assert_driver_retired(handle: &DriverHandle, fakes: &Fakes) {
+    assert!(
+        !handle.ready(),
+        "retained delivery handles cannot keep the driver running"
+    );
+    assert!(
+        backend_owners_released(fakes),
+        "all physical worker backend owners were released"
+    );
+    assert_eq!(handle.stopped(), None);
+    assert!(fakes.observer.stopped.lock().is_empty());
+    assert_eq!(
+        *fakes.observer.finished.lock(),
+        1,
+        "exactly one orderly completion"
+    );
+}
+
+/// The final running owner joins every physical worker before returning, even
+/// when a public delivery handle keeps the input channel connected.
+#[test]
+fn dropping_running_owner_stops_and_joins_with_retained_handle() {
+    let Instance { running, fakes, .. } = spawn_instance(231, Arc::new(SystemClock::new()), |_| {});
+    let handle = running.handle();
+    assert!(handle.ready());
+    drop(running);
+    assert_driver_retired(&handle, &fakes);
+}
+
+/// Caller panic retires the same real worker owner without an explicit shutdown
+/// and without converting orderly completion into a worker-failure report.
+#[test]
+fn caller_unwind_stops_and_joins_running_owner_with_retained_handle() {
+    let Instance { running, fakes, .. } = spawn_instance(232, Arc::new(SystemClock::new()), |_| {});
+    let handle = running.handle();
+    assert!(handle.ready());
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _running = running;
+        panic!("caller unwinds with the original running driver owner");
+    }));
+    assert!(unwind.is_err());
+    assert_driver_retired(&handle, &fakes);
+}
+
+/// A real backend callback can own the running instance. It must return before
+/// its own worker and the loop's remaining channel owners can be joined.
+#[test]
+fn worker_callback_drop_transfers_all_original_joins_without_self_deadlock() {
+    struct DropOwnerClock {
+        clock: SystemClock,
+        running: parking_lot::Mutex<Option<RunningDriver>>,
+        retired: mpsc::SyncSender<std::thread::ThreadId>,
+    }
+    impl Clock for DropOwnerClock {
+        fn now(&self) -> iroha_sumeragi::types::Millis {
+            let running = self.running.lock().take();
+            if let Some(running) = running {
+                drop(running);
+                let _ = self.retired.send(std::thread::current().id());
+            }
+            self.clock.now()
+        }
+    }
+    let (retired, receive) = mpsc::sync_channel(1);
+    let clock = Arc::new(DropOwnerClock {
+        clock: SystemClock::new(),
+        running: parking_lot::Mutex::new(None),
+        retired,
+    });
+    let Instance { running, fakes, .. } = spawn_instance(233, Arc::clone(&clock), |_| {});
+    let handle = running.handle();
+    assert!(handle.ready());
+    let loop_thread = running.threads.last().unwrap().thread().id();
+    *clock.running.lock() = Some(running);
+    handle.transactions_available();
+    assert_eq!(
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the real loop callback returns"),
+        loop_thread,
+    );
+    wait_until(
+        "all reentrant worker owners retired",
+        Duration::from_secs(5),
+        || !handle.ready() && backend_owners_released(&fakes),
+    );
+    assert_driver_retired(&handle, &fakes);
+}
+
 /// A single validator commits through the whole driver — persistence, executor and serve
 /// threads, the loop and the barrier — while record, body and block-store writes and apply
 /// steps fail and are retried (never skipped); transactions reach blocks.

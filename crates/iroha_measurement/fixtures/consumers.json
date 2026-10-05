@@ -1,0 +1,25 @@
+{
+  "consumers": [
+    {
+      "dependency": "dev-dependencies",
+      "manifest": "crates/iroha_core_privacy/Cargo.toml",
+      "package": "iroha_core_privacy",
+      "sites": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs",
+          "use": "Test-only complete-proof diagnostic: reads the harness hand-off and retains the public phase-tree record beside the receipt."
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation.rs",
+          "use": "Test-only X509 prover observation: each PhaseTimerV1 also opens a phase in the shared tree and the public geometry counters are recorded as work counters. Collection is thread-scoped."
+        },
+        {
+          "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",
+          "use": "Opt-in integration test (feature fastpq-replay-measurement): measures a genuine FASTPQ prove and verify flow at public-call granularity."
+        }
+      ]
+    }
+  ],
+  "rule": "A workspace member may depend on iroha_measurement only as listed here, and may name it only in the listed source files. The dependency is a dev-dependency, so code compiled into a node, a validator or an SDK cannot reach the recorder; an entry of another kind must state its production_use. Validation code must never read a measurement, a target or a local limit.",
+  "schema": "iroha.measurement.consumers.v1"
+}

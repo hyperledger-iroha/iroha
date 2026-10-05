@@ -203,6 +203,112 @@ class SignedSourceCaptureTests(unittest.TestCase):
         path.write_bytes(source.canonical_json_bytes(value))
         path.chmod(0o400)
 
+    def test_export_authenticates_real_object_database_without_materializing_a_worktree(self):
+        with mock.patch.object(source, "_materialize", side_effect=AssertionError("export must not copy source")), \
+             mock.patch.object(source, "_verify_objects", wraps=source._verify_objects) as verify_objects, \
+             mock.patch.object(source, "_verify_signature", wraps=source._verify_signature) as verify_signature, \
+             mock.patch.object(source, "_git", wraps=source._git) as git:
+            result = self.export()
+            self.assertEqual(verify_objects.call_count, 1)
+            self.assertEqual(verify_signature.call_count, 2)
+            self.assertFalse(any("read-tree" in call.args for call in git.call_args_list))
+        self.assertEqual(set(self.capture.iterdir()), {self.capture / "source.pack", self.capture / "source-capture.json"})
+        with mock.patch.object(source, "_materialize", wraps=source._materialize) as materialize:
+            facts = self.import_capture()
+            materialize.assert_called_once()
+        self.assertEqual(facts, self.verify())
+        self.assertEqual(result["commit"], facts["commit"])
+
+    def test_export_refuses_an_extra_native_packed_history_object_before_publication(self):
+        (self.repo / "bound-padding").write_bytes(b"x" * 4096)
+        self.git("add", "bound-padding")
+        self.git("commit", "-m", "include a compressible source object")
+        self.commit = self.git("rev-parse", "HEAD").decode().strip()
+        self.tree = self.git("rev-parse", "HEAD^{tree}").decode().strip()
+        git = source._git
+        def include_history(root, *args, **kwargs):
+            if "pack-objects" in args:
+                kwargs["payload"] += (self.parent + "\n").encode()
+            return git(root, *args, **kwargs)
+        with mock.patch.object(source, "_git", side_effect=include_history), \
+             self.assertRaisesRegex(source.SourceCaptureError, "header/object census differs"):
+            self.export()
+        self.assertFalse(self.capture.exists())
+
+    def test_source_capacity_refuses_bytes_and_inodes_before_native_pack_or_import_writes(self):
+        inspect = source.disk_capacity.inspect_filesystem
+        git = source._git
+        self.export()
+        for resource in ("available_bytes", "available_inodes"):
+            def constrained(path):
+                observation = inspect(path)
+                observation[resource] = 0
+                return observation
+            with self.subTest(resource=resource), \
+                 mock.patch.object(source.disk_capacity, "inspect_filesystem", side_effect=constrained), \
+                 mock.patch.object(source, "_git", wraps=git) as observed:
+                output = self.case / ("no-capacity-" + resource)
+                with self.assertRaisesRegex(source.SourceCaptureError, "source capture capacity refused"):
+                    source.export_source(self.repo, self.commit, self.tree, self.fingerprint, output)
+                with self.assertRaisesRegex(source.SourceCaptureError, "source capture capacity refused"):
+                    self.import_capture()
+                self.assertFalse(output.exists())
+                self.assertFalse(self.imported.exists())
+                self.assertFalse(any("pack-objects" in call.args or "index-pack" in call.args
+                                     for call in observed.call_args_list))
+        self.assertFalse(any(self.case.glob(".source-incomplete-*")))
+
+    def test_export_capacity_accounts_for_both_packs_without_source_materialization(self):
+        (self.repo / "large-source").write_bytes(b"x" * (1024 * 1024))
+        self.git("add", "large-source")
+        self.git("commit", "-m", "include a compressible one MiB source")
+        self.commit = self.git("rev-parse", "HEAD").decode().strip()
+        self.tree = self.git("rev-parse", "HEAD^{tree}").decode().strip()
+        observed = []
+        evaluate = source.disk_capacity.evaluate
+        def record(plan, **kwargs):
+            observed.append(copy.deepcopy(plan))
+            return evaluate(plan, **kwargs)
+        with mock.patch.object(source.disk_capacity, "evaluate", side_effect=record):
+            result = self.export()
+        captures = [plan for plan in observed
+                    if plan["allocations"][0]["label"] == "signed source capture and native verification"]
+        self.assertEqual(len(captures), 2)
+        additional = captures[1]["allocations"][0]["bytes"]
+        self.assertGreaterEqual(additional, result["pack_size"] + source.SOURCE_DISK_HEADROOM_BYTES)
+        self.assertLess(additional, 2 * result["pack_size"] + source.SOURCE_DISK_HEADROOM_BYTES + 128 * 1024)
+        self.assertLess(additional, result["source_bytes"] + source.SOURCE_DISK_HEADROOM_BYTES)
+        first = captures[0]["allocations"][0]
+        self.assertGreater(first["bytes"], 2 * result["pack_size"] + source.SOURCE_DISK_HEADROOM_BYTES)
+        self.assertGreater(first["inodes"], 0)
+
+    def test_full_temporary_filesystem_refuses_before_native_scratch_or_output_creation(self):
+        inspect = source.disk_capacity.inspect_filesystem
+        input_scratch = self.case / "native-input-scratch"
+        input_scratch.mkdir(mode=0o700)
+        keyring_scratch = Path("/tmp").resolve(strict=True)
+        for full_path in (input_scratch, keyring_scratch):
+            for resource in ("available_bytes", "available_inodes"):
+                def separate_full_scratch(path):
+                    observation = inspect(path)
+                    observation["available_bytes"] = 1024**4
+                    observation["available_inodes"] = 1_000_000
+                    observation["device"] += {self.case: 0, input_scratch: 1, keyring_scratch: 2}[path]
+                    if path == full_path:
+                        observation[resource] = 0
+                    return observation
+                with self.subTest(path=full_path, resource=resource), \
+                     mock.patch.object(source.tempfile, "gettempdir", return_value=str(input_scratch)), \
+                     mock.patch.object(source.disk_capacity, "inspect_filesystem", side_effect=separate_full_scratch), \
+                     mock.patch.object(source.tempfile, "TemporaryFile", side_effect=AssertionError("scratch must be preadmitted")), \
+                     mock.patch.object(source.tempfile, "TemporaryDirectory", side_effect=AssertionError("keyring must be preadmitted")), \
+                     mock.patch.object(source, "_git", wraps=source._git) as git:
+                    with self.assertRaisesRegex(source.SourceCaptureError, "source capture capacity refused"):
+                        self.export()
+                    self.assertFalse(any("pack-objects" in call.args for call in git.call_args_list))
+                    self.assertFalse(self.capture.exists())
+                    self.assertFalse(any(self.case.glob(".source-incomplete-*")))
+
     def test_signed_exact_tree_roundtrip_excludes_dirty_untracked_history_and_gitlink_objects(self):
         (self.repo / "nested/data").write_bytes(b"uncommitted work must remain untouched")
         (self.repo / "untracked-test.py").write_text("untouched\n")
@@ -495,7 +601,8 @@ class SignedSourceCaptureTests(unittest.TestCase):
         self.verify()
 
     def test_signed_escaping_or_present_symlinks_refuse(self):
-        for target in ("../../outside", "/etc/passwd", "Cargo.lock", "nested"):
+        for target in ("../../outside", "/etc/passwd", "Cargo.lock", "nested",
+                       ".git", ".git/config", ".git/index", ".git/objects/pack"):
             with self.subTest(target=target):
                 (self.repo / "sdk-link").unlink()
                 (self.repo / "sdk-link").symlink_to(target)

@@ -22,7 +22,12 @@ use thiserror::Error;
 /// Largest consensus frame every node's transport accepts, the chain-wide bound that on-chain
 /// chain parameters are validated against (§9.4, O10): 16 MiB of payload plus the core's frame
 /// overhead. It is a protocol constant, not node configuration, so validation is deterministic;
-/// it equals the driver's default frame limit.
+/// it is the driver's default frame limit.
+// TODO(X.2): a payload limit above `CHAIN_TRANSPORT_FRAME_LIMIT - 2 * FRAME_OVERHEAD`
+// (16,185,312 bytes) passes this validation but leaves no `sync_max_bytes` that both serves
+// the block and fits this frame limit, so no node can start. Raise the frame limits for the
+// 16 MiB payload default and reject such parameters here
+// (`specs/zk_resource_contract.json`, `committed_payload_has_a_feasible_sync_setting`).
 pub const CHAIN_TRANSPORT_FRAME_LIMIT: u64 = 16 * 1024 * 1024 + FRAME_OVERHEAD as u64;
 
 /// Chain parameters of one height as stored in World and committed in `R` (§10.1, §12.4): the

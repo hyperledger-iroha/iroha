@@ -11,6 +11,45 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use std::cell::Cell;
 
+/// Borrow one exact asset definition and its incarnation at the original certified cut.
+///
+/// Both targets must be present in the reconstructed complete snapshot before the consumer runs.
+fn with_asset_snapshot<T>(
+    state: &State,
+    tip: &CommittedBlock,
+    asset_id: &AssetDefinitionId,
+    budget: &AllocationBudget,
+    consume: impl FnOnce(
+        &WorldStateSnapshotV1,
+        &AssetDefinition,
+        &AxtAssetIncarnationV1,
+    ) -> Result<T, String>,
+) -> Result<T, WorldStateSnapshotError> {
+    state.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
+        let definition = world
+            .asset_definitions
+            .get(asset_id)
+            .ok_or("World snapshot exact asset definition is absent")?;
+        let incarnation = world
+            .axt_asset_incarnations
+            .get(asset_id)
+            .ok_or("World snapshot exact asset incarnation is absent")?;
+        for (field, value) in [
+            ("world.asset_definitions", hash_value(definition)?),
+            ("world.axt_asset_incarnations", hash_value(incarnation)?),
+        ] {
+            require_target(
+                snapshot,
+                field,
+                WorldStateElementKindV1::Table,
+                Some(hash_value(asset_id)?),
+                value,
+            )?;
+        }
+        consume(snapshot, definition, incarnation)
+    })
+}
+
 #[test]
 fn snapshot_reader_refusal_preserves_original_source_and_does_not_call_consumer() {
     let (chain, asset) = asset_chain();
@@ -21,7 +60,7 @@ fn snapshot_reader_refusal_preserves_original_source_and_does_not_call_consumer(
     let original = state.latest_block_header.write();
     let expected = state.latest_block_header.try_read_or_wait().err().unwrap();
     let called = Cell::new(false);
-    let result = state.with_native_world_state_snapshot_v1(&tip, &asset, &budget, |_, _, _, _| {
+    let result = with_asset_snapshot(state, &tip, &asset, &budget, |_, _, _| {
         called.set(true);
         Ok(())
     });

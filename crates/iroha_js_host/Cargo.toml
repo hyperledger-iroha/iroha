@@ -60,6 +60,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+iroha_allocation = { workspace = true }
 iroha_sumeragi = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 sorafs_chunker = { workspace = true }

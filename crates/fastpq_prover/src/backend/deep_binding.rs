@@ -30,8 +30,10 @@ use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1 as F};
 
 /// Complete protocol identity; every fixed geometry field is also in the context.
 pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:sha3-256:shake256-atomic-raw:row301:qpair+composition-mask:ood604:components606:mask-lambda0+terms-lambda1-606:trace-shift2:quotient-shift1:arity16-16-8-8-4:fri-degree2n:terminal-degree2-128:q77:c87:raw93:mask162-78:omit-first-known-fiber:v1";
-const MAX_STATEMENT_BYTES: usize = 240 * 1024;
-const MAX_RELATION_IDENTITY_BYTES: usize = 256;
+/// Longest statement the context binds; published as `air::MAX_STATEMENT_BYTES`.
+pub(super) const MAX_STATEMENT_BYTES: usize = 240 * 1024;
+/// Longest relation identity; published as `air::MAX_RELATION_IDENTITY_BYTES`.
+pub(super) const MAX_RELATION_IDENTITY_BYTES: usize = 256;
 #[cfg(test)]
 const FIXTURE_RELATION_IDENTITY: &str = "fastpq:deep:explicit-context-fixture:v1";
 const OOD_VALUES: usize = 2 * COMMITTED_COLUMN_COUNT + 2;

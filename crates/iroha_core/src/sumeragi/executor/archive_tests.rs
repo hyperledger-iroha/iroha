@@ -222,7 +222,7 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
         finishing: None,
         recovery: None,
         results: BTreeMap::new(),
-        last_built: None,
+        completed_payload: None,
         queue: context.queue.clone(),
         beacon: None,
         archives: Some(archives),
@@ -453,7 +453,6 @@ fn committed_archive_index_refusal_retains_original_release_and_exact_publicatio
 fn committed_archive_cold_history_refusal_retains_original_pool_and_exact_publication() {
     run(|| {
         use iroha_allocation::AllocationBudget;
-        use iroha_data_model::block::SharedSignedBlock;
         use std::task::{Context, Waker};
         for provider_capture in [true, false] {
             let chain = chain();
@@ -500,7 +499,9 @@ fn committed_archive_cold_history_refusal_retains_original_pool_and_exact_public
                     .unwrap(),
                 )
                 .unwrap();
-            let layout = SharedSignedBlock::allocation_layout();
+            // The authenticated cold reader first funds the exact stored frame,
+            // before reserving the decoded SharedSignedBlock control.
+            let layout = core::alloc::Layout::array::<u8>(original_wire.len()).unwrap();
             let expected: crate::execution_attempt::ExecutionDeferred =
                 budget.try_reserve(layout).unwrap_err().into();
             let PublicationError::Deferred(reason) = worker.commit(&block, &qc).unwrap_err() else {
@@ -647,7 +648,7 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     );
     assert!(events.try_recv().is_err());
     assert!(worker.execute(&block, qc.block_hash).is_none());
-    assert_eq!(worker.build(3, 0, 1 << 20).unwrap(), (None, false));
+    assert_eq!(worker.build(3, 0, 1 << 20, 100).unwrap(), (None, false));
     assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
     assert!(
         worker.live.as_ref().unwrap().overlay.is_none(),

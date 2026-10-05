@@ -1,11 +1,39 @@
 #!/usr/bin/env python3
 """Check structural consistency of the ZK delivery graph and Markdown plan.
 
-Requires Python 3.10+ and its standard library; no environment variables or
-installed packages are needed. Defaults read specs/zk_delivery_graph.json,
+Requires Python 3.10+ and its standard library; it uses no environment variables,
+installed packages or subprocesses. Defaults read specs/zk_delivery_graph.json,
 specs/zk_delivery_plan.md and specs/zk_delivery_reconciliation.json relative to
 this script's repository. Archived source files need not be present. This read-only
 check never changes files and does not establish code or cryptographic readiness.
+A validation run exits with status 0 only when every check passes and writing the
+report did not fail; a closed pipe or failed device is exit status 1 without a
+traceback, for the report and for --help alike.
+
+The plan holds one table row per task and delivery and one `### <ID> <title>`
+contract per task, each equal to the graph. No other heading, wholly emphasized
+line or first table cell may name an ID, whatever block quote, list marker,
+emphasis or code mark decorates it. The roots sentence and both count statements
+are stated once, word for word, where a line break is the only tolerated spacing
+difference; the same words in another letter case, spacing or emphasis are a second
+statement. The plan is read as lines of text. Left to review, because they are not
+interpreted: HTML other than a one-line h1-h6 heading, comments, code fences, a
+title that spans lines, a table row without a pipe and a restatement in other words.
+
+Task `status` is `planned`, `in_progress` or `implemented`. A non-planned task
+records `evidence` with four fields:
+  source      text containing the observed 40-hex commit id;
+  paths       repository files outside ignored build and archive trees (dist,
+              target, .git, __pycache__, node_modules, build), each a regular file
+              that resolves inside --root; Git tracking is not examined here;
+  commands    [{command, outcome}] with outcome `passed`, `failed` or `not_run`;
+  acceptance  [{clause, state, proof}] with state `met`, `partial` or `unmet`.
+A clause is exactly one whole sentence of the task's outputs or acceptance text,
+recorded once. A proof cites at least one recorded path or command verbatim.
+`in_progress` records any nonempty subset of sentences. `implemented` requires one
+`met` entry for every sentence, every command `passed`, every recorded path and
+command cited by a proof and every prerequisite implemented. Recorded status is
+traceability; it grants no runtime permission and qualifies no cryptography.
 """
 
 from __future__ import annotations
@@ -13,8 +41,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import os
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 
@@ -22,9 +53,71 @@ ROOT = Path(__file__).resolve().parents[1]
 SCOPE = "Structural consistency only; not code or cryptographic qualification."
 IDENTIFIER = re.compile(r"[A-Z][A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+COMMIT_ID = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
+SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 SUPPORTED_SDKS = ["Rust", "Kotlin/Java/Android", "Swift", "JavaScript", "Python", "C#"]
 NON_GATING_TASKS = {"H.3", "V.4", "V.6"}
+TASK_STATUSES = ("planned", "in_progress", "implemented")
+COMMAND_OUTCOMES = ("passed", "failed", "not_run")
+CLAUSE_STATES = ("met", "partial", "unmet")
+LEDGER_DISPOSITIONS = {
+    "requirements": ("retained", "corrected"),
+    "findings": ("addressed_in_plan", "addressed_with_correction"),
+    "prior_findings": ("carried_forward", "superseded_by_user_direction"),
+}
+FINDING_SEVERITIES = ("blocker", "major", "minor")
+# Ignored build and archive trees cannot carry evidence: validation must not need them.
+IGNORED_EVIDENCE_COMPONENTS = frozenset(("dist", "target", ".git", "__pycache__", "node_modules", "build"))
 SOURCE_REQUIREMENT_IDS = {f"REQ-{index:03d}" for index in range(1, 120)}
+# Markdown that may precede a title or table row: indentation, block quotes and list markers.
+PLAN_DECORATION = re.compile(r"(?:[ \t>]|[-*+][ \t]|\d+[.)][ \t])*")
+# A line that renders as a title: an ATX or HTML heading or a wholly emphasized line.
+PLAN_TITLE = re.compile(r"#|<[hH][1-6]\b|[*_].*[*_][ \t]*\Z")
+PLAN_UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*\Z")
+# The first ID that a title or first table cell names, through emphasis, code or link marks.
+# An ID starts its word, so that one long line is scanned once rather than from every character.
+NAMED_ID = re.compile(r"(?<![A-Za-z0-9_-])_*([A-Z][A-Za-z0-9_-]*\.[A-Za-z0-9_-]+)")
+# A pipe that divides table cells; an escaped pipe is cell text.
+PLAN_CELL_BREAK = re.compile(r"(?<!\\)\|")
+# The words that open the roots statement, and the two count statements with `{}` for each number.
+PLAN_ROOTS = "Start in parallel at"
+PLAN_GRAPH_COUNTS = "contains {} implementation/evidence tasks and {} named deliveries"
+PLAN_LEDGER_COUNTS = (
+    "preserves {} verbatim revision-6 requirement units, all {} revision-6 findings, "
+    "all {} earlier report IDs and all {} original graph tasks"
+)
+
+
+def printable(text: str) -> str:
+    """Escape lone surrogates so that both output formats can always render the text."""
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def load_json(path: Path) -> Any:
+    """Parse one JSON input, rejecting duplicate object keys and non-finite numbers."""
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(name: str) -> Any:
+        raise ValueError(f"non-finite JSON number {name}")
+
+    def finite(literal: str) -> float:
+        # An overflowing literal such as 1e999 parses to infinity without reaching parse_constant.
+        value = float(literal)
+        if not math.isfinite(value):
+            raise ValueError(f"non-finite JSON number {literal}")
+        return value
+
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=unique_object, parse_constant=reject_constant, parse_float=finite,
+    )
 
 
 def reconciliation_inventory_sha256(ledger: dict[str, Any]) -> str:
@@ -50,7 +143,11 @@ def reconciliation_inventory_sha256(ledger: dict[str, Any]) -> str:
 def check_reconciliation(
     ledger: Any, baseline: Any, task_ids: set[str]
 ) -> list[str]:
-    """Validate complete embedded source inventories and their current task maps."""
+    """Validate complete embedded source inventories and their current task maps.
+
+    The ledger's own `revision` names the reconstruction it was extracted for; it is
+    provenance and is not compared with the graph revision.
+    """
     errors: list[str] = []
     if not isinstance(ledger, dict):
         return ["reconciliation must be an object"]
@@ -117,11 +214,6 @@ def check_reconciliation(
         if source.get("available_optional") is not True:
             errors.append(f"source {identifier}.available_optional must be true")
 
-    dispositions = {
-        "requirements": {"retained", "corrected"},
-        "findings": {"addressed_in_plan", "addressed_with_correction"},
-        "prior_findings": {"carried_forward", "superseded_by_user_direction"},
-    }
     for name in ("requirements", "findings", "prior_findings", "original_tasks"):
         for identifier, record in sections[name].items():
             mapping = record.get("task_ids")
@@ -134,15 +226,13 @@ def check_reconciliation(
             rationale = record.get("rationale")
             if not isinstance(rationale, str) or len(rationale.strip()) < 20:
                 errors.append(f"{identifier}.rationale must explain the mapping (at least 20 characters)")
-            if name in dispositions:
-                disposition = record.get("disposition")
-                if not isinstance(disposition, str) or disposition not in dispositions[name]:
-                    errors.append(f"{identifier}.disposition is not a supported source disposition")
+            if name in LEDGER_DISPOSITIONS and record.get("disposition") not in LEDGER_DISPOSITIONS[name]:
+                errors.append(f"{identifier}.disposition is not a supported source disposition")
             if name in ("requirements", "findings"):
                 for key in (("original_text", "summary") if name == "requirements" else ("original_text", "title")):
                     if not isinstance(record.get(key), str) or not record[key].strip():
                         errors.append(f"{identifier}.{key} must be nonempty")
-            if name == "findings" and record.get("severity") not in ("blocker", "major", "minor"):
+            if name == "findings" and record.get("severity") not in FINDING_SEVERITIES:
                 errors.append(f"{identifier}.severity must be blocker, major or minor")
             if name in ("prior_findings", "original_tasks"):
                 if not isinstance(record.get("original_record"), dict) or not record["original_record"]:
@@ -169,27 +259,216 @@ def check_reconciliation(
             start, end = reference.get("line_start"), reference.get("line_end")
             if type(start) is not int or type(end) is not int or start < 1 or end < start:
                 errors.append(f"{identifier}.source must contain a positive ordered line span")
+
+    prior = [record.get("disposition") for record in sections["prior_findings"].values()]
+    recorded = {
+        "requirements": len(sections["requirements"]),
+        "r6_findings": len(sections["findings"]),
+        "prior_findings": len(sections["prior_findings"]),
+        "original_tasks": len(sections["original_tasks"]),
+        "prior_carried_forward": sum(item == "carried_forward" for item in prior),
+        "prior_superseded_by_user_direction": sum(item == "superseded_by_user_direction" for item in prior),
+    }
+    counts = ledger.get("counts")
+    if not isinstance(counts, dict) or set(counts) != set(recorded) or any(
+        type(counts[key]) is not int or counts[key] != value for key, value in recorded.items()
+    ):
+        stated = ", ".join(f"{key} {value}" for key, value in recorded.items())
+        errors.append(f"reconciliation.counts must equal the recorded inventories: {stated}")
     if errors:
         return errors
-    if reconciliation_inventory_sha256(ledger) != fingerprint:
+    try:
+        actual_fingerprint = reconciliation_inventory_sha256(ledger)
+    except (RecursionError, UnicodeError):
+        return ["reconciliation source inventory cannot be hashed: text is not valid Unicode or nesting is too deep"]
+    if actual_fingerprint != fingerprint:
         errors.append("reconciliation source inventory fingerprint differs from the graph baseline")
     return errors
 
 
-def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
-    """Return one format-independent report for the graph and plan."""
+def task_sentences(record: dict[str, Any]) -> list[str]:
+    """Return the distinct whole sentences of a task's outputs and acceptance, in order."""
+    sentences: list[str] = []
+    for field in ("outputs", "acceptance"):
+        texts = record.get(field)
+        for text in texts if isinstance(texts, list) else []:
+            for sentence in SENTENCE_BOUNDARY.split(text) if isinstance(text, str) else []:
+                sentence = sentence.strip()
+                if sentence and sentence not in sentences:
+                    sentences.append(sentence)
+    return sentences
+
+
+def named_exactly(root: Path, parts: list[str]) -> bool:
+    """Whether each component is a directory entry by its exact name, on any volume."""
+    directory = root
+    for part in parts:
+        if part not in os.listdir(directory):
+            return False
+        directory = directory / part
+    return True
+
+
+def check_evidence_paths(identifier: str, paths: list[str], root: Path | None) -> list[str]:
+    """Admit only distinct repository files outside ignored build and archive trees."""
     errors: list[str] = []
-    report: dict[str, Any] = {
+    recorded: set[str] = set()
+    locations: set[Path] = set()
+    for path in paths:
+        parts = path.split("/")
+        if (
+            not path.isprintable() or path != path.strip() or "\\" in path
+            or any(part in ("", ".", "..") or part.casefold() in IGNORED_EVIDENCE_COMPONENTS for part in parts)
+        ):
+            errors.append(
+                f"{identifier}.evidence.paths must be repository files outside ignored build and archive trees: {path}"
+            )
+            continue
+        if path.casefold() in recorded:
+            errors.append(f"{identifier}.evidence.paths repeats a path: {path}")
+            continue
+        recorded.add(path.casefold())
+        if root is None:
+            continue
+        try:
+            base = root.resolve()
+            candidate = root.joinpath(*parts)
+            if not candidate.exists() or not named_exactly(root, parts):
+                errors.append(f"{identifier}.evidence path does not exist: {path}")
+                continue
+            if not candidate.is_file():
+                errors.append(f"{identifier}.evidence path is not a regular file: {path}")
+                continue
+            # Symbolic links must not lead out of the repository or into an ignored tree.
+            location = candidate.resolve()
+            if not location.is_relative_to(base) or any(
+                part.casefold() in IGNORED_EVIDENCE_COMPONENTS for part in location.relative_to(base).parts
+            ):
+                errors.append(
+                    f"{identifier}.evidence path resolves outside the repository or into an ignored tree: {path}"
+                )
+            elif location in locations:
+                errors.append(f"{identifier}.evidence.paths repeats a file: {path}")
+            locations.add(location)
+        except (OSError, RuntimeError):
+            errors.append(f"{identifier}.evidence path cannot be examined: {path}")
+    return errors
+
+
+def check_evidence(identifier: str, record: dict[str, Any], root: Path | None) -> list[str]:
+    """Validate the evidence a non-planned task records for its status."""
+    errors: list[str] = []
+    evidence = record.get("evidence")
+    if not isinstance(evidence, dict):
+        return [f"{identifier}.evidence must record source, paths, commands and acceptance for a non-planned status"]
+    implemented = record.get("status") == "implemented"
+    source = evidence.get("source")
+    if not isinstance(source, str) or not COMMIT_ID.search(source):
+        errors.append(f"{identifier}.evidence.source must contain the observed 40-hex commit id")
+
+    citable: list[str] | None = []
+    paths = evidence.get("paths")
+    if not isinstance(paths, list) or not paths or any(not isinstance(path, str) for path in paths):
+        errors.append(f"{identifier}.evidence.paths must be a nonempty list of path strings")
+        citable = None
+    else:
+        errors.extend(check_evidence_paths(identifier, paths, root))
+        citable.extend(paths)
+
+    commands = evidence.get("commands")
+    if not isinstance(commands, list) or not commands or any(
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("command"), str) or not entry["command"].strip()
+        or not isinstance(entry.get("outcome"), str) or entry["outcome"] not in COMMAND_OUTCOMES
+        for entry in commands
+    ):
+        errors.append(f"{identifier}.evidence.commands must record each command with outcome passed, failed or not_run")
+        citable = None
+    else:
+        if implemented:
+            unpassed = [entry["command"] for entry in commands if entry["outcome"] != "passed"]
+            if unpassed:
+                errors.append(f"{identifier} cannot be implemented with a failed or unexecuted check: {unpassed[0]}")
+        if citable is not None:
+            citable.extend(entry["command"] for entry in commands)
+
+    clauses = evidence.get("acceptance")
+    if not isinstance(clauses, list) or not clauses or any(
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("clause"), str) or not entry["clause"].strip()
+        or not isinstance(entry.get("state"), str) or entry["state"] not in CLAUSE_STATES
+        or not isinstance(entry.get("proof"), str) or not entry["proof"].strip()
+        for entry in clauses
+    ):
+        errors.append(f"{identifier}.evidence.acceptance must record each clause with state met, partial or unmet and its proof")
+        return errors
+    sentences = task_sentences(record)
+    quoted: set[str] = set()
+    cited: set[str] = set()
+    for entry in clauses:
+        clause = entry["clause"].strip()
+        if clause in quoted:
+            errors.append(f"{identifier}.evidence.acceptance repeats a clause: {clause[:60]}")
+            continue
+        quoted.add(clause)
+        if clause not in sentences:
+            errors.append(f"{identifier}.evidence.acceptance clause is not one whole sentence of the task: {clause[:60]}")
+        if implemented and entry["state"] != "met":
+            errors.append(f"{identifier} cannot be implemented with a clause that is {entry['state']}: {clause[:60]}")
+        if citable is not None:
+            references = [item for item in citable if item in entry["proof"]]
+            if not references:
+                errors.append(f"{identifier}.evidence.acceptance proof must cite a recorded path or command: {clause[:60]}")
+            cited.update(references)
+    if implemented:
+        for sentence in sentences:
+            if sentence not in quoted:
+                errors.append(f"{identifier} cannot be implemented without evidence for: {sentence[:60]}")
+        for item in citable or []:
+            if item not in cited:
+                errors.append(f"{identifier} cannot be implemented with evidence that no proof cites: {item}")
+    return errors
+
+
+def empty_report() -> dict[str, Any]:
+    """Return the failing report that validation fills; both formats render this one shape."""
+    return {
         "ok": False,
         "scope": SCOPE,
-        "errors": errors,
+        "errors": [],
         "task_count": 0,
         "delivery_count": 0,
         "roots": [],
+        "status_counts": {status: 0 for status in TASK_STATUSES},
+        "progress": [],
+        "complete_deliveries": [],
     }
+
+
+def check_plan(graph: Any, plan: str, reconciliation: Any, root: Path | None = None) -> dict[str, Any]:
+    """Return one format-independent report for the graph and plan.
+
+    `root` is the repository that evidence paths are resolved against; without it
+    the file system is not examined.
+    """
+    report = empty_report()
+    errors: list[str] = report["errors"]
+    try:
+        validate(graph, plan, reconciliation, root, report)
+    except RecursionError:
+        errors.append("validation stopped: an input is nested too deeply")
+    except (OSError, UnicodeError) as error:
+        errors.append(f"validation stopped: {error}")
+    errors[:] = [printable(error) for error in errors]
+    return report
+
+
+def validate(graph: Any, plan: str, reconciliation: Any, root: Path | None, report: dict[str, Any]) -> None:
+    """Fill `report`; only the last statement, reached when every check has run, can mark it ok."""
+    errors: list[str] = report["errors"]
     if not isinstance(graph, dict):
         errors.append("graph must be an object")
-        return report
+        return
     if type(graph.get("schema_version")) is not int or graph["schema_version"] != 1:
         errors.append("schema_version must be 1")
     if not isinstance(graph.get("source_commit"), str) or not graph["source_commit"].strip():
@@ -238,11 +517,19 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
             if string_list(record.get("requires"), f"{identifier}.requires"):
                 if len(record["requires"]) != len(set(record["requires"])):
                     errors.append(f"{identifier}.requires contains duplicate edges")
+                if kind == "deliveries" and not record["requires"]:
+                    errors.append(f"{identifier}.requires must name at least one task or delivery")
             if kind == "tasks":
                 for field in ("outputs", "acceptance"):
                     string_list(record.get(field), f"{identifier}.{field}", nonempty=True)
-                if record.get("status") != "planned":
-                    errors.append(f"{identifier}.status must be planned")
+                status = record.get("status")
+                if status not in TASK_STATUSES:
+                    errors.append(f"{identifier}.status must be planned, in_progress or implemented")
+                elif status == "planned":
+                    if "evidence" in record:
+                        errors.append(f"{identifier}.evidence is recorded only for in_progress or implemented status")
+                else:
+                    errors.extend(check_evidence(identifier, record, root))
             else:
                 if record.get("kind") not in ("functional", "evidence"):
                     errors.append(f"{identifier}.kind must be functional or evidence")
@@ -304,7 +591,7 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
             errors.append("constraints.runtime_admission_task must be a task ID")
     # Schema failures must not turn into traceback exceptions during graph walks.
     if errors:
-        return report
+        return
 
     errors.extend(check_reconciliation(reconciliation, graph.get("reconciliation_baseline"), task_ids))
 
@@ -312,6 +599,8 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
         for dependency in record["requires"]:
             if dependency not in nodes:
                 errors.append(f"{identifier} requires unknown ID {dependency}")
+            elif identifier in task_ids and dependency in delivery_ids:
+                errors.append(f"task {identifier} may require only tasks, not delivery {dependency}")
     for identifier in graph["start_immediately"]:
         if identifier not in task_ids:
             errors.append(f"start_immediately contains unknown task {identifier}")
@@ -325,8 +614,17 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
     for identifier in constraints["non_gating_tasks"] + [constraints["runtime_admission_task"]]:
         if identifier not in task_ids:
             errors.append(f"admission constraints contain unknown task {identifier}")
+    for identifier in sorted(task_ids):
+        if nodes[identifier]["status"] != "implemented":
+            continue
+        pending = sorted(
+            dependency for dependency in nodes[identifier]["requires"]
+            if nodes.get(dependency, {}).get("status") != "implemented"
+        )
+        if pending:
+            errors.append(f"{identifier} cannot be implemented before its prerequisites: {', '.join(pending)}")
     if errors:
-        return report
+        return
 
     # Iterative traversal also handles malformed, very deep graphs predictably.
     ancestors: dict[str, set[str]] = {}
@@ -342,7 +640,7 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
         ancestors[identifier] = reachable
         if identifier in reachable:
             errors.append(f"dependency cycle includes {identifier}")
-    roots = sorted(identifier for identifier in task_ids if not nodes[identifier]["requires"])
+    roots = sorted(record["id"] for record in graph["tasks"] if not record["requires"])
     report["roots"] = roots
     if set(roots) != set(graph["start_immediately"]):
         errors.append(f"start_immediately must equal task roots: {', '.join(roots) or '(none)'}")
@@ -363,10 +661,8 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
     for identifier in constraints["non_gating_tasks"]:
         if identifier == admission or identifier in ancestors[admission]:
             errors.append(f"runtime admission {admission} depends on non-gating task {identifier}")
-    evidence_deliveries = {
-        identifier for identifier in delivery_ids if nodes[identifier]["kind"] == "evidence"
-    }
-    for identifier in delivery_ids:
+    evidence_deliveries = {record["id"] for record in graph["deliveries"] if record["kind"] == "evidence"}
+    for identifier in sorted(delivery_ids):
         if nodes[identifier]["kind"] != "functional":
             continue
         gates = ancestors[identifier] & (set(constraints["non_gating_tasks"]) | evidence_deliveries)
@@ -374,14 +670,35 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
             errors.append(f"functional delivery {identifier} depends on evidence gates: {', '.join(sorted(gates))}")
 
     rows: dict[str, list[str]] = {}
-    for line_number, line in enumerate(plan.splitlines(), 1):
-        line = line.strip()
-        if not line.startswith("|") or not line.endswith("|"):
+    headings: set[str] = set()
+    # Titles and rows are read through Markdown decoration, so that a second, weaker
+    # contract or row cannot hide behind a block quote, list marker or emphasis.
+    texts = [line[PLAN_DECORATION.match(line).end():] for line in plan.splitlines()]
+    for line_number, text in enumerate(texts, 1):
+        underlined = line_number < len(texts) and PLAN_UNDERLINE.match(texts[line_number])
+        if PLAN_TITLE.match(text) or underlined:
+            named = NAMED_ID.search(text)
+            if named is None:
+                continue
+            identifier = named.group(1)
+            if identifier in headings:
+                errors.append(f"duplicate plan task contract heading for {identifier} at line {line_number}")
+            elif identifier not in task_ids:
+                errors.append(f"plan contains a task contract heading for unknown ID {identifier} at line {line_number}")
+            headings.add(identifier)
             continue
-        cells = [cell.strip() for cell in line[1:-1].split("|")]
-        if not cells or not IDENTIFIER.fullmatch(cells[0]):
+        if "|" not in text:
             continue
-        identifier = cells[0]
+        # The opening and the closing pipe of a table row are both optional in Markdown.
+        cells = [cell.strip() for cell in PLAN_CELL_BREAK.split(text)]
+        if text.startswith("|"):
+            cells.pop(0)
+        if not cells[-1]:
+            cells.pop()
+        named = NAMED_ID.search(cells[0]) if cells else None
+        if named is None:
+            continue
+        identifier = named.group(1)
         if identifier in rows:
             errors.append(f"duplicate plan table row for {identifier} at line {line_number}")
         rows[identifier] = cells
@@ -404,35 +721,125 @@ def check_plan(graph: Any, plan: str, reconciliation: Any) -> dict[str, Any]:
             )
             if not re.search(r"^" + re.escape(contract) + r"(?=\n\n|\n?\Z)", plan, re.MULTILINE):
                 errors.append(f"plan task contract differs from graph for {identifier}")
+    # A statement is found in any letter case and spacing, so that a second one cannot hide,
+    # and is accepted only word for word, with each line break read as one space.
+    prose = plan.replace("\n", " ")
+    loose = " ".join(plan.casefold().split())
+    statements = [(f"{PLAN_ROOTS} **{', '.join(graph['start_immediately'])}**.", re.escape(PLAN_ROOTS.casefold()))]
+    for template, counts in (
+        (PLAN_GRAPH_COUNTS, (len(task_ids), len(delivery_ids))),
+        (PLAN_LEDGER_COUNTS, tuple(
+            len(reconciliation[name]) for name in ("requirements", "findings", "prior_findings", "original_tasks")
+        )),
+    ):
+        # Whatever stands where a number belongs, the sentence is a count statement.
+        statements.append((template.format(*counts), re.escape(template.casefold()).replace(re.escape("{}"), r"\S+")))
+    for stated, words in statements:
+        if len(re.findall(rf"\b{words}\b", loose)) != 1 or stated not in prose:
+            errors.append(f"plan prose must state once: {stated}")
+
+    for identifier in sorted(task_ids):
+        status = nodes[identifier]["status"]
+        report["status_counts"][status] += 1
+        if status != "planned":
+            clauses = nodes[identifier]["evidence"]["acceptance"]
+            met = sum(entry["state"] == "met" for entry in clauses)
+            report["progress"].append(
+                f"{identifier} {status}: {met} of {len(task_sentences(nodes[identifier]))} clauses met"
+            )
+    report["complete_deliveries"] = sorted(
+        record["id"] for record in graph["deliveries"]
+        if all(nodes[item]["status"] == "implemented" for item in ancestors[record["id"]] & task_ids)
+    )
     report["ok"] = not errors
-    return report
+
+
+def write_report(lines: list[str]) -> bool:
+    """Print the rendered report; return False, without a traceback, when the stream refuses it."""
+    stream = sys.stdout
+    if stream is None:
+        return True
+    # A stream that cannot encode a character receives its escape instead of a traceback.
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        for line in lines:
+            print(line.encode(encoding, "backslashreplace").decode(encoding))
+        stream.flush()
+    except OSError:
+        # A closed pipe or failed device. The interpreter flushes this stream again at
+        # exit; that flush must have somewhere to go instead of failing a second time.
+        try:
+            sink = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(sink, stream.fileno())
+            finally:
+                os.close(sink)
+        except (OSError, ValueError):
+            pass
+        return False
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
     """Read inputs, validate once, and render the same report in either format."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--graph", type=Path, default=ROOT / "specs/zk_delivery_graph.json")
-    parser.add_argument("--plan", type=Path, default=ROOT / "specs/zk_delivery_plan.md")
-    parser.add_argument("--reconciliation", type=Path, default=ROOT / "specs/zk_delivery_reconciliation.json")
-    parser.add_argument("--format", choices=("text", "json"), default="text")
-    args = parser.parse_args(argv)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--graph", type=Path, default=ROOT / "specs/zk_delivery_graph.json",
+        help="delivery graph JSON (default: specs/zk_delivery_graph.json in this repository)",
+    )
+    parser.add_argument(
+        "--plan", type=Path, default=ROOT / "specs/zk_delivery_plan.md",
+        help="Markdown plan compared with the graph (default: specs/zk_delivery_plan.md)",
+    )
+    parser.add_argument(
+        "--reconciliation", type=Path, default=ROOT / "specs/zk_delivery_reconciliation.json",
+        help="source reconciliation ledger JSON (default: specs/zk_delivery_reconciliation.json)",
+    )
+    parser.add_argument(
+        "--root", type=Path, default=ROOT,
+        help="repository that evidence paths resolve against (default: this script's repository)",
+    )
+    parser.add_argument(
+        "--format", choices=("text", "json"), default="text",
+        help="render the one validation report as text or JSON (default: text)",
+    )
     try:
-        graph = json.loads(args.graph.read_text(encoding="utf-8"))
-        plan = args.plan.read_text(encoding="utf-8")
-        reconciliation = json.loads(args.reconciliation.read_text(encoding="utf-8"))
-        report = check_plan(graph, plan, reconciliation)
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        report = {"ok": False, "scope": SCOPE, "errors": [f"cannot read inputs: {error}"]}
+        args = parser.parse_args(argv)
+    except (SystemExit, OSError) as stopped:
+        # argparse has printed its help or a usage error. A stream that refuses that
+        # text is exit status 1 without a traceback, as it is for a report.
+        if write_report([]) and isinstance(stopped, SystemExit):
+            raise
+        return 1
+    inputs: dict[str, Any] = {}
+    report = empty_report()
+    for label, path, reader in (
+        ("graph", args.graph, load_json),
+        ("plan", args.plan, lambda source: source.read_text(encoding="utf-8")),
+        ("reconciliation", args.reconciliation, load_json),
+    ):
+        try:
+            inputs[label] = reader(path)
+        except RecursionError:
+            report["errors"].append(f"cannot read inputs: {label} is nested too deeply")
+        except (OSError, ValueError) as error:
+            report["errors"].append(f"cannot read inputs: {label}: {error}")
+    if not report["errors"]:
+        report = check_plan(inputs["graph"], inputs["plan"], inputs["reconciliation"], args.root)
     if args.format == "json":
-        print(json.dumps(report, indent=2, sort_keys=True))
+        lines = [json.dumps(report, indent=2, sort_keys=True)]
     else:
-        print("PASS" if report["ok"] else "FAIL")
-        print(SCOPE)
-        for error in report["errors"]:
-            print(f"- {error}")
+        lines = ["PASS" if report["ok"] else "FAIL", SCOPE]
+        lines.extend(f"- {error}" for error in report["errors"])
         if report["ok"]:
-            print(f"{report['task_count']} tasks, {report['delivery_count']} deliveries; graph and plan agree.")
-    return 0 if report["ok"] else 1
+            counts = report["status_counts"]
+            lines.append(f"{report['task_count']} tasks, {report['delivery_count']} deliveries; graph and plan agree.")
+            lines.append(
+                f"Recorded status: {counts['planned']} planned, {counts['in_progress']} in progress, "
+                f"{counts['implemented']} implemented; {len(report['complete_deliveries'])} deliveries complete."
+            )
+            lines.extend(f"- {line}" for line in report["progress"])
+    return 0 if write_report(lines) and report["ok"] else 1
 
 
 if __name__ == "__main__":

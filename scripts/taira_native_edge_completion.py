@@ -37,6 +37,9 @@ IDENTITY_KEYS = {"device", "inode", "uid", "gid", "mode", "links", "size", "mtim
 BINDING_KEYS = {"operation_id", "inventory_sha256", "authorization_sha256", "authorization_nonce",
                 "host_pair_sha256", "host_identity_sha256", "custody_root"}
 MAX_PUBLIC_BYTES = 1024 * 1024
+ADOPTION_PREFIX = "iroha.taira.public-reset.native-owner-adoption-"
+ADOPTION_BINDING_KEYS = {"operation_id", "request_sha256", "authorization_sha256", "authorization_nonce",
+    "host_pair_sha256", "host_identity_sha256", "custody_root", "helper_source_closure_sha256"}
 
 
 def need(condition, code):
@@ -274,11 +277,72 @@ def inspect_owned_publication(request):
     return owner_modules(sources).inspect_owned_publication(request)
 
 
+def verify_native_custody(custody):
+    """Recheck independently fixed OS custody shared by closed native actions."""
+    self = custody
+    packet = self.packet
+    recheck_observed(self.anchor["retained"]["reference"]["file"], self.anchor["retained"]["fd"])
+    need(packet["guard"]["reference"] == self.anchor["retained"]["reference"],
+         "independent_native_guard_changed")
+    recheck_observed(packet["guard"]["reference"]["file"], packet["guard"]["fd"])
+    current = open_anchored(self.path, directory=True)
+    try:
+        need(identity(os.fstat(current)) == self.directory_identity == identity(os.fstat(self.directory)),
+             "operation_directory_changed")
+    finally:
+        os.close(current)
+    fields(packet["parent"], {"pid", "uid", "started", "executable"}, "native_parent_fields")
+    parent = packet["parent"]
+    need(type(parent["pid"]) is int and parent["pid"] == os.getppid() and parent["pid"] > 1
+         and type(parent["uid"]) is int and parent["uid"] == os.geteuid()
+         and isinstance(parent["started"], str)
+         and re.fullmatch(r"[A-Za-z0-9: ]{20,32}", parent["started"]) is not None,
+         "native_parent_changed")
+    need(parent["executable"]["reference"]["file"]["path"] == self.anchor["dispatcher_path"]
+         and parent["executable"]["reference"]["sha256"] == self.anchor["guard"]["dispatcher_sha256"]
+         and kernel_executable_path(parent["pid"]) == self.anchor["dispatcher_path"],
+         "independent_native_parent_required")
+    if not self.parent_digest_verified:
+        retained_public(parent["executable"], limit=512 * 1024 * 1024, executable=True)
+        self.parent_digest_verified = True
+    else:
+        recheck_observed(parent["executable"]["reference"]["file"], parent["executable"]["fd"], executable=True)
+    closure, sources = source_closure()
+    need(closure == packet["helper_source_closure_sha256"], "helper_closure_changed")
+    self.sources = sources
+    owner = owner_modules(sources)
+    expected = dict(pid=parent["pid"], uid=parent["uid"], started=parent["started"],
+                    executable=parent["executable"]["reference"]["file"]["path"])
+    need(owner.observe_master(expected) == expected, "native_parent_changed")
+    for name, expected_path in (
+            ("lock", self.path / "operation.lock"),
+            ("host_lock", Path(self.anchor["custody_root"]) / "taira-edge/host-operation.lock")):
+        lock = packet[name]
+        fields(lock, {"fd", "file"}, "native_lock_fields")
+        descriptor_value(lock["fd"])
+        validate_observed(lock["file"])
+        need(lock["file"]["path"] == str(expected_path), "native_lock_path")
+        need(lock["file"]["identity"]["size"] == 0, "native_lock_size")
+        recheck_observed(lock["file"], lock["fd"])
+        competing = open_anchored(lock["file"]["path"])
+        try:
+            try:
+                fcntl.flock(competing, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                fcntl.flock(competing, fcntl.LOCK_UN)
+                raise RuntimeError("native_lock_not_held")
+        finally:
+            os.close(competing)
+    return owner, parent, expected
+
+
 class Admission:
     """Retain public child custody and revalidate it before each owned effect."""
 
     def __init__(self, packet):
-        fields(packet, BINDING_KEYS | {"schema", "action", "helper_source_closure_sha256", "parent", "lock",
+        fields(packet, BINDING_KEYS | {"schema", "action", "helper_source_closure_sha256", "parent", "lock", "host_lock",
             "guard", "inventory", "authorization", "progress", "checkpoints", "fence", "plan"},
             "completion_admission_fields")
         need(packet["schema"] == ADMISSION_SCHEMA and packet["action"] in {"rollback", "seal", "cleanup"}
@@ -322,56 +386,7 @@ class Admission:
 
     def verify(self):
         packet = self.packet
-        recheck_observed(self.anchor["retained"]["reference"]["file"], self.anchor["retained"]["fd"])
-        need(packet["guard"]["reference"] == self.anchor["retained"]["reference"],
-             "independent_native_guard_changed")
-        recheck_observed(packet["guard"]["reference"]["file"], packet["guard"]["fd"])
-        current = open_anchored(self.path, directory=True)
-        try:
-            need(identity(os.fstat(current)) == self.directory_identity == identity(os.fstat(self.directory)),
-                 "operation_directory_changed")
-        finally:
-            os.close(current)
-        fields(packet["parent"], {"pid", "uid", "started", "executable"}, "native_parent_fields")
-        parent = packet["parent"]
-        need(type(parent["pid"]) is int and parent["pid"] == os.getppid() and parent["pid"] > 1
-             and type(parent["uid"]) is int and parent["uid"] == os.geteuid()
-             and isinstance(parent["started"], str)
-             and re.fullmatch(r"[A-Za-z0-9: ]{20,32}", parent["started"]) is not None,
-             "native_parent_changed")
-        need(parent["executable"]["reference"]["file"]["path"] == self.anchor["dispatcher_path"]
-             and parent["executable"]["reference"]["sha256"] == self.anchor["guard"]["dispatcher_sha256"]
-             and kernel_executable_path(parent["pid"]) == self.anchor["dispatcher_path"],
-             "independent_native_parent_required")
-        if not self.parent_digest_verified:
-            retained_public(parent["executable"], limit=512 * 1024 * 1024, executable=True)
-            self.parent_digest_verified = True
-        else:
-            recheck_observed(parent["executable"]["reference"]["file"], parent["executable"]["fd"], executable=True)
-        closure, sources = source_closure()
-        need(closure == packet["helper_source_closure_sha256"], "helper_closure_changed")
-        self.sources = sources
-        owner = owner_modules(sources)
-        expected = dict(pid=parent["pid"], uid=parent["uid"], started=parent["started"],
-                        executable=parent["executable"]["reference"]["file"]["path"])
-        need(owner.observe_master(expected) == expected, "native_parent_changed")
-        fields(packet["lock"], {"fd", "file"}, "native_lock_fields")
-        lock = packet["lock"]
-        descriptor_value(lock["fd"])
-        validate_observed(lock["file"])
-        need(lock["file"]["path"] == str(self.path / "operation.lock"), "operation_lock_path")
-        recheck_observed(lock["file"], lock["fd"])
-        competing = open_anchored(lock["file"]["path"])
-        try:
-            try:
-                fcntl.flock(competing, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                pass
-            else:
-                fcntl.flock(competing, fcntl.LOCK_UN)
-                raise RuntimeError("native_lock_not_held")
-        finally:
-            os.close(competing)
+        owner, parent, expected = verify_native_custody(self)
         for key, name in (("inventory", "inventory.json"), ("authorization", "authorization.json"),
                           ("progress", "progress.json"), ("plan", "completion-plan.json")):
             need(packet[key]["reference"]["file"]["path"] == str(self.path / name), "operation_public_path")
@@ -425,14 +440,41 @@ class Admission:
              "completion_plan_schema")
         owner.validate_plan(self.plan["nginx"])
         plan = self.plan["nginx"]
-        need(plan["host_kind"] == "macos" and plan["publication"]["kind"] == "reconcile"
-             and plan["operation_id"] == plan["publication"]["prior"]["operation_id"], "completion_publication_binding")
+        need(plan["host_kind"] == "macos", "completion_publication_binding")
         effect = self.plan["publication_effect"]
         fields(effect, {"kind", "value"}, "publication_effect_fields")
+        if effect["kind"] == "publisher_rolled_back":
+            need(packet["action"] == "rollback" and self.progress["status"] in {
+                "rollback_requested", "rolled_back", "recovery_pending"}
+                and plan["publication"]["kind"] in {"create", "replace"}
+                and plan["operation_id"] == self.progress["publication_operation_id"],
+                "publisher_rollback_effect")
+            fields(effect["value"], {"journal", "restored_owned_publication"}, "publisher_rollback_fields")
+            reference = numeric_owner_journal(effect["value"]["journal"])
+            need(owner.validate_public_journal_reference(reference, plan["native"]) == plan["operation_id"],
+                 "publisher_rollback_operation")
+            restored = effect["value"]["restored_owned_publication"]
+            need((restored is None) == (plan["publication"]["kind"] == "create"),
+                 "publisher_rollback_predecessor")
+            if restored is not None:
+                need(restored["publication"]["file"]["path"] == str(
+                    Path(plan["destination"]["directory"]["path"]) / plan["destination"]["basename"]),
+                    "publisher_rollback_destination")
+                restored = numeric_owner_publication(restored)
+                owner.validate_public_prior_reference(restored, plan["native"])
+                prior = plan["publication"]["prior"]
+                need(restored["operation_id"] == prior["operation_id"]
+                     and restored["publication"]["sha256"] == prior["publication"]["sha256"]
+                     and all(restored["publication"]["identity"][key] == prior["publication"]["identity"][key]
+                             for key in IDENTITY_KEYS - {"ctime_ns"}), "publisher_rollback_predecessor")
+        else:
+            need(plan["publication"]["kind"] == "reconcile"
+                 and plan["operation_id"] == plan["publication"]["prior"]["operation_id"],
+                 "completion_publication_binding")
         if effect["kind"] == "owned":
             need(effect["value"] is None and plan["operation_id"] == self.progress["publication_operation_id"],
                  "owned_publication_effect")
-        else:
+        elif effect["kind"] == "not_requested":
             need(effect["kind"] == "not_requested" and packet["action"] == "rollback"
                  and self.progress["status"] in {"admitted", "staged", "rollback_requested", "rolled_back", "recovery_pending"},
                  "publication_effect_not_requested")
@@ -447,6 +489,8 @@ class Admission:
             need(effect["value"]["intended_operation_id"] == self.progress["publication_operation_id"]
                  and effect["value"]["intended_operation_id"] != plan["operation_id"]
                  and incumbent == numeric_owned_publication(plan), "incumbent_owner_binding")
+        else:
+            need(effect["kind"] == "publisher_rolled_back", "publication_effect_kind")
         checkpoints = packet["checkpoints"]
         need(isinstance(checkpoints, list) and len(checkpoints) <= 3, "checkpoint_count")
         hashes = []
@@ -544,12 +588,163 @@ class Admission:
         self.directory_owned_change = True
 
 
+class AdoptionAdmission:
+    """Admit a separately signed exact ownership transition, never old phases."""
+
+    def __init__(self, packet):
+        fields(packet, ADOPTION_BINDING_KEYS | {"schema", "parent", "host_lock", "lock", "guard", "request",
+            "authorization", "trusted_key", "progress", "plan", "source_plan", "lease", "publication", "opaque_journals"},
+            "adoption_admission_fields")
+        need(packet["schema"] == ADOPTION_PREFIX + "admission.v1" and sys.platform == "darwin",
+             "native_adoption_admission")
+        for key in ("operation_id", "authorization_nonce"):
+            hex_value(packet[key], 32, "adoption_operation_identity")
+        for key in ADOPTION_BINDING_KEYS - {"operation_id", "authorization_nonce", "custody_root"}:
+            hex_value(packet[key], 64, "adoption_binding_digest")
+        self.packet = packet
+        self.bindings = {key: packet[key] for key in ADOPTION_BINDING_KEYS}
+        self.anchor = native_custodian_anchor(packet)
+        self.directory = None
+        self.parent_digest_verified = False
+        self.path = path_value(packet["custody_root"]) / "taira-edge/operations" / packet["authorization_sha256"]
+        self.incident_refs = None
+        try:
+            self.directory = open_anchored(self.path, directory=True)
+            self.directory_identity = identity(os.fstat(self.directory))
+            validate_observed(dict(path=str(self.path), identity=self.directory_identity), directory=True)
+            self.verify()
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if self.directory is not None:
+            os.close(self.directory)
+        os.close(self.anchor["retained"]["fd"])
+
+    def refresh_directory(self):
+        self.directory_identity = identity(os.fstat(self.directory))
+
+    def verify(self):
+        packet = self.packet
+        owner, parent, expected = verify_native_custody(self)
+        for key, name in (("request", "request.json"), ("authorization", "authorization.json"),
+                ("trusted_key", "trusted-key.json"), ("progress", "progress.json"), ("plan", "adoption-plan.json")):
+            need(packet[key]["reference"]["file"]["path"] == str(self.path / name), "adoption_public_path")
+        need(packet["lease"]["reference"]["file"]["path"] == str(
+            Path(self.anchor["custody_root"]) / "taira-edge/active-adoption.json"), "adoption_lease_path")
+        request = public_json(retained_public(packet["request"], limit=128 * 1024))
+        fields(request, {"schema", "hosts", "operation_id", "authorization_nonce", "helper_source_closure_sha256",
+                        "adoption_plan", "not_before_unix_ms", "expires_at_unix_ms"}, "adoption_request_fields")
+        need(request["schema"] == ADOPTION_PREFIX + "request.v1"
+             and packet["request"]["reference"]["sha256"] == packet["request_sha256"]
+             and all(request[key] == packet[key] for key in
+                     ("operation_id", "authorization_nonce", "helper_source_closure_sha256")),
+             "adoption_request_binding")
+        fields(request["hosts"], {"schema", "provider", "validator_guest", "native_edge"}, "adoption_host_pair_fields")
+        native, guard = request["hosts"]["native_edge"], self.anchor["guard"]
+        need(request["hosts"]["provider"] == "macstadium-dublin"
+             and native["owner_uid"] == os.geteuid() and native["owner_gid"] == os.getegid()
+             and native["custody_root"] == packet["custody_root"]
+             and native["endpoint"]["host_identity_sha256"] == packet["host_identity_sha256"]
+             and native["guard_sha256"] == packet["guard"]["reference"]["sha256"]
+             and native["dispatcher_path"] == expected["executable"]
+             and native["dispatcher_sha256"] == parent["executable"]["reference"]["sha256"],
+             "adoption_native_guard_binding")
+        trusted = public_json(retained_public(packet["trusted_key"], limit=16 * 1024))
+        fields(trusted, {"schema", "algorithm", "public_key"}, "adoption_trusted_key_fields")
+        need(trusted["schema"] == "iroha.taira.public-reset.trusted-key.v1" and trusted["algorithm"] == "ed25519"
+             and packet["trusted_key"]["reference"]["sha256"] == guard["trusted_key_sha256"],
+             "adoption_trusted_key_binding")
+        authorization = public_json(retained_public(packet["authorization"], limit=16 * 1024))
+        fields(authorization, {"schema", "claims", "signature_hex"}, "adoption_authorization_fields")
+        claims = authorization["claims"]
+        fields(claims, {"schema", "request_sha256", "operation_id", "authorization_nonce", "host_pair_sha256",
+            "helper_source_closure_sha256", "not_before_unix_ms", "expires_at_unix_ms"}, "adoption_claims_fields")
+        hex_value(authorization["signature_hex"], 128, "adoption_signature")
+        need(authorization["schema"] == ADOPTION_PREFIX + "authorization.v1"
+             and claims["schema"] == ADOPTION_PREFIX + "claims.v1"
+             and packet["authorization"]["reference"]["sha256"] == packet["authorization_sha256"]
+             and all(claims[key] == packet[key] for key in ("request_sha256", "operation_id", "authorization_nonce",
+                     "host_pair_sha256", "helper_source_closure_sha256"))
+             and all(type(request[key]) is int and 0 <= request[key] <= 2**64-1
+                     and claims[key] == request[key] for key in ("not_before_unix_ms", "expires_at_unix_ms"))
+             and request["expires_at_unix_ms"] > request["not_before_unix_ms"], "adoption_authorization_binding")
+        # The actual guarded Rust parent verifies the exact domain-separated
+        # signature. Python cannot reinterpret expiry or supply another signer.
+        self.progress = public_json(retained_public(packet["progress"], limit=16 * 1024))
+        fields(self.progress, ADOPTION_BINDING_KEYS | {"schema", "status", "receipt_sha256"}, "adoption_progress_fields")
+        need(self.progress["schema"] == ADOPTION_PREFIX + "progress.v1"
+             and all(self.progress[key] == value for key, value in self.bindings.items())
+             and self.progress["status"] in {"adoption_requested", "recovery_pending", "adopted_unqualified"},
+             "adoption_progress_binding")
+        if self.progress["receipt_sha256"] is not None:
+            hex_value(self.progress["receipt_sha256"], 64, "adoption_progress_receipt")
+        lease = public_json(retained_public(packet["lease"], limit=16 * 1024))
+        lease_keys = {"operation_id", "request_sha256", "authorization_sha256", "authorization_nonce", "host_pair_sha256"}
+        fields(lease, lease_keys | {"schema"}, "adoption_lease_fields")
+        need(lease["schema"] == ADOPTION_PREFIX + "lease.v1"
+             and all(lease[key] == packet[key] for key in lease_keys), "adoption_lease_binding")
+        try:
+            os.stat(Path(self.anchor["custody_root"]) / "taira-edge/active-lease.json", follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise RuntimeError("adoption_reset_lease_present")
+        self.plan = public_json(retained_public(packet["plan"]))
+        fields(self.plan, {"schema", "nginx", "publication", "opaque_journals"}, "adoption_plan_fields")
+        source_plan = retained_public(packet["source_plan"])
+        need(self.plan["schema"] == ADOPTION_PREFIX + "plan.v1"
+             and request["adoption_plan"] == packet["source_plan"]["reference"]
+             and source_plan == retained_public(packet["plan"])
+             and self.plan["publication"] == packet["publication"]["reference"], "adoption_plan_binding")
+        owner.validate_plan(self.plan["nginx"])
+        plan = self.plan["nginx"]
+        need(plan["operation_id"] == packet["operation_id"] and plan["host_kind"] == "macos"
+             and plan["publication"] == {"kind": "create"}
+             and plan["candidate"]["sha256"] == self.plan["publication"]["sha256"]
+             and self.plan["publication"]["file"]["path"] == str(
+                 Path(plan["destination"]["directory"]["path"]) / plan["destination"]["basename"]),
+             "adoption_publication_binding")
+        retained_public(packet["publication"])
+        originals, retained = self.plan["opaque_journals"], packet["opaque_journals"]
+        need(isinstance(originals, list) and isinstance(retained, list) and 0 < len(originals) == len(retained) <= 32,
+             "adoption_incident_bound")
+        paths = set()
+        for ordinal, (original, pin) in enumerate(zip(originals, retained)):
+            observed = original["file"]
+            validate_observed(observed)
+            hex_value(original["sha256"], 64, "adoption_incident_digest")
+            name = Path(observed["path"]).name
+            match = re.fullmatch(r"\.taira-native-nginx-apply-([0-9a-f]{32})\.receipt\.ndjson", name)
+            need(match is not None and match[1] != packet["operation_id"]
+                 and observed["path"] == str(Path(plan["native"]["directory"]["path"]) / name)
+                 and observed["path"] not in paths, "adoption_incident_path")
+            paths.add(observed["path"])
+            actual = pin["reference"]
+            validate_observed(actual["file"])
+            need(actual["sha256"] == original["sha256"]
+                 and actual["file"]["path"] in {observed["path"], adoption_archive_path(self, ordinal)}
+                 and all(actual["file"]["identity"][key] == observed["identity"][key]
+                         for key in IDENTITY_KEYS - {"ctime_ns"}), "adoption_incident_lineage")
+        if self.incident_refs is not None:
+            for pin in self.incident_refs:
+                retained_public(pin)
+        return owner
+
+
+def adoption_archive_path(admission, ordinal):
+    return str(Path(admission.plan["nginx"]["native"]["directory"]["path"]) /
+        (".taira-native-nginx-adoption-" + admission.packet["operation_id"] + "-opaque-" + str(ordinal) + ".ndjson"))
+
+
 class CompletionJournal:
     """One finite append-only effect chain, retained under the inherited lock."""
 
-    def __init__(self, admission):
+    def __init__(self, admission, *, name="native-completion.ndjson"):
+        need(name in {"native-completion.ndjson", "native-adoption.ndjson"}, "native_effect_journal_name")
         self.admission = admission
-        self.name = "native-completion.ndjson"
+        self.name = name
         flags = os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC
         self.fd = None
         try:
@@ -573,6 +768,7 @@ class CompletionJournal:
 
     def load(self):
         admission = self.admission
+        owner = admission.verify()
         self.check()
         body = os.pread(self.fd, MAX_PUBLIC_BYTES + 1, 0)
         need(len(body) <= MAX_PUBLIC_BYTES and (not body or body.endswith(b"\n")), "completion_journal_bound")
@@ -581,7 +777,7 @@ class CompletionJournal:
             fields(record, BINDING_KEYS | {"schema", "sequence", "plan_sha256", "phase", "action",
                 "publication_operation_id", "publication_identity", "backup_identity", "publisher_journal",
                 "progress_before_sha256", "global_proof_sha256", "error_code", "publisher_terminal_record",
-                "restored_owner"}, "completion_journal_fields")
+                "restored_owner", "publisher_write_intent"}, "completion_journal_fields")
             need(record["schema"] == JOURNAL_SCHEMA and type(record["sequence"]) is int
                  and record["sequence"] == ordinal
                  and all(record[key] == value for key, value in admission.bindings.items())
@@ -591,6 +787,27 @@ class CompletionJournal:
                      "reload_requested", "publisher_terminal_requested", "publisher_terminal", "rolled_back",
                      "seal_requested", "sealed", "cleanup_requested", "cleaned", "recovery_pending"}
                  and record["action"] in {"rollback", "seal", "cleanup"}, "completion_journal_binding")
+            witness = record["publisher_write_intent"]
+            if witness is not None:
+                fields(witness, {"intent", "stage", "record"}, "publisher_write_intent_fields")
+                reference = witness["intent"]
+                fields(reference, {"path", "identity", "sha256"}, "publisher_write_intent_reference")
+                native = admission.plan["nginx"]["native"]
+                owner.validate_public_owner_identity(reference["identity"], native)
+                owner.validate_public_owner_identity(witness["stage"], native)
+                hex_value(reference["sha256"], 64, "publisher_write_intent_digest")
+                projection = witness["record"]
+                need(isinstance(projection, dict)
+                     and "journal_publication_identity" not in projection
+                     and "journal_write_intent" not in projection
+                     and type(projection.get("sequence")) is int
+                     and 0 < projection["sequence"] <= 128, "publisher_write_intent_record")
+                hex_value(projection.get("operation_id"), 32, "publisher_write_intent_operation")
+                name = Path(reference["path"]).name
+                need(re.fullmatch(r"\.taira-native-nginx-write-" + projection["operation_id"]
+                     + "-" + str(projection["sequence"]) + r"-[0-9a-f]{32}\.intent\.json", name)
+                     is not None and reference["path"] == str(Path(native["directory"]["path"]) / name)
+                     and record["phase"] == "publisher_terminal_requested", "publisher_write_intent_path")
             self.records.append(record)
         need(len(self.records) <= 128, "completion_journal_record_bound")
         self.check()
@@ -606,8 +823,9 @@ class CompletionJournal:
              and stat.S_IMODE(info.st_mode) == 0o600, "completion_journal_changed")
 
     def append(self, phase, *, publication_identity, backup_identity, publisher_journal, error_code=None,
-               publisher_terminal_record=None, restored_owner=None):
-        self.admission.verify()
+               publisher_terminal_record=None, restored_owner=None, publisher_write_intent=None):
+        import uuid
+        owner = self.admission.verify()
         self.check()
         packet = self.admission.packet
         fence_sha = (packet["fence"]["value"]["reference"]["reference"]["sha256"]
@@ -620,17 +838,135 @@ class CompletionJournal:
             progress_before_sha256=packet["progress"]["reference"]["sha256"],
             global_proof_sha256=fence_sha, error_code=error_code,
             publisher_terminal_record=publisher_terminal_record,
-            restored_owner=restored_owner)
+            restored_owner=restored_owner, publisher_write_intent=publisher_write_intent)
+        self.append_record(record)
+
+    def append_record(self, record):
+        """Publish one complete private authority chain under exact native custody."""
+        import uuid
+        owner = self.admission.verify()
+        self.check()
         body = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
         need(len(self.records) < 128 and len(body) <= 65536
              and os.fstat(self.fd).st_size + len(body) <= MAX_PUBLIC_BYTES, "completion_journal_bound")
-        need(os.write(self.fd, body) == len(body), "completion_journal_write_incomplete")
-        os.fsync(self.fd)
-        self.observed = identity(os.fstat(self.fd))
+        prefix = os.pread(self.fd, MAX_PUBLIC_BYTES + 1, 0)
         self.check()
-        # Never retain aliases to mutable caller metadata: a later controlled
-        # rename/append must not silently rewrite an earlier durable intent.
-        self.records.append(public_json(body, 65536))
+        need(len(prefix) == self.observed["size"] and (not prefix or prefix.endswith(b"\n")),
+             "completion_journal_changed")
+        complete = prefix + body
+        stage_name = ".native-completion-" + uuid.uuid4().hex + ".journal"
+        stage_fd = os.open(stage_name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                           0o600, dir_fd=self.admission.directory)
+        stage_created = identity(os.fstat(stage_fd))
+        old_fd, old_observed = self.fd, self.observed
+        stage_observed = None
+        installed = False
+        self.admission.refresh_directory()
+
+        def paired(observed, expected):
+            # Only our atomic rename may refresh ctime; bytes, ownership and
+            # the two original inodes must retain their admitted lineage.
+            return all(observed[key] == expected[key] for key in IDENTITY_KEYS - {"ctime_ns"})
+
+        def staged(expected, content):
+            before = identity(os.fstat(stage_fd))
+            need(stat.S_ISREG(os.fstat(stage_fd).st_mode) and before == expected
+                 == identity(os.stat(stage_name, dir_fd=self.admission.directory, follow_symlinks=False))
+                 and before["uid"] == os.geteuid() and before["gid"] == os.getegid()
+                 and before["mode"] == 0o600 and before["links"] == 1,
+                 "completion_journal_stage_changed")
+            need(os.pread(stage_fd, MAX_PUBLIC_BYTES + 1, 0) == content
+                 and identity(os.fstat(stage_fd)) == before
+                 == identity(os.stat(stage_name, dir_fd=self.admission.directory, follow_symlinks=False)),
+                 "completion_journal_stage_changed")
+
+        def adopt_exchange():
+            nonlocal stage_fd, installed
+            new_observed, displaced = identity(os.fstat(stage_fd)), identity(os.fstat(old_fd))
+            need(paired(new_observed, stage_observed) and paired(displaced, old_observed)
+                 and new_observed == identity(os.stat(self.name, dir_fd=self.admission.directory, follow_symlinks=False))
+                 and displaced == identity(os.stat(stage_name, dir_fd=self.admission.directory, follow_symlinks=False))
+                 and os.pread(stage_fd, MAX_PUBLIC_BYTES + 1, 0) == complete
+                 and os.pread(old_fd, MAX_PUBLIC_BYTES + 1, 0) == prefix,
+                 "completion_journal_exchange_ambiguous")
+            need(new_observed == identity(os.fstat(stage_fd))
+                 == identity(os.stat(self.name, dir_fd=self.admission.directory, follow_symlinks=False))
+                 and displaced == identity(os.fstat(old_fd))
+                 == identity(os.stat(stage_name, dir_fd=self.admission.directory, follow_symlinks=False)),
+                 "completion_journal_exchange_ambiguous")
+            self.fd, self.observed = stage_fd, new_observed
+            stage_fd, installed = None, True
+            # Retain no aliases to mutable caller metadata, including on an
+            # exception immediately after the complete chain became visible.
+            self.records.append(public_json(body, 65536))
+            return displaced
+
+        try:
+            need(stat.S_ISREG(os.fstat(stage_fd).st_mode) and stage_created["uid"] == os.geteuid()
+                 and stage_created["gid"] == os.getegid() and stage_created["mode"] == 0o600
+                 and stage_created["links"] == 1, "completion_journal_stage_changed")
+            offset = 0
+            while offset < len(complete):
+                self.admission.verify()
+                self.check()
+                try:
+                    written = os.write(stage_fd, complete[offset:])
+                except InterruptedError:
+                    continue
+                need(0 < written <= len(complete) - offset, "completion_journal_write_incomplete")
+                offset += written
+            os.fsync(stage_fd)
+            stage_observed = identity(os.fstat(stage_fd))
+            staged(stage_observed, complete)
+            self.admission.verify()
+            self.check()
+            need(os.pread(old_fd, MAX_PUBLIC_BYTES + 1, 0) == prefix, "completion_journal_changed")
+            self.check()
+            try:
+                owner.native_exchange(self.admission.directory, self.name, stage_name)
+            except BaseException:
+                # A native effect can precede an interrupted acknowledgement.
+                # Adopt only the two exact exchanged inodes; unknown paths are
+                # preserved and cannot authorize a later append or cleanup.
+                self.admission.refresh_directory()
+                if identity(os.fstat(stage_fd)) == identity(os.stat(
+                        self.name, dir_fd=self.admission.directory, follow_symlinks=False)):
+                    adopt_exchange()
+                raise
+            self.admission.refresh_directory()
+            displaced = adopt_exchange()
+            os.fsync(self.admission.directory)
+            self.admission.verify()
+            self.check()
+            need(displaced == identity(os.fstat(old_fd))
+                 == identity(os.stat(stage_name, dir_fd=self.admission.directory, follow_symlinks=False))
+                 and os.pread(old_fd, MAX_PUBLIC_BYTES + 1, 0) == prefix,
+                 "completion_journal_cleanup_ambiguous")
+            need(displaced == identity(os.fstat(old_fd))
+                 == identity(os.stat(stage_name, dir_fd=self.admission.directory, follow_symlinks=False)),
+                 "completion_journal_cleanup_ambiguous")
+            os.unlink(stage_name, dir_fd=self.admission.directory)
+            self.admission.refresh_directory()
+            os.fsync(self.admission.directory)
+            self.check()
+        finally:
+            if installed:
+                os.close(old_fd)
+            else:
+                # Failed/partial or substituted stages remain evidence. Only
+                # an exact fully written unexchanged public stage may be removed.
+                if stage_observed is not None:
+                    try:
+                        self.admission.verify()
+                        self.check()
+                        staged(stage_observed, complete)
+                        os.unlink(stage_name, dir_fd=self.admission.directory)
+                        self.admission.refresh_directory()
+                        os.fsync(self.admission.directory)
+                    except Exception:
+                        pass
+            if stage_fd is not None:
+                os.close(stage_fd)
 
     def reference(self):
         self.check()
@@ -639,6 +975,258 @@ class CompletionJournal:
         self.check()
         return dict(file=dict(path=str(self.admission.path / self.name), identity=self.observed),
                     sha256=hashlib.sha256(body).hexdigest())
+
+
+class AdoptionJournal(CompletionJournal):
+    """Keep the signed incident set and publisher intent in native authority."""
+
+    def __init__(self, admission):
+        super().__init__(admission, name="native-adoption.ndjson")
+
+    def load(self):
+        self.check()
+        body = os.pread(self.fd, MAX_PUBLIC_BYTES + 1, 0)
+        need(len(body) <= MAX_PUBLIC_BYTES and (not body or body.endswith(b"\n")), "adoption_journal_bound")
+        for sequence, line in enumerate(body.splitlines(), 1):
+            row = public_json(line, 65536)
+            fields(row, ADOPTION_BINDING_KEYS | {"schema", "sequence", "phase", "archive_ordinal",
+                "archived_journals", "owner_journal", "write_intent"}, "adoption_journal_fields")
+            need(row["schema"] == ADOPTION_PREFIX + "journal.v1" and type(row["sequence"]) is int
+                 and row["sequence"] == sequence and all(row[key] == value for key, value in self.admission.bindings.items())
+                 and row["phase"] in {"admitted", "archive_requested", "archived", "owner_write_requested", "adopted_unqualified"}
+                 and isinstance(row["archived_journals"], list) and len(row["archived_journals"]) <= 32,
+                 "adoption_journal_binding")
+            for ordinal, reference in enumerate(row["archived_journals"]):
+                need(ordinal < len(self.admission.plan["opaque_journals"]), "adoption_archives_bound")
+                fields(reference, {"file", "sha256"}, "adoption_archive_reference")
+                validate_observed(reference["file"])
+                original = self.admission.plan["opaque_journals"][ordinal]
+                need(reference["file"]["path"] == adoption_archive_path(self.admission, ordinal)
+                     and reference["sha256"] == original["sha256"]
+                     and all(reference["file"]["identity"][key] == original["file"]["identity"][key]
+                             for key in IDENTITY_KEYS - {"ctime_ns"}), "adoption_archive_lineage")
+            ordinal = row["archive_ordinal"]
+            need((row["phase"] == "archive_requested") == (ordinal is not None)
+                 and (ordinal is None or type(ordinal) is int and 0 <= ordinal < len(self.admission.plan["opaque_journals"])),
+                 "adoption_archive_intent")
+            witness = row["write_intent"]
+            if witness is not None:
+                fields(witness, {"intent", "stage", "record"}, "adoption_write_intent_fields")
+                need(row["phase"] == "owner_write_requested" and isinstance(witness["record"], dict)
+                     and witness["record"].get("operation_id") == self.admission.packet["operation_id"],
+                     "adoption_write_intent_binding")
+                fields(witness["intent"], {"path", "identity", "sha256"}, "adoption_write_intent_reference")
+                native = self.admission.plan["nginx"]["native"]
+                owner = self.admission.verify()
+                owner.validate_public_owner_identity(witness["intent"]["identity"], native)
+                owner.validate_public_owner_identity(witness["stage"], native)
+                hex_value(witness["intent"]["sha256"], 64, "adoption_write_intent_digest")
+                name = Path(witness["intent"]["path"]).name
+                need(witness["record"].get("sequence") == 1
+                     and re.fullmatch(r"\.taira-native-nginx-write-" + self.admission.packet["operation_id"]
+                         + r"-1-[0-9a-f]{32}\.intent\.json", name) is not None
+                     and witness["intent"]["path"] == str(Path(native["directory"]["path"]) / name),
+                     "adoption_write_intent_path")
+            if row["owner_journal"] is not None:
+                need(row["phase"] == "adopted_unqualified", "adoption_owner_phase")
+                owner = self.admission.verify()
+                need(owner.validate_public_journal_reference(row["owner_journal"], self.admission.plan["nginx"]["native"])
+                     == self.admission.packet["operation_id"], "adoption_owner_operation")
+            self.records.append(row)
+        need(len(self.records) <= 128, "adoption_journal_bound")
+        self.check()
+
+    def phase(self, phase, archives, *, archive_ordinal=None, owner_journal=None, write_intent=None):
+        self.append_record(dict(self.admission.bindings, schema=ADOPTION_PREFIX + "journal.v1",
+            sequence=len(self.records)+1, phase=phase, archive_ordinal=archive_ordinal,
+            archived_journals=archives, owner_journal=owner_journal, write_intent=write_intent))
+
+
+def adopt(packet):
+    admission = AdoptionAdmission(packet)
+    journal = None
+    try:
+        journal = AdoptionJournal(admission)
+        return adopt_owned(admission, journal)
+    finally:
+        if journal is not None:
+            journal.close()
+        admission.close()
+
+
+def adopt_owned(admission, journal):
+    owner = admission.verify()
+    result = owner.adopt_owned_publication(admission.plan["nginx"], lambda receipt, request, context:
+        adopt_in_context(receipt, request, context, admission, journal, owner))
+    status, code = "adopted_unqualified", None
+    if result.get("exit_code") != 0 or result.get("validation_files_removed") is not True:
+        status = "recovery_pending"
+        code = result.get("error_code", "native_adoption_refused")
+    need(code is None or isinstance(code, str) and re.fullmatch(r"[a-z_]{1,128}", code), "adoption_error_code")
+    bindings = {key: value for key, value in admission.bindings.items() if key != "host_identity_sha256"}
+    return dict(bindings, schema=ADOPTION_PREFIX + "receipt.v1",
+        progress_before_sha256=admission.packet["progress"]["reference"]["sha256"], status=status,
+        archived_journals=result.get("archived_journals", []),
+        owned_publication=result.get("owned_publication") if status == "adopted_unqualified" else None,
+        error_code=code)
+
+
+def adopt_in_context(receipt, request, context, admission, journal, owner):
+    """Archive only pinned opaque inodes, then own the unchanged public include."""
+    import copy
+    directory = context["directory"]
+    destination = str(Path(request["destination"]["directory"]["path"]) / request["destination"]["basename"])
+    originals = admission.plan["opaque_journals"]
+    journal_name = ".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson"
+    journal_path = str(Path(request["native"]["directory"]["path"]) / journal_name)
+    incident_refs = copy.deepcopy(admission.packet["opaque_journals"])
+    archives = []
+    current_journal = None
+
+    def public_pin(reference, fd):
+        return dict(fd=fd, reference=reference)
+
+    def current_public():
+        retained_public(admission.packet["publication"])
+        need(admission.packet["publication"]["reference"] == admission.plan["publication"], "adoption_include_changed")
+
+    def census():
+        permitted = {Path(reference["reference"]["file"]["path"]).name for ordinal, reference in enumerate(incident_refs)
+                     if reference["reference"]["file"]["path"] == originals[ordinal]["file"]["path"]}
+        if any(row["write_intent"] is not None for row in journal.records):
+            permitted.add(journal_name)
+        observed = set()
+        with os.scandir(directory) as entries:
+            for count, entry in enumerate(entries, 1):
+                need(count <= 4096, "adoption_directory_entry_bound")
+                if re.fullmatch(r"\.taira-native-nginx-apply-[0-9a-f]{32}\.receipt\.ndjson", entry.name):
+                    observed.add(entry.name)
+        need(observed <= permitted, "adoption_unadmitted_journal")
+
+    def guard():
+        admission.verify()
+        journal.check()
+        current_public()
+        for key, fd in context["bound"].items():
+            context["revalidate"](request["native"][key], fd)
+        context["revalidate"](request["native"]["directory"], directory, True)
+        need(context["identity"](os.fstat(context["lock"])) == context["lock_identity"]
+             == context["identity"](os.stat(".taira-native-nginx-check.lock", dir_fd=directory, follow_symlinks=False)),
+             "check_lock_identity_changed")
+        need(owner.observe_master(request["master"]) == request["master"], "master_identity_changed")
+        for reference in incident_refs:
+            retained_public(reference)
+        if current_journal is not None:
+            reference, fd = current_journal
+            context["revalidate"]({key: reference[key] for key in ("path", "identity")}, fd)
+        census()
+
+    # Before an inherited archive may supply custody, our independently durable
+    # authority must already name that exact original and target arrangement.
+    for ordinal, pin in enumerate(incident_refs):
+        original = originals[ordinal]
+        retained_public(pin)
+        need(pin["reference"]["sha256"] == original["sha256"]
+             and all(pin["reference"]["file"]["identity"][key] == original["file"]["identity"][key]
+                     for key in IDENTITY_KEYS - {"ctime_ns"}), "adoption_incident_lineage")
+        archive_path = adoption_archive_path(admission, ordinal)
+        if pin["reference"]["file"]["path"] == archive_path:
+            need(any(row["phase"] == "archive_requested" and row["archive_ordinal"] == ordinal
+                     for row in journal.records), "adoption_archive_without_intent")
+            try:
+                os.stat(original["file"]["path"], follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise RuntimeError("adoption_archive_ambiguous")
+        else:
+            need(pin["reference"] == original, "adoption_incident_changed")
+            try:
+                os.stat(archive_path, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise RuntimeError("adoption_archive_ambiguous")
+    admission.incident_refs = incident_refs
+    guard()
+    native_context_check(context, request, owner, includes=True)
+    guard()
+    if not journal.records:
+        journal.phase("admitted", archives)
+    for ordinal, pin in enumerate(incident_refs):
+        original = originals[ordinal]
+        target = adoption_archive_path(admission, ordinal)
+        if pin["reference"]["file"]["path"] != target:
+            if not any(row["phase"] == "archive_requested" and row["archive_ordinal"] == ordinal
+                       for row in journal.records):
+                journal.phase("archive_requested", archives, archive_ordinal=ordinal)
+            else:
+                journal.check()
+                os.fsync(journal.fd)
+                os.fsync(admission.directory)
+            guard()
+            owner.native_publish_no_replace(directory, Path(original["file"]["path"]).name, Path(target).name)
+            observed = identity(os.fstat(pin["fd"]))
+            need(all(observed[key] == original["file"]["identity"][key] for key in IDENTITY_KEYS - {"ctime_ns"})
+                 and observed == identity(os.stat(target, follow_symlinks=False)), "adoption_archive_changed")
+            pin["reference"] = dict(file=dict(path=target, identity=observed), sha256=original["sha256"])
+        receipt["archived_journals"] = copy.deepcopy(archives + [pin["reference"]])
+        os.fsync(directory)
+        guard()
+        archives.append(copy.deepcopy(pin["reference"]))
+        receipt["archived_journals"] = copy.deepcopy(archives)
+        if not any(row["phase"] == "archived" and row["archived_journals"] == archives for row in journal.records):
+            journal.phase("archived", archives)
+    guard()
+    native_context_check(context, request, owner, includes=True)
+    guard()
+    publication_identity = {key: str(value) for key, value in admission.plan["publication"]["file"]["identity"].items()}
+    record = dict(schema="iroha.taira.native-nginx-apply.journal.v1", sequence=1,
+        operation_id=request["operation_id"], phase="awaiting_readiness", qualified=False,
+        candidate_sha256=request["candidate_sha256"], renderer_source_sha256=request["renderer_source_sha256"],
+        host_kind=request["host_kind"], native_executable=request["native"]["nginx"],
+        main_configuration=request["native"]["main"], master=request["master"], destination_path=destination,
+        destination_directory=request["destination"]["directory"], publication_identity=publication_identity,
+        cause="explicit_native_owner_adoption:" + admission.packet["authorization_sha256"])
+    prepared = next((row["write_intent"] for row in reversed(journal.records) if row["write_intent"] is not None), None)
+    projection = owner.public_journal_record_projection
+
+    def persist_intent(intent, stage, semantic):
+        need(semantic == projection(record), "adoption_owner_record_changed")
+        witness = dict(intent=intent, stage=stage, record=semantic)
+        if not any(row["write_intent"] == witness for row in journal.records):
+            journal.phase("owner_write_requested", archives, write_intent=witness)
+        else:
+            journal.check()
+            os.fsync(journal.fd)
+            os.fsync(admission.directory)
+        guard()
+
+    try:
+        observed = context["identity"](os.stat(journal_name, dir_fd=directory, follow_symlinks=False))
+    except FileNotFoundError:
+        reference, fd, committed = owner.append_owned_publication_record(
+            context, request, None, None, [], record, persist_intent, prepared)
+    else:
+        need(prepared is not None and all(observed[key] == prepared["stage"][key]
+             for key in IDENTITY_KEYS - {"ctime_ns"}), "adoption_owner_without_intent")
+        fd = context["open_bound"](dict(path=journal_path, identity=observed))
+        body = os.pread(fd, MAX_PUBLIC_BYTES+1, 0)
+        reference = dict(path=journal_path, identity=observed, sha256=hashlib.sha256(body).hexdigest())
+        retained, rows = owner.read_owned_publication_journal(reference, request, context, destination)
+        need(len(rows) == 1 and rows[0]["journal_write_intent"] == prepared["intent"]
+             and projection(rows[0]) == projection(record), "adoption_owner_record_changed")
+        fd, committed = retained, rows[0]
+        os.fsync(directory)
+    current_journal = reference, fd
+    guard()
+    need(projection(committed) == projection(record), "adoption_owner_record_changed")
+    if not any(row["phase"] == "adopted_unqualified" and row["owner_journal"] == reference for row in journal.records):
+        journal.phase("adopted_unqualified", archives, owner_journal=reference)
+    guard()
+    receipt.update(exit_code=0, owned_publication=dict(operation_id=request["operation_id"],
+        journal=dict(file=dict(path=reference["path"], identity={key: int(value) for key, value in reference["identity"].items()}),
+                     sha256=reference["sha256"]), publication=admission.plan["publication"]))
 
 
 def complete(packet):
@@ -715,6 +1303,26 @@ def numeric_owned_publication(plan):
         publication=public(destination, prior["publication"]["identity"], prior["publication"]["sha256"]))
 
 
+def numeric_owner_journal(reference):
+    """Project one closed numeric public journal reference to the owner's wire."""
+    fields(reference, {"file", "sha256"}, "publisher_public_fields")
+    validate_observed(reference["file"])
+    hex_value(reference["sha256"], 64, "publisher_public_digest")
+    return dict(path=reference["file"]["path"],
+                identity={key: str(value) for key, value in reference["file"]["identity"].items()},
+                sha256=reference["sha256"])
+
+
+def numeric_owner_publication(value):
+    """Project only an actual typed owner, without accepting legacy string identities."""
+    fields(value, {"operation_id", "journal", "publication"}, "publisher_restored_owner_fields")
+    hex_value(value["operation_id"], 32, "publisher_restored_identity")
+    journal = numeric_owner_journal(value["journal"])
+    publication = numeric_owner_journal(value["publication"])
+    return dict(operation_id=value["operation_id"], journal=journal,
+                publication={key: publication[key] for key in ("identity", "sha256")})
+
+
 def finish_in_context(receipt, request, context, admission, journal, owner):
     """Only the owner-proven public include and retained backup can be changed."""
     action = packet_action(admission)
@@ -722,9 +1330,11 @@ def finish_in_context(receipt, request, context, admission, journal, owner):
     destination = str(Path(request["destination"]["directory"]["path"]) / request["destination"]["basename"])
     basename = request["destination"]["basename"]
     backup_name = ".taira-nginx-backup-" + request["operation_id"] + ".public"
-    prior = request["publication"]["prior"]
-    publisher = prior["journal"]
-    active = prior["publication"]["identity"]
+    prior = request["publication"].get("prior")
+    publisher = (numeric_owner_journal(admission.plan["publication_effect"]["value"]["journal"])
+                 if admission.plan["publication_effect"]["kind"] == "publisher_rolled_back"
+                 else prior["journal"])
+    active = prior["publication"]["identity"] if prior is not None else None
     backup = None
     restored = None
     terminal_record = None
@@ -757,53 +1367,168 @@ def finish_in_context(receipt, request, context, admission, journal, owner):
         need(owner.observe_master(request["master"]) == request["master"], "master_identity_changed")
 
     def immutable_publisher(reference, template):
-        # A crash can occur after our exact owned terminal append but before
-        # its completion-journal acknowledgement. Admit only that one suffix
-        # over the immutable original public prefix, then use the shared owner
-        # decoder for the complete chain. No alternate NDJSON decoder exists.
+        # An atomic publisher append exposes either the complete pinned prefix
+        # or that prefix plus exactly one independently witnessed terminal row.
+        # Its pre-publication intent is also retained in our own authority chain.
         owner.validate_public_journal_reference(reference, context["native"])
         opened = open_anchored(reference["path"])
         context["handles"].append(opened)
         observed = context["identity"](os.fstat(opened))
-        stable = set(reference["identity"]) - {"size", "mtime_ns", "ctime_ns"}
-        need(all(observed[key] == reference["identity"][key] for key in stable), "publisher_journal_changed")
-        body = os.pread(opened, MAX_PUBLIC_BYTES+1, 0)
+        owner.validate_public_owner_identity(observed, context["native"])
+        need(stat.S_ISREG(os.fstat(opened).st_mode)
+             and observed == context["identity"](os.stat(reference["path"], follow_symlinks=False)),
+             "publisher_journal_changed")
+        body = os.pread(opened, MAX_PUBLIC_BYTES + 1, 0)
         prefix_size = int(reference["identity"]["size"])
         need(len(body) <= MAX_PUBLIC_BYTES and len(body) >= prefix_size
              and hashlib.sha256(body[:prefix_size]).hexdigest() == reference["sha256"],
              "publisher_journal_prefix_changed")
-        suffix = ((json.dumps(template, sort_keys=True) + "\n").encode() if template is not None else b"")
-        need(body[prefix_size:] in ({b"", suffix} if suffix else {b""}), "publisher_journal_suffix_changed")
         need(observed == context["identity"](os.fstat(opened))
              == context["identity"](os.stat(reference["path"], follow_symlinks=False)),
              "publisher_journal_changed")
         actual = dict(path=reference["path"], identity=observed, sha256=hashlib.sha256(body).hexdigest())
         retained, records = owner.read_owned_publication_journal(actual, request, context, destination)
+        projection = owner.public_journal_record_projection
+        if len(body) == prefix_size:
+            need(observed == reference["identity"] and actual["sha256"] == reference["sha256"],
+                 "publisher_journal_changed")
+            retain_journal(actual, retained)
+            if template is None or projection(records[-1]) == projection(template):
+                return actual, records, False
+            need(type(template["sequence"]) is int and template["sequence"] == len(records) + 1,
+                 "publisher_terminal_sequence")
+            return actual, records, False
+        need(template is not None and records[-1]["sequence"] == template["sequence"]
+             and projection(records[-1]) == projection(template)
+             and len(body[prefix_size:].splitlines()) == 1, "publisher_journal_suffix_changed")
+        recorded = [row["publisher_write_intent"] for row in journal.records
+                    if row["publisher_write_intent"] is not None]
+        witness = next((item for item in recorded
+                        if item["intent"] == records[-1]["journal_write_intent"]
+                        and item["record"] == projection(template)), None)
+        need(witness is not None
+             and all(observed[key] == witness["stage"][key]
+                     for key in IDENTITY_KEYS - {"ctime_ns"}), "publisher_terminal_not_recorded")
         retain_journal(actual, retained)
-        return actual, records, bool(body[prefix_size:])
+        native_guard()
+        return actual, records, True
 
     def append_publisher(reference, template):
         native_guard()
         actual, records, appended = immutable_publisher(reference, template)
-        if records[-1] == template:
+        projection = owner.public_journal_record_projection
+        if projection(records[-1]) == projection(template):
             return actual
-        if not appended:
-            need(template["sequence"] == len(records)+1, "publisher_terminal_sequence")
-            opened = os.open(Path(reference["path"]).name, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC,
-                             dir_fd=context["directory"])
-            context["handles"].append(opened)
-            need(context["identity"](os.fstat(opened)) == actual["identity"], "publisher_journal_changed")
-            data = (json.dumps(template, sort_keys=True) + "\n").encode()
-            need(len(data) <= 65536 and int(actual["identity"]["size"]) + len(data) <= MAX_PUBLIC_BYTES,
-                 "publisher_terminal_size_bound")
-            need(os.write(opened, data) == len(data), "publisher_terminal_write_incomplete")
-            os.fsync(opened)
-            actual, records, appended = immutable_publisher(reference, template)
-        need(appended and records[-1] == template, "publisher_terminal_changed")
-        return actual
+        need(not appended and any(row["publisher_terminal_record"] is not None
+                 and projection(row["publisher_terminal_record"]) == projection(template)
+                 or row["restored_owner"] is not None
+                 and row["restored_owner"]["terminal_record"] is not None
+                 and projection(row["restored_owner"]["terminal_record"]) == projection(template)
+                 for row in journal.records), "publisher_terminal_not_recorded")
+        retained = retained_journals[actual["path"]][1]
+        def persist_intent(intent, stage_identity, record_projection):
+            need(record_projection == projection(template), "publisher_terminal_changed")
+            witness = dict(intent=intent, stage=stage_identity, record=record_projection)
+            if not any(row["publisher_write_intent"] == witness for row in journal.records):
+                journal_effect("publisher_terminal_requested", publisher_write_intent=witness)
+            else:
+                journal.check()
+                os.fsync(journal.fd)
+                os.fsync(admission.directory)
+            native_guard()
+        prepared = next((row["publisher_write_intent"] for row in reversed(journal.records)
+                         if row["publisher_write_intent"] is not None
+                         and row["publisher_write_intent"]["record"] == projection(template)), None)
+        updated, successor, committed = owner.append_owned_publication_record(
+            context, request, actual, retained, records, template, persist_intent, prepared)
+        need(projection(committed) == projection(template), "publisher_terminal_changed")
+        retain_journal(updated, successor)
+        native_guard()
+        return updated
 
     try:
         native_guard()
+        if admission.plan["publication_effect"]["kind"] == "publisher_rolled_back":
+            # The original publisher has already restored its journal-proven
+            # predecessor. A historical rollback lease cannot complete forward
+            # publication just to manufacture a terminal boundary.
+            need(action == "rollback", "publisher_rollback_terminal_action")
+            effect = admission.plan["publication_effect"]["value"]
+            need(owner.validate_public_journal_reference(publisher, context["native"])
+                 == request["operation_id"], "publisher_rollback_operation")
+            retained, rows = owner.read_owned_publication_journal(publisher, request, context, destination)
+            retain_journal(publisher, retained)
+            need(rows[-1]["phase"] == "rolled_back_unqualified"
+                 and rows[-1]["qualified"] is False
+                 and rows[-1]["master"] == request["master"]
+                 and rows[-1]["candidate_sha256"] == request["candidate_sha256"]
+                 and rows[-1]["renderer_source_sha256"] == request["renderer_source_sha256"]
+                 and rows[0].get("prior") == prior, "publisher_rollback_terminal_binding")
+            restored_publication = effect["restored_owned_publication"]
+            need((restored_publication is None) == (prior is None), "publisher_rollback_predecessor")
+            if restored_publication is not None:
+                predecessor = numeric_owner_publication(restored_publication)
+                owner.validate_public_prior_reference(predecessor, context["native"])
+                need(restored_publication["publication"]["file"]["path"] == destination
+                     and predecessor["operation_id"] == prior["operation_id"]
+                     and predecessor["publication"]["sha256"] == prior["publication"]["sha256"]
+                     and all(predecessor["publication"]["identity"][key] == prior["publication"]["identity"][key]
+                             for key in IDENTITY_KEYS - {"ctime_ns"}), "publisher_rollback_predecessor")
+                retained, previous = owner.read_owned_publication_journal(
+                    predecessor["journal"], request, context, destination)
+                retain_journal(predecessor["journal"], retained)
+                need(previous[-1]["phase"] == "awaiting_readiness"
+                     and previous[-1]["master"] == request["master"]
+                     and previous[-1]["publication_identity"] == predecessor["publication"]["identity"]
+                     and previous[-1]["candidate_sha256"] == predecessor["publication"]["sha256"],
+                     "publisher_rollback_restored_binding")
+                # The restored public journal may contain the exact owner's
+                # controlled ctime refresh. Its signed original prefix remains
+                # the immutable authority for this predecessor.
+                old_size = int(prior["journal"]["identity"]["size"])
+                need(0 < old_size <= MAX_PUBLIC_BYTES
+                     and hashlib.sha256(os.pread(retained, old_size, 0)).hexdigest()
+                         == prior["journal"]["sha256"], "publisher_rollback_restored_prefix")
+                active = predecessor["publication"]["identity"]
+                owned(basename, active, predecessor["publication"]["sha256"])
+                restored = dict(owner=predecessor, terminal_record=None)
+            else:
+                active = None
+
+            def restored_guard():
+                native_guard()
+                if restored_publication is not None:
+                    owned(basename, active, predecessor["publication"]["sha256"])
+                else:
+                    try:
+                        os.stat(basename, dir_fd=directory, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise RuntimeError("publisher_rollback_absence_changed")
+                try:
+                    os.stat(backup_name, dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise RuntimeError("publisher_rollback_backup_remaining")
+
+            restored_guard()
+            native_context_check(context, request, owner, includes=restored_publication is not None)
+            restored_guard()
+            if not journal.records:
+                journal_effect("admitted")
+            need(all(row["action"] == "rollback" and row["phase"] in {
+                "admitted", "rollback_requested", "rolled_back", "recovery_pending"} for row in journal.records),
+                "publisher_rollback_journal_phase")
+            if journal.records[-1]["phase"] != "rolled_back":
+                journal_effect("rollback_requested")
+                restored_guard()
+                journal_effect("rolled_back")
+            restored_guard()
+            receipt.update(exit_code=0, completion_status="rolled_back",
+                           restored_owned_publication=restored_publication)
+            return
         if admission.plan["publication_effect"]["kind"] == "not_requested":
             # Stage-only rollback proves the incumbent without changing it.
             # It cannot borrow the successor's nonexistent journal or undo a
@@ -1032,7 +1757,8 @@ def finish_in_context(receipt, request, context, admission, journal, owner):
             retained, previous = owner.read_owned_publication_journal(
                 restored_owner["journal"], request, context, destination)
             retain_journal(restored_owner["journal"], retained)
-            need(previous[-1] == restored["terminal_record"]
+            need(owner.public_journal_record_projection(previous[-1])
+                 == owner.public_journal_record_projection(restored["terminal_record"])
                  and previous[-1]["publication_identity"] == active, "restored_terminal_binding")
             def numeric_public(path, observed, digest):
                 return dict(file=dict(path=path, identity={key: int(value) for key, value in observed.items()}),
@@ -1105,10 +1831,15 @@ def main(argv=None):
     entry = parser.add_mutually_exclusive_group(required=True)
     entry.add_argument("--admission-fd", type=int, help="Direct native Rust parent's retained admission descriptor")
     entry.add_argument("--inspect-request-fd", type=int, help="Retained public request for a read-only owner observation")
+    entry.add_argument("--adoption-admission-fd", type=int, help="Direct native Rust parent's independently authorized owner adoption")
     args = parser.parse_args(argv)
     try:
-        result = (complete(read_request_fd(args.admission_fd, 64 * 1024)) if args.admission_fd is not None
-                  else inspect_owned_publication(read_request_fd(args.inspect_request_fd, 64 * 1024)))
+        if args.adoption_admission_fd is not None:
+            result = adopt(read_request_fd(args.adoption_admission_fd, 128 * 1024))
+        elif args.admission_fd is not None:
+            result = complete(read_request_fd(args.admission_fd, 64 * 1024))
+        else:
+            result = inspect_owned_publication(read_request_fd(args.inspect_request_fd, 64 * 1024))
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return int(result.get("status") == "recovery_pending")
     except Exception as error:

@@ -6,7 +6,9 @@ only Git objects from an optimizations repository, including the public signing
 key; dirty/untracked working files are neither read nor changed. Import verifies
 the signature in an isolated public-key ring and publishes a fresh, clean,
 shallow source artifact for native public-reset admission. No build, activation,
-private-key transfer, history traversal or overwrite is supported. HOME is
+private-key transfer, history traversal or overwrite is supported. The separate
+append/verify-store corridor admits additional signed packs to an existing warm
+builder while preserving its original checkout and controller bytes. HOME is
 preserved. GNUPGHOME is used only for public-key verification in private scratch.
 """
 
@@ -29,6 +31,9 @@ import tempfile
 import time
 import uuid
 import zlib
+
+sys.dont_write_bytecode = True
+import taira_disk_capacity as disk_capacity
 
 from release_artifact_contract import (
     ReleaseArtifactError,
@@ -56,6 +61,9 @@ MAX_FILES = 100_000
 MAX_PUBLIC_KEY_BYTES = 128 * 1024
 CHUNK = 1024 * 1024
 GIT_TIMEOUT_SECONDS = 600
+# Native Git/GPG control files and filesystem metadata need working headroom;
+# this is an operational reserve, not a Cargo build or peak-memory estimate.
+SOURCE_DISK_HEADROOM_BYTES = 64 * 1024**2
 _OID = re.compile(r"[0-9a-f]{40}")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _FINGERPRINT = re.compile(r"(?:[0-9A-F]{40}|[0-9A-F]{64})")
@@ -264,6 +272,7 @@ def _public_key_packet_check(payload):
 
 def _verify_signature(root, commit, signer, key):
     _public_key_packet_check(key)
+    _check_source_capacity(_scratch_capacity_allocations(len(key)))
     # This is a public-only keyring; import cannot consult or mutate operator keys.
     # GnuPG probes its agent socket even with --no-autostart. A short native
     # temporary path avoids sockaddr_un limits for deeply nested artifact roots.
@@ -468,28 +477,50 @@ def export_source(repo_root: Path, expected_commit: str, expected_tree: str,
     _directory(root / ".git")
     _need(_git(root, "symbolic-ref", "--short", "HEAD").strip() == b"optimizations", "source export requires optimizations")
     _need(_git(root, "rev-parse", "--show-toplevel").decode().strip() == str(root), "source repository root differs")
-    stage = _stage(output_dir)
+    destination = _absolute(output_dir)
+    _directory(destination.parent)
+    _need(not os.path.lexists(destination), "source artifact destination already exists")
     key = _run([_tool("gpg"), "--batch", "--no-options", "--export-options", "export-minimal",
                 "--export", expected_signer], cwd=root, maximum=MAX_PUBLIC_KEY_BYTES)
     _verify_signature(root, expected_commit, expected_signer, key)
     objects, entries, source_bytes = _inventory(root, expected_commit, expected_tree)
-    pack_path = stage / "source.pack"
-    with exclusive_output_fd(pack_path, mode=0o600) as fd:
-        _git(root, "pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object", "--window=0",
-             payload="".join(row["object"] + "\n" for row in objects).encode(), output_fd=fd, maximum=MAX_PACK_BYTES)
-    pack = stable_hash_path(pack_path, max_size=MAX_PACK_BYTES)
+    # zlib's compressBound for deflateInit's default window/memory geometry,
+    # plus at most six Git object-header bytes, the pack header and SHA1 trailer.
+    # See https://github.com/madler/zlib/blob/master/compress.c.
+    pack_bound = min(MAX_PACK_BYTES, 32 + sum(
+        row["size"] + (row["size"] >> 12) + (row["size"] >> 14)
+        + (row["size"] >> 25) + 19 for row in objects))
     manifest = {"schema": SCHEMA, "commit": expected_commit, "tree": expected_tree,
                 "signer_fingerprint": expected_signer, "public_key_base64": base64.b64encode(key).decode(),
-                "pack": {"size": pack.size, "sha256": pack.sha256}, "objects": objects,
+                "pack": {"size": pack_bound, "sha256": "0" * 64}, "objects": objects,
                 "entries": entries, "source_bytes": source_bytes}
+    _need(len(canonical_json_bytes(manifest)) <= MAX_MANIFEST_BYTES, "source capture manifest exceeds its bound")
+    _require_source_capacity(destination.parent, manifest, exporting=True)
+    stage = _stage(destination)
+    pack_path = stage / "source.pack"
+    with exclusive_output_fd(pack_path, mode=0o600) as fd:
+        _git(root, "pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object", "--window=0", "--compression=6",
+             payload="".join(row["object"] + "\n" for row in objects).encode(), output_fd=fd, maximum=MAX_PACK_BYTES)
+    pack = stable_hash_path(pack_path, max_size=MAX_PACK_BYTES)
+    _need(pack.size <= pack_bound, "source pack exceeds its preadmitted bound")
+    manifest["pack"] = {"size": pack.size, "sha256": pack.sha256}
     rendered = canonical_json_bytes(manifest)
     _need(len(rendered) <= MAX_MANIFEST_BYTES, "source capture manifest exceeds its bound")
     exclusive_write_bytes(stage / "source-capture.json", rendered, mode=0o600)
-    # Verify the emitted pack independently, including no extra/history objects.
-    verification = stage / "verification-source"
-    import_source(pack_path, stage / "source-capture.json", expected_commit, expected_tree,
-                  expected_signer, verification)
-    shutil.rmtree(verification)  # This helper owns this validated disposable import only.
+    # Reconstruct and independently authenticate the emitted object database.
+    # Export needs no second working tree; the receiver still materializes and
+    # verifies every signed file before it publishes its complete source artifact.
+    admitted, admitted_key, manifest_pin = _manifest(
+        stage / "source-capture.json", expected_commit, expected_tree, expected_signer)
+    _require_source_capacity(stage, admitted, exporting=False, materializing=False)
+    verification = _stage(stage / "verification-objects")
+    _import_object_database(verification, pack_path, pack, admitted, admitted_key)
+    _verify_source_links(verification, admitted)
+    _need(stable_hash_path(pack_path, max_size=MAX_PACK_BYTES) == pack
+          and stable_hash_path(stage / "source-capture.json", max_size=MAX_MANIFEST_BYTES) == manifest_pin,
+          "source input changed during export verification")
+    # Only this freshly created, authenticated disposable object database is removed.
+    shutil.rmtree(verification)
     _need(set(os.listdir(stage)) == {"source.pack", "source-capture.json"}, "source export has unexpected output")
     for path in stage.iterdir():
         path.chmod(0o400)
@@ -547,12 +578,103 @@ def _link_target(relative, payload, paths):
     return target
 
 
+def _source_layout(manifest):
+    paths = {row["path"]: row["mode"] for row in manifest["entries"]}
+    # The receiver's Git metadata and index exist even though none are signed
+    # source entries. Object-only export must reject links to those referents too.
+    paths.update({".git/" + name: "100644" for name in _git_metadata(manifest["commit"])})
+    paths[".git/index"] = "100644"
+    all_paths = set(paths) | {".git/objects/info", ".git/objects/pack", ".git/refs/tags"}
+    for value in list(all_paths):
+        all_paths.update(str(parent) for parent in PurePosixPath(value).parents if str(parent) != ".")
+    return paths, all_paths
+
+
+def _checked_link(root, entry, payload, paths, all_paths):
+    target = _link_target(entry["path"], payload, paths)
+    # Admission requires the normalized referent to be absent, including
+    # directories implied by other source entries, even without a working tree.
+    normalized = os.path.normpath(str(PurePosixPath(entry["path"]).parent / target))
+    _need(normalized not in all_paths, "source symlink referent is present")
+    _need(not os.path.lexists(root / normalized), "source symlink referent is present")
+    return target
+
+
+def _verify_source_links(root, manifest):
+    rows = {row["object"]: row for row in manifest["objects"]}
+    paths, all_paths = _source_layout(manifest)
+    with _object_reader(root) as read:
+        for entry in manifest["entries"]:
+            if entry["mode"] == "120000":
+                row, payload = read(entry["object"], "blob", payload=True)
+                _need(row == rows[entry["object"]], "source symlink object differs")
+                _checked_link(root, entry, payload, paths, all_paths)
+
+
+def _require_source_capacity(parent, manifest, *, exporting=False, materializing=True):
+    """Admit bounded additional disk bytes/inodes without deleting or reserving space."""
+    count = len(manifest["objects"])
+    controls = {".git/" + name: payload for name, payload in _git_metadata(manifest["commit"]).items()}
+    directories = {".", ".git/objects/info", ".git/objects/pack", ".git/refs/tags"}
+    for value in list(controls) + list(directories):
+        directories.update(str(path) for path in PurePosixPath(value).parents)
+    # SHA1 pack-index v2, including a large-offset slot for every object;
+    # reverse-index v1 includes both checksums. No delta/base scratch is used.
+    payload = manifest["pack"]["size"] * (2 if exporting else 1) + 1124 + 40 * count
+    payload += sum(len(value) for value in controls.values())
+    files = len(controls) + 3
+    if exporting:
+        payload += len(canonical_json_bytes(manifest))
+        files += 2  # Capsule pack and manifest; native input scratch is charged separately.
+        directories.add("verification-objects")
+    elif materializing:
+        paths, all_paths = _source_layout(manifest)
+        directories.update(value for value in all_paths if value not in paths or paths[value] == "160000")
+        payload += manifest["source_bytes"]
+        # Index entries, their path bytes/padding, and a conservative cache-tree extension.
+        payload += 32 + sum(80 + len(row["path"].encode()) for row in manifest["entries"])
+        payload += sum(100 + len(value.encode()) for value in directories)
+        files += 1 + sum(row["mode"] != "160000" for row in manifest["entries"])
+    allocation = _source_capacity_allocation(parent, "signed source capture and native verification",
+                                              payload, files, len(directories))
+    scratch = _scratch_capacity_allocations(max(MAX_PUBLIC_KEY_BYTES, 41 * count if exporting else 0))
+    _check_source_capacity([allocation, *scratch])
+
+
+def _source_capacity_allocation(path, label, payload, files, directories):
+    try:
+        observation = disk_capacity.inspect_filesystem(path)
+        bound = disk_capacity.allocation_bound(payload, files, directories, observation["fragment_bytes"])
+        return {"path": str(path), "label": label,
+                "bytes": bound["bytes"] + SOURCE_DISK_HEADROOM_BYTES,
+                "inodes": bound["inodes"] + 64}
+    except disk_capacity.CapacityError as error:
+        raise SourceCaptureError(f"source capture capacity inspection failed: {error}") from error
+
+
+def _scratch_capacity_allocations(payload_bytes):
+    # _run's stdin scratch follows Python's ambient temporary directory; GPG
+    # deliberately uses short /tmp paths. They can be on distinct filesystems.
+    return [
+        _source_capacity_allocation(Path(tempfile.gettempdir()).resolve(strict=True),
+                                    "native source command input scratch", payload_bytes, 1, 0),
+        _source_capacity_allocation(Path("/tmp").resolve(strict=True),
+                                    "isolated public signature keyring scratch", 0, 0, 0),
+    ]
+
+
+def _check_source_capacity(allocations):
+    try:
+        result = disk_capacity.evaluate({"schema": disk_capacity.PLAN_SCHEMA, "allocations": allocations},
+                                         inspect=disk_capacity.inspect_filesystem)
+    except disk_capacity.CapacityError as error:
+        raise SourceCaptureError(f"source capture capacity inspection failed: {error}") from error
+    _need(result["passed"], "source capture capacity refused: " + "; ".join(result["errors"]))
+
+
 def _materialize(root, manifest):
     rows = {row["object"]: row for row in manifest["objects"]}
-    paths = {row["path"]: row["mode"] for row in manifest["entries"]}
-    all_paths = set(paths)
-    for value in paths:
-        all_paths.update(str(parent) for parent in PurePosixPath(value).parents if str(parent) != ".")
+    paths, all_paths = _source_layout(manifest)
     with _object_reader(root) as read:
         for entry in manifest["entries"]:
             path = root / entry["path"]
@@ -562,11 +684,7 @@ def _materialize(root, manifest):
             elif entry["mode"] == "120000":
                 row, payload = read(entry["object"], "blob", payload=True)
                 _need(row == rows[entry["object"]], "source symlink object differs")
-                target = _link_target(entry["path"], payload, paths)
-                # Native admission requires the normalized referent to be absent,
-                # including directories implied by other source entries.
-                normalized = os.path.normpath(str(PurePosixPath(entry["path"]).parent / target))
-                _need(normalized not in all_paths, "source symlink referent is present")
+                target = _checked_link(root, entry, payload, paths, all_paths)
                 os.symlink(target, path)
             else:
                 with exclusive_output_fd(path, mode=0o755 if entry["mode"] == "100755" else 0o644) as fd:
@@ -802,18 +920,12 @@ def verify_import(source_root: Path, manifest_path: Path, expected_commit: str,
     return _facts(root, manifest)
 
 
-def import_source(pack_path: Path, manifest_path: Path, expected_commit: str,
-                  expected_tree: str, expected_signer: str, source_root: Path) -> dict:
-    """Verify and exclusively publish one source artifact; retain failures for diagnosis."""
-    manifest, key, manifest_pin = _manifest(manifest_path, expected_commit, expected_tree, expected_signer)
-    pack_path = _absolute(pack_path)
-    pack_pin = stable_hash_path(pack_path, max_size=MAX_PACK_BYTES)
-    _need(pack_pin.sha256 == manifest["pack"]["sha256"] and pack_pin.size == manifest["pack"]["size"], "source pack transport digest differs")
-    stage = _stage(source_root)
+def _import_object_database(stage, pack_path, pack_pin, manifest, key):
+    """Use the sole bounded pack decoder and native Git/signature admission on both hosts."""
     git_root = stage / ".git"
     for name in ("objects/info", "objects/pack", "refs/tags"):
         _mkdir_parents(git_root / name, stage)
-    for name, payload in _git_metadata(expected_commit).items():
+    for name, payload in _git_metadata(manifest["commit"]).items():
         path = git_root / name
         _mkdir_parents(path.parent, stage)
         exclusive_write_bytes(path, payload, mode=0o644)
@@ -822,7 +934,22 @@ def import_source(pack_path: Path, manifest_path: Path, expected_commit: str,
         _git(stage, "index-pack", "--stdin", "--rev-index", input_fd=fd)
     _freeze_new_pack(stage)
     _verify_objects(stage, manifest)
-    _verify_signature(stage, expected_commit, expected_signer, key)
+    _verify_signature(stage, manifest["commit"], manifest["signer_fingerprint"], key)
+
+
+def import_source(pack_path: Path, manifest_path: Path, expected_commit: str,
+                  expected_tree: str, expected_signer: str, source_root: Path) -> dict:
+    """Verify and exclusively publish one source artifact; retain failures for diagnosis."""
+    manifest, key, manifest_pin = _manifest(manifest_path, expected_commit, expected_tree, expected_signer)
+    pack_path = _absolute(pack_path)
+    pack_pin = stable_hash_path(pack_path, max_size=MAX_PACK_BYTES)
+    _need(pack_pin.sha256 == manifest["pack"]["sha256"] and pack_pin.size == manifest["pack"]["size"], "source pack transport digest differs")
+    destination = _absolute(source_root)
+    _directory(destination.parent)
+    _need(not os.path.lexists(destination), "source artifact destination already exists")
+    _require_source_capacity(destination.parent, manifest)
+    stage = _stage(destination)
+    _import_object_database(stage, pack_path, pack_pin, manifest, key)
     _materialize(stage, manifest)
     _git(stage, "read-tree", expected_commit)
     stage.chmod(0o755)
@@ -849,17 +976,57 @@ def main():
             command.add_argument("--source-root", type=Path, required=True)
             if name == "import":
                 command.add_argument("--pack", type=Path, required=True)
+    append = commands.add_parser("append", help="append an authenticated direct pack under existing build/source leases")
+    append.add_argument("--source-root", type=Path, required=True)
+    for field in ("commit", "tree", "signer"):
+        append.add_argument("--expected-" + field, required=True)
+    append.add_argument("--pack", type=Path, required=True)
+    append.add_argument("--manifest", type=Path, required=True)
+    append.add_argument("--expected-manifest-sha256", required=True)
+    append.add_argument("--operation-id", required=True)
+    append.add_argument("--receipt", type=Path, required=True)
+    append.add_argument("--expected-receipt-sha256", required=True)
+    append.add_argument("--expected-intent-sha256")
+    initialize = commands.add_parser("initialize-store", help="admit existing native object/capture custody without publishing objects")
+    initialize.add_argument("--source-root", type=Path, required=True)
+    initialize.add_argument("--captures-input", type=Path, required=True)
+    initialize.add_argument("--expected-captures-input-sha256", required=True)
+    initialize.add_argument("--operation-id", required=True)
+    initialize.add_argument("--expected-intent-sha256")
+    for field in ("commit", "tree", "signer"):
+        initialize.add_argument("--expected-captured-" + field, required=True)
+    verify_store = commands.add_parser("verify-store", help="reauthenticate the exact current builder object union")
+    verify_store.add_argument("--source-root", type=Path, required=True)
+    verify_store.add_argument("--receipt", type=Path, required=True)
+    verify_store.add_argument("--expected-receipt-sha256", required=True)
+    for field in ("commit", "tree", "signer"):
+        verify_store.add_argument("--expected-" + field, required=True)
     args = parser.parse_args()
     try:
         if args.operation == "export":
             result = export_source(args.repo_root, args.expected_commit, args.expected_tree, args.expected_signer, args.output_dir)
         elif args.operation == "import":
             result = import_source(args.pack, args.manifest, args.expected_commit, args.expected_tree, args.expected_signer, args.source_root)
+        elif args.operation == "append":
+            from taira_source_store import append_source
+            result = append_source(args.source_root, receipt=args.receipt, expected_receipt_sha256=args.expected_receipt_sha256,
+                                   pack=args.pack, manifest=args.manifest, manifest_sha256=args.expected_manifest_sha256,
+                                   commit=args.expected_commit, tree=args.expected_tree, signer=args.expected_signer,
+                                   operation_id=args.operation_id, intent_sha256=args.expected_intent_sha256)
+        elif args.operation == "initialize-store":
+            from taira_source_store import custody_inputs, initialize_store
+            result = initialize_store(args.source_root, custody_inputs(args.captures_input, args.expected_captures_input_sha256),
+                                      args.expected_captured_commit, args.expected_captured_tree, args.expected_captured_signer,
+                                      args.operation_id, intent_sha256=args.expected_intent_sha256)
+        elif args.operation == "verify-store":
+            from taira_source_store import verify_store
+            result = verify_store(args.source_root, args.receipt, args.expected_receipt_sha256,
+                                  args.expected_commit, args.expected_tree, args.expected_signer)
         else:
             result = verify_import(args.source_root, args.manifest, args.expected_commit, args.expected_tree, args.expected_signer)
         sys.stdout.buffer.write(canonical_json_bytes(result))
         return 0
-    except (ReleaseArtifactError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (ReleaseArtifactError, RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"taira source capture refused: {error}", file=sys.stderr)
         return 1
 

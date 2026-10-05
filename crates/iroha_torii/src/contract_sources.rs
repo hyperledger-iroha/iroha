@@ -439,14 +439,6 @@ fn canonical_code_hash(code_bytes: &[u8]) -> Result<Hash, Error> {
     }
     Ok(ivm::contract_code_hash(code_bytes))
 }
-fn manifest_from_verified_artifact(
-    verified: &ivm::VerifiedContractArtifact,
-    code_hash: Hash,
-) -> ContractManifest {
-    let mut manifest = verified.manifest.clone();
-    manifest.code_hash = Some(code_hash);
-    manifest
-}
 fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
     if raw.len() != FIXED_HEX_COMPONENT_CHARS_V1 {
         return Err(conversion_error(format!(
@@ -2082,7 +2074,7 @@ fn locate_instruction_box(
 fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCodeViewDto, Error> {
     let mut code_hash = input.code_hash.clone().unwrap_or_default();
     let mut declared_code_hash = input.declared_code_hash.clone();
-    let mut manifest = input.manifest.clone();
+    let mut manifest = input.manifest.take();
     let mut compiler_fingerprint = manifest
         .as_ref()
         .and_then(|value| value.compiler_fingerprint.clone());
@@ -2108,11 +2100,9 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
                     declared_code_hash = Some(code_hash.clone());
                     code_hash = verified_hash.clone();
                 }
-                let verified_manifest = manifest_from_verified_artifact(&verified, canonical_hash);
+                let verified_manifest = verified.manifest;
                 match manifest.as_ref() {
-                    Some(existing)
-                        if existing.signature_payload()
-                            == verified_manifest.signature_payload() => {}
+                    Some(existing) if existing.same_signed_content(&verified_manifest) => {}
                     Some(_) => {
                         input.warnings.push(
                             "Stored manifest does not match the verified artifact; using metadata embedded in the contract bytes.".to_owned(),
@@ -3735,7 +3725,18 @@ mod tests {
             &mut stx,
         )
         .expect("register contract bytes");
-        let manifest = verified.manifest.signed(authority_keypair);
+        let signing_owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let max_frame_bytes =
+            usize::try_from(stx.world.parameters().transaction.ivm_bytecode_size.get())
+                .expect("committed fixture manifest frame bound fits usize");
+        let manifest = verified
+            .manifest
+            .try_signed(
+                signing_owner.allocation_context(),
+                max_frame_bytes,
+                authority_keypair,
+            )
+            .expect("sign fixture manifest under original funded owner");
         register_manifest(
             authority,
             contract_address.dataspace_id().expect("fixture scope"),

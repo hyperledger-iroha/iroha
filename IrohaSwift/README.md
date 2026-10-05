@@ -134,12 +134,16 @@ and the monotonic clock.
 
 `KagemushaWalletWireV1` consumes `fixtures/kagemusha/wallet_v1_vectors.json` and
 mirrors only what an SDK needs before it hands bytes to the typed decoder: the
-domain-separated digests (`digest(role:body:)`, `signedObjectDigest`), the raw
-low-S P-256 signature rule, the envelope frame header with its per-kind bounds
+SHA-256 domain-separated digests (`digest(role:body:)`, `signedObjectDigest`), the raw
+low-S P-256 signature rule, the canonical σ-field encoding check
+(`isCanonicalFieldValue`), the envelope frame header with its per-kind bounds
 (`inspectEnvelope`, `validateEnvelope`) and the strict `kgm1:` text form
-(`encodeText`, `decodeText`). Structural envelope checks carry no monetary or
-delivery authority; typed decoding and verification of the message bodies remain
-open (TODO(G4)).
+(`encodeText`, `decodeText`). Poseidon values (`credit_id`, `proof_digest`, the
+Payment digest, commitments, chains, roots and openings) are computed only by the
+native Rust core; Swift carries them as opaque canonical σ-field values and never
+recomputes them. Structural envelope checks carry no monetary or delivery
+authority; typed decoding and verification of the message bodies remain open
+(TODO(G4)).
 
 `KagemushaWalletApplePlatformV1` is the iPhone platform adapter of the Rust wallet
 Advance provider (Secure Enclave payment key, passcode-bound keychain rollback anchor,
@@ -173,7 +177,15 @@ The bridge requires the four `soranet_mldsa_*` exports owned by
 `crates/soranet_pq/include/soranet_pq.h`. Swift loads those current symbols
 unconditionally; an incomplete native artifact fails admission.
 
-Build the required native bridge before resolving the package:
+Install the authenticated native release archive before resolving the package.
+`scripts/validate_norito_bridge_archive.py --consumer` accepts an independently
+trusted archive SHA-256 and full producing commit, verifies the clean matching
+source checkout, headers, pins, lock, ABI and native slices, and installs into
+an absent `dist/NoritoBridge.xcframework`. Consumer Macs need Python 3.10+ and
+Apple command-line tools, without the producer's Rust toolchain or exact tool
+binaries. See [consumer installation](../docs/norito_bridge_release.md#consumer-installation)
+for the command and trust inputs. The signed public release remains unpromoted;
+use an authenticated local candidate or build the bridge from source:
 
 ```bash
 cd /path/to/iroha

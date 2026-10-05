@@ -54,7 +54,7 @@ export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1 =
 export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1 =
   8 * 1024 * 1024;
 
-// Closed ProposalKind inventory in append-only Norito index order.
+// Closed first-release ProposalKind inventory in Norito index order.
 export const PARLIAMENT_PROPOSAL_KINDS_V1 = Object.freeze([
   "DeployContract",
   "RuntimeUpgrade",
@@ -66,10 +66,6 @@ export const PARLIAMENT_PROPOSAL_KINDS_V1 = Object.freeze([
   "ContractLifecycleGovernance",
   "ContractEmergencyHold",
   "GlobalDataTriggerPermissionGovernance",
-  "KagemushaVerifierPolicyInstall",
-  "KagemushaVerifierReleaseInstall",
-  "KagemushaVerifierReleaseActivate",
-  "KagemushaVerifierReleaseRetire",
 ]);
 
 // Closed ContractLifecycleGovernance action inventory in wire-tag order.

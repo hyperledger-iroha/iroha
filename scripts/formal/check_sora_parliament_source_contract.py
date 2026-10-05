@@ -520,6 +520,81 @@ def require_sortition_registration_guards(world: str) -> None:
         )
 
 
+def require_sortition_retry_liveness(reducer: str) -> None:
+    """Bind the model's one-generation retry and terminal audit to the reducer and planner.
+
+    The model's single sortition generation stands for every failed body, so the reducer must
+    admit only a retry of every `NoRoster` body (a partial retry could spend the last redraw
+    unit and strand another failed body), on a fresh pulse slot whose awaiting requests share
+    one snapshot. A later-stage body may exhaust its sortition while an earlier stage is live,
+    and the terminal audit must accept that rejection. The driver plan must emit that exact
+    retry (but not a futile capacity re-record) and keep only steps whose successor
+    persistence accepts.
+    """
+    path = "crates/iroha_core/src/governance/parliament.rs"
+
+    def code(item: str) -> str:
+        return compact_rust(mask_rust(rust_item(reducer, item, path)))
+
+    require_all(
+        path,
+        code("fn validate_sortition_registration_batch_v1("),
+        (
+            ".no_roster_sortition_generations_v1().into_keys()",
+            "registered_bodies!=failed_bodies",
+            "ifself.sortition_generation_slots_v1().contains(&ParliamentPulseSlotV1::new("
+            "first.request.beacon_session_id,first.request.pulse_height,)){"
+            "returnErr(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule);}",
+        ),
+    )
+    require_all(
+        path,
+        code("pub fn validate(&self) -> Result<(), ParliamentReducerErrorV1> {"),
+        (
+            "election.attempt.status==BodyElectionAttemptStatusV1::AwaitingPulse",
+            ".entry(slot).or_insert(election.candidate_snapshot_index)"
+            "!=election.candidate_snapshot_index",
+        ),
+    )
+    require_all(
+        path,
+        code("fn no_roster_sortition_generations_v1("),
+        (
+            "self.active_elections.iter()",
+            "self.active_sortition_capacity_failures.iter()",
+            "BodyElectionAttemptStatusV1::NoRoster",
+        ),
+    )
+    require_all(
+        path,
+        code("fn expected_completed_body_count_v1("),
+        (
+            "BodyInstanceStatusV1::NoResult=>returnOk(index)",
+            "self.required_bodies[index..].iter().any(",
+        ),
+    )
+    planner_path = "crates/iroha_core/src/governance/parliament/planner.rs"
+    planner = read(planner_path)
+    require_all(
+        planner_path,
+        compact_rust(mask_rust(rust_item(planner, "fn try_due<T>(", planner_path))),
+        ("apply(&mutnext).is_err()||next.validate().is_err()",),
+    )
+    plan = compact_rust(mask_rust(rust_item(planner, "pub fn plan_driver_v1(", planner_path)))
+    require_all(
+        planner_path,
+        plan,
+        (
+            ".next_sortition_retry_v1(height,logical_beacon,governance,eligible)",
+            "letrecords_capacity_evidence=hidden_body_requested"
+            "&&!hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len());",
+            "if!records_capacity_evidence&&trial.register_sortition_request_batch(",
+            ".is_ok()&&trial.validate().is_ok()",
+            "ParliamentLifecycleTransitionV1::RegisterSortitionRequest(",
+        ),
+    )
+
+
 def require_block_start_construction(state: str) -> None:
     """Follow the actual constructor into its original-writer, armed-owner handoff."""
     state_path = "crates/iroha_core/src/state.rs"
@@ -1037,16 +1112,15 @@ def require_parliament_commit_publication(state: str) -> None:
         "verifier,state_ref.network_id,)})",
         "returnErr(TransactionsBlockError::KagemushaVerifierAuthority);",
         "letpredecessor=state_ref.world.kagemusha_verifier_registry.view();",
-        "authorization.validate_for_state_commit(",
+        "ifworld.kagemusha_verifier_registry.get()!=predecessor.get(){",
         "returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);",
-        "(true,None)|(false,Some(_))=>{",
         "drop(predecessor);",
     )
     authority_positions = [kagemusha.find(token) for token in authority_checks]
     if (
         any(position < 0 for position in authority_positions)
         or authority_positions != sorted(authority_positions)
-        or kagemusha.count("returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);") != 2
+        or kagemusha.count("returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);") != 1
     ):
         raise RuntimeError(f"{path}: KAGEMUSHA authority must reject unowned transitions before publication")
     geometry = section(compact, "ifletErr(err)=geometry_result{", "autoscale_start.elapsed()", path)
@@ -2612,6 +2686,7 @@ def main() -> int:
             "self.attempt.status = GovernanceAttemptStatusV1::Rejected",
         ),
     )
+    require_sortition_retry_liveness(reducer)
     ballot_failure_terminalization = section(
         reducer,
         "pub fn fail_ballot_no_result(",

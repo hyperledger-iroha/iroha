@@ -23,7 +23,8 @@
 #![allow(
     clippy::module_name_repetitions,
     clippy::missing_errors_doc,
-    clippy::missing_panics_doc
+    clippy::missing_panics_doc,
+    clippy::too_many_lines
 )]
 use norito::{
     Archived, DeserializePayload, Error, SerializePayload,

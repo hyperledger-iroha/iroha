@@ -36,12 +36,25 @@ pub(super) fn commit_canonical<T: norito::NoritoSerialize>(
     context: &'static str,
     input: &T,
 ) -> Result<[u8; 32], norito::core::Error> {
+    let mut commitment = [0_u8; 32];
+    commit_canonical_into(context, input, &mut commitment)?;
+    Ok(commitment)
+}
+
+/// Stream one canonical private transcript and write its 32-byte digest in place.
+///
+/// A secret digest goes straight into the caller's clearing owner; it is never
+/// returned by value. On an error the output is left unchanged.
+pub(super) fn commit_canonical_into<T: norito::NoritoSerialize>(
+    context: &'static str,
+    input: &T,
+    output: &mut [u8; 32],
+) -> Result<(), norito::core::Error> {
     let mut hasher = Zeroizing::new(blake3::Hasher::new_derive_key(context));
     norito::core::write_canonical_to_writer(input, &mut *hasher)?;
     let mut reader = Zeroizing::new(hasher.finalize_xof());
-    let mut commitment = [0_u8; 32];
-    reader.fill(&mut commitment);
-    Ok(commitment)
+    reader.fill(output);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -96,5 +109,24 @@ mod tests {
                 commit_canonical(CONTEXT, &input).expect("fixed canonical encoding")
             );
         }
+    }
+
+    #[test]
+    fn in_place_commitment_is_the_same_digest_written_into_the_callers_owner() {
+        let input = PolicySecretInputV1 {
+            backend: RamLfeBackend::BfvProgrammedV1,
+            secret: b"canonical-secret",
+        };
+        let mut output = [0xA5_u8; 32];
+        commit_canonical_into(CONTEXT, &input, &mut output).expect("canonical commitment");
+        assert_eq!(
+            output,
+            commit_canonical(CONTEXT, &input).expect("canonical commitment")
+        );
+        // The digest is the BLAKE3 derive-key hash of the canonical frame.
+        let frame = norito::encode_canonical(&input).expect("canonical frame");
+        let mut hasher = blake3::Hasher::new_derive_key(CONTEXT);
+        hasher.update(&frame);
+        assert_eq!(&output, hasher.finalize().as_bytes());
     }
 }

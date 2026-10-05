@@ -1,5 +1,8 @@
 //! Fallible, world-state-anchored access to canonical block history.
 
+mod read_budget;
+pub use read_budget::CanonicalHistoryReadBudget;
+
 use iroha_allocation::AllocationBudget;
 use iroha_data_model::block::SharedSignedBlock;
 use std::num::NonZeroUsize;
@@ -107,6 +110,12 @@ impl WalkStart {
 }
 
 impl<'a> CanonicalHistorySource<'a> {
+    /// Bind an off-chain walk to the actual caller's original source backing.
+    /// The caller keeps this same budget's synchronous codec scope installed.
+    pub(crate) fn with_read_budget(mut self, budget: &CanonicalHistoryReadBudget) -> Self {
+        self.budget = budget.frames().clone();
+        self
+    }
     pub(super) fn new(
         kura: &'a Kura,
         block_hashes: &'a dyn super::BlockHashRead,

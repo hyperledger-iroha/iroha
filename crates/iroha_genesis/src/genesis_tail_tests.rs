@@ -198,6 +198,38 @@ fn completed_default_genesis_source_template_proposal_roundtrips() -> Result<()>
     );
     Ok(())
 }
+/// The canonical default genesis is persisted and distributed as the single framed
+/// first-release block wire (`specs/first_release_history_cutover.md`): it round-trips byte for
+/// byte, and the framed decoder refuses every other block wire version and a headerless payload.
+#[test]
+fn completed_default_genesis_source_template_uses_the_single_framed_block_wire() -> Result<()> {
+    use iroha_data_model::block::decode_framed_signed_block;
+    init_instruction_registry();
+    let genesis = with_test_signing_topology(load_default_genesis_source_template_for_test()?);
+    let proposal = genesis.build_and_sign(&checked_genesis_fixture_keypair())?;
+    let frame = proposal
+        .0
+        .encode_wire()
+        .expect("canonical default genesis frame");
+    assert_eq!(frame[0], 1, "the first-release block wire version");
+    norito::core::reset_decode_state();
+    let decoded = decode_framed_signed_block(&frame).expect("the current framed wire decodes");
+    assert_eq!(decoded, proposal.0);
+    assert_eq!(decoded.encode_wire().expect("re-encode"), frame);
+    for version in [0_u8, 2, u8::MAX] {
+        let mut other = frame.clone();
+        other[0] = version;
+        assert!(
+            decode_framed_signed_block(&other).is_err(),
+            "block wire version {version} has no decoder"
+        );
+    }
+    assert!(
+        decode_framed_signed_block(&proposal.0.encode_versioned()).is_err(),
+        "a headerless genesis payload is not the stored wire"
+    );
+    Ok(())
+}
 #[test]
 fn instruction_registry_decodes_register_domain_box() {
     let registry = default_instruction_registry();

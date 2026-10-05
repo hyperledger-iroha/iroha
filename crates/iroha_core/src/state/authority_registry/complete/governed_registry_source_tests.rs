@@ -254,17 +254,12 @@ fn authenticated_populated_pair() -> (
         KAGEMUSHA_RELEASE_VERIFICATION_ONLY_V1, KagemushaReleaseApprovalV1,
         KagemushaReleaseAttestationV1,
     };
-    let instruction: iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1 =
-        norito::decode_canonical(include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
-        )))
-        .unwrap();
-    let proposal = instruction.proposal;
-    let mut predecessor = proposal
-        .successor()
+    let (mut predecessor, manifest, receipt, attestation) =
+        crate::smartcontracts::isi::kagemusha::release_evidence_tests::release_evidence();
+    predecessor
+        .install_authenticated_release(&manifest, &receipt, &attestation)
         .expect("actual threshold-authenticated first standby");
-    let first = proposal.manifest.release_id;
+    let first = manifest.release_id;
     predecessor.activate_standby(None, first).unwrap();
     let policy = predecessor.authority_policy.as_ref().unwrap();
     let mut keys: Vec<_> = [0x41_u8, 0x42, 0x43]
@@ -279,9 +274,9 @@ fn authenticated_populated_pair() -> (
             .collect::<Vec<_>>()
     );
     assert_eq!(policy.threshold, 2);
-    let mut receipt = proposal.receipt.clone();
+    let mut receipt = receipt.clone();
     receipt.source_tree_digest[0] ^= 0x5a;
-    let mut manifest = proposal.manifest.clone();
+    let mut manifest = manifest.clone();
     manifest.source_tree_digest = receipt.source_tree_digest;
     manifest.validation_receipt_digest = receipt.canonical_digest().unwrap();
     let manifest = manifest.seal().unwrap();
@@ -289,7 +284,7 @@ fn authenticated_populated_pair() -> (
     assert!(
         predecessor
             .clone()
-            .install_authenticated_release(&manifest, &receipt, &proposal.attestation)
+            .install_authenticated_release(&manifest, &receipt, &attestation)
             .is_err(),
         "original approvals cannot authenticate the substituted release"
     );
@@ -488,7 +483,7 @@ fn standby_retirement_capture_retains_exact_original_predecessor_and_remaining_a
     let mut current = predecessor.clone();
     current.retire_standby(target).unwrap();
     let state = state();
-    // This exercises the source-cut owner; certified State publication has a separate due test.
+    // Data-only source fixture: block publication rejects every registry mutation.
     install_pair(&state, predecessor.clone(), current.clone());
     let captured = CapturedGovernedRegistry::try_capture(&state, limits())
         .unwrap()

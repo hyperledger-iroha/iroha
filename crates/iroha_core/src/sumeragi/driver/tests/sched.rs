@@ -265,6 +265,9 @@ fn build_after_parent_apply_and_payload_ready() {
     assert!(rig.start().is_none(), "height 1 is not applied yet");
     rig.sched.commit(b1.clone(), commit_qc(&b1, r1));
     rig.drain();
+    rig.sched
+        .retain_control_context(Some((applied_parent_context(&b1, r1), 1)));
+    rig.drain();
     let built: Vec<u64> = rig
         .events
         .iter()
@@ -279,6 +282,8 @@ fn build_after_parent_apply_and_payload_ready() {
     let ready = rig.sched.take_events();
     assert_eq!(ready, vec![Event::PayloadReady { req: 5 }]);
     rig.exec.add_tx(9);
+    rig.sched
+        .retain_control_context(Some((applied_parent_context(&b1, r1), 2)));
     rig.sched.build(6, 2, 2, 1024, 100);
     rig.drain();
     assert!(
@@ -299,6 +304,8 @@ fn arrival_during_a_build_follows_an_empty_answer() {
     rig.sched.commit(b1.clone(), commit_qc(&b1, r1));
     rig.drain();
     rig.events.clear();
+    rig.sched
+        .retain_control_context(Some((applied_parent_context(&b1, r1), 0)));
     rig.sched.build(7, 2, 0, 1024, 100);
     let op = rig.start().expect("the build starts");
     rig.sched.transactions_available();
@@ -326,6 +333,8 @@ fn arrival_during_a_build_follows_an_empty_answer() {
     );
     // Without an arrival the answer waits for one, as before.
     rig.events.clear();
+    rig.sched
+        .retain_control_context(Some((applied_parent_context(&b1, r1), 1)));
     rig.sched.build(8, 2, 1, 1024, 100);
     rig.drain();
     assert!(
@@ -692,7 +701,9 @@ fn apply_runs_alone_while_backing_off() {
     assert!(drive(&mut sched, &mut exec, &blocks, 9).is_empty());
     assert_eq!(exec.calls, vec!["prepare"]);
     assert_eq!(sched.wakeup(), 10);
-    let events = drive(&mut sched, &mut exec, &blocks, 10);
+    let mut events = drive(&mut sched, &mut exec, &blocks, 10);
+    sched.retain_control_context(Some((applied_parent_context(&b1, r1), 0)));
+    events.extend(drive(&mut sched, &mut exec, &blocks, 10));
     assert_eq!(&exec.calls[..2], &["prepare", "commit"]);
     assert_eq!(sched.applied(), 1);
     assert!(
@@ -1055,6 +1066,19 @@ fn control_context(height: u64, view: u64) -> iroha_sumeragi::api::ControlWitnes
         parent_result: RG,
     }
 }
+fn applied_parent_context(
+    parent: &AvailableBody,
+    result: Hash32,
+) -> iroha_sumeragi::api::ApplicationControlContext {
+    iroha_sumeragi::api::ApplicationControlContext {
+        instance: parent.source().instance(),
+        epoch: parent.header().epoch,
+        height: parent.header().height + 1,
+        parent_hash: hash(parent),
+        parent_result: result,
+    }
+}
+
 fn partial_context(height: u64) -> iroha_sumeragi::api::ApplicationControlContext {
     iroha_sumeragi::api::ApplicationControlContext {
         instance: Hash32([5; 32]),
@@ -1318,4 +1342,135 @@ fn due_control_build_progresses_under_replenished_drive_and_partial_ingress() {
             .iter()
             .any(|event| matches!(event, Event::ControlWitnessBuilt { req: 71, .. }))
     );
+}
+
+/// The execution worker's apply completion precedes Core's BlockApplied acceptance.
+/// An original queued build must survive that first source activation without running early.
+#[test]
+fn successor_build_waits_for_core_parent_activation_and_keeps_empty_readiness() {
+    let mut rig = Rig::new();
+    let (parent, _, result) = child(1, (G, RG), 1);
+    rig.sched.build(77, 2, 0, 1024, 100);
+    rig.sched.commit(parent.clone(), commit_qc(&parent, result));
+    rig.drain();
+    assert_eq!(rig.sched.applied(), 1);
+    assert!(
+        rig.events
+            .iter()
+            .any(|event| matches!(event, Event::BlockApplied { height: 1, .. }))
+    );
+    assert!(
+        !rig.events
+            .iter()
+            .any(|event| matches!(event, Event::PayloadBuilt { .. })),
+        "worker apply alone cannot dispatch the original queued successor"
+    );
+    assert!(rig.start().is_none());
+    assert_eq!(rig.sched.wakeup(), Millis::MAX);
+    rig.events.clear();
+    rig.sched
+        .retain_control_context(Some((applied_parent_context(&parent, result), 0)));
+    let operation = rig
+        .start()
+        .expect("Core's exact parent activates the original request");
+    assert!(matches!(
+        operation,
+        ExecOp::Build {
+            req: 77,
+            height: 2,
+            view: 0,
+            ..
+        }
+    ));
+    rig.finish(operation);
+    assert_eq!(
+        rig.events,
+        vec![Event::PayloadBuilt {
+            req: 77,
+            payload: None,
+            attest: false
+        }]
+    );
+    rig.sched.transactions_available();
+    assert_eq!(
+        rig.sched.take_events(),
+        vec![Event::PayloadReady { req: 77 }]
+    );
+    rig.sched.transactions_available();
+    assert!(
+        rig.sched.take_events().is_empty(),
+        "original readiness is emitted once"
+    );
+}
+
+/// Arrivals while the real queued request awaits Core's parent remain owed to that request.
+#[test]
+fn successor_build_activation_preserves_arrival_and_rejects_another_height_or_view() {
+    for arrival_before_activation in [false, true] {
+        let mut sched = ExecSched::new(1, Backoff::default(), super::test_registrations());
+        sched.build(78, 2, 4, 1024, 100);
+        if arrival_before_activation {
+            sched.transactions_available();
+        }
+        assert!(sched.next(0).is_none());
+        assert_eq!(sched.wakeup(), Millis::MAX);
+        sched.retain_control_context(Some((partial_context(2), 4)));
+        assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 78, .. })));
+        sched.done(0, ExecDone::Built(Ok((None, false))));
+        let events = sched.take_events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::PayloadReady { req: 78 }))
+                .count(),
+            usize::from(arrival_before_activation)
+        );
+        if !arrival_before_activation {
+            sched.transactions_available();
+            assert_eq!(sched.take_events(), vec![Event::PayloadReady { req: 78 }]);
+        }
+    }
+    for (height, view) in [(3, 4), (2, 5)] {
+        let mut sched = ExecSched::new(1, Backoff::default(), super::test_registrations());
+        sched.build(79, 2, 4, 1024, 100);
+        sched.retain_control_context(Some((partial_context(height), view)));
+        assert!(sched.next(0).is_none());
+        assert_eq!(
+            sched.queued_ops(),
+            0,
+            "another parent/view cannot activate the original"
+        );
+        sched.retain_control_context(Some((partial_context(2), 4)));
+        assert!(sched.next(0).is_none(), "a discarded request cannot revive");
+    }
+}
+
+/// Binding a queued parent once does not weaken irreversible source or view cancellation.
+#[test]
+fn activated_build_withdrawal_cancels_original_running_and_empty_owners() {
+    for empty_completed in [false, true] {
+        let mut sched = ExecSched::new(1, Backoff::default(), super::test_registrations());
+        sched.build(80, 2, 4, 1024, 100);
+        sched.retain_control_context(Some((partial_context(2), 4)));
+        assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 80, .. })));
+        if empty_completed {
+            sched.done(0, ExecDone::Built(Ok((None, false))));
+            assert!(matches!(
+                sched.take_events().as_slice(),
+                [Event::PayloadBuilt { req: 80, .. }]
+            ));
+        }
+        sched.retain_control_context(None);
+        sched.retain_control_context(Some((partial_context(2), 4)));
+        if !empty_completed {
+            sched.done(0, ExecDone::Built(Ok((None, false))));
+        }
+        sched.transactions_available();
+        assert!(
+            sched.take_events().is_empty(),
+            "withdrawal retires the original request forever"
+        );
+        assert!(sched.next(Millis::MAX - 1).is_none());
+        assert_eq!(sched.wakeup(), Millis::MAX);
+    }
 }

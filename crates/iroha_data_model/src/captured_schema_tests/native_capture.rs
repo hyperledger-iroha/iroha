@@ -189,7 +189,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
             include_str!("../../tests/fixtures/native_current_codec_owner_identities.json");
         assert_eq!(
             hex::encode(Sha256::digest(source.as_bytes())),
-            "43098bfb7815e1c6a0b8705d8e41169f25c4e5e0bc6fe0ec851ebee2ae50196d"
+            "6bd8a9c34c620e4c47bca8c71a44f13f47bb58b723aa4eae26454ea192ecc428"
         );
         let document: Value = json::from_str(source).expect("paired native owner inventory");
         assert_eq!(
@@ -203,7 +203,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
         );
         assert_eq!(document.get("schema").and_then(Value::as_u64), Some(1));
         let owners = document.get("owners").and_then(Value::as_array).unwrap();
-        assert_eq!(owners.len(), 106, "complete current compiler owner census");
+        assert_eq!(owners.len(), 105, "complete current compiler owner census");
         let mut result = BTreeMap::new();
         let mut roots = BTreeMap::new();
         let mut directions = BTreeMap::new();
@@ -259,7 +259,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
                 "duplicate captured owner"
             );
         }
-        assert_eq!(roots.len(), 1_559, "complete current nominal inventory");
+        assert_eq!(roots.len(), 1_551, "complete current nominal inventory");
         result
     })
 }
@@ -272,7 +272,7 @@ pub fn assert_current_owner(cases: &[Case], owner: &str) {
     let expected = current_owner_fixture()
         .get(owner)
         .expect("every current owner is captured");
-    let expected = owner_for_governance_feature(expected, cfg!(feature = "governance"));
+    let expected = owner_for_current_inventory(expected, cfg!(feature = "governance"));
     assert_eq!(
         actual, expected,
         "current codec owner or directional identity changed"
@@ -281,26 +281,15 @@ pub fn assert_current_owner(cases: &[Case], owner: &str) {
 
 #[test]
 fn current_native_fixture_has_complete_owner_inventory() {
-    assert_eq!(current_owner_fixture().len(), 106);
+    assert_eq!(current_owner_fixture().len(), 105);
 }
 
-// These are the only row-level feature conditions in the captured printer inventories.
-// Filter by this closed source declaration, never by whichever rows the current code emits.
-fn owner_for_governance_feature(owner: &Value, governance: bool) -> Value {
-    if governance {
-        return owner.clone();
-    }
+// Apply only the closed feature conditions in the current typed inventory.
+// The current fixture already excludes retired governance owners.
+fn owner_for_current_inventory(owner: &Value, governance: bool) -> Value {
     let name = owner.get("owner").and_then(Value::as_str).unwrap();
     let removed: &[&str] = match name {
-        "iroha_data_model::captured_schema_tests::current_release_capture" => &[
-            "iroha_data_model::parliament_types::KagemushaVerifierPolicyInstallProposalV1",
-            "iroha_data_model::parliament_types::KagemushaVerifierReleaseInstallProposalV1",
-            "iroha_data_model::parliament_types::KagemushaVerifierReleaseActivateProposalV1",
-            "iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1",
-            "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1",
-            "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1",
-        ],
-        "iroha_data_model::fraud::types::captured_types_schema_tests" => &[
+        "iroha_data_model::fraud::types::captured_types_schema_tests" if !governance => &[
             "iroha_data_model::fraud::types::GovernanceExport",
             "iroha_data_model::fraud::types::DecisionAggregate",
         ],
@@ -310,7 +299,7 @@ fn owner_for_governance_feature(owner: &Value, governance: bool) -> Value {
     assert_eq!(
         rows.len(),
         9,
-        "both complete feature-shaped source inventories have nine rows"
+        "the complete feature-shaped source inventory has nine rows"
     );
     let actual_removed = rows
         .iter()
@@ -337,11 +326,22 @@ fn owner_for_governance_feature(owner: &Value, governance: bool) -> Value {
 }
 
 #[test]
-fn current_owner_feature_shapes_use_only_closed_declared_governance_rows() {
+fn current_owner_inventory_excludes_retired_types_under_every_feature_shape() {
     let owners = current_owner_fixture();
     for (name, owner) in owners {
-        assert_eq!(owner_for_governance_feature(owner, true), *owner);
-        let minimal = owner_for_governance_feature(owner, false);
+        let complete = owner_for_current_inventory(owner, true);
+        if name == "iroha_data_model::captured_schema_tests::current_release_capture" {
+            assert_eq!(complete["rows"].as_array().unwrap().len(), 3);
+            assert!(complete["rows"].as_array().unwrap().iter().all(|row| {
+                !row["nominal"]
+                    .as_str()
+                    .unwrap()
+                    .contains("KagemushaVerifier")
+            }));
+        } else {
+            assert_eq!(complete, *owner);
+        }
+        let minimal = owner_for_current_inventory(owner, false);
         let expected = match name.as_str() {
             "iroha_data_model::captured_schema_tests::current_release_capture" => 3,
             "iroha_data_model::fraud::types::captured_types_schema_tests" => 7,

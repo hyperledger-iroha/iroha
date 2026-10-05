@@ -6,8 +6,6 @@
 
 use super::*;
 use host_pair::{NativeObservedFileV1, NativePublicFileV1, SignedHostPhaseV1};
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
 
 pub(super) const PROGRESS_SCHEMA: &str = "iroha.taira.public-reset.native-edge-progress.v1";
 pub(super) const FENCE_SCHEMA: &str = "iroha.taira.public-reset.native-edge-global-proof.v1";
@@ -15,6 +13,47 @@ pub(super) const ADMISSION_SCHEMA: &str =
     "iroha.taira.public-reset.native-edge-completion-admission.v1";
 pub(super) const MAX_PROGRESS_BYTES: usize = 16 * 1024;
 pub(super) const MAX_COMPLETION_ADMISSION_BYTES: usize = 64 * 1024;
+
+/// The owner journal belongs to the native nginx main directory. The public
+/// include can live in its separate servers/conf.d child and is not a custodian.
+pub(super) fn publisher_journal_path(plan: &Value, operation_id: &str) -> Result<PathBuf> {
+    validate_lower_hex("native publisher operation", operation_id, 32)?;
+    let directory = plan
+        .get("native")
+        .and_then(|value| value.get("directory"))
+        .and_then(|value| value.get("path"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("native publisher journal directory missing"))?;
+    Ok(Path::new(directory).join(format!(
+        ".taira-native-nginx-apply-{operation_id}.receipt.ndjson"
+    )))
+}
+
+/// The maintained native publisher's sole closed, read-only ownership observation.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(super) struct NativeOwnerObservationV1 {
+    pub(super) schema: String,
+    pub(super) owned_publication: host_pair::NativeOwnedPublicationV1,
+    pub(super) nginx: NativeObservedFileV1,
+    pub(super) main_configuration: NativeObservedFileV1,
+    pub(super) master: host_pair::NativeNginxMasterV1,
+    pub(super) phase: String,
+}
+
+impl NativeOwnerObservationV1 {
+    pub(super) fn validate(&self, operation_id: &str) -> Result<()> {
+        if self.schema != "iroha.taira.native-nginx-owned-publication-inspection.v1"
+            || self.phase != "awaiting_readiness"
+            || self.owned_publication.operation_id != operation_id
+        {
+            return Err(eyre!(
+                "native owned observation has another publisher or readiness phase"
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Required native inputs. The separately signed capture retains its own exact
 /// custodian generation while guest successor pins may advance independently.
@@ -100,6 +139,12 @@ pub(super) enum NativePublicationEffectV1 {
         intended_operation_id: String,
         incumbent: host_pair::NativeOwnedPublicationV1,
     },
+    #[norito(rename = "publisher_rolled_back")]
+    PublisherRolledBack {
+        journal: NativePublicFileV1,
+        #[norito(required)]
+        restored_owned_publication: Option<host_pair::NativeOwnedPublicationV1>,
+    },
 }
 
 impl NativeNginxCompletionPlanV1 {
@@ -113,10 +158,17 @@ impl NativeNginxCompletionPlanV1 {
             .get("publication")
             .and_then(Value::as_object)
             .ok_or_else(|| eyre!("native completion lacks its exact owned publisher"))?;
-        let prior = publication
-            .get("prior")
-            .and_then(Value::as_object)
-            .ok_or_else(|| eyre!("native completion lacks the retained prior publication"))?;
+        if self.schema != "iroha.taira.public-reset.native-nginx-completion-plan.v1"
+            || self.completion_journal_basename != "native-completion.ndjson"
+            || plan.get("schema").and_then(Value::as_str)
+                != Some("iroha.taira.native-nginx-apply.plan.v1")
+            || plan.get("host_kind").and_then(Value::as_str) != Some("macos")
+            || plan.get("provider").and_then(Value::as_str) != Some("macstadium-dublin")
+        {
+            return Err(eyre!(
+                "native completion plan has another canonical publisher corridor"
+            ));
+        }
         let publisher = match &self.publication_effect {
             NativePublicationEffectV1::Owned => publication_operation_id,
             NativePublicationEffectV1::NotRequested {
@@ -132,14 +184,59 @@ impl NativeNginxCompletionPlanV1 {
                 }
                 incumbent.operation_id.as_str()
             }
+            NativePublicationEffectV1::PublisherRolledBack {
+                journal,
+                restored_owned_publication,
+            } => {
+                let owner = plan
+                    .get("native")
+                    .and_then(|value| value.get("owner_uid"))
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or_else(|| eyre!("rolled-back native publisher has no admitted owner"))?;
+                if !matches!(
+                    publication.get("kind").and_then(Value::as_str),
+                    Some("create" | "replace")
+                ) || Path::new(&journal.file.path)
+                    != publisher_journal_path(&self.nginx, publication_operation_id)?
+                    || journal.file.identity.size > 1024 * 1024
+                    || journal.file.identity.mode != 0o600
+                    || journal.file.identity.uid != owner
+                    || restored_owned_publication
+                        .as_ref()
+                        .is_some_and(|restored| restored.operation_id == publication_operation_id)
+                {
+                    return Err(eyre!(
+                        "rolled-back native publisher changed its exact original journal owner"
+                    ));
+                }
+                journal.validate_public(owner)?;
+                if let Some(restored) = restored_owned_publication {
+                    restored.journal.validate_public(owner)?;
+                    restored.publication.validate_public(owner)?;
+                    if restored.journal.file.identity.size > 1024 * 1024
+                        || restored.publication.file.identity.size > 1024 * 1024
+                    {
+                        return Err(eyre!(
+                            "restored native publisher exceeds its public owner extent"
+                        ));
+                    }
+                }
+                if plan.get("operation_id").and_then(Value::as_str)
+                    != Some(publication_operation_id)
+                {
+                    return Err(eyre!(
+                        "rolled-back native plan has another intended publisher"
+                    ));
+                }
+                return Ok(());
+            }
         };
-        if self.schema != "iroha.taira.public-reset.native-nginx-completion-plan.v1"
-            || self.completion_journal_basename != "native-completion.ndjson"
-            || plan.get("schema").and_then(Value::as_str)
-                != Some("iroha.taira.native-nginx-apply.plan.v1")
-            || plan.get("host_kind").and_then(Value::as_str) != Some("macos")
-            || plan.get("provider").and_then(Value::as_str) != Some("macstadium-dublin")
-            || plan.get("operation_id").and_then(Value::as_str) != Some(publisher)
+        let prior = publication
+            .get("prior")
+            .and_then(Value::as_object)
+            .ok_or_else(|| eyre!("native completion lacks the retained prior publication"))?;
+        if plan.get("operation_id").and_then(Value::as_str) != Some(publisher)
             || publication.get("kind").and_then(Value::as_str) != Some("reconcile")
             || prior.get("operation_id").and_then(Value::as_str) != Some(publisher)
         {
@@ -147,8 +244,8 @@ impl NativeNginxCompletionPlanV1 {
                 "native completion plan is not an exact reconciliation of this admitted publisher"
             ));
         }
-        // The maintained native nginx helper validates every remaining field and
-        // retains its exact owner journal/publication/backup before any effect.
+        // All remaining original native/public fields and terminal records are
+        // admitted by the maintained owner, under the same retained lock/decoder.
         Ok(())
     }
 }
@@ -369,7 +466,7 @@ pub(super) struct NativeParentV1 {
 }
 
 /// Independently held per-authorization lock inherited by the direct native helper.
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(super) struct NativeRetainedLockV1 {
     pub(super) fd: u32,
@@ -405,6 +502,7 @@ pub(super) struct NativeCompletionAdmissionV1 {
     pub(super) custody_root: String,
     pub(super) helper_source_closure_sha256: String,
     pub(super) parent: NativeParentV1,
+    pub(super) host_lock: NativeRetainedLockV1,
     pub(super) lock: NativeRetainedLockV1,
     pub(super) guard: RetainedPublicRefV1,
     pub(super) inventory: RetainedPublicRefV1,

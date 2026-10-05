@@ -691,7 +691,7 @@ pub struct GovernanceCapabilitiesV1 {
     pub supported_routes: Vec<String>,
 }
 const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_ATTEMPT_TIMED_OVN_V1";
-const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 14] = [
+const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 10] = [
     "DEPLOY_CONTRACT",
     "RUNTIME_UPGRADE",
     "SCCP_ROUTE_GOVERNANCE",
@@ -702,10 +702,6 @@ const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 14] = [
     "CONTRACT_LIFECYCLE_GOVERNANCE",
     "CONTRACT_EMERGENCY_HOLD",
     "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
-    "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
-    "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
-    "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
-    "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
 ];
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///
@@ -2299,10 +2295,12 @@ fn is_canonical_public_entrypoint_name(name: &str) -> bool {
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the contract address is malformed or the dataspace alias
-/// encoded in the address is unknown to the current node.
+/// encoded in the address is unknown to the current node. Manifest-frame resource refusals
+/// preserve the query budget failure under the caller's original physical allocation owner.
 pub async fn handle_gov_contract_get(
     state: Arc<iroha_core::state::State>,
     contract_address: axum::extract::Path<String>,
+    allocation_context: &norito::core::DecodeBudgetContext,
 ) -> Result<JsonBody<GovernedContractResponse>, crate::Error> {
     let contract_address: iroha_data_model::smart_contract::ContractAddress =
         contract_address.0.parse().map_err(|err| {
@@ -2404,7 +2402,7 @@ pub async fn handle_gov_contract_get(
         ));
     }
     if verified.abi_hash != manifest_abi_hash
-        || record.manifest.signature_payload() != verified.manifest.signature_payload()
+        || !record.manifest.same_signed_content(&verified.manifest)
     {
         return Err(governed_contract_invariant(
             "active contract manifest does not match its authenticated artifact metadata",
@@ -2413,12 +2411,36 @@ pub async fn handle_gov_contract_get(
     let provenance = record.manifest.provenance.as_ref().ok_or_else(|| {
         governed_contract_invariant("active contract manifest has no signed provenance")
     })?;
+    let max_frame_bytes = usize::try_from(
+        view.world()
+            .parameters()
+            .transaction
+            .ivm_bytecode_size
+            .get(),
+    )
+    .map_err(|_| {
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+        ))
+    })?;
+    let signature_payload = record
+        .manifest
+        .signature_payload_bytes(allocation_context, max_frame_bytes)
+        .map_err(|error| match error {
+            norito::core::BoundedEncodeError::Serialization(error)
+                if !error.is_decode_resource_limit() =>
+            {
+                governed_contract_invariant(format!(
+                    "active contract manifest canonical serialization failed: {error}"
+                ))
+            }
+            _ => crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            )),
+        })?;
     provenance
         .signature
-        .verify(
-            &provenance.signer,
-            &record.manifest.signature_payload_bytes(),
-        )
+        .verify(&provenance.signer, &signature_payload)
         .map_err(|_| {
             governed_contract_invariant("active contract manifest provenance is invalid")
         })?;

@@ -37,6 +37,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             fixture["proposal_kinds"] as? [String],
             ToriiParliamentAPIV1.proposalKinds
         )
+        XCTAssertEqual(ToriiParliamentAPIV1.proposalKinds.count, 10)
         XCTAssertEqual(
             fixture["contract_lifecycle_actions"] as? [String],
             ToriiParliamentAPIV1.contractLifecycleActions
@@ -197,6 +198,26 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         )
         let partial = try XCTUnwrap(fixture["tle_partial_release"] as? [String: Any])
         XCTAssertEqual((partial["response_fields"] as? [String])?.count, 9)
+    }
+
+    func testRetiredKagemushaProposalKindsCannotEnterAttemptDrafts() throws {
+        let retiredKinds = [
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire",
+        ]
+        for kind in retiredKinds {
+            XCTAssertFalse(ToriiParliamentAPIV1.proposalKinds.contains(kind))
+            XCTAssertThrowsError(try ToriiParliamentProposalV1(
+                validating: Data("{\"kind\":\"\(kind)\",\"payload\":{}}".utf8)
+            )) { error in
+                guard case ToriiClientError.invalidPayload(let message) = error else {
+                    return XCTFail("expected closed-inventory rejection for \(kind)")
+                }
+                XCTAssertEqual(message, "proposal.kind is unknown or retired")
+            }
+        }
     }
 
     func testInitialSortitionDraftUsesOnlyTheEnclosingAttempt() throws {

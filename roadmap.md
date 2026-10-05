@@ -108,6 +108,18 @@ Contracts: [Norito](norito.md), [schema](specs/norito_schema_identity.md),
 [IVM completion](specs/kotodama_ivm_completion.md), [FASTPQ](specs/fastpq_plan.md)
 and [privacy closure](specs/privacy_first_release_closure.md).
 
+The [ZK delivery plan](specs/zk_delivery_plan.md) and its
+[task graph](specs/zk_delivery_graph.json) own the ZK, privacy,
+authenticated-State and FHE outcomes: the rows here state the release outcome,
+and the graph holds the tasks, their status and their evidence. Three criteria
+come from the [resource contract](specs/zk_resource_contract.json). For C5, the
+maximum-proof transport (plan task X.2) closes the contract relations it owns,
+including `private_settlement_carrier_within_includable_transaction`. For N5,
+the signed attachment list frame, 8 MiB today, admits a ceiling-sized proof
+(I.1). For N4 and N8, the 74 node-local validity bounds of the three
+node-configuration policy catalogs, including the eight bound into a digest but
+compared by no state transition, become committed State (F.4).
+
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
 | C1 | Norito/derive closure | Norito/derives/primitives/MV | Explicit archive context, fallible aligned/scalar/tree allocations and owned values; retire unused adapters, share emitters, meet compile budgets/UI tests. |
@@ -124,7 +136,7 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
-| P1 | Parliament | Governance/crypto/Torii | [18-event pipeline](specs/governance_pipeline.md), atomic policy/confirmation, beacon/ballot/deadline/retry and four-peer rollback; independent review/signed API. |
+| P1 | Parliament | Governance/crypto/Torii | [Final ballot requirements and launch gate](specs/parliament_private_ballot_design.md): deliver a reviewed construction satisfying PQ confidentiality and accepted-voter dropout without decryption custodians; actual small electorates, independent epoch-seated pause panel and Parliament availability isolation; canonical V1 replacement, atomic policy/confirmation, bounded retry and four-peer replay/rollback; independent proof review/signed API before binding-governance mainnet launch. No owner choice remains pending. |
 | P13 | Standalone elections | Governance/circuits/SDKs | [Full statement](specs/zk_audit_matrix.md#election-statement-completion): credentials/nullifiers, weight/re-vote, encryption/custody and sound ballot/tally; V1 keys/fixtures and restore/finality. |
 | P2 | SoraFS promotion | SoraFS/operators | [Reliability](specs/sorafs/first_release_reliability_goals.md), [V1 goals](specs/sorafs/v1_implementation_goals.md) and [closure](specs/sorafs/v1_closure_ledger.md); software signer, live multi-provider/dual-gateway L1, 17 summaries and authenticated L2. Load/resilience observations are optional diagnostics without a fixed deployment duration. |
 | P3 | Governance DAG | DAG/broker | [Two services](specs/sorafs_governance_dag_plan.md), authenticated ingress/signing/CAS, failover/recovery/corruption and five-target SBOM/L1/L2 artifacts. |

@@ -97,9 +97,6 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::governance::ProposeContractLifecycleGovernance);
         $macro!(iroha_data_model::isi::governance::ProposeContractEmergencyHold);
         $macro!(iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
-        $macro!(iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1);
-        $macro!(iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1);
-        $macro!(iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1);
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
         $macro!(iroha_data_model::isi::governance::UpdatePlainConviction);
@@ -944,14 +941,14 @@ mod tests {
     fn generic_privacy_types_are_absent_but_specialized_flows_remain_registered() {
         let registry = instruction_registry::default();
         let specs = gather_instruction_specs(&registry, None);
-        assert_eq!(specs.len(), 83, "first-release generated instruction count");
+        assert_eq!(specs.len(), 80, "first-release generated instruction count");
         let governance_specs = specs
             .iter()
             .filter(|spec| spec.type_name.contains("::isi::governance::"))
             .collect::<Vec<_>>();
         assert_eq!(
             governance_specs.len(),
-            12,
+            9,
             "first-release generated governance instruction count"
         );
         for expected in [
@@ -963,15 +960,6 @@ mod tests {
             ),
             std::any::type_name::<
                 iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
-            >(),
-            std::any::type_name::<
-                iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
-            >(),
-            std::any::type_name::<
-                iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
-            >(),
-            std::any::type_name::<
-                iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
             >(),
             std::any::type_name::<iroha_data_model::isi::governance::CastZkBallot>(),
             std::any::type_name::<iroha_data_model::isi::governance::CastPlainBallot>(),

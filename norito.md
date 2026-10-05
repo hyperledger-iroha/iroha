@@ -1091,6 +1091,32 @@ own their implementations and MV owns only map serialization. Moving this
 contract does not change key spellings, decoding, or the map wire layout.
 
 
+## Heap Encoding
+
+`BinaryHeap<T>` uses the ordinary element-sequence layout: a fixed-width
+little-endian u64 count followed by each element's active-layout length prefix
+and payload. Elements appear in ascending `Ord` order. Within an equal-`Ord`
+group, their active-layout payload bytes appear in lexicographic order.
+Equality under `Ord` does not imply identical payloads; the encoded order must
+therefore be independent of heap backing, insertion history and reconstruction.
+Equal payloads retain every element and its multiplicity.
+
+The encoder admits the sorted-reference array through the original cumulative
+codec context before allocation. Uniquely ordered heaps use only that array.
+Tied groups additionally admit an exact three-usize metadata entry for every
+tied element and one packed arena containing their measured payloads. Checked
+writes cannot exceed the measured key lengths. The comparator only borrows
+those admitted bytes; it neither serializes elements nor allocates sorting
+scratch. The sequence emits the same key bytes that established tie order.
+
+Every real reference, metadata, key-arena and nested element allocation joins
+the original context, including each separate framing pass. Releasing local
+scratch does not reset cumulative charges. Length-only heap measurement must
+also construct real tie keys to establish canonical order; nested measurements
+needed for those writes consume the same finite count-work allowance. The
+codec incorporates its already measured keys without counting their payloads
+again. No additional layout flag, frame identity or alternate decoder is used.
+
 ## MV JSON Snapshot Undo
 
 The first-release MV JSON schema retains exact current and predecessor presence.

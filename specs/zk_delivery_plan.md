@@ -1,7 +1,8 @@
 # ZK delivery plan revision 8
 
-**Status: ready for development.** Finalized 2026-10-04. All implementation tasks
-remain planned; finalizing this document does not establish implemented algorithms,
+**Status: ready for development.** Finalized 2026-10-04. The graph records each
+task as `planned`, `in_progress` or `implemented`, and a non-planned status carries
+its evidence. Neither finalizing this document nor recording a status establishes
 cryptographic qualification, performance or live deployment.
 
 This is the normative development plan for the ZK, privacy, authenticated-State and
@@ -776,7 +777,7 @@ Acceptance: Each capability already supplies operation-v1 when it lands. This ag
 
 Deliverable: Maintain the final plan, graph and self-contained r6 requirement/finding reconciliation with a single checker.
 
-Acceptance: Validate true roots, cycles, delivery reachability, required/forbidden ancestry, per-delivery operation-v1, all23 r6 findings, every earlier F report and original task mapping. Both output formats execute identical checks. Missing ignored dist sources do not break validation; mappings are traceability, not semantic proof.
+Acceptance: Validate true roots, cycles, delivery reachability, required/forbidden ancestry, per-delivery operation-v1, all 23 r6 findings, every earlier F report and original task mapping. Both output formats execute identical checks. Missing ignored dist sources do not break validation; mappings are traceability, not semantic proof.
 
 ### V.2 Four-peer atomic execution and recovery
 
@@ -1059,10 +1060,34 @@ python3 scripts/check_zk_delivery_plan.py --format json
 python3 -m unittest discover -s scripts/tests -p check_zk_delivery_plan_test.py
 ```
 
+A task leaves `planned` only with recorded `evidence`, which has four fields:
+
+- `source`: text containing the observed 40-hex commit id.
+- `paths`: repository files outside ignored build and archive trees (`dist`,
+  `target`, `.git`, `__pycache__`, `node_modules`, `build`). Each is a regular file
+  that resolves inside the repository. The checker does not examine Git tracking.
+- `commands`: entries of `command` and `outcome` (`passed`, `failed` or `not_run`).
+- `acceptance`: entries of `clause`, `state` (`met`, `partial` or `unmet`) and `proof`.
+
+A clause is exactly one whole sentence of the task's Deliverable or Acceptance text,
+recorded once. A proof cites at least one recorded path or command verbatim.
+`in_progress` records any nonempty subset of sentences and admits partial, failed and
+unexecuted items. `implemented` requires one `met` entry for every sentence, every
+command `passed`, every recorded path and command cited by a proof and every
+prerequisite implemented. Return a task to `in_progress` when a later change
+invalidates its evidence. Graph status stays `ready_for_development`; a recorded
+status is traceability and grants no runtime permission.
+
 Both formats use one validator and exit status. Checks cover graph integrity,
 true roots, reachability, required/forbidden ancestry, per-delivery SDK/ISI contracts,
-exact plan/graph text, all original requirement/report/task inventories, source
-provenance and valid replacement-task mappings. The ignored originals are not read.
+exact plan/graph text including task headings and the roots and counts stated above,
+each stated once word for word
+(no other heading, emphasized line or first table cell may name a task or delivery ID),
+recorded task status and evidence, all original requirement/report/task inventories
+and their recorded counts, source provenance and valid replacement-task mappings.
+The ignored originals are not read. The plan is read as lines of text: HTML blocks,
+comments, code fences, multi-line titles, pipe-less table rows and restatements in
+other words are not interpreted, so review still reads the rendered plan.
 Passing these checks establishes structural and traceability consistency only;
 semantic review and implementation acceptance tests remain necessary.
 
@@ -1071,3 +1096,37 @@ owners and implement the smallest complete capability slice. Keep the four settl
 directions, user-approved phone-provider choice and first-release replacement policy
 intact. Revise a task when actual construction or measurement disproves an assumption,
 retaining the required outcome and recording the concrete change.
+
+Outputs so far name where landed work lives. The graph alone records status and
+evidence, and a listed path qualifies nothing. For V.1 they are
+`scripts/check_zk_delivery_plan.py` and
+`scripts/tests/check_zk_delivery_plan_test.py`. For X.1:
+`specs/zk_x509_presentation_interval.md`,
+`specs/zk_x509_presentation_interval_sites.json`,
+`fixtures/zk/x509/interval_vectors_v1.json`,
+`crates/iroha_data_model/src/privacy/zk_x509_interval.rs` and
+`scripts/check_zk_x509_presentation_interval.py`. For B.1:
+`crates/fastpq_prover/src/backend/air.rs`,
+`specs/fastpq/shared_backend_inventory.json` with its guide
+`specs/fastpq/shared_backend_inventory.md`, and the check
+`crates/fastpq_prover/tests/shared_backend_inventory.rs`. For M.1:
+`crates/ivm/src/proof_coverage.rs`, the generated
+`crates/ivm/docs/proof_coverage_inventory.json` and its guide
+`crates/ivm/docs/proof_coverage.md`. For T.1:
+`specs/first_release_history_cutover.md`,
+`specs/first_release_history_cutover.json`,
+`scripts/check_first_release_history.py` and the pinned history under
+`fixtures/core/first_release_history/`. For C.1:
+`specs/fhe_ownership_inventory.json` and
+`scripts/check_fhe_ownership_map.py`. For R.0:
+`specs/ram_lfe_execution_proof.md`, the canonical types in
+`crates/iroha_crypto/src/ram_lfe/canonical.rs` and
+`crates/iroha_data_model/src/ram_lfe.rs`, and the cleartext reference
+`crates/iroha_crypto/src/ram_lfe/reference.rs`. For G.1: section 16 of
+`specs/sumeragi.md`, `specs/state_table_inventory.json` and
+`crates/iroha_core/src/state/authority_registry/keyed_commitment.rs`. For C.2:
+the crate `crates/iroha_fhe/`. For E.1: the crate `crates/iroha_measurement/`,
+`scripts/zk_resource_harness.py` and
+`crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs`. For F.2:
+`specs/zk_resource_contract.json`, `scripts/check_zk_resource_contract.py` and
+`crates/iroha_data_model/tests/resource_contract_v1.rs`.

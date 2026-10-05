@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Authenticate a genuine NoritoBridge ZIP and optionally install it without replacement."""
+"""Authenticate a NoritoBridge ZIP and optionally install it without replacement.
+
+Producer verification is the default and requires the sealed build toolchain.
+Consumer verification requires independently trusted archive SHA-256 and source
+commit inputs, a clean matching release checkout, its external read-only Cargo
+lock copy, Python 3.10+, and current Apple command-line tools. Consumer tools need
+not match producer binaries. DEVELOPER_DIR selects the consumer's Xcode; otherwise
+xcode-select is used. No mode overwrites an existing installation.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +22,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from typing import NoReturn
@@ -303,8 +312,72 @@ def _load_native_owner(root: Path, name: str):
     return module
 
 
-def _validate_native_contents(root: Path, lockfile: Path, artifact_directory: Path) -> dict[str, object]:
+def _consumer_git(root: Path, *arguments: str) -> bytes:
+    """Inspect the trusted release checkout without inherited Git overrides."""
+    try:
+        return subprocess.run(
+            ["/usr/bin/git", "--no-replace-objects", "--no-optional-locks",
+             "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+             *arguments],
+            cwd=root,
+            env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "TMPDIR": "/tmp",
+                 "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+                 "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        fail(f"unable to inspect consumer release source: {error}")
+
+
+def _consumer_source_identity(root: Path, expected_commit: str) -> tuple[str, str]:
+    """Bind clean release source and the one admitted mechanical pin child."""
+    head = _consumer_git(root, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii").strip()
+    if re.fullmatch(r"[0-9a-f]{40}", head) is None:
+        fail("consumer release HEAD is not a canonical commit")
+    if _consumer_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"):
+        fail("consumer installation requires a clean matching release checkout")
+    # Existing pin admission owns the direct/pin-parent exception. Disallow Git
+    # replacement objects even in its independently sanitized Git subprocesses.
+    if _consumer_git(root, "for-each-ref", "--format=%(refname)", "refs/replace/"):
+        fail("consumer release checkout must not contain Git replacement refs")
+    tracked = _consumer_git(root, "ls-files", "-v", "-z").split(b"\0")
+    if any(entry and (entry[:1].islower() or entry[:1] == b"S") for entry in tracked):
+        fail("consumer release checkout must not hide changes with Git index flags")
+    # Admit source with the trusted installer's policy before executing any
+    # validator from that checkout. An unrelated checkout cannot self-approve.
+    owner = _load_native_owner(
+        Path(__file__).resolve().parents[1], "check_mobile_sdk_artifact_pin_commit.py",
+    )
+    try:
+        owner.validate_pin_relationship(root, expected_commit)
+        embedded = owner.embedded_source_commit(root, expected_commit)
+    except (OSError, RuntimeError, ValueError) as error:
+        fail(f"consumer release source does not match trusted commit: {error}")
+    return head, embedded
+
+
+def _consumer_developer_directory() -> Path:
+    """Select the recipient's Apple tools without asserting producer equality."""
+    configured = os.environ.get("DEVELOPER_DIR")
+    if configured is None:
+        try:
+            configured = subprocess.run(
+                ["/usr/bin/xcode-select", "-p"], check=True,
+                env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            fail(f"consumer native inspection requires Apple command-line tools: {error}")
+    return canonical_directory(Path(configured), "consumer Apple developer directory")
+
+
+def _validate_native_contents(root: Path, lockfile: Path, artifact_directory: Path,
+                              *, consumer_source_commit: str | None = None) -> dict[str, object]:
     """Require the real source/tool/ABI/slice/export/pin owner before admission."""
+    consumer_identity = (
+        _consumer_source_identity(root, consumer_source_commit)
+        if consumer_source_commit is not None else None
+    )
     validator = _load_native_owner(root, "validate_norito_bridge_xcframework.py")
     framework = artifact_directory / ARCHIVE_ROOT
     try:
@@ -316,10 +389,29 @@ def _validate_native_contents(root: Path, lockfile: Path, artifact_directory: Pa
             manifest_link=artifact_directory / "NoritoBridge.artifacts.json",
             expected_link_target=EMBEDDED_MANIFEST,
             swift_loader=root / "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
-            verify_repository_provenance=True,
+            verify_repository_provenance=consumer_identity is None,
         )
-        archive_owner = _load_native_owner(root, "archive_norito_xcframework.py")
-        archive_owner._validate_native_binaries(framework, validator)
+        if consumer_identity is not None:
+            if manifest["source_tree_dirty"] is not False:
+                fail("consumer installation refuses dirty-source artifacts")
+            if manifest["source_commit"] != consumer_source_commit:
+                fail("artifact source commit does not match the trusted release commit")
+            if manifest["embedded_source_commit"] != consumer_identity[1]:
+                fail("artifact embedded source commit does not match the trusted release")
+        # The installed verification program owns consumer tool selection. The
+        # immutable release checkout owns the ABI, headers, pins and build recipe.
+        # An updated installer can therefore inspect a release made before that
+        # installer without rewriting its authenticated source.
+        inspection_root = root if consumer_identity is None else Path(__file__).resolve().parents[1]
+        archive_owner = _load_native_owner(inspection_root, "archive_norito_xcframework.py")
+        if consumer_identity is None:
+            archive_owner._validate_native_binaries(framework, validator)
+        else:
+            archive_owner._validate_native_binaries(
+                framework, validator, developer_dir=_consumer_developer_directory(),
+            )
+            if _consumer_source_identity(root, consumer_source_commit) != consumer_identity:
+                fail("consumer release source changed during authentication")
         return manifest
     except (OSError, RuntimeError, ValueError) as error:
         fail(f"archived native artifact authentication failed: {error}")
@@ -381,8 +473,17 @@ def authenticate_archive(
     expected_sha256: str | None = None,
     install_directory: Path | None = None,
     scratch_directory: Path | None = None,
+    consumer: bool = False,
+    expected_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Authenticate original ZIP bytes and optionally install the exact generation."""
+    if consumer:
+        if expected_sha256 is None or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+            fail("consumer verification requires an independently trusted --expected-sha256")
+        if expected_source_commit is None or re.fullmatch(r"[0-9a-f]{40}", expected_source_commit) is None:
+            fail("consumer verification requires a trusted --expected-source-commit")
+    elif expected_source_commit is not None:
+        fail("--expected-source-commit requires --consumer")
     root = canonical_directory(root, "repository root")
     payload = validate_archive(archive, parse_version(root))
     digest = hashlib.sha256(payload).hexdigest()
@@ -399,9 +500,12 @@ def authenticate_archive(
     parent = canonical_directory(parent, "archive staging parent")
     stage = Path(tempfile.mkdtemp(prefix=".NoritoBridge.archive-check.", dir=parent))
     identity = _stage_identity(stage)
+    validation_arguments = (
+        {"consumer_source_commit": expected_source_commit} if consumer else {}
+    )
     try:
         _extract_archive(payload, stage)
-        manifest = _validate_native_contents(root, lockfile, stage)
+        manifest = _validate_native_contents(root, lockfile, stage, **validation_arguments)
         if _stage_identity(stage) != identity:
             fail("archive staging directory changed during authentication")
         _assert_stage_inventory(stage)
@@ -413,7 +517,7 @@ def authenticate_archive(
             _rename_no_replace(stage / ARCHIVE_ROOT, destination / ARCHIVE_ROOT)
             _rename_no_replace(stage / "NoritoBridge.artifacts.json", destination / "NoritoBridge.artifacts.json")
             _fsync_directory(destination)
-            manifest = _validate_native_contents(root, lockfile, destination)
+            manifest = _validate_native_contents(root, lockfile, destination, **validation_arguments)
             if _stage_identity(stage) != identity:
                 fail("archive staging directory changed during installation")
             stage.rmdir()
@@ -433,6 +537,10 @@ def main() -> int:
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--lockfile-path", type=Path, required=True)
     parser.add_argument("--expected-sha256")
+    parser.add_argument("--consumer", action="store_true",
+                        help="verify a trusted release on a consumer Mac without producer tool equality")
+    parser.add_argument("--expected-source-commit",
+                        help="full producing commit from the same trusted release evidence as the SHA-256")
     parser.add_argument("--scratch-dir", type=Path)
     parser.add_argument("--install-dir", type=Path)
     arguments = parser.parse_args()
@@ -441,6 +549,8 @@ def main() -> int:
         expected_sha256=arguments.expected_sha256,
         install_directory=arguments.install_dir,
         scratch_directory=arguments.scratch_dir,
+        consumer=arguments.consumer,
+        expected_source_commit=arguments.expected_source_commit,
     )
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0

@@ -23,16 +23,19 @@ Chips for the Iroha-native PIPA-v1 PLONKish engine (`iroha_plonk`,
   satisfying assignment.
 - `arith`: the glue gate `q_m a b + q_a a + q_b b + q_c c + q_d d + q_k` with
   boolean, select and is-zero gates.
-- `statement`: **prototype** only. The 29-field step statement encoding of
-  the split-lineage step relations under `kgwstmt1`, in the order of the G1
-  `KagemushaWalletStatementV1::field_items` (not wired into any protocol
-  path): version, relation identity (two limbs), scheme, asset, credential,
-  successor lifecycle, sequence and `next_load`, the enabled-controls mask,
-  the lineage inputs of a Send, both state commitments, the effect tag and an
-  11-field effect union. Also the canonical
-  cross-field limb encoding of spec S6 (`lo < 2^128`, `hi < 2^127`,
-  `lo + 2^128 hi < modulus`) and the decomposition of an own-field word into
-  those canonical limbs.
+- `statement`: the G1 step statement encoding of the split-lineage step
+  relations: 28 elements under `kgwstmt1`, in the order of the G1
+  `KagemushaWalletStatementV1::field_items` (wire record section 3.2; not yet
+  wired into a protocol path): version, the scheme-level relation identity
+  (two limbs, witness cells bound by the public digest), scheme, asset,
+  credential, successor lifecycle, sequence and `next_load`, the
+  enabled-controls mask, the lineage inputs of a Send, both state
+  commitments, the effect tag and a 10-element effect union (`credit_id` is
+  one element). Its tests reproduce the G1 statement vectors of
+  `fixtures/kagemusha/wallet_v1_vectors.json` natively and in circuit. Also
+  the canonical cross-field limb encoding of spec S6 (`lo < 2^128`,
+  `hi < 2^127`, `lo + 2^128 hi < modulus`) and the decomposition of an
+  own-field word into those canonical limbs.
 - `cells`: typed cells (`Word`, `Bit`, `Uint`) and row cursors; `tamper`: the
   per-cell tamper harness.
 

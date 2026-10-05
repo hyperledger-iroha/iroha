@@ -256,13 +256,20 @@ mod tests {
             super::super::permission_table_root(roles.iter().map(|(id, role)| (id, role))),
             forward
         );
+        assert_eq!(roles[0].1.permission_epoch(&permission), None);
+        assert_eq!(roles[1].1.permission_epoch(&permission), Some(7));
         let mut records: Vec<_> = roles
             .iter()
-            .map(|(id, role)| {
+            .zip([0_u64, 7])
+            .map(|((id, role), epoch)| {
+                assert_eq!(
+                    role.permission_epoch(&permission).unwrap_or_default(),
+                    epoch
+                );
                 (
                     Hash::new(id.encode()),
                     Hash::new(permission.encode()),
-                    role.permission_epoch(&permission).unwrap(),
+                    epoch,
                 )
             })
             .collect();

@@ -1484,6 +1484,11 @@ impl fmt::Display for error::BlockRejectionReason {
 /// Returns [`NoritoFrameError::LengthMismatch`] if `versioned` is empty. Propagates
 /// header validation and synthesis failures from the internal
 /// `validate_signed_block_header` and `write_signed_block_header` helpers.
+// TODO: only tests, one bench and one integration test frame a headerless block. Make this
+// helper and the headerless `DecodeVersioned` implementation test-only once the block tests
+// build their frames from `SignedBlock::canonical_wire` and the lib-test target builds again
+// (`specs/first_release_history_cutover.json`, T1-A15). Until then
+// `scripts/check_first_release_history.py` refuses any production reference to either.
 pub fn frame_versioned_signed_block_bytes(versioned: &[u8]) -> Result<Vec<u8>, NoritoFrameError> {
     if versioned.is_empty() {
         return Err(NoritoFrameError::LengthMismatch);

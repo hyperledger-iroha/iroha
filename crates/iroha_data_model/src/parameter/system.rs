@@ -21,6 +21,77 @@ use std::sync::LazyLock;
 ///
 /// The ABI V1 address map reserves the half-open range `0x0010_0000..0x0020_0000` for the heap.
 pub const IVM_HEAP_MAX_BYTES: u64 = 0x0010_0000;
+/// Block-payload bytes the global proposer keeps free for a block's non-transaction fields.
+///
+/// This is the single owner of the reserve (`specs/zk_resource_contract.json`,
+/// `block.payload_transaction_reserve_bytes`). The proposer selects framed transactions
+/// within `max_block_bytes` less this reserve and queue admission refuses a transaction no
+/// proposer can select, so both stages make the same decision from committed parameters.
+pub const BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES: u32 = 64 * 1024;
+/// Lane-payload bytes a lane proposer keeps free for the framing of its batch.
+pub const LANE_BATCH_FRAMING_RESERVE_BYTES: u32 = 64;
+/// A signed transaction larger than every payload the committed parameters allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "signed transaction is {encoded_bytes} bytes; the committed transaction and block payload limits include at most {max_bytes} bytes"
+)]
+pub struct TransactionNeverIncludable {
+    /// Framed canonical length of the signed transaction.
+    pub encoded_bytes: u64,
+    /// Largest framed transaction a proposer of the committed chain can include.
+    pub max_bytes: u64,
+}
+/// The proposers that can carry one signed transaction, decided by its committed route.
+///
+/// The route is part of the bound: a lane's payload limit helps only a transaction routed to
+/// that lane. A caller that does not know the route uses [`Self::Global`]: a transaction
+/// within the global budget is includable on every route, because the bound of a native lane
+/// is never below the global one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionInclusionRoute {
+    /// Routed to lane zero, or no native lane carries it: only the global proposer selects it.
+    Global,
+    /// Routed to a native lane. Its proposer selects the transaction within the lane's
+    /// budget. The global proposer rescues a transaction of a stalled lane only within the
+    /// global budget: a larger one is carried by its lane's proposer or by none.
+    NativeLane {
+        /// `max_block_bytes` pinned by the committed record of the routed lane.
+        max_block_bytes: NonZeroU32,
+    },
+}
+/// Largest framed signed transaction that is both admitted and includable in a block.
+///
+/// `max_tx_bytes` is the committed per-transaction cap, `max_block_bytes` the committed
+/// global payload limit and `route` the proposers the transaction's committed route reaches.
+/// A transaction is includable when one of those proposers can select it; the result is the
+/// smaller of the cap and the largest selection budget on the route. It is zero when no
+/// payload on the route leaves room for a transaction.
+// TODO(X.2): the default payload limit (4 MiB) is below the transaction cap (10 MiB), so this
+// bound is the payload budget today. Once parameter validation enforces
+// `max_tx_bytes + reserve <= max_block_bytes` the result is always `max_tx_bytes`
+// (`specs/zk_resource_contract.json`, `transaction_cap_fits_block_payload`).
+#[must_use]
+pub const fn max_includable_transaction_bytes(
+    max_tx_bytes: NonZeroU64,
+    max_block_bytes: NonZeroU32,
+    route: TransactionInclusionRoute,
+) -> u64 {
+    let global = max_block_bytes
+        .get()
+        .saturating_sub(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES);
+    let lane = match route {
+        TransactionInclusionRoute::NativeLane { max_block_bytes } => max_block_bytes
+            .get()
+            .saturating_sub(LANE_BATCH_FRAMING_RESERVE_BYTES),
+        TransactionInclusionRoute::Global => 0,
+    };
+    let payload = if global > lane { global } else { lane } as u64;
+    if payload < max_tx_bytes.get() {
+        payload
+    } else {
+        max_tx_bytes.get()
+    }
+}
 /// Raw 32-byte consensus fingerprint with one canonical JSON representation.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parameter::system::ConsensusFingerprint")]
@@ -1774,6 +1845,51 @@ impl FromIterator<Parameter> for Parameters {
     }
 }
 impl Parameters {
+    /// Largest framed signed transaction these parameters admit and a proposer on `route`
+    /// can include.
+    ///
+    /// See [`max_includable_transaction_bytes`].
+    #[must_use]
+    pub const fn max_includable_transaction_bytes(&self, route: TransactionInclusionRoute) -> u64 {
+        max_includable_transaction_bytes(
+            self.transaction.max_tx_bytes,
+            self.sumeragi.max_block_bytes,
+            route,
+        )
+    }
+    /// Check the framed canonical length of a signed transaction before submitting it.
+    ///
+    /// SDK preflight, queue admission and proposer selection share this bound for the same
+    /// `route`, so a transaction that passes is within the selection budget of a proposer
+    /// on the route it has when it is admitted. [`TransactionInclusionRoute::Global`] is
+    /// the bound of a transaction routed to lane zero and a sufficient condition for every
+    /// other route: the global proposer can select such a transaction directly or as the
+    /// rescue of a stalled lane. A [`TransactionInclusionRoute::NativeLane`] result holds
+    /// only for a transaction the committed routing rules send to that lane; the node
+    /// derives the route itself and refuses a lane-zero transaction above the global budget
+    /// whatever a lane would carry.
+    ///
+    /// The bound is not a promise of inclusion. A transaction above the global budget is
+    /// carried by its lane's proposer only: the global rescue selects within the global
+    /// budget and skips it. If that lane stalls or closes, or the routing rules stop
+    /// sending the transaction there, it stays queued until it expires.
+    ///
+    /// # Errors
+    /// The transaction is larger than [`Self::max_includable_transaction_bytes`] on `route`.
+    pub const fn check_signed_transaction_bytes(
+        &self,
+        encoded_bytes: u64,
+        route: TransactionInclusionRoute,
+    ) -> Result<(), TransactionNeverIncludable> {
+        let max_bytes = self.max_includable_transaction_bytes(route);
+        if encoded_bytes > max_bytes {
+            return Err(TransactionNeverIncludable {
+                encoded_bytes,
+                max_bytes,
+            });
+        }
+        Ok(())
+    }
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = Parameter> + '_ {
         self.sumeragi

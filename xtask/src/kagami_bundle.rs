@@ -1,10 +1,7 @@
-//! Assemble the two matching native CLI programs without a desktop build dependency.
+//! Assemble the matching native client, developer worker and daemon without a desktop build dependency.
 
-use crate::workspace_root;
-use iroha_deploy::{
-    bootstrap::InstalledNetworkProfiles,
-    managed::{InstalledRuntime, KagamiBundleLayout, admit_native_program},
-};
+use crate::{network_profiles, workspace_root};
+use iroha_deploy::managed::{InstalledRuntime, KagamiBundleLayout, admit_native_program};
 use iroha_fs::{FileSnapshot, OwnerDirectory, PublishMode, RetainedFile};
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
@@ -21,7 +18,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
-const PROGRAMS: [&str; 2] = ["kagami", "iroha3d"];
+const PROGRAMS: [&str; 3] = ["iroha", "kagami", "iroha3d"];
 
 pub(crate) fn validate_profile(profile: &str) -> Result<(), &'static str> {
     match profile {
@@ -39,7 +36,7 @@ fn build_args(profile: &str) -> Vec<OsString> {
     if profile == "release" {
         args.push("--release".into());
     }
-    for package in ["iroha_kagami", "irohad"] {
+    for package in ["iroha_cli", "iroha_kagami", "irohad"] {
         args.extend([OsString::from("-p"), OsString::from(package)]);
     }
     for program in PROGRAMS {
@@ -48,15 +45,24 @@ fn build_args(profile: &str) -> Vec<OsString> {
     args
 }
 
-/// Build both programs from this checkout in one locked native invocation, then publish once.
+/// Build the client, worker and daemon from this checkout in one locked native invocation, then publish once.
 /// The inventory establishes local integrity, not authenticated release provenance.
 pub(crate) fn bundle(
     output: &Path,
     profile: &str,
     profiles: Option<&Path>,
 ) -> Result<PathBuf, Box<dyn Error>> {
+    bundle_at(&workspace_root(), output, profile, profiles)
+}
+
+fn bundle_at(
+    source_root: &Path,
+    output: &Path,
+    profile: &str,
+    profiles: Option<&Path>,
+) -> Result<PathBuf, Box<dyn Error>> {
     validate_profile(profile)?;
-    let profiles = profiles.map(InstalledNetworkProfiles::load).transpose()?;
+    let profiles = network_profiles::select(source_root, profile, profiles)?;
     let package = output.join(format!(
         "kagami-{}-{}-{profile}",
         env::consts::OS,
@@ -68,7 +74,7 @@ pub(crate) fn bundle(
     // Reuse Cargo's active target and native jobserver; the daemon keeps its standard features.
     let mut child = Command::new("cargo")
         .args(build_args(profile))
-        .current_dir(workspace_root())
+        .current_dir(source_root)
         .stdout(Stdio::piped())
         .spawn()?;
     let stream = child
@@ -78,7 +84,7 @@ pub(crate) fn bundle(
     let records = collect_programs(BufReader::new(stream));
     let status = child.wait()?;
     if !status.success() {
-        return Err("building matching Kagami and iroha3d failed".into());
+        return Err("building matching iroha, Kagami and iroha3d failed".into());
     }
     publish(&records?, &package, profile, profiles.as_ref())?;
     Ok(package)
@@ -118,11 +124,19 @@ fn collect_programs(mut stream: impl BufRead) -> Result<BTreeMap<String, PathBuf
             else {
                 return Ok(());
             };
-            if target
+            let kind = target
                 .get("kind")
                 .and_then(Value::as_array)
-                .is_none_or(|kind| kind.len() != 1 || kind[0].as_str() != Some("bin"))
+                .ok_or("Cargo native artifact has no target kind")?;
+            // The SDK library is also named `iroha`. It is a dependency artifact,
+            // never a substitute for the separately requested native client.
+            if kind.len() == 1
+                && kind[0].as_str() == Some("lib")
+                && value.get("executable") == Some(&Value::Null)
             {
+                return Ok(());
+            }
+            if kind.len() != 1 || kind[0].as_str() != Some("bin") {
                 return Err("CLI artifact is not the requested native binary target".into());
             }
             let path = PathBuf::from(
@@ -151,7 +165,7 @@ fn collect_programs(mut stream: impl BufRead) -> Result<BTreeMap<String, PathBuf
         return Err(error);
     }
     if programs.len() != PROGRAMS.len() {
-        return Err("Cargo did not report both exact CLI executables".into());
+        return Err("Cargo did not report all three exact native executables".into());
     }
     Ok(programs)
 }
@@ -183,11 +197,57 @@ fn retain_output(
     Ok((file, snapshot, expected_hash))
 }
 
+fn copy_program(
+    source: &mut RetainedFile,
+    source_snapshot: FileSnapshot,
+    expected_hash: &str,
+    destination: &Path,
+) -> Result<(RetainedFile, FileSnapshot, String, fs::File), Box<dyn Error>> {
+    let expected_size = source.file().metadata()?.len();
+    if source.snapshot()? != source_snapshot {
+        return Err("CLI artifact changed before copying".into());
+    }
+    let mut copied = RetainedFile::create_new_private(destination)?;
+    source.file_mut().seek(SeekFrom::Start(0))?;
+    let limit = expected_size
+        .checked_add(1)
+        .ok_or("CLI artifact extent is invalid")?;
+    let size = io::copy(&mut source.file_mut().take(limit), copied.file_mut())?;
+    if size != expected_size {
+        return Err("CLI artifact extent changed during copying".into());
+    }
+    copied.file().sync_all()?;
+    copied.revalidate()?;
+    // Keep the exclusively created inode alive through permission finalization
+    // and atomic root publication, joining every later observer to this handle.
+    let created = copied.file().try_clone()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        created.set_permissions(fs::Permissions::from_mode(0o700))?;
+    }
+    created.sync_all()?;
+    let created_snapshot = FileSnapshot::of(&created, false)?;
+    drop(copied);
+    let mut copied = RetainedFile::open_regular(destination)?;
+    let copied_snapshot = copied.snapshot()?;
+    admit_native_program(&mut copied)?;
+    if copied_snapshot != created_snapshot
+        || digest(&mut copied)? != expected_hash
+        || copied.snapshot()? != copied_snapshot
+        || source.snapshot()? != source_snapshot
+        || digest(source)? != expected_hash
+    {
+        return Err("matching CLI input changed during package publication".into());
+    }
+    Ok((copied, copied_snapshot, expected_hash.into(), created))
+}
+
 fn publish(
     source: &BTreeMap<String, PathBuf>,
     package: &Path,
     profile: &str,
-    profiles: Option<&InstalledNetworkProfiles>,
+    profiles: Option<&network_profiles::Selection>,
 ) -> Result<(), Box<dyn Error>> {
     publish_checked(source, package, profile, profiles, &mut || Ok(()))
 }
@@ -196,10 +256,11 @@ fn publish_checked(
     source: &BTreeMap<String, PathBuf>,
     package: &Path,
     profile: &str,
-    profiles: Option<&InstalledNetworkProfiles>,
+    profiles: Option<&network_profiles::Selection>,
     before_publication: &mut dyn FnMut() -> Result<(), Box<dyn Error>>,
 ) -> Result<(), Box<dyn Error>> {
     validate_profile(profile)?;
+    network_profiles::require_for_profile(profile, profiles)?;
     let mut programs = PROGRAMS
         .into_iter()
         .map(|name| {
@@ -216,9 +277,7 @@ fn publish_checked(
             Ok((filename, file, snapshot, hash))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-    let profile_bytes = profiles
-        .map(InstalledNetworkProfiles::encode_installation)
-        .transpose()?;
+    let profile_bytes = profiles.map(network_profiles::Selection::bytes);
     let parent =
         OwnerDirectory::open_or_create(package.parent().ok_or("CLI package has no parent")?)?;
     let staging = parent.create_private_child(format!(
@@ -228,44 +287,35 @@ fn publish_checked(
     ))?;
     let runtime = staging.create_child("bin")?;
     let mut retained_outputs = Vec::new();
+    let mut created_outputs = Vec::new();
     for (filename, file, snapshot, hash) in &mut programs {
-        let mut copied = runtime.open_append(filename.as_str())?;
-        file.file_mut().seek(SeekFrom::Start(0))?;
-        io::copy(file.file_mut(), &mut copied)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            copied.set_permissions(fs::Permissions::from_mode(0o700))?;
-        }
-        copied.sync_all()?;
-        drop(copied);
-        let mut copied = RetainedFile::open_regular(runtime.path().join(filename.as_str()))?;
-        let copied_snapshot = copied.snapshot()?;
-        admit_native_program(&mut copied)?;
-        if digest(&mut copied)? != *hash
-            || copied.snapshot()? != copied_snapshot
-            || file.snapshot()? != *snapshot
-            || digest(file)? != *hash
-        {
-            return Err("matching CLI input changed during package publication".into());
-        }
-        retained_outputs.push((copied, copied_snapshot, hash.clone()));
+        let (copied, copied_snapshot, copied_hash, created) = copy_program(
+            file,
+            *snapshot,
+            hash,
+            &runtime.path().join(filename.as_str()),
+        )?;
+        retained_outputs.push((copied, copied_snapshot, copied_hash));
+        created_outputs.push((created, copied_snapshot));
     }
     if let Some(bytes) = profile_bytes {
         runtime.write_atomic(
             iroha_deploy::bootstrap::NETWORK_PROFILES_FILENAME,
-            &bytes,
+            bytes,
             PublishMode::CreateNew,
         )?;
         retained_outputs.push(retain_output(
             &runtime
                 .path()
                 .join(iroha_deploy::bootstrap::NETWORK_PROFILES_FILENAME),
-            hex::encode(Sha256::digest(&bytes)),
+            hex::encode(Sha256::digest(bytes)),
         )?);
     }
+    if let Some(profiles) = profiles {
+        profiles.verify_installed(&KagamiBundleLayout::profiles_path(staging.path()))?;
+    }
     InstalledRuntime::from_directory(runtime.path())?;
-    let manifest = inventory(staging.path(), profile)?;
+    let manifest = inventory(staging.path(), profile, profiles)?;
     let manifest_bytes = json::to_vec(&manifest)?;
     staging.write_atomic("manifest.json", &manifest_bytes, PublishMode::CreateNew)?;
     retained_outputs.push(retain_output(
@@ -287,7 +337,15 @@ fn publish_checked(
             return Err("CLI package output changed before atomic publication".into());
         }
     }
-    if inventory(staging.path(), profile)? != manifest {
+    for (created, snapshot) in &created_outputs {
+        if FileSnapshot::of(created, false)? != *snapshot {
+            return Err("created CLI program changed before atomic publication".into());
+        }
+    }
+    if let Some(profiles) = profiles {
+        profiles.verify_installed(&KagamiBundleLayout::profiles_path(staging.path()))?;
+    }
+    if inventory(staging.path(), profile, profiles)? != manifest {
         return Err("CLI package contents changed before atomic publication".into());
     }
     staging.rename_to_sibling(
@@ -297,7 +355,11 @@ fn publish_checked(
     Ok(())
 }
 
-fn inventory(package: &Path, profile: &str) -> Result<Value, Box<dyn Error>> {
+fn inventory(
+    package: &Path,
+    profile: &str,
+    profiles: Option<&network_profiles::Selection>,
+) -> Result<Value, Box<dyn Error>> {
     let mut files = Vec::new();
     for entry in WalkDir::new(package).follow_root_links(false) {
         let entry = entry?;
@@ -337,6 +399,10 @@ fn inventory(package: &Path, profile: &str) -> Result<Value, Box<dyn Error>> {
             Value::String("iroha.kagami-bundle.v1".into()),
         ),
         ("profile".into(), Value::String(profile.into())),
+        (
+            "network_profiles".into(),
+            profiles.map_or(Value::Null, network_profiles::Selection::provenance),
+        ),
         (
             "target".into(),
             Value::String(format!("{}-{}", env::consts::OS, env::consts::ARCH)),

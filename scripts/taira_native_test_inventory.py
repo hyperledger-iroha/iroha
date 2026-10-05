@@ -9,6 +9,12 @@ import re
 
 # (coverage, parent source, test source, registered module, full module path, exact test leaves)
 NATIVE_CORE_TEST_OWNERS = (
+    ('native proposal attestation policy', 'sumeragi/executor.rs', 'sumeragi/executor_attestation_policy_tests.rs', 'attestation_policy_tests', 'sumeragi::executor::attestation_policy_tests', (
+        'native_top_up_proposal_requires_attestation_before_an_epoch_boundary',
+        'ordinary_nonboundary_proposal_has_no_mint_attestation_requirement',
+        'ordinary_boundary_proposal_requires_its_authenticated_scheduled_attestation',
+        'executed_top_up_count_cannot_finalize_without_the_flag_even_if_static_work_is_ordinary',
+    )),
     ('native complete World root verification', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/world_state_tests.rs', 'world_state_tests', 'sumeragi::test_chain::tests::world_state_tests', (
         'certified_results_bind_the_complete_world_and_the_emitted_events',
         'unwitnessed_world_divergence_changes_the_certified_result',
@@ -136,6 +142,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'original_prepared_signature_owner_survives_refusal_validation_publication_apply_and_replay',
         'explicit_signature_preparation_rejection_retires_only_its_original_source',
         'later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner',
+        'global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve',
     )),
     ('native local empty signature preparation', 'sumeragi/executor.rs', 'sumeragi/executor_local_signature_preparation_tests.rs', 'local_signature_preparation_tests', 'sumeragi::executor::local_signature_preparation_tests', (
         'original_local_payload_signature_refusal_keeps_job_and_exact_release_owner',
@@ -357,6 +364,9 @@ NATIVE_CORE_TEST_OWNERS = (
         'apply_failures_are_retried',
         'build_after_parent_apply_and_payload_ready',
         'arrival_during_a_build_follows_an_empty_answer',
+        'successor_build_waits_for_core_parent_activation_and_keeps_empty_readiness',
+        'successor_build_activation_preserves_arrival_and_rejects_another_height_or_view',
+        'activated_build_withdrawal_cancels_original_running_and_empty_owners',
         'applied_heights_answer_waiting_requests',
         'every_execute_is_answered_exactly_once',
         'executor_panics_become_local_failures',
@@ -416,6 +426,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'stored_result_decode_refusal_retains_original_decoded_owners_and_retries',
         'malformed_result_preimage_remains_terminal_storage_corruption',
         'stored_certificate_allocator_refusal_keeps_original_read_and_retries',
+        'stored_body_projection_accepts_the_payload_limit_and_refuses_one_over',
     )),
     ('native committed read custody', 'sumeragi/block_store/committed_read.rs', 'sumeragi/block_store/committed_read_tests.rs', 'tests', 'sumeragi::block_store::committed_read::tests', (
         'committed_read_returns_original_qc_backing_after_projection_refusal_and_retry',

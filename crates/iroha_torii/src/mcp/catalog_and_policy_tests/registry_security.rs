@@ -243,6 +243,7 @@ fn vpn_canonical_auth_bridge_passes_exact_target_proof_to_authoritative_verifier
         &uri,
         &body,
         None,
+        crate::history_producer::HistoryProducerOwner::for_test().allocation_context(),
     )
     .expect("authoritative verifier accepts exact inner proof")
     .expect("canonical identity");
@@ -1226,25 +1227,15 @@ fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
     );
 }
 #[test]
-fn kagemusha_routes_are_available_to_operator_mcp_tools() {
+fn retired_kagemusha_routes_are_absent_from_operator_mcp_tools() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
-    for path in [
-        iroha_torii_shared::route_catalog::kagemusha::READINESS_PATH,
-        iroha_torii_shared::route_catalog::kagemusha::TOP_UP_PATH,
-        iroha_torii_shared::route_catalog::kagemusha::REDEEM_PATH,
-        iroha_torii_shared::route_catalog::kagemusha::OPERATION_PATH,
-    ] {
-        assert!(
-            tools.iter().any(|tool| {
-                tool.route_backing()
-                    .is_some_and(|(_, _, path_template)| path_template == path)
-            }),
-            "universal KAGEMUSHA route is missing from the operator MCP registry: {path}"
-        );
-    }
+    assert!(tools.iter().all(|tool| {
+        tool.route_backing()
+            .is_none_or(|(_, _, path_template)| !path_template.starts_with("/v1/kagemusha/"))
+    }));
 }
 #[test]
 fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
@@ -1470,52 +1461,11 @@ fn tool_registry_keeps_signed_ledger_original_carriers_outside_mcp() {
     }
 }
 #[test]
-fn tool_registry_honors_universal_kagemusha_mcp_projection() {
+fn tool_registry_exposes_health_and_generic_transaction_submission() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
-    assert!(
-        route_catalog::kagemusha::AUTHORITY_STATE
-            .projections()
-            .mcp(),
-        "the challenged data-only World publication has the catalog's MCP projection"
-    );
-    for route in [
-        route_catalog::kagemusha::ORDINARY_WALLET_CURRENT,
-        route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE,
-        route_catalog::kagemusha::ORDINARY_MINT_FINALIZED,
-        route_catalog::kagemusha::ORDINARY_MINT_CREDIT,
-    ] {
-        assert!(
-            !route.projections().mcp(),
-            "scoped native read authority must remain outside MCP: {}",
-            route.path()
-        );
-    }
-    for route in route_catalog::kagemusha::ROUTES {
-        let method = match route.method() {
-            CatalogHttpMethod::Any => {
-                panic!("KAGEMUSHA routes must never use protocol-wide ANY matching")
-            }
-            CatalogHttpMethod::Get => Method::GET,
-            CatalogHttpMethod::Post => Method::POST,
-            CatalogHttpMethod::Put => Method::PUT,
-            CatalogHttpMethod::Patch => Method::PATCH,
-            CatalogHttpMethod::Delete => Method::DELETE,
-        };
-        assert_eq!(
-            tools.iter().any(|tool| tool.route_backing().is_some_and(
-                |(_, tool_method, path_template)| {
-                    tool_method == &method && path_template == route.path()
-                }
-            )),
-            route.projections().mcp(),
-            "KAGEMUSHA route disagrees with its declared MCP projection: {} {}",
-            route.method().as_str(),
-            route.path()
-        );
-    }
     assert!(tools.iter().any(|tool| tool.name == "iroha.health"));
     assert!(
         tools

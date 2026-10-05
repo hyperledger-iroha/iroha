@@ -17,6 +17,11 @@ use crate::{
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     syscalls,
 };
+#[cfg(test)]
+thread_local! {
+    /// Payload bytes actually copied by owned mock-WSV reads on this test thread.
+    pub(crate) static OWNED_STATE_READ_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 use core::str::FromStr;
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 pub use iroha_data_model::account::AccountId;
@@ -458,6 +463,10 @@ impl MockWorldStateView {
     pub fn sc_get<P: AsRef<str>>(&self, path: P) -> Option<Vec<u8>> {
         let path: StatePath = path.as_ref().parse().ok()?;
         let out = self.state_overlay.get(&path);
+        #[cfg(test)]
+        if let Some(value) = &out {
+            OWNED_STATE_READ_BYTES.with(|bytes| bytes.set(bytes.get().saturating_add(value.len())));
+        }
         if crate::dev_env::decode_trace_enabled() {
             eprintln!(
                 "sc_get: {path} -> {}",
@@ -1799,7 +1808,7 @@ impl WsvHost {
         {
             return entry.is_some();
         }
-        self.wsv.sc_get(key).is_some()
+        self.wsv.state_overlay.get_ref(key).is_some()
     }
     fn state_value_payload_len(stored: &[u8]) -> Result<usize, VMError> {
         crate::host::validate_state_value_payload_len(stored.len())?;
@@ -1815,8 +1824,8 @@ impl WsvHost {
                 .transpose();
         }
         self.wsv
-            .sc_get(key)
-            .as_deref()
+            .state_overlay
+            .value_payload_ref(key)?
             .map(Self::state_value_payload_len)
             .transpose()
     }
@@ -2711,7 +2720,10 @@ impl IVMHost for WsvHost {
         let state_quote = match number {
             crate::syscalls::SYSCALL_STATE_GET => {
                 let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                Some(crate::host::state_get_gas_quote(path_len))
+                Some(reserve_available_syscall_gas_at_least(
+                    vm,
+                    crate::host::state_path_gas(path_len),
+                )?)
             }
             crate::syscalls::SYSCALL_STATE_LEN => {
                 let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
@@ -2829,11 +2841,12 @@ impl IVMHost for WsvHost {
                         }
                     }
                 }
-                if let Some(env) = self.wsv.sc_get(&path) {
-                    let len = Self::state_value_payload_len(&env)?;
+                if let Some(env) = self.wsv.state_overlay.value_payload_ref(&path)? {
+                    let len = Self::state_value_payload_len(env)?;
                     let gas = crate::host::state_value_gas(path_len, len);
                     preflight_reserved_syscall_gas(vm, gas)?;
-                    crate::host::validate_declared_state_value_payload(vm, &path, &env)?;
+                    crate::host::validate_declared_state_value_payload(vm, &path, env)?;
+                    let env = env.to_vec();
                     self.log_read_key(path.as_ref());
                     Self::load_state_value(vm, &env)?;
                     Ok(gas)

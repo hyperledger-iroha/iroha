@@ -19,6 +19,15 @@ pub struct BlockAcquisitionSlot<'a, V: Value, C: Send + Sync + 'static = Untrack
     current_release: DeferredReleaseBatch,
 }
 
+// Public synchronous APIs wait for the original physical mutexes; admitted
+// APIs report contention immediately. Both enter the same one-shot slot and
+// retain the same prepaid owners through cloning and retirement.
+#[derive(Clone, Copy)]
+enum WriterAcquisition {
+    Waiting,
+    Nonblocking,
+}
+
 // The untracked identity policy is explicit at acquisition construction. A
 // supplied original token never falls back to allocation, including on refusal.
 enum SuccessorAcquisition {
@@ -165,24 +174,30 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
         }
     }
 
-    fn initialize_writers(&mut self) -> Result<(), AdmittedStorageError> {
+    fn initialize_writers(
+        &mut self,
+        acquisition: WriterAcquisition,
+    ) -> Result<(), AdmittedStorageError> {
         assert!(!self.started, "original cell acquisition is one-shot");
         self.started = true;
         let target = self.target;
         let AcquisitionPhase::Pending(pending) = &mut self.phase else {
             panic!("original pending acquisition");
         };
-        let release = target.revert_released.observe();
-        pending.revert = Some(
-            target
-                .revert_released
-                .poisoning_guard(target.revert.try_acquire_writer().ok_or(
-                    AdmittedStorageError::Busy {
+        let undo = match acquisition {
+            WriterAcquisition::Waiting => target.revert.acquire_writer(),
+            WriterAcquisition::Nonblocking => {
+                let release = target.revert_released.observe();
+                target
+                    .revert
+                    .try_acquire_writer()
+                    .ok_or(AdmittedStorageError::Busy {
                         role: StorageRole::Undo,
                         release,
-                    },
-                )?),
-        );
+                    })?
+            }
+        };
+        pending.revert = Some(target.revert_released.poisoning_guard(undo));
         if pending
             .revert
             .as_ref()
@@ -193,17 +208,20 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
                 role: StorageRole::Undo,
             });
         }
-        let release = target.blocks_released.observe();
-        pending.blocks = Some(
-            target
-                .blocks_released
-                .poisoning_guard(target.blocks.try_acquire_writer().ok_or(
-                    AdmittedStorageError::Busy {
+        let current = match acquisition {
+            WriterAcquisition::Waiting => target.blocks.acquire_writer(),
+            WriterAcquisition::Nonblocking => {
+                let release = target.blocks_released.observe();
+                target
+                    .blocks
+                    .try_acquire_writer()
+                    .ok_or(AdmittedStorageError::Busy {
                         role: StorageRole::Current,
                         release,
-                    },
-                )?),
-        );
+                    })?
+            }
+        };
+        pending.blocks = Some(target.blocks_released.poisoning_guard(current));
         if pending
             .blocks
             .as_ref()
@@ -338,6 +356,14 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
     /// Returns the exact pre-probe Busy source or permanent poison. Earlier acquired
     /// writers and prepaid generations stay in this one-shot slot until release/drop.
     pub fn try_initialize(&mut self, mode: BlockMode) -> Result<(), AdmittedStorageError> {
+        self.initialize_block(mode, WriterAcquisition::Nonblocking)
+    }
+
+    fn initialize_block(
+        &mut self,
+        mode: BlockMode,
+        acquisition: WriterAcquisition,
+    ) -> Result<(), AdmittedStorageError> {
         assert!(!self.started, "original cell acquisition is one-shot");
         // The existing outer-EBR-only APIs explicitly leave identity untracked.
         // Even that policy allocates before any physical writer or payload clone.
@@ -345,7 +371,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
         if matches!(self.next, SuccessorAcquisition::Untracked) {
             self.next = SuccessorAcquisition::Original(NextPublication::new());
         }
-        self.initialize_writers()?;
+        self.initialize_writers(acquisition)?;
         let predecessor = self.target.publication.capture();
         let writers = self.take_writers();
         self.phase = AcquisitionPhase::Block(Block::new(
@@ -382,7 +408,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
     type Block = Block<'a, V, C>;
 
     fn initialize(&mut self, mode: BlockMode) {
-        self.try_initialize(mode)
+        self.initialize_block(mode, WriterAcquisition::Waiting)
             .expect("original Cell acquisition");
     }
 
@@ -479,7 +505,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
 
     pub(super) fn acquire(target: &'a Cell<V, C>, charges: CellAllocationCharges<C>) -> Self {
         let mut slot = BlockAcquisitionSlot::new(target, charges);
-        slot.initialize_writers()
+        slot.initialize_writers(WriterAcquisition::Waiting)
             .expect("original Cell writer pair");
         slot.take_writers()
     }

@@ -102,6 +102,16 @@ def _journal(root, operation="a" * 32):
     return rows
 
 
+def _configuration_exchange(callback):
+    """Interrupt config publication while permitting atomic owner journals."""
+    exchange = MODULE.native_exchange
+    def guarded(directory, first, second):
+        if first.endswith('.receipt.ndjson') or second.endswith('.receipt.ndjson'):
+            return exchange(directory, first, second)
+        return callback(directory, first, second)
+    return guarded
+
+
 def _clean(root):
     assert not list(root.glob(".taira-nginx-check-*"))
     assert not list((root / "conf.d").glob(".taira-nginx-publish-*"))
@@ -527,7 +537,7 @@ def test_interrupted_exchange_keeps_durable_intent_and_never_allows_blind_new_ow
     def crash(*args):
         if after_exchange: exchange(*args)
         raise KeyboardInterrupt("owned test crash at native exchange")
-    monkeypatch.setattr(MODULE, "native_exchange", crash)
+    monkeypatch.setattr(MODULE, "native_exchange", _configuration_exchange(crash))
     with pytest.raises(KeyboardInterrupt): MODULE.remote_apply(request)
     assert _journal(root, "b" * 32)[-1]["phase"] == "publishing"
     assert (root / "conf.d/new-scoped.conf").read_bytes() == (candidate if after_exchange else original)
@@ -618,7 +628,7 @@ def test_publication_refuses_stage_permission_drift_without_rebaselining(native_
         def change_stage_after_exchange(directory, first, second):
             exchange(directory, first, second)
             os.chmod(second, 0o666, dir_fd=directory)
-        monkeypatch.setattr(MODULE, "native_exchange", change_stage_after_exchange)
+        monkeypatch.setattr(MODULE, "native_exchange", _configuration_exchange(change_stage_after_exchange))
     else:
         request, root, candidate = native_apply
         link = os.link
@@ -698,3 +708,354 @@ def test_read_only_inspection_refuses_same_inode_lock_drift(native_apply, monkey
         MODULE.inspect_owned_publication(request)
     assert (root / "reload-count").read_bytes() == reloads
     assert not list(root.glob(".taira-nginx-check-*"))
+
+
+def _interrupted_local_plan(request, root):
+    candidate = root / 'public-candidate.conf'
+    candidate.write_bytes(base64.b64decode(request['candidate_base64']))
+    candidate.chmod(0o600)
+    renderer = root / 'public-renderer.py'
+    renderer.write_bytes(b'# maintained public renderer\n')
+    renderer.chmod(0o600)
+    request['renderer_source_sha256'] = hashlib.sha256(renderer.read_bytes()).hexdigest()
+    return dict(schema=MODULE.PLAN_SCHEMA, provider='macstadium-dublin', host_kind=request['host_kind'],
+        deployment_reference=dict(path=str(root/'bound-deployment.json'), sha256='0'*64),
+        native=request['native'], candidate=dict(path=str(candidate), sha256=request['candidate_sha256'],
+        owner_uid=os.geteuid()), renderer_source=dict(path=str(renderer), sha256=request['renderer_source_sha256']),
+        master=request['master'], operation_id=request['operation_id'], destination=request['destination'],
+        publication=request['publication'])
+
+
+def _interrupted_journal(root, operation):
+    path = root / ('.taira-native-nginx-apply-' + operation + '.receipt.ndjson')
+    return dict(path=str(path), identity=_identity(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+def test_same_operation_recovery_before_child_started_requires_native_journal_absence(native_apply):
+    request, root, candidate = native_apply
+    plan = _interrupted_local_plan(request, root)
+    result = MODULE.reconcile_interrupted_publication(plan, None, "resume")
+    assert result['exit_code'] == 0 and result['phase'] == 'awaiting_readiness', result
+    assert result['operation_id'] == request['operation_id'] and result['publication_kind'] == 'create'
+    assert (root/'conf.d/new-scoped.conf').read_bytes() == candidate
+    before = _interrupted_journal(root, request['operation_id'])
+    reloads = (root/'reload-count').read_bytes()
+    refused = MODULE.reconcile_interrupted_publication(plan, None, "resume")
+    assert refused['exit_code'] == 1 and refused['recovery_pending'] is True
+    assert refused['error_code'] == 'interrupted_journal_already_exists'
+    assert _interrupted_journal(root, request['operation_id']) == before
+    assert (root/'reload-count').read_bytes() == reloads
+
+
+@pytest.mark.parametrize('kind', ['create', 'replace'])
+@pytest.mark.parametrize('after_effect', [False, True])
+def test_same_operation_recovers_journal_proven_link_or_exchange(native_apply, monkeypatch, kind, after_effect):
+    if kind == 'replace':
+        request, root, original, candidate = _replacement(native_apply)
+    else:
+        request, root, candidate = native_apply
+    plan = _interrupted_local_plan(request, root)
+    exchange, link, unlink = MODULE.native_exchange, MODULE.os.link, MODULE.os.unlink
+    def interrupt(*args, **kwargs):
+        if after_effect:
+            (exchange if kind == 'replace' else link)(*args, **kwargs)
+        raise KeyboardInterrupt('owned publication crash window')
+    monkeypatch.setattr(MODULE, 'native_exchange' if kind == 'replace' else 'unused_exchange', _configuration_exchange(interrupt), raising=False)
+    if kind == 'create':
+        monkeypatch.setattr(MODULE.os, 'link', interrupt)
+        # A killed owner would not execute finally; keep its admitted stage for
+        # the resumed process instead of simulating an orderly cleanup.
+        def retained_stage(name, *args, **kwargs):
+            if str(name).startswith('.taira-nginx-publish-'):
+                raise OSError('owned killed process does not clean its stage')
+            return unlink(name, *args, **kwargs)
+        monkeypatch.setattr(MODULE.os, 'unlink', retained_stage)
+    with pytest.raises(KeyboardInterrupt):
+        MODULE.remote_apply(request)
+    journal = _interrupted_journal(root, request['operation_id'])
+    assert _journal(root, request['operation_id'])[-1]['phase'] == 'publishing'
+    monkeypatch.setattr(MODULE, 'native_exchange', exchange)
+    monkeypatch.setattr(MODULE.os, 'link', link)
+    monkeypatch.setattr(MODULE.os, 'unlink', unlink)
+    result = MODULE.reconcile_interrupted_publication(plan, journal, "resume")
+    assert result['exit_code'] == 0 and result['phase'] == 'awaiting_readiness', result
+    assert result['publication_kind'] == kind and result['operation_id'] == request['operation_id']
+    assert (root/'conf.d/new-scoped.conf').read_bytes() == candidate
+    assert not list((root/'conf.d').glob('.taira-nginx-publish-*'))
+    if kind == 'replace':
+        assert (root/'conf.d'/('.taira-nginx-backup-'+request['operation_id']+'.public')).read_bytes() == original
+    assert all(row['operation_id'] == request['operation_id'] for row in _journal(root, request['operation_id']))
+
+
+def test_completed_same_operation_recovery_is_read_only_no_hup_or_journal_append(native_apply, monkeypatch):
+    request, root, candidate = native_apply
+    plan = _interrupted_local_plan(request, root)
+    assert MODULE.apply_owned_publication(plan)['exit_code'] == 0
+    before = _interrupted_journal(root, request['operation_id'])
+    publication = _identity(root/'conf.d/new-scoped.conf')
+    monkeypatch.setattr(MODULE, 'signal_master', lambda *args: pytest.fail('completed owner was reloaded'))
+    monkeypatch.setattr(MODULE, 'native_exchange', lambda *args: pytest.fail('completed owner was exchanged'))
+    result = MODULE.reconcile_interrupted_publication(plan, before, "resume")
+    assert result['exit_code'] == 0 and result['phase'] == 'awaiting_readiness', result
+    assert _interrupted_journal(root, request['operation_id']) == before
+    assert _identity(root/'conf.d/new-scoped.conf') == publication
+    assert result['qualified'] is False and result['private_config_read_by_controller'] is False
+
+
+@pytest.mark.parametrize('fault', ['foreign_destination', 'changed_journal', 'changed_original_plan', 'wrong_operation'])
+def test_interrupted_reconciliation_refuses_foreign_or_unbound_publication(native_apply, monkeypatch, fault):
+    request, root, original, candidate = _replacement(native_apply)
+    plan = _interrupted_local_plan(request, root)
+    exchange = MODULE.native_exchange
+    def crash(*args):
+        exchange(*args)
+        raise KeyboardInterrupt('owned publication interrupted after exchange')
+    monkeypatch.setattr(MODULE, 'native_exchange', _configuration_exchange(crash))
+    with pytest.raises(KeyboardInterrupt):
+        MODULE.remote_apply(request)
+    monkeypatch.setattr(MODULE, 'native_exchange', exchange)
+    reference = _interrupted_journal(root, request['operation_id'])
+    destination = root/'conf.d/new-scoped.conf'
+    if fault == 'foreign_destination':
+        foreign = root/'foreign-public.conf'
+        foreign.write_bytes(b'foreign data must survive\n'); foreign.chmod(0o600)
+        os.replace(foreign, destination)
+    elif fault == 'changed_journal':
+        Path(reference['path']).write_bytes(b'foreign record\n')
+    elif fault == 'changed_original_plan':
+        plan['master']['started'] = 'Sun Oct 4 02:03:04 2026'
+    else:
+        plan['operation_id'] = 'c'*32
+    publication_before = destination.read_bytes(), _identity(destination)
+    journal_before = Path(reference['path']).read_bytes()
+    reloads = (root/'reload-count').read_bytes()
+    try:
+        result = MODULE.reconcile_interrupted_publication(plan, reference, "resume")
+    except RuntimeError as error:
+        assert fault == 'wrong_operation' and error.args[0] == 'interrupted_operation_identity'
+    else:
+        assert result['exit_code'] == 1 and result['recovery_pending'] is True, result
+    assert (destination.read_bytes(), _identity(destination)) == publication_before
+    assert Path(reference['path']).read_bytes() == journal_before
+    assert (root/'reload-count').read_bytes() == reloads
+
+
+@pytest.mark.parametrize('kind', ['create', 'replace'])
+@pytest.mark.parametrize('after_effect', [False, True])
+def test_direct_partial_rollback_restores_without_candidate_context_or_hup(native_apply, monkeypatch, kind, after_effect):
+    if kind == 'replace':
+        request, root, original, candidate = _replacement(native_apply)
+    else:
+        request, root, candidate = native_apply
+        original = None
+    plan = _interrupted_local_plan(request, root)
+    exchange, link, unlink, signal = MODULE.native_exchange, MODULE.os.link, MODULE.os.unlink, MODULE.signal_master
+    def interrupt(*args, **kwargs):
+        if after_effect:
+            (exchange if kind == 'replace' else link)(*args, **kwargs)
+        raise KeyboardInterrupt('owned publication crash')
+    if kind == 'replace':
+        monkeypatch.setattr(MODULE, 'native_exchange', _configuration_exchange(interrupt))
+    else:
+        monkeypatch.setattr(MODULE.os, 'link', interrupt)
+        def retain_stage(name, *args, **kwargs):
+            if str(name).startswith('.taira-nginx-publish-'):
+                raise OSError('killed owner retained stage')
+            return unlink(name, *args, **kwargs)
+        monkeypatch.setattr(MODULE.os, 'unlink', retain_stage)
+    with pytest.raises(KeyboardInterrupt):
+        MODULE.remote_apply(request)
+    reference = _interrupted_journal(root, request['operation_id'])
+    monkeypatch.setattr(MODULE, 'native_exchange', exchange)
+    monkeypatch.setattr(MODULE.os, 'link', link)
+    monkeypatch.setattr(MODULE.os, 'unlink', unlink)
+    reloads = int((root/'reload-count').read_text()) if (root/'reload-count').exists() else 0
+    def only_original_reload(expected, retained):
+        destination = root/'conf.d/new-scoped.conf'
+        if original is None:
+            assert not destination.exists()
+        else:
+            assert destination.read_bytes() == original, 'candidate was loaded during rollback'
+        return signal(expected, retained)
+    monkeypatch.setattr(MODULE, 'signal_master', only_original_reload)
+    result = MODULE.reconcile_interrupted_publication(plan, reference, 'rollback')
+    assert result.get('error_code') is None, result
+    assert result['exit_code'] == 0 and result['phase'] == 'rolled_back_unqualified', result
+    assert result['configuration_published'] is False and result['qualified'] is False
+    assert result['journal']['file']['identity'] == {key:int(value) for key,value in _identity(Path(reference['path'])).items()}
+    assert result['journal']['sha256'] == hashlib.sha256(Path(reference['path']).read_bytes()).hexdigest()
+    actual_reloads = int((root/'reload-count').read_text()) if (root/'reload-count').exists() else 0
+    assert actual_reloads == reloads + int(after_effect)
+    if kind == 'replace':
+        restored = result['restored_owned_publication']
+        assert restored['operation_id'] == 'a'*32
+        assert (root/'conf.d/new-scoped.conf').read_bytes() == original
+        assert restored['publication']['file']['identity'] == {key:int(value) for key,value in _identity(root/'conf.d/new-scoped.conf').items()}
+        assert restored['journal']['file']['identity'] == {key:int(value) for key,value in _identity(Path(restored['journal']['file']['path'])).items()}
+        assert _journal(root, 'a'*32)[-1]['phase'] == 'awaiting_readiness'
+        assert _journal(root, 'a'*32)[-1]['publication_identity'] == _identity(root/'conf.d/new-scoped.conf')
+    else:
+        assert not (root/'conf.d/new-scoped.conf').exists()
+        assert result['restored_owned_publication'] is None
+    assert not list((root/'conf.d').glob('.taira-nginx-backup-*'))
+    assert not list((root/'conf.d').glob('.taira-nginx-publish-*'))
+    current = _interrupted_journal(root, request['operation_id'])
+    monkeypatch.setattr(MODULE, 'signal_master', lambda *args: pytest.fail('terminal rollback repeated HUP'))
+    again = MODULE.reconcile_interrupted_publication(plan, current, 'rollback')
+    assert again['exit_code'] == 0 and again['journal'] == result['journal'], again
+
+
+@pytest.mark.parametrize('kind', ['create', 'replace'])
+def test_absent_publisher_rollback_proves_no_effect_and_creates_no_journal(native_apply, monkeypatch, kind):
+    if kind == 'replace':
+        request, root, original, candidate = _replacement(native_apply)
+    else:
+        request, root, candidate = native_apply
+    plan = _interrupted_local_plan(request, root)
+    before = _prior(root, 'a'*32, hashlib.sha256(original).hexdigest()) if kind == 'replace' else None
+    monkeypatch.setattr(MODULE, 'signal_master', lambda *args: pytest.fail('absent publisher rollback HUP'))
+    monkeypatch.setattr(MODULE, 'native_exchange', lambda *args: pytest.fail('absent publisher rollback exchange'))
+    result = MODULE.reconcile_interrupted_publication(plan, None, 'rollback')
+    assert result['exit_code'] == 0 and result['phase'] == 'not_requested', result
+    assert result['journal'] is None and result['configuration_published'] is False
+    assert not (root/('.taira-native-nginx-apply-'+request['operation_id']+'.receipt.ndjson')).exists()
+    if before is not None:
+        assert _prior(root, 'a'*32, hashlib.sha256(original).hexdigest()) == before
+        assert result['restored_owned_publication']['operation_id'] == 'a'*32
+    else:
+        assert result['restored_owned_publication'] is None
+
+
+def test_prepared_partial_rollback_never_publishes_or_loads_candidate(native_apply, monkeypatch):
+    request, root, original, candidate = _replacement(native_apply)
+    plan = _interrupted_local_plan(request, root)
+    native_open = MODULE.os.open
+    def before_stage(path, *args, **kwargs):
+        if str(path).startswith('.taira-nginx-backup-'):
+            raise KeyboardInterrupt('owned crash before allocating stage')
+        return native_open(path, *args, **kwargs)
+    monkeypatch.setattr(MODULE.os, 'open', before_stage)
+    with pytest.raises(KeyboardInterrupt):
+        MODULE.remote_apply(request)
+    monkeypatch.setattr(MODULE.os, 'open', native_open)
+    reference = _interrupted_journal(root, request['operation_id'])
+    assert _journal(root, request['operation_id'])[-1]['phase'] == 'prepared'
+    monkeypatch.setattr(MODULE, 'signal_master', lambda *args: pytest.fail('prepared rollback HUP'))
+    monkeypatch.setattr(MODULE, 'native_exchange', _configuration_exchange(lambda *args: pytest.fail('prepared rollback exchange')))
+    result = MODULE.reconcile_interrupted_publication(plan, reference, 'rollback')
+    assert result.get('error_code') is None, result
+    assert result['exit_code'] == 0 and result['phase'] == 'rolled_back_unqualified', result
+    assert (root/'conf.d/new-scoped.conf').read_bytes() == original
+    assert result['restored_owned_publication']['operation_id'] == 'a'*32
+
+
+@pytest.mark.parametrize('fault', ['after_restore_exchange', 'after_original_hup', 'after_predecessor_append', 'after_cleanup'])
+def test_partial_rollback_resumes_exact_owned_terminal_frontier(native_apply, monkeypatch, fault):
+    request, root, original, candidate = _replacement(native_apply)
+    plan = _interrupted_local_plan(request, root)
+    exchange = MODULE.native_exchange
+    def interrupt_publication(*args):
+        exchange(*args)
+        raise KeyboardInterrupt('owned cutover interrupted after exchange')
+    monkeypatch.setattr(MODULE, 'native_exchange', _configuration_exchange(interrupt_publication))
+    with pytest.raises(KeyboardInterrupt):
+        MODULE.remote_apply(request)
+    monkeypatch.setattr(MODULE, 'native_exchange', exchange)
+    reference = _interrupted_journal(root, request['operation_id'])
+    signal, unlink = MODULE.signal_master, MODULE.os.unlink
+    predecessor = root/('.taira-native-nginx-apply-'+('a'*32)+'.receipt.ndjson')
+    exchanges = 0
+    crashed = False
+    def interrupt_exchange(*args):
+        nonlocal exchanges, crashed
+        if args[1].endswith('.receipt.ndjson') or args[2].endswith('.receipt.ndjson'):
+            exchange(*args)
+            if fault == 'after_predecessor_append' and predecessor.name in args[1:] and not crashed:
+                crashed = True
+                raise KeyboardInterrupt('owned crash after refreshed predecessor journal')
+            return
+        exchanges += 1
+        exchange(*args)
+        if fault == 'after_restore_exchange' and not crashed:
+            crashed = True
+            raise KeyboardInterrupt('owned crash after direct predecessor exchange')
+    def interrupt_signal(*args):
+        nonlocal crashed
+        assert (root/'conf.d/new-scoped.conf').read_bytes() == original
+        result = signal(*args)
+        if fault == 'after_original_hup' and not crashed:
+            crashed = True
+            raise KeyboardInterrupt('owned crash after original-context HUP')
+        return result
+    def interrupt_unlink(name, *args, **kwargs):
+        nonlocal crashed
+        unlink(name, *args, **kwargs)
+        if fault == 'after_cleanup' and str(name).startswith('.taira-nginx-backup-') and not crashed:
+            crashed = True
+            raise KeyboardInterrupt('owned crash after candidate backup cleanup')
+    monkeypatch.setattr(MODULE, 'native_exchange', interrupt_exchange)
+    monkeypatch.setattr(MODULE, 'signal_master', interrupt_signal)
+    monkeypatch.setattr(MODULE.os, 'unlink', interrupt_unlink)
+    with pytest.raises(KeyboardInterrupt):
+        MODULE.reconcile_interrupted_publication(plan, reference, 'rollback')
+    assert crashed and (root/'conf.d/new-scoped.conf').read_bytes() == original
+    current = _interrupted_journal(root, request['operation_id'])
+    result = MODULE.reconcile_interrupted_publication(plan, current, 'rollback')
+    assert result['exit_code'] == 0 and result['phase'] == 'rolled_back_unqualified', result
+    assert exchanges == 1
+    assert result['restored_owned_publication']['publication']['file']['identity'] == {
+        key:int(value) for key,value in _identity(root/'conf.d/new-scoped.conf').items()}
+    assert not list((root/'conf.d').glob('.taira-nginx-backup-*'))
+    assert _journal(root, 'a'*32)[-1]['publication_identity'] == _identity(root/'conf.d/new-scoped.conf')
+    assert sum(row.get('cause') == 'exact_operation_rollback_restore' for row in _journal(root, 'a'*32)) == 1
+
+
+@pytest.mark.parametrize('fault', ['foreign_backup', 'foreign_destination', 'changed_lock'])
+def test_partial_rollback_preserves_foreign_custody_and_refuses_reload(native_apply, monkeypatch, fault):
+    request, root, original, candidate = _replacement(native_apply)
+    plan = _interrupted_local_plan(request, root)
+    exchange = MODULE.native_exchange
+    def crash(*args):
+        exchange(*args)
+        raise KeyboardInterrupt('owned publication interrupted')
+    monkeypatch.setattr(MODULE, 'native_exchange', _configuration_exchange(crash))
+    with pytest.raises(KeyboardInterrupt):
+        MODULE.remote_apply(request)
+    monkeypatch.setattr(MODULE, 'native_exchange', exchange)
+    reference = _interrupted_journal(root, request['operation_id'])
+    destination = root/'conf.d/new-scoped.conf'
+    backup = root/'conf.d'/('.taira-nginx-backup-'+request['operation_id']+'.public')
+    if fault in {'foreign_backup', 'foreign_destination'}:
+        foreign = root/'foreign-public'
+        foreign.write_bytes(b'foreign retained bytes\n'); foreign.chmod(0o600)
+        os.replace(foreign, backup if fault == 'foreign_backup' else destination)
+    else:
+        def change_lock(expected):
+            (root/'.taira-native-nginx-check.lock').chmod(0o640)
+            return None
+        monkeypatch.setattr(MODULE, 'open_master_handle', change_lock)
+    before = destination.read_bytes(), _identity(destination), backup.read_bytes(), _identity(backup)
+    monkeypatch.setattr(MODULE, 'signal_master', lambda *args: pytest.fail('unowned rollback HUP'))
+    result = MODULE.reconcile_interrupted_publication(plan, reference, 'rollback')
+    assert result['exit_code'] == 1 and result['recovery_pending'] is True, result
+    assert (destination.read_bytes(), _identity(destination), backup.read_bytes(), _identity(backup)) == before
+
+
+def test_no_journal_rollback_refuses_intervening_foreign_intent_after_native_context(native_apply, monkeypatch):
+    request, root, original, candidate = _replacement(native_apply)
+    plan = _interrupted_local_plan(request, root)
+    intended = root/('.taira-native-nginx-apply-'+request['operation_id']+'.receipt.ndjson')
+    context_check = MODULE.check_owned_public_context
+    def foreign_intent(*args):
+        result = context_check(*args)
+        intended.write_bytes(b'foreign intent must be preserved\n'); intended.chmod(0o600)
+        return result
+    monkeypatch.setattr(MODULE, 'check_owned_public_context', foreign_intent)
+    monkeypatch.setattr(MODULE, 'signal_master', lambda *args: pytest.fail('foreign intent rollback HUP'))
+    before = _prior(root, 'a'*32, hashlib.sha256(original).hexdigest())
+    result = MODULE.reconcile_interrupted_publication(plan, None, 'rollback')
+    assert result['exit_code'] == 1 and result['recovery_pending'] is True, result
+    assert result['error_code'] == 'interrupted_journal_already_exists'
+    assert result['journal'] is None and result['restored_owned_publication'] is None
+    assert intended.read_bytes() == b'foreign intent must be preserved\n'
+    assert _prior(root, 'a'*32, hashlib.sha256(original).hexdigest()) == before

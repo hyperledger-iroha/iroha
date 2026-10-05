@@ -454,3 +454,270 @@ fn weighted_prefix_transition_attains_degree_four_including_fixed_selector() {
     }
     assert_eq!(values, [F::ZERO]);
 }
+
+/// Integer meaning of the verifier-fixed relation-slot schedule: every active
+/// slot is `left = right + slack` with a 38-bit slack that is nonzero when the
+/// slot is strict. Operands come only from the public window and the
+/// authenticated DER time slots.
+fn slot_schedule_admits_v1(
+    certificates: &[(u64, u64)],
+    crl: (u64, u64),
+    entries: &[u64],
+    start: u64,
+    end: u64,
+) -> bool {
+    (0..RELATION_SLOTS_V1).all(|index| {
+        let slot = relation_slot_v1(index).unwrap();
+        let active = match slot.activity {
+            NumericActivityV1::Required => true,
+            NumericActivityV1::CertificateTwo => certificates.len() == 3,
+            NumericActivityV1::Entry(entry) => usize::from(entry) < entries.len(),
+        };
+        if !active {
+            return true;
+        }
+        let value = |operand: NumericOperandV1| match operand {
+            NumericOperandV1::WindowStart => start,
+            NumericOperandV1::WindowEnd => end,
+            NumericOperandV1::Time { slot, add_seconds } => {
+                u64::from(add_seconds)
+                    + match slot {
+                        TemporalSlotV1::CertificateNotBefore(certificate) => {
+                            certificates[usize::from(certificate)].0
+                        }
+                        TemporalSlotV1::CertificateNotAfter(certificate) => {
+                            certificates[usize::from(certificate)].1
+                        }
+                        TemporalSlotV1::CrlThisUpdate => crl.0,
+                        TemporalSlotV1::CrlNextUpdate => crl.1,
+                        TemporalSlotV1::CrlEntry(entry) => entries[usize::from(entry)],
+                    }
+            }
+        };
+        value(slot.left)
+            .checked_sub(value(slot.right))
+            .is_some_and(|slack| slack < 1 << SLACK_BITS_V1 && (!slot.strict || slack != 0))
+    })
+}
+
+/// The in-relation temporal predicate is the canonical data-model interval
+/// definition: each certificate is bound on both sides by its own slots, so the
+/// binding upper bound is the earliest `notAfter` at any path position, and the
+/// CRL `nextUpdate` slot is the only strict one.
+#[test]
+fn relation_slot_schedule_is_the_canonical_presentation_interval_predicate() {
+    use iroha_data_model::privacy::{
+        PrivacyZkX509CertificateValidityV1, PrivacyZkX509CrlUpdateIntervalV1,
+        PrivacyZkX509PresentationWindowV1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
+        ZK_X509_MAX_UNIX_SECONDS_V1, validate_zk_x509_presentation_interval_v1,
+    };
+
+    // The schedule has one lower and one upper slot per certificate, three CRL
+    // slots, and the canonical age and calendar ceilings.
+    for certificate in 0..3_u8 {
+        let lower = relation_slot_v1(usize::from(certificate) * 2).unwrap();
+        assert_eq!(
+            (lower.relation, lower.instance),
+            (1, u16::from(certificate))
+        );
+        assert_eq!(lower.left, NumericOperandV1::WindowStart);
+        assert_eq!(
+            lower.right,
+            NumericOperandV1::Time {
+                slot: TemporalSlotV1::CertificateNotBefore(certificate),
+                add_seconds: 0,
+            }
+        );
+        let upper = relation_slot_v1(usize::from(certificate) * 2 + 1).unwrap();
+        assert_eq!(
+            (upper.relation, upper.instance),
+            (2, u16::from(certificate))
+        );
+        assert_eq!(
+            upper.left,
+            NumericOperandV1::Time {
+                slot: TemporalSlotV1::CertificateNotAfter(certificate),
+                add_seconds: 0,
+            }
+        );
+        assert_eq!(upper.right, NumericOperandV1::WindowEnd);
+        let expected_activity = if certificate == 2 {
+            NumericActivityV1::CertificateTwo
+        } else {
+            NumericActivityV1::Required
+        };
+        assert_eq!(lower.activity, expected_activity);
+        assert_eq!(upper.activity, expected_activity);
+        assert!(!lower.strict && !upper.strict);
+    }
+    let fresh = relation_slot_v1(8).unwrap();
+    assert_eq!(
+        fresh.left,
+        NumericOperandV1::Time {
+            slot: TemporalSlotV1::CrlThisUpdate,
+            add_seconds: u16::try_from(ZK_X509_MAX_CRL_AGE_SECONDS_V1).unwrap(),
+        }
+    );
+    assert_eq!(
+        u64::from(CRL_AGE_SECONDS_V1),
+        ZK_X509_MAX_CRL_AGE_SECONDS_V1
+    );
+    assert_eq!(MAXIMUM_TIMESTAMP_V1, ZK_X509_MAX_UNIX_SECONDS_V1);
+    let next_update = relation_slot_v1(7).unwrap();
+    assert!(next_update.strict);
+    assert_eq!(
+        next_update.left,
+        NumericOperandV1::Time {
+            slot: TemporalSlotV1::CrlNextUpdate,
+            add_seconds: 0,
+        }
+    );
+    assert_eq!(next_update.right, NumericOperandV1::WindowEnd);
+
+    // Exhaustive boundary grid around the CRL freshness horizon.
+    const T: u64 = 1_672_531_200;
+    let mut validities = Vec::new();
+    for not_before in [T - 2, T, T + 2] {
+        for not_after in [T + 297, T + 299, T + 300, T + 302] {
+            validities.push((not_before, not_after));
+        }
+    }
+    let crls = [
+        (T - 1, T + 299),
+        (T, T + 300),
+        (T, T + 301),
+        (T, T + 305),
+        (T + 1, T + 303),
+    ];
+    let mut admitted = 0_u64;
+    let mut rejected = 0_u64;
+    let mut check = |certificates: &[(u64, u64)]| {
+        let canonical_certificates: Vec<_> = certificates
+            .iter()
+            .map(|(not_before, not_after)| {
+                PrivacyZkX509CertificateValidityV1::new(*not_before, *not_after)
+            })
+            .collect();
+        for crl in crls {
+            for start in (T - 3)..=(T + 3) {
+                for end in (T + 295)..=(T + 304) {
+                    let window = PrivacyZkX509PresentationWindowV1::new(start, end);
+                    let in_relation = window.validate().is_ok()
+                        && validate_window_v1(start, end).is_ok()
+                        && slot_schedule_admits_v1(certificates, crl, &[], start, end);
+                    let canonical = validate_zk_x509_presentation_interval_v1(
+                        &canonical_certificates,
+                        PrivacyZkX509CrlUpdateIntervalV1::new(crl.0, crl.1),
+                        window,
+                    )
+                    .is_ok();
+                    assert_eq!(
+                        in_relation, canonical,
+                        "window [{start}, {end}], path {certificates:?}, CRL {crl:?}"
+                    );
+                    if canonical {
+                        admitted += 1;
+                    } else {
+                        rejected += 1;
+                    }
+                }
+            }
+        }
+    };
+    for leaf in &validities {
+        for root in &validities {
+            check(&[*leaf, *root]);
+            for intermediate in &validities {
+                check(&[*leaf, *intermediate, *root]);
+            }
+        }
+    }
+    assert!(admitted > 1_000 && rejected > 100_000);
+
+    // Earliest expiry at the leaf, the intermediate and the root: equality is
+    // admitted, one second later has no non-negative slack.
+    let earliest = T + 150;
+    let later = T + 86_400;
+    for position in 0..3 {
+        let mut certificates = [(T - 3_600, later); 3];
+        certificates[position].1 = earliest;
+        let crl = (T, T + 301);
+        assert!(slot_schedule_admits_v1(
+            &certificates,
+            crl,
+            &[],
+            T,
+            earliest
+        ));
+        assert!(!slot_schedule_admits_v1(
+            &certificates,
+            crl,
+            &[],
+            T,
+            earliest + 1
+        ));
+        // The latest-expiry window is inside the CRL and the other certificates.
+        assert!(!slot_schedule_admits_v1(
+            &certificates,
+            crl,
+            &[],
+            T,
+            T + 300
+        ));
+        let mut all_later = certificates;
+        all_later[position].1 = later;
+        assert!(slot_schedule_admits_v1(&all_later, crl, &[], T, T + 300));
+    }
+    // CRL nextUpdate is strict; thisUpdate is inclusive; the age cap is 300.
+    let certificates = [(T - 3_600, later); 2];
+    assert!(slot_schedule_admits_v1(
+        &certificates,
+        (T, T + 200),
+        &[],
+        T,
+        T + 199
+    ));
+    assert!(!slot_schedule_admits_v1(
+        &certificates,
+        (T, T + 200),
+        &[],
+        T,
+        T + 200
+    ));
+    assert!(!slot_schedule_admits_v1(
+        &certificates,
+        (T, T + 200),
+        &[],
+        T - 1,
+        T + 199
+    ));
+    assert!(slot_schedule_admits_v1(
+        &certificates,
+        (T, T + 900),
+        &[],
+        T + 1,
+        T + 300
+    ));
+    assert!(!slot_schedule_admits_v1(
+        &certificates,
+        (T, T + 900),
+        &[],
+        T + 1,
+        T + 301
+    ));
+    // Revocation-entry slots are unchanged: no entry postdates thisUpdate.
+    assert!(slot_schedule_admits_v1(
+        &certificates,
+        (T, T + 301),
+        &[T, T - 1],
+        T,
+        T + 300
+    ));
+    assert!(!slot_schedule_admits_v1(
+        &certificates,
+        (T, T + 301),
+        &[T + 1],
+        T,
+        T + 300
+    ));
+}

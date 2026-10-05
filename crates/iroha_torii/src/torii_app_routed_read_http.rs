@@ -163,6 +163,15 @@ enum AppLocalCollectionRead {
     ExplorerLatestTransactions,
     ExplorerInstructions,
     ExplorerLatestInstructions,
+    ExplorerBlockDetail,
+    ExplorerTransactionDetail,
+    ExplorerInstructionDetail,
+    ExplorerInstructionContractView,
+    ExplorerHealth,
+    ExplorerDomainDetail,
+    ExplorerAssetDetail,
+    ExplorerNftDetail,
+    ExplorerRwaDetail,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppReadHttpIdentity {
@@ -175,7 +184,7 @@ struct AppReadHttpRoute {
     route: iroha_torii_shared::route_catalog::RouteDescriptor,
     decoder: AppRoutedReadHttpDecoder,
 }
-const APP_LOCAL_COLLECTION_HTTP_ROUTES_V1: [AppReadHttpRoute; 32] = [
+const APP_LOCAL_COLLECTION_HTTP_ROUTES_V1: [AppReadHttpRoute; 41] = [
     AppReadHttpRoute {
         endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ContractActivity),
         route: route_catalog::application_api::CONTRACTS_ACTIVITY_GET,
@@ -355,6 +364,60 @@ const APP_LOCAL_COLLECTION_HTTP_ROUTES_V1: [AppReadHttpRoute; 32] = [
         ),
         route: route_catalog::application_api::EXPLORER_INSTRUCTIONS_LATEST_QUERY_POST,
         decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerBlockDetail),
+        route: route_catalog::application_api::EXPLORER_BLOCKS_BY_IDENTIFIER_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerTransactionDetail,
+        ),
+        route: route_catalog::application_api::EXPLORER_TRANSACTIONS_BY_HASH_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerInstructionDetail,
+        ),
+        route: route_catalog::application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerInstructionContractView,
+        ),
+        route:
+            route_catalog::application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerHealth),
+        route: route_catalog::application_api::EXPLORER_HEALTH_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerDomainDetail,
+        ),
+        route: route_catalog::application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerAssetDetail),
+        route: route_catalog::application_api::EXPLORER_ASSETS_BY_ASSET_ID_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerNftDetail),
+        route: route_catalog::application_api::EXPLORER_NFTS_BY_NFT_ID_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerRwaDetail),
+        route: route_catalog::application_api::EXPLORER_RWAS_BY_RWA_ID_GET,
+        decoder: AppRoutedReadHttpDecoder::None,
     },
 ];
 fn app_routed_read_http_endpoint(route_id: &str) -> Option<AppReadHttpRoute> {

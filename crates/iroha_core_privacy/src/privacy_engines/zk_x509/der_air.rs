@@ -31,6 +31,10 @@ use super::{
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use iroha_data_model::privacy::{
+    ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use thiserror::Error;
 /// The profile admits at most three certificates and one complete CRL.
 pub(crate) const ZK_X509_DER_AIR_MAX_DOCUMENTS_V1: usize = 4;
@@ -4123,7 +4127,7 @@ fn validate_rfc5280_semantics_v1(
         || statement
             .presentation_not_after_unix_seconds
             .checked_sub(statement.presentation_not_before_unix_seconds)
-            .is_none_or(|width| width > 300)
+            .is_none_or(|width| width > ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1)
         || statement
             .disclosed_attribute_indices
             .iter()
@@ -4149,6 +4153,10 @@ fn validate_rfc5280_semantics_v1(
         return Err(ZkX509DerAirErrorV1::Input);
     }
     for (index, certificate) in certificates.iter().enumerate() {
+        // Every certificate is checked on its own, so the binding bounds are the
+        // latest notBefore and the earliest notAfter in the path. This stays an
+        // independent formulation of the canonical data-model interval
+        // definition; `presentation_interval_tests` compares the two.
         if statement.presentation_not_before_unix_seconds < certificate.not_before
             || statement.presentation_not_after_unix_seconds > certificate.not_after
         {
@@ -4184,7 +4192,7 @@ fn validate_rfc5280_semantics_v1(
         || statement
             .presentation_not_after_unix_seconds
             .checked_sub(crl.this_update)
-            .is_none_or(|age| age > 300)
+            .is_none_or(|age| age > ZK_X509_MAX_CRL_AGE_SECONDS_V1)
         || crl
             .revoked_serials
             .iter()

@@ -49,6 +49,8 @@ mod kotodama_hello_entrypoint_apply;
 mod kotodama_pointer_abi_apply;
 #[path = "../limits_enforcement.rs"]
 mod limits_enforcement;
+#[path = "../../src/manifest_signing_test_support.rs"]
+mod manifest_signing_test_support;
 #[path = "../nexus_policies.rs"]
 mod nexus_policies;
 #[path = "../oracle.rs"]

@@ -3099,22 +3099,15 @@ public sealed record class ToriiExplorerDuration
 [JsonConverter(typeof(ToriiExplorerTransactionRejectionJsonConverter))]
 public sealed record class ToriiExplorerTransactionRejection
 {
-    private string encoded = string.Empty;
-    private JsonNode? json;
+    private string reason = string.Empty;
     private string message = string.Empty;
 
-    [JsonPropertyName("encoded")]
-    public string Encoded
+    /// <summary>Canonical padded base64 of one native TransactionRejectionReason frame.</summary>
+    [JsonPropertyName("reason")]
+    public string Reason
     {
-        get => encoded;
-        init => encoded = ToriiExplorerDirectMetadata.RequireExactHex(value, nameof(Encoded));
-    }
-
-    [JsonPropertyName("json")]
-    public JsonNode? Json
-    {
-        get => ToriiJsonSnapshots.Copy(json);
-        init => json = ToriiJsonSnapshots.Copy(value);
+        get => reason;
+        init => reason = ToriiExplorerDirectMetadata.RequireCanonicalBase64(value, nameof(Reason));
     }
 
     [JsonPropertyName("message")]
@@ -3198,27 +3191,12 @@ public sealed record class ToriiExplorerTransactionDetail
     public ToriiExplorerDuration? TimeToLive { get; init; }
 }
 
-[JsonConverter(typeof(ToriiExplorerInstructionJsonJsonConverter))]
-public sealed record class ToriiExplorerInstructionJson
+[JsonConverter(typeof(ToriiExplorerInstructionBoxJsonConverter))]
+public sealed record class ToriiExplorerInstructionBox
 {
-    private JsonNode? payload;
-    private string kind = string.Empty;
     private string wireId = string.Empty;
-    private string encoded = string.Empty;
-
-    [JsonPropertyName("kind")]
-    public string Kind
-    {
-        get => kind;
-        init => kind = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(Kind));
-    }
-
-    [JsonPropertyName("payload")]
-    public JsonNode? Payload
-    {
-        get => ToriiJsonSnapshots.Copy(payload);
-        init => payload = ToriiJsonSnapshots.Copy(value);
-    }
+    private string framedSha256 = string.Empty;
+    private string instruction = string.Empty;
 
     [JsonPropertyName("wire_id")]
     public string WireId
@@ -3227,32 +3205,20 @@ public sealed record class ToriiExplorerInstructionJson
         init => wireId = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(WireId));
     }
 
-    [JsonPropertyName("encoded")]
-    public string Encoded
+    /// <summary>Lowercase SHA-256 of the exact decoded InstructionBox frame.</summary>
+    [JsonPropertyName("framed_sha256")]
+    public string FramedSha256
     {
-        get => encoded;
-        init => encoded = ToriiExplorerDirectMetadata.RequireExactEvenLengthHex(value, nameof(Encoded));
-    }
-}
-
-[JsonConverter(typeof(ToriiExplorerInstructionBoxJsonConverter))]
-public sealed record class ToriiExplorerInstructionBox
-{
-    private string encoded = string.Empty;
-    private ToriiExplorerInstructionJson? json;
-
-    [JsonPropertyName("encoded")]
-    public string Encoded
-    {
-        get => encoded;
-        init => encoded = ToriiExplorerDirectMetadata.RequireExactHex(value, nameof(Encoded));
+        get => framedSha256;
+        init => framedSha256 = ToriiExplorerDirectMetadata.RequireExactSizedHex(value, nameof(FramedSha256), 32);
     }
 
-    [JsonPropertyName("json")]
-    public ToriiExplorerInstructionJson? Json
+    /// <summary>Canonical padded base64 of one native Norito InstructionBox frame.</summary>
+    [JsonPropertyName("instruction")]
+    public string Instruction
     {
-        get => json;
-        init => json = value ?? throw new ArgumentNullException(nameof(Json), "Instruction JSON must not be null.");
+        get => instruction;
+        init => instruction = ToriiExplorerDirectMetadata.RequireCanonicalBase64(value, nameof(Instruction));
     }
 }
 
@@ -3262,16 +3228,7 @@ public sealed record class ToriiExplorerInstruction
     private string authority = string.Empty;
     private string createdAt = string.Empty;
     private string kind = string.Empty;
-    private ToriiExplorerInstructionBox instructionBox = new()
-    {
-        Encoded = "00",
-        Json = new ToriiExplorerInstructionJson
-        {
-            Kind = "Unknown",
-            WireId = "unknown",
-            Encoded = "00",
-        },
-    };
+    private ToriiExplorerInstructionBox instructionBox = new();
     private string transactionHash = string.Empty;
     private string transactionStatus = string.Empty;
 
@@ -3333,6 +3290,31 @@ public sealed record class ToriiExplorerInstruction
 
 internal static class ToriiExplorerDirectMetadata
 {
+
+    internal static string RequireCanonicalBase64(string? value, string paramName)
+    {
+        if (string.IsNullOrEmpty(value) || value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must be non-empty canonical base64 text without whitespace.", paramName);
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(value);
+        }
+        catch (FormatException exception)
+        {
+            throw new ArgumentException("Value must be canonical base64 text.", paramName, exception);
+        }
+
+        if (bytes.Length == 0 || Convert.ToBase64String(bytes) != value)
+        {
+            throw new ArgumentException("Value must be non-empty canonical base64 text.", paramName);
+        }
+
+        return value;
+    }
 
     internal static ulong RequirePositive(ulong value, string paramName)
     {

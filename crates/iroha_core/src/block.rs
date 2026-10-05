@@ -9913,6 +9913,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn block_overlay_rejects_protected_contract_call_without_persisting_state() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let chain_id = ChainId::from("protected-contract-overlay");
         let (authority, keypair) = gen_account_in("wonderland");
         let domain =
@@ -9949,9 +9950,16 @@ seiyaku GuardedOverlay {
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
         world.contract_code.insert(artifact_id, program);
-        world
-            .contract_manifests
-            .insert(artifact_id, manifest.signed(&keypair));
+        world.contract_manifests.insert(
+            artifact_id,
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &keypair,
+                )
+                .expect("sign bounded fixture manifest"),
+        );
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
@@ -10072,6 +10080,7 @@ seiyaku GuardedOverlay {
     }
     #[test]
     fn block_validation_reprepares_stale_contract_state_read_modify_write() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let chain_id = ChainId::from("durable-state-read-validation");
         let (alice, alice_keypair) = gen_account_in("wonderland");
         let (bob, bob_keypair) = gen_account_in("wonderland");
@@ -10131,9 +10140,16 @@ seiyaku DynamicAccessCounter {
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
         world.contract_code.insert(artifact_id, program);
-        world
-            .contract_manifests
-            .insert(artifact_id, manifest.signed(&alice_keypair));
+        world.contract_manifests.insert(
+            artifact_id,
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &alice_keypair,
+                )
+                .expect("sign bounded fixture manifest"),
+        );
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
@@ -10265,6 +10281,7 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn block_validation_serializes_a_dynamic_target_that_changes_during_reprepare() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let chain_id = ChainId::from("dynamic-target-live-reprepare");
         let (alice, alice_keypair) = gen_account_in("wonderland");
         let (bob, bob_keypair) = gen_account_in("wonderland");
@@ -10339,9 +10356,16 @@ seiyaku DynamicTarget {
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
         world.contract_code.insert(artifact_id, program);
-        world
-            .contract_manifests
-            .insert(artifact_id, manifest.signed(&alice_keypair));
+        world.contract_manifests.insert(
+            artifact_id,
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &alice_keypair,
+                )
+                .expect("sign bounded fixture manifest"),
+        );
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);

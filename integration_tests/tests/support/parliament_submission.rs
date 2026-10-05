@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use eyre::{Result, eyre};
+use integration_tests::manifest::ManifestEncodingBudget;
 use iroha::{
     blocking::Client,
     client::{AccountTransactionDraft, FeeQuoteRequest},
@@ -164,11 +165,16 @@ pub(crate) async fn stage_contract_artifact(
     client: &Client,
     artifact: &[u8],
 ) -> Result<(ContractCodeHash, ContractAbiHash)> {
+    let encoding = ManifestEncodingBudget::new()?;
     let verified = ivm::verify_contract_artifact(artifact)
         .map_err(|error| eyre!("verify integration contract artifact: {error}"))?;
     let manifest = verified
         .manifest
-        .try_signed(client.client().key_pair())
+        .try_signed(
+            encoding.context(),
+            encoding.max_frame_bytes(),
+            client.client().key_pair(),
+        )
         .map_err(|error| eyre!("sign integration contract manifest: {error}"))?;
     let total_size = u64::try_from(artifact.len())?;
     let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;

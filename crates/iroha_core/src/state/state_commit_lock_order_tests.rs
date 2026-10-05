@@ -379,3 +379,86 @@ fn heavy_world_commit_bench_helper_commits_accounts() {
     assert!(elapsed > Duration::ZERO);
     assert_eq!(state.view().world.accounts().iter().count(), 16);
 }
+
+#[test]
+fn infallible_state_block_refuses_capacity_without_waiting_or_changing_state() {
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    state
+        .ensure_da_indexes_hydrated()
+        .expect("prepare the actual empty DA indexes");
+    let budget = state.ivm_execution_budget();
+    let retained = budget.reserved_bytes();
+    let generation = state.state_view_generation();
+    budget.set_limit_bytes(0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    assert!(matches!(
+        state.try_block(header.clone()),
+        Err(StateBlockStartError::Storage(
+            StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Allocation(
+                iroha_allocation::AllocationRefusal::Capacity { .. }
+            ))
+        ))
+    ));
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(state.block(header));
+    }));
+    let panic = refused.expect_err("infallible block retains the genuine capacity refusal");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("capacity panic diagnostic");
+    assert!(
+        message.contains("Capacity"),
+        "original finite admission reason is retained: {message}"
+    );
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.committed_height(), 0);
+    assert!(state.latest_block_hash_fast().is_none());
+}
+
+#[test]
+fn infallible_state_block_refuses_original_writer_poison_without_waiting() {
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    state
+        .ensure_da_indexes_hydrated()
+        .expect("prepare the actual empty DA indexes");
+    let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _original = state.canonical_runtime.block();
+        panic!("poison the original runtime writer");
+    }));
+    assert!(poison.is_err());
+    let generation = state.state_view_generation();
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    assert!(matches!(
+        state.try_block(header.clone()),
+        Err(StateBlockStartError::Storage(
+            StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Poisoned { .. })
+        ))
+    ));
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(state.block(header));
+    }));
+    let panic = refused.expect_err("infallible block retains original writer poison");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("poison panic diagnostic");
+    assert!(
+        message.contains("Poisoned"),
+        "original poison reason is retained: {message}"
+    );
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.committed_height(), 0);
+    assert!(state.latest_block_hash_fast().is_none());
+}

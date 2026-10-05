@@ -23,6 +23,10 @@ import sys
 import tempfile
 import tomllib
 
+# The isolated Apple recipe loads only this repository-owned custody parser.
+sys.path.insert(0, str(Path(__file__).resolve(strict=True).parent))
+from native_sdk_source_custody import cargo_messages
+
 
 MAGIC = b"!<arch>\n"
 INDEX_NAMES = {"__.SYMDEF", "__.SYMDEF SORTED", "__.SYMDEF_64", "__.SYMDEF_64 SORTED", "/", "/SYM64/"}
@@ -169,11 +173,18 @@ def cargo_references(
         raise ValueError("Cargo package provenance requires locked registry pqcrypto-internals 0.2.11 with checksum")
     package_id = source + "#pqcrypto-internals@0.2.11"
     messages_bytes = read_regular(messages_path)
-    messages = [json.loads(line) for line in messages_bytes.decode("utf-8").splitlines()]
-    if (not messages or any(not isinstance(message, dict) for message in messages)
-            or messages[-1] != {"reason": "build-finished", "success": True}
-            or sum(message.get("reason") == "build-finished" for message in messages) != 1):
-        raise ValueError("Cargo provenance requires one successfully completed build")
+    def unique_members(pairs):
+        values = {}
+        for name, value in pairs:
+            if name in values:
+                raise ValueError("Cargo provenance contains a duplicate JSON member: " + name)
+            values[name] = value
+        return values
+
+    try:
+        messages = cargo_messages(messages_bytes.decode("utf-8"), unique_members)
+    except (RuntimeError, ValueError) as error:
+        raise ValueError("Cargo provenance requires one successfully completed build: " + str(error)) from error
     candidates = []
     for message in messages:
         if message.get("reason") != "build-script-executed" or message.get("package_id") != package_id:

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    backend::compact_transfer_air::CompactTransferAir,
+    backend::{air::WorkLimits, compact_transfer_air::CompactTransferAir},
     gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
 };
 use rand::{SeedableRng, TryRngCore, rngs::StdRng};
@@ -16,11 +16,20 @@ const COMPLETE_CONTEXT: &[u8] = b"native producer diagnostic";
 const COMPLETE_BYTES: usize = 485_219;
 const COMPLETE_HASH: &str = "8a1a23ca4af35b6e0d7346ecf5f54fb489d1933244e267db893d1e9a3e08fdab";
 
-fn limits() -> ConstructionLimits {
-    ConstructionLimits {
+/// The fixed profile's exact relation shape with the given attempt ceilings
+/// and no additional statement ceiling.
+fn work(max_payload_bytes: usize, max_work_units: usize) -> WorkLimits {
+    WorkLimits {
+        max_statement_bytes: usize::MAX,
+        max_payload_bytes,
+        max_work_units,
+        ..VerifierLimits::exact(0).work
+    }
+}
+fn limits() -> ProducerLimits {
+    ProducerLimits {
         digest_execution: DigestExecutionV1::Cpu,
-        max_payload_bytes: usize::MAX,
-        max_work_units: usize::MAX,
+        work: work(usize::MAX, usize::MAX),
         max_hash_calls: usize::MAX,
         max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
     }
@@ -73,7 +82,7 @@ fn required_device_failure_precedes_source_reading_and_entropy() {
     let air = CompactTransferAir::new(&statement(), None).unwrap();
     let plan = ProducerPlan::new(
         &air,
-        ConstructionLimits {
+        ProducerLimits {
             digest_execution: DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Cuda),
             ..limits()
         },
@@ -89,6 +98,8 @@ fn required_device_failure_precedes_source_reading_and_entropy() {
 
 #[test]
 fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocation() {
+    use crate::backend::compact_protocol::FixedAir as _;
+    type Lower = fn(&mut WorkLimits);
     let air = CompactTransferAir::new(&statement(), None).unwrap();
     let plan = ProducerPlan::new(&air, limits()).unwrap();
     eprintln!(
@@ -101,33 +112,63 @@ fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocati
     assert!(plan.hash_calls > 2 * (2 * LDE_ROWS - 1));
     assert!(plan.hash_calls < 3 * (2 * LDE_ROWS - 1));
     assert!(plan.payload_bytes > plan.replay.payload_bytes);
-    let exact = ConstructionLimits {
+    let exact = ProducerLimits {
         digest_execution: DigestExecutionV1::Cpu,
-        max_payload_bytes: plan.payload_bytes,
-        max_work_units: plan.work_units,
+        work: WorkLimits {
+            max_statement_bytes: air.statement_bytes().len(),
+            ..work(plan.payload_bytes, plan.work_units)
+        },
         max_hash_calls: plan.hash_calls,
         max_proof_bytes: deep_proof::MAX_FRAME_BYTES,
     };
     assert!(ProducerPlan::new(&air, exact).is_ok());
     for budget in [
-        ConstructionLimits {
-            max_payload_bytes: exact.max_payload_bytes - 1,
+        ProducerLimits {
+            work: work(plan.payload_bytes - 1, plan.work_units),
             ..exact
         },
-        ConstructionLimits {
-            max_work_units: exact.max_work_units - 1,
+        ProducerLimits {
+            work: work(plan.payload_bytes, plan.work_units - 1),
             ..exact
         },
-        ConstructionLimits {
+        ProducerLimits {
             max_hash_calls: exact.max_hash_calls - 1,
             ..exact
         },
-        ConstructionLimits {
+        ProducerLimits {
             max_proof_bytes: exact.max_proof_bytes - 1,
             ..exact
         },
     ] {
         assert!(ProducerPlan::new(&air, budget).is_err());
+    }
+    // Every relation ceiling of the typed interface limits is exact as well:
+    // one below the sealed relation's declared shape or statement is refused
+    // by name before any plan is derived.
+    let relation_ceilings: [(&str, usize, Lower); 4] = [
+        ("max_deep_producer_trace_rows", TRACE_ROWS, |w| {
+            w.max_trace_rows -= 1;
+        }),
+        ("max_deep_producer_trace_cells", TRACE_ROWS * 342, |w| {
+            w.max_trace_cells -= 1
+        }),
+        ("max_deep_producer_constraints", CONSTRAINTS, |w| {
+            w.max_constraints -= 1;
+        }),
+        (
+            "max_deep_producer_statement_bytes",
+            air.statement_bytes().len(),
+            |w| w.max_statement_bytes -= 1,
+        ),
+    ];
+    for (name, required, lower) in relation_ceilings {
+        let mut limited = exact;
+        lower(&mut limited.work);
+        assert!(matches!(
+            ProducerPlan::new(&air, limited),
+            Err(Error::VerifierLimitExceeded { limit, actual, max })
+                if limit == name && actual == required && max == required - 1
+        ));
     }
     let mut rng = NoEntropy(0);
     // A valid plan cannot turn an absent source into entropy consumption or a tree.
@@ -136,8 +177,8 @@ fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocati
     assert!(
         ProducerPlan::new(
             &air,
-            ConstructionLimits {
-                max_payload_bytes: 0,
+            ProducerLimits {
+                work: work(0, usize::MAX),
                 ..limits()
             }
         )
@@ -436,10 +477,12 @@ fn build_complete_masked_proof(
     let defaults = crate::backend::offline_compact::ProvingLimits::default();
     let plan = ProducerPlan::new(
         &air,
-        ConstructionLimits {
+        ProducerLimits {
             digest_execution: execution,
-            max_payload_bytes: defaults.max_segment_charge_bytes,
-            max_work_units: defaults.max_segment_work_units,
+            work: work(
+                defaults.max_segment_charge_bytes,
+                defaults.max_segment_work_units,
+            ),
             max_hash_calls: defaults.max_segment_work_units,
             max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
         },
@@ -527,13 +570,27 @@ fn check_default_policy_plan(relation: &impl DeepRelation) {
     };
     let proving = ProvingLimits::default();
     let verification = VerificationLimits::default();
-    let limits = ConstructionLimits {
-        digest_execution: proving.digest_execution,
-        max_payload_bytes: proving.max_segment_charge_bytes,
-        max_work_units: proving.max_segment_work_units,
-        max_hash_calls: proving.max_segment_work_units,
-        max_proof_bytes: verification.bundle.segment.max_proof_bytes,
-    };
+    // The facade's own mapping of the default policies to the engine limits.
+    let limits = ProducerLimits::for_segment(
+        &proving,
+        &VerifierLimits::for_segment(
+            verification.bundle.segment,
+            verification.max_segment_decode_allocation_charges,
+        ),
+    );
+    assert_eq!(limits.digest_execution, proving.digest_execution);
+    assert_eq!(
+        (limits.work.max_payload_bytes, limits.work.max_work_units),
+        (
+            proving.max_segment_charge_bytes,
+            proving.max_segment_work_units
+        )
+    );
+    assert_eq!(limits.max_hash_calls, proving.max_segment_work_units);
+    assert_eq!(
+        limits.max_proof_bytes,
+        verification.bundle.segment.max_proof_bytes
+    );
     let plan = ProducerPlan::new(relation, limits).unwrap();
     assert!(plan.payload_bytes <= proving.max_segment_charge_bytes);
     // Preserve the existing resource boundary. Admission must cover the
@@ -568,15 +625,21 @@ fn check_default_policy_plan(relation: &impl DeepRelation) {
             .unwrap()
     );
     for limited in [
-        ConstructionLimits {
-            max_payload_bytes: plan.payload_bytes - 1,
+        ProducerLimits {
+            work: WorkLimits {
+                max_payload_bytes: plan.payload_bytes - 1,
+                ..limits.work
+            },
             ..limits
         },
-        ConstructionLimits {
-            max_work_units: plan.work_units - 1,
+        ProducerLimits {
+            work: WorkLimits {
+                max_work_units: plan.work_units - 1,
+                ..limits.work
+            },
             ..limits
         },
-        ConstructionLimits {
+        ProducerLimits {
             max_hash_calls: plan.hash_calls - 1,
             ..limits
         },

@@ -1065,7 +1065,9 @@ else:
                 "connect_norito_forbidden_symbol"
             ]
 
-        def canonical_output(tool: Path, arguments: list[str]) -> str:
+        selected_developer = None
+        def canonical_output(tool: Path, arguments: list[str], **keywords) -> str:
+            self.assertEqual(keywords, {} if selected_developer is None else {"developer_dir": selected_developer})
             identifier = Path(arguments[-1]).parent.name
             if tool.name == "lipo":
                 return " ".join(
@@ -1091,6 +1093,21 @@ else:
             ),
         ):
             owner._validate_native_binaries(self.framework, NativePolicy)
+            selected_developer = Path("/Applications/ConsumerXcode.app/Contents/Developer")
+            owner._validate_native_binaries(self.framework, NativePolicy, developer_dir=selected_developer)
+
+    def test_native_tool_environment_uses_explicit_consumer_or_sealed_producer_selection(self) -> None:
+        owner = load_owner_module()
+        tool = Path("/usr/bin/lipo")
+        producer = "/Applications/ProducerXcode.app/Contents/Developer"
+        consumer = Path("/Applications/ConsumerXcode.app/Contents/Developer")
+        with mock.patch.dict(os.environ, {"NORITO_BRIDGE_SEAL_DEVELOPER_DIR": producer}), \
+             mock.patch.object(owner.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 0, "arm64\n", "")) as run:
+            self.assertEqual(owner._run_native_tool(tool, ["-archs", "archive"]), "arm64\n")
+            self.assertEqual(run.call_args.kwargs["env"]["DEVELOPER_DIR"], producer)
+            owner._run_native_tool(tool, ["-archs", "archive"], developer_dir=consumer)
+            self.assertEqual(run.call_args.kwargs["env"]["DEVELOPER_DIR"], str(consumer))
 
     def test_reference_only_required_symbol_is_rejected(self) -> None:
         owner = load_owner_module()

@@ -8951,7 +8951,6 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanReadAllLedgerData",
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",
-    "CanManageKagemushaReserve",
     "CanProposeSccpRouteGovernance",
 ];
 include!("executor_initial_permission_authority.rs");
@@ -9802,8 +9801,6 @@ mod tests {
         );
         assert!(view.world().account(&address.subject_id()).is_ok());
     }
-
-    include!("executor_ordinary_mint_permission_tests.rs");
 
     fn state_after_genesis(world: World) -> State {
         state_after_genesis_with_instructions(world, |_| Vec::new())
@@ -13421,12 +13418,12 @@ mod tests {
         let administrator_account = Account::new(administrator.clone()).build(&administrator);
         let ordinary_permission: Permission =
             executor_permission::parameter::CanSetParameters.into();
-        let kagemusha_permission: Permission =
-            executor_permission::kagemusha::CanManageKagemushaReserve.into();
+        let genesis_only_permission: Permission =
+            executor_permission::sccp::CanProposeSccpRouteGovernance.into();
         let mut world = World::with([], [attacker_account, administrator_account], []);
         world.account_permissions.insert(
             administrator.clone(),
-            BTreeSet::from([ordinary_permission.clone(), kagemusha_permission.clone()]),
+            BTreeSet::from([ordinary_permission.clone(), genesis_only_permission.clone()]),
         );
         let state = state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(
@@ -13449,10 +13446,12 @@ mod tests {
         )
         .execute(&administrator, &mut state_transaction)
         .expect("seed ordinary role fixture");
-        let kagemusha_role: RoleId = "initial_executor_kagemusha_role".parse().expect("role id");
+        let genesis_only_role: RoleId = "initial_executor_genesis_only_role"
+            .parse()
+            .expect("role id");
         Register::role(
-            Role::new(kagemusha_role.clone(), administrator.clone())
-                .add_permission(kagemusha_permission.clone()),
+            Role::new(genesis_only_role.clone(), administrator.clone())
+                .add_permission(genesis_only_permission.clone()),
         )
         .execute(&administrator, &mut state_transaction)
         .expect("seed governed role fixture");
@@ -13497,8 +13496,8 @@ mod tests {
                 .any(|permission| permission == &ordinary_permission)
         );
         for instruction in [
-            Grant::account_permission(kagemusha_permission.clone(), attacker.clone()).into(),
-            Grant::account_role(kagemusha_role.clone(), attacker.clone()).into(),
+            Grant::account_permission(genesis_only_permission.clone(), attacker.clone()).into(),
+            Grant::account_role(genesis_only_role.clone(), attacker.clone()).into(),
         ] {
             super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &administrator, instruction)
@@ -13511,12 +13510,12 @@ mod tests {
                 .world
                 .account_permissions_iter(&attacker)
                 .expect("attacker permissions")
-                .any(|permission| permission == &kagemusha_permission)
+                .any(|permission| permission == &genesis_only_permission)
         );
         assert!(!authority_has_role(
             &state_transaction.world,
             &attacker,
-            &kagemusha_role
+            &genesis_only_role
         ));
     }
     #[test]
@@ -20560,6 +20559,7 @@ seiyaku TriggerArguments {
     }
     #[test]
     fn contract_call_enforces_entrypoint_and_hold_before_argument_decode() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
@@ -20622,7 +20622,13 @@ seiyaku GuardedValue {
                 contract_address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &ALICE_KEYPAIR,
+                )
+                .expect("sign bounded fixture manifest"),
         );
         // The invoked contract's subject needs its own exact grant for caller metadata.
         world.account_permissions.insert(
@@ -21049,7 +21055,13 @@ seiyaku GuardedValueRebound {
                 contract_address.dataspace_id().unwrap(),
                 rebound_code_hash,
             ),
-            rebound_manifest.signed(&ALICE_KEYPAIR),
+            rebound_manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &ALICE_KEYPAIR,
+                )
+                .expect("sign bounded fixture manifest"),
         );
         state_tx
             .world
@@ -21195,6 +21207,7 @@ seiyaku GuardedValueRebound {
     }
     #[test]
     fn mixed_batch_observes_ordered_permission_state_and_rolls_back_on_failure() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -21252,7 +21265,13 @@ seiyaku OrderedBatchGuard {
                 contract_address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &ALICE_KEYPAIR,
+                )
+                .expect("sign bounded fixture manifest"),
         );
         // The invoked contract's subject needs its own exact grant for caller metadata.
         world.account_permissions.insert(
@@ -21468,6 +21487,7 @@ seiyaku OrderedBatchGuard {
     }
     #[test]
     fn resolved_contract_invocation_releases_cache_and_records_vm_error_gas() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -21506,7 +21526,13 @@ seiyaku MeteredFailure {
                 contract_address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &ALICE_KEYPAIR,
+                )
+                .expect("sign bounded fixture manifest"),
         );
         world.commit();
         bind_executor_test_contract_after_genesis(&state, &contract_address, &authority, code_hash);

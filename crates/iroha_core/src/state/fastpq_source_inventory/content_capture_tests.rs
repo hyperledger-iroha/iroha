@@ -229,7 +229,13 @@ fn original_recorder_authority_failure_is_sticky_without_consuming_another_recor
                 assert_eq!(error, expected);
                 assert_eq!(assert_raw_content_failure(&block), error);
                 assert_getters_refuse(&mut block, &error);
-                assert_eq!(block.capture_exec_witness(), Err(error.clone()));
+                assert_eq!(
+                    block.capture_exec_witness(),
+                    Err("FASTPQ witness capture refuses a poisoned carrier".into())
+                );
+                // The carrier boundary refuses retries first, while preserving
+                // the exact original content or recorder failure in the inventory.
+                assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
                 // A genuine Sealed/Poisoned output owner has no finality publication
                 // capability. The paired native control below exercises the real
                 // prepare/publish path; it cannot reach the old component enum gate.
@@ -270,7 +276,13 @@ fn content_failure_survives_resynchronization_retry_getters_and_commit() {
                 // the block's latched failure or to fabricate a new ordinary witness.
                 exec_witness::start_block();
                 exec_witness::synchronize_fastpq_transcripts(&original);
-                assert_eq!(block.capture_exec_witness(), Err(first_error.clone()));
+                assert_eq!(
+                    block.capture_exec_witness(),
+                    Err("FASTPQ witness capture refuses a poisoned carrier".into())
+                );
+                // The carrier boundary refuses retries first, while preserving
+                // the exact original content or recorder failure in the inventory.
+                assert_eq!(block.fastpq_source_inventory(), Err(first_error.as_str()));
                 assert_eq!(assert_raw_content_failure(&block), first_error);
                 assert_getters_refuse(&mut block, &first_error);
                 assert_eq!(block.fastpq_source_inventory(), Err(first_error.as_str()));
@@ -369,8 +381,28 @@ fn pending_overlay_prevents_first_or_cached_capture_and_leaves_failure_sticky() 
                 drop(overlay);
                 exec_witness::start_block();
                 exec_witness::synchronize_fastpq_transcripts(&original);
-                assert_eq!(block.capture_exec_witness(), Err(error.clone()));
+                let retry_error = if already_captured {
+                    // A cached-content rejection clears outputs and retains its exact
+                    // first error; it cannot repair or replace the original sealed owner.
+                    assert!(matches!(
+                        block.execution_output_plan,
+                        Some(crate::state::output_capacity::ExecutionOutputPlanState::Sealed(_))
+                    ));
+                    error.clone()
+                } else {
+                    // Failed first capture poisons the unpublished original carrier.
+                    assert!(matches!(
+                        block.execution_output_plan,
+                        Some(crate::state::output_capacity::ExecutionOutputPlanState::Poisoned)
+                    ));
+                    "FASTPQ witness capture refuses a poisoned carrier".into()
+                };
+                assert_eq!(block.capture_exec_witness(), Err(retry_error));
+                // Both paths retain their first source failure and hide every output.
+                assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
+                assert_eq!(assert_raw_content_failure(&block), error);
                 assert_getters_refuse(&mut block, &error);
+                assert!(block.verify_execution_output_publication().is_err());
             },
         );
     }
@@ -624,11 +656,15 @@ fn failed_output_binding_publishes_no_partial_capture_and_cannot_be_retried() {
                 crate::exec_witness::synchronize_fastpq_transcripts(&archive);
                 assert_eq!(block.capture_exec_witness(), Err(error.clone()));
                 assert_getters_refuse(&mut block, &error);
-                // A genuine Sealed/Poisoned output owner has no finality publication
-                // capability. The paired native control below exercises the real
-                // prepare/publish path; it cannot reach the old component enum gate.
-                assert!(block.verify_execution_output_publication().is_err());
-                drop(block);
+                // Deliberately removing the plan selects the component setup
+                // surface, but cannot remove the first source-inventory failure.
+                block.verify_execution_output_publication().unwrap();
+                block.validate_canonical_runtime_projection().unwrap();
+                block.verify_sumeragi_lane_state_publication().unwrap();
+                assert!(matches!(
+                    block.commit(),
+                    Err(crate::state::TransactionsBlockError::FastpqSourceInventory)
+                ));
                 assert_not_published(&state);
                 crate::exec_witness::drain_exec_witness();
             },

@@ -92,6 +92,89 @@ pub(super) struct ResetHostV1 {
     pub(super) guard_sha256: String,
     /// Native software custody key; its private material never leaves this physical host.
     pub(super) capture_public_key: String,
+    /// Exact native interpreter capability; guest validators have no Python execution role.
+    #[norito(required)]
+    pub(super) native_python: Option<NativePythonRuntimeV1>,
+}
+
+/// Independently selected native Python image and its exact supported version.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(super) struct NativePythonRuntimeV1 {
+    pub(super) schema: String,
+    pub(super) executable: NativePublicFileV1,
+    #[norito(json = "native_python_version")]
+    pub(super) version: [u16; 3],
+}
+
+/// Exactly three numeric version components; no variable-sized wire owner.
+mod native_python_version {
+    use super::*;
+
+    pub(super) fn serialize(version: &[u16; 3], output: &mut String) {
+        output.push('[');
+        for (index, component) in version.iter().enumerate() {
+            if index != 0 {
+                output.push(',');
+            }
+            component.json_serialize(output);
+        }
+        output.push(']');
+    }
+
+    pub(super) fn serialize_bounded(
+        version: &[u16; 3],
+        output: &mut dyn json::JsonWriteSink,
+    ) -> std::result::Result<(), json::BoundedJsonError> {
+        output.begin_container()?;
+        output.push('[')?;
+        for (index, component) in version.iter().enumerate() {
+            if index != 0 {
+                output.push(',')?;
+            }
+            component.json_serialize_to(output)?;
+        }
+        output.push(']')?;
+        output.end_container();
+        Ok(())
+    }
+
+    pub(super) fn deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> std::result::Result<[u16; 3], json::Error> {
+        parser.expect(b'[')?;
+        let major = u16::json_deserialize(parser)?;
+        parser.expect(b',')?;
+        let minor = u16::json_deserialize(parser)?;
+        parser.expect(b',')?;
+        let patch = u16::json_deserialize(parser)?;
+        parser.expect(b']')?;
+        Ok([major, minor, patch])
+    }
+}
+
+impl NativePythonRuntimeV1 {
+    pub(super) fn validate(&self, owner_uid: u32) -> Result<()> {
+        let image = &self.executable.file;
+        validate_absolute_normal_path(Path::new(&image.path), "native Python image")?;
+        validate_lower_hex("native Python image digest", &self.executable.sha256, 64)?;
+        if self.schema != "iroha.taira.public-reset.native-python-runtime.v1"
+            || self.version[0] != 3
+            || self.version[1] < 11
+            || image.path.bytes().any(|byte| byte.is_ascii_whitespace())
+            || !matches!(image.identity.uid, 0) && image.identity.uid != owner_uid
+            || image.identity.links != 1
+            || image.identity.size == 0
+            || image.identity.size > 512 * 1024 * 1024
+            || image.identity.mode & 0o7022 != 0
+            || image.identity.mode & 0o111 == 0
+        {
+            return Err(eyre!(
+                "native Python requires one exact safe executable image and supported version"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Physical SSH route only; role upload guards and release programs are separate owners.
@@ -163,6 +246,7 @@ impl ResetHostPairV1 {
                 || current.custody_root != previous.custody_root
                 || current.dispatcher_path != previous.dispatcher_path
                 || current.capture_public_key != previous.capture_public_key
+                || current.native_python != previous.native_python
             {
                 return Err(eyre!(
                     "host successor changes the immutable physical route, platform or software custodian"
@@ -259,6 +343,7 @@ impl ResetHostV1 {
             }
         }
         if native_edge {
+            self.native_python()?.validate(self.owner_uid)?;
             if self.platform.os != "macos"
                 || self.platform.arch != "aarch64"
                 || self.platform.kvm_api_version != 0
@@ -276,7 +361,8 @@ impl ResetHostV1 {
                     "native edge requires a named Mac owner, Darwin/AArch64 and exact private custody roots"
                 ));
             }
-        } else if self.platform.os != "linux"
+        } else if self.native_python.is_some()
+            || self.platform.os != "linux"
             || self.platform.arch != "aarch64"
             || !matches!(self.platform.kvm_api_version, 0 | 12)
             || self.owner_uid != 0
@@ -291,6 +377,12 @@ impl ResetHostV1 {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn native_python(&self) -> Result<&NativePythonRuntimeV1> {
+        self.native_python
+            .as_ref()
+            .ok_or_else(|| eyre!("native edge requires its explicit native Python capability"))
     }
 
     fn bind_endpoint(&self, endpoint: &EndpointV1) -> Result<()> {
@@ -926,6 +1018,7 @@ pub(super) fn fixture_pair() -> ResetHostPairV1 {
             )
             .public_key()
             .to_string(),
+            native_python: None,
         },
         native_edge: ResetHostV1 {
             endpoint: endpoint(true),
@@ -948,6 +1041,27 @@ pub(super) fn fixture_pair() -> ResetHostPairV1 {
             )
             .public_key()
             .to_string(),
+            native_python: Some(NativePythonRuntimeV1 {
+                schema: "iroha.taira.public-reset.native-python-runtime.v1".into(),
+                executable: NativePublicFileV1 {
+                    file: NativeObservedFileV1 {
+                        path: "/opt/homebrew/Cellar/python@3.14/3.14.8/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python".into(),
+                        identity: NativeFileIdentityV1 {
+                            device: 1,
+                            inode: 32,
+                            uid: 501,
+                            gid: 20,
+                            mode: 0o755,
+                            links: 1,
+                            size: 4096,
+                            mtime_ns: 1,
+                            ctime_ns: 1,
+                        },
+                    },
+                    sha256: "3".repeat(64),
+                },
+                version: [3, 14, 8],
+            }),
         },
     }
 }
@@ -1130,6 +1244,79 @@ pub(super) fn fixture_native_edge_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_python_requires_explicit_supported_safe_image_and_guest_null() {
+        let pair = fixture_pair();
+        pair.validate().unwrap();
+        for mutation in 0..8 {
+            let mut changed = pair.clone();
+            let runtime = changed.native_edge.native_python.as_mut().unwrap();
+            match mutation {
+                0 => runtime.version = [3, 9, 6],
+                1 => runtime.version = [4, 0, 0],
+                2 => runtime.executable.file.identity.mode = 0o777,
+                3 => runtime.executable.file.identity.mode = 0o4755,
+                4 => runtime.executable.file.identity.links = 2,
+                5 => runtime.executable.file.identity.uid = 502,
+                6 => changed.native_edge.native_python = None,
+                _ => {
+                    changed.validator_guest.native_python =
+                        changed.native_edge.native_python.clone()
+                }
+            }
+            assert!(changed.validate().is_err(), "runtime mutation {mutation}");
+        }
+        let mut value = json::to_value(&pair).unwrap();
+        value
+            .get_mut("native_edge")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("native_python");
+        assert!(json::from_value::<ResetHostPairV1>(value).is_err());
+        let runtime = pair.native_edge.native_python.as_ref().unwrap();
+        let wire = json::to_json(runtime).unwrap();
+        assert!(wire.contains("\"version\":[3,14,8]"));
+        assert_eq!(
+            json::from_str::<NativePythonRuntimeV1>(&wire).unwrap(),
+            *runtime
+        );
+        for version in ["[]", "[3,14]", "[3,14,8,0]", "\"030e08\"", "[3,14,65536]"] {
+            assert!(
+                json::from_str::<NativePythonRuntimeV1>(&wire.replace("[3,14,8]", version))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn native_python_substitution_changes_signed_host_identity() {
+        let pair = fixture_pair();
+        let mut changed = pair.clone();
+        changed
+            .native_edge
+            .native_python
+            .as_mut()
+            .unwrap()
+            .executable
+            .sha256 = "4".repeat(64);
+        assert_ne!(pair.digest().unwrap(), changed.digest().unwrap());
+        assert!(changed.validate_physical_binding(&pair).is_err());
+        let (mut inventory, _, signed) = checkpoint(HostPhaseV1::CandidateFrontier, None);
+        inventory
+            .hosts
+            .native_edge
+            .native_python
+            .as_mut()
+            .unwrap()
+            .version = [3, 14, 9];
+        assert!(
+            signed
+                .verify(&inventory, &"2".repeat(64), &"3".repeat(64), 123_000, None)
+                .is_err()
+        );
+    }
 
     fn checkpoint(
         phase: HostPhaseV1,

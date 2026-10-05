@@ -1821,7 +1821,7 @@ async fn mcp_jsonrpc_rejects_every_unlisted_tool_alias() {
     app.shutdown().await;
 }
 #[tokio::test]
-async fn mcp_jsonrpc_includes_universal_kagemusha_operations_for_operator_profile() {
+async fn mcp_jsonrpc_operator_profile_lists_core_tools_without_retired_wallet_routes() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1829,18 +1829,10 @@ async fn mcp_jsonrpc_includes_universal_kagemusha_operations_for_operator_profil
     cfg.torii.mcp.expose_operator_routes = true;
     let app = build_router(cfg);
     let names = list_all_tool_names(&app).await;
-    let expected = [
-        "torii.get_v1_kagemusha_readiness",
-        "torii.post_v1_kagemusha_top_up",
-        "torii.post_v1_kagemusha_redeem",
-        "torii.get_v1_kagemusha_operations_operation_id",
-    ];
-    for name in expected {
-        assert!(
-            names.iter().any(|candidate| candidate == name),
-            "universal KAGEMUSHA operation is missing from tools/list: {name}"
-        );
-    }
+    assert!(
+        names.iter().all(|name| !name.contains("kagemusha")),
+        "retired KAGEMUSHA routes must not project into tools/list"
+    );
     assert!(names.iter().any(|name| name == "iroha.health"));
     assert!(names.iter().any(|name| name == "iroha.transactions.submit"));
     app.shutdown().await;

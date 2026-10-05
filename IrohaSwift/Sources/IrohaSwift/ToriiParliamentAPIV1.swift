@@ -53,6 +53,11 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
                 "proposal must be valid UTF-8 JSON without duplicate keys and use exact canonical first-release unsigned integers."
             )
         }
+        guard case .object(let proposal) = validated.value,
+              case .string(let tag) = proposal["kind"],
+              ToriiParliamentAPIV1.proposalKinds.contains(tag) else {
+            throw ToriiClientError.invalidPayload("proposal.kind is unknown or retired")
+        }
         let decoder = JSONDecoder()
         decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = validated.numberLexemes
         kind = try decoder.decode(ToriiGovernanceProposalKind.self, from: data)
@@ -677,7 +682,7 @@ public enum ToriiParliamentAPIV1 {
     private static let maximumSortitionRetries: UInt32 = 16
     public static let maximumSortitionRequestsPerBatch = 10
 
-    /// Closed Parliament V1 proposal-kind inventory in append-only Norito index order.
+    /// Closed first-release Parliament proposal-kind inventory in Norito wire-index order.
     public static let proposalKinds = [
         "DeployContract",
         "RuntimeUpgrade",
@@ -689,10 +694,6 @@ public enum ToriiParliamentAPIV1 {
         "ContractLifecycleGovernance",
         "ContractEmergencyHold",
         "GlobalDataTriggerPermissionGovernance",
-        "KagemushaVerifierPolicyInstall",
-        "KagemushaVerifierReleaseInstall",
-        "KagemushaVerifierReleaseActivate",
-        "KagemushaVerifierReleaseRetire",
     ]
 
     /// Closed contract-lifecycle governance action inventory in wire-tag order.

@@ -4,6 +4,8 @@ mod public_contract_creation_fees {
 
     #[test]
     fn public_contract_artifact_stages_pay_fees_without_management_grants() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let _guard = crate::status::nexus_fee_test_lock()
             .lock()
             .expect("fee status lock");
@@ -102,7 +104,7 @@ mod public_contract_creation_fees {
                         iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), total_size: artifact.len() as u64, chunk_index: 0, chunk_count: 1, chunk: artifact.clone() }.into(),
                         iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), total_size: artifact.len() as u64, chunk_count: 1 }.into(),
                     ],
-                    vec![{ let scoped_manifest = manifest.clone().try_signed(&key).unwrap(); iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }.into()],
+                    vec![{ let scoped_manifest = manifest.clone().try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &key).unwrap(); iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }.into()],
                 ];
                 let transactions = stages
                     .into_iter()

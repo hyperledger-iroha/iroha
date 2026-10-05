@@ -1773,7 +1773,7 @@ mod tests {
         assert!(cache.get_or_prepare(code_hash, b"malformed").is_err());
         assert_eq!(cache.stats().misses, 2);
     }
-    /// Assemble a minimal program containing only a HALT instruction.
+    /// Assemble a minimal contract with a complete typed Unit return.
     pub(super) fn minimal_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata::default().encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -1811,7 +1811,14 @@ mod tests {
             states: Vec::new(),
         };
         program.extend_from_slice(&interface.encode_section());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        for word in [
+            ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+            ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ] {
+            program.extend_from_slice(&word.to_le_bytes());
+        }
         program
     }
     pub(super) fn minimal_generic_program() -> Vec<u8> {

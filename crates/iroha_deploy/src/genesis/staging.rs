@@ -750,6 +750,8 @@ fn staged_default_kura() -> actual::Kura {
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+        history_checkpoint_cache_capacity:
+            iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:

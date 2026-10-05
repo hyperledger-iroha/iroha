@@ -380,6 +380,17 @@ dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.I
 The integration suite is environment-gated; its test project documents the required
 variables. The executable sample lives in `samples/Hyperledger.Iroha.Sdk.Sample`.
 
+For focused validation, invoke the built xUnit v3 executable with its method
+selector. Microsoft.Testing.Platform ignores the VSTest `dotnet test --filter`
+and `--logger` switches. From the same `csharp/` directory after the build above:
+
+```bash
+dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Explorer*' -noLogo -noColor
+```
+
+The selector matches the fully qualified method name. Use `Debug` in the artifact
+path when validating a Debug build.
+
 ## Pack
 
 Package validation expects the native bridge stage to contain the supported runtime
@@ -497,11 +508,10 @@ work are bounded by `PetalDecodeOptions.MaxPixels` (12 MP) and
 bit-identical to Rust, and the decoder repeats the reference's IEEE double
 operations in the same order. The shared fixtures
 `fixtures/petal/petal_stream_v1.json` and `petal_captures_v1.json` pin both. Run
-the Petal tests with the xUnit v3 filter (the VSTest `--filter` switch is ignored
-under Microsoft.Testing.Platform):
+the Petal tests through the same built xUnit v3 runner:
 
 ```bash
-dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -- --filter-class "*Petal*"
+dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Petal*' -noLogo -noColor
 ```
 
 ## Local confidential wallet proofs

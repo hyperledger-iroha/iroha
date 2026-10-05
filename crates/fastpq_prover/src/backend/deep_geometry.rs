@@ -14,7 +14,7 @@ use fastpq_isi::{FASTPQ_FINAL_V1, StarkParameterSet};
 
 use super::{
     FriDomain,
-    compact_protocol::FixedAir,
+    air::{SemanticAir, q77::SealedView},
     compact_public_columns::PublicColumnReconstruction,
     compact_transfer_air::CompactTransferAir,
     deep_composition::{DeepComposition, OodPair},
@@ -121,6 +121,12 @@ impl DeepGeometry {
         next: &[F],
         quotient: &[F],
     ) -> Result<DeepComposition> {
+        // This out-of-domain evaluation reads the relation through the typed
+        // AIR interface: the sealed view reports the relation's own declared
+        // geometry, compared here with the engine constants, and supplies its
+        // complete evaluator. Transcript binding, the producer's quotient and
+        // the public-column reconstruction below still read their own owners.
+        let relation = SealedView::new(relation);
         let schema = relation.schema();
         if schema.trace_rows != TRACE_ROWS
             || schema.width != 342
@@ -139,7 +145,7 @@ impl DeepGeometry {
         // the fixed-polynomial reconstruction or AIR arithmetic below.
         let composition = DeepComposition::new(points, current, next, quotient)?;
         let (current, next) = self.public_columns.reconstruct_pair_at(z, current, next)?;
-        let residues = relation.evaluate_at(z, &current, &next)?;
+        let residues = relation.evaluate(z, &current, &next)?;
         if residues.len() != CONSTRAINTS {
             return Err(shape(
                 "DEEP reference AIR returned an incomplete numerator vector",

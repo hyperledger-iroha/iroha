@@ -1,0 +1,256 @@
+{
+  "schema": "iroha.zk-x509.presentation-interval-sites.v1",
+  "definition": "crates/iroha_data_model/src/privacy/zk_x509_interval.rs",
+  "vectors": "fixtures/zk/x509/interval_vectors_v1.json",
+  "check": "python3 scripts/check_zk_x509_presentation_interval.py",
+  "pattern": "presentation_not_(before|after)|[pP]resentationNot(Before|After)|presentation_window\\(|ZkX509Presentation(Bounds|Window|Interval)|zk_x509_presentation_(bounds|interval)_v1|(this|next)_update_unix_seconds|([tT]his|[nN]ext)UpdateUnixSeconds|ZK_X509_MAX_(CRL_AGE|PRESENTATION_WINDOW)",
+  "canonical_api": "PrivacyZkX509(Presentation(Bounds|Window|IntervalError)|CrlUpdateInterval|CertificateValidity)V1|presentation_window\\(\\)|\\.update_interval\\(\\)|zk_x509_presentation_(bounds|interval)_v1",
+  "roles": {
+    "definition": "The single canonical interval definition.",
+    "canonical": "Non-test code whose window verdict or chosen window comes from the canonical definition. Checked: the file calls the canonical API. Whether the file is compiled in an ordinary build is recorded under `build_gates`.",
+    "in-relation": "Independent formulation enforced by the proof relation or its witness builder; tests compare it with the definition. Checked: the file is in the zk-X509 engine.",
+    "deferred": "Hand-written predicate, deadline or expected window equal to the canonical definition that does not call it yet. Checked: the reviewed source lines are pinned under `deferred`, each with its owner and TODO; a boundary-grid test pins the formula to the definition.",
+    "transport": "Defines, copies, hashes, serializes or exposes the window fields, the CRL update fields or the two ceilings without evaluating a presentation-window predicate. CRL record shape and rotation ordering are record invariants, not window predicates.",
+    "test": "Only tests or fixtures in this file use the names. Checked for files that are tests by location or name.",
+    "record": "Vectors, ledgers, scripts and documentation."
+  },
+  "sites": {
+    "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs": [
+      "deferred"
+    ],
+    "crates/iroha_core/src/smartcontracts/isi/privacy.rs": [
+      "deferred"
+    ],
+    "crates/iroha_core/src/smartcontracts/isi/privacy/tests/zk_x509_governance_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_air.rs": [
+      "in-relation"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/main_io.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/merkle.rs": [
+      "transport"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs": [
+      "transport"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/projection_air.rs": [
+      "canonical"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs": [
+      "canonical"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation/presentation_interval_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation/release_fixture.rs": [
+      "canonical"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_binding_glue.rs": [
+      "in-relation"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_numeric.rs": [
+      "in-relation"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_numeric_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_presentation_interval_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_private_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark.rs": [
+      "canonical",
+      "in-relation"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/registration_phase_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/support_and_io_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/verifier_profile.rs": [
+      "transport"
+    ],
+    "crates/iroha_core_privacy/src/privacy_state.rs": [
+      "canonical"
+    ],
+    "crates/iroha_data_model/src/isi/privacy.rs": [
+      "test"
+    ],
+    "crates/iroha_data_model/src/privacy/credentials.rs": [
+      "transport"
+    ],
+    "crates/iroha_data_model/src/privacy/proofs.rs": [
+      "test"
+    ],
+    "crates/iroha_data_model/src/privacy/statements.rs": [
+      "canonical"
+    ],
+    "crates/iroha_data_model/src/privacy/tests/namespaces_and_governance.rs": [
+      "test"
+    ],
+    "crates/iroha_data_model/src/privacy/zk_x509_interval.rs": [
+      "definition"
+    ],
+    "crates/iroha_data_model/tests/resource_contract_v1.rs": [
+      "test"
+    ],
+    "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs": [
+      "test"
+    ],
+    "fixtures/zk/x509/interval_vectors_v1.json": [
+      "record"
+    ],
+    "integration_tests/tests/privacy_exact12_zk_x509_network.rs": [
+      "deferred",
+      "test"
+    ],
+    "python/iroha_python/iroha_python_rs/src/lib.rs": [
+      "transport"
+    ],
+    "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs": [
+      "test"
+    ],
+    "scripts/check_zk_x509_presentation_interval.py": [
+      "record"
+    ],
+    "scripts/tests/check_zk_resource_contract_test.py": [
+      "record"
+    ],
+    "scripts/tests/check_zk_x509_presentation_interval_test.py": [
+      "record"
+    ],
+    "specs/zk_delivery_reconciliation.json": [
+      "record"
+    ],
+    "specs/zk_resource_contract.json": [
+      "record"
+    ],
+    "specs/zk_x509_presentation_interval.md": [
+      "record"
+    ],
+    "specs/zk_x509_presentation_interval_sites.json": [
+      "record"
+    ]
+  },
+  "deferred_test": {
+    "path": "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs",
+    "name": "deferred_sites_equal_the_canonical_definition_on_a_boundary_grid"
+  },
+  "deferred": {
+    "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs": [
+      {
+        "name": "zk_x509_network_window_has_reserve_v1",
+        "owner": "X.6",
+        "equals": "statement.presentation_window().last_admissible_block_timestamp_ms() + 1",
+        "todo": "TODO(X.6): take the exclusive submission deadline from the canonical accessor when end-to-end deadline budgeting lands; the hand-written `(PA + 1) * 1000` is pinned to it by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.",
+        "source": [
+          "let deadline_exclusive_millis = statement",
+          ".presentation_not_after_unix_seconds",
+          ".checked_add(1)",
+          ".and_then(|seconds| seconds.checked_mul(1_000))"
+        ],
+        "transcribed": [
+          ".checked_add(1).and_then(|seconds| seconds.checked_mul(1_000))"
+        ]
+      }
+    ],
+    "crates/iroha_core/src/smartcontracts/isi/privacy.rs": [
+      {
+        "name": "validate_zk_x509_crl_freshness_v1",
+        "owner": "X.6",
+        "equals": "PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval()) containing block_timestamp_ms / 1000, for block seconds within the RFC 5280 calendar",
+        "todo": "TODO(X.6): call `from_crl(record.update_interval())` and `contains_unix_seconds` for CRL registration and rotation freshness, keeping the two error messages; the canonical form additionally rejects a block second after 9999-12-31T23:59:59Z. Pinned by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.",
+        "source": [
+          "let block_unix_seconds = block_timestamp_ms / 1_000;",
+          "if block_unix_seconds < record.this_update_unix_seconds",
+          "|| block_unix_seconds >= record.next_update_unix_seconds",
+          "{",
+          "return Err(invalid_privacy_parameter(",
+          "\"X.509 signed CRL is not current at the executing block timestamp\",",
+          "));",
+          "}",
+          "let age = block_unix_seconds",
+          ".checked_sub(record.this_update_unix_seconds)",
+          ".ok_or_else(|| invalid_privacy_parameter(\"X.509 signed CRL begins in the future\"))?;",
+          "if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {"
+        ],
+        "transcribed": [
+          "block_unix_seconds < record.this_update_unix_seconds || block_unix_seconds >= record.next_update_unix_seconds",
+          "block_unix_seconds.checked_sub(record.this_update_unix_seconds)",
+          "ZK_X509_MAX_CRL_AGE_SECONDS_V1"
+        ]
+      }
+    ],
+    "integration_tests/tests/privacy_exact12_zk_x509_network.rs": [
+      {
+        "name": "require_live_x509_submission_window",
+        "owner": "X.6",
+        "equals": "statement.presentation_window().last_admissible_block_timestamp_ms() + 1",
+        "todo": "TODO(X.6): take the exclusive submission deadline from the canonical accessor; same pinned formula as the release-evidence site.",
+        "source": [
+          "let deadline_exclusive_millis = statement",
+          ".presentation_not_after_unix_seconds",
+          ".checked_add(1)",
+          ".and_then(|seconds| seconds.checked_mul(1_000))"
+        ],
+        "transcribed": [
+          ".checked_add(1).and_then(|seconds| seconds.checked_mul(1_000))"
+        ]
+      },
+      {
+        "name": "fresh semantic replay expected window",
+        "owner": "X.6",
+        "equals": "trusted second + ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1, the end of `widest_window_from(trusted second)` for the network fixture",
+        "todo": "TODO(X.6): replace the literal 300 with the canonical ceiling or the builder window when the network test is next rebuilt.",
+        "source": [
+          "let expected_semantic_time = semantic_trusted_block_timestamp_ms / 1_000;",
+          "let expected_semantic_deadline = expected_semantic_time",
+          ".checked_add(300)"
+        ],
+        "transcribed": [
+          ".checked_add(300)"
+        ]
+      }
+    ]
+  },
+  "build_gates": {
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs": {
+      "declared_in": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/mod.rs",
+      "declaration": [
+        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]",
+        "#[doc(hidden)]",
+        "pub mod relation;"
+      ],
+      "note": "The native reference relation and `derive_zk_x509_presentation_bounds_v1` are compiled with the prover: tests and the `privacy-release-evidence` feature only. X.5 owns making the holder path ship."
+    },
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation/release_fixture.rs": {
+      "declared_in": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs",
+      "declaration": [
+        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]",
+        "#[doc(hidden)]",
+        "pub mod release_fixture;"
+      ],
+      "note": "Release fixtures exist only in tests and the `privacy-release-evidence` feature."
+    },
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs": {
+      "declared_in": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+      "declaration": [
+        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]",
+        "pub(crate) fn prepare_zk_x509_prover_input_v1("
+      ],
+      "note": "Prover preflight (state admission plus the reference relation) is compiled with the prover: tests and the `privacy-release-evidence` feature only."
+    }
+  }
+}

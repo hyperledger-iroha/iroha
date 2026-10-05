@@ -63,24 +63,16 @@ mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
 mod game;
-/// Original Google ID-token verification DATA for first-device hardware evidence.
-#[cfg(unix)]
-pub mod google_identity_original_v1;
+mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
-mod kagemusha_commands;
-mod kagemusha_state;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
-mod ordinary_mint_credit;
-mod ordinary_mint_finalized;
-mod ordinary_mint_issuer_purpose;
-mod ordinary_wallet_current;
 #[cfg(feature = "app_api")]
 mod parliament_tle_release;
 pub mod privacy_issuance_api;
@@ -95,15 +87,19 @@ mod push;
 #[cfg(any(test, feature = "bench"))]
 #[doc(hidden)]
 pub mod query_load_profiles;
+#[cfg(test)]
+mod query_memory_reclamation_tests;
 #[cfg(feature = "app_api")]
 mod reserve_account_proof;
 #[cfg(feature = "app_api")]
 mod reserve_policy_proof;
 mod resource_names_state;
+mod response_memory_custody;
 /// SCCP v1 public read API.
 mod sccp;
 mod sns_lease;
 mod staking_preparation;
+mod stream_control;
 mod stream_token_custody_proof;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
@@ -1214,6 +1210,8 @@ mod deployment_state;
 mod event;
 #[cfg(feature = "app_api")]
 pub mod explorer;
+#[cfg(feature = "app_api")]
+mod explorer_history;
 #[cfg(feature = "app_api")]
 mod explorer_query;
 #[cfg(feature = "app_api")]
@@ -2503,8 +2501,6 @@ struct AppState {
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     proof_body_inflight: Arc<tokio::sync::Semaphore>,
-    /// Byte-weighted working-set capacity for proof-bearing KAGEMUSHA commands.
-    kagemusha_command_memory_inflight: ByteWeightedMemoryPool,
     soracloud_public_rate_limiter: limits::RateLimiter,
     soracloud_mutation_rate_limiter: limits::RateLimiter,
     soracloud_mutation_inflight: Arc<tokio::sync::Semaphore>,
@@ -2665,7 +2661,6 @@ struct AppState {
     sorafs_appeal_finance_policy: Arc<sorafs::api::AppealFinanceRuntimePolicy>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
-    kagemusha_commands: Arc<kagemusha_commands::KagemushaCommandRuntime>,
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
@@ -4650,6 +4645,14 @@ async fn enforce_soracloud_signed_mutation_request(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Ok(error.into_response());
+            }
+        };
+
     let path = req.uri().path().to_owned();
     let response_format =
         match utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT)) {
@@ -4691,6 +4694,7 @@ async fn enforce_soracloud_signed_mutation_request(
         &parts.uri,
         body.as_ref(),
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => verified,
         Ok(None) => {
@@ -5063,11 +5067,6 @@ fn has_dot_segment(path: &str) -> bool {
             || segment.eq_ignore_ascii_case("%2e%2e")
     })
 }
-fn has_percent_encoded_kagemusha_operation_id(path: &str) -> bool {
-    const PREFIX: &str = "/v1/kagemusha/operations/";
-    path.strip_prefix(PREFIX)
-        .is_some_and(|operation_id| !operation_id.contains('/') && operation_id.contains('%'))
-}
 fn has_percent_encoded_operator_credential_id(path: &str) -> bool {
     const PREFIX: &str = "/v1/operator/auth/credentials/";
     path.strip_prefix(PREFIX).is_some_and(|credential_id| {
@@ -5101,7 +5100,6 @@ async fn enforce_strict_request_target(
         || path.contains('\\')
         || encoded_path_invalid
         || has_dot_segment(path)
-        || has_percent_encoded_kagemusha_operation_id(path)
         || has_percent_encoded_operator_credential_id(path)
         || has_percent_encoded_governance_selector(path)
     {
@@ -5133,47 +5131,6 @@ async fn enforce_strict_request_target(
     let mut response =
         utils::respond_with_status_and_format(status, ErrorEnvelope::new(code, message), format);
     append_vary_accept(response.headers_mut());
-    Ok(response)
-}
-async fn enforce_kagemusha_cache_policy(
-    req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<axum::response::Response, Infallible> {
-    const OPERATION_PREFIX: &str = "/v1/kagemusha/operations/";
-    const READINESS_PATH: &str = "/v1/kagemusha/readiness";
-    const TOP_UP_PATH: &str = "/v1/kagemusha/top-up";
-    const REDEEM_PATH: &str = "/v1/kagemusha/redeem";
-    let route = req.extensions().get::<MatchedRouteMetadata>();
-    let operation_status = route.is_some_and(|route| {
-        route.stable_route_id() == route_catalog::kagemusha::OPERATION.stable_route_id()
-    }) || req.uri().path().starts_with(OPERATION_PREFIX);
-    let readiness = route.is_some_and(|route| {
-        route.stable_route_id() == route_catalog::kagemusha::READINESS.stable_route_id()
-    }) || req.uri().path() == READINESS_PATH
-        || req.uri().path().starts_with("/v1/kagemusha/readiness/");
-    let command = route.is_some_and(|route| {
-        let id = route.stable_route_id();
-        id == route_catalog::kagemusha::TOP_UP.stable_route_id()
-            || id == route_catalog::kagemusha::REDEEM.stable_route_id()
-    }) || matches!(req.uri().path(), TOP_UP_PATH | REDEEM_PATH);
-    let mut response = next.run(req).await;
-    let policy = if operation_status || command {
-        Some("no-store")
-    } else if readiness {
-        if matches!(response.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
-            Some("private, max-age=0, must-revalidate")
-        } else {
-            Some("no-store")
-        }
-    } else {
-        None
-    };
-    if let Some(policy) = policy {
-        response.headers_mut().insert(
-            axum::http::header::CACHE_CONTROL,
-            HeaderValue::from_static(policy),
-        );
-    }
     Ok(response)
 }
 fn is_cors_preflight(request: &axum::http::Request<Body>) -> bool {
@@ -6234,7 +6191,7 @@ async fn catch_handler_panics(
 /// Attach catalog metadata after Axum has selected a route template.
 ///
 /// `MatchedPath` is a router template (for example
-/// `/v1/kagemusha/operations/{operation_id}`), never the concrete request URI.
+/// `/v1/operator/auth/credentials/{credential_id}`), never the concrete request URI.
 /// The metadata is copied to the response so outer middleware can observe it
 /// without buffering or reconstructing the consumed request.
 async fn attach_matched_route_metadata(
@@ -7132,6 +7089,14 @@ fn push_authenticate_device_request(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, AxResponse> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -7140,6 +7105,7 @@ fn push_authenticate_device_request(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(push_error_response(
@@ -7299,25 +7265,6 @@ async fn collect_proof_body_with_deadline(
     )
     .await
 }
-async fn collect_kagemusha_command_body_with_deadline(
-    request: axum::http::Request<Body>,
-    max_bytes: usize,
-    deadline: Duration,
-) -> Result<axum::http::Request<Body>, Response> {
-    collect_bounded_body_with_deadline(
-        request,
-        max_bytes,
-        deadline,
-        BoundedBodyReadMessages {
-            context: "KAGEMUSHA command request body",
-            too_large: "KAGEMUSHA command request body exceeds the route byte limit",
-            protocol_error: "KAGEMUSHA command request body stream ended with a protocol error",
-            timeout:
-                "KAGEMUSHA command request body was not completed before the absolute read deadline",
-        },
-    )
-    .await
-}
 #[cfg(feature = "app_api")]
 async fn collect_verified_source_body_with_deadline(
     request: axum::http::Request<Body>,
@@ -7412,6 +7359,14 @@ async fn enforce_canonical_account_body_authentication(
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state.app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return error.into_response();
+            }
+        };
+
     let (mut parts, body) = request.into_parts();
     let body = if let Some(admitted) = admitted_app_routed_read_body_for_auth(&parts) {
         if admitted.len() > state.max_body_bytes {
@@ -7440,6 +7395,7 @@ async fn enforce_canonical_account_body_authentication(
         &parts.uri,
         body.as_ref(),
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => verified,
         Ok(None) => {
@@ -7463,6 +7419,14 @@ async fn enforce_optional_canonical_account_body_authentication(
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state.app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return error.into_response();
+            }
+        };
+
     let (mut parts, body) = request.into_parts();
     let body = if let Some(admitted) = admitted_app_routed_read_body_for_auth(&parts) {
         if admitted.len() > state.max_body_bytes {
@@ -7488,6 +7452,7 @@ async fn enforce_optional_canonical_account_body_authentication(
         &parts.uri,
         body.as_ref(),
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => ToriiAccountReadVisibility::Signed(verified.account),
         Ok(None) => ToriiAccountReadVisibility::None,
@@ -7780,7 +7745,13 @@ async fn handler_gov_contract_get(
         None,
     )
     .await?;
-    crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
+    let owner = crate::history_producer::HistoryProducerOwner::authentication_read(&app)?;
+    crate::gov::handle_gov_contract_get(
+        app.state.clone(),
+        contract_address,
+        owner.allocation_context(),
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_draft(
@@ -10288,358 +10259,6 @@ async fn handler_repo_agreements_query(
     )
     .await
 }
-const fn kagemusha_top_up_body_limit(transaction_max_content_len: usize) -> usize {
-    transaction_max_content_len
-}
-const fn kagemusha_command_ingress_capacity_is_valid(transaction_max_content_len: usize) -> bool {
-    transaction_max_content_len
-        >= iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1
-}
-const fn kagemusha_redeem_body_limit(transaction_max_content_len: usize) -> usize {
-    if transaction_max_content_len
-        < iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
-    {
-        transaction_max_content_len
-    } else {
-        iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct KagemushaCommandBodyPolicy {
-    route_hint: &'static str,
-    max_body_bytes: usize,
-}
-impl KagemushaCommandBodyPolicy {
-    fn top_up(transaction_max_content_len: usize) -> Self {
-        Self {
-            route_hint: "v1/kagemusha/top-up",
-            max_body_bytes: kagemusha_top_up_body_limit(transaction_max_content_len),
-        }
-    }
-
-    fn redeem(transaction_max_content_len: usize) -> Self {
-        Self {
-            route_hint: "v1/kagemusha/redeem",
-            max_body_bytes: kagemusha_redeem_body_limit(transaction_max_content_len),
-        }
-    }
-
-    fn working_set_parts(self, encoded_len: usize) -> Option<[u64; 2]> {
-        if encoded_len > self.max_body_bytes {
-            return None;
-        }
-        let decode_allocation_bytes =
-            norito::canonical_decode_limits(encoded_len).max_total_allocated_bytes();
-        Some([
-            u64::try_from(encoded_len).ok()?,
-            u64::try_from(decode_allocation_bytes).ok()?,
-        ])
-    }
-
-    fn maximum_working_set_bytes(self) -> Option<usize> {
-        self.working_set_parts(self.max_body_bytes)?
-            .into_iter()
-            .try_fold(0_u64, u64::checked_add)
-            .and_then(|bytes| usize::try_from(bytes).ok())
-    }
-}
-fn kagemusha_command_memory_pool_bytes(transaction_max_content_len: usize) -> Option<usize> {
-    Some(
-        KagemushaCommandBodyPolicy::top_up(transaction_max_content_len)
-            .maximum_working_set_bytes()?
-            .max(
-                KagemushaCommandBodyPolicy::redeem(transaction_max_content_len)
-                    .maximum_working_set_bytes()?,
-            )
-            .max(ordinary_mint_finalized::maximum_working_set_bytes()?)
-            .max(ordinary_mint_credit::maximum_working_set_bytes()?),
-    )
-}
-fn encode_kagemusha_readiness_representation(
-    payload: &iroha_torii_shared::kagemusha_api::KagemushaReadinessV1,
-    format: crate::utils::ResponseFormat,
-) -> Result<(&'static str, Vec<u8>), Error> {
-    match format {
-        crate::utils::ResponseFormat::Json => norito::json::to_vec(payload)
-            .map(|bytes| ("application/json", bytes))
-            .map_err(|source| Error::SerializationFailure {
-                context: "kagemusha_readiness",
-                source: Box::new(source),
-            }),
-        crate::utils::ResponseFormat::Norito => norito::to_bytes(payload)
-            .map(|bytes| (crate::utils::NORITO_MIME_TYPE, bytes))
-            .map_err(|source| Error::SerializationFailure {
-                context: "kagemusha_readiness",
-                source: Box::new(source),
-            }),
-    }
-}
-fn strong_etag_for_representation(bytes: &[u8]) -> String {
-    use sha2::Digest as _;
-    format!("\"{}\"", hex::encode(sha2::Sha256::digest(bytes)))
-}
-#[axum::debug_handler]
-async fn handler_kagemusha_readiness(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    if uri.query().is_some() {
-        return Err(Error::AppQueryValidation {
-            code: "kagemusha_readiness_query_unsupported",
-            message: "KAGEMUSHA capability discovery does not accept query parameters.".to_owned(),
-        });
-    }
-    check_access(&app, &headers, Some(remote.ip()), "v1/kagemusha/readiness").await?;
-    let payload = universal_kagemusha_readiness_v1();
-    let response_format = crate::utils::current_response_format();
-    let (content_type, representation) =
-        encode_kagemusha_readiness_representation(&payload, response_format)?;
-    let etag = strong_etag_for_representation(&representation);
-    let cache_control = axum::http::HeaderValue::from_static("private, max-age=0, must-revalidate");
-    if headers
-        .get(axum::http::header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.split(',').any(|candidate| {
-                let candidate = candidate.trim();
-                candidate == "*"
-                    || candidate == etag
-                    || candidate.strip_prefix("W/").is_some_and(|tag| tag == etag)
-            })
-        })
-    {
-        let mut response = axum::http::Response::new(axum::body::Body::empty());
-        *response.status_mut() = axum::http::StatusCode::NOT_MODIFIED;
-        response
-            .headers_mut()
-            .insert(axum::http::header::CACHE_CONTROL, cache_control);
-        if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
-            response
-                .headers_mut()
-                .insert(axum::http::header::ETAG, value);
-        }
-        append_vary_accept(response.headers_mut());
-        return Ok(response);
-    }
-    let mut response = axum::http::Response::builder()
-        .status(axum::http::StatusCode::OK)
-        .header(axum::http::header::CONTENT_TYPE, content_type)
-        .body(axum::body::Body::from(representation))
-        .expect("build pre-encoded KAGEMUSHA readiness response");
-    response
-        .headers_mut()
-        .insert(axum::http::header::CACHE_CONTROL, cache_control);
-    if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
-        response
-            .headers_mut()
-            .insert(axum::http::header::ETAG, value);
-    }
-    append_vary_accept(response.headers_mut());
-    Ok(response)
-}
-#[axum::debug_handler]
-async fn handler_kagemusha_redeem(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-    crate::utils::extractors::KagemushaNorito(request): crate::utils::extractors::KagemushaNorito<
-        iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1,
-    >,
-) -> Result<AxResponse, Error> {
-    kagemusha_commands::handle_redeem(app, headers, accept, request).await
-}
-#[axum::debug_handler]
-async fn handler_kagemusha_top_up(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-    crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
-) -> Result<AxResponse, Error> {
-    kagemusha_commands::handle_top_up(app, headers, accept, body).await
-}
-async fn enforce_kagemusha_command_prebody_admission(
-    State(app): State<SharedAppState>,
-    req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<AxResponse, Infallible> {
-    let policy = req
-        .extensions()
-        .get::<MatchedRouteMetadata>()
-        .and_then(|route| match route.stable_route_id() {
-            id if id == route_catalog::kagemusha::TOP_UP.stable_route_id() => Some(
-                KagemushaCommandBodyPolicy::top_up(app.transaction_max_content_len),
-            ),
-            id if id == route_catalog::kagemusha::REDEEM.stable_route_id() => Some(
-                KagemushaCommandBodyPolicy::redeem(app.transaction_max_content_len),
-            ),
-            _ => None,
-        });
-    let Some(policy) = policy else {
-        return Ok(next.run(req).await);
-    };
-    let transport_remote = req
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|connect| connect.0.ip());
-    let remote = limits::ingress_remote_ip(
-        req.headers(),
-        transport_remote,
-        app.trusted_proxy_nets.as_ref(),
-    );
-    let mut headers = req.headers().clone();
-    headers.remove(limits::REMOTE_ADDR_HEADER);
-    if let Err(error) = check_access(&app, &headers, remote, policy.route_hint).await {
-        return Ok(error.into_response());
-    }
-    if let Err(response) = crate::utils::norito_request_content_type(&headers) {
-        return Ok(response);
-    }
-    if let Err(error) = kagemusha_commands::validate_command_headers_before_body(&headers) {
-        return Ok(error.into_response());
-    }
-    let declared_content_length =
-        match validate_bounded_content_length(&headers, policy.max_body_bytes) {
-            Ok(declared) => declared,
-            Err(BoundedContentLengthError::TooLarge) => {
-                return Ok((
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    format!(
-                        "KAGEMUSHA command request body exceeds the {}-byte route limit",
-                        policy.max_body_bytes
-                    ),
-                )
-                    .into_response());
-            }
-            Err(BoundedContentLengthError::Invalid) => {
-                return Ok((
-                    StatusCode::BAD_REQUEST,
-                    "invalid or ambiguous KAGEMUSHA command Content-Length",
-                )
-                    .into_response());
-            }
-        };
-    use axum::body::HttpBody as _;
-    let exact_body_hint = req
-        .body()
-        .size_hint()
-        .exact()
-        .and_then(|bytes| usize::try_from(bytes).ok());
-    if declared_content_length
-        .zip(exact_body_hint)
-        .is_some_and(|(declared, hinted)| declared != hinted)
-    {
-        // Hyper's network body uses the validated Content-Length as its exact
-        // framing boundary. This additional check rejects custom/internal Tower
-        // bodies with a contradictory exact hint before admission or polling.
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            "KAGEMUSHA command Content-Length does not match the request body framing",
-        )
-            .into_response());
-    }
-    let body_permit = match app.proof_body_inflight.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            return Ok(Error::AppServiceUnavailable {
-                code: "kagemusha_command_body_admission_saturated",
-                message: "KAGEMUSHA command body admission is saturated; retry later.".to_owned(),
-            }
-            .into_response());
-        }
-    };
-    // A canonical Content-Length is an exact transport bound. Chunked or otherwise
-    // lengthless requests reserve the complete route working set before their first
-    // body frame is polled.
-    let charged_body_bytes = declared_content_length.unwrap_or(policy.max_body_bytes);
-    let Some(working_set_parts) = policy.working_set_parts(charged_body_bytes) else {
-        return Ok(Error::AppServiceUnavailable {
-            code: "kagemusha_command_admission_configuration_invalid",
-            message:
-                "KAGEMUSHA command body admission cannot represent the configured route limit."
-                    .to_owned(),
-        }
-        .into_response());
-    };
-    let memory_permit = match app
-        .kagemusha_command_memory_inflight
-        .try_acquire_parts(working_set_parts)
-    {
-        Some(permit) => permit,
-        None => {
-            return Ok(Error::AppServiceUnavailable {
-                code: "kagemusha_command_memory_admission_saturated",
-                message: "KAGEMUSHA command memory admission is saturated; retry later.".to_owned(),
-            }
-            .into_response());
-        }
-    };
-    let mut req = match collect_kagemusha_command_body_with_deadline(
-        req,
-        policy.max_body_bytes,
-        app.proof_limits.body_read_timeout,
-    )
-    .await
-    {
-        Ok(req) => req,
-        Err(response) => return Ok(response),
-    };
-    let actual_body_bytes = req
-        .body()
-        .size_hint()
-        .exact()
-        .and_then(|bytes| usize::try_from(bytes).ok());
-    if declared_content_length.is_some_and(|declared| Some(declared) != actual_body_bytes) {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            "KAGEMUSHA command Content-Length does not match the received body",
-        )
-            .into_response());
-    }
-    let lease = KagemushaCommandBodyAdmissionLease::new(body_permit, memory_permit);
-    req.extensions_mut().insert(lease.clone());
-    let response = next.run(req).await;
-    drop(lease);
-    Ok(response)
-}
-#[derive(Clone)]
-struct KagemushaCommandBodyAdmissionLease {
-    _permits: Arc<KagemushaCommandBodyAdmissionPermits>,
-}
-struct KagemushaCommandBodyAdmissionPermits {
-    _body: tokio::sync::OwnedSemaphorePermit,
-    _memory: tokio::sync::OwnedSemaphorePermit,
-}
-impl KagemushaCommandBodyAdmissionLease {
-    fn new(
-        body: tokio::sync::OwnedSemaphorePermit,
-        memory: tokio::sync::OwnedSemaphorePermit,
-    ) -> Self {
-        Self {
-            _permits: Arc::new(KagemushaCommandBodyAdmissionPermits {
-                _body: body,
-                _memory: memory,
-            }),
-        }
-    }
-}
-#[axum::debug_handler]
-async fn handler_kagemusha_operation_status(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    axum::extract::Path(operation_id): axum::extract::Path<String>,
-) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/kagemusha/operations/{operation_id}",
-    )
-    .await?;
-    kagemusha_commands::handle_operation_status(&app, &operation_id)
-}
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct DefiOracleAttestationLatestQuery {
@@ -11147,8 +10766,7 @@ async fn handler_explorer_health(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/health").await?;
     }
-    routing::handle_v1_explorer_health(app.state.clone(), app.kura.clone(), app.telemetry.clone())
-        .await
+    routing::handle_v1_explorer_health(app.state.clone(), app.telemetry.clone()).await
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[axum::debug_handler]
@@ -11706,11 +11324,12 @@ async fn handler_explorer_block_detail(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks/{id}").await?;
     }
-    routing::handle_v1_explorer_block_detail(
+    routing::handle_v1_explorer_block_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         identifier,
+        acquire_query_admission(&app, true).await?,
     )
     .await
 }
@@ -11743,11 +11362,12 @@ async fn handler_explorer_transaction_detail(
         )
         .await?;
     }
-    match crate::routing::handle_v1_explorer_transaction_detail(
+    match crate::routing::handle_v1_explorer_transaction_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         hash,
+        acquire_query_admission(&app, true).await?,
     )
     .await
     {
@@ -11784,12 +11404,13 @@ async fn handler_explorer_instruction_detail(
         )
         .await?;
     }
-    match crate::routing::handle_v1_explorer_instruction_detail(
+    match crate::routing::handle_v1_explorer_instruction_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         hash,
         index,
+        acquire_query_admission(&app, true).await?,
     )
     .await
     {
@@ -11826,12 +11447,13 @@ async fn handler_explorer_instruction_contract_view(
         )
         .await?;
     }
-    if let Err(error) = crate::routing::handle_v1_explorer_instruction_detail(
+    if let Err(error) = crate::routing::handle_v1_explorer_instruction_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         hash.clone(),
         index,
+        acquire_query_admission(&app, true).await?,
     )
     .await
     {
@@ -12892,16 +12514,6 @@ async fn handler_peers(
     };
     Ok(routing::handle_peers(&app.online_peers, format))
 }
-fn universal_kagemusha_readiness_v1() -> iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 {
-    iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 {
-        kagemusha_handoff_capability: iroha_data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1
-            .to_owned(),
-        wire_version: iroha_data_model::kagemusha::KAGEMUSHA_WIRE_VERSION_V1,
-        device_lifecycle_version:
-            iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1,
-        ready: true,
-    }
-}
 /// GET `/health` — ordinary Torii health, independent of wallet UI features.
 async fn handler_health(
     State(app): State<SharedAppState>,
@@ -12931,8 +12543,7 @@ async fn wait_for_consensus_readiness(
 
 /// GET `/readyz` — ordinary node admission readiness.
 ///
-/// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Consensus admission and the current authenticated beacon custody observation
+/// Consensus admission and the current authenticated beacon custody observation
 /// must be available. A refresh is awaited within the ordinary route execution budget.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
@@ -15542,6 +15153,14 @@ fn torii_visibility_account_from_headers(
     body: &[u8],
     _endpoint: &'static str,
 ) -> Result<ToriiAccountReadVisibility, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     if torii_signed_visibility_headers_present(headers) {
         let verified = crate::app_auth::verify_canonical_network_request(
             &app.state,
@@ -15551,6 +15170,7 @@ fn torii_visibility_account_from_headers(
             uri,
             body,
             None,
+            authentication_owner.allocation_context(),
         )
         .map_err(|error| Error::AppUnauthorized {
             code: "canonical_authentication_invalid",
@@ -24838,18 +24458,13 @@ async fn handler_explorer_transactions_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/transactions/stream",
-    )?;
+    let visibility =
+        stream_control::ExplorerReadContext::from_headers(&app, &headers, &method, &uri)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_transactions_stream(
             app.state.clone(),
-            app.events.clone(),
             visibility,
+            app.clone(),
         )
         .into_response());
     }
@@ -24865,12 +24480,10 @@ async fn handler_explorer_transactions_stream(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_explorer_transactions_stream(
-        app.state.clone(),
-        app.events.clone(),
-        visibility,
+    Ok(
+        routing::handle_v1_explorer_transactions_stream(app.state.clone(), visibility, app.clone())
+            .into_response(),
     )
-    .into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_explorer_blocks_stream(
@@ -24881,18 +24494,13 @@ async fn handler_explorer_blocks_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/blocks/stream",
-    )?;
+    let visibility =
+        stream_control::ExplorerReadContext::from_headers(&app, &headers, &method, &uri)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_blocks_stream(
             app.state.clone(),
-            app.events.clone(),
             visibility,
+            app.clone(),
         )
         .into_response());
     }
@@ -24909,12 +24517,8 @@ async fn handler_explorer_blocks_stream(
         )));
     }
     Ok(
-        routing::handle_v1_explorer_blocks_stream(
-            app.state.clone(),
-            app.events.clone(),
-            visibility,
-        )
-        .into_response(),
+        routing::handle_v1_explorer_blocks_stream(app.state.clone(), visibility, app.clone())
+            .into_response(),
     )
 }
 #[cfg(feature = "app_api")]
@@ -24926,18 +24530,13 @@ async fn handler_explorer_instructions_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/instructions/stream",
-    )?;
+    let visibility =
+        stream_control::ExplorerReadContext::from_headers(&app, &headers, &method, &uri)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_instructions_stream(
             app.state.clone(),
-            app.events.clone(),
             visibility,
+            app.clone(),
         )
         .into_response());
     }
@@ -24953,12 +24552,10 @@ async fn handler_explorer_instructions_stream(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_explorer_instructions_stream(
-        app.state.clone(),
-        app.events.clone(),
-        visibility,
+    Ok(
+        routing::handle_v1_explorer_instructions_stream(app.state.clone(), visibility, app.clone())
+            .into_response(),
     )
-    .into_response())
 }
 #[cfg(feature = "app_api")]
 fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
@@ -30716,6 +30313,14 @@ fn require_signed_account_request(
     error_code: &'static str,
     error_message: &'static str,
 ) -> Result<AccountId, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -30724,6 +30329,7 @@ fn require_signed_account_request(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     )? {
         Some(verified) => Ok(verified.account),
         None => Err(Error::AppUnauthorized {
@@ -32563,12 +32169,21 @@ async fn handler_fee_quote(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     let verified = crate::app_auth::verify_fee_quote_canonical_request(
         &app.state,
         &headers,
         &method,
         &uri,
         body.as_ref(),
+        authentication_owner.allocation_context(),
     )?;
     let Some(caller) = verified.as_ref().map(|request| &request.account) else {
         return Ok(torii_canonical_auth_required_response(
@@ -33543,6 +33158,14 @@ fn authenticate_full_ledger_carrier_reader(
     method: &Method,
     uri: &Uri,
 ) -> Result<AccountId, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     let request = crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -33551,6 +33174,7 @@ fn authenticate_full_ledger_carrier_reader(
         uri,
         &[],
         None,
+        authentication_owner.allocation_context(),
     )?
     .ok_or_else(|| Error::AppUnauthorized {
         code: "canonical_authentication_required",
@@ -35108,7 +34732,6 @@ pub struct Torii {
     sorafs_appeal_finance_policy: Arc<sorafs::api::AppealFinanceRuntimePolicy>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
-    kagemusha_commands: Arc<kagemusha_commands::KagemushaCommandRuntime>,
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
@@ -37864,26 +37487,6 @@ impl Torii {
             GET => public_get(multisig_execution_evidence::handler);
         );
     }
-    /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
-    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
-        let transaction_max_content_len = self.transaction_max_content_len;
-        let kagemusha_top_up_body_limit_bytes =
-            kagemusha_top_up_body_limit(transaction_max_content_len);
-        let kagemusha_redeem_body_limit_bytes =
-            kagemusha_redeem_body_limit(transaction_max_content_len);
-        mount_catalog_route_rows!(
-            builder, kagemusha;
-            READINESS => public_get(handler_kagemusha_readiness);
-            TOP_UP => limited_canonical_signed_post(handler_kagemusha_top_up, kagemusha_top_up_body_limit_bytes);
-            REDEEM => limited_canonical_signed_post(handler_kagemusha_redeem, kagemusha_redeem_body_limit_bytes);
-            OPERATION => public_get(handler_kagemusha_operation_status);
-            AUTHORITY_STATE => public_get(kagemusha_state::handler);
-            ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);
-            ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);
-            ORDINARY_MINT_FINALIZED => limited_canonical_signature_post(ordinary_mint_finalized::handler, iroha_torii_shared::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1);
-            ORDINARY_MINT_CREDIT => limited_canonical_signature_post(ordinary_mint_credit::handler, iroha_torii_shared::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1);
-        );
-    }
     /// App-facing typed and protocol-native endpoints.
     #[cfg(feature = "app_api")]
     fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
@@ -38813,15 +38416,6 @@ impl Torii {
             config.peer_telemetry_urls.clear();
             config.connect.enabled = false;
             config.mcp.enabled = false;
-        }
-        if !kagemusha_command_ingress_capacity_is_valid(transaction_max_content_len) {
-            return Err(ToriiBuildError::invalid_configuration(
-                "max_content_len",
-                format!(
-                    "KAGEMUSHA V1 commands require at least {} bytes of signed-transaction ingress capacity",
-                    iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1
-                ),
-            ));
         }
         let runtime_deps = if emergency_fast {
             runtime_deps.into_emergency_fast()
@@ -40139,12 +39733,6 @@ impl Torii {
             )
         })
         .transpose()?;
-        let kagemusha_commands = config
-            .kagemusha_v1_commands
-            .clone()
-            .map(kagemusha_commands::KagemushaCommandRuntime::from_config)
-            .unwrap_or_default();
-        let kagemusha_commands = Arc::new(kagemusha_commands);
         #[cfg(feature = "app_api")]
         let identifier_resolver = config
             .ram_lfe
@@ -40440,7 +40028,6 @@ impl Torii {
             sorafs_appeal_finance_policy,
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter,
-            kagemusha_commands,
             #[cfg(feature = "app_api")]
             account_onboarding,
             vpn_relay_trust,
@@ -40659,40 +40246,6 @@ impl Torii {
                     "query memory pool does not fit weighted semaphore geometry",
                 )
             })?;
-        {
-            let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
-                kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
-                    || {
-                        ToriiBuildError::invalid_configuration(
-                            "max_content_len",
-                            "KAGEMUSHA command body limits do not fit the platform address space",
-                        )
-                    },
-                )?,
-            )
-            .ok_or_else(|| {
-                ToriiBuildError::invalid_configuration(
-                    "max_content_len",
-                    "KAGEMUSHA command memory pool does not fit weighted semaphore geometry",
-                )
-            })?;
-            let redemption_parts = KagemushaCommandBodyPolicy::redeem(
-                torii_proxy_max_response_bytes,
-            )
-            .working_set_parts(kagemusha_redeem_body_limit(torii_proxy_max_response_bytes))
-            .ok_or_else(|| {
-                ToriiBuildError::invalid_configuration(
-                    "max_content_len",
-                    "KAGEMUSHA redemption working set does not fit the platform address space",
-                )
-            })?;
-            if !kagemusha_command_memory_inflight.can_reserve_parts(redemption_parts) {
-                return Err(ToriiBuildError::invalid_configuration(
-                    "max_content_len",
-                    "KAGEMUSHA command memory pool cannot admit one maximum-size redemption",
-                ));
-            }
-        }
         let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
             usize::try_from(query_fanout_inflight.capacity_bytes()).map_err(|_| {
                 ToriiBuildError::invalid_configuration(
@@ -41110,37 +40663,6 @@ impl Torii {
                     "query memory pool does not fit weighted semaphore geometry",
                 )
             })?;
-        let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
-            kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
-                || {
-                    ToriiBuildError::invalid_configuration(
-                        "max_content_len",
-                        "KAGEMUSHA command body limits do not fit the platform address space",
-                    )
-                },
-            )?,
-        )
-        .ok_or_else(|| {
-            ToriiBuildError::invalid_configuration(
-                "max_content_len",
-                "KAGEMUSHA command memory pool does not fit weighted semaphore geometry",
-            )
-        })?;
-        if !kagemusha_command_memory_inflight.can_reserve_parts(
-            KagemushaCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
-                .working_set_parts(kagemusha_redeem_body_limit(torii_proxy_max_response_bytes))
-                .ok_or_else(|| {
-                    ToriiBuildError::invalid_configuration(
-                        "max_content_len",
-                        "KAGEMUSHA redemption working set does not fit the platform address space",
-                    )
-                })?,
-        ) {
-            return Err(ToriiBuildError::invalid_configuration(
-                "max_content_len",
-                "KAGEMUSHA command memory pool cannot admit one maximum-size redemption",
-            ));
-        }
         let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
             usize::try_from(query_fanout_inflight.capacity_bytes()).map_err(|_| {
                 ToriiBuildError::invalid_configuration(
@@ -41271,7 +40793,6 @@ impl Torii {
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
             proof_body_inflight,
-            kagemusha_command_memory_inflight,
             soracloud_public_rate_limiter: self.soracloud_public_rate_limiter.clone(),
             soracloud_mutation_rate_limiter: self.soracloud_mutation_rate_limiter.clone(),
             soracloud_mutation_inflight,
@@ -41446,7 +40967,6 @@ impl Torii {
             sorafs_appeal_finance_policy: self.sorafs_appeal_finance_policy.clone(),
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
-            kagemusha_commands: self.kagemusha_commands.clone(),
             #[cfg(feature = "app_api")]
             account_onboarding: self.account_onboarding.clone(),
             vpn_relay_trust: self.vpn_relay_trust.clone(),
@@ -41590,7 +41110,6 @@ impl Torii {
         #[cfg(feature = "connect")]
         self.add_connect_routes(&mut builder);
         Self::add_multisig_execution_evidence_routes(&mut builder);
-        self.add_kagemusha_routes(&mut builder);
         // App-facing JSON API
         #[cfg(feature = "app_api")]
         self.add_app_api_routes(&mut builder);
@@ -41603,22 +41122,15 @@ impl Torii {
             )
         })?;
         let route_index = mounted_manifest.route_index();
-        let mut router = router
+        let router = router
             .fallback(handler_route_not_found_or_sorafs_site)
             .layer(axum::middleware::from_fn(enforce_route_timeout));
-        // Mandatory KAGEMUSHA body admission remains inside listener authentication.
-        router = router.layer(axum::middleware::from_fn_with_state(
-            app_state.clone(),
-            enforce_kagemusha_command_prebody_admission,
-        ));
+        // App admission stays inside authentication but outside body extractors.
         #[cfg(feature = "app_api")]
-        {
-            // App admission stays inside authentication but outside body extractors.
-            router = router.layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_app_routed_read_http_admission,
-            ));
-        }
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            enforce_app_routed_read_http_admission,
+        ));
         // Strict media negotiation belongs inside pre-auth and API-token
         // admission. An unauthenticated or over-capacity caller must receive
         // that primary rejection without first exercising header grammar or
@@ -41672,12 +41184,6 @@ impl Torii {
         // Normalize every JSON response, including errors returned before
         // handler selection, to the required UTF-8 media type.
         let router = router.layer(axum::middleware::from_fn(enforce_json_utf8_charset));
-        // KAGEMUSHA command and operation-status responses, plus readiness
-        // failures, are never cacheable, including early validation,
-        // authorization, not-found, and recovery failures. Successful
-        // readiness responses receive the exact private revalidation policy
-        // even if an inner layer supplied a conflicting cache directive.
-        let router = router.layer(axum::middleware::from_fn(enforce_kagemusha_cache_policy));
         // Metrics wrap every response-producing layer, including CORS,
         // malformed headers, authentication, request-size, rate-limit,
         // timeout, and panic paths.
@@ -43365,44 +42871,6 @@ pub enum Error {
     /// Torii server terminated with an error
     FailedExit,
 }
-fn kagemusha_reject_code_from_message(message: &str) -> Option<&str> {
-    use iroha_data_model::kagemusha::KAGEMUSHA_V1_REJECTION_REASON_PREFIX;
-    let start = message.find(KAGEMUSHA_V1_REJECTION_REASON_PREFIX)?;
-    let rest = &message[start + KAGEMUSHA_V1_REJECTION_REASON_PREFIX.len()..];
-    let (label, _) = rest.split_once(':')?;
-    if label.is_empty() { None } else { Some(label) }
-}
-fn kagemusha_reject_code_from_query_fail(
-    fail: &iroha_data_model::query::error::QueryExecutionFail,
-) -> Option<&str> {
-    use iroha_data_model::query::error::QueryExecutionFail as Q;
-    match fail {
-        Q::Conversion(message) => kagemusha_reject_code_from_message(message),
-        _ => None,
-    }
-}
-fn kagemusha_reject_code_from_instruction_fail(
-    fail: &iroha_data_model::isi::error::InstructionExecutionError,
-) -> Option<&str> {
-    use iroha_data_model::isi::error::InstructionExecutionError as I;
-    match fail {
-        I::Conversion(message) => kagemusha_reject_code_from_message(message),
-        I::InvariantViolation(message) => kagemusha_reject_code_from_message(message.as_ref()),
-        I::Query(fail) => kagemusha_reject_code_from_query_fail(fail),
-        _ => None,
-    }
-}
-fn kagemusha_reject_code_from_validation_fail(
-    fail: &iroha_data_model::ValidationFail,
-) -> Option<&str> {
-    use iroha_data_model::ValidationFail as V;
-    match fail {
-        V::NotPermitted(message) => kagemusha_reject_code_from_message(message),
-        V::QueryFailed(fail) => kagemusha_reject_code_from_query_fail(fail),
-        V::InstructionFailed(fail) => kagemusha_reject_code_from_instruction_fail(fail),
-        _ => None,
-    }
-}
 fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
     use iroha_data_model::{
         ValidationFail as V, isi::error::InstructionExecutionError as I,
@@ -43459,15 +42927,12 @@ impl IntoResponse for Error {
                         format,
                     );
                 }
-                let kagemusha_reason =
-                    kagemusha_reject_code_from_validation_fail(&err).map(str::to_owned);
                 let axt = match &err {
                     iroha_data_model::ValidationFail::AxtReject(ctx) => Some(ctx.clone()),
                     _ => None,
                 };
                 let mut envelope = public_validation_fail_envelope(&err, status);
                 let mut details = envelope.details.take().unwrap_or_default();
-                details.reject_code = kagemusha_reason.clone();
                 details.axt = axt.as_ref().map(|ctx| AxtErrorDetails {
                     code: Some(ctx.reason.code().to_owned()),
                     reason: Some(ctx.reason.label().to_owned()),
@@ -43523,13 +42988,6 @@ impl IntoResponse for Error {
                                 HeaderName::from_static("x-iroha-axt-next-handle-counter"),
                                 value,
                             );
-                        }
-                    }
-                }
-                if headers.get("x-iroha-reject-code").is_none() {
-                    if let Some(code) = kagemusha_reason {
-                        if let Ok(header) = HeaderValue::from_str(&code) {
-                            headers.insert(HeaderName::from_static("x-iroha-reject-code"), header);
                         }
                     }
                 }

@@ -242,7 +242,6 @@ def _capabilities() -> dict[str, Any]:
             "CONTRACT_LIFECYCLE_GOVERNANCE",
             "DEPLOY_CONTRACT",
             "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
-            "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
             "MUSUBI_REGISTRY_GOVERNANCE",
             "RUNTIME_UPGRADE",
             "SCCP_ROUTE_GOVERNANCE",
@@ -1907,6 +1906,30 @@ def test_capabilities_reject_unsupported_data_model_version() -> None:
     session = RecordingSession()
     session.queue(_json_response(payload))
     with pytest.raises(TypeError, match="unsupported data-model version"):
+        ToriiClient(
+            "https://node.test", session=session
+        ).get_governance_capabilities_v1(canonical_auth=_auth())
+
+
+@pytest.mark.parametrize(
+    "retired_kind",
+    [
+        "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
+        "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
+        "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
+        "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
+    ],
+)
+def test_capabilities_reject_retired_kagemusha_proposal_kinds(
+    retired_kind: str,
+) -> None:
+    payload = _capabilities()
+    assert len(payload["supported_proposal_kinds"]) == 10
+    assert retired_kind not in payload["supported_proposal_kinds"]
+    payload["supported_proposal_kinds"].append(retired_kind)
+    session = RecordingSession()
+    session.queue(_json_response(payload))
+    with pytest.raises(ValueError, match="exact first-release set"):
         ToriiClient(
             "https://node.test", session=session
         ).get_governance_capabilities_v1(canonical_auth=_auth())

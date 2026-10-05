@@ -1,0 +1,1218 @@
+{
+  "schema": "iroha.zk-x509.presentation-interval-vectors.v1",
+  "definition": "crates/iroha_data_model/src/privacy/zk_x509_interval.rs",
+  "max_crl_age_seconds": 300,
+  "max_presentation_window_seconds": 300,
+  "max_unix_seconds": 253402300799,
+  "min_chain_depth": 2,
+  "max_chain_depth": 3,
+  "keys": {
+    "bounds.earliest_start": "Earliest admissible window start, inclusive: the latest of every certificate notBefore and the CRL thisUpdate.",
+    "bounds.latest_end": "Latest admissible window end, inclusive: the earliest of every certificate notAfter, the CRL nextUpdate - 1, thisUpdate + max_crl_age_seconds and max_unix_seconds.",
+    "signable": "Whether the signed intervals can be DER-encoded as a path and CRL of the closed profile; other cases exercise the definition only.",
+    "windows.result": "`admitted` or the stable rejection code of the canonical definition.",
+    "deadlines.deadline_unix_ms": "Last admissible block timestamp for a presentation ending at presentation_not_after."
+  },
+  "cases": [
+    {
+      "name": "crl-age-bound",
+      "note": "A long-lived CRL is fresh for exactly 300 seconds after thisUpdate.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672534800
+      },
+      "bounds": {
+        "earliest_start": 1672531200,
+        "latest_end": 1672531500
+      },
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531501,
+          "result": "invalid-window"
+        },
+        {
+          "not_before": 1672531201,
+          "not_after": 1672531501,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531199,
+          "not_after": 1672531400,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531201,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531210,
+          "not_after": 1672531210,
+          "result": "invalid-window"
+        },
+        {
+          "not_before": 1672531210,
+          "not_after": 1672531209,
+          "result": "invalid-window"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531500999
+        },
+        {
+          "presentation_not_after": 1672531201,
+          "deadline_unix_ms": 1672531201999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "timestamp_ms": 1672531199999,
+          "admitted": false
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "timestamp_ms": 1672531200000,
+          "admitted": true
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "timestamp_ms": 1672531500999,
+          "admitted": true
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "timestamp_ms": 1672531501000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "crl-next-update-exclusive",
+      "note": "nextUpdate is exclusive: a window ending at nextUpdate is rejected.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531400
+      },
+      "bounds": {
+        "earliest_start": 1672531200,
+        "latest_end": 1672531399
+      },
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531399,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531400,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531300,
+          "not_after": 1672531399,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531399,
+          "not_after": 1672531400,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531398,
+          "not_after": 1672531399,
+          "result": "admitted"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531399,
+          "deadline_unix_ms": 1672531399999
+        },
+        {
+          "presentation_not_after": 1672531400,
+          "deadline_unix_ms": 1672531399999
+        },
+        {
+          "presentation_not_after": 1672531450,
+          "deadline_unix_ms": 1672531399999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531399,
+          "timestamp_ms": 1672531399999,
+          "admitted": true
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531399,
+          "timestamp_ms": 1672531400000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "earliest-expiry-at-leaf",
+      "note": "The leaf expires first.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1672531320
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1672617600
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531200,
+        "latest_end": 1672531320
+      },
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531320,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531321,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531319,
+          "not_after": 1672531320,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531320,
+          "not_after": 1672531321,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "result": "ends-after-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531320,
+          "deadline_unix_ms": 1672531320999
+        },
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531320999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531320,
+          "timestamp_ms": 1672531320999,
+          "admitted": true
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531320,
+          "timestamp_ms": 1672531321000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "earliest-expiry-at-intermediate",
+      "note": "The intermediate CA expires before the leaf; the latest-expiry formula would admit the last window.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1672617600
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1672531350
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531200,
+        "latest_end": 1672531350
+      },
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531350,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531351,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531349,
+          "not_after": 1672531350,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531350,
+          "not_after": 1672531351,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "result": "ends-after-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531350,
+          "deadline_unix_ms": 1672531350999
+        },
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531350999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531350,
+          "timestamp_ms": 1672531350999,
+          "admitted": true
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531350,
+          "timestamp_ms": 1672531351000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "earliest-expiry-at-root",
+      "note": "The root CA expires before the intermediate and the leaf.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1672617600
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1672574400
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1672531290
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531200,
+        "latest_end": 1672531290
+      },
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531290,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531291,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531289,
+          "not_after": 1672531290,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531290,
+          "not_after": 1672531291,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "result": "ends-after-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531290,
+          "deadline_unix_ms": 1672531290999
+        },
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531290999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531290,
+          "timestamp_ms": 1672531290999,
+          "admitted": true
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531290,
+          "timestamp_ms": 1672531291000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "earliest-expiry-at-root-depth-two",
+      "note": "Two-certificate path whose root expires before the leaf.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1672617600
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1672531245
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531200,
+        "latest_end": 1672531245
+      },
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531245,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531246,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531244,
+          "not_after": 1672531245,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "result": "ends-after-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531245,
+          "deadline_unix_ms": 1672531245999
+        },
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531245999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531245,
+          "timestamp_ms": 1672531245999,
+          "admitted": true
+        },
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531245,
+          "timestamp_ms": 1672531246000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "latest-not-before-at-leaf",
+      "note": "The leaf becomes valid last.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1672531230,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531230,
+        "latest_end": 1672531500
+      },
+      "windows": [
+        {
+          "not_before": 1672531230,
+          "not_after": 1672531500,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531229,
+          "not_after": 1672531500,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 1672531230,
+          "not_after": 1672531231,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531229,
+          "not_after": 1672531230,
+          "result": "starts-before-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531500999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 1672531230,
+          "not_after": 1672531500,
+          "timestamp_ms": 1672531229999,
+          "admitted": false
+        },
+        {
+          "not_before": 1672531230,
+          "not_after": 1672531500,
+          "timestamp_ms": 1672531230000,
+          "admitted": true
+        }
+      ]
+    },
+    {
+      "name": "latest-not-before-at-intermediate",
+      "note": "The intermediate CA becomes valid last.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1672531240,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531240,
+        "latest_end": 1672531500
+      },
+      "windows": [
+        {
+          "not_before": 1672531240,
+          "not_after": 1672531500,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531239,
+          "not_after": 1672531500,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 1672531240,
+          "not_after": 1672531241,
+          "result": "admitted"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531500999
+        }
+      ],
+      "blocks": []
+    },
+    {
+      "name": "latest-not-before-at-root",
+      "note": "The root CA becomes valid last.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1672531250,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531250,
+        "latest_end": 1672531500
+      },
+      "windows": [
+        {
+          "not_before": 1672531250,
+          "not_after": 1672531500,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531249,
+          "not_after": 1672531500,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 1672531250,
+          "not_after": 1672531251,
+          "result": "admitted"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531500,
+          "deadline_unix_ms": 1672531500999
+        }
+      ],
+      "blocks": []
+    },
+    {
+      "name": "certificates-bind-both-sides",
+      "note": "Different certificates bind the start and the end.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1672531210,
+          "not_after": 1672531300
+        },
+        {
+          "not_before": 1672531220,
+          "not_after": 1672531295
+        },
+        {
+          "not_before": 1672531205,
+          "not_after": 1672531290
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531220,
+        "latest_end": 1672531290
+      },
+      "windows": [
+        {
+          "not_before": 1672531220,
+          "not_after": 1672531290,
+          "result": "admitted"
+        },
+        {
+          "not_before": 1672531219,
+          "not_after": 1672531290,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 1672531220,
+          "not_after": 1672531291,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531210,
+          "not_after": 1672531290,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 1672531220,
+          "not_after": 1672531295,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531220,
+          "not_after": 1672531300,
+          "result": "ends-after-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531290,
+          "deadline_unix_ms": 1672531290999
+        },
+        {
+          "presentation_not_after": 1672531300,
+          "deadline_unix_ms": 1672531290999
+        }
+      ],
+      "blocks": []
+    },
+    {
+      "name": "single-shared-second",
+      "note": "The signed intervals share one second, which no two-second window fits.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1672531300,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1672531300
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds": {
+        "earliest_start": 1672531300,
+        "latest_end": 1672531300
+      },
+      "windows": [
+        {
+          "not_before": 1672531300,
+          "not_after": 1672531301,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 1672531299,
+          "not_after": 1672531300,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 1672531300,
+          "not_after": 1672531300,
+          "result": "invalid-window"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 1672531300,
+          "deadline_unix_ms": 1672531300999
+        }
+      ],
+      "blocks": []
+    },
+    {
+      "name": "disjoint-certificates",
+      "note": "The leaf becomes valid after the intermediate CA has expired.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1672531400,
+          "not_after": 1672531600
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1672531300
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds_error": "disjoint-intervals",
+      "windows": [
+        {
+          "not_before": 1672531400,
+          "not_after": 1672531450,
+          "result": "disjoint-intervals"
+        },
+        {
+          "not_before": 1672531250,
+          "not_after": 1672531300,
+          "result": "disjoint-intervals"
+        },
+        {
+          "not_before": 1672531300,
+          "not_after": 1672531400,
+          "result": "disjoint-intervals"
+        }
+      ],
+      "deadlines": [],
+      "blocks": []
+    },
+    {
+      "name": "certificate-expired-before-crl",
+      "note": "An expired credential: the leaf expired before the CRL thisUpdate.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1672531199
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds_error": "disjoint-intervals",
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531201,
+          "result": "disjoint-intervals"
+        },
+        {
+          "not_before": 1672531198,
+          "not_after": 1672531199,
+          "result": "disjoint-intervals"
+        },
+        {
+          "not_before": 1672531199,
+          "not_after": 1672531200,
+          "result": "disjoint-intervals"
+        }
+      ],
+      "deadlines": [],
+      "blocks": []
+    },
+    {
+      "name": "certificate-not-yet-valid-within-crl",
+      "note": "The root CA becomes valid only after the CRL freshness horizon.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1672531501,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds_error": "disjoint-intervals",
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531500,
+          "result": "disjoint-intervals"
+        },
+        {
+          "not_before": 1672531501,
+          "not_after": 1672531502,
+          "result": "disjoint-intervals"
+        }
+      ],
+      "deadlines": [],
+      "blocks": []
+    },
+    {
+      "name": "generalized-time-boundary",
+      "note": "Signed times straddle the UTCTime/GeneralizedTime switch at 2050.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 2524521600,
+          "not_after": 2524608100
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 2556144000
+        }
+      ],
+      "crl": {
+        "this_update": 2524607900,
+        "next_update": 2524608150
+      },
+      "bounds": {
+        "earliest_start": 2524607900,
+        "latest_end": 2524608100
+      },
+      "windows": [
+        {
+          "not_before": 2524607900,
+          "not_after": 2524608100,
+          "result": "admitted"
+        },
+        {
+          "not_before": 2524607900,
+          "not_after": 2524608101,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 2524607899,
+          "not_after": 2524608100,
+          "result": "starts-before-bounds"
+        },
+        {
+          "not_before": 2524607999,
+          "not_after": 2524608000,
+          "result": "admitted"
+        },
+        {
+          "not_before": 2524608000,
+          "not_after": 2524608001,
+          "result": "admitted"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 2524608100,
+          "deadline_unix_ms": 2524608100999
+        },
+        {
+          "presentation_not_after": 2524608149,
+          "deadline_unix_ms": 2524608100999
+        }
+      ],
+      "blocks": []
+    },
+    {
+      "name": "calendar-ceiling-crl-next-update",
+      "note": "Certificates and the CRL nextUpdate carry the last RFC 5280 second (99991231235959Z); nextUpdate stays exclusive at the calendar ceiling.",
+      "signable": true,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 253402300799
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 253402300799
+        }
+      ],
+      "crl": {
+        "this_update": 253402300599,
+        "next_update": 253402300799
+      },
+      "bounds": {
+        "earliest_start": 253402300599,
+        "latest_end": 253402300798
+      },
+      "windows": [
+        {
+          "not_before": 253402300599,
+          "not_after": 253402300798,
+          "result": "admitted"
+        },
+        {
+          "not_before": 253402300599,
+          "not_after": 253402300799,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 253402300797,
+          "not_after": 253402300798,
+          "result": "admitted"
+        },
+        {
+          "not_before": 253402300598,
+          "not_after": 253402300798,
+          "result": "starts-before-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 253402300798,
+          "deadline_unix_ms": 253402300798999
+        },
+        {
+          "presentation_not_after": 253402300799,
+          "deadline_unix_ms": 253402300798999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 253402300599,
+          "not_after": 253402300798,
+          "timestamp_ms": 253402300798999,
+          "admitted": true
+        },
+        {
+          "not_before": 253402300599,
+          "not_after": 253402300798,
+          "timestamp_ms": 253402300799000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "calendar-ceiling-window-end",
+      "note": "A governed CRL record whose nextUpdate lies beyond the RFC 5280 calendar cannot be DER-signed; the window still ends at the last calendar second at the latest.",
+      "signable": false,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 253402300799
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 253402300799
+        }
+      ],
+      "crl": {
+        "this_update": 253402300699,
+        "next_update": 253402300849
+      },
+      "bounds": {
+        "earliest_start": 253402300699,
+        "latest_end": 253402300799
+      },
+      "windows": [
+        {
+          "not_before": 253402300699,
+          "not_after": 253402300799,
+          "result": "admitted"
+        },
+        {
+          "not_before": 253402300699,
+          "not_after": 253402300800,
+          "result": "ends-after-bounds"
+        },
+        {
+          "not_before": 253402300798,
+          "not_after": 253402300799,
+          "result": "admitted"
+        },
+        {
+          "not_before": 253402300799,
+          "not_after": 253402300800,
+          "result": "ends-after-bounds"
+        }
+      ],
+      "deadlines": [
+        {
+          "presentation_not_after": 253402300799,
+          "deadline_unix_ms": 253402300799999
+        },
+        {
+          "presentation_not_after": 253402300800,
+          "deadline_unix_ms": 253402300799999
+        }
+      ],
+      "blocks": [
+        {
+          "not_before": 253402300699,
+          "not_after": 253402300799,
+          "timestamp_ms": 253402300799999,
+          "admitted": true
+        },
+        {
+          "not_before": 253402300699,
+          "not_after": 253402300799,
+          "timestamp_ms": 253402300800000,
+          "admitted": false
+        }
+      ]
+    },
+    {
+      "name": "invalid-chain-depth-one",
+      "note": "A lone certificate is not a path.",
+      "signable": false,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds_error": "invalid-chain-depth",
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531201,
+          "result": "invalid-chain-depth"
+        }
+      ],
+      "deadlines": [],
+      "blocks": []
+    },
+    {
+      "name": "invalid-chain-depth-four",
+      "note": "Four certificates exceed the closed profile.",
+      "signable": false,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds_error": "invalid-chain-depth",
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531201,
+          "result": "invalid-chain-depth"
+        }
+      ],
+      "deadlines": [],
+      "blocks": []
+    },
+    {
+      "name": "invalid-certificate-validity",
+      "note": "A certificate whose notAfter precedes its notBefore.",
+      "signable": false,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1672531210,
+          "not_after": 1672531209
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531501
+      },
+      "bounds_error": "invalid-certificate-validity",
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531201,
+          "result": "invalid-certificate-validity"
+        }
+      ],
+      "deadlines": [],
+      "blocks": []
+    },
+    {
+      "name": "invalid-crl-update-interval",
+      "note": "A CRL whose nextUpdate equals its thisUpdate.",
+      "signable": false,
+      "certificates": [
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        },
+        {
+          "not_before": 1640995200,
+          "not_after": 1893456000
+        }
+      ],
+      "crl": {
+        "this_update": 1672531200,
+        "next_update": 1672531200
+      },
+      "bounds_error": "invalid-crl-update-interval",
+      "windows": [
+        {
+          "not_before": 1672531200,
+          "not_after": 1672531201,
+          "result": "invalid-crl-update-interval"
+        }
+      ],
+      "deadlines": [],
+      "blocks": []
+    }
+  ]
+}

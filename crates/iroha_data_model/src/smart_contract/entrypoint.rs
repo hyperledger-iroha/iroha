@@ -218,8 +218,8 @@ impl EntrypointValueKindV1 {
     pub const fn is_pointer(self) -> bool {
         !matches!(self, Self::Bool)
     }
-    // One source spelling for both leaf schemas and scalar cursor keys.
-    const fn canonical_type_name(self) -> &'static str {
+    /// Canonical V1 spelling shared by leaf schemas and borrowed durable-state projections.
+    pub const fn canonical_type_name(self) -> &'static str {
         match self {
             Self::Int => "int",
             Self::Decimal => "decimal",
@@ -236,6 +236,14 @@ impl EntrypointValueKindV1 {
             Self::DataSpaceId => "DataSpaceId",
             Self::Blob => "bytes",
         }
+    }
+
+    /// Whether this scalar kind is a canonical V1 durable cursor key.
+    ///
+    /// JSON is not a stable scalar key. This is the same rule used by recursive schema validation.
+    #[must_use]
+    pub const fn is_state_cursor_key(self) -> bool {
+        !matches!(self, Self::Json)
     }
 }
 /// Named product metadata carried by a [`EntrypointValueTypeNodeV1::Struct`] node.
@@ -502,7 +510,9 @@ impl EntrypointValueTypeV1 {
                 return None;
             }
             match node {
-                EntrypointValueTypeNodeV1::StateCursor(EntrypointValueKindV1::Json) => return None,
+                EntrypointValueTypeNodeV1::StateCursor(key) if !key.is_state_cursor_key() => {
+                    return None;
+                }
                 EntrypointValueTypeNodeV1::Error(error) if !error.validate() => return None,
                 EntrypointValueTypeNodeV1::Struct(node) => {
                     if !is_canonical_kotodama_struct_name(&node.name)

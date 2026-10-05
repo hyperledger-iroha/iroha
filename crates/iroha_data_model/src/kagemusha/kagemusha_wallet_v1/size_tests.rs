@@ -1,9 +1,10 @@
 //! Envelope sizes of the split-lineage layouts (§8, design §7).
 //!
 //! Every case is built from fully valid objects and asserted against its complete-frame bound.
-//! `σ_send` is measured only for the prototype relation (3,296 bytes); Ω, `σ_recv` and the
-//! compressed credit-digest opening are unmeasured, so this module names explicit placeholders
-//! and reports, for each message, its fixed overhead and the largest proof that still fits.
+//! `σ_send` and `σ_recv` are measured (3,296 bytes each) for the §3 core without the blacklist
+//! non-membership, quota and lease checks; Ω and the compressed credit-digest opening are
+//! unmeasured, so this module names explicit placeholders and reports, for each message, its
+//! fixed overhead and the largest proof that still fits.
 //! The proof bytes are stand-ins; only their lengths matter here. The signed blacklist is not
 //! a peer message (it is downloaded online from the issuer), so it has no envelope case here.
 
@@ -13,17 +14,20 @@ use super::{
     *,
 };
 
-/// Measured `σ_send` of the prototype relation, in bytes: the exact PIPA-v1 proof length of the
-/// two-level `sigma_send` of `iroha_kagemusha_proof` at its 3.5 KB budget shape (`k = 12`, one
-/// lane), with the G1 statement encoding. Spec §11: σ is not yet measured for the full §3 core.
+/// Measured `σ_send`, in bytes: the exact PIPA-v1 proof length of `sigma_send` of
+/// `iroha_kagemusha_proof` over the 32-element §3 core and the 28-element statement at its
+/// 3.5 KB budget shape (`k = 12`, one lane), with the empty mask and with the blacklist
+/// list-age control alike.
+// TODO(G3): re-measure once σ_send carries the blacklist non-membership, quota and lease checks
+// (spec §7); the R9 budget then bounds Ω by `8,385 − |σ_send|`.
 const MEASURED_SIGMA_SEND_BYTES: usize = 3_296;
 /// Placeholder Ω transport proof length; Ω is unbuilt and unmeasured (spec §11).
 // TODO(G3): replace with the exact transport length of the frozen verifying-key allowlist
 // (owner answer Q6).
 const PLACEHOLDER_OMEGA_PROOF_BYTES: usize = 4_000;
-/// Placeholder `σ_recv` length; `σ_recv` is unmeasured for the §3 core.
-// TODO(G3): replace with the measured σ_recv length.
-const PLACEHOLDER_SIGMA_RECV_BYTES: usize = MEASURED_SIGMA_SEND_BYTES;
+/// Measured `σ_recv`, in bytes: the exact proof length of `sigma_recv` of
+/// `iroha_kagemusha_proof` at the same shape (`k = 12`, one lane).
+const MEASURED_SIGMA_RECV_BYTES: usize = 3_296;
 /// Placeholder count of non-default siblings in a compressed credit-digest opening: the
 /// depth-256 sparse tree of owner answer Q7 carries at most 256, and about `log2` of the number
 /// of recorded credits for random identifiers.
@@ -125,13 +129,13 @@ struct Sizes {
     certificates: usize,
 }
 
-/// Validate every case at the placeholder sizes and measure it.
+/// Validate every case at the measured σ and the placeholder Ω and opening sizes and measure it.
 fn measure(f: &MessageFixture) -> Sizes {
     let message_max = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1;
     let (omega, sigma, sigma_recv, siblings) = (
         PLACEHOLDER_OMEGA_PROOF_BYTES,
         MEASURED_SIGMA_SEND_BYTES,
-        PLACEHOLDER_SIGMA_RECV_BYTES,
+        MEASURED_SIGMA_RECV_BYTES,
         PLACEHOLDER_OPENING_SIBLINGS,
     );
     let request = f.request(true);
@@ -253,7 +257,7 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
          (credential frame {} / {}), SessionControl {} / {session_max}, Request {} / \
          {message_max}, Payment {} / {message_max} with σ_send {MEASURED_SIGMA_SEND_BYTES} and \
          placeholder Ω proof {PLACEHOLDER_OMEGA_PROOF_BYTES}, Credited::Receive {} / \
-         {message_max} with placeholder σ_recv {PLACEHOLDER_SIGMA_RECV_BYTES}, Credited::Status \
+         {message_max} with σ_recv {MEASURED_SIGMA_RECV_BYTES}, Credited::Status \
          {} / {message_max} with placeholder Ω(h) proof {PLACEHOLDER_OMEGA_PROOF_BYTES} and \
          {PLACEHOLDER_OPENING_SIBLINGS} siblings (CreditStatus frame {}), Lineage {} / \
          {message_max}, PolicyData certificates (3) {} / {message_max}",

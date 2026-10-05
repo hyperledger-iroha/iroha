@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.sdk.offline
 
+import java.math.BigInteger
 import java.security.MessageDigest
 import java.util.Base64
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -16,6 +17,12 @@ import org.hyperledger.iroha.sdk.norito.Varint
  * Mirrors Rust `iroha_data_model::kagemusha::KagemushaWalletDigestRoleV1` in declaration order.
  * A `*-body` role names the signed transcript of an object; the matching role without the suffix
  * names that signed object's digest `H(role, e || signature)`.
+ *
+ * `credit_id`, `proof_digest`, the Payment digest, map leaves and roots, chains, the state
+ * commitment, the σ statement digest and the blacklist, quota-window and credit-digest trees are
+ * not SHA-256 roles: they are Poseidon values over the σ field that the native Rust core computes
+ * (wire record section 3.2). Kotlin carries them as opaque canonical field values
+ * ([KagemushaWalletWireV1.isCanonicalFieldValue]) and never recomputes them.
  */
 enum class KagemushaWalletDigestRoleV1(
     /** Exact ASCII role label hashed after [KagemushaWalletWireV1.DIGEST_PREFIX]. */
@@ -41,33 +48,21 @@ enum class KagemushaWalletDigestRoleV1(
     FEE_SCHEDULE("fee-schedule"),
     BLACKLIST_BODY("blacklist-body"),
     BLACKLIST("blacklist"),
-    BLACKLIST_LEAF("blacklist-leaf"),
-    BLACKLIST_NODE("blacklist-node"),
     QUOTA_SHARE_BODY("quota-share-body"),
     QUOTA_SHARE("quota-share"),
-    QUOTA_WINDOW("quota-window"),
-    QUOTA_NODE("quota-node"),
     TIME_ANCHOR_BODY("time-anchor-body"),
     TIME_ANCHOR("time-anchor"),
     OFFER_BODY("offer-body"),
     SESSION_CONTROL_BODY("session-control-body"),
     REQUEST_BODY("request-body"),
     REQUEST("request"),
-    CREDIT("credit"),
     STATEMENT("statement"),
-
-    /** Proof digest of a step that consumes Ω(pred): `LE32 len(Ω) || Ω || LE32 len(σ) || σ`. */
-    PROOF("proof"),
-
-    /** Proof digest of every other step, the σ-only domain: `LE32 len(σ) || σ`. */
-    STEP_PROOF("step-proof"),
 
     /** Lineage digest over the exact Ω bytes (public transcript, then transport proof). */
     LINEAGE("lineage"),
     RECEIPT_BODY("receipt-body"),
     RECEIPT("receipt"),
     PACKAGE("package"),
-    PAYMENT("payment"),
     CREDIT_OPENING("credit-opening"),
     CREDIT_STATUS("credit-status"),
     CREDITED("credited"),
@@ -86,6 +81,14 @@ enum class KagemushaWalletDigestRoleV1(
     RENEWAL_ASSERTION("renewal-assertion"),
     ARTIFACT_MANIFEST_BODY("artifact-manifest-body"),
     ARTIFACT_MANIFEST("artifact-manifest"),
+
+    /**
+     * σ verifying-key allowlist transcript: `LE16 version || LE32 n || n × (tag kind ||
+     * LE32 enabled_controls || verifying_key_digest || LE32 proof_bytes) ||
+     * lineage_verifying_key_digest || LE32 lineage_proof_bytes`; its digest is the
+     * `verifying_key_set_digest` that the relation identity and the artifact manifest bind.
+     */
+    VERIFYING_KEY_SET("verifying-key-set"),
     CHARGE_QUOTE_BODY("charge-quote-body"),
     CHARGE_QUOTE("charge-quote"),
     EVIDENCE("evidence"),
@@ -240,10 +243,33 @@ object KagemushaWalletWireV1 {
     /**
      * Maximum complete envelope frame for Request, Payment, Credited, PolicyData and Lineage.
      *
-     * σ and Ω carry no separate byte caps: until the artifact set fixes their exact lengths
-     * (TODO(G3), owner question Q6) they are bounded only by the frame that carries them.
+     * σ and Ω byte caps are the exact proof lengths of the frozen σ verifying-key allowlist
+     * (owner answer Q6), with Ω plus the largest σ_send at most [PAYMENT_PROOF_BUDGET_BYTES].
+     * Until the artifacts freeze (TODO(G3)) only the carrying frame bounds them, which is all a
+     * structural carrier check enforces.
      */
     const val MESSAGE_MAX_BYTES: Int = 10_000
+
+    /** `F_payment`: the bytes of a Payment envelope frame other than its Ω and σ_send proofs. */
+    const val PAYMENT_FIXED_BYTES: Int = 1_615
+
+    /** Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`. */
+    const val PAYMENT_PROOF_BUDGET_BYTES: Int = MESSAGE_MAX_BYTES - PAYMENT_FIXED_BYTES
+
+    /**
+     * Maximum σ entries of the verifying-key allowlist: one per operation other than Send and one
+     * per supported Send enabled-controls mask.
+     */
+    const val VERIFYING_KEY_ENTRIES_MAX: Int = 15
+
+    /** Maximum standalone canonical frame of the σ verifying-key allowlist. */
+    const val VERIFYING_KEY_ALLOWLIST_MAX_BYTES: Int = 2_048
+
+    /** Maximum non-default siblings of a credit-digest opening (the depth-256 sparse tree). */
+    const val CREDIT_OPENING_SIBLINGS_MAX: Int = 256
+
+    /** Length of one canonical little-endian σ-field value (Pasta `Fp`). */
+    const val FIELD_VALUE_BYTES: Int = 32
 
     /** Maximum complete `kgm1:` text for a session-bounded envelope. */
     const val SESSION_TEXT_MAX_BYTES: Int = 2_736
@@ -295,9 +321,49 @@ object KagemushaWalletWireV1 {
     private val DIGEST_PREFIX_BYTES: ByteArray = DIGEST_PREFIX.toByteArray(Charsets.US_ASCII)
     private val ENVELOPE_SCHEMA_HASH: ByteArray = SchemaHash.hash16(ENVELOPE_FRAME_NAME)
 
+    /** `p` of the σ field, Pasta `Fp` (the Vesta scalar field). */
+    private val FIELD_MODULUS: BigInteger =
+        BigInteger("40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16)
+
     /** 16-byte Norito schema hash of [ENVELOPE_FRAME_NAME]; a defensive copy. */
     @JvmStatic
     fun envelopeSchemaHash(): ByteArray = ENVELOPE_SCHEMA_HASH.copyOf()
+
+    /** The σ field modulus `p` as [FIELD_VALUE_BYTES] little-endian bytes; a fresh array. */
+    @JvmStatic
+    fun fieldModulus(): ByteArray =
+        ByteArray(FIELD_VALUE_BYTES) { index -> FIELD_MODULUS.shiftRight(8 * index).toInt().toByte() }
+
+    /**
+     * Whether [value] is one canonical σ-field value: exactly [FIELD_VALUE_BYTES] bytes whose
+     * little-endian integer is below `p`.
+     *
+     * Every Poseidon value of the protocol (`credit_id`, `proof_digest`, the Payment digest, the
+     * state commitment, chains, map, blacklist, quota-window and credit-digest roots and their
+     * opening siblings) is computed by the native Rust core; Kotlin checks only this encoding and
+     * otherwise treats the value as opaque.
+     */
+    @JvmStatic
+    fun isCanonicalFieldValue(value: ByteArray): Boolean =
+        value.size == FIELD_VALUE_BYTES && BigInteger(1, value.reversedArray()) < FIELD_MODULUS
+
+    /**
+     * Defensive copy of [value] after requiring it to be a canonical σ-field value
+     * ([isCanonicalFieldValue]) that is also nonzero when [nonzero] is set.
+     *
+     * @throws IllegalArgumentException for another length, a value of at least `p`, or a zero
+     * value where a nonzero one is required.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun requireCanonicalFieldValue(value: ByteArray, nonzero: Boolean = false): ByteArray {
+        require(value.size == FIELD_VALUE_BYTES) {
+            "KAGEMUSHA wallet V1 field value must be exactly $FIELD_VALUE_BYTES bytes"
+        }
+        require(isCanonicalFieldValue(value)) { "KAGEMUSHA wallet V1 field value is not canonical" }
+        require(!nonzero || value.any { it.toInt() != 0 }) { "KAGEMUSHA wallet V1 field value is zero" }
+        return value.copyOf()
+    }
 
     /** Exact `kgm1:` text length of a frame of [frameBytes]: the prefix and unpadded base64url. */
     @JvmStatic
@@ -490,7 +556,10 @@ object KagemushaWalletWireV1 {
      * nothing grants monetary authority.
      * TODO(G4): the typed decoder also checks the Credited evidence against the held Request and
      * the retained Payment (its credit, payer wallet and amount, or its opening, and the Payment
-     * digest the evidence binds).
+     * digest the evidence binds). The receiver is matched by the Request's receiver wallet and
+     * its receiver credential's payment key, never by credential digest, so evidence from a
+     * receiver that renewed its credential after quoting the Request still matches (owner
+     * answer Q8).
      *
      * @throws IllegalArgumentException for any violation.
      */

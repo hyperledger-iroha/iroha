@@ -1,10 +1,19 @@
 //! Generic hidden-program RAM-LFE policy and receipt types.
+//!
+//! [`RamLfeReceiptV1`] and [`RamLfeOpeningV1`] are the canonical V1 execution
+//! receipt and opening. Together with `iroha_crypto::RamLfePolicyV1` they are
+//! specified in `specs/ram_lfe_execution_proof.md`. The signed policy, receipt
+//! and opening types beside them are superseded and stay only until the tasks
+//! named at each `TODO` switch their consumers.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, proof::ProofBox};
+use crate::{NetworkId, account::AccountId, proof::ProofBox};
 use iroha_crypto::{
-    Algorithm, Hash, PolicyCommitment, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
-    SignatureOf,
+    Algorithm, Hash, PolicyCommitment, PublicKey, RamLfeAssociatedDataHashV1, RamLfeBackend,
+    RamLfeError, RamLfeExecutionContextIdV1, RamLfeInitializedMemoryCommitmentV1,
+    RamLfeInputCiphertextCommitmentV1, RamLfeOpeningKeyCommitmentV1,
+    RamLfeOutputCiphertextCommitmentV1, RamLfeOutputCommitmentV1, RamLfePolicyCommitmentV1,
+    RamLfePolicyV1, RamLfePrfKeyCommitmentV1, RamLfeVerificationMode, Signature, SignatureOf,
 };
 use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
@@ -75,6 +84,8 @@ impl FromStr for RamLfeProgramId {
             .map_err(|err| RamLfeProgramIdParseError::InvalidName(err.to_string()))
     }
 }
+// TODO(R.12): register `iroha_crypto::RamLfePolicyV1` in place of this record.
+// R.6 removes its Signed mode and resolver signing key.
 /// Public metadata for a globally registered hidden RAM-LFE program.
 #[derive(
     Debug,
@@ -149,6 +160,8 @@ impl RamLfeProgramPolicy {
         self
     }
 }
+// TODO(R.12): replace with `RamLfeReceiptV1`. This payload binds neither the
+// full policy, the network, the beneficiary, the initialized memory nor a replay nonce.
 /// Canonical stateless RAM-LFE execution receipt payload.
 #[derive(
     Debug,
@@ -209,6 +222,8 @@ impl RamLfeExecutionReceiptPayload {
         self.to_bytes().map(Hash::new)
     }
 }
+// TODO(R.12): replace with `RamLfeOpeningV1` once R.8 supplies the decryption
+// and PRF proof. A signature over this payload is an attestation, not a proof.
 /// Canonical payload signed by an external RAM-LFE output-opening authority.
 #[derive(
     Debug,
@@ -245,6 +260,7 @@ pub struct RamLfeOutputOpeningPayload {
     #[norito(default)]
     pub expires_at_ms: Option<u64>,
 }
+// TODO(R.12): retire with `RamLfeOutputOpeningPayload`.
 /// Externally attested opening of a RAM-LFE encrypted output.
 #[derive(
     Debug,
@@ -278,6 +294,8 @@ impl RamLfeOutputOpening {
             .verify(public_key, &self.payload)
     }
 }
+// TODO(R.6): remove the Signed branch with the obsolete Signed execution mode;
+// R.12 retires the remaining wrapper with `RamLfeExecutionReceiptPayload`.
 /// Explicit attestation attached to a RAM-LFE receipt payload.
 #[derive(
     Debug,
@@ -319,6 +337,7 @@ impl RamLfeReceiptAttestation {
         }
     }
 }
+// TODO(R.12): retire with `RamLfeExecutionReceiptPayload`.
 /// Self-contained generic RAM-LFE execution receipt.
 #[derive(
     Debug,
@@ -363,12 +382,351 @@ impl RamLfeExecutionReceipt {
             .verify(public_key, &self.payload)
     }
 }
+const RECEIPT_DOMAIN: &[u8] = b"iroha.ram_lfe.v1.receipt";
+const OPENING_DOMAIN: &[u8] = b"iroha.ram_lfe.v1.opening";
+
+/// Blake2b domains owned by the data model for the canonical V1 contract.
+///
+/// They extend `iroha_crypto::RAM_LFE_V1_PUBLIC_DOMAINS`; no domain of either
+/// table is a prefix of another.
+pub const RAM_LFE_V1_MODEL_DOMAINS: [&[u8]; 2] = [RECEIPT_DOMAIN, OPENING_DOMAIN];
+
+fn canonical_commitment<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<Hash, RamLfeError> {
+    let frame = norito::encode_canonical(value)
+        .map_err(|error| RamLfeError::TranscriptEncoding(error.to_string()))?;
+    Ok(Hash::new_from_chunks(&[domain, &frame]))
+}
+
+/// Consumer scope in which a receipt's replay nonce must be unused.
+///
+/// A receipt made for one scope is never valid in another.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeReplayDomainV1")]
+pub enum RamLfeReplayDomainV1 {
+    /// General encrypted execution result.
+    Execution,
+    /// Identifier claim made from the opened output.
+    IdentifierClaim,
+}
+
+/// Replay scope and nonce bound into a canonical V1 receipt.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeReplayV1")]
+pub struct RamLfeReplayV1 {
+    /// Scope in which the nonce must be unused.
+    pub domain: RamLfeReplayDomainV1,
+    /// Request nonce, unique within the scope, network and program.
+    pub nonce: [u8; 32],
+}
+
+/// Execution fields that make one execution unique: the network, the program
+/// and the replay scope and nonce.
+///
+/// Its digest blinds the initialized-memory commitment of the execution. It
+/// is built from execution fields and never from the receipt commitment,
+/// because the receipt contains the commitment the digest blinds.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeExecutionContextV1")]
+pub struct RamLfeExecutionContextV1 {
+    /// Exact genesis-derived deployment identity.
+    pub network: NetworkId,
+    /// Registered program the execution runs under.
+    pub program_id: RamLfeProgramId,
+    /// Replay scope and nonce of the execution.
+    pub replay: RamLfeReplayV1,
+}
+
+impl RamLfeExecutionContextV1 {
+    /// Return the execution-context identity: the commitment to this record's
+    /// canonical frame.
+    ///
+    /// # Errors
+    /// Reports a canonical encoding failure.
+    pub fn id(&self) -> Result<RamLfeExecutionContextIdV1, RamLfeError> {
+        let frame = norito::encode_canonical(self)
+            .map_err(|error| RamLfeError::TranscriptEncoding(error.to_string()))?;
+        RamLfeExecutionContextIdV1::commit(&frame)
+    }
+}
+
+/// Commitment to one complete [`RamLfeReceiptV1`].
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeReceiptCommitmentV1")]
+pub struct RamLfeReceiptCommitmentV1(Hash);
+
+impl RamLfeReceiptCommitmentV1 {
+    /// Borrow the marked Iroha Blake2b digest.
+    #[must_use]
+    pub const fn as_hash(&self) -> &Hash {
+        &self.0
+    }
+}
+
+/// Commitment to one complete [`RamLfeOpeningV1`].
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeOpeningCommitmentV1")]
+pub struct RamLfeOpeningCommitmentV1(Hash);
+
+impl RamLfeOpeningCommitmentV1 {
+    /// Borrow the marked Iroha Blake2b digest.
+    #[must_use]
+    pub const fn as_hash(&self) -> &Hash {
+        &self.0
+    }
+}
+
+/// Canonical V1 execution receipt: the public statement of one execution.
+///
+/// It binds the complete authoritative policy, the network, the program, the
+/// beneficiary, the request context, the initialized memory, both ciphertexts,
+/// a mandatory expiry and a replay scope and nonce. A validator derives the
+/// policy commitment, the network and the program from committed State and
+/// compares them with [`Self::verify_authority`]; a prover supplies none of
+/// them. Only the beneficiary may request the opening of a receipt
+/// ([`Self::verify_opening_requester`]).
+///
+/// The receipt is a statement, not evidence. It proves nothing by itself.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeReceiptV1")]
+pub struct RamLfeReceiptV1 {
+    /// Commitment to the complete authoritative policy.
+    pub policy: RamLfePolicyCommitmentV1,
+    /// Exact genesis-derived deployment identity.
+    pub network: NetworkId,
+    /// Registered program the policy belongs to.
+    pub program_id: RamLfeProgramId,
+    /// Account the result is produced for.
+    pub beneficiary: AccountId,
+    /// Digest of the public associated data of the request.
+    pub associated_data: RamLfeAssociatedDataHashV1,
+    /// State lanes initialized for this execution.
+    pub initialized_memory: RamLfeInitializedMemoryCommitmentV1,
+    /// Exact submitted input ciphertext.
+    pub input_ciphertext: RamLfeInputCiphertextCommitmentV1,
+    /// Exact evaluated output ciphertext.
+    pub output_ciphertext: RamLfeOutputCiphertextCommitmentV1,
+    /// Expiry in milliseconds since the Unix epoch.
+    pub expires_at_ms: u64,
+    /// Replay scope and nonce.
+    pub replay: RamLfeReplayV1,
+}
+
+impl RamLfeReceiptV1 {
+    /// Check the receipt against the authoritative policy, network and program.
+    ///
+    /// All three come from committed State: the program the transaction names,
+    /// the policy registered for it and the network the validator runs on. The
+    /// policy record carries no program identifier, so two programs registered
+    /// with the same policy are told apart only by the program checked here.
+    ///
+    /// # Errors
+    /// Rejects a receipt bound to any other policy, network or program.
+    pub fn verify_authority(
+        &self,
+        policy: &RamLfePolicyV1,
+        network: &NetworkId,
+        program_id: &RamLfeProgramId,
+    ) -> Result<(), RamLfeError> {
+        if self.policy != policy.commitment()? {
+            return Err(RamLfeError::InvalidCanonicalValue(
+                "receipt is bound to another policy",
+            ));
+        }
+        if &self.network != network {
+            return Err(RamLfeError::InvalidCanonicalValue(
+                "receipt is bound to another network",
+            ));
+        }
+        if &self.program_id != program_id {
+            return Err(RamLfeError::InvalidCanonicalValue(
+                "receipt is bound to another program",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Check that an account may request the opening of this receipt.
+    ///
+    /// `authority` is the authenticated authority of the transaction that
+    /// requests the opening. An account named by the prover or by the opener
+    /// is not sufficient. Only the beneficiary may request the opening, and
+    /// the opened result is delivered to that account only.
+    ///
+    /// # Errors
+    /// Returns [`RamLfeError::UnauthorizedOpeningRequester`] for any account
+    /// other than the beneficiary.
+    pub fn verify_opening_requester(&self, authority: &AccountId) -> Result<(), RamLfeError> {
+        if &self.beneficiary != authority {
+            return Err(RamLfeError::UnauthorizedOpeningRequester);
+        }
+        Ok(())
+    }
+
+    /// Return the fields that make this execution unique.
+    ///
+    /// The result does not depend on the initialized-memory commitment, so the
+    /// evaluator can compute it before it commits the memory.
+    #[must_use]
+    pub fn execution_context(&self) -> RamLfeExecutionContextV1 {
+        RamLfeExecutionContextV1 {
+            network: self.network,
+            program_id: self.program_id.clone(),
+            replay: self.replay,
+        }
+    }
+
+    /// Commit the complete receipt.
+    ///
+    /// # Errors
+    /// Reports a canonical encoding failure.
+    pub fn commitment(&self) -> Result<RamLfeReceiptCommitmentV1, RamLfeError> {
+        canonical_commitment(RECEIPT_DOMAIN, self).map(RamLfeReceiptCommitmentV1)
+    }
+}
+
+/// Canonical V1 opening: the public statement of one authorized opening.
+///
+/// It binds the receipt, the ordered output and the opening and PRF keys the
+/// policy registered. The statement is not evidence: no opener, resolver or
+/// committee signature over it stands in for the decryption and PRF proofs.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeOpeningV1")]
+pub struct RamLfeOpeningV1 {
+    /// Receipt whose output ciphertext is opened.
+    pub receipt: RamLfeReceiptCommitmentV1,
+    /// Hiding commitment to the ordered opened output.
+    pub output: RamLfeOutputCommitmentV1,
+    /// Opening key the policy registered.
+    pub opening_key: RamLfeOpeningKeyCommitmentV1,
+    /// PRF key the policy registered.
+    pub prf_key: RamLfePrfKeyCommitmentV1,
+}
+
+impl RamLfeOpeningV1 {
+    /// Build the opening statement for a receipt under its authoritative policy.
+    ///
+    /// The opening and PRF keys are taken from the policy, never from the opener.
+    ///
+    /// # Errors
+    /// Rejects a receipt bound to another policy and reports an encoding failure.
+    pub fn new(
+        policy: &RamLfePolicyV1,
+        receipt: &RamLfeReceiptV1,
+        output: RamLfeOutputCommitmentV1,
+    ) -> Result<Self, RamLfeError> {
+        if receipt.policy != policy.commitment()? {
+            return Err(RamLfeError::InvalidCanonicalValue(
+                "receipt is bound to another policy",
+            ));
+        }
+        Ok(Self {
+            receipt: receipt.commitment()?,
+            output,
+            opening_key: policy.opening_key,
+            prf_key: policy.prf_key,
+        })
+    }
+
+    /// Check the opening against the authoritative policy and receipt.
+    ///
+    /// # Errors
+    /// Rejects an opening of another receipt or under any other opening or PRF key.
+    pub fn verify_authority(
+        &self,
+        policy: &RamLfePolicyV1,
+        receipt: &RamLfeReceiptV1,
+    ) -> Result<(), RamLfeError> {
+        if *self != Self::new(policy, receipt, self.output)? {
+            return Err(RamLfeError::InvalidCanonicalValue(
+                "opening is bound to another receipt or key",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Commit the complete opening.
+    ///
+    /// # Errors
+    /// Reports a canonical encoding failure.
+    pub fn commitment(&self) -> Result<RamLfeOpeningCommitmentV1, RamLfeError> {
+        canonical_commitment(OPENING_DOMAIN, self).map(RamLfeOpeningCommitmentV1)
+    }
+}
 /// Prelude exports for RAM-LFE program-policy consumers.
 pub mod prelude {
     pub use super::{
-        RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeOutputOpening,
+        RamLfeExecutionContextV1, RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload,
+        RamLfeOpeningCommitmentV1, RamLfeOpeningV1, RamLfeOutputOpening,
         RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramIdParseError,
-        RamLfeProgramPolicy, RamLfeReceiptAttestation,
+        RamLfeProgramPolicy, RamLfeReceiptAttestation, RamLfeReceiptCommitmentV1, RamLfeReceiptV1,
+        RamLfeReplayDomainV1, RamLfeReplayV1,
     };
 }
 #[cfg(test)]

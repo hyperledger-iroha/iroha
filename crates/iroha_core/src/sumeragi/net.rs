@@ -157,9 +157,9 @@ pub const fn priority_of_class(class: TrafficClass) -> Priority {
 pub struct FrameCaps {
     /// Control frames.
     pub control: usize,
-    /// Proposal frames (`max_block_bytes + 64 KiB`).
+    /// Proposal frames (`max_block_bytes + FRAME_OVERHEAD`).
     pub proposal: usize,
-    /// Bulk frames (`sync_max_bytes + 64 KiB`).
+    /// Bulk frames (`sync_max_bytes + FRAME_OVERHEAD`).
     pub bulk: usize,
 }
 
@@ -173,7 +173,8 @@ impl FrameCaps {
     };
 
     /// The caps for `max_block_bytes` and `sync_max_bytes`: control 2 MiB, proposal
-    /// `max_block_bytes + 64 KiB`, bulk `sync_max_bytes + 64 KiB`, each at most the transport's.
+    /// `max_block_bytes + FRAME_OVERHEAD`, bulk `sync_max_bytes + FRAME_OVERHEAD`, each at most
+    /// the transport's.
     pub fn for_params(max_block_bytes: u32, sync_max_bytes: u32) -> Self {
         let with_overhead = |bytes: u32| {
             usize::try_from(u64::from(bytes) + u64::from(FRAME_OVERHEAD)).unwrap_or(usize::MAX)

@@ -46,16 +46,12 @@ fn active_registry() -> KagemushaGovernedVerifierRegistryV1 {
 }
 
 fn standby_registry() -> KagemushaGovernedVerifierRegistryV1 {
-    let instruction: iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1 =
-        norito::decode_canonical(include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
-        )))
-        .expect("canonical authenticated release fixture");
-    instruction
-        .proposal
-        .successor()
-        .expect("threshold-authenticated inactive standby")
+    let (mut registry, manifest, receipt, attestation) =
+        crate::smartcontracts::isi::kagemusha::release_evidence_tests::release_evidence();
+    registry
+        .install_authenticated_release(&manifest, &receipt, &attestation)
+        .expect("threshold-authenticated inactive standby");
+    registry
 }
 
 fn first_header() -> BlockHeader {
@@ -149,7 +145,7 @@ fn snapshot_roundtrip_preserves_inactive_standby_and_reject_all_recovery() {
 }
 
 #[test]
-fn snapshot_roundtrip_preserves_certified_activation_and_standby_predecessor() {
+fn snapshot_roundtrip_preserves_active_registry_and_standby_predecessor() {
     let world = World::default();
     let standby = standby_registry();
     let release_id = standby.releases[0].release_id;
@@ -300,7 +296,7 @@ fn replayed_governed_release_remains_reject_all_until_local_authentication() {
     assert!(state.validate_kagemusha_v1_runtime_for_startup().is_ok());
 
     governed = active_registry();
-    // Model a replay transition after the process-local reject-all verifier was installed.
+    // Model canonical registry data after the process-local reject-all verifier was installed.
     set_registry(&state.world, governed);
     state
         .validate_kagemusha_v1_runtime_for_startup()
@@ -344,7 +340,7 @@ fn touching_governed_registry_without_changing_it_does_not_require_a_transition(
 }
 
 #[test]
-fn signer_policy_change_without_finalized_transition_is_rejected() {
+fn signer_policy_change_without_a_state_transition_owner_cannot_publish() {
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -369,7 +365,7 @@ fn signer_policy_change_without_finalized_transition_is_rejected() {
     );
     let error = block
         .commit_empty_block_for_testing()
-        .expect_err("an unrelated block cannot install the signer policy");
+        .expect_err("no State transition owner authorizes a signer-policy mutation");
     assert!(matches!(
         error,
         TransactionsBlockError::KagemushaGovernanceUnavailable
@@ -474,7 +470,7 @@ fn staged_release_change_is_rejected_without_state_publication() {
     *block.world.kagemusha_verifier_registry.get_mut() = active_registry();
     let error = block
         .commit_empty_block_for_testing()
-        .expect_err("staged release has no Parliament authorization");
+        .expect_err("staged release has no State transition owner");
     assert!(matches!(
         error,
         TransactionsBlockError::KagemushaGovernanceUnavailable
@@ -728,15 +724,11 @@ fn runtime_reload_world_reader_notifications_follow_commit_fence_release() {
 }
 
 #[test]
-fn direct_standby_retirement_without_certified_original_owner_never_publishes() {
-    let install: iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1 =
-        norito::decode_canonical(include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
-        )))
-        .unwrap();
-    let predecessor = install.proposal.successor().unwrap();
-    let target = install.proposal.manifest.release_id;
+fn direct_standby_retirement_without_a_state_transition_owner_never_publishes() {
+    let predecessor = standby_registry();
+    let target = predecessor.releases[0].release_id;
+    let (_, manifest, _, _) =
+        crate::smartcontracts::isi::kagemusha::release_evidence_tests::release_evidence();
     let world = World::default();
     set_registry(&world, predecessor.clone());
     let state = State::new_with_chain_and_network_id_for_testing(
@@ -744,7 +736,7 @@ fn direct_standby_retirement_without_certified_original_owner_never_publishes() 
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
         "generic-testnet".parse().unwrap(),
-        install.proposal.network_id,
+        manifest.network_id,
     );
     let before_generation = state.view_generation.load(Ordering::Acquire);
     let mut block = state.block(first_header());

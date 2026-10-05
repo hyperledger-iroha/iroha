@@ -246,7 +246,7 @@ def test_closed_environment_binds_actual_apple_tools_without_serialized_or_calle
     assert selected['AR'] == '/stock/apple/bin/ar' and selected['RANLIB'] == '/stock/apple/bin/ranlib'
     assert selected['NODE_OPTIONS'] == ''
     assert not {'CARGO_BUILD_JOBS', 'CARGO_INCREMENTAL', 'RUSTFLAGS', 'RUSTC_WRAPPER',
-                'MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE', 'IROHA_GIT_COMMIT_HASH'} & selected.keys()
+                'IROHA_GIT_COMMIT_HASH'} & selected.keys()
 
 
 def test_tool_alias_is_authenticated_as_exact_resolved_tool_not_rejected_as_source_alias(tmp_path):
@@ -278,3 +278,76 @@ def test_nonowned_or_nonstrict_local_artifact_directory_refuses_before_manifest(
     with pytest.raises(RuntimeError, match='owned canonical mode0700'):
         unit.verify(ROOT, output, 'a' * 64)
     assert not (output / unit.MANIFEST).exists()
+
+
+
+def test_empty_original_source_is_bound_without_admitting_empty_native_inputs(tmp_path):
+    source = tmp_path / 'empty.rs'; source.write_bytes(b'')
+    empty_sha = hashlib.sha256(b'').hexdigest()
+    assert unit.source_digest(source) == empty_sha
+    for reader in (unit.digest, unit.tool_digest, unit.load):
+        with pytest.raises(RuntimeError, match='nonempty'):
+            reader(source)
+    destination = tmp_path / 'not-created.node'
+    with pytest.raises(RuntimeError, match='nonempty'):
+        unit.clone(source, destination)
+    assert not destination.exists()
+    source.write_bytes(b'// current source\n')
+    assert unit.source_digest(source) != empty_sha
+
+
+@pytest.mark.parametrize('ancestor', (False, True))
+def test_empty_original_source_cannot_traverse_a_leaf_or_directory_alias(tmp_path, ancestor):
+    owner = tmp_path / 'owner'; owner.mkdir()
+    source = owner / 'empty.rs'; source.write_bytes(b'')
+    if ancestor:
+        alias = tmp_path / 'alias'; alias.symlink_to(owner, target_is_directory=True)
+        selected = alias / source.name
+    else:
+        selected = tmp_path / 'alias.rs'; selected.symlink_to(source)
+    with pytest.raises(RuntimeError):
+        unit.source_digest(selected)
+
+
+def test_original_source_hashing_refuses_a_directory(tmp_path):
+    with pytest.raises(RuntimeError, match='regular'):
+        unit.source_digest(tmp_path)
+
+
+def test_original_source_hashing_detects_a_change_during_read(tmp_path, monkeypatch):
+    source = tmp_path / 'empty.rs'; source.write_bytes(b'')
+    original = unit.custody.original_file; checks = []
+    def observed(path):
+        checks.append(path)
+        if len(checks) == 2:
+            source.write_bytes(b'// changed after the read\n')
+        return original(path)
+    monkeypatch.setattr(unit.custody, 'original_file', observed)
+    with pytest.raises(RuntimeError, match='source changed'):
+        unit.source_digest(source)
+    assert len(checks) == 2
+
+
+def test_real_dep_info_binds_empty_source_and_still_refuses_drift_or_empty_receipt(tmp_path):
+    root = tmp_path / 'root'; root.mkdir()
+    source = root / 'empty.rs'; source.write_bytes(b'')
+    target = root / 'target'; target.mkdir()
+    emitted = target / 'libfixture.rlib'; emitted.write_bytes(b'inert library owner')
+    dep = target / 'fixture.d'
+    dep.write_text(f'{emitted}: {source}\n')
+    retained = root / 'retained'; retained.mkdir()
+    message = {'reason': 'compiler-artifact', 'package_id': 'inert fixture',
+               'target': {'name': 'fixture', 'kind': ['rlib']}, 'filenames': [str(emitted)]}
+    originals = {'empty.rs': unit.source_digest(source)}
+    receipt = unit.custody.reconcile(message, root, originals, retained, unit.source_digest, target)
+    assert receipt['dep_info'][0]['matched_originals'] == [
+        {'path': 'empty.rs', 'sha256': hashlib.sha256(b'').hexdigest()}]
+    unit.custody.verify_dep_info([message], [receipt], root, originals, target, retained, unit.source_digest)
+    source.write_bytes(b'// changed source\n')
+    with pytest.raises(RuntimeError, match='differs from prospective'):
+        unit.custody.verify_dep_info([message], [receipt], root, originals, target, retained, unit.source_digest)
+    source.write_bytes(b'')
+    held = Path(receipt['dep_info'][0]['retained_dep_info']); held.write_bytes(b'')
+    receipt['dep_info'][0]['sha256'] = hashlib.sha256(b'').hexdigest()
+    with pytest.raises(RuntimeError, match='no dependency rule'):
+        unit.custody.verify_dep_info([message], [receipt], root, originals, target, retained, unit.source_digest)

@@ -169,6 +169,8 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
 }
 #[test]
 fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -244,7 +246,7 @@ ledger::account::set_detail(
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             code_hash,
         ),
-        manifest.signed(&payer_keypair),
+        manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &payer_keypair).expect("sign bounded fixture manifest"),
     );
     world
         .contract_instances

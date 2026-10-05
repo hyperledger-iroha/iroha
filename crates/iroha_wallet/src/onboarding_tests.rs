@@ -261,6 +261,25 @@ impl iroha::http::HttpTransport for RecoveryTransport {
                         .any(|(key, value)| key == "hash"
                             && value == self.expected.hash().to_string())
                 );
+                if self.status == "Absent" {
+                    let absence = iroha_torii_shared::ErrorEnvelope::new(
+                        iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                        "Missing exact saved transaction.",
+                    )
+                    .with_details(iroha_torii_shared::ErrorDetails {
+                        pipeline_transaction_status_not_found: Some(
+                            iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(
+                                &self.expected.hash(),
+                                "global",
+                            ),
+                        ),
+                        ..iroha_torii_shared::ErrorDetails::default()
+                    });
+                    return Ok(iroha::http::Response::builder()
+                        .status(404)
+                        .header("Content-Type", "application/json")
+                        .body(json::to_vec(&absence)?)?);
+                }
                 let response = PipelineTransactionStatusResponse::new(
                     hex::encode(self.expected.hash().as_ref()),
                     iroha_torii_shared::PipelineTransactionStatus {
@@ -528,6 +547,217 @@ struct PollingRecoveryTransport {
     inner: RecoveryTransport,
     status_reads: std::sync::atomic::AtomicUsize,
     becomes_applied: bool,
+}
+
+fn expired_signed_bootstrap_fixture(
+    (config, mut operation): (Config, OperationJournalV1),
+) -> (Config, OperationJournalV1) {
+    use iroha::data_model::{alias_setup::AliasPlanDispositionV1, prelude::TransactionBuilder};
+    use iroha_crypto::Signature;
+    use iroha_torii_shared::prepared_transaction::{
+        FaucetPreparedSignatureFieldsV1, OnboardingPreparedSignatureFieldsV1,
+        PreparedOperationBindingRefV1, faucet_prepared_signature_transcript_v1,
+        onboarding_prepared_signature_transcript_v1, prepared_signature_digest_v1,
+    };
+    use sha2::{Digest as _, Sha256};
+
+    let original = operation
+        .verify(&config, operation.kind())
+        .unwrap()
+        .unwrap();
+    let creation = Duration::from_millis(1);
+    let ttl = original
+        .time_to_live()
+        .expect("verified positive fixture TTL");
+    let expiry = u64::try_from((creation + ttl).as_millis()).unwrap();
+    assert!(
+        expiry <= current_unix_ms().unwrap(),
+        "real signed lifetime is expired"
+    );
+    operation.binding.execution_expires_at_unix_ms = expiry;
+    let mut metadata = original.metadata().clone();
+    metadata.insert(
+        "prepared_operation_binding".parse().unwrap(),
+        iroha_primitives::json::Json::from_norito_value_ref(
+            &json::to_value(&operation.binding).unwrap(),
+        )
+        .unwrap(),
+    );
+    // These are the published deterministic issuer seeds of the canonical vectors.
+    let seed = match &operation.operation {
+        OperationV1::Onboarding(onboarding) => {
+            assert!(expiry <= onboarding.receipt.body.valid_until_ms);
+            0x51
+        }
+        OperationV1::Faucet(_) => 0x61,
+    };
+    let signer = KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+    assert_eq!(
+        original.authority(),
+        &AccountId::new(signer.public_key().clone())
+    );
+    let mut builder = TransactionBuilder::from_payload(original.payload().clone())
+        .unwrap()
+        .with_metadata(metadata);
+    builder.set_creation_time(creation);
+    let transaction = builder.sign(signer.private_key());
+    let wire = transaction.encode_wire_v1().unwrap();
+    let wire_hex = hex::encode(&wire);
+    let wire_sha256 = hex::encode(Sha256::digest(&wire));
+    let transaction_hash = hex::encode(transaction.hash().as_ref());
+    let binding = PreparedOperationBindingRefV1 {
+        schema: &operation.binding.schema,
+        semantic_hash_hex: &operation.binding.semantic_hash_hex,
+        kind: &operation.binding.kind,
+        request_id: &operation.binding.request_id,
+        execution_expires_at_unix_ms: expiry,
+    };
+    match &mut operation.operation {
+        OperationV1::Onboarding(onboarding) => {
+            let OnboardingResponseV1::Prepared(prepared) = &mut onboarding.response else {
+                panic!("expired fixture requires a signed onboarding transaction");
+            };
+            prepared.binding = operation.binding.clone();
+            prepared.transaction_hash_hex = transaction_hash;
+            prepared.signed_transaction_wire_hex = wire_hex;
+            prepared.signed_transaction_wire_sha256 = wire_sha256;
+            let disposition = match prepared.disposition {
+                AliasPlanDispositionV1::Create => "create",
+                AliasPlanDispositionV1::Repair => "repair",
+                AliasPlanDispositionV1::NoOp => "no_op",
+                AliasPlanDispositionV1::Conflict => "conflict",
+            };
+            let transcript =
+                onboarding_prepared_signature_transcript_v1(OnboardingPreparedSignatureFieldsV1 {
+                    envelope_schema: &prepared.schema,
+                    binding,
+                    semantic_hash_hex: &prepared.semantic_hash_hex,
+                    account_id: &prepared.account_id,
+                    alias: &prepared.alias,
+                    disposition,
+                    transaction_hash_hex: &prepared.transaction_hash_hex,
+                    signed_transaction_wire_sha256: &prepared.signed_transaction_wire_sha256,
+                    signed_transaction_wire: &wire,
+                });
+            prepared.server_signature = Signature::try_new(
+                signer.private_key(),
+                prepared_signature_digest_v1(&transcript).as_ref(),
+            )
+            .unwrap();
+        }
+        OperationV1::Faucet(faucet) => {
+            let prepared = &mut faucet.prepared;
+            prepared.binding = operation.binding.clone();
+            prepared.transaction_hash_hex = transaction_hash;
+            prepared.signed_transaction_wire_hex = wire_hex;
+            prepared.signed_transaction_wire_sha256 = wire_sha256;
+            let amount = prepared.amount.to_string();
+            let transcript =
+                faucet_prepared_signature_transcript_v1(FaucetPreparedSignatureFieldsV1 {
+                    envelope_schema: &prepared.schema,
+                    binding,
+                    claim_account_id: &prepared.claim.account_id,
+                    claim_pow_anchor_height: prepared.claim.pow_anchor_height,
+                    claim_pow_nonce_hex: &prepared.claim.pow_nonce_hex,
+                    semantic_hash_hex: &prepared.semantic_hash_hex,
+                    account_id: &prepared.account_id,
+                    asset_definition_id: &prepared.asset_definition_id,
+                    asset_id: &prepared.asset_id,
+                    amount: &amount,
+                    transaction_hash_hex: &prepared.transaction_hash_hex,
+                    signed_transaction_wire_sha256: &prepared.signed_transaction_wire_sha256,
+                    signed_transaction_wire: &wire,
+                });
+            prepared.server_signature = Signature::try_new(
+                signer.private_key(),
+                prepared_signature_digest_v1(&transcript).as_ref(),
+            )
+            .unwrap();
+        }
+    }
+    let verified = operation
+        .verify(&config, operation.kind())
+        .unwrap()
+        .unwrap();
+    assert_eq!(verified.encode_wire_v1().unwrap(), wire);
+    assert_eq!(verified.creation_time(), creation);
+    assert_eq!(verified.time_to_live(), Some(ttl));
+    assert_eq!(
+        u64::try_from((verified.creation_time() + ttl).as_millis()).unwrap(),
+        operation.binding.execution_expires_at_unix_ms,
+    );
+    (config, operation)
+}
+
+#[test]
+#[cfg(unix)]
+fn expired_saved_bootstrap_is_terminal_only_without_a_dispatch_marker() {
+    use std::sync::{Arc, atomic::AtomicUsize};
+    let _profile = ChainDiscriminantGuard::enter(0x02f1);
+    for (config, operation) in [
+        expired_signed_bootstrap_fixture(onboarding_fixture(false)),
+        expired_signed_bootstrap_fixture(faucet_fixture()),
+    ] {
+        let transaction = operation
+            .verify(&config, operation.kind())
+            .unwrap()
+            .unwrap();
+        assert!(current_unix_ms().unwrap() >= operation.binding.execution_expires_at_unix_ms);
+        for (remote, dispatched, expected) in [
+            ("Absent", false, OperationStatus::Expired),
+            ("Absent", true, OperationStatus::Pending),
+            ("Queued", false, OperationStatus::Pending),
+            ("Applied", false, OperationStatus::Applied),
+            ("Rejected", false, OperationStatus::Rejected),
+        ] {
+            for submit in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("saved-bootstrap");
+                let journal = Journal::create(&path).unwrap();
+                journal.write_operation(&operation).unwrap();
+                if dispatched {
+                    assert!(journal.record_submission(&operation).unwrap());
+                }
+                drop(journal);
+                let original = fs::read(path.join("operation.json")).unwrap();
+                let marker = dispatched.then(|| fs::read(path.join("submission.json")).unwrap());
+                let transport = Arc::new(RecoveryTransport {
+                    expected: transaction.clone(),
+                    returned: transaction.clone(),
+                    status: remote,
+                    source: "state",
+                    calls: AtomicUsize::new(0),
+                });
+                let client = IrohaClient::builder(config.clone())
+                    .http_transport(transport.clone())
+                    .build()
+                    .unwrap();
+                let result = run_saved_operation_with_client(
+                    &config,
+                    &path,
+                    1,
+                    Instant::now() + Duration::from_secs(1),
+                    SavedAction {
+                        kind: operation.kind(),
+                        submit,
+                        token: None,
+                        expected_faucet: None,
+                    },
+                    || Ok(client),
+                )
+                .unwrap();
+                assert_eq!(result.status, expected);
+                assert_eq!(fs::read(path.join("operation.json")).unwrap(), original);
+                assert_eq!(
+                    fs::read(path.join("submission.json")).ok(),
+                    marker,
+                    "read-only recovery never creates or changes a dispatch marker",
+                );
+                // The transport accepts only exact status/details/capability reads.
+                assert!(transport.calls.load(std::sync::atomic::Ordering::SeqCst) > 0);
+            }
+        }
+    }
 }
 impl iroha::http::HttpTransport for PollingRecoveryTransport {
     fn send_blocking(

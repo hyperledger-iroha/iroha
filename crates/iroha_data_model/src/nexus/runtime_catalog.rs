@@ -19,7 +19,7 @@ use norito::{
     codec::{Decode, Encode},
     json::{self, JsonDeserializeOwned, JsonSerialize},
 };
-use std::{collections::BTreeSet, num::NonZeroU32};
+use std::num::NonZeroU32;
 use thiserror::Error;
 
 /// Maximum entries of each kind in a transition or cumulative runtime overlay.
@@ -379,8 +379,29 @@ impl NexusRuntimeCatalogV1 {
 /// Commit to the complete canonical native configured dataspace baseline, including descriptions.
 #[must_use]
 pub fn dataspace_catalog_hash(catalog: &DataSpaceCatalog) -> Hash {
-    let encoded = catalog.entries().to_vec().encode();
-    Hash::new_from_chunks(&[b"iroha:nexus:dataspace-catalog:v1\0", &encoded])
+    try_dataspace_catalog_hash(catalog).expect("canonical dataspace catalog encoding")
+}
+
+/// Hash the original catalog's canonical bare sequence without copying its graph or bytes.
+///
+/// # Errors
+/// Returns the native serialization failure rather than producing a partial commitment.
+pub fn try_dataspace_catalog_hash(catalog: &DataSpaceCatalog) -> Result<Hash, std::io::Error> {
+    struct Entries<'a>(&'a [DataSpaceMetadata]);
+    impl norito::SerializePayload for Entries<'_> {
+        fn serialize(
+            &self,
+            out: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            norito::core::write_element_sequence::<DataSpaceMetadata, _>(out, self.0.iter())
+        }
+    }
+    Hash::new_from_writer(|out| {
+        out.write_all(b"iroha:nexus:dataspace-catalog:v1\0")?;
+        norito::codec::encode_adaptive_into(&Entries(catalog.entries()), &mut &mut *out)
+            .map_err(std::io::Error::other)?;
+        Ok(())
+    })
 }
 
 fn version(value: u8) -> Result<(), NexusCatalogValidationError> {
@@ -421,10 +442,12 @@ fn validate_dataspaces(
     {
         return Err(NexusCatalogValidationError::NonCanonicalOrder("dataspaces"));
     }
-    let mut aliases = BTreeSet::new();
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         entry.validate_structure()?;
-        if !aliases.insert(entry.descriptor.alias.as_str()) {
+        if entries[..index]
+            .iter()
+            .any(|previous| previous.descriptor.alias == entry.descriptor.alias)
+        {
             return Err(NexusCatalogValidationError::DuplicateAlias(
                 entry.descriptor.alias.clone(),
             ));
@@ -795,5 +818,58 @@ mod tests {
         entry.description = Some("description is also bound".into());
         baseline = DataSpaceCatalog::new(vec![entry]).unwrap();
         assert_ne!(dataspace_catalog_hash(&baseline), first);
+    }
+
+    #[test]
+    fn borrowed_dataspace_hash_preserves_exact_native_sequence_commitment() {
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(17),
+                alias: "borrowed".into(),
+                description: Some("exact retained description ".repeat(4096)),
+                fault_tolerance: 3,
+            },
+        ])
+        .unwrap();
+        // This is the original canonical commitment, built independently from the
+        // same retained descriptors. The production writer must preserve every byte.
+        let original = Hash::new_from_chunks(&[
+            b"iroha:nexus:dataspace-catalog:v1\0",
+            &catalog.entries().to_vec().encode(),
+        ]);
+        assert_eq!(try_dataspace_catalog_hash(&catalog).unwrap(), original);
+        let tiny =
+            norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(0, 0, 0, 0, 32));
+        assert_eq!(
+            tiny.with(|| try_dataspace_catalog_hash(&catalog)).unwrap(),
+            original,
+            "hashing borrowed native metadata cannot require another owned graph or buffer"
+        );
+        assert_eq!(tiny.consumed_allocated_bytes(), 0);
+    }
+
+    #[test]
+    fn dataspace_catalog_uniqueness_preserves_original_validation() {
+        let first = DataSpaceMetadata {
+            id: DataSpaceId::new(17),
+            alias: "seventeen".into(),
+            description: None,
+            fault_tolerance: 1,
+        };
+        let mut second = first.clone();
+        second.alias = "another".into();
+        assert!(matches!(DataSpaceCatalog::new(vec![first.clone(), second]),
+            Err(super::super::DataSpaceCatalogError::DuplicateId(id)) if id == first.id));
+        let mut second = first.clone();
+        second.id = DataSpaceId::new(18);
+        assert!(matches!(DataSpaceCatalog::new(vec![first.clone(), second]),
+            Err(super::super::DataSpaceCatalogError::DuplicateAlias(alias)) if alias == first.alias));
+        let mut second = first.clone();
+        second.id = DataSpaceId::new(18);
+        second.alias = "eighteen".into();
+        let catalog = DataSpaceCatalog::new(vec![second, first]).unwrap();
+        assert_eq!(catalog.entries()[0].id, DataSpaceId::new(17));
+        assert_eq!(catalog.entries()[1].id, DataSpaceId::new(18));
     }
 }

@@ -741,6 +741,8 @@ CORE_MUTATIONS = [
 
     m("HC129", "native validation: retry after a consuming unwind lost its original graph",
       ["sumeragi::executor::tests::consuming_validation_unwind_requires_recovery_after_original_owner_is_lost"]),
+    m("HC132", "native proposal: omit the required top-up seal outside an epoch boundary",
+      ["sumeragi::executor::attestation_policy_tests::native_top_up_proposal_requires_attestation_before_an_epoch_boundary"]),
 
 ]
 

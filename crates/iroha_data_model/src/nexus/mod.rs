@@ -660,7 +660,12 @@ impl LaneConfig {
     pub fn effective_shard_id(&self) -> ShardId {
         self.shard_id.unwrap_or_else(|| self.id.into())
     }
-    fn validate_policy_surface(&self) -> Result<(), LaneCatalogError> {
+    /// Validate this borrowed lane's mandatory functional policy without copying metadata.
+    ///
+    /// # Errors
+    /// Rejects retired policy keys, empty scheduler/settlement policies, and incompatible
+    /// confidential-compute storage or audience settings.
+    pub fn validate_policy_surface(&self) -> Result<(), LaneCatalogError> {
         if self.metadata.contains_key(RETIRED_SHARD_ID_METADATA_KEY) {
             return Err(LaneCatalogError::RetiredShardIdMetadata(self.id));
         }
@@ -1869,15 +1874,34 @@ impl Default for DataSpaceMetadata {
 pub struct DataSpaceCatalog {
     entries: Vec<DataSpaceMetadata>,
 }
+/// Borrowed lookup in one already validated dataspace catalog or its scoped overlay.
+///
+/// A read projection can retain native catalog owners without copying their strings or
+/// descriptions. Implementations must expose one unambiguous identifier/alias binding.
+pub trait DataSpaceCatalogRead {
+    /// Borrow the entry whose canonical alias matches `alias`.
+    fn by_alias(&self, alias: &str) -> Option<&DataSpaceMetadata>;
+    /// Borrow the entry whose identifier matches `id`.
+    fn by_id(&self, id: DataSpaceId) -> Option<&DataSpaceMetadata>;
+}
+impl DataSpaceCatalogRead for DataSpaceCatalog {
+    fn by_alias(&self, alias: &str) -> Option<&DataSpaceMetadata> {
+        self.by_alias(alias)
+    }
+    fn by_id(&self, id: DataSpaceId) -> Option<&DataSpaceMetadata> {
+        self.by_id(id)
+    }
+}
 impl DataSpaceCatalog {
     /// Build a catalog ensuring identifiers and aliases remain unique.
     ///
     /// # Errors
     /// Returns a [`DataSpaceCatalogError`] when metadata reuses an identifier or alias, when
-    /// an alias is left blank, or when fault tolerance is below 1.
+    /// an alias is left blank, or when fault tolerance is below 1. Scalar validation runs in
+    /// input order, followed by alias duplicates in alias order, then identifier duplicates
+    /// in identifier order. Both uniqueness passes sort the original vector in place; valid
+    /// entries retain their canonical identifier order without an auxiliary allocation.
     pub fn new(mut entries: Vec<DataSpaceMetadata>) -> Result<Self, DataSpaceCatalogError> {
-        let mut seen_ids = BTreeSet::new();
-        let mut seen_aliases = BTreeSet::new();
         for entry in &entries {
             if entry.alias.trim().is_empty() {
                 return Err(DataSpaceCatalogError::EmptyAlias(entry.id));
@@ -1888,14 +1912,21 @@ impl DataSpaceCatalog {
                     fault_tolerance: entry.fault_tolerance,
                 });
             }
-            if !seen_ids.insert(entry.id) {
-                return Err(DataSpaceCatalogError::DuplicateId(entry.id));
-            }
-            if !seen_aliases.insert(entry.alias.clone()) {
-                return Err(DataSpaceCatalogError::DuplicateAlias(entry.alias.clone()));
-            }
+        }
+        entries.sort_unstable_by(|left, right| left.alias.cmp(&right.alias));
+        if let Some(index) = entries
+            .windows(2)
+            .position(|pair| pair[0].alias == pair[1].alias)
+        {
+            // The consumed original alias is already owned. Refusal needs no graph copy.
+            return Err(DataSpaceCatalogError::DuplicateAlias(
+                entries.swap_remove(index).alias,
+            ));
         }
         entries.sort_unstable_by_key(|entry| entry.id);
+        if let Some(pair) = entries.windows(2).find(|pair| pair[0].id == pair[1].id) {
+            return Err(DataSpaceCatalogError::DuplicateId(pair[0].id));
+        }
         Ok(Self { entries })
     }
     /// Access the catalog entries.
@@ -2369,7 +2400,7 @@ mod tests {
         let dup = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
                 id: DataSpaceId::new(2),
-                alias: "ops".into(),
+                alias: "different".into(),
                 description: None,
                 fault_tolerance: 1,
             },
@@ -2390,6 +2421,92 @@ mod tests {
         }])
         .expect_err("blank alias");
         assert!(matches!(empty_alias, DataSpaceCatalogError::EmptyAlias(_)));
+    }
+
+    #[test]
+    fn dataspace_catalog_duplicate_alias_moves_original_storage_and_precedes_ids() {
+        let first = DataSpaceMetadata {
+            id: DataSpaceId::new(2),
+            alias: "shared-alias".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        };
+        let second = first.clone();
+        let original_aliases = [first.alias.as_ptr(), second.alias.as_ptr()];
+        let error = DataSpaceCatalog::new(vec![first, second]).unwrap_err();
+        let DataSpaceCatalogError::DuplicateAlias(alias) = error else {
+            panic!("alias duplicate must precede the simultaneous identifier duplicate");
+        };
+        assert_eq!(alias, "shared-alias");
+        assert!(
+            original_aliases.contains(&alias.as_ptr()),
+            "the returned error moves an original alias instead of allocating a clone"
+        );
+
+        let error = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "same".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(3),
+                alias: "same".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .unwrap_err();
+        assert!(matches!(error, DataSpaceCatalogError::DuplicateAlias(alias) if alias == "same"));
+        let error = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "same".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "same".into(),
+                description: None,
+                fault_tolerance: 0,
+            },
+        ])
+        .unwrap_err();
+        assert!(
+            matches!(error, DataSpaceCatalogError::InvalidFaultTolerance { .. }),
+            "scalar errors precede either uniqueness pass"
+        );
+    }
+
+    #[test]
+    fn dataspace_catalog_sorts_original_graph_without_changing_native_wire_or_hash() {
+        let mut entries: Vec<_> = (1_u64..=4096)
+            .rev()
+            .map(|id| DataSpaceMetadata {
+                id: DataSpaceId::new(id),
+                // This alias order deliberately differs from the final identifier order.
+                alias: format!("entry-{}", 4097 - id),
+                description: Some(format!("retained description {id}")),
+                fault_tolerance: 1,
+            })
+            .collect();
+        let original_allocation = entries.as_ptr();
+        let original_capacity = entries.capacity();
+        let mut expected = entries.clone();
+        expected.sort_unstable_by_key(|entry| entry.id);
+        let expected_wire = expected.encode();
+        let expected_hash = iroha_crypto::Hash::new_from_chunks(&[
+            b"iroha:nexus:dataspace-catalog:v1\0",
+            &expected_wire,
+        ]);
+        let catalog = DataSpaceCatalog::new(std::mem::take(&mut entries)).unwrap();
+        assert_eq!(catalog.entries.as_ptr(), original_allocation);
+        assert_eq!(catalog.entries.capacity(), original_capacity);
+        assert_eq!(catalog.entries, expected);
+        assert_eq!(catalog.entries.encode(), expected_wire);
+        assert_eq!(try_dataspace_catalog_hash(&catalog).unwrap(), expected_hash);
     }
     #[test]
     fn dataspace_default_fault_tolerance_is_nonzero() {

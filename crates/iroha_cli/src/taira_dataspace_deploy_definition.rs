@@ -683,16 +683,14 @@ mod tests {
     #[test]
     fn actual_dpn_definition_builds_a_native_restricted_plan_with_one_deliberate_cap() {
         let mut definition = definition();
-        assert!(definition.dataspace.max_fee.is_zero());
-        assert!(native_plan(&definition).is_err());
-        definition.dataspace.max_fee = Quantity::from(20_u32);
+        assert_eq!(definition.dataspace.max_fee, Quantity::from(25_000_u32));
         let (binding, plan) = native_plan(&definition).unwrap();
         assert_eq!(binding.name, "dpn");
         assert!(binding.restricted);
         assert_eq!(plan.manifest.lane.id.as_u32(), plan.baseline.lane_count);
         assert_eq!(plan.manifest.dataspace.descriptor.alias, "dpn");
         assert_eq!(plan.manifest.alias_request.intents.len(), 2);
-        assert_eq!(plan.manifest.spending.max_fee, Quantity::from(20_u32));
+        assert_eq!(plan.manifest.spending.max_fee, Quantity::from(25_000_u32));
         assert_eq!(
             plan.initial_alias_plan.body.totals_by_asset[0].amount,
             Quantity::from(1_u32)
@@ -700,6 +698,8 @@ mod tests {
         definition.dataspace.account_alias = None;
         let (_, without_alias) = native_plan(&definition).unwrap();
         assert_eq!(without_alias.manifest.alias_request.intents.len(), 1);
+        definition.dataspace.max_fee = Quantity::zero();
+        assert!(native_plan(&definition).is_err());
     }
 
     #[test]

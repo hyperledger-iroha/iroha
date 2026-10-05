@@ -788,15 +788,53 @@ mod prepared_scalar_wire_tests {
         let wire = ConsensusThresholdSecretScalarTripleV1::from_zeroizing(Zeroizing::new([
             [0x11; 32], [0x22; 32], [0x33; 32],
         ]));
+        let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let mut payload = Vec::new();
         norito::core::serialize_to_writer(&wire, &mut payload).unwrap();
-        let mut expected = vec![99];
+        // The one positional field is a nested array, whose three children each
+        // contain 32 length-prefixed scalar bytes. Its payload is 3 * (1 + 64)
+        // bytes, so the fixed V1 compact field length is [0xc3, 0x01].
+        let mut expected = vec![0xc3, 0x01];
         for component in [[0x11; 32], [0x22; 32], [0x33; 32]] {
-            expected.push(32);
-            expected.extend_from_slice(&component);
+            expected.push(64);
+            for byte in component {
+                expected.push(1);
+                expected.push(byte);
+            }
         }
         assert_eq!(payload, expected);
+        // This secret is one positional field of its native credential owner,
+        // not a separately schema-framed public value.
+        let limits = norito::canonical_decode_limits(payload.len());
+        let scratch_bytes = limits.max_total_allocated_bytes();
+        let counter_bytes = norito::core::DecodeBudgetContext::allocation_layout().size();
+        let pool = AllocationBudget::new(
+            scratch_bytes
+                .checked_add(counter_bytes)
+                .expect("finite scalar fixture grant fits usize"),
+        );
+        let scratch = pool
+            .try_reserve_bytes(scratch_bytes)
+            .expect("fund original scalar decoder scratch");
+        let context = norito::core::DecodeBudgetContext::try_new_owned(limits, &pool)
+            .expect("fund original scalar decoder counter");
+        let (decoded, used) = context
+            .with(|| {
+                norito::core::decode_field_canonical::<ConsensusThresholdSecretScalarTripleV1>(
+                    &payload,
+                )
+            })
+            .unwrap();
+        assert_eq!(used, payload.len());
+        assert_eq!(
+            *decoded.into_zeroizing(),
+            [[0x11; 32], [0x22; 32], [0x33; 32]]
+        );
         assert_eq!(*wire.into_zeroizing(), [[0x11; 32], [0x22; 32], [0x33; 32]]);
+        drop(context);
+        assert_eq!(pool.reserved_bytes(), scratch_bytes);
+        drop(scratch);
+        assert_eq!(pool.reserved_bytes(), 0);
     }
 
     #[test]

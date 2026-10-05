@@ -2,12 +2,6 @@
 
 use super::*;
 
-/// Exact nonzero operation-id pattern the checked-in KAGEMUSHA V1 contract publishes.
-const KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1: &str = "^(?!0{64}$)[0-9a-f]{64}$";
-/// Exact operation `Location` header pattern the checked-in KAGEMUSHA V1 contract publishes.
-const KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1: &str =
-    "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$";
-
 #[test]
 fn static_authority_is_the_complete_catalog_projection_with_exact_effects() {
     fn method_name(method: CatalogHttpMethod) -> &'static str {
@@ -877,8 +871,12 @@ fn ledger_executed_block_wire_cached_loading_is_safe_from_256_kib_callers() {
                         .and_then(Value::as_object)
                         .unwrap_or_else(|| panic!("{variant} OpenAPI paths"));
                     assert!(
-                        paths.contains_key("/v1/kagemusha/readiness"),
-                        "universal KAGEMUSHA capability route missing from {variant} OpenAPI",
+                        paths.contains_key("/v1/accounts/capabilities"),
+                        "app API capability route missing from {variant} OpenAPI",
+                    );
+                    assert!(
+                        paths.contains_key(route_catalog::core::RESOURCE_NAMES_STATE.path()),
+                        "ledger original carrier missing from {variant} OpenAPI",
                     );
                 }
             }
@@ -1291,241 +1289,68 @@ fn generated_spec_includes_documented_paths() {
         openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.9")
     {
         assert!(
-            paths.contains_key(path),
-            "missing final KAGEMUSHA route {path}"
+            !paths.contains_key(path),
+            "retired KAGEMUSHA transport leaked into OpenAPI: {path}"
         );
     }
     assert!(!paths.contains_key("/v1/attestation/issue"));
-    let topup_post = paths
-        .get("/v1/kagemusha/top-up")
-        .and_then(Value::as_object)
-        .and_then(|path| path.get("post"))
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA top-up post operation");
-    let topup_description = topup_post
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("KAGEMUSHA top-up description");
-    assert!(topup_description.contains("payer-signed `SignedTransaction`"));
-    assert!(topup_description.contains("configured `torii.max_content_len`"));
-    assert!(topup_description.contains("embedded top-up request is limited to 16 KiB"));
-    let redeem_post = paths
-        .get("/v1/kagemusha/redeem")
-        .and_then(Value::as_object)
-        .and_then(|path| path.get("post"))
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA redeem post operation");
-    let redeem_description = redeem_post
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("KAGEMUSHA redeem description");
-    assert!(redeem_description.contains("redemption voucher"));
-    let topup_request_content = topup_post
-        .get("requestBody")
-        .and_then(Value::as_object)
-        .and_then(|body| body.get("content"))
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA V1 top-up request content");
-    assert_eq!(
-        topup_request_content
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        vec!["application/x-norito"]
-    );
-    let topup_norito_schema = topup_request_content
-        .get("application/x-norito")
-        .and_then(Value::as_object)
-        .and_then(|media| media.get("schema"))
-        .and_then(Value::as_object)
-        .expect("typed top-up Norito schema");
-    assert_eq!(
-        topup_norito_schema
-            .get("x-iroha-norito-schema")
-            .and_then(Value::as_str),
-        Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1)
-    );
-    assert!(
-        !topup_norito_schema.contains_key("x-iroha-max-bytes"),
-        "the static document must not claim one numeric value for runtime-configured transaction ingress"
-    );
-    let redeem_request_content = redeem_post
-        .get("requestBody")
-        .and_then(Value::as_object)
-        .and_then(|body| body.get("content"))
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA V1 redeem request content");
-    assert_eq!(
-        redeem_request_content
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        vec!["application/x-norito"]
-    );
-    let redeem_norito_schema = redeem_request_content
-        .get("application/x-norito")
-        .and_then(Value::as_object)
-        .and_then(|media| media.get("schema"))
-        .and_then(Value::as_object)
-        .expect("typed redeem Norito schema");
-    assert_eq!(
-        redeem_norito_schema
-            .get("x-iroha-norito-schema")
-            .and_then(Value::as_str),
-        Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1)
-    );
-    assert_eq!(
-        redeem_norito_schema
-            .get("x-iroha-max-bytes")
-            .and_then(Value::as_u64),
-        Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1 as u64)
-    );
-    let accepted = topup_post
-        .get("responses")
-        .and_then(Value::as_object)
-        .and_then(|responses| responses.get("202"))
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA top-up accepted response");
-    let accepted_headers = accepted
-        .get("headers")
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA top-up accepted headers");
-    assert!(accepted_headers.contains_key("Location"));
-    assert!(accepted_headers.contains_key("Retry-After"));
-    let terminal_replay = topup_post
-        .get("responses")
-        .and_then(Value::as_object)
-        .and_then(|responses| responses.get("200"))
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA top-up terminal replay response");
-    let terminal_headers = terminal_replay
-        .get("headers")
-        .and_then(Value::as_object)
-        .expect("KAGEMUSHA top-up terminal replay headers");
-    assert!(terminal_headers.contains_key("Location"));
-    assert!(!terminal_headers.contains_key("Retry-After"));
-    assert_eq!(
-        terminal_headers["Location"]["schema"]["pattern"].as_str(),
-        Some(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1)
-    );
-    assert_eq!(
-        operation_response_schema_ref(topup_post, "200", "/v1/kagemusha/top-up terminal replay"),
-        "#/components/schemas/KagemushaOperationStatusV1"
-    );
 }
 #[test]
-fn generated_spec_exposes_only_kagemusha_v1() {
-    let document = generate_spec();
-    let paths = document
-        .get("paths")
-        .and_then(Value::as_object)
-        .expect("paths section");
-    let schemas = component_schemas(&document);
-    let kagemusha_tags = document
-        .get("tags")
-        .and_then(Value::as_array)
-        .expect("top-level tags")
-        .iter()
-        .filter_map(|tag| tag.get("name").and_then(Value::as_str))
-        .filter(|name| name.eq_ignore_ascii_case("KAGEMUSHA"))
-        .collect::<Vec<_>>();
-    assert_eq!(kagemusha_tags, ["KAGEMUSHA"]);
-    let retired_product = ["line", "off"].into_iter().rev().collect::<String>();
-    for suffix in ["readiness", "top-up", "redeem", "operations/{operation_id}"] {
-        let retired_path = format!("/v1/{retired_product}/{suffix}");
-        assert!(
-            !paths.contains_key(&retired_path),
-            "retired product route leaked into the first-release OpenAPI: {retired_path}"
-        );
-    }
-
-    assert_eq!(
-        schemas
-            .get("KagemushaReadinessV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("required"))
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(4)
-    );
-    assert!(schemas.contains_key("KagemushaOperationStatusV1"));
-    assert!(
-        schemas
-            .keys()
-            .all(|name| !name.starts_with("KagemushaRecipient"))
-    );
-
-    let readiness = paths["/v1/kagemusha/readiness"]["get"]
-        .as_object()
-        .expect("readiness operation");
-    assert_eq!(
-        operation_response_schema_ref(readiness, "200", "/v1/kagemusha/readiness"),
-        "#/components/schemas/KagemushaReadinessV1"
-    );
-    assert!(
-        readiness["description"]
-            .as_str()
-            .is_some_and(|description| description.contains("no hop"))
-    );
-
-    for (path, request_schema, request_maximum) in [
-        (
-            "/v1/kagemusha/top-up",
-            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1,
-            None,
-        ),
-        (
-            "/v1/kagemusha/redeem",
-            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
-            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1),
-        ),
+fn openapi_authorities_retire_kagemusha_transport_and_proposal_inputs() {
+    for (variant, document) in [
+        ("package-local", canonical_document()),
+        ("compiled", generate_spec()),
     ] {
-        let operation = paths[path]["post"]
-            .as_object()
-            .expect("KAGEMUSHA operation");
-        let wire = &operation["requestBody"]["content"]["application/x-norito"]["schema"];
-        assert_eq!(wire["x-iroha-norito-schema"].as_str(), Some(request_schema));
-        assert_eq!(
-            wire.get("x-iroha-max-bytes").and_then(Value::as_u64),
-            request_maximum.map(|maximum| maximum as u64)
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        assert!(
+            paths.keys().all(|path| !path.starts_with("/v1/kagemusha/")),
+            "retired KAGEMUSHA transport remains in {variant} OpenAPI"
         );
-        assert_eq!(
-            operation_response_schema_ref(operation, "202", path),
-            "#/components/schemas/KagemushaOperationStatusV1"
+        assert!(
+            document
+                .get("tags")
+                .and_then(Value::as_array)
+                .expect("tags section")
+                .iter()
+                .all(|tag| tag
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_none_or(|name| !name.eq_ignore_ascii_case("KAGEMUSHA")))
         );
-        assert_eq!(
-            operation_response_schema_ref(operation, "200", path),
-            "#/components/schemas/KagemushaOperationStatusV1"
-        );
-        assert_eq!(
-            operation["parameters"][0]["schema"]["pattern"].as_str(),
-            Some(KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1)
-        );
-        for status in ["200", "202"] {
-            assert_eq!(
-                operation["responses"][status]["headers"]["Location"]["schema"]["pattern"].as_str(),
-                Some(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1)
+        let retired_product = ["line", "off"].into_iter().rev().collect::<String>();
+        for suffix in ["readiness", "top-up", "redeem", "operations/{operation_id}"] {
+            let retired_path = format!("/v1/{retired_product}/{suffix}");
+            assert!(
+                !paths.contains_key(&retired_path),
+                "retired product route remains in {variant}: {retired_path}"
             );
         }
-        assert!(
-            operation["responses"]["200"]["headers"]
-                .get("Retry-After")
-                .is_none()
-        );
-        assert!(
-            operation["responses"]["202"]["headers"]
-                .get("Retry-After")
-                .is_some()
-        );
+        let schemas = component_schemas(&document);
+        for retired in [
+            "KagemushaReadinessV1",
+            "KagemushaOperationStatusV1",
+            "KagemushaAuthorityStateV1",
+            "KagemushaAuthorityStateRefV1",
+            "OrdinaryWalletCurrentOriginalV1",
+            "OrdinaryWalletCurrentRequestV1",
+            "OrdinaryMintIssuerPurposeOriginalV1",
+            "OrdinaryMintIssuerPurposeRequestV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierPolicyInstallV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1",
+        ] {
+            assert!(
+                !schemas.contains_key(retired),
+                "retired input/carrier schema remains in {variant}: {retired}"
+            );
+        }
     }
-    let status = paths["/v1/kagemusha/operations/{operation_id}"]["get"]
-        .as_object()
-        .expect("KAGEMUSHA status operation");
-    assert_eq!(
-        status["parameters"][0]["schema"]["pattern"].as_str(),
-        Some(KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1)
-    );
 }
+
 #[test]
 fn musubi_v1_openapi_matches_the_complete_catalog_and_declares_models() {
     let document = generate_spec();
@@ -2861,18 +2686,6 @@ fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {
         acceptance_codes,
         TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES
     );
-    assert_eq!(
-        &KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES[1..],
-        TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
-    );
-    assert_eq!(
-        &KAGEMUSHA_COMMAND_CONFLICT_REJECT_CODES[3..],
-        TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES
-    );
-    assert_eq!(
-        KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES,
-        TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES
-    );
     let forbidden = [
         QueueError::GovernanceNotPermitted {
             alias: "lane".to_owned(),
@@ -2941,73 +2754,34 @@ fn scoped_native_original_reads_match_canonical_media_and_resource_bounds() {
             NATIVE_AUTHORITY_ORIGINALS_MAX_BYTES_V1,
             NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1,
         },
-        ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1,
-        ordinary_mint_issuer_purpose::{
-            ORDINARY_MINT_ISSUER_PURPOSE_MAX_BYTES_V1,
-            ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1,
-        },
-        ordinary_wallet_current::{
-            ORDINARY_WALLET_CURRENT_MAX_BYTES_V1, ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1,
-        },
         resource_names_state::NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1,
     };
     let document = canonical_document();
-    for (descriptor, method, request_bound, response_bound, binary_only) in [
+    for (descriptor, method, request_bound, response_bound) in [
         (
             route_catalog::core::RESOURCE_NAMES_STATE,
             "get",
             None,
             NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1,
-            false,
         ),
         (
             route_catalog::core::AUTHORITY_ORIGINALS,
             "post",
             Some(NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1),
             NATIVE_AUTHORITY_ORIGINALS_MAX_BYTES_V1,
-            false,
-        ),
-        (
-            route_catalog::kagemusha::ORDINARY_WALLET_CURRENT,
-            "post",
-            Some(ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1),
-            ORDINARY_WALLET_CURRENT_MAX_BYTES_V1,
-            false,
-        ),
-        (
-            route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE,
-            "post",
-            Some(ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1),
-            ORDINARY_MINT_ISSUER_PURPOSE_MAX_BYTES_V1,
-            false,
-        ),
-        (
-            route_catalog::kagemusha::ORDINARY_MINT_FINALIZED,
-            "post",
-            Some(ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1),
-            iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_FINALIZED_TOPUP_MAX_BYTES_V1,
-            true,
-        ),
-        (
-            route_catalog::kagemusha::ORDINARY_MINT_CREDIT,
-            "post",
-            Some(ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1),
-            iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1,
-            true,
         ),
     ] {
         let operation = openapi_operation(&document, descriptor.path(), method);
-        if descriptor.stable_route_id().starts_with("ledger.") {
-            assert_eq!(
-                operation
-                    .get("tags")
-                    .and_then(Value::as_array)
-                    .map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
-                Some(vec!["Ledger"]),
-                "{} is a generic ledger original carrier",
-                descriptor.path()
-            );
-        }
+        assert!(descriptor.stable_route_id().starts_with("ledger."));
+        assert_eq!(
+            operation
+                .get("tags")
+                .and_then(Value::as_array)
+                .map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+            Some(vec!["Ledger"]),
+            "{} is a generic ledger original carrier",
+            descriptor.path()
+        );
         assert_eq!(
             operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
             Some("read")
@@ -3064,14 +2838,9 @@ fn scoped_native_original_reads_match_canonical_media_and_resource_bounds() {
             .and_then(|value| value.get("content"))
             .and_then(Value::as_object)
             .expect("native original content");
-        let expected = if binary_only {
-            vec!["application/x-norito"]
-        } else {
-            vec!["application/json", "application/x-norito"]
-        };
         assert_eq!(
             content.keys().map(String::as_str).collect::<Vec<_>>(),
-            expected
+            vec!["application/json", "application/x-norito"]
         );
         assert_eq!(
             content
@@ -3081,16 +2850,6 @@ fn scoped_native_original_reads_match_canonical_media_and_resource_bounds() {
                 .and_then(Value::as_u64),
             Some(u64::try_from(response_bound).expect("native output frame ceiling"))
         );
-        if binary_only {
-            assert!(
-                responses
-                    .get("202")
-                    .expect("pending original response")
-                    .get("content")
-                    .is_none()
-            );
-        } else {
-            assert!(!responses.contains_key("202"));
-        }
+        assert!(!responses.contains_key("202"));
     }
 }

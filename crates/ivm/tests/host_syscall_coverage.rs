@@ -311,3 +311,17 @@ fn normalize_norito_bytes_is_identical_across_lightweight_hosts() {
         HostSyscallQuoteStrategy::InputOutputBounded
     );
 }
+
+#[test]
+fn state_get_metering_reserves_available_gas_and_retains_its_exact_formula() {
+    let spec = host_syscall_metering_spec(ivm::SyscallPolicy::AbiV1, syscalls::SYSCALL_STATE_GET)
+        .expect("STATE_GET metering spec");
+    assert_eq!(spec.metering, SyscallMetering::Reserved);
+    assert_eq!(spec.formula, HostSyscallGasFormula::StateGet);
+    assert_eq!(spec.parameters, HostSyscallGasParameters::DurableState);
+    assert_eq!(
+        spec.quote_strategy,
+        HostSyscallQuoteStrategy::ReserveAvailable
+    );
+    assert_eq!(spec.minimum_gas, gas::STATE_QUERY_GAS_BASE);
+}

@@ -12,6 +12,10 @@ use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
 use rand::TryCryptoRng;
 
 use super::{
+    air::{
+        SemanticAir,
+        q77::{ProducerLimits, SealedView, VerifierLimits},
+    },
     compact_public_columns::COMMITTED_COLUMN_COUNT,
     deep_binding::{Context, Message, Oracle, Transcript},
     deep_coefficient_commitment::{CoefficientCommitment, CoefficientCommitmentPlan},
@@ -37,17 +41,7 @@ use super::{
     masked_quotient::{checked_add as add, checked_mul as mul},
     secret_polynomial::SecretPolynomial,
 };
-use crate::{DigestExecutionV1, Error, Result, VerifyLimits, field::GoldilocksFp4V1 as F};
-
-/// Explicit caller resource and execution budget, fixed before private work.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ConstructionLimits {
-    pub(super) digest_execution: DigestExecutionV1,
-    pub(super) max_payload_bytes: usize,
-    pub(super) max_work_units: usize,
-    pub(super) max_hash_calls: usize,
-    pub(super) max_proof_bytes: usize,
-}
+use crate::{DigestExecutionV1, Error, Result, field::GoldilocksFp4V1 as F};
 
 /// One attempt's fixed pass schedule and conservative, checked payload/work bound.
 ///
@@ -66,10 +60,10 @@ pub(super) struct ProducerPlan<'a, R: DeepRelation> {
     coefficient: CoefficientReplayPlan,
     fri: [CoefficientReplayPlan; 5],
     terminal: CoefficientReplayPlan,
-    limits: ConstructionLimits,
-    #[cfg(test)]
+    limits: ProducerLimits,
+    /// Declared payload charge, reported to the registered AIR observer.
     pub(super) payload_bytes: usize,
-    #[cfg(test)]
+    /// Declared structural work, reported to the registered AIR observer.
     pub(super) work_units: usize,
     #[cfg(test)]
     pub(super) hash_calls: usize,
@@ -78,15 +72,42 @@ pub(super) struct ProducerPlan<'a, R: DeepRelation> {
 impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
     /// Derive the whole attempt before reading private columns or consuming RNG.
     /// Only the bounded public statement and small frontier plans allocate here.
-    pub(super) fn new(relation: &'a R, limits: ConstructionLimits) -> Result<Self> {
+    ///
+    /// `limits` is the typed [`crate::air::q77::ProducerLimits`] of the AIR
+    /// interface; the engine has no other producer limit type. The relation's
+    /// declared shape, read through its sealed interface view, and its
+    /// statement are checked against `limits.work` before any plan is derived.
+    pub(super) fn new(relation: &'a R, limits: ProducerLimits) -> Result<Self> {
         limit(
             "max_deep_proof_bytes",
             deep_proof::MAX_FRAME_BYTES,
             limits.max_proof_bytes,
         )?;
+        let work = limits.work;
+        let schema = SealedView::new(relation).schema();
+        limit(
+            "max_deep_producer_trace_rows",
+            schema.trace_rows,
+            work.max_trace_rows,
+        )?;
+        limit(
+            "max_deep_producer_trace_cells",
+            schema.trace_cells(),
+            work.max_trace_cells,
+        )?;
+        limit(
+            "max_deep_producer_constraints",
+            schema.constraints,
+            work.max_constraints,
+        )?;
+        limit(
+            "max_deep_producer_statement_bytes",
+            relation.statement_bytes().len(),
+            work.max_statement_bytes,
+        )?;
         let replay_limits = ReplayLimits {
-            max_payload_bytes: limits.max_payload_bytes,
-            max_work_units: limits.max_work_units,
+            max_payload_bytes: work.max_payload_bytes,
+            max_work_units: work.max_work_units,
             // Row root, the four-stripe numerator, and row openings. Charging
             // the numerator as a full pass is a conservative structural bound.
             max_full_passes: 3,
@@ -96,14 +117,14 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             relation.deep_relation(),
             replay,
             QuotientLimits {
-                max_payload_bytes: limits.max_payload_bytes,
-                max_work_units: limits.max_work_units,
+                max_payload_bytes: work.max_payload_bytes,
+                max_work_units: work.max_work_units,
             },
         )?;
         let binding = Context::for_relation(relation).map_err(binding_error)?;
         let coefficient_limits = CoefficientLimits {
-            max_payload_bytes: limits.max_payload_bytes,
-            max_work_units: limits.max_work_units,
+            max_payload_bytes: work.max_payload_bytes,
+            max_work_units: work.max_work_units,
             // Each scoped coefficient owner makes exactly one traversal. This
             // enclosing plan charges root and opening traversals separately.
             max_full_passes: 1,
@@ -131,12 +152,12 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         limit(
             "max_deep_producer_payload_bytes",
             payload_bytes,
-            limits.max_payload_bytes,
+            work.max_payload_bytes,
         )?;
         limit(
             "max_deep_producer_work_units",
             work_units,
-            limits.max_work_units,
+            work.max_work_units,
         )?;
         limit(
             "max_deep_producer_hash_calls",
@@ -158,9 +179,7 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             fri,
             terminal,
             limits,
-            #[cfg(test)]
             payload_bytes,
-            #[cfg(test)]
             work_units,
             #[cfg(test)]
             hash_calls,
@@ -188,7 +207,21 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         })
     }
 
+    /// Run the attempt and report its public outcome to the registered
+    /// [`crate::air::q77`] observer, which cannot change the result.
     fn build_with_replay<T: TryCryptoRng>(
+        self,
+        rng: &mut T,
+        initialize: impl FnOnce(ReplayLimits, &mut T) -> Result<MaskedTraceReplay>,
+    ) -> Result<Vec<u8>> {
+        let relation = self.relation;
+        super::air::q77::observe_proof_admitted(relation, self.payload_bytes, self.work_units);
+        let result = self.build_unobserved(rng, initialize);
+        super::air::q77::observe_proof(relation, &result);
+        result
+    }
+
+    fn build_unobserved<T: TryCryptoRng>(
         self,
         rng: &mut T,
         initialize: impl FnOnce(ReplayLimits, &mut T) -> Result<MaskedTraceReplay>,
@@ -247,7 +280,7 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             &composition,
             &mut transcript,
             stream,
-            limits.max_payload_bytes,
+            limits.work.max_payload_bytes,
         )?;
         let queries = query_challenge(&mut transcript)?;
         let plans = OpeningPlans::new(&queries)?;
@@ -528,16 +561,17 @@ fn opening_index(index: usize) -> Result<u32> {
 }
 
 /// Decode and verify the exact encoded proof with the independent bounded verifier.
+///
+/// The check runs under the fixed profile's exact ceilings for this relation's
+/// statement and the producer's own frame ceiling.
 fn self_check<R: DeepRelation>(relation: &R, bytes: &[u8], max_proof_bytes: usize) -> Result<()> {
     deep_engine::verify_committed(
         relation,
         bytes,
-        VerifyLimits {
-            max_batch_bytes: relation.statement_bytes().len(),
+        VerifierLimits {
             max_proof_bytes,
-            ..VerifyLimits::default()
+            ..VerifierLimits::exact(relation.statement_bytes().len())
         },
-        deep_proof::MAX_ALLOCATION_CHARGES,
     )?;
     Ok(())
 }
@@ -557,7 +591,7 @@ fn attempt_charges(
     coefficient: CoefficientReplayPlan,
     fri: &[CoefficientReplayPlan; 5],
     terminal: CoefficientReplayPlan,
-    limits: ConstructionLimits,
+    limits: ProducerLimits,
 ) -> Result<AttemptCharges> {
     let stream = stream_limits(limits);
     let queries = maximal_queries();
@@ -918,10 +952,10 @@ fn active_phase_payload(quotient: usize, rows: usize, coefficients: usize) -> Re
     )
 }
 
-fn stream_limits(limits: ConstructionLimits) -> StreamLimits {
+fn stream_limits(limits: ProducerLimits) -> StreamLimits {
     StreamLimits {
         digest_execution: limits.digest_execution,
-        max_payload_bytes: limits.max_payload_bytes,
+        max_payload_bytes: limits.work.max_payload_bytes,
         max_hashes: limits.max_hash_calls,
     }
 }

@@ -1343,6 +1343,14 @@ fn authenticate_reserve_read(
     method: &Method,
     uri: &Uri,
 ) -> Result<AccountId, Response> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &state.state,
         state.state.network_id_ref(),
@@ -1351,6 +1359,7 @@ fn authenticate_reserve_read(
         uri,
         &[],
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => {
             if !state.sorafs_node.is_enabled() {

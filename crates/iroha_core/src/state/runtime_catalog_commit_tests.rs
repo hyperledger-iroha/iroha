@@ -798,3 +798,383 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
         );
     });
 }
+
+#[test]
+fn runtime_catalog_owned_validation_rejects_staged_journal_substitution() {
+    run_catalog_test(|| {
+        let (state, keys) = catalog_fixture(InvalidMember::None);
+        let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+        let payload = catalog_payload(&state, &keys);
+        let mut block = state.block(catalog_test_header(&state));
+        let mut transaction = block.transaction();
+        transaction
+            .stage_consensus_catalog_transition(&payload)
+            .unwrap();
+        transaction.apply();
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        let original = block.pending_autoscale_lifecycle.clone().unwrap();
+        for mutation in [
+            "previous incarnations",
+            "previous lineage",
+            "previous activations",
+            "previous catalog",
+            "previous dataspaces",
+            "previous routing",
+            "previous autoscale",
+            "updated incarnations",
+            "updated lineage",
+            "updated activations",
+            "updated catalog",
+            "updated dataspaces",
+            "reset lanes",
+            "replaced lanes",
+            "transition height",
+            "expected incarnation root",
+        ] {
+            let pending = block.pending_autoscale_lifecycle.as_mut().unwrap();
+            match mutation {
+                "previous incarnations" => {
+                    pending.catalog_update.previous_lane_incarnations.clear()
+                }
+                "previous lineage" => pending
+                    .catalog_update
+                    .previous_lane_incarnation_lineage
+                    .clear(),
+                "previous activations" => pending
+                    .catalog_update
+                    .previous_lane_incarnation_activation_heights
+                    .clear(),
+                "previous catalog" => {
+                    pending.catalog_update.previous_catalog =
+                        original.catalog_update.updated_catalog.clone()
+                }
+                "previous dataspaces" => {
+                    pending.catalog_update.previous_dataspace_catalog =
+                        original.catalog_update.updated_dataspace_catalog.clone()
+                }
+                "previous routing" => {
+                    pending.catalog_update.previous_routing_policy.default_lane = LaneId::new(5)
+                }
+                "previous autoscale" => {
+                    pending.catalog_update.previous_autoscale.enabled =
+                        !original.catalog_update.previous_autoscale.enabled
+                }
+                "updated incarnations" => pending.catalog_update.updated_lane_incarnations.clear(),
+                "updated lineage" => pending
+                    .catalog_update
+                    .updated_lane_incarnation_lineage
+                    .clear(),
+                "updated activations" => pending
+                    .catalog_update
+                    .updated_lane_incarnation_activation_heights
+                    .clear(),
+                "updated catalog" => {
+                    pending.catalog_update.updated_catalog =
+                        original.catalog_update.previous_catalog.clone()
+                }
+                "updated dataspaces" => {
+                    pending.catalog_update.updated_dataspace_catalog =
+                        original.catalog_update.previous_dataspace_catalog.clone()
+                }
+                "reset lanes" => {
+                    pending.catalog_update.lanes_to_reset.insert(LaneId::new(0));
+                }
+                "replaced lanes" => {
+                    pending
+                        .catalog_update
+                        .replaced_lane_ids
+                        .insert(LaneId::new(0));
+                }
+                "transition height" => pending.transition_height += 1,
+                "expected incarnation root" => {
+                    pending.expected_incarnation_root = Hash::new(b"forged predecessor")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                block.validate_owned_runtime_catalog_overlay().is_err(),
+                "retained original journals refuse {mutation} substitution"
+            );
+            block.pending_autoscale_lifecycle = Some(original.clone());
+            block.validate_owned_runtime_catalog_overlay().unwrap();
+        }
+        drop(block);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before
+        );
+    });
+}
+
+#[test]
+fn runtime_catalog_owned_validation_binds_policy_without_a_staged_transition() {
+    run_catalog_test(|| {
+        let (state, _) = catalog_fixture(InvalidMember::None);
+        let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+        let mut block = state.block(catalog_test_header(&state));
+        assert!(block.pending_autoscale_lifecycle.is_none());
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        let original_fee = block.nexus.fees.base_fee.clone();
+        block.nexus.fees.base_fee = Quantity::from(99_u32);
+        assert!(block.validate_owned_runtime_catalog_overlay().is_err());
+        block.nexus.fees.base_fee = original_fee;
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        block.zk.halo2.enabled = !block.zk.halo2.enabled;
+        assert!(block.validate_owned_runtime_catalog_overlay().is_err());
+        block.zk.halo2.enabled = !block.zk.halo2.enabled;
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        drop(block);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before
+        );
+    });
+}
+
+fn assert_runtime_catalog_frozen_policy_refuses_refreshed_projection(staged: bool) {
+    run_catalog_test(move || {
+        let (state, keys) = catalog_fixture(InvalidMember::None);
+        let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+        let payload = catalog_payload(&state, &keys);
+        let mut block = state.block(catalog_test_header(&state));
+        if staged {
+            let mut transaction = block.transaction();
+            transaction
+                .stage_consensus_catalog_transition(&payload)
+                .unwrap();
+            transaction.apply();
+        }
+        assert_eq!(block.pending_autoscale_lifecycle.is_some(), staged);
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        let original_routing = block.nexus.routing_policy.clone();
+        let original_autoscale = block.nexus.autoscale;
+        // Lane one and the unchanged universal dataspace are both retained by
+        // this fixture: the forgery is valid routing geometry, not a missing lane.
+        assert!(block.nexus.lane_catalog.lanes().iter().any(|lane| {
+            lane.id == LaneId::new(1) && lane.dataspace_id == original_routing.default_dataspace
+        }));
+        assert_ne!(original_routing.default_lane, LaneId::new(1));
+        block.nexus.routing_policy.default_lane = LaneId::new(1);
+        block.refresh_canonical_runtime();
+        block
+            .validate_canonical_runtime_projection()
+            .expect("forged routing matches its refreshed actual working runtime owner");
+        let error = block.validate_owned_runtime_catalog_overlay().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("working policy differs from its captured authority")
+        );
+        block.nexus.routing_policy = original_routing;
+        block.refresh_canonical_runtime();
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+
+        // A positive target duration remains well formed, and only its static
+        // policy differs. Rebuilding the runtime projection cannot authorize it.
+        block.nexus.autoscale.target_block_ms = NonZeroU64::new(
+            original_autoscale
+                .target_block_ms
+                .get()
+                .checked_add(1)
+                .unwrap(),
+        )
+        .unwrap();
+        block.refresh_canonical_runtime();
+        block
+            .validate_canonical_runtime_projection()
+            .expect("forged autoscale matches its refreshed actual working runtime owner");
+        let error = block.validate_owned_runtime_catalog_overlay().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("working policy differs from its captured authority")
+        );
+        block.nexus.autoscale = original_autoscale;
+        block.refresh_canonical_runtime();
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        drop(block);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before
+        );
+    });
+}
+
+#[test]
+fn runtime_catalog_owned_validation_binds_refreshed_routing_and_autoscale_without_transition() {
+    assert_runtime_catalog_frozen_policy_refuses_refreshed_projection(false);
+}
+
+#[test]
+fn runtime_catalog_owned_validation_binds_refreshed_routing_and_autoscale_with_transition() {
+    assert_runtime_catalog_frozen_policy_refuses_refreshed_projection(true);
+}
+
+fn assert_runtime_catalog_serialized_autoscale_policy_refuses_refreshed_owner(staged: bool) {
+    run_catalog_test(move || {
+        let (state, keys) = catalog_fixture(InvalidMember::None);
+        let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+        let payload = catalog_payload(&state, &keys);
+        let mut block = state.block(catalog_test_header(&state));
+        if staged {
+            let mut transaction = block.transaction();
+            transaction
+                .stage_consensus_catalog_transition(&payload)
+                .unwrap();
+            transaction.apply();
+        }
+        assert_eq!(block.pending_autoscale_lifecycle.is_some(), staged);
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        let original = block.canonical_runtime.get().clone();
+        let enabled = block.nexus.autoscale.enabled;
+        block.nexus.autoscale.enabled = !enabled;
+        block.refresh_canonical_runtime();
+        assert_ne!(block.canonical_runtime.get(), &original);
+        assert_eq!(
+            block.canonical_runtime.get().owner_policy.autoscale_enabled,
+            !enabled
+        );
+        block
+            .validate_canonical_runtime_projection()
+            .expect("the forged serialized policy matches its refreshed actual MV owner");
+        let error = block.validate_owned_runtime_catalog_overlay().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("working policy differs from its captured authority")
+        );
+        block.nexus.autoscale.enabled = enabled;
+        block.refresh_canonical_runtime();
+        assert_eq!(block.canonical_runtime.get(), &original);
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        drop(block);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before
+        );
+    });
+}
+
+#[test]
+fn runtime_catalog_owned_validation_binds_changed_serialized_autoscale_with_and_without_transition()
+{
+    assert_runtime_catalog_serialized_autoscale_policy_refuses_refreshed_owner(false);
+    assert_runtime_catalog_serialized_autoscale_policy_refuses_refreshed_owner(true);
+}
+
+#[test]
+fn runtime_catalog_owned_validation_retains_unstaged_geometry_while_samples_advance() {
+    run_catalog_test(|| {
+        let (state, _) = catalog_fixture(InvalidMember::None);
+        let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+        let mut block = state.block(catalog_test_header(&state));
+        assert!(block.pending_autoscale_lifecycle.is_none());
+        block.validate_owned_runtime_catalog_overlay().unwrap();
+        let old_runtime = block.canonical_runtime.get().clone();
+        // Exercise the same bounded append primitive as ordinary sample staging.
+        // This is a metadata component scope, not carrier/finality publication.
+        let fields = block.fields.as_mut().expect("original executing fixture");
+        append_autoscale_sample_record(
+            &mut fields.autoscale_sample_history,
+            AutoscaleSampleRecord {
+                block_height: fields._curr_block.height().get(),
+                block_hash: fields._curr_block.hash(),
+                creation_time_ms: fields._curr_block.creation_time_ms,
+                work_count: 0,
+            },
+            autoscale_sample_history_cap(&fields.nexus.autoscale),
+        );
+        block.autoscale_sample_history_dirty = true;
+        block.autoscale_evaluated_committed_fragment_count = Some(0);
+        block.refresh_canonical_runtime();
+        assert_ne!(block.canonical_runtime.get(), &old_runtime);
+        block.validate_canonical_runtime_projection().unwrap();
+        block
+            .validate_owned_runtime_catalog_overlay()
+            .expect("advancing samples do not replace their original geometry owner");
+        let original_nexus = block.nexus.clone();
+        let original_incarnations = block.lane_incarnations.clone();
+        let original_activation = block.lane_incarnation_activation_heights.clone();
+        let original_lineage = block.lane_incarnation_lineage.clone();
+        let sampled_runtime = block.canonical_runtime.get().clone();
+        let lane = LaneId::new(1);
+        for mutation in [
+            "effective alias",
+            "incarnation",
+            "activation",
+            "lineage generation",
+            "transition cursor",
+        ] {
+            match mutation {
+                "effective alias" => {
+                    let mut lanes = block.nexus.lane_catalog.lanes().to_vec();
+                    let entry = lanes.iter_mut().find(|entry| entry.id == lane).unwrap();
+                    entry.alias = "forged-unstaged-existing-lane".to_owned();
+                    block.nexus.lane_catalog =
+                        LaneCatalog::new(block.nexus.lane_catalog.lane_count(), lanes).unwrap();
+                    block.nexus.lane_config =
+                        iroha_config::parameters::actual::LaneConfig::from_catalog(
+                            &block.nexus.lane_catalog,
+                        );
+                }
+                "incarnation" => {
+                    let forged = Hash::new(b"forged unstaged lane incarnation");
+                    assert_ne!(original_incarnations[&lane], forged);
+                    block.lane_incarnations.insert(lane, forged);
+                    block
+                        .lane_incarnation_lineage
+                        .get_mut(&lane)
+                        .unwrap()
+                        .incarnation = forged;
+                }
+                "activation" => {
+                    let height = original_activation[&lane].checked_add(1).unwrap();
+                    block
+                        .lane_incarnation_activation_heights
+                        .insert(lane, height);
+                    block
+                        .lane_incarnation_lineage
+                        .get_mut(&lane)
+                        .unwrap()
+                        .activation_height = height;
+                }
+                "lineage generation" => {
+                    let lineage = block.lane_incarnation_lineage.get_mut(&lane).unwrap();
+                    lineage.generation = lineage.generation.checked_add(1).unwrap();
+                }
+                "transition cursor" => {
+                    block.nexus.autoscale.last_transition_height = original_nexus
+                        .autoscale
+                        .last_transition_height
+                        .checked_add(1)
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            block.refresh_canonical_runtime();
+            assert_ne!(block.canonical_runtime.get(), &sampled_runtime);
+            block
+                .validate_canonical_runtime_projection()
+                .expect("forged fields are structurally valid and self-consistent");
+            let error = block.validate_owned_runtime_catalog_overlay().unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("unstaged runtime geometry differs from its retained original owner"),
+                "{mutation}: {error}"
+            );
+            block.nexus = original_nexus.clone();
+            block.lane_incarnations = original_incarnations.clone();
+            block.lane_incarnation_activation_heights = original_activation.clone();
+            block.lane_incarnation_lineage = original_lineage.clone();
+            block.refresh_canonical_runtime();
+            assert_eq!(block.canonical_runtime.get(), &sampled_runtime);
+            block.validate_owned_runtime_catalog_overlay().unwrap();
+        }
+        drop(block);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before
+        );
+    });
+}

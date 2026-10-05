@@ -391,7 +391,9 @@ Changing `select` or `limit` between pages is allowed.
 | rwas | `id`, `owned_by`, `quantity`, `held_quantity`, `primary_reference`, `status`, `is_frozen`, `parents`, `metadata.*` |
 | blocks | `hash`, `height`, `created_at`, `prev_block_hash`, `transactions_hash`, `transactions_rejected`, `transactions_total` |
 | transactions and latest | `authority`, `hash`, `block`, `created_at`, `executable`, `status` |
-| instructions and latest | `authority`, `created_at`, `kind`, `box`, `box.encoded`, `box.framed_sha256`, `box.json`, `transaction_hash`, `transaction_status`, `block`, `index` |
+| instructions and latest | `authority`, `created_at`, `kind`, `box`, `box.wire_id`, `box.framed_sha256`, `box.instruction`, `transaction_hash`, `transaction_status`, `block`, `index` |
+
+Instruction boxes contain only `wire_id`, `framed_sha256` (lowercase SHA-256 without a prefix), and `instruction` (canonical padded base64 of the native Norito `InstructionBox` frame). Decode the frame with the SDK native decoder to inspect its complete instruction payload. Transaction detail rejections contain `reason` (the canonical native `TransactionRejectionReason` frame in base64) and its public `message`.
 
 DTO fields accept the complete shared filter AST. The following synthetic
 membership selectors are filter-only and accept one string equality in the

@@ -11,17 +11,21 @@ daemon_packages = ["irohad", "irohad_lib"]
 description = "Foundational codecs, primitives, derives, schemas, and support libraries."
 packages = [
   "build-support",
+  "bytes",
   "concread",
+  "http-body-util",
   "iroha_allocation",
   "iroha_audio",
   "iroha_config_base",
   "iroha_crypto",
   "iroha_derive",
   "iroha_derive_primitives",
+  "iroha_fhe",
   "iroha_file_mmap",
   "iroha_fs",
   "iroha_i18n",
   "iroha_macro",
+  "iroha_measurement",
   "iroha_model_base",
   "iroha_operation_journal",
   "iroha_panic_hook",
@@ -71,6 +75,7 @@ packages = [
 [lanes.node]
 description = "Node, Torii, client, configuration, networking, and node test support."
 packages = [
+  "axum-core",
   "iroha",
   "iroha_cli",
   "iroha_cli_lib",

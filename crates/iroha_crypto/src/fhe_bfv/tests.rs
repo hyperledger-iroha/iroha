@@ -11968,9 +11968,9 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
 #[test]
 fn add_mod_prime_handles_large_modulus_without_overflow() {
     let modulus = u64::MAX - 58;
-    assert_eq!(add_mod_prime(modulus - 2, 10, modulus), 8);
-    assert_eq!(add_mod_prime(u64::MAX, u64::MAX, modulus), 116);
-    assert_eq!(add_mod_prime(1, 1, 0), 0);
+    assert_eq!(add_mod_u64(modulus - 2, 10, modulus), 8);
+    assert_eq!(add_mod_u64(u64::MAX, u64::MAX, modulus), 116);
+    assert_eq!(add_mod_u64(1, 1, 0), 0);
 }
 #[cfg(feature = "bfv-accel")]
 #[test]
@@ -11978,8 +11978,8 @@ fn sub_mod_prime_handles_large_modulus_without_overflow() {
     let modulus = u64::MAX - 58;
     let lhs = 7;
     let rhs = modulus - 11;
-    assert_eq!(sub_mod_prime(lhs, rhs, modulus), 18);
-    assert_eq!(sub_mod_prime(1, 1, 0), 0);
+    assert_eq!(sub_mod_u64(lhs, rhs, modulus), 18);
+    assert_eq!(sub_mod_u64(1, 1, 0), 0);
 }
 #[cfg(feature = "bfv-accel")]
 #[test]
@@ -11987,7 +11987,7 @@ fn sub_mod_prime_reduces_unbounded_rhs_before_subtracting() {
     let modulus = 17;
     let lhs = 3;
     let rhs = 41;
-    assert_eq!(sub_mod_prime(lhs, rhs, modulus), 13);
+    assert_eq!(sub_mod_u64(lhs, rhs, modulus), 13);
 }
 #[test]
 fn scalar_modular_helpers_handle_max_width_values() {

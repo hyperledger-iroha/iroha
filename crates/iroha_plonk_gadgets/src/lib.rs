@@ -15,11 +15,11 @@
 //!   underflow has no satisfying assignment;
 //! - [`arith`]: the glue gate (add, multiply, linear combinations,
 //!   constants, booleans, select, is-zero, equality);
-//! - [`statement`]: the **prototype** step statement encoding of the
-//!   split-lineage step relations, the canonical cross-field limb encoding
-//!   of spec S6, and the canonical limb decomposition of an own-field word.
-//!   The split-lineage design awaits owner approval; nothing here is wired
-//!   into a protocol path.
+//! - [`statement`]: the G1 step statement encoding (28 elements under
+//!   `kgwstmt1`) of the split-lineage step relations, the canonical
+//!   cross-field limb encoding of spec S6, and the canonical limb
+//!   decomposition of an own-field word. Nothing here is wired into a
+//!   protocol path yet.
 //! - [`cells`]: the typed cells chips exchange ([`cells::Word`],
 //!   [`cells::Bit`], [`cells::Uint`]) and row cursors;
 //! - [`tamper`]: the per-cell tamper harness every chip test runs. It shows

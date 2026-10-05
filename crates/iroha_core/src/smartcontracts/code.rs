@@ -1263,6 +1263,7 @@ mod tests {
     }
     #[test]
     fn registry_roundtrip_manifest_and_code() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
@@ -1275,7 +1276,13 @@ mod tests {
             &mut stx,
         )
         .expect("register bytecode");
-        let manifest = manifest.signed(&kp);
+        let manifest = manifest
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest");
         register_manifest(
             &authority,
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -1395,6 +1402,7 @@ mod tests {
     }
     #[test]
     fn protected_contract_activation_uses_existing_owner_lifecycle() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
@@ -1422,7 +1430,13 @@ mod tests {
             &mut stx,
         )
         .expect("register bytecode");
-        let manifest = manifest.signed(&kp);
+        let manifest = manifest
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest");
         register_manifest(
             &authority,
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -1457,6 +1471,7 @@ mod tests {
     }
     #[test]
     fn lifecycle_hooks_are_single_use_and_bound_to_real_activation_transitions() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (state, authority, keypair) = test_state();
         let mut block = state.block(default_header(1));
         let mut transaction = block.transaction();
@@ -1494,7 +1509,13 @@ seiyaku LifecycleOne {
         register_manifest(
             &authority,
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            v1_manifest.signed(&keypair),
+            v1_manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &keypair,
+                )
+                .expect("sign bounded fixture manifest"),
             &mut transaction,
         )
         .expect("register v1 manifest");
@@ -1596,7 +1617,13 @@ seiyaku LifecycleTwo {
         register_manifest(
             &authority,
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            v2_manifest.signed(&keypair),
+            v2_manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &keypair,
+                )
+                .expect("sign bounded fixture manifest"),
             &mut transaction,
         )
         .expect("register v2 manifest");
@@ -1702,6 +1729,7 @@ seiyaku LifecycleTwo {
     }
     #[test]
     fn stale_hajimari_completion_rejects_deactivate_reactivate_aba() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (state, authority, keypair) = test_state();
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -1739,7 +1767,13 @@ seiyaku LifecycleAba {
         register_manifest(
             &authority,
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            manifest.signed(&keypair),
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &keypair,
+                )
+                .expect("sign bounded fixture manifest"),
             &mut first_transaction,
         )
         .expect("register lifecycle manifest");
@@ -2175,6 +2209,7 @@ seiyaku LifecycleAba {
     }
     #[test]
     fn active_contract_lookups_reject_missing_subject_account() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (state, authority, keypair) = test_state();
         let mut block = state.block(default_header(1));
         let mut transaction = block.transaction();
@@ -2189,7 +2224,13 @@ seiyaku LifecycleAba {
         register_manifest(
             &authority,
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            manifest.signed(&keypair),
+            manifest
+                .try_signed(
+                    manifest_signing.context(),
+                    manifest_signing.max_frame_bytes(),
+                    &keypair,
+                )
+                .expect("sign bounded fixture manifest"),
             &mut transaction,
         )
         .expect("register contract manifest");

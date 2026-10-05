@@ -54,7 +54,16 @@ fn check_schema(schema: Schema) {
 fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     // The declaration macro also emits a no-`..` typed destructure. Adding an
     // actual field without a role fails Rust compilation before this test runs.
-    assert_eq!(WORLD_FIELDS.len(), 314);
+    assert_eq!(WORLD_FIELDS.len(), 315);
+    let Role::Canonical(Canonical::Cell(Schema::Norito { nominal_name, .. })) =
+        fields()["world.sumeragi_amx_participant"].role
+    else {
+        panic!("original native AMX participant must retain its typed canonical owner");
+    };
+    assert_eq!(
+        nominal_name(),
+        norito::schema::identity::nominal_name::<crate::sumeragi::amx::RetainedNativeAmx>(),
+    );
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
@@ -156,7 +165,6 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
         "world.musubi_resolver_index_revision",
         "world.sccp_light_clients",
         "world.sumeragi_lanes",
-        "world.kagemusha_verifier_registry",
         "state.transactions",
         "state.canonical_runtime",
         "state.pipeline",
@@ -241,7 +249,6 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
         "state.trigger_ivm_cache",
         "state.native_pending_evidence",
         "state.view_generation",
-        "state.kagemusha_v1_runtime_verifier",
     ] {
         assert!(matches!(fields[id].role, Role::Local(_)), "{id}");
     }

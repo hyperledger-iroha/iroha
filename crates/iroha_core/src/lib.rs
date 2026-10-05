@@ -558,6 +558,8 @@ mod frame_identity_tests;
 #[cfg(test)]
 pub(crate) mod ivm_test_support;
 #[cfg(test)]
+pub(crate) mod manifest_signing_test_support;
+#[cfg(test)]
 pub(crate) mod unit_test_support;
 // Governance height/custody fixtures use explicit synthetic publication,
 // so they share this nonshipping harness rather than exporting that authority.

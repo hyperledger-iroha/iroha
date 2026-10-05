@@ -1,0 +1,21 @@
+[package]
+name = "iroha_measurement"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Public-only phase tree and resource observation records for diagnostics"
+publish = false
+
+[lints]
+workspace = true
+
+# This crate sits below proof, Core and data-model crates. Its dependency list
+# is checked by `tests/layering.rs`; do not add proof, model or node crates
+# here, including as dev-dependencies.
+[dependencies]
+iroha_allocation = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.177"

@@ -82,6 +82,7 @@ use crate::privacy_engines::transparent_stark::{
 use crate::privacy_engines::transparent_stark::{
     PrivacyOuterDigestV1, privacy_outer_digest_frame_v1,
 };
+use iroha_data_model::privacy::PrivacyZkX509PresentationWindowV1;
 use thiserror::Error;
 #[path = "rfc5280_binding_glue.rs"]
 mod binding;
@@ -770,11 +771,12 @@ impl ZkX509Rfc5280StarkShapeV1 {
     pub(crate) fn validate(&self) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
         let eku_count = usize::from(self.leaf_extended_key_usage_count);
         let disclosed_count = usize::from(self.disclosed_attribute_count);
-        if self.presentation_not_before_unix_seconds >= self.presentation_not_after_unix_seconds
-            || self
-                .presentation_not_after_unix_seconds
-                .checked_sub(self.presentation_not_before_unix_seconds)
-                .is_none_or(|width| width > 300)
+        if PrivacyZkX509PresentationWindowV1::new(
+            self.presentation_not_before_unix_seconds,
+            self.presentation_not_after_unix_seconds,
+        )
+        .validate()
+        .is_err()
             || self.leaf_key_usage == 0
             || eku_count == 0
             || eku_count > self.leaf_extended_key_usages.len()
@@ -2993,7 +2995,7 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
     let stale_limit = trace
         .crl
         .this_update
-        .checked_add(300)
+        .checked_add(u64::from(numeric::CRL_AGE_SECONDS_V1))
         .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
     push_relation_v1(
         &mut witness.numeric_relations,
@@ -9059,6 +9061,7 @@ mod tests {
     };
     use sha2::{Digest as _, Sha256};
     include!("rfc5280_stark_preflight_tests.rs");
+    include!("rfc5280_presentation_interval_tests.rs");
     include!("rfc5280_key_output_tests.rs");
     include!("rfc5280_spki_output_tests.rs");
     include!("rfc5280_variable_output_tests.rs");

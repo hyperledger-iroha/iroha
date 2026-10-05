@@ -898,6 +898,58 @@ mod tests {
         assert_eq!(validate_local(&base, &[]), Ok(()));
     }
 
+    /// Transport and sync stages of the resource contract
+    /// (`specs/zk_resource_contract.json`): both bounds are inclusive, and the frame overhead
+    /// is the sum of its bounded parts.
+    #[test]
+    fn frame_and_sync_bounds_are_inclusive_at_the_committed_payload_limit() {
+        assert_eq!(
+            u64::from(FRAME_OVERHEAD),
+            64 * 1024
+                + crate::message::MAX_RESULT_WITNESS_BYTES as u64
+                + crate::types::MAX_COMMITTEE_SIZE as u64
+                    * (crate::message::MAX_ATTESTATION_SIGNATURE_BYTES
+                        + crate::types::MAX_PUBLIC_KEY_LEN
+                        + 64) as u64
+                + crate::types::MAX_CONTROL_WITNESS_BYTES as u64
+                + 32
+        );
+        assert_eq!(FRAME_OVERHEAD, 591_904);
+        let local = LocalParams::default();
+        assert_eq!(local.sync_max_bytes, 16 * 1024 * 1024);
+        let with_payload = |max_block_bytes: u32| {
+            config(
+                4,
+                ChainParams {
+                    max_block_bytes,
+                    ..ChainParams::default()
+                },
+            )
+        };
+        // The largest committed payload the default sync response serves, and one byte over.
+        let served = local.sync_max_bytes - FRAME_OVERHEAD;
+        assert_eq!(validate_local(&local, &[&with_payload(served)]), Ok(()));
+        assert_eq!(
+            validate_local(&local, &[&with_payload(served + 1)]),
+            Err(ConfigError::SyncMaxBytesTooSmall)
+        );
+        // The transport frame: the payload plus the overhead fits exactly, one byte over does
+        // not, whatever the node's sync setting is.
+        let transport = 16 * 1024 * 1024 + u64::from(FRAME_OVERHEAD);
+        let largest = with_payload(16 * 1024 * 1024);
+        assert_eq!(validate_chain(&largest.params, transport), Ok(()));
+        assert_eq!(
+            validate_chain(&with_payload(16 * 1024 * 1024 + 1).params, transport),
+            Err(ConfigError::MaxBlockBytesAboveTransport)
+        );
+        // Open relation recorded by the contract (owner X.2): the chain rule admits a 16 MiB
+        // payload, but the default sync response cannot serve it.
+        assert_eq!(
+            validate_local(&local, &[&largest]),
+            Err(ConfigError::SyncMaxBytesTooSmall)
+        );
+    }
+
     #[test]
     fn chain_validation() {
         let chain = ChainParams::default();

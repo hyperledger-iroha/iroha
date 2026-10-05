@@ -1007,7 +1007,7 @@ fn append_verified_contract_metadata_registration<R: StateReadOnly>(
             }),
         ));
     }
-    if manifest.signature_payload() != verified.manifest.signature_payload() {
+    if !manifest.same_signed_content(&verified.manifest) {
         return Err(OverlayBuildError::HeaderPolicy(
             IvmAdmissionError::BytecodeDecodingFailed(
                 "contract manifest metadata does not match embedded CNTR section".into(),
@@ -1093,7 +1093,7 @@ fn append_verified_contract_metadata_registration_without_state(
         return Ok(());
     };
     let verified = ivm::verify_contract_artifact(bytecode).map_err(map_artifact_admission_error)?;
-    if manifest.signature_payload() != verified.manifest.signature_payload() {
+    if !manifest.same_signed_content(&verified.manifest) {
         return Err(OverlayBuildError::HeaderPolicy(
             IvmAdmissionError::BytecodeDecodingFailed(
                 "contract manifest metadata does not match embedded CNTR section".into(),
@@ -6621,6 +6621,7 @@ seiyaku GuardedOverlayRebound {
 
     #[test]
     fn overlay_appends_manifest_only_when_missing() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         // Build state with a domain/account and optionally pre-seeded manifest
         let (authority_id, kp) = gen_account_in("wonderland");
         let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
@@ -6642,7 +6643,13 @@ seiyaku GuardedOverlayRebound {
         let code_hash = verified_manifest
             .code_hash
             .expect("verified manifest code hash");
-        let manifest = verified_manifest.signed(&kp);
+        let manifest = verified_manifest
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest");
         let mut md = iroha_model_base::metadata::Metadata::default();
         md.insert(
             "contract_entrypoint".parse().expect("metadata key"),
@@ -7361,6 +7368,7 @@ seiyaku ProtectedProved {
     }
     #[test]
     fn overlay_rejects_manifest_abi_mismatch_before_execution() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
@@ -7395,7 +7403,12 @@ seiyaku ProtectedProved {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest"),
         );
         let state = test_support::state_after_genesis(world);
         // Build a contract-call style transaction that references the instance.
@@ -7590,6 +7603,7 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn raw_and_proved_ivm_reject_header_substitution_for_bound_contract() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             transaction::IvmProved,
@@ -7649,7 +7663,12 @@ seiyaku AliasBoundArguments {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest"),
         );
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -7808,6 +7827,7 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn overlay_rejects_contract_binding_code_hash_mismatch() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
@@ -7839,7 +7859,12 @@ seiyaku AliasBoundArguments {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest"),
         );
         let state = test_support::state_after_genesis(world);
         let mut metadata = Metadata::default();
@@ -7903,6 +7928,7 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn overlay_requires_manifest_abi_for_bound_instance() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
@@ -7932,7 +7958,12 @@ seiyaku AliasBoundArguments {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest"),
         );
         let state = test_support::state_after_genesis(world);
         let mut metadata = Metadata::default();
@@ -7972,7 +8003,12 @@ seiyaku AliasBoundArguments {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest"),
         );
         let state = test_support::state_after_genesis(world);
         let res = build_overlay_for_transaction(&tx, &*execution_block(&state));

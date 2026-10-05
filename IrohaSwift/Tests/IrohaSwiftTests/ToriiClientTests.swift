@@ -12271,16 +12271,22 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             guard let url = request.url else {
                 throw ToriiClientError.invalidResponse
             }
-            if url.path == "/v1/explorer/instructions" {
-                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                let queryItems = components?.queryItems ?? []
-                let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            if url.path == "/v1/explorer/instructions/query" {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                XCTAssertNil(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+                let queryData = try XCTUnwrap(toriiClientTestBodyData(from: request))
+                let query = try XCTUnwrap(try JSONSerialization.jsonObject(with: queryData) as? [String: Any])
+                XCTAssertEqual(Set(query.keys), Set(["filter", "limit"]))
                 XCTAssertNil(query["cursor"])
-                XCTAssertEqual(query["limit"], "2")
+                XCTAssertEqual(query["limit"] as? Int, 2)
                 XCTAssertNil(query["page"])
                 XCTAssertNil(query["per_page"])
-                XCTAssertEqual(query["kind"], "Transfer")
-                XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                let expectedFilter = (ToriiField("kind") == "Transfer")
+                    .and(ToriiField("account") == "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+                    .and(ToriiField("asset_id") == "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                let filterData = try JSONSerialization.data(withJSONObject: XCTUnwrap(query["filter"]))
+                XCTAssertEqual(try ToriiFilter(jsonData: filterData), expectedFilter)
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -12365,7 +12371,19 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             guard let url = request.url else {
                 throw ToriiClientError.invalidResponse
             }
-            if url.path == "/v1/explorer/instructions" {
+            if url.path == "/v1/explorer/instructions/query" {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                XCTAssertNil(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+                let queryData = try XCTUnwrap(toriiClientTestBodyData(from: request))
+                let query = try XCTUnwrap(try JSONSerialization.jsonObject(with: queryData) as? [String: Any])
+                XCTAssertEqual(Set(query.keys), Set(["filter", "limit"]))
+                XCTAssertNil(query["cursor"])
+                XCTAssertEqual(query["limit"] as? Int, 1)
+                let expectedFilter = (ToriiField("kind") == "Transfer")
+                    .and(ToriiField("account") == "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+                let filterData = try JSONSerialization.data(withJSONObject: XCTUnwrap(query["filter"]))
+                XCTAssertEqual(try ToriiFilter(jsonData: filterData), expectedFilter)
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -12739,15 +12757,22 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             guard let url = request.url else {
                 throw ToriiClientError.invalidResponse
             }
-            if url.path == "/v1/explorer/instructions" {
-                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                let queryItems = components?.queryItems ?? []
-                let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-                XCTAssertEqual(query["cursor"], "Y3Vyc29y")
-                XCTAssertEqual(query["limit"], "2")
+            if url.path == "/v1/explorer/instructions/query" {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                XCTAssertNil(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+                let queryData = try XCTUnwrap(toriiClientTestBodyData(from: request))
+                let query = try XCTUnwrap(try JSONSerialization.jsonObject(with: queryData) as? [String: Any])
+                XCTAssertEqual(Set(query.keys), Set(["cursor", "filter", "limit"]))
+                XCTAssertEqual(query["cursor"] as? String, "Y3Vyc29y")
+                XCTAssertEqual(query["limit"] as? Int, 2)
                 XCTAssertNil(query["page"])
                 XCTAssertNil(query["per_page"])
-                XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                let expectedFilter = (ToriiField("kind") == "Transfer")
+                    .and(ToriiField("account") == "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+                    .and(ToriiField("asset_id") == "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                let filterData = try JSONSerialization.data(withJSONObject: XCTUnwrap(query["filter"]))
+                XCTAssertEqual(try ToriiFilter(jsonData: filterData), expectedFilter)
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -12868,7 +12893,21 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             guard let url = request.url else {
                 throw ToriiClientError.invalidResponse
             }
-            if url.path == "/v1/explorer/instructions" {
+            if url.path == "/v1/explorer/instructions/query" {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                XCTAssertNil(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+                let queryData = try XCTUnwrap(toriiClientTestBodyData(from: request))
+                let query = try XCTUnwrap(try JSONSerialization.jsonObject(with: queryData) as? [String: Any])
+                XCTAssertEqual(Set(query.keys), Set(["filter"]))
+                XCTAssertNil(query["cursor"])
+                XCTAssertNil(query["limit"])
+                let expectedFilter = (ToriiField("transaction_hash") == "deadbeef")
+                    .and(ToriiField("kind") == "Transfer")
+                    .and(ToriiField("account") == "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+                    .and(ToriiField("asset_id") == "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                let filterData = try JSONSerialization.data(withJSONObject: XCTUnwrap(query["filter"]))
+                XCTAssertEqual(try ToriiFilter(jsonData: filterData), expectedFilter)
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -12976,7 +13015,21 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             guard let url = request.url else {
                 throw ToriiClientError.invalidResponse
             }
-            if url.path == "/v1/explorer/instructions" {
+            if url.path == "/v1/explorer/instructions/query" {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                XCTAssertNil(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+                let queryData = try XCTUnwrap(toriiClientTestBodyData(from: request))
+                let query = try XCTUnwrap(try JSONSerialization.jsonObject(with: queryData) as? [String: Any])
+                XCTAssertEqual(Set(query.keys), Set(["filter"]))
+                XCTAssertNil(query["cursor"])
+                XCTAssertNil(query["limit"])
+                let expectedFilter = (ToriiField("transaction_hash") == "deadbeef")
+                    .and(ToriiField("kind") == "Transfer")
+                    .and(ToriiField("account") == "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+                    .and(ToriiField("asset_id") == "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                let filterData = try JSONSerialization.data(withJSONObject: XCTUnwrap(query["filter"]))
+                XCTAssertEqual(try ToriiFilter(jsonData: filterData), expectedFilter)
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,

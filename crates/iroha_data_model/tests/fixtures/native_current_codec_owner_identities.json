@@ -683,60 +683,6 @@
           "nominal": "iroha:kagemusha:governed-verifier-registry:v1",
           "root": "iroha:kagemusha:governed-verifier-registry:v1",
           "serialize_hash": "9fce72aa4a510501f35b125687d8cd07"
-        },
-        {
-          "deserialize_hash": "beb45df25c666201690ed546a399214b",
-          "nominal": "iroha_data_model::parliament_types::KagemushaVerifierPolicyInstallProposalV1",
-          "root": "iroha_data_model::parliament_types::KagemushaVerifierPolicyInstallProposalV1",
-          "serialize_hash": "beb45df25c666201690ed546a399214b"
-        },
-        {
-          "deserialize_hash": "0712f39a3e2d808ed4f22b922a9d0c9e",
-          "nominal": "iroha_data_model::parliament_types::KagemushaVerifierReleaseInstallProposalV1",
-          "root": "iroha_data_model::parliament_types::KagemushaVerifierReleaseInstallProposalV1",
-          "serialize_hash": "0712f39a3e2d808ed4f22b922a9d0c9e"
-        },
-        {
-          "deserialize_hash": "53a600c22050912ff4ba3581463b4b47",
-          "nominal": "iroha_data_model::parliament_types::KagemushaVerifierReleaseActivateProposalV1",
-          "root": "iroha_data_model::parliament_types::KagemushaVerifierReleaseActivateProposalV1",
-          "serialize_hash": "53a600c22050912ff4ba3581463b4b47"
-        },
-        {
-          "deserialize_hash": "3250da43e40b847ccc6d1bac7b8915f9",
-          "nominal": "iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1",
-          "root": "iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1",
-          "serialize_hash": "3250da43e40b847ccc6d1bac7b8915f9"
-        },
-        {
-          "deserialize_hash": "fccadf6d0d4c581a4056f456194311b1",
-          "nominal": "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1",
-          "root": "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1",
-          "serialize_hash": "fccadf6d0d4c581a4056f456194311b1"
-        },
-        {
-          "deserialize_hash": "9197e1f0c73179526ce7adc25844b3f7",
-          "nominal": "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1",
-          "root": "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1",
-          "serialize_hash": "9197e1f0c73179526ce7adc25844b3f7"
-        }
-      ],
-      "schema": 1
-    },
-    {
-      "owner": "iroha_data_model::captured_schema_tests::current_release_capture::retirement_capture",
-      "rows": [
-        {
-          "deserialize_hash": "970e07372821dcdb75f899d0623a390a",
-          "nominal": "iroha_data_model::parliament_types::KagemushaVerifierReleaseRetireProposalV1",
-          "root": "iroha_data_model::parliament_types::KagemushaVerifierReleaseRetireProposalV1",
-          "serialize_hash": "970e07372821dcdb75f899d0623a390a"
-        },
-        {
-          "deserialize_hash": "54c162ed0b05a327fafae2b7e65f1526",
-          "nominal": "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1",
-          "root": "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1",
-          "serialize_hash": "54c162ed0b05a327fafae2b7e65f1526"
         }
       ],
       "schema": 1

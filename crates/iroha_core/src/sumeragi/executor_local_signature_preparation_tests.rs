@@ -13,13 +13,13 @@ fn original_source(
     worker: &Worker<'_>,
 ) -> GlobalPayloadSource {
     let height = worker.applied.0 + 1;
-    let scheduled = worker.scheduled(height).unwrap().height_config().unwrap();
+    let scheduled = worker.scheduled(height).unwrap();
     let view = chain.state().view();
     let parent = view
         .latest_block()
         .expect("original authenticated parent read")
         .unwrap();
-    let cadence = Duration::from_millis(scheduled.params.block_time);
+    let cadence = Duration::from_millis(scheduled.params.block_time_ms);
     let block_time = parent.header().creation_time() + cadence;
     let tx = chain.tick(u64::try_from(block_time.as_millis()).unwrap() - 1);
     let (_, time) = iroha_primitives::time::TimeSource::new_mock(block_time);
@@ -45,15 +45,10 @@ fn original_source(
     .unwrap();
     assert!(block.is_resultless_proposal());
     assert_eq!(block.signatures().len(), 0);
-    let hashes = block
-        .external_entrypoints_slice()
-        .iter()
-        .map(TransactionEntrypoint::hash)
-        .collect();
     GlobalPayloadSource {
-        attest: attestation_required(&block),
+        attest: proposal_requires_attestation(&block, scheduled.epoch.authorization.last_height),
         block,
-        hashes,
+        pending_inputs: None,
     }
 }
 
@@ -61,16 +56,26 @@ fn install_original(
     worker: &mut Worker<'_>,
     source: GlobalPayloadSource,
     budget: AllocationBudget,
-) {
+) -> OriginalPayloadScope {
     assert!(worker.payload_build.is_none());
+    assert!(worker.completed_payload.is_none());
     let max_bytes = u32::try_from(source.block.resultless_proposal_wire_len().unwrap()).unwrap();
-    worker.payload_build = Some(GlobalPayloadBuild {
-        height: worker.applied.0 + 1,
-        view: 0,
+    let view = worker.state.view();
+    let scope = OriginalPayloadScope::capture(
+        &view,
+        worker.state.state_view_generation(),
+        worker.applied.0 + 1,
+        0,
         max_bytes,
+        100,
+    );
+    drop(view);
+    worker.payload_build = Some(GlobalPayloadBuild {
+        scope,
         job: PayloadBuild::new(source, budget, max_bytes as usize),
         preparation_refusal: None,
     });
+    scope
 }
 
 #[test]
@@ -81,17 +86,17 @@ fn original_local_payload_signature_refusal_keeps_job_and_exact_release_owner() 
         let source = original_source(chain, worker);
         let expected = source.block.encode_wire().unwrap();
         let entries = source.block.external_entrypoints_slice().as_ptr();
-        let hashes = source.hashes.as_ptr();
+        let input_hash = source.block.external_entrypoints_slice()[0].hash();
         let header = source.block.header();
         let applied = worker.applied;
         let mut registration = crate::unit_test_support::release_registration(&budget);
+        let scope = install_original(worker, source, budget.clone());
         let floor = budget.reserved_bytes();
         let demand = BlockSignatures::allocation_layout().size();
         let pressure = budget
             .try_reserve_bytes(budget.limit_bytes() - floor - (demand - 1))
             .unwrap();
         let occupied = budget.reserved_bytes();
-        install_original(worker, source, budget.clone());
         let error = worker.finish_payload_build().unwrap_err();
         let PublicationError::Deferred(ref returned) = error else {
             panic!("local signature preparation must return its exact original refusal: {error:?}");
@@ -126,14 +131,19 @@ fn original_local_payload_signature_refusal_keeps_job_and_exact_release_owner() 
                 panic!("retain original pre-wire control refusal with the actual job");
             };
             assert_eq!(original, returned.allocation_refusal().unwrap());
+            assert_eq!(retained.scope, scope);
             let source = retained.job.source();
             assert_eq!(source.block.header(), header);
             assert_eq!(source.block.external_entrypoints_slice().as_ptr(), entries);
-            assert_eq!(source.hashes.as_ptr(), hashes);
+            assert_eq!(
+                source.block.external_entrypoints_slice()[0].hash(),
+                input_hash
+            );
+            assert!(source.pending_inputs.is_none());
             assert!(!source.block.signatures_admitted_to(&budget));
             assert_eq!(budget.reserved_bytes(), occupied);
             assert_eq!(worker.applied, applied);
-            assert!(worker.last_built.is_none());
+            assert!(worker.completed_payload.is_none());
             assert!(worker.live.is_none());
             assert!(worker.finishing.is_none());
             assert!(worker.recovery.is_none());
@@ -156,9 +166,9 @@ fn original_local_payload_signature_refusal_keeps_job_and_exact_release_owner() 
         assert_eq!(bytes.as_slice(), expected);
         assert!(!attest);
         assert!(worker.payload_build.is_none());
-        let (height, view, retained_hashes) = worker.last_built.as_ref().unwrap();
-        assert_eq!((*height, *view), (applied.0 + 1, 0));
-        assert_eq!(retained_hashes.as_ptr(), hashes);
+        assert_eq!((scope.height, scope.view), (applied.0 + 1, 0));
+        // This source has no Queue lease and cannot authorize completed-payload reuse.
+        assert!(worker.completed_payload.is_none());
         assert_eq!(worker.applied, applied);
         assert_eq!(worker.state.view().height() as u64, applied.0);
         assert!(events.try_recv().is_err());
@@ -175,15 +185,16 @@ fn original_local_payload_wire_refusal_retains_completed_leaf_without_repreparat
         let source = original_source(chain, worker);
         let expected = source.block.encode_wire().unwrap();
         let entries = source.block.external_entrypoints_slice().as_ptr();
-        let hashes = source.hashes.as_ptr();
+        let input_hash = source.block.external_entrypoints_slice()[0].hash();
+        let header = source.block.header();
         let applied = worker.applied;
+        let scope = install_original(worker, source, budget.clone());
         let floor = budget.reserved_bytes();
         let demand = BlockSignatures::allocation_layout().size();
         let pressure = budget
             .try_reserve_bytes(budget.limit_bytes() - floor - (demand + expected.len() - 1))
             .unwrap();
         let occupied = budget.reserved_bytes();
-        install_original(worker, source, budget.clone());
         for _ in 0..2 {
             assert!(matches!(
                 worker.finish_payload_build(),
@@ -191,13 +202,19 @@ fn original_local_payload_wire_refusal_retains_completed_leaf_without_repreparat
             ));
             let retained = worker.payload_build.as_ref().unwrap();
             assert!(retained.preparation_refusal.is_none());
+            assert_eq!(retained.scope, scope);
             let source = retained.job.source();
             assert!(source.block.signatures_admitted_to(&budget));
+            assert_eq!(source.block.header(), header);
             assert_eq!(source.block.external_entrypoints_slice().as_ptr(), entries);
-            assert_eq!(source.hashes.as_ptr(), hashes);
+            assert_eq!(
+                source.block.external_entrypoints_slice()[0].hash(),
+                input_hash
+            );
+            assert!(source.pending_inputs.is_none());
             assert_eq!(budget.reserved_bytes(), occupied + demand);
             assert_eq!(worker.applied, applied);
-            assert!(worker.last_built.is_none());
+            assert!(worker.completed_payload.is_none());
             assert!(events.try_recv().is_err());
         }
         drop(pressure);
@@ -205,7 +222,8 @@ fn original_local_payload_wire_refusal_retains_completed_leaf_without_repreparat
         let bytes = bytes.unwrap();
         assert!(bytes.admitted_to(&budget));
         assert_eq!(bytes.as_slice(), expected);
-        assert_eq!(worker.last_built.as_ref().unwrap().2.as_ptr(), hashes);
+        assert!(worker.payload_build.is_none());
+        assert!(worker.completed_payload.is_none());
         assert_eq!(worker.applied, applied);
         assert_eq!(worker.state.view().height() as u64, applied.0);
         assert!(events.try_recv().is_err());

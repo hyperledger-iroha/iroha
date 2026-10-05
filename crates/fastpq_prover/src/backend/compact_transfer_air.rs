@@ -63,7 +63,7 @@ use crate::gadgets::compact_trace_columns::decode_smt_row;
 use crate::{fft::Planner, gadgets::compact_smt_air::PHYSICAL_HASH_ROWS};
 
 const CONSTRAINT_COUNT: usize = LOCAL_SLOTS + TRANSITION_SLOTS + RESIDUE_COUNT;
-const IDENTITY: &str =
+pub(super) const IDENTITY: &str =
     "fastpq:compact:v1:compact-transfer:v1:342cols:597local+83edge+243smt:65536rows";
 const MASK_CYCLE_ROWS: usize = 4096;
 #[cfg(test)]
@@ -615,7 +615,7 @@ fn shape(details: &'static str) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{
         backend::{field_pow, fixed_domain::FixedTraceDomain},
@@ -634,7 +634,7 @@ mod tests {
         })
     }
 
-    fn statement() -> PublicStatement {
+    pub(in crate::backend) fn statement() -> PublicStatement {
         PublicStatement {
             updates: [
                 PublicUpdate {
@@ -933,7 +933,7 @@ mod tests {
     }
 
     /// Prover-test-only complete witness; this native fixture is never a verifier input.
-    fn physical_fixture() -> (PublicStatement, PhysicalSmtWitness) {
+    pub(in crate::backend) fn physical_fixture() -> (PublicStatement, PhysicalSmtWitness) {
         let siblings =
             core::array::from_fn(|level| digest(u8::try_from(level + 17).expect("fixture seed")));
         let path = 0xa59c_71e3;
@@ -1260,12 +1260,12 @@ mod tests {
     #[ignore = "explicit complete canonical q77 SMT proof with native masked trace"]
     fn complete_smt_prover_diagnostic() {
         use crate::backend::{
+            air::q77::{ProducerLimits, VerifierLimits},
             deep_engine,
             deep_geometry::QUERY_COUNT,
             deep_proof,
-            deep_prover::{ConstructionLimits, ProducerPlan},
+            deep_prover::ProducerPlan,
             deep_trace_source::OwnedTraceSource,
-            offline_compact::ProvingLimits,
         };
         use rand::{SeedableRng, rngs::StdRng};
         let start = std::time::Instant::now();
@@ -1275,15 +1275,12 @@ mod tests {
         let construction = start.elapsed();
         let air =
             CompactTransferAir::new(&statement, Some(b"test-only-full-smt-diagnostic")).unwrap();
-        let policy = ProvingLimits::default();
+        // The default proving policy as the engine's typed producer limits.
         let plan = ProducerPlan::new(
             &air,
-            ConstructionLimits {
-                digest_execution: policy.digest_execution,
-                max_payload_bytes: policy.max_segment_charge_bytes,
-                max_work_units: policy.max_segment_work_units,
-                max_hash_calls: policy.max_segment_work_units,
+            ProducerLimits {
                 max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
+                ..ProducerLimits::default()
             },
         )
         .unwrap();
@@ -1299,8 +1296,8 @@ mod tests {
         assert!(bytes.len() <= deep_proof::MAX_FRAME_BYTES);
         assert!(bytes.len() <= limits.max_proof_bytes);
         let verification_start = std::time::Instant::now();
-        let verified =
-            deep_engine::verify_committed(&air, &bytes, limits, 32 * 1024 * 1024).unwrap();
+        let engine_limits = |segment| VerifierLimits::for_segment(segment, 32 * 1024 * 1024);
+        let verified = deep_engine::verify_committed(&air, &bytes, engine_limits(limits)).unwrap();
         let work = verified.work();
         assert_eq!(work.proof_bytes, bytes.len());
         assert_eq!(work.air_evaluations, 1);
@@ -1325,7 +1322,7 @@ mod tests {
             ),
         ] {
             assert!(
-                matches!(deep_engine::verify_committed(&air, &bytes, policy, 32 * 1024 * 1024),
+                matches!(deep_engine::verify_committed(&air, &bytes, engine_limits(policy)),
                 Err(Error::VerifierLimitExceeded { limit, .. }) if limit == name)
             );
         }
@@ -1337,7 +1334,7 @@ mod tests {
         changed.new_root[0] ^= 1;
         let changed =
             CompactTransferAir::new(&changed, Some(b"test-only-full-smt-diagnostic")).unwrap();
-        assert!(deep_engine::verify_committed(&changed, &bytes, limits, 32 * 1024 * 1024).is_err());
+        assert!(deep_engine::verify_committed(&changed, &bytes, engine_limits(limits)).is_err());
     }
 
     #[test]

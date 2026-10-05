@@ -118,11 +118,7 @@ fn retained_proposal_operator(proposal_kind: &ProposalKind) -> Result<&AccountId
         | ProposalKind::SccpRouteGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_)
-        | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
-        | ProposalKind::KagemushaVerifierPolicyInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseActivate(_)
-        | ProposalKind::KagemushaVerifierReleaseRetire(_) => Err(inconsistent(
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => Err(inconsistent(
             "non-validation-fee proposal reached the typed validation-fee projection",
         )),
     }
@@ -546,6 +542,27 @@ pub(crate) async fn handler_proposal_draft(
 mod tests {
     use super::*;
     use std::cell::Cell;
+    #[test]
+    fn validation_fee_projection_rejects_unrelated_current_proposal() {
+        use iroha_data_model::governance::types::{
+            GlobalDataTriggerPermissionGovernanceActionV1,
+            GlobalDataTriggerPermissionGovernanceProposalV1,
+        };
+
+        let proposal = ProposalKind::GlobalDataTriggerPermissionGovernance(
+            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority: iroha_test_samples::ALICE_ID.clone(),
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Grant,
+            },
+        );
+        assert!(matches!(
+            retained_proposal_operator(&proposal),
+            Err(Error::AppServiceUnavailable {
+                code: "validation_fee_state_inconsistent",
+                ..
+            })
+        ));
+    }
     #[test]
     fn catch_up_responses_are_temporary_service_unavailability() {
         for error in [

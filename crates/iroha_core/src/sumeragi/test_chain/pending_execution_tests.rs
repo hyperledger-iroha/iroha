@@ -66,10 +66,11 @@ fn pending_execution_retains_one_source_and_publishes_once() {
 
 #[test]
 fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
-    for mutation in 0..3 {
+    for mutation in 0..4 {
         let mut chain = chain();
         let state = Arc::clone(chain.state());
         let kura = Arc::clone(chain.kura());
+        let budget = state.ivm_execution_budget();
         let parent = chain.committed(1).block().encode_wire().unwrap();
         let proposal = chain.proposal(Some(2000), Vec::new());
         let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
@@ -85,6 +86,113 @@ fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
                     .unwrap();
                 match mutation {
                     0 => {
+                        let hash = original.block.as_ref().hash();
+                        let wire = original.block.as_ref().encode_wire().unwrap();
+                        let key = KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519);
+                        use iroha_data_model::block::{BlockSignatures, PreparedBlockSignatures};
+                        use norito::{
+                            SerializePayload,
+                            core::{DecodeFlagsGuard, Encoder, SequenceSpan},
+                        };
+
+                        assert!(original.block.as_ref().signatures_admitted_to(&budget));
+                        let signature = iroha_data_model::block::BlockSignature::new(
+                            1,
+                            iroha_crypto::SignatureOf::from_hash(key.private_key(), hash),
+                        );
+                        let before = budget.reserved_bytes();
+                        assert!(matches!(
+                            original.block.as_mut().add_signature(signature.clone()),
+                            Err(iroha_crypto::Error::Signing(reason))
+                                if reason == "admitted block signatures are immutable"
+                        ));
+                        assert_eq!(original.block.as_ref().encode_wire().unwrap(), wire);
+                        assert_eq!(budget.reserved_bytes(), before);
+
+                        // Construct altered offered bytes through the genuine bounded
+                        // signature producer; admission keeps the original State pool.
+                        let offered = BlockSignatures::try_from_iter(
+                            original
+                                .block
+                                .as_ref()
+                                .signatures()
+                                .cloned()
+                                .chain([signature]),
+                        )
+                        .unwrap();
+                        assert!(!offered.admitted_to(&budget));
+                        assert!(matches!(
+                            original.block.as_mut().replace_signatures(offered.clone()),
+                            Err(iroha_crypto::Error::Signing(reason))
+                                if reason == "block signature replacement changed original custody"
+                        ));
+                        assert_eq!(original.block.as_ref().encode_wire().unwrap(), wire);
+                        assert_eq!(budget.reserved_bytes(), before);
+                        let _flags = DecodeFlagsGuard::enter(0);
+                        let mut offered_wire = Vec::new();
+                        offered
+                            .serialize(&mut Encoder::for_buffer(&mut offered_wire))
+                            .unwrap();
+                        let mut source =
+                            iroha_allocation::ChargedBuffer::new(offered_wire.len(), &budget)
+                                .unwrap();
+                        source.append(&offered_wire).unwrap();
+                        assert!(source.belongs_to(&budget));
+                        let source_pointer = source.as_slice().as_ptr();
+                        let span = SequenceSpan {
+                            start: 0,
+                            end: offered_wire.len(),
+                        };
+                        let mut prepared =
+                            PreparedBlockSignatures::from_source(&source, span, &budget).unwrap();
+                        prepared.prepare(&source).unwrap();
+                        let replacement = prepared
+                            .finish(&source)
+                            .unwrap_or_else(|(_, error)| panic!("{error}"));
+                        assert!(replacement.admitted_to(&budget));
+                        assert_eq!(replacement, offered);
+                        let retained = original
+                            .block
+                            .as_mut()
+                            .replace_signatures(replacement)
+                            .unwrap();
+                        assert!(retained.admitted_to(&budget));
+                        assert!(original.block.as_ref().signatures_admitted_to(&budget));
+                        assert_eq!(source.as_slice().as_ptr(), source_pointer);
+                        let signature_backing: usize =
+                            BlockSignatures::backing_layouts(offered.len())
+                                .unwrap()
+                                .iter()
+                                .map(std::alloc::Layout::size)
+                                .sum();
+                        let signature_bytes: usize = offered
+                            .iter()
+                            .map(|value| value.signature().payload().len())
+                            .sum();
+                        assert_eq!(
+                            budget.reserved_bytes(),
+                            before
+                                + offered_wire.len()
+                                + signature_backing
+                                + signature_bytes
+                                + BlockSignatures::allocation_layout().size()
+                        );
+                        assert_eq!(original.block.as_ref().hash(), hash);
+                        assert_ne!(original.block.as_ref().encode_wire().unwrap(), wire);
+                    }
+                    1 => {
+                        // Reconstruct altered offered bytes; the exact funded original
+                        // remains protected and its original credits stay retained.
+                        original.witness.offer_reconstructed_tamper(|offered| {
+                            let write = offered
+                                .writes
+                                .first_mut()
+                                .expect("genuine native witness has writes");
+                            write.value.push(0xFF);
+                        });
+                    }
+                    2 => original.state.world.sumeragi_lanes.get_mut().incarnations += 1,
+                    _ => {
                         let hash = original.block.as_ref().hash();
                         let wire = original.block.as_ref().encode_wire().unwrap();
                         let key = KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519);
@@ -128,18 +236,6 @@ fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
                         );
                         assert_eq!(kept_original.encode_wire().unwrap(), wire);
                     }
-                    1 => {
-                        // Reconstruct altered offered bytes; the exact funded original
-                        // remains protected and its original credits stay retained.
-                        original.witness.offer_reconstructed_tamper(|offered| {
-                            let write = offered
-                                .writes
-                                .first_mut()
-                                .expect("genuine native witness has writes");
-                            write.value.push(0xFF);
-                        });
-                    }
-                    _ => original.state.world.sumeragi_lanes.get_mut().incarnations += 1,
                 }
                 assert!(
                     original

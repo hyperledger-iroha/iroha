@@ -535,14 +535,6 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeContractEmergencyHol
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
 #[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierPolicyInstallV1);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseInstallV1);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseActivateV1);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseRetireV1);
-#[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeSccpRouteGovernance);

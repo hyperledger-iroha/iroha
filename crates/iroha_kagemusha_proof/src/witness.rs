@@ -1,84 +1,85 @@
-//! **Prototype** native witnesses of the step relations and their reference
-//! evaluation (spec `kagemusha_single_design_proposal.md` sections 3 and
-//! 3.2, controls off).
+//! Native witnesses of the step relations `sigma_send` and `sigma_recv` and
+//! their reference evaluation, in the G1 wallet layout
+//! (`specs/kagemusha_single_design_proposal.md` sections 3, 3.2, 5.1 and 7;
+//! the wire record `specs/kagemusha_wallet_wire_v1.md` section 3.2).
+//!
+//! # Hashes
+//!
+//! Every value a step relation computes is `P(d, items)`, the RP57 Poseidon
+//! [`hash_with_domain`] over the Pasta `Fp` σ field, under the G1 domains:
+//! the state commitment `kgwcore1`, the rest digest `kgwrest1`, `credit_id`
+//! `kgwcrdt1`, the chain appends `kgwschn1` / `kgwrchn1` and the statement
+//! `kgwstmt1`. Element lists follow the G1 rule: an integer, tag or mask is
+//! one element, a 32-byte SHA-256 digest or identifier two `u128` limbs (low
+//! half first), a `P` value one element.
 //!
 //! # State
 //!
-//! A wallet state has 40 fields: a 30-field core the step relations open
-//! ([`CoreState`]) and a 10-field remainder no step relation reads
-//! ([`StateRemainder`]). The core holds every field spec section 3 assigns
-//! to it: lifecycle, `wallet_id` and credential digest, balance,
-//! `burned_total`, sequence and the send, load and redeem ordinals, both
-//! chains, the five map roots, the enabled-controls mask, the quota windows
-//! root, the blacklist version and root, the lease expiry, the policy epoch,
-//! the accepted-time floor and the state nonce. It also holds the scheme and
-//! asset identifiers (four limbs beyond the spec's list): the predecessor's
-//! lineage proof exposes no asset, so a step proof can bind the asset of the
-//! incarnation only by opening it.
-//!
-//! Two commitment layouts are supported ([`StateLayout`]):
-//!
-//! - **two-level** (spec section 3): `H(kgspcor1, core || H(kgsprst1,
-//!   remainder))`, 17 permutations per opening (16 with a folded prefix).
-//!   The remainder digest is carried; no step relation opens it.
-//! - **flat**: `H(kgspflt1, core || remainder)`, 22 permutations per opening
-//!   (21 folded).
-//!
-//! Each `(step, layout)` pair has its own relation identifier
-//! ([`relation_id`]), so a verifier allowlist cannot take one layout's proof
-//! for the other's.
+//! A wallet state is a 32-element core ([`CoreState`], in the G1
+//! `KagemushaWalletStateV1::core_field_items` order: lifecycle; scheme id,
+//! asset digest, `wallet_id` and credential digest (two limbs each);
+//! balance, `burned_total`, sequence, `next_send`, `next_load`,
+//! `next_redeem`; both chains; the consumed-credit, pending-outgoing,
+//! load/redeem-recovery, fee-claim and quota-usage roots; the
+//! enabled-controls mask; the quota-windows root; the blacklist version,
+//! root, issue time and maximum age; the lease expiry; the policy epoch; the
+//! accepted-time floor; the state nonce) and a 13-element rest
+//! ([`StateRest`]) that no step relation opens. The commitment is one `Fp`
+//! value `P(kgwcore1, core || P(kgwrest1, rest))` (owner answer Q10).
 //!
 //! # Relations
 //!
-//! Both steps open the predecessor commitment, require lifecycle Active, a
-//! nonzero `u128` amount and `sequence + 1 < 2^128`, hash the 24-field
-//! Request body under the credit domain (the credit identifier,
-//! `credit_id = H(kgspcrd1, Request body)`, spec section 5.1), decompose it
-//! into its canonical limbs, require distinct payer and receiver wallets,
-//! append one chain and commit the successor with a fresh state nonce. The
-//! identity limbs (scheme, asset, `wallet_id`, credential) of the Request and
-//! the statement are the opened core cells.
+//! A [`SigmaRelation`] is a step and the enabled-controls mask its
+//! verifying key is selected by (the G1 selector `(operation tag, mask)`,
+//! owner answer Q11). Both steps open the predecessor commitment, require the
+//! lifecycle to be Active or Retiring (carried unchanged: a Retiring wallet
+//! keeps sending and receiving, spec section 6.3), a nonzero `u128` amount
+//! and `sequence + 1 < 2^128`, hash the 24-element Request body into
+//! `credit_id = P(kgwcrdt1, body)` (one element, owner answer Q1), require
+//! distinct payer and receiver wallets, append one chain and commit the
+//! successor with a fresh state nonce. The Request's scheme, asset and own
+//! wallet are the opened core cells.
 //!
 //! - `sigma_send` takes `burned_total` and the pending-outgoing root of the
-//!   predecessor's lineage proof as public inputs ([`LineageInputs`]).
-//!   It requires the enabled-controls mask to be empty and checks
-//!   `amount + fee < 2^128` and `amount + fee <= balance - burned_total`
-//!   (both checked). It advances the send ordinal without overflow and
-//!   requires `request_policy_epoch <= policy_epoch` and
-//!   `max(accepted_time_floor, request_time) <= lower <= upper` (all `u64`).
-//!   The successor balance is `balance - amount - fee`, its `burned_total`
-//!   the lineage input, its accepted-time floor `lower` (accepted time never
-//!   goes back), and its pending-outgoing and fee-claim roots are carried
-//!   witnesses. The Request's payer is the core `wallet_id` and its send
-//!   ordinal the core's `next_send`. `send_chain' = H(kgspsnd1, send_chain,
-//!   credit_id, receiver, ordinal, amount, fee)`.
+//!   predecessor's lineage proof as public inputs ([`LineageInputs`]). It
+//!   requires the core's enabled-controls mask to be the relation's, checks
+//!   `amount + fee < 2^128` and `amount + fee <= balance - burned_total`,
+//!   advances the send ordinal without overflow and requires
+//!   `request_policy_epoch <= policy_epoch` and
+//!   `max(accepted_time_floor, request_time) <= lower <= upper` (all
+//!   `u64`). The successor balance is `balance - amount - fee`, its
+//!   `burned_total` the lineage input, its accepted-time floor `lower`, and
+//!   its pending-outgoing and fee-claim roots are carried witnesses.
+//!   `send_chain' = P(kgwschn1, [send_chain, credit_id, receiver (2),
+//!   ordinal, amount, fee, request digest (2)])`.
+//!   With the blacklist control in its mask it also enforces the maximum
+//!   list age (owner answer Q5): while a list is held (`blacklist_version !=
+//!   0`) under an age rule (`blacklist_max_age_ms != 0`),
+//!   `blacklist_issued_at_ms <= upper <= blacklist_issued_at_ms +
+//!   blacklist_max_age_ms` (the native G1 `check_blacklist` rule).
 //! - `sigma_recv` credits the amount (`balance + amount < 2^128`). The
-//!   Request's receiver and receiver credential are the core `wallet_id` and
-//!   credential digest. `recv_chain' = H(kgsprcv1, recv_chain, credit_id,
-//!   payer, amount)`, and the successor's consumed-credit root is a carried
-//!   witness. Its statement contains no Payment digest (it is precomputed
-//!   at Request signing).
+//!   Request's receiver is the core `wallet_id` (owner answer Q8: matched by
+//!   `wallet_id`, never by credential digest; the Request's receiver
+//!   credential digest is a Request term, so a Request quoted before a
+//!   renewal stays receivable after it; the `payment_key` match is the
+//!   native Payment check and `Λ_recv`'s). `recv_chain' = P(kgwrchn1,
+//!   [recv_chain, credit_id, payer (2), amount])`, and the successor's
+//!   consumed-credit root is a carried witness.
 //!
 //! Map roots that a step does not touch are copied; the roots it updates are
-//! carried witnesses. Spec section 3.2 assigns their transitions to the
-//! native Advance check and to the lineage relation.
+//! carried witnesses (spec section 3.2 assigns their transitions to the
+//! native Advance check and to the lineage relation).
 //!
-//! The fee schedule digest, the receiver credential (of a Send), the scheme
-//! policy, the certificates and the nonce are Request terms: bound by the
-//! credit identifier, which the receiver recomputes from the Request it
-//! signed. Whether the fee schedule is one the payer's head-committed policy
-//! permits is a lineage-relation check (spec section 3.2); that policy lives
-//! in the remainder, which no step relation opens.
-//!
-//! The public statement is the 29-field step encoding
-//! ([`iroha_plonk_gadgets::statement`]) hashed under `kgwstmt1`: the G1
-//! wallet statement field encoding (`KagemushaWalletStatementV1::field_items`),
-//! including the successor `next_load` and, in the Send effect, the
-//! Request digest limbs after the fee.
-// TODO(G3, design §15): the send chain entry, the core layout and domains, the
-// Retiring lifecycle and the relation identities are still the prototype's;
-// align them with the G1 encodings (`KagemushaWalletSendChainEntryV1`, core and
-// rest field items, `kgwcore1`/`kgwrest1`/`kgwschn1`/`kgwrchn1`).
+//! The public input is the statement digest `P(kgwstmt1, 28 elements)`
+//! ([`iroha_plonk_gadgets::statement`]): the G1
+//! `KagemushaWalletStatementV1::field_items` with the scheme-level relation
+//! identity carried by the witness ([`StepWitness::relation_id`]).
+// TODO(G3, spec section 7): sigma_send with the blacklist control enforces
+// only the maximum list age; the recipient non-membership opening against
+// `blacklist_root`, the quota windows and usage update and the lease expiry
+// check are not implemented, so `CONTROLS_SUPPORTED` admits the blacklist
+// bit alone and no relation with an enabled control may be frozen into a
+// verifying-key allowlist yet.
 //!
 //! # Native reference
 //!
@@ -89,62 +90,71 @@
 
 use iroha_pasta::poseidon::{PoseidonField, hash_with_domain};
 use iroha_plonk_gadgets::statement::{
-    EFFECT_UNION_FIELDS, STATEMENT_DOMAIN, STATEMENT_FIELDS, STATEMENT_VERSION, StatementV1,
-    StepRelation, bytes_to_limbs, foreign_limbs,
+    EFFECT_UNION_FIELDS, STATEMENT_DOMAIN, STATEMENT_FIELDS, STATEMENT_HEADER_FIELDS,
+    STATEMENT_VERSION, StatementV1, StepRelation, digest_fields,
 };
 
-/// Core fields: the fields the step relations open.
-pub const CORE_FIELDS: usize = 30;
-/// Remainder fields: the state version, the regulatory policy digest limbs
-/// and 7 other carried fields.
-pub const REMAINDER_FIELDS: usize = 10;
-/// Fields of the flat state commitment.
-pub const STATE_FIELDS: usize = CORE_FIELDS + REMAINDER_FIELDS;
-/// Other carried remainder fields (time anchor, quota share body, ...).
-pub const OTHER_CARRIED_FIELDS: usize = 7;
-/// Fields of the Request body (the `credit_id` preimage).
+/// Core elements: every field a step relation reads, changes or carries.
+pub const CORE_FIELDS: usize = 32;
+/// Rest elements: the fields only the lineage relation opens.
+pub const REST_FIELDS: usize = 13;
+/// Inputs of the state commitment: the core and the rest digest.
+pub const COMMITMENT_ARITY: usize = CORE_FIELDS + 1;
+/// Elements of the Request body (the `credit_id` preimage).
 pub const REQUEST_FIELDS: usize = 24;
-/// Fields of a `send_chain` entry.
-pub const SEND_CHAIN_FIELDS: usize = 8;
-/// Fields of a `recv_chain` entry.
-pub const RECEIVE_CHAIN_FIELDS: usize = 6;
-/// Effect fields of `sigma_send`: credit identifier (2), receiver (2), send
+/// Inputs of a `send_chain` append: the chain and the 8 descriptor elements.
+pub const SEND_CHAIN_FIELDS: usize = 9;
+/// Inputs of a `recv_chain` append: the chain and 4 descriptor elements.
+pub const RECEIVE_CHAIN_FIELDS: usize = 5;
+/// Effect elements of `sigma_send`: `credit_id`, receiver (2), send
 /// ordinal, amount, fee, Request digest (2), accepted lower and upper time.
-pub const SEND_EFFECT_FIELDS: usize = 11;
-/// Effect fields of `sigma_recv`.
-pub const RECEIVE_EFFECT_FIELDS: usize = 5;
-/// The state version.
-pub const STATE_VERSION: u64 = 1;
-/// The Request body version.
+pub const SEND_EFFECT_FIELDS: usize = 10;
+/// Effect elements of `sigma_recv`: `credit_id`, payer (2), amount.
+pub const RECEIVE_EFFECT_FIELDS: usize = 4;
+/// The Request body version (G1 `KAGEMUSHA_WALLET_VERSION_V1`).
 pub const REQUEST_VERSION: u64 = 1;
-/// The Active lifecycle.
-pub const LIFECYCLE_ACTIVE: u64 = 1;
+/// The Active lifecycle tag.
+pub const LIFECYCLE_ACTIVE: u8 = 1;
+/// The Retiring lifecycle tag.
+pub const LIFECYCLE_RETIRING: u8 = 2;
 
-/// Two-level core commitment domain (prototype label).
-pub const CORE_DOMAIN: u64 = u64::from_le_bytes(*b"kgspcor1");
-/// Two-level remainder digest domain (prototype label).
-pub const REMAINDER_DOMAIN: u64 = u64::from_le_bytes(*b"kgsprst1");
-/// Flat state commitment domain (prototype label).
-pub const FLAT_STATE_DOMAIN: u64 = u64::from_le_bytes(*b"kgspflt1");
-/// Credit identifier domain: `credit_id = H(credit, Request body)`
-/// (prototype label).
-pub const CREDIT_DOMAIN: u64 = u64::from_le_bytes(*b"kgspcrd1");
-/// `send_chain` domain (prototype label).
-pub const SEND_CHAIN_DOMAIN: u64 = u64::from_le_bytes(*b"kgspsnd1");
-/// `recv_chain` domain (prototype label).
-pub const RECEIVE_CHAIN_DOMAIN: u64 = u64::from_le_bytes(*b"kgsprcv1");
+/// State commitment domain `kgwcore1` (G1 `KAGEMUSHA_WALLET_CORE_DOMAIN_V1`).
+pub const CORE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwcore1");
+/// Rest digest domain `kgwrest1` (G1 `KAGEMUSHA_WALLET_REST_DOMAIN_V1`).
+pub const REST_DOMAIN: u64 = u64::from_le_bytes(*b"kgwrest1");
+/// `credit_id` domain `kgwcrdt1` (G1 `KAGEMUSHA_WALLET_CREDIT_DOMAIN_V1`).
+pub const CREDIT_DOMAIN: u64 = u64::from_le_bytes(*b"kgwcrdt1");
+/// `send_chain` append domain `kgwschn1` (G1
+/// `KAGEMUSHA_WALLET_SEND_CHAIN_DOMAIN_V1`).
+pub const SEND_CHAIN_DOMAIN: u64 = u64::from_le_bytes(*b"kgwschn1");
+/// `recv_chain` append domain `kgwrchn1` (G1
+/// `KAGEMUSHA_WALLET_RECV_CHAIN_DOMAIN_V1`).
+pub const RECEIVE_CHAIN_DOMAIN: u64 = u64::from_le_bytes(*b"kgwrchn1");
+
+/// Recipient blacklist control bit (G1 `KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1`).
+pub const CONTROL_BLACKLIST: u32 = 1 << 0;
+/// Sending quota control bit (G1 `KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1`).
+pub const CONTROL_QUOTAS: u32 = 1 << 1;
+/// Attestation lease control bit (G1
+/// `KAGEMUSHA_WALLET_CONTROL_ATTESTATION_LEASE_V1`).
+pub const CONTROL_ATTESTATION_LEASE: u32 = 1 << 2;
+/// Every defined control bit.
+pub const CONTROLS_DEFINED: u32 = CONTROL_BLACKLIST | CONTROL_QUOTAS | CONTROL_ATTESTATION_LEASE;
+/// The control bits a `sigma_send` of this crate may enable: the blacklist
+/// control, whose maximum-age rule it enforces (see the module TODO).
+pub const CONTROLS_SUPPORTED: u32 = CONTROL_BLACKLIST;
 
 const _: () = assert!(SEND_EFFECT_FIELDS <= EFFECT_UNION_FIELDS);
 const _: () = assert!(RECEIVE_EFFECT_FIELDS <= EFFECT_UNION_FIELDS);
-const _: () = assert!(1 + 2 + OTHER_CARRIED_FIELDS == REMAINDER_FIELDS);
+const _: () = assert!(STATEMENT_HEADER_FIELDS + EFFECT_UNION_FIELDS == STATEMENT_FIELDS);
 
-/// Core field positions.
+/// Core element positions (G1 core element order).
 pub mod core_index {
-    /// The lifecycle.
+    /// The lifecycle tag.
     pub const LIFECYCLE: usize = 0;
     /// The scheme identifier limbs.
     pub const SCHEME: usize = 1;
-    /// The asset identifier limbs.
+    /// The asset digest limbs.
     pub const ASSET: usize = 3;
     /// The `wallet_id` limbs.
     pub const WALLET: usize = 5;
@@ -162,15 +172,15 @@ pub mod core_index {
     pub const NEXT_LOAD: usize = 13;
     /// The next redeem ordinal.
     pub const NEXT_REDEEM: usize = 14;
-    /// The send chain accumulator.
+    /// The send chain.
     pub const SEND_CHAIN: usize = 15;
-    /// The receive chain accumulator.
+    /// The receive chain.
     pub const RECEIVE_CHAIN: usize = 16;
     /// The consumed-credit root.
     pub const CONSUMED_CREDIT_ROOT: usize = 17;
     /// The pending-outgoing root.
     pub const PENDING_OUTGOING_ROOT: usize = 18;
-    /// The load/redeem recovery root.
+    /// The load/redeem recovery root (one map keyed by `(kind, ordinal)`).
     pub const LOAD_REDEEM_ROOT: usize = 19;
     /// The fee-claim recovery root.
     pub const FEE_CLAIM_ROOT: usize = 20;
@@ -178,80 +188,103 @@ pub mod core_index {
     pub const QUOTA_USAGE_ROOT: usize = 21;
     /// The enabled-controls mask.
     pub const ENABLED_CONTROLS: usize = 22;
-    /// The quota share/windows root.
+    /// The quota-windows root.
     pub const QUOTA_WINDOWS_ROOT: usize = 23;
     /// The blacklist version.
     pub const BLACKLIST_VERSION: usize = 24;
     /// The blacklist root.
     pub const BLACKLIST_ROOT: usize = 25;
+    /// The blacklist issue time.
+    pub const BLACKLIST_ISSUED_AT: usize = 26;
+    /// The regulatory policy's maximum blacklist age.
+    pub const BLACKLIST_MAX_AGE: usize = 27;
     /// The lease expiry.
-    pub const LEASE_EXPIRY: usize = 26;
+    pub const LEASE_EXPIRY: usize = 28;
     /// The `u64` policy epoch.
-    pub const POLICY_EPOCH: usize = 27;
+    pub const POLICY_EPOCH: usize = 29;
     /// The `u64` accepted-time floor.
-    pub const TIME_FLOOR: usize = 28;
+    pub const TIME_FLOOR: usize = 30;
     /// The state nonce.
-    pub const STATE_NONCE: usize = 29;
+    pub const STATE_NONCE: usize = 31;
 }
 
-/// How a state is committed.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum StateLayout {
-    /// `H(core || H(remainder))` (spec section 3).
-    #[default]
-    TwoLevel,
-    /// `H(core || remainder)`.
-    Flat,
+/// A step relation and the enabled-controls mask it enforces: the G1
+/// verifying-key selector `(operation tag, mask)` (owner answer Q11).
+///
+/// `sigma_recv` has the empty mask (G1 selects every operation other than
+/// Send with mask 0); `sigma_send` has one relation per mask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SigmaRelation {
+    step: StepRelation,
+    enabled_controls: u32,
 }
 
-impl StateLayout {
-    /// The state commitment domain.
-    #[must_use]
-    pub const fn domain(self) -> u64 {
-        match self {
-            Self::TwoLevel => CORE_DOMAIN,
-            Self::Flat => FLAT_STATE_DOMAIN,
-        }
-    }
-
-    /// The arity of the state commitment hash.
-    #[must_use]
-    pub const fn commitment_arity(self) -> usize {
-        match self {
-            Self::TwoLevel => CORE_FIELDS + 1,
-            Self::Flat => STATE_FIELDS,
-        }
-    }
-
-    /// A short label.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::TwoLevel => "two_level",
-            Self::Flat => "flat",
-        }
-    }
-}
-
-/// The 32-byte relation identity of `step` under `layout` (prototype labels
-/// in the low 16 bytes, zero high half): one per pair, so a verifier
-/// allowlist never takes one layout's relation for the other's. It enters
-/// the statement as two 128-bit limbs, like the G1 scheme `relation_id`.
-#[must_use]
-pub const fn relation_id(step: StepRelation, layout: StateLayout) -> [u8; 32] {
-    let label = match (step, layout) {
-        (StepRelation::Send, StateLayout::TwoLevel) => *b"kgsp-send-2level",
-        (StepRelation::Send, StateLayout::Flat) => *b"kgsp-send-flat-1",
-        (StepRelation::Receive, StateLayout::TwoLevel) => *b"kgsp-recv-2level",
-        (StepRelation::Receive, StateLayout::Flat) => *b"kgsp-recv-flat-1",
+impl SigmaRelation {
+    /// `sigma_send` with every control off.
+    pub const SEND: Self = Self::send(0);
+    /// `sigma_recv`.
+    pub const RECEIVE: Self = Self {
+        step: StepRelation::Receive,
+        enabled_controls: 0,
     };
-    let mut identity = [0_u8; 32];
-    let mut index = 0;
-    while index < label.len() {
-        identity[index] = label[index];
-        index += 1;
+
+    /// `sigma_send` enforcing `enabled_controls`.
+    #[must_use]
+    pub const fn send(enabled_controls: u32) -> Self {
+        Self {
+            step: StepRelation::Send,
+            enabled_controls,
+        }
     }
-    identity
+
+    /// The relation of `step` with every control off.
+    #[must_use]
+    pub const fn of(step: StepRelation) -> Self {
+        match step {
+            StepRelation::Send => Self::SEND,
+            StepRelation::Receive => Self::RECEIVE,
+        }
+    }
+
+    /// The step.
+    #[must_use]
+    pub const fn step(self) -> StepRelation {
+        self.step
+    }
+
+    /// The enabled-controls mask the relation enforces (zero for Receive).
+    #[must_use]
+    pub const fn enabled_controls(self) -> u32 {
+        self.enabled_controls
+    }
+
+    /// The G1 verifying-key selector `(operation tag, mask)`.
+    #[must_use]
+    pub const fn selector(self) -> (u8, u32) {
+        (self.step.effect_tag(), self.enabled_controls)
+    }
+
+    /// Whether the relation enforces every bit of `control`.
+    #[must_use]
+    pub const fn enforces(self, control: u32) -> bool {
+        control != 0 && self.enabled_controls & control == control
+    }
+
+    /// Whether this crate implements the relation: `sigma_recv`, or
+    /// `sigma_send` with a mask of [`CONTROLS_SUPPORTED`] bits.
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        self.enabled_controls & !CONTROLS_SUPPORTED == 0
+    }
+
+    /// A short label: `send_m<mask>` or `recv`.
+    #[must_use]
+    pub fn label(self) -> String {
+        match self.step {
+            StepRelation::Send => format!("send_m{}", self.enabled_controls),
+            StepRelation::Receive => "recv".to_owned(),
+        }
+    }
 }
 
 /// The identity of a wallet incarnation (spec section 2.2).
@@ -259,12 +292,12 @@ pub const fn relation_id(step: StepRelation, layout: StateLayout) -> [u8; 32] {
 pub struct Identity {
     /// The scheme identifier.
     pub scheme_id: [u8; 32],
-    /// The asset (incarnation) identifier.
-    pub asset: [u8; 32],
+    /// The asset scope digest.
+    pub asset_digest: [u8; 32],
     /// The `wallet_id`.
     pub wallet_id: [u8; 32],
-    /// The credential digest.
-    pub credential: [u8; 32],
+    /// The digest of the current credential.
+    pub credential_digest: [u8; 32],
 }
 
 /// The five map roots of the core.
@@ -285,23 +318,27 @@ pub struct MapRoots<F> {
 /// The regulatory-control fields of the core (spec section 7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Controls<F> {
-    /// The enabled-controls mask (zero: every control off).
-    pub enabled: u64,
-    /// The quota share/windows root.
+    /// The enabled-controls mask.
+    pub enabled: u32,
+    /// The windows root of the held quota share.
     pub quota_windows_root: F,
-    /// The blacklist version.
+    /// The held blacklist version (zero: none held).
     pub blacklist_version: u64,
-    /// The blacklist root.
+    /// The held blacklist gap-tree root.
     pub blacklist_root: F,
-    /// The lease expiry.
-    pub lease_expiry: u64,
+    /// The held blacklist issue time in Unix milliseconds.
+    pub blacklist_issued_at_ms: u64,
+    /// The regulatory policy's maximum blacklist age (zero: no age rule).
+    pub blacklist_max_age_ms: u64,
+    /// The attestation lease expiry.
+    pub lease_expires_at_ms: u64,
 }
 
-/// The 30 core fields.
+/// The 32 core elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoreState<F> {
-    /// The lifecycle ([`LIFECYCLE_ACTIVE`] for a usable state).
-    pub lifecycle: u64,
+    /// The lifecycle tag ([`LIFECYCLE_ACTIVE`] or [`LIFECYCLE_RETIRING`]).
+    pub lifecycle: u8,
     /// The incarnation identity.
     pub identity: Identity,
     /// The balance.
@@ -316,9 +353,9 @@ pub struct CoreState<F> {
     pub next_load: u128,
     /// The next redeem ordinal.
     pub next_redeem: u128,
-    /// The send chain accumulator.
+    /// The send chain.
     pub send_chain: F,
-    /// The receive chain accumulator.
+    /// The receive chain.
     pub recv_chain: F,
     /// The map roots.
     pub roots: MapRoots<F>,
@@ -326,28 +363,23 @@ pub struct CoreState<F> {
     pub controls: Controls<F>,
     /// The policy epoch.
     pub policy_epoch: u64,
-    /// The accepted-time floor.
-    pub accepted_time_floor: u64,
+    /// The accepted-time floor in Unix milliseconds.
+    pub accepted_time_floor_ms: u64,
     /// The state nonce.
     pub state_nonce: F,
 }
 
-/// The two 128-bit limbs of a 32-byte value as field elements.
-#[must_use]
-pub fn limbs<F: PoseidonField>(bytes: &[u8; 32]) -> [F; 2] {
-    bytes_to_limbs(bytes).map(F::from_u128)
-}
-
 impl<F: PoseidonField> CoreState<F> {
-    /// The field encoding, in [`core_index`] order.
+    /// The element encoding, in [`core_index`] order.
     #[must_use]
     pub fn fields(&self) -> [F; CORE_FIELDS] {
-        let [scheme_lo, scheme_hi] = limbs::<F>(&self.identity.scheme_id);
-        let [asset_lo, asset_hi] = limbs::<F>(&self.identity.asset);
-        let [wallet_lo, wallet_hi] = limbs::<F>(&self.identity.wallet_id);
-        let [credential_lo, credential_hi] = limbs::<F>(&self.identity.credential);
+        let [scheme_lo, scheme_hi] = digest_fields::<F>(&self.identity.scheme_id);
+        let [asset_lo, asset_hi] = digest_fields::<F>(&self.identity.asset_digest);
+        let [wallet_lo, wallet_hi] = digest_fields::<F>(&self.identity.wallet_id);
+        let [credential_lo, credential_hi] = digest_fields::<F>(&self.identity.credential_digest);
+        let controls = &self.controls;
         [
-            F::from(self.lifecycle),
+            F::from(u64::from(self.lifecycle)),
             scheme_lo,
             scheme_hi,
             asset_lo,
@@ -369,48 +401,72 @@ impl<F: PoseidonField> CoreState<F> {
             self.roots.load_redeem_recovery,
             self.roots.fee_claim_recovery,
             self.roots.quota_usage,
-            F::from(self.controls.enabled),
-            self.controls.quota_windows_root,
-            F::from(self.controls.blacklist_version),
-            self.controls.blacklist_root,
-            F::from(self.controls.lease_expiry),
+            F::from(u64::from(controls.enabled)),
+            controls.quota_windows_root,
+            F::from(controls.blacklist_version),
+            controls.blacklist_root,
+            F::from(controls.blacklist_issued_at_ms),
+            F::from(controls.blacklist_max_age_ms),
+            F::from(controls.lease_expires_at_ms),
             F::from(self.policy_epoch),
-            F::from(self.accepted_time_floor),
+            F::from(self.accepted_time_floor_ms),
             self.state_nonce,
         ]
     }
 }
 
-/// The 10 remainder fields (opaque to the step relations; the lineage
-/// relation opens them).
+/// The 13 rest elements (opaque to the step relations; the lineage relation
+/// opens them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StateRemainder<F> {
-    /// The state version.
-    pub version: u64,
-    /// The regulatory policy body digest.
-    pub regulatory_policy: [u8; 32],
-    /// The other carried fields.
-    pub other: [F; OTHER_CARRIED_FIELDS],
+pub struct StateRest {
+    /// Controls the credential's regulatory policy permits.
+    pub permitted_controls: u32,
+    /// The regulatory policy's time-anchor response-age bound.
+    pub time_anchor_max_response_ms: u64,
+    /// Digest of the held scheme policy.
+    pub scheme_policy: [u8; 32],
+    /// The fee schedule the held scheme policy names.
+    pub fee_schedule: [u8; 32],
+    /// Digest of the held blacklist.
+    pub blacklist: [u8; 32],
+    /// Digest of the held quota share.
+    pub quota_share: [u8; 32],
+    /// Identity of the held quota share.
+    pub quota_share_id: u64,
+    /// Digest of the committed time anchor.
+    pub time_anchor: [u8; 32],
 }
 
-impl<F: PoseidonField> StateRemainder<F> {
-    /// The field encoding: version, regulatory policy limbs, then the other
-    /// carried fields.
+impl StateRest {
+    /// The element encoding (G1 rest element order).
     #[must_use]
-    pub fn fields(&self) -> [F; REMAINDER_FIELDS] {
-        let mut fields = [F::ZERO; REMAINDER_FIELDS];
-        fields[0] = F::from(self.version);
-        let [policy_lo, policy_hi] = limbs::<F>(&self.regulatory_policy);
-        fields[1] = policy_lo;
-        fields[2] = policy_hi;
-        fields[3..].copy_from_slice(&self.other);
-        fields
+    pub fn fields<F: PoseidonField>(&self) -> [F; REST_FIELDS] {
+        let [policy_lo, policy_hi] = digest_fields::<F>(&self.scheme_policy);
+        let [schedule_lo, schedule_hi] = digest_fields::<F>(&self.fee_schedule);
+        let [blacklist_lo, blacklist_hi] = digest_fields::<F>(&self.blacklist);
+        let [share_lo, share_hi] = digest_fields::<F>(&self.quota_share);
+        let [anchor_lo, anchor_hi] = digest_fields::<F>(&self.time_anchor);
+        [
+            F::from(u64::from(self.permitted_controls)),
+            F::from(self.time_anchor_max_response_ms),
+            policy_lo,
+            policy_hi,
+            schedule_lo,
+            schedule_hi,
+            blacklist_lo,
+            blacklist_hi,
+            share_lo,
+            share_hi,
+            F::from(self.quota_share_id),
+            anchor_lo,
+            anchor_hi,
+        ]
     }
 
-    /// The two-level remainder digest `H(kgsprst1, fields)`.
+    /// The rest digest `P(kgwrest1, rest elements)`.
     #[must_use]
-    pub fn digest(&self) -> F {
-        hash_with_domain(REMAINDER_DOMAIN, &self.fields())
+    pub fn digest<F: PoseidonField>(&self) -> F {
+        hash_with_domain(REST_DOMAIN, &self.fields::<F>())
     }
 }
 
@@ -419,30 +475,22 @@ impl<F: PoseidonField> StateRemainder<F> {
 pub struct StateV1<F> {
     /// The core.
     pub core: CoreState<F>,
-    /// The remainder.
-    pub remainder: StateRemainder<F>,
+    /// The rest.
+    pub rest: StateRest,
 }
 
-/// The state commitment preimage of `core` under `layout`.
-fn commitment_preimage<F: PoseidonField>(
-    layout: StateLayout,
-    core: &[F; CORE_FIELDS],
-    remainder: &StateRemainder<F>,
-) -> Vec<F> {
+/// The state commitment `P(kgwcore1, core || rest digest)`.
+fn commit<F: PoseidonField>(core: &[F; CORE_FIELDS], rest_digest: F) -> F {
     let mut inputs = core.to_vec();
-    match layout {
-        StateLayout::TwoLevel => inputs.push(remainder.digest()),
-        StateLayout::Flat => inputs.extend_from_slice(&remainder.fields()),
-    }
-    inputs
+    inputs.push(rest_digest);
+    hash_with_domain(CORE_DOMAIN, &inputs)
 }
 
 impl<F: PoseidonField> StateV1<F> {
-    /// The state commitment under `layout`.
+    /// The state commitment `P(kgwcore1, core || P(kgwrest1, rest))`.
     #[must_use]
-    pub fn commitment(&self, layout: StateLayout) -> F {
-        let preimage = commitment_preimage(layout, &self.core.fields(), &self.remainder);
-        hash_with_domain(layout.domain(), &preimage)
+    pub fn commitment(&self) -> F {
+        commit(&self.core.fields(), self.rest.digest())
     }
 }
 
@@ -453,50 +501,52 @@ pub struct RequestTerms {
     pub amount: u128,
     /// The exact fee.
     pub fee: u128,
-    /// The signed fee schedule digest.
+    /// The fee schedule digest.
     pub fee_schedule: [u8; 32],
-    /// The Request policy epoch.
+    /// The receiver's scheme policy epoch.
     pub policy_epoch: u64,
-    /// The scheme policy digest.
+    /// The receiver's scheme policy digest.
     pub scheme_policy: [u8; 32],
-    /// The Request (receiver's authenticated accepted) time.
+    /// The receiver's authenticated accepted time (G1
+    /// `receiver_accepted_time_ms`).
     pub request_time: u64,
-    /// The certificates digest.
+    /// The certificate-set digest.
     pub certificates: [u8; 32],
     /// The fresh Request nonce.
     pub nonce: [u8; 32],
 }
 
-/// The canonical 24-field Request body (spec section 5.1): the `credit_id`
-/// preimage, as both wallets and every consumer hold it.
+/// The canonical 24-element Request body (spec section 5.1; G1
+/// `KagemushaWalletRequestBodyV1::field_items`): the `credit_id` preimage,
+/// as both wallets and every consumer hold it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestBody {
     /// The scheme identifier.
     pub scheme_id: [u8; 32],
-    /// The asset identifier.
-    pub asset: [u8; 32],
+    /// The asset scope digest.
+    pub asset_digest: [u8; 32],
     /// The payer wallet.
     pub payer_wallet: [u8; 32],
     /// The receiver wallet.
     pub receiver_wallet: [u8; 32],
     /// The payer send ordinal `s`.
     pub send_ordinal: u128,
-    /// The receiver credential digest.
-    pub receiver_credential: [u8; 32],
+    /// The digest of the receiver credential carried beside the body.
+    pub receiver_credential_digest: [u8; 32],
     /// The remaining terms.
     pub terms: RequestTerms,
 }
 
 impl RequestBody {
-    /// The field encoding.
+    /// The element encoding in request-body order.
     #[must_use]
     pub fn fields<F: PoseidonField>(&self) -> [F; REQUEST_FIELDS] {
-        let pair = |bytes: &[u8; 32]| limbs::<F>(bytes);
+        let pair = digest_fields::<F>;
         let [scheme_lo, scheme_hi] = pair(&self.scheme_id);
-        let [asset_lo, asset_hi] = pair(&self.asset);
+        let [asset_lo, asset_hi] = pair(&self.asset_digest);
         let [payer_lo, payer_hi] = pair(&self.payer_wallet);
         let [receiver_lo, receiver_hi] = pair(&self.receiver_wallet);
-        let [credential_lo, credential_hi] = pair(&self.receiver_credential);
+        let [credential_lo, credential_hi] = pair(&self.receiver_credential_digest);
         let terms = &self.terms;
         let [schedule_lo, schedule_hi] = pair(&terms.fee_schedule);
         let [policy_lo, policy_hi] = pair(&terms.scheme_policy);
@@ -530,17 +580,10 @@ impl RequestBody {
         ]
     }
 
-    /// `credit_id = H(kgspcrd1, Request body)` in `F`.
+    /// `credit_id = P(kgwcrdt1, Request body)`: one σ-field element.
     #[must_use]
     pub fn credit_id<F: PoseidonField>(&self) -> F {
         hash_with_domain(CREDIT_DOMAIN, &self.fields::<F>())
-    }
-
-    /// The canonical limbs of [`Self::credit_id`] (the halves of its
-    /// canonical 32-byte encoding).
-    #[must_use]
-    pub fn credit_limbs<F: PoseidonField>(&self) -> [u128; 2] {
-        foreign_limbs(&self.credit_id::<F>())
     }
 }
 
@@ -559,12 +602,13 @@ pub struct LineageInputs<F> {
 pub struct SendInputs<F> {
     /// The receiver wallet.
     pub receiver_wallet: [u8; 32],
-    /// The receiver credential digest.
-    pub receiver_credential: [u8; 32],
+    /// The receiver credential digest of the Request.
+    pub receiver_credential_digest: [u8; 32],
     /// The other Request terms.
     pub request: RequestTerms,
     /// The digest of the signed Request (G1 `H("request", e || signature)`),
-    /// bound by the Send effect; `sigma_send` does not recompute it (SHA-256).
+    /// bound by the Send effect and the chain append; `sigma_send` does not
+    /// recompute it (SHA-256).
     pub request_digest: [u8; 32],
     /// The accepted lower time.
     pub accepted_lower: u64,
@@ -588,6 +632,9 @@ pub struct ReceiveInputs<F> {
     pub payer_wallet: [u8; 32],
     /// The payer send ordinal `s`.
     pub send_ordinal: u128,
+    /// The receiver credential digest the Request was quoted under (equal
+    /// to the core's unless the credential was renewed since).
+    pub receiver_credential_digest: [u8; 32],
     /// The other Request terms.
     pub request: RequestTerms,
     /// The successor's consumed-credit root (the predecessor's with
@@ -606,7 +653,7 @@ pub enum StepInputs<F> {
 }
 
 impl<F> StepInputs<F> {
-    /// The step relation these inputs belong to.
+    /// The step these inputs belong to.
     #[must_use]
     pub const fn relation(&self) -> StepRelation {
         match self {
@@ -634,6 +681,9 @@ impl<F> StepInputs<F> {
 /// A full step witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepWitness<F> {
+    /// The scheme-level relation identity the statement carries (G1
+    /// `KagemushaWalletSchemeV1::relation_id`).
+    pub relation_id: [u8; 32],
     /// The predecessor state.
     pub predecessor: StateV1<F>,
     /// The successor's fresh state nonce.
@@ -645,17 +695,20 @@ pub struct StepWitness<F> {
 /// A relation rule the witness breaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Violation {
-    /// The predecessor lifecycle is not Active.
-    LifecycleNotActive,
+    /// The witness belongs to another step than the relation.
+    WrongStep,
+    /// The relation enables a control this crate does not implement.
+    UnsupportedRelation,
+    /// The predecessor lifecycle is neither Active nor Retiring.
+    Lifecycle,
     /// The amount is zero.
     ZeroAmount,
     /// `sequence + 1` reaches `2^128`.
     SequenceOverflow,
     /// The payer and receiver wallets are equal.
     SelfPayment,
-    /// `sigma_send`: the enabled-controls mask is not empty (this relation
-    /// enforces no control).
-    ControlsEnabled,
+    /// `sigma_send`: the core's enabled-controls mask is not the relation's.
+    ControlsMismatch,
     /// `sigma_send`: `amount + fee` reaches `2^128`.
     DebitOverflow,
     /// `sigma_send`: `amount + fee` exceeds `balance - burned_total` (with
@@ -673,37 +726,25 @@ pub enum Violation {
     AcceptedTimeBelowRequest,
     /// `sigma_send`: the accepted upper time is below the lower time.
     AcceptedWindowInverted,
+    /// `sigma_send` with the blacklist control: the held list is older than
+    /// the maximum age at the accepted upper time, or issued after it.
+    BlacklistTooOld,
     /// `sigma_recv`: `balance + amount` reaches `2^128`.
     BalanceOverflow,
 }
 
-/// The public outputs of a step proof.
+/// The public input of a step proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StepPublic<F> {
-    /// The statement digest.
+    /// The statement digest `P(kgwstmt1, statement elements)`.
     pub statement: F,
-    /// `sigma_send` only: the credit identifier (also bound, as canonical
-    /// limbs, in the statement effect).
-    pub credit_id: Option<F>,
 }
 
 impl<F: Copy> StepPublic<F> {
-    /// The instance column: the statement digest, then the credit
-    /// identifier.
+    /// The instance column: the statement digest.
     #[must_use]
     pub fn instance(&self) -> Vec<F> {
-        let mut instance = vec![self.statement];
-        instance.extend(self.credit_id);
-        instance
-    }
-}
-
-/// The number of public outputs of `relation`.
-#[must_use]
-pub const fn public_outputs(relation: StepRelation) -> usize {
-    match relation {
-        StepRelation::Send => 2,
-        StepRelation::Receive => 1,
+        vec![self.statement]
     }
 }
 
@@ -714,9 +755,9 @@ pub struct StepDigests<F> {
     pub predecessor: F,
     /// The successor commitment.
     pub successor: F,
-    /// The credit identifier `H(kgspcrd1, Request body)`.
+    /// The credit identifier `P(kgwcrdt1, Request body)`.
     pub credit: F,
-    /// The appended chain accumulator (`send_chain'` or `recv_chain'`).
+    /// The appended chain (`send_chain'` or `recv_chain'`).
     pub chain: F,
     /// The statement digest.
     pub statement: F,
@@ -725,17 +766,15 @@ pub struct StepDigests<F> {
 /// The reference evaluation of a step (field arithmetic, as in circuit).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeStep<F> {
-    /// The step relation.
-    pub relation: StepRelation,
-    /// The successor core fields.
+    /// The relation evaluated.
+    pub relation: SigmaRelation,
+    /// The successor core elements.
     pub successor_core: [F; CORE_FIELDS],
     /// The successor state, for a witness without violations.
     pub successor_state: Option<StateV1<F>>,
     /// The Request body.
     pub request: RequestBody,
-    /// The canonical limbs of the credit identifier.
-    pub credit_limbs: [u128; 2],
-    /// The chain entry that was hashed.
+    /// The chain append inputs that were hashed.
     pub chain_entry: Vec<F>,
     /// The statement encoding.
     pub statement: [F; STATEMENT_FIELDS],
@@ -746,12 +785,11 @@ pub struct NativeStep<F> {
 }
 
 impl<F: Copy> NativeStep<F> {
-    /// The public outputs the circuit computes from the witness.
+    /// The public input the circuit computes from the witness.
     #[must_use]
-    pub fn public(&self) -> StepPublic<F> {
+    pub const fn public(&self) -> StepPublic<F> {
         StepPublic {
             statement: self.digests.statement,
-            credit_id: (self.relation == StepRelation::Send).then_some(self.digests.credit),
         }
     }
 
@@ -762,12 +800,29 @@ impl<F: Copy> NativeStep<F> {
     }
 }
 
-/// The relation rules `witness` breaks.
-fn violations<F>(witness: &StepWitness<F>) -> Vec<Violation> {
+/// Whether the maximum-age rule rejects a held blacklist at `upper` (the
+/// native G1 `check_blacklist` age check: underflow or an age above the
+/// maximum).
+fn blacklist_too_old(controls: &Controls<impl Sized>, upper: u64) -> bool {
+    controls.blacklist_version != 0
+        && controls.blacklist_max_age_ms != 0
+        && upper
+            .checked_sub(controls.blacklist_issued_at_ms)
+            .is_none_or(|age| age > controls.blacklist_max_age_ms)
+}
+
+/// The relation rules `witness` breaks under `relation`.
+fn violations<F>(witness: &StepWitness<F>, relation: SigmaRelation) -> Vec<Violation> {
     let core = &witness.predecessor.core;
     let mut found = Vec::new();
-    if core.lifecycle != LIFECYCLE_ACTIVE {
-        found.push(Violation::LifecycleNotActive);
+    if witness.inputs.relation() != relation.step() {
+        found.push(Violation::WrongStep);
+    }
+    if !relation.is_supported() {
+        found.push(Violation::UnsupportedRelation);
+    }
+    if core.lifecycle != LIFECYCLE_ACTIVE && core.lifecycle != LIFECYCLE_RETIRING {
+        found.push(Violation::Lifecycle);
     }
     if witness.inputs.amount() == 0 {
         found.push(Violation::ZeroAmount);
@@ -784,8 +839,8 @@ fn violations<F>(witness: &StepWitness<F>) -> Vec<Violation> {
     }
     match &witness.inputs {
         StepInputs::Send(send) => {
-            if core.controls.enabled != 0 {
-                found.push(Violation::ControlsEnabled);
+            if core.controls.enabled != relation.enabled_controls() {
+                found.push(Violation::ControlsMismatch);
             }
             let debit = send.request.amount.checked_add(send.request.fee);
             if debit.is_none() {
@@ -805,7 +860,7 @@ fn violations<F>(witness: &StepWitness<F>) -> Vec<Violation> {
             if send.request.policy_epoch > core.policy_epoch {
                 found.push(Violation::PolicyEpochNewer);
             }
-            if send.accepted_lower < core.accepted_time_floor {
+            if send.accepted_lower < core.accepted_time_floor_ms {
                 found.push(Violation::AcceptedTimeBelowFloor);
             }
             if send.accepted_lower < send.request.request_time {
@@ -813,6 +868,11 @@ fn violations<F>(witness: &StepWitness<F>) -> Vec<Violation> {
             }
             if send.accepted_upper < send.accepted_lower {
                 found.push(Violation::AcceptedWindowInverted);
+            }
+            if relation.enforces(CONTROL_BLACKLIST)
+                && blacklist_too_old(&core.controls, send.accepted_upper)
+            {
+                found.push(Violation::BlacklistTooOld);
             }
         }
         StepInputs::Receive(receive) => {
@@ -825,14 +885,14 @@ fn violations<F>(witness: &StepWitness<F>) -> Vec<Violation> {
 }
 
 impl<F: PoseidonField> StepWitness<F> {
-    /// The step relation of this witness.
+    /// The step of this witness.
     #[must_use]
     pub const fn relation(&self) -> StepRelation {
         self.inputs.relation()
     }
 
-    /// The Request body: the identity fields come from the predecessor
-    /// state (the payer's for `sigma_send`, the receiver's for
+    /// The Request body: the scheme, asset and own wallet come from the
+    /// predecessor core (the payer's for `sigma_send`, the receiver's for
     /// `sigma_recv`), the rest from the inputs.
     #[must_use]
     pub fn request_body(&self) -> RequestBody {
@@ -841,20 +901,20 @@ impl<F: PoseidonField> StepWitness<F> {
         match &self.inputs {
             StepInputs::Send(send) => RequestBody {
                 scheme_id: identity.scheme_id,
-                asset: identity.asset,
+                asset_digest: identity.asset_digest,
                 payer_wallet: identity.wallet_id,
                 receiver_wallet: send.receiver_wallet,
                 send_ordinal: core.next_send,
-                receiver_credential: send.receiver_credential,
+                receiver_credential_digest: send.receiver_credential_digest,
                 terms: send.request,
             },
             StepInputs::Receive(receive) => RequestBody {
                 scheme_id: identity.scheme_id,
-                asset: identity.asset,
+                asset_digest: identity.asset_digest,
                 payer_wallet: receive.payer_wallet,
                 receiver_wallet: identity.wallet_id,
                 send_ordinal: receive.send_ordinal,
-                receiver_credential: identity.credential,
+                receiver_credential_digest: receive.receiver_credential_digest,
                 terms: receive.request,
             },
         }
@@ -875,7 +935,7 @@ impl<F: PoseidonField> StepWitness<F> {
                 core.send_chain = chain;
                 core.roots.pending_outgoing = send.successor_pending_outgoing;
                 core.roots.fee_claim_recovery = send.successor_fee_claim;
-                core.accepted_time_floor = send.accepted_lower;
+                core.accepted_time_floor_ms = send.accepted_lower;
             }
             StepInputs::Receive(receive) => {
                 core.balance = core.balance.checked_add(receive.request.amount)?;
@@ -885,21 +945,21 @@ impl<F: PoseidonField> StepWitness<F> {
         }
         Some(StateV1 {
             core,
-            remainder: self.predecessor.remainder,
+            rest: self.predecessor.rest,
         })
     }
 
-    /// The public statement of an honest witness under `layout` (`None`
+    /// The public statement of an honest witness under `relation` (`None`
     /// when the witness breaks the relation).
     #[must_use]
-    pub fn statement(&self, layout: StateLayout) -> Option<StatementV1<F>> {
-        let native = self.evaluate(layout);
+    pub fn statement(&self, relation: SigmaRelation) -> Option<StatementV1<F>> {
+        let native = self.evaluate(relation);
         let successor = native.successor_state?;
         if !native.violations.is_empty() {
             return None;
         }
         let core = &self.predecessor.core;
-        let (burned_total, pending_outgoing_root) = match &self.inputs {
+        let (lineage_burned_total, lineage_pending_outgoing_root) = match &self.inputs {
             StepInputs::Send(send) => (
                 send.lineage.burned_total,
                 send.lineage.pending_outgoing_root,
@@ -911,57 +971,55 @@ impl<F: PoseidonField> StepWitness<F> {
             StepRelation::Receive => RECEIVE_EFFECT_FIELDS,
         };
         Some(StatementV1 {
-            relation_id: relation_id(self.relation(), layout),
+            relation_id: self.relation_id,
             step: self.relation(),
             scheme_id: core.identity.scheme_id,
-            asset: core.identity.asset,
-            credential: core.identity.credential,
+            asset_digest: core.identity.asset_digest,
+            credential_digest: core.identity.credential_digest,
             lifecycle: successor.core.lifecycle,
             sequence: successor.core.sequence,
             next_load: successor.core.next_load,
+            enabled_controls: core.controls.enabled,
+            lineage_burned_total,
+            lineage_pending_outgoing_root,
             predecessor: native.digests.predecessor,
             successor: native.digests.successor,
-            enabled_controls: core.controls.enabled,
-            burned_total,
-            pending_outgoing_root,
-            effect: native.statement[STATEMENT_FIELDS - EFFECT_UNION_FIELDS..][..effect_len]
-                .to_vec(),
+            effect: native.statement[STATEMENT_HEADER_FIELDS..][..effect_len].to_vec(),
         })
     }
 
-    /// The reference evaluation under `layout`.
+    /// The reference evaluation under `relation`.
     #[must_use]
-    pub fn evaluate(&self, layout: StateLayout) -> NativeStep<F> {
+    pub fn evaluate(&self, relation: SigmaRelation) -> NativeStep<F> {
         let state = &self.predecessor;
         let core = state.core.fields();
-        let predecessor = state.commitment(layout);
+        let rest_digest = state.rest.digest::<F>();
+        let predecessor = commit(&core, rest_digest);
         let request = self.request_body();
         let credit = request.credit_id::<F>();
-        let credit_limbs = foreign_limbs(&credit);
-        let [credit_lo, credit_hi] = credit_limbs.map(F::from_u128);
         let mut successor_core = core;
         successor_core[core_index::SEQUENCE] += F::ONE;
         successor_core[core_index::STATE_NONCE] = self.successor_nonce;
         let amount = F::from_u128(request.terms.amount);
         let (chain_entry, chain_domain, effect, lineage) = match &self.inputs {
             StepInputs::Send(send) => {
-                let [receiver_lo, receiver_hi] = limbs::<F>(&send.receiver_wallet);
+                let [receiver_lo, receiver_hi] = digest_fields::<F>(&send.receiver_wallet);
+                let [request_lo, request_hi] = digest_fields::<F>(&send.request_digest);
                 let ordinal = core[core_index::NEXT_SEND];
                 let fee = F::from_u128(send.request.fee);
                 let entry = vec![
                     core[core_index::SEND_CHAIN],
-                    credit_lo,
-                    credit_hi,
+                    credit,
                     receiver_lo,
                     receiver_hi,
                     ordinal,
                     amount,
                     fee,
+                    request_lo,
+                    request_hi,
                 ];
-                let [request_lo, request_hi] = limbs::<F>(&send.request_digest);
                 let effect = vec![
-                    credit_lo,
-                    credit_hi,
+                    credit,
                     receiver_lo,
                     receiver_hi,
                     ordinal,
@@ -985,16 +1043,15 @@ impl<F: PoseidonField> StepWitness<F> {
                 (entry, SEND_CHAIN_DOMAIN, effect, lineage)
             }
             StepInputs::Receive(receive) => {
-                let [payer_lo, payer_hi] = limbs::<F>(&receive.payer_wallet);
+                let [payer_lo, payer_hi] = digest_fields::<F>(&receive.payer_wallet);
                 let entry = vec![
                     core[core_index::RECEIVE_CHAIN],
-                    credit_lo,
-                    credit_hi,
+                    credit,
                     payer_lo,
                     payer_hi,
                     amount,
                 ];
-                let effect = vec![credit_lo, credit_hi, payer_lo, payer_hi, amount];
+                let effect = vec![credit, payer_lo, payer_hi, amount];
                 successor_core[core_index::BALANCE] += amount;
                 successor_core[core_index::CONSUMED_CREDIT_ROOT] =
                     receive.successor_consumed_credit;
@@ -1002,40 +1059,39 @@ impl<F: PoseidonField> StepWitness<F> {
             }
         };
         let chain = hash_with_domain(chain_domain, &chain_entry);
-        let relation = self.relation();
-        match relation {
+        let step = self.relation();
+        match step {
             StepRelation::Send => successor_core[core_index::SEND_CHAIN] = chain,
             StepRelation::Receive => successor_core[core_index::RECEIVE_CHAIN] = chain,
         }
-        let successor_preimage = commitment_preimage(layout, &successor_core, &state.remainder);
-        let successor = hash_with_domain(layout.domain(), &successor_preimage);
+        let successor = commit(&successor_core, rest_digest);
         let mut statement = [F::ZERO; STATEMENT_FIELDS];
-        let pick = |index: usize| core[index];
-        let [relation_lo, relation_hi] = limbs::<F>(&relation_id(relation, layout));
+        let [relation_lo, relation_hi] = digest_fields::<F>(&self.relation_id);
         let header = [
             F::from(STATEMENT_VERSION),
             relation_lo,
             relation_hi,
-            pick(core_index::SCHEME),
-            pick(core_index::SCHEME + 1),
-            pick(core_index::ASSET),
-            pick(core_index::ASSET + 1),
-            pick(core_index::CREDENTIAL),
-            pick(core_index::CREDENTIAL + 1),
+            core[core_index::SCHEME],
+            core[core_index::SCHEME + 1],
+            core[core_index::ASSET],
+            core[core_index::ASSET + 1],
+            core[core_index::CREDENTIAL],
+            core[core_index::CREDENTIAL + 1],
             successor_core[core_index::LIFECYCLE],
             successor_core[core_index::SEQUENCE],
             successor_core[core_index::NEXT_LOAD],
-            pick(core_index::ENABLED_CONTROLS),
+            core[core_index::ENABLED_CONTROLS],
             lineage[0],
             lineage[1],
             predecessor,
             successor,
-            F::from(relation.effect_tag()),
+            F::from(u64::from(step.effect_tag())),
         ];
-        statement[..header.len()].copy_from_slice(&header);
-        statement[header.len()..header.len() + effect.len()].copy_from_slice(&effect);
+        statement[..STATEMENT_HEADER_FIELDS].copy_from_slice(&header);
+        statement[STATEMENT_HEADER_FIELDS..STATEMENT_HEADER_FIELDS + effect.len()]
+            .copy_from_slice(&effect);
         let statement_digest = hash_with_domain(STATEMENT_DOMAIN, &statement);
-        let violations = violations(self);
+        let violations = violations(self, relation);
         let successor_state = if violations.is_empty() {
             self.successor_state(chain)
         } else {
@@ -1046,7 +1102,6 @@ impl<F: PoseidonField> StepWitness<F> {
             successor_core,
             successor_state,
             request,
-            credit_limbs,
             chain_entry,
             statement,
             digests: StepDigests {
@@ -1070,93 +1125,88 @@ mod tests {
     use crate::vectors::{Mutation, sample_witness};
 
     #[test]
-    fn domains_and_relation_ids_are_distinct_prototype_labels() {
-        assert_eq!(CORE_DOMAIN.to_le_bytes(), *b"kgspcor1");
-        assert_eq!(REMAINDER_DOMAIN.to_le_bytes(), *b"kgsprst1");
-        assert_eq!(FLAT_STATE_DOMAIN.to_le_bytes(), *b"kgspflt1");
-        assert_eq!(CREDIT_DOMAIN.to_le_bytes(), *b"kgspcrd1");
-        assert_eq!(SEND_CHAIN_DOMAIN.to_le_bytes(), *b"kgspsnd1");
-        assert_eq!(RECEIVE_CHAIN_DOMAIN.to_le_bytes(), *b"kgsprcv1");
-        assert_eq!(StateLayout::TwoLevel.commitment_arity(), 31);
-        assert_eq!(StateLayout::Flat.commitment_arity(), 40);
-        assert_eq!(StateLayout::Flat.domain(), FLAT_STATE_DOMAIN);
-        assert_eq!(StateLayout::TwoLevel.label(), "two_level");
-        assert_eq!(public_outputs(StepRelation::Send), 2);
-        assert_eq!(public_outputs(StepRelation::Receive), 1);
-        let mut ids = Vec::new();
-        for step in [StepRelation::Send, StepRelation::Receive] {
-            for layout in [StateLayout::TwoLevel, StateLayout::Flat] {
-                ids.push(relation_id(step, layout));
-            }
+    fn domains_and_selectors_are_the_g1_ones() {
+        assert_eq!(CORE_DOMAIN.to_le_bytes(), *b"kgwcore1");
+        assert_eq!(REST_DOMAIN.to_le_bytes(), *b"kgwrest1");
+        assert_eq!(CREDIT_DOMAIN.to_le_bytes(), *b"kgwcrdt1");
+        assert_eq!(SEND_CHAIN_DOMAIN.to_le_bytes(), *b"kgwschn1");
+        assert_eq!(RECEIVE_CHAIN_DOMAIN.to_le_bytes(), *b"kgwrchn1");
+        assert_eq!(COMMITMENT_ARITY, 33);
+        assert_eq!(SigmaRelation::SEND.selector(), (3, 0));
+        assert_eq!(SigmaRelation::send(CONTROL_BLACKLIST).selector(), (3, 1));
+        assert_eq!(SigmaRelation::RECEIVE.selector(), (4, 0));
+        assert_eq!(
+            SigmaRelation::of(StepRelation::Receive),
+            SigmaRelation::RECEIVE
+        );
+        assert!(SigmaRelation::send(CONTROL_BLACKLIST).enforces(CONTROL_BLACKLIST));
+        assert!(!SigmaRelation::SEND.enforces(CONTROL_BLACKLIST));
+        assert!(!SigmaRelation::SEND.enforces(0));
+        assert!(SigmaRelation::send(CONTROL_BLACKLIST).is_supported());
+        for unsupported in [
+            CONTROL_QUOTAS,
+            CONTROL_ATTESTATION_LEASE,
+            CONTROLS_DEFINED,
+            8,
+        ] {
+            assert!(!SigmaRelation::send(unsupported).is_supported());
         }
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), 4, "one relation id per (step, layout)");
+        assert_eq!(SigmaRelation::send(1).label(), "send_m1");
+        assert_eq!(SigmaRelation::RECEIVE.label(), "recv");
     }
 
     #[test]
     fn field_encodings_follow_the_core_layout() {
-        let witness = sample_witness::<Fp>(3, StepRelation::Send, Mutation::None);
+        let witness = sample_witness::<Fp>(3, SigmaRelation::SEND, Mutation::None);
         let state = witness.predecessor;
         let core = state.core.fields();
         assert_eq!(core[core_index::BALANCE], Fp::from_u128(state.core.balance));
         assert_eq!(core[core_index::LIFECYCLE], Fp::ONE);
         assert_eq!(
             [core[core_index::WALLET], core[core_index::WALLET + 1]],
-            limbs::<Fp>(&state.core.identity.wallet_id)
+            digest_fields::<Fp>(&state.core.identity.wallet_id)
         );
         assert_eq!(
-            [
-                core[core_index::CREDENTIAL],
-                core[core_index::CREDENTIAL + 1]
-            ],
-            limbs::<Fp>(&state.core.identity.credential)
+            [core[core_index::ASSET], core[core_index::ASSET + 1]],
+            digest_fields::<Fp>(&state.core.identity.asset_digest)
         );
         assert_eq!(
-            core[core_index::BURNED_TOTAL],
-            Fp::from_u128(state.core.burned_total)
+            core[core_index::BLACKLIST_ISSUED_AT],
+            Fp::from(state.core.controls.blacklist_issued_at_ms)
         );
         assert_eq!(
-            core[core_index::PENDING_OUTGOING_ROOT],
-            state.core.roots.pending_outgoing
+            core[core_index::BLACKLIST_MAX_AGE],
+            Fp::from(state.core.controls.blacklist_max_age_ms)
         );
         assert_eq!(
-            core[core_index::ENABLED_CONTROLS],
-            Fp::from(state.core.controls.enabled)
+            core[core_index::LOAD_REDEEM_ROOT],
+            state.core.roots.load_redeem_recovery
         );
         assert_eq!(
             core[core_index::TIME_FLOOR],
-            Fp::from(state.core.accepted_time_floor)
+            Fp::from(state.core.accepted_time_floor_ms)
         );
         assert_eq!(core[core_index::STATE_NONCE], state.core.state_nonce);
-        let remainder = state.remainder.fields();
-        assert_eq!(remainder[0], Fp::from(STATE_VERSION));
+        let rest = state.rest.fields::<Fp>();
+        assert_eq!(rest[0], Fp::from(u64::from(state.rest.permitted_controls)));
+        assert_eq!(rest[10], Fp::from(state.rest.quota_share_id));
         assert_eq!(
-            [remainder[1], remainder[2]],
-            limbs::<Fp>(&state.remainder.regulatory_policy)
-        );
-        assert_eq!(remainder[3..], state.remainder.other);
-        assert_eq!(
-            state.commitment(StateLayout::TwoLevel),
+            state.commitment(),
             hash_with_domain(
                 CORE_DOMAIN,
-                &[core.as_slice(), &[state.remainder.digest()]].concat()
+                &[core.as_slice(), &[hash_with_domain(REST_DOMAIN, &rest)]].concat()
             )
-        );
-        assert_eq!(
-            state.commitment(StateLayout::Flat),
-            hash_with_domain(FLAT_STATE_DOMAIN, &[core.as_slice(), &remainder].concat())
         );
     }
 
     #[test]
     fn request_bodies_take_identity_from_the_state() {
-        let send = sample_witness::<Fp>(4, StepRelation::Send, Mutation::None);
+        let send = sample_witness::<Fp>(4, SigmaRelation::SEND, Mutation::None);
         let body = send.request_body();
         let core = &send.predecessor.core;
         assert_eq!(body.payer_wallet, core.identity.wallet_id);
         assert_eq!(body.scheme_id, core.identity.scheme_id);
-        assert_eq!(body.asset, core.identity.asset);
+        assert_eq!(body.asset_digest, core.identity.asset_digest);
         assert_eq!(body.send_ordinal, core.next_send);
         let fields = body.fields::<Fp>();
         assert_eq!(fields[0], Fp::from(REQUEST_VERSION));
@@ -1166,40 +1216,43 @@ mod tests {
             body.credit_id::<Fp>(),
             hash_with_domain(CREDIT_DOMAIN, &fields)
         );
-        assert_eq!(
-            body.credit_limbs::<Fp>(),
-            bytes_to_limbs(&body.credit_id::<Fp>().to_repr())
-        );
-        let receive = sample_witness::<Fq>(4, StepRelation::Receive, Mutation::None);
+        let receive = sample_witness::<Fq>(4, SigmaRelation::RECEIVE, Mutation::None);
         let body = receive.request_body();
         let core = &receive.predecessor.core;
         assert_eq!(body.receiver_wallet, core.identity.wallet_id);
-        assert_eq!(body.receiver_credential, core.identity.credential);
+        let StepInputs::Receive(inputs) = &receive.inputs else {
+            panic!("receive witness");
+        };
+        // The receiver credential digest is the Request's, not the core's.
+        assert_eq!(
+            body.receiver_credential_digest,
+            inputs.receiver_credential_digest
+        );
         assert_eq!(receive.inputs.terms(), &body.terms);
     }
 
     /// The statement encoding equals the gadgets' `StatementV1` for honest
     /// witnesses.
-    fn statement_matches_gadgets<F: PoseidonField>(relation: StepRelation) {
-        for layout in [StateLayout::TwoLevel, StateLayout::Flat] {
-            let witness = sample_witness::<F>(11, relation, Mutation::None);
-            let native = witness.evaluate(layout);
-            assert!(native.is_honest(), "{:?}", native.violations);
-            let statement = witness.statement(layout).expect("honest statement");
-            assert_eq!(statement.encode(), Some(native.statement));
-            assert_eq!(statement.digest(), Some(native.digests.statement));
-            assert_eq!(statement.relation_id, relation_id(relation, layout));
-            assert_eq!(native.public().statement, native.digests.statement);
-            assert_eq!(
-                native.public().credit_id,
-                (relation == StepRelation::Send).then_some(native.digests.credit)
-            );
-        }
+    fn statement_matches_gadgets<F: PoseidonField>(relation: SigmaRelation) {
+        let witness = sample_witness::<F>(11, relation, Mutation::None);
+        let native = witness.evaluate(relation);
+        assert!(native.is_honest(), "{:?}", native.violations);
+        let statement = witness.statement(relation).expect("honest statement");
+        assert_eq!(statement.encode(), Some(native.statement));
+        assert_eq!(statement.digest(), Some(native.digests.statement));
+        assert_eq!(statement.relation_id, witness.relation_id);
+        assert_eq!(statement.enabled_controls, relation.enabled_controls());
+        assert_eq!(native.public().statement, native.digests.statement);
+        assert_eq!(native.public().instance(), vec![native.digests.statement]);
     }
 
     #[test]
     fn statements_match_the_gadget_encoding_on_both_fields() {
-        for relation in [StepRelation::Send, StepRelation::Receive] {
+        for relation in [
+            SigmaRelation::SEND,
+            SigmaRelation::send(CONTROL_BLACKLIST),
+            SigmaRelation::RECEIVE,
+        ] {
             statement_matches_gadgets::<Fp>(relation);
             statement_matches_gadgets::<Fq>(relation);
         }
@@ -1207,11 +1260,11 @@ mod tests {
 
     #[test]
     fn send_reference_debits_and_appends() {
-        let witness = sample_witness::<Fp>(5, StepRelation::Send, Mutation::None);
+        let witness = sample_witness::<Fp>(5, SigmaRelation::SEND, Mutation::None);
         let StepInputs::Send(send) = &witness.inputs else {
             panic!("send witness");
         };
-        let native = witness.evaluate(StateLayout::TwoLevel);
+        let native = witness.evaluate(SigmaRelation::SEND);
         let core = witness.predecessor.core;
         let successor = native.successor_state.expect("honest successor");
         assert_eq!(successor.core.fields(), native.successor_core);
@@ -1221,7 +1274,8 @@ mod tests {
         );
         assert_eq!(successor.core.burned_total, send.lineage.burned_total);
         assert_eq!(successor.core.next_send, core.next_send + 1);
-        assert_eq!(successor.core.accepted_time_floor, send.accepted_lower);
+        assert_eq!(successor.core.accepted_time_floor_ms, send.accepted_lower);
+        assert_eq!(successor.core.lifecycle, core.lifecycle);
         assert_eq!(
             successor.core.roots.pending_outgoing,
             send.successor_pending_outgoing
@@ -1235,27 +1289,31 @@ mod tests {
             hash_with_domain(SEND_CHAIN_DOMAIN, &native.chain_entry)
         );
         assert_eq!(native.chain_entry.len(), SEND_CHAIN_FIELDS);
-        assert_eq!(native.chain_entry[1..3], native.statement[18..20]);
-        // The Send effect binds the Request digest limbs after the fee.
-        assert_eq!(native.statement[25..27], limbs::<Fp>(&send.request_digest));
+        // The chain entry and the effect carry the one-element credit_id.
+        assert_eq!(native.chain_entry[1], native.digests.credit);
+        assert_eq!(
+            native.statement[STATEMENT_HEADER_FIELDS],
+            native.digests.credit
+        );
+        // The Send effect and chain bind the Request digest limbs after the
+        // fee.
+        let request = digest_fields::<Fp>(&send.request_digest);
+        assert_eq!(native.statement[24..26], request);
+        assert_eq!(native.chain_entry[7..9], request);
         assert_eq!(
             native.digests.credit,
             hash_with_domain(CREDIT_DOMAIN, &native.request.fields::<Fp>())
         );
-        assert_eq!(
-            successor.commitment(StateLayout::TwoLevel),
-            native.digests.successor
-        );
-        assert_eq!(native.public().instance().len(), 2);
+        assert_eq!(successor.commitment(), native.digests.successor);
     }
 
     #[test]
     fn receive_reference_credits_and_appends() {
-        let witness = sample_witness::<Fq>(6, StepRelation::Receive, Mutation::None);
+        let witness = sample_witness::<Fq>(6, SigmaRelation::RECEIVE, Mutation::None);
         let StepInputs::Receive(receive) = &witness.inputs else {
             panic!("receive witness");
         };
-        let native = witness.evaluate(StateLayout::Flat);
+        let native = witness.evaluate(SigmaRelation::RECEIVE);
         let core = witness.predecessor.core;
         let successor = native.successor_state.expect("honest successor");
         assert_eq!(successor.core.fields(), native.successor_core);
@@ -1268,76 +1326,94 @@ mod tests {
             receive.successor_consumed_credit
         );
         assert_eq!(successor.core.burned_total, core.burned_total);
-        assert_eq!(successor.core.accepted_time_floor, core.accepted_time_floor);
+        assert_eq!(
+            successor.core.accepted_time_floor_ms,
+            core.accepted_time_floor_ms
+        );
         assert_eq!(native.chain_entry.len(), RECEIVE_CHAIN_FIELDS);
         assert_eq!(native.public().instance(), vec![native.digests.statement]);
         // The lineage inputs of a Receive statement are zero.
         assert_eq!(native.statement[13], Fq::ZERO);
         assert_eq!(native.statement[14], Fq::ZERO);
         assert_eq!(witness.relation(), StepRelation::Receive);
-        assert_eq!(
-            successor.commitment(StateLayout::Flat),
-            native.digests.successor
-        );
+        assert_eq!(successor.commitment(), native.digests.successor);
     }
 
     #[test]
     fn mutations_are_reported_as_violations() {
+        let blacklist = SigmaRelation::send(CONTROL_BLACKLIST);
         let cases = [
             (
-                StepRelation::Send,
+                SigmaRelation::SEND,
                 Mutation::Overdraft,
                 Violation::Overdraft,
             ),
-            (StepRelation::Send, Mutation::Burned, Violation::Overdraft),
+            (SigmaRelation::SEND, Mutation::Burned, Violation::Overdraft),
             (
-                StepRelation::Send,
+                SigmaRelation::SEND,
                 Mutation::StaleEpoch,
                 Violation::PolicyEpochNewer,
             ),
             (
-                StepRelation::Send,
+                SigmaRelation::SEND,
                 Mutation::EarlyTime,
                 Violation::AcceptedTimeBelowFloor,
             ),
             (
-                StepRelation::Send,
+                SigmaRelation::SEND,
                 Mutation::SelfPayment,
                 Violation::SelfPayment,
             ),
             (
-                StepRelation::Send,
-                Mutation::ControlsEnabled,
-                Violation::ControlsEnabled,
+                SigmaRelation::SEND,
+                Mutation::ControlsMismatch,
+                Violation::ControlsMismatch,
             ),
             (
-                StepRelation::Receive,
+                blacklist,
+                Mutation::StaleBlacklist,
+                Violation::BlacklistTooOld,
+            ),
+            (
+                blacklist,
+                Mutation::FutureBlacklist,
+                Violation::BlacklistTooOld,
+            ),
+            (
+                SigmaRelation::RECEIVE,
                 Mutation::Overflow,
                 Violation::BalanceOverflow,
             ),
             (
-                StepRelation::Receive,
+                SigmaRelation::RECEIVE,
                 Mutation::SelfPayment,
                 Violation::SelfPayment,
             ),
         ];
         for (relation, mutation, violation) in cases {
-            let native =
-                sample_witness::<Fp>(9, relation, mutation).evaluate(StateLayout::TwoLevel);
+            let native = sample_witness::<Fp>(9, relation, mutation).evaluate(relation);
             assert_eq!(native.violations, vec![violation], "{mutation:?}");
             assert!(native.successor_state.is_none());
         }
-        let mut witness = sample_witness::<Fp>(9, StepRelation::Send, Mutation::None);
-        witness.predecessor.core.lifecycle = 2;
+        // Without the blacklist control the age rule is not enforced.
+        for mutation in [Mutation::StaleBlacklist, Mutation::FutureBlacklist] {
+            assert!(
+                sample_witness::<Fp>(9, SigmaRelation::SEND, mutation)
+                    .evaluate(SigmaRelation::SEND)
+                    .is_honest()
+            );
+        }
+        let mut witness = sample_witness::<Fp>(9, SigmaRelation::SEND, Mutation::None);
+        witness.predecessor.core.lifecycle = 3;
         witness.predecessor.core.sequence = u128::MAX;
         witness.predecessor.core.next_send = u128::MAX;
         if let StepInputs::Send(send) = &mut witness.inputs {
             send.request.amount = 0;
             send.accepted_upper = 0;
         }
-        let found = witness.evaluate(StateLayout::Flat).violations;
+        let found = witness.evaluate(SigmaRelation::SEND).violations;
         for violation in [
-            Violation::LifecycleNotActive,
+            Violation::Lifecycle,
             Violation::ZeroAmount,
             Violation::SequenceOverflow,
             Violation::SendOrdinalOverflow,
@@ -1345,22 +1421,82 @@ mod tests {
         ] {
             assert!(found.contains(&violation), "{violation:?}");
         }
-        assert_eq!(witness.statement(StateLayout::Flat), None);
+        assert_eq!(witness.statement(SigmaRelation::SEND), None);
         // The overflowing successor sequence is the field value 2^128.
-        let native = witness.evaluate(StateLayout::Flat);
+        let native = witness.evaluate(SigmaRelation::SEND);
         assert_eq!(
             native.successor_core[core_index::SEQUENCE],
             Fp::from_u128(u128::MAX) + Fp::ONE
         );
         // A debit of 2^128 overflows and overdraws.
-        let mut witness = sample_witness::<Fp>(9, StepRelation::Send, Mutation::None);
+        let mut witness = sample_witness::<Fp>(9, SigmaRelation::SEND, Mutation::None);
         if let StepInputs::Send(send) = &mut witness.inputs {
             send.request.amount = u128::MAX;
             send.request.fee = 1;
         }
         assert_eq!(
-            witness.evaluate(StateLayout::TwoLevel).violations,
+            witness.evaluate(SigmaRelation::SEND).violations,
             vec![Violation::DebitOverflow, Violation::Overdraft]
         );
+        // A witness of the other step, and a relation this crate does not
+        // implement.
+        let send = sample_witness::<Fp>(9, SigmaRelation::SEND, Mutation::None);
+        assert_eq!(
+            send.evaluate(SigmaRelation::RECEIVE).violations,
+            vec![Violation::WrongStep]
+        );
+        let mut quota = send;
+        quota.predecessor.core.controls.enabled = CONTROL_QUOTAS;
+        assert_eq!(
+            quota
+                .evaluate(SigmaRelation::send(CONTROL_QUOTAS))
+                .violations,
+            vec![Violation::UnsupportedRelation]
+        );
+    }
+
+    #[test]
+    fn retiring_wallets_keep_sending_and_receiving() {
+        for relation in [SigmaRelation::SEND, SigmaRelation::RECEIVE] {
+            let mut witness = sample_witness::<Fp>(12, relation, Mutation::None);
+            witness.predecessor.core.lifecycle = LIFECYCLE_RETIRING;
+            let native = witness.evaluate(relation);
+            assert!(native.is_honest(), "{relation:?}");
+            assert_eq!(
+                native.successor_state.map(|state| state.core.lifecycle),
+                Some(LIFECYCLE_RETIRING)
+            );
+            assert_eq!(
+                witness
+                    .statement(relation)
+                    .map(|statement| statement.lifecycle),
+                Some(LIFECYCLE_RETIRING)
+            );
+        }
+    }
+
+    #[test]
+    fn the_blacklist_age_rule_is_the_native_g1_rule() {
+        let controls = |version, issued, max_age| Controls {
+            enabled: CONTROL_BLACKLIST,
+            quota_windows_root: Fp::ZERO,
+            blacklist_version: version,
+            blacklist_root: Fp::ONE,
+            blacklist_issued_at_ms: issued,
+            blacklist_max_age_ms: max_age,
+            lease_expires_at_ms: 0,
+        };
+        // Age exactly the maximum, issued at the upper time: accepted.
+        assert!(!blacklist_too_old(&controls(1, 100, 50), 150));
+        assert!(!blacklist_too_old(&controls(1, 150, 50), 150));
+        // One millisecond older, or issued after the upper time: rejected.
+        assert!(blacklist_too_old(&controls(1, 100, 50), 151));
+        assert!(blacklist_too_old(&controls(1, 151, 50), 150));
+        // No list held, or no age rule: not enforced.
+        assert!(!blacklist_too_old(&controls(0, 0, 50), u64::MAX));
+        assert!(!blacklist_too_old(&controls(1, u64::MAX, 0), 0));
+        // The extremes of u64.
+        assert!(!blacklist_too_old(&controls(1, 0, u64::MAX), u64::MAX));
+        assert!(blacklist_too_old(&controls(1, 0, u64::MAX - 1), u64::MAX));
     }
 }

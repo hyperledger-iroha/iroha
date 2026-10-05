@@ -639,16 +639,34 @@ fn run_saved_operation(
     deadline: Instant,
     action: SavedAction<'_>,
 ) -> Result<OperationReport> {
+    run_saved_operation_with_client(config, path, timeout_secs, deadline, action, || {
+        operation_client(config, timeout_secs, deadline)
+    })
+}
+
+fn run_saved_operation_with_client(
+    config: &Config,
+    path: &Path,
+    timeout_secs: u64,
+    deadline: Instant,
+    action: SavedAction<'_>,
+    make_client: impl FnOnce() -> Result<IrohaClient>,
+) -> Result<OperationReport> {
     let journal = Journal::open(path)?;
     let operation: OperationJournalV1 = journal.read_operation()?;
     if let Some(request) = action.expected_faucet {
         operation.verify_faucet_request(request)?;
     }
     let transaction = operation.verify(config, action.kind)?;
-    let client = operation_client(config, timeout_secs, deadline)?;
+    let client = make_client()?;
     let mut before = observe(&client, &operation, transaction.as_ref())?;
-    if before.status == "Absent" && journal.submission_recorded(&operation)? {
-        before.status = "Pending";
+    if before.status == "Absent" {
+        if journal.submission_recorded(&operation)? {
+            // A dispatch may have succeeded even after its acknowledgement was lost.
+            before.status = "Pending";
+        } else if current_unix_ms()? >= operation.binding.execution_expires_at_unix_ms {
+            before.status = "Expired";
+        }
     }
     if !action.submit || before.status != "Absent" {
         return report(

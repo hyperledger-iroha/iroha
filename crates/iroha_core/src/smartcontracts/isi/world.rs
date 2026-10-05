@@ -2549,15 +2549,81 @@ pub mod isi {
         }
         Ok(rec.custody.clone())
     }
-    fn ensure_manifest_signature(
-        manifest: &ContractManifest,
-    ) -> Result<&ManifestProvenance, InstructionExecutionError> {
+    fn ensure_manifest_signature<'manifest>(
+        manifest: &'manifest ContractManifest,
+        world: &WorldTransaction<'_, '_>,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<&'manifest ManifestProvenance, InstructionExecutionError> {
         let provenance = manifest.provenance.as_ref().ok_or_else(|| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 "manifest.provenance missing".into(),
             ))
         })?;
-        let payload = manifest.signature_payload_bytes();
+        use crate::execution_attempt::{
+            ExecutionAttemptError, ExecutionDeferred, norito_decode_attempt_error,
+        };
+        use norito::core::{BoundedEncodeError, DecodeBudgetContext};
+
+        let defer = |reason: ExecutionDeferred| {
+            world.attempt_error_to_instruction_error(ExecutionAttemptError::Deferred(reason))
+        };
+        // The context and exact output frame belong to the same State execution pool.
+        // Local capacity limits never become a verdict about the signed content.
+        let max_frame_bytes = budget.limit_bytes();
+        let mut counter = budget
+            .try_reserve(DecodeBudgetContext::allocation_layout())
+            .map_err(|original| defer(original.into()))?;
+        let context = DecodeBudgetContext::from_reservation(
+            norito::DecodeLimits::new(
+                max_frame_bytes,
+                max_frame_bytes,
+                max_frame_bytes,
+                max_frame_bytes,
+                norito::core::MAX_VALUE_NESTING_DEPTH,
+            ),
+            &mut counter,
+        )
+        .map_err(|error| {
+            let reason = match error {
+                iroha_allocation::PrepaidSharedError::Allocator { .. } => {
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                }
+                iroha_allocation::PrepaidSharedError::Reservation(_) => {
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+                }
+            };
+            defer(reason.into())
+        })?;
+        let encode_error = |error: BoundedEncodeError| match error {
+            BoundedEncodeError::Serialization(error) => world.attempt_error_to_instruction_error(
+                norito_decode_attempt_error(error, |error| {
+                    invalid_smart_contract_parameter(format!(
+                        "manifest signing payload encoding failed: {error}"
+                    ))
+                }),
+            ),
+            BoundedEncodeError::AllocationFailed { .. } => {
+                defer(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+            }
+            BoundedEncodeError::FrameTooLarge { .. } => {
+                defer(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
+            }
+        };
+        // Count the borrowed canonical payload before reserving its real output.
+        // The reservation remains live until the payload has been verified and freed.
+        let encoded_bytes = context.with(|| {
+            norito::canonical_frame_len(&manifest.signature_payload())
+                .map_err(BoundedEncodeError::from)
+                .map_err(&encode_error)
+        })?;
+        let _frame = budget
+            .try_reserve_bytes(encoded_bytes)
+            .map_err(|original| defer(original.into()))?;
+        let payload = context.with(|| {
+            manifest
+                .signature_payload_bytes(&context, max_frame_bytes)
+                .map_err(&encode_error)
+        })?;
         verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
             |_| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -2603,7 +2669,7 @@ pub mod isi {
                 "stored contract bytecode hash does not match manifest.code_hash".into(),
             ));
         }
-        if manifest.signature_payload() != verified.manifest.signature_payload() {
+        if !manifest.same_signed_content(&verified.manifest) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "manifest payload does not match embedded contract artifact".into(),
@@ -3212,221 +3278,6 @@ pub mod isi {
                 | GlobalDataTriggerPermissionGovernanceActionV1::Revoke => {}
             }
             let kind = ProposalKind::GlobalDataTriggerPermissionGovernance(payload);
-            let id = kind.fingerprint();
-            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                if existing.kind != kind {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                }
-                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
-                return Ok(());
-            }
-            let record = crate::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height: state_transaction.block_height(),
-                status: crate::state::GovernanceProposalStatus::Proposed,
-            };
-            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
-            state_transaction
-                .world
-                .put_governance_proposal(id, record)
-                .map_err(governance_proposal_storage_error)?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
-                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
-                        id,
-                        proposer: authority.clone(),
-                        contract_address: None,
-                    },
-                ),
-            ));
-            Ok(())
-        }
-    }
-    impl Execute for gov::ProposeKagemushaVerifierPolicyInstallV1 {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if !is_bonded_citizen(authority, state_transaction) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "only a bonded citizen may propose the initial KAGEMUSHA verifier policy"
-                        .into(),
-                ));
-            }
-            let payload = self.proposal;
-            if &payload.proposal_operator != authority {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "KAGEMUSHA verifier-policy proposal operator differs from the transaction authority"
-                        .into(),
-                ));
-            }
-            ensure_kagemusha_policy_initial_predecessor_v1(&payload, state_transaction)?;
-            let kind = ProposalKind::KagemushaVerifierPolicyInstall(payload);
-            let id = kind.fingerprint();
-            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                if existing.kind != kind {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                }
-                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
-                return Ok(());
-            }
-            let record = crate::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height: state_transaction.block_height(),
-                status: crate::state::GovernanceProposalStatus::Proposed,
-            };
-            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
-            state_transaction
-                .world
-                .put_governance_proposal(id, record)
-                .map_err(governance_proposal_storage_error)?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
-                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
-                        id,
-                        proposer: authority.clone(),
-                        contract_address: None,
-                    },
-                ),
-            ));
-            Ok(())
-        }
-    }
-    impl Execute for gov::ProposeKagemushaVerifierReleaseInstallV1 {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if !is_bonded_citizen(authority, state_transaction) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "only a bonded citizen may propose the KAGEMUSHA verifier release".into(),
-                ));
-            }
-            let payload = self.proposal;
-            if &payload.proposal_operator != authority {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "KAGEMUSHA verifier-release proposal operator differs from the transaction authority"
-                        .into(),
-                ));
-            }
-            ensure_kagemusha_release_install_predecessor_v1(&payload, state_transaction)?;
-            let kind = ProposalKind::KagemushaVerifierReleaseInstall(payload);
-            let id = kind.fingerprint();
-            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                if existing.kind != kind {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                }
-                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
-                return Ok(());
-            }
-            let record = crate::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height: state_transaction.block_height(),
-                status: crate::state::GovernanceProposalStatus::Proposed,
-            };
-            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
-            state_transaction
-                .world
-                .put_governance_proposal(id, record)
-                .map_err(governance_proposal_storage_error)?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
-                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
-                        id,
-                        proposer: authority.clone(),
-                        contract_address: None,
-                    },
-                ),
-            ));
-            Ok(())
-        }
-    }
-    impl Execute for gov::ProposeKagemushaVerifierReleaseActivateV1 {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if !is_bonded_citizen(authority, state_transaction) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "only a bonded citizen may propose KAGEMUSHA verifier release activation"
-                        .into(),
-                ));
-            }
-            let payload = self.proposal;
-            if &payload.proposal_operator != authority {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "KAGEMUSHA verifier activation operator differs from the transaction authority"
-                        .into(),
-                ));
-            }
-            ensure_kagemusha_release_activate_predecessor_v1(&payload, state_transaction)?;
-            let kind = ProposalKind::KagemushaVerifierReleaseActivate(payload);
-            let id = kind.fingerprint();
-            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                if existing.kind != kind {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                }
-                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
-                return Ok(());
-            }
-            let record = crate::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height: state_transaction.block_height(),
-                status: crate::state::GovernanceProposalStatus::Proposed,
-            };
-            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
-            state_transaction
-                .world
-                .put_governance_proposal(id, record)
-                .map_err(governance_proposal_storage_error)?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
-                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
-                        id,
-                        proposer: authority.clone(),
-                        contract_address: None,
-                    },
-                ),
-            ));
-            Ok(())
-        }
-    }
-    impl Execute for gov::ProposeKagemushaVerifierReleaseRetireV1 {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if !is_bonded_citizen(authority, state_transaction) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "only a bonded citizen may propose KAGEMUSHA verifier release retirement"
-                        .into(),
-                ));
-            }
-            let payload = self.proposal;
-            if &payload.proposal_operator != authority {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "KAGEMUSHA verifier retirement operator differs from the transaction authority"
-                        .into(),
-                ));
-            }
-            ensure_kagemusha_release_retire_predecessor_v1(&payload, state_transaction)?;
-            let kind = ProposalKind::KagemushaVerifierReleaseRetire(payload);
             let id = kind.fingerprint();
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
                 if existing.kind != kind {
@@ -5695,12 +5546,16 @@ pub mod isi {
             ));
         }
         if let Some(existing) = state_transaction.world.contract_manifests.get(&key) {
-            if existing.signature_payload() != verified.manifest.signature_payload() {
+            if !existing.same_signed_content(&verified.manifest) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "existing manifest does not match the verified contract artifact".into(),
                 ));
             }
-            ensure_manifest_signature(existing)?;
+            ensure_manifest_signature(
+                existing,
+                &state_transaction.world,
+                &state_transaction.execution_budget(),
+            )?;
             Ok(false)
         } else {
             let provenance = provenance.ok_or_else(|| {
@@ -5711,7 +5566,11 @@ pub mod isi {
             })?;
             let mut manifest = verified.manifest;
             manifest.provenance = Some(provenance.clone());
-            ensure_manifest_signature(&manifest)?;
+            ensure_manifest_signature(
+                &manifest,
+                &state_transaction.world,
+                &state_transaction.execution_budget(),
+            )?;
             state_transaction
                 .world
                 .contract_manifests
@@ -8560,129 +8419,6 @@ pub mod isi {
             )
     }
 
-    fn validate_kagemusha_policy_proposal_v1(
-        payload: &iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        payload.validate().map_err(|reason| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                reason.to_owned(),
-            ))
-        })?;
-        if payload.network_id != state_transaction.network_id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier-policy proposal belongs to a different exact NetworkId".into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    fn ensure_kagemusha_policy_initial_predecessor_v1(
-        payload: &iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        validate_kagemusha_policy_proposal_v1(payload, state_transaction)?;
-        if state_transaction.world.kagemusha_verifier_registry.get()
-            != &payload.expected_predecessor
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier-policy initial predecessor changed before the Parliament attempt"
-                    .into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    fn validate_kagemusha_release_install_proposal_v1(
-        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseInstallProposalV1,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        payload.validate().map_err(|reason| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                reason.to_owned(),
-            ))
-        })?;
-        if payload.network_id != state_transaction.network_id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier-release proposal belongs to a different exact NetworkId".into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    fn ensure_kagemusha_release_install_predecessor_v1(
-        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseInstallProposalV1,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        validate_kagemusha_release_install_proposal_v1(payload, state_transaction)?;
-        if state_transaction.world.kagemusha_verifier_registry.get()
-            != &payload.expected_predecessor
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier-release predecessor changed before the Parliament attempt"
-                    .into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    fn ensure_kagemusha_release_activate_predecessor_v1(
-        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseActivateProposalV1,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        payload.validate().map_err(|reason| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                reason.to_owned(),
-            ))
-        })?;
-        if payload.network_id != state_transaction.network_id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier activation belongs to a different exact NetworkId".into(),
-            )
-            .into());
-        }
-        if state_transaction.world.kagemusha_verifier_registry.get()
-            != &payload.expected_predecessor
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier activation predecessor changed before the Parliament attempt"
-                    .into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn ensure_kagemusha_release_retire_predecessor_v1(
-        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseRetireProposalV1,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        payload.validate().map_err(|reason| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                reason.to_owned(),
-            ))
-        })?;
-        if payload.network_id != state_transaction.network_id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier retirement belongs to a different exact NetworkId".into(),
-            )
-            .into());
-        }
-        if state_transaction.world.kagemusha_verifier_registry.get()
-            != &payload.expected_predecessor
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA verifier retirement predecessor changed before the Parliament attempt"
-                    .into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-
     fn parliament_expected_head_v1(
         proposal: &ProposalKind,
         state_transaction: &StateTransaction<'_, '_>,
@@ -8779,60 +8515,6 @@ pub mod isi {
                     if is_granted { 2 } else { 1 },
                     &(payload.authority.clone(), is_granted),
                 )
-            }
-            ProposalKind::KagemushaVerifierPolicyInstall(payload) => {
-                validate_kagemusha_policy_proposal_v1(payload, state_transaction)?;
-                let registry = state_transaction.world.kagemusha_verifier_registry.get();
-                registry.validate().map_err(|reason| {
-                    InstructionExecutionError::InvariantViolation(reason.into())
-                })?;
-                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
-            }
-            ProposalKind::KagemushaVerifierReleaseInstall(payload) => {
-                validate_kagemusha_release_install_proposal_v1(payload, state_transaction)?;
-                let registry = state_transaction.world.kagemusha_verifier_registry.get();
-                registry.validate().map_err(|reason| {
-                    InstructionExecutionError::InvariantViolation(reason.into())
-                })?;
-                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
-            }
-            ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
-                payload.validate().map_err(|reason| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(reason.to_owned()),
-                    )
-                })?;
-                if payload.network_id != state_transaction.network_id {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "KAGEMUSHA verifier activation belongs to a different exact NetworkId"
-                            .into(),
-                    )
-                    .into());
-                }
-                let registry = state_transaction.world.kagemusha_verifier_registry.get();
-                registry.validate().map_err(|reason| {
-                    InstructionExecutionError::InvariantViolation(reason.into())
-                })?;
-                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
-            }
-            ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
-                payload.validate().map_err(|reason| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(reason.to_owned()),
-                    )
-                })?;
-                if payload.network_id != state_transaction.network_id {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "KAGEMUSHA verifier retirement belongs to a different exact NetworkId"
-                            .into(),
-                    )
-                    .into());
-                }
-                let registry = state_transaction.world.kagemusha_verifier_registry.get();
-                registry.validate().map_err(|reason| {
-                    InstructionExecutionError::InvariantViolation(reason.into())
-                })?;
-                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
             }
             ProposalKind::MusubiRegistryGovernance(action) => {
                 use iroha_data_model::musubi::MusubiParliamentActionV1;
@@ -8994,47 +8676,6 @@ pub mod isi {
                         .into())
                     }
                 }
-            }
-            ProposalKind::KagemushaVerifierPolicyInstall(payload) => {
-                ensure_kagemusha_policy_initial_predecessor_v1(payload, state_transaction)?;
-                state_transaction
-                    .world
-                    .kagemusha_verifier_registry
-                    .get_mut()
-                    .initialize_authority_policy(payload.authority_policy.clone())
-                    .map_err(|reason| {
-                        InstructionExecutionError::InvariantViolation(reason.into()).into()
-                    })
-            }
-            ProposalKind::KagemushaVerifierReleaseInstall(payload) => {
-                ensure_kagemusha_release_install_predecessor_v1(payload, state_transaction)?;
-                *state_transaction
-                    .world
-                    .kagemusha_verifier_registry
-                    .get_mut() = payload.successor().map_err(|reason| {
-                    InstructionExecutionError::InvariantViolation(reason.into())
-                })?;
-                Ok(())
-            }
-            ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
-                ensure_kagemusha_release_activate_predecessor_v1(payload, state_transaction)?;
-                *state_transaction
-                    .world
-                    .kagemusha_verifier_registry
-                    .get_mut() = payload.successor().map_err(|reason| {
-                    InstructionExecutionError::InvariantViolation(reason.into())
-                })?;
-                Ok(())
-            }
-            ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
-                ensure_kagemusha_release_retire_predecessor_v1(payload, state_transaction)?;
-                *state_transaction
-                    .world
-                    .kagemusha_verifier_registry
-                    .get_mut() = payload.successor().map_err(|reason| {
-                    InstructionExecutionError::InvariantViolation(reason.into())
-                })?;
-                Ok(())
             }
             ProposalKind::MusubiRegistryGovernance(action) => {
                 // Musubi's enacted proposal is the action-bound authorization consumed by its
@@ -9312,46 +8953,16 @@ pub mod isi {
             return Ok(DueParliamentCertificateExecutionV1::Applied);
         }
 
-        let kagemusha_registry_authorization = match &proposal.kind {
-            ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | ProposalKind::KagemushaVerifierReleaseRetire(_) => Some(
-                crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
-                    &attempt,
-                    &proposal,
-                    &certificate,
-                    state_transaction.network_id,
-                    current_height,
-                    observed_head,
-                    state_transaction.world.kagemusha_verifier_registry.get(),
-                )
-                .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?,
-            ),
-            _ => None,
-        };
         attempt
             .mark_enacted(governance_attempt_id, current_height)
             .map_err(parliament_reducer_error)?;
-        let effect_result: Result<(), Error> = (|| {
-            // The World write remains isolated until transaction apply. Stage
-            // its State authority only after a successful exact effect, so an
-            // EffectFailed result cannot retain a pending registry token.
-            apply_parliament_proposal_effect_v1(
-                proposal_id,
-                &proposal,
-                &certificate,
-                state_transaction,
-            )?;
-            if let Some(authorization) = kagemusha_registry_authorization {
-                state_transaction
-                    .stage_kagemusha_registry_transition(authorization)
-                    .map_err(|reason| {
-                        InstructionExecutionError::InvariantViolation(reason.into())
-                    })?;
-            }
-            Ok(())
-        })();
+        // The World write remains isolated until transaction apply.
+        let effect_result: Result<(), Error> = apply_parliament_proposal_effect_v1(
+            proposal_id,
+            &proposal,
+            &certificate,
+            state_transaction,
+        );
         if let Some(reason) = state_transaction.execution_deferral() {
             return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
                 reason,
@@ -9504,7 +9115,9 @@ pub mod isi {
     /// - `RegisterSortitionRequest`: `request_height` is the containing block, `pulse_height`
     ///   is `request_height + sortition_pulse_delay_blocks`, `beacon_session_id` is the
     ///   network's logical beacon, `target_seats` is the configured body size, the candidate
-    ///   root and count are the canonical citizen snapshot, and every id is derived.
+    ///   root and count are the canonical citizen snapshot, and every id is derived. A retry
+    ///   batch holds exactly every body whose generation ended `NoRoster`, each at its next
+    ///   sequence, so the driver plan lists the one admissible retry for each height.
     /// - `AdvanceBodyPhase`: the body is the attempt's active body and `target` is the only
     ///   next phase the reducer accepts.
     /// - `RegisterBallotAttempt`: `ballot_attempt_id` and `tle_session_id` are derived,
@@ -9657,18 +9270,6 @@ pub mod isi {
                 expected_proposal_status,
                 state_transaction,
             )?;
-            if let ProposalKind::KagemushaVerifierPolicyInstall(payload) = &self.proposal {
-                ensure_kagemusha_policy_initial_predecessor_v1(payload, state_transaction)?;
-            }
-            if let ProposalKind::KagemushaVerifierReleaseInstall(payload) = &self.proposal {
-                ensure_kagemusha_release_install_predecessor_v1(payload, state_transaction)?;
-            }
-            if let ProposalKind::KagemushaVerifierReleaseActivate(payload) = &self.proposal {
-                ensure_kagemusha_release_activate_predecessor_v1(payload, state_transaction)?;
-            }
-            if let ProposalKind::KagemushaVerifierReleaseRetire(payload) = &self.proposal {
-                ensure_kagemusha_release_retire_predecessor_v1(payload, state_transaction)?;
-            }
             if let ProposalKind::ValidationFeePayoutLifecycle(payload) = &self.proposal {
                 validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                     &payload.payout_binding,
@@ -15020,7 +14621,11 @@ pub mod isi {
                     InvalidParameterError::SmartContract("manifest.abi_hash missing".into()),
                 ));
             }
-            let provenance = ensure_manifest_signature(&manifest)?;
+            let provenance = ensure_manifest_signature(
+                &manifest,
+                &state_transaction.world,
+                &state_transaction.execution_budget(),
+            )?;
             let signer_allowed = match authority.controller() {
                 AccountController::Single(signatory) => signatory == &provenance.signer,
                 AccountController::Multisig(policy) => policy
@@ -15044,7 +14649,7 @@ pub mod isi {
             if let Some(existing) = state_transaction.world.contract_manifests.get(&key) {
                 // Identical artifact content is shareable across independently signed deployments.
                 // Keep the first immutable provenance rather than replacing it with a later signer.
-                if existing.signature_payload() == manifest.signature_payload() {
+                if existing.same_signed_content(&manifest) {
                     return Ok(());
                 }
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -17791,73 +17396,6 @@ pub mod isi {
                 )
                 .into());
             }
-            // Domain retirement must apply the same liability boundary as direct
-            // asset-definition retirement before deleting any reserve custody.
-            for (storage_key, pool) in state_transaction.world.kagemusha_reserve_pools.iter() {
-                if !remove_asset_definitions.contains(&pool.key.asset) {
-                    continue;
-                }
-                if storage_key != &pool.key.liability_pool_id {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {} has a Kagemusha V1 reserve pool with a non-canonical storage key",
-                            pool.key.asset
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                pool.validate().map_err(|error| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {} has an invalid Kagemusha V1 reserve pool: {error}",
-                            pool.key.asset
-                        )
-                        .into(),
-                    )
-                })?;
-                let outstanding = pool.available().map_err(|error| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {} has an invalid Kagemusha V1 reserve liability: {error}",
-                            pool.key.asset
-                        )
-                        .into(),
-                    )
-                })?;
-                if outstanding != 0 {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {} has {outstanding} outstanding Kagemusha V1 reserve atomic units",
-                            pool.key.asset
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-            }
-            for (_, operation) in state_transaction.world.kagemusha_reserve_operations.iter() {
-                let pool = operation.pool();
-                if remove_asset_definitions.contains(&pool.asset) {
-                    let stored_pool = state_transaction
-                        .world
-                        .kagemusha_reserve_pools
-                        .get(&pool.liability_pool_id);
-                    crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_retirement_operation_pool_v1(
-                        pool,
-                        stored_pool,
-                    )
-                    .map_err(|error| {
-                        InstructionExecutionError::InvariantViolation(
-                            format!(
-                                "cannot unregister domain {domain_id}: asset definition {} has a Kagemusha V1 operation with an invalid reserve pool: {error}",
-                                pool.asset
-                            )
-                            .into(),
-                        )
-                    })?;
-                }
-            }
             for account_id in &relabeled_accounts {
                 if account_id == &state_transaction.gov.bond_escrow_account
                     || account_id == &state_transaction.gov.slash_receiver_account
@@ -18215,11 +17753,6 @@ pub mod isi {
             }
             for asset_definition_id in remove_asset_definitions {
                 state_transaction
-                    .settlement
-                    .kagemusha
-                    .reserve_accounts
-                    .remove(&asset_definition_id);
-                state_transaction
                     .world
                     .zk_assets
                     .remove(asset_definition_id.clone());
@@ -18537,14 +18070,6 @@ pub mod isi {
                         .map_err(|error| InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(error.to_string()),
                         ))?;
-                }
-                if crate::state::is_retired_kagemusha_mint_finality_parameter(custom.id()) {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions"
-                                .to_owned(),
-                        ),
-                    ));
                 }
                 match iroha_data_model::nexus::ValidatorCommitteeOperationV1::from_custom_parameter(
                     custom,
@@ -18882,10 +18407,11 @@ pub mod isi {
                                 }),
                             ));
                         }
-                        _ => {}
                     }
                 };
             }
+            // Keep execution exhaustive like Parameters::set_parameter: a new
+            // governed variant must update State and emit its configuration event.
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
                 Sumeragi(sumeragi.payload_retry_interval_ms) => SumeragiParameter::PayloadRetryIntervalMs,
@@ -18898,12 +18424,15 @@ pub mod isi {
                 Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
                 Block(block.execution_output) => BlockParameter::ExecutionOutput,
                 Block(block.fastpq_source) => BlockParameter::FastpqSource,
+                Transaction(transaction.max_signatures) => TransactionParameter::MaxSignatures,
                 Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
                 Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
                 Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
                 Transaction(transaction.max_decompressed_bytes) => TransactionParameter::MaxDecompressedBytes,
                 Transaction(transaction.max_metadata_depth) => TransactionParameter::MaxMetadataDepth,
                 Transaction(transaction.max_time_to_live_ms) => TransactionParameter::MaxTimeToLiveMs,
+                Transaction(transaction.require_height_ttl) => TransactionParameter::RequireHeightTtl,
+                Transaction(transaction.require_sequence) => TransactionParameter::RequireSequence,
                 SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
                 SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
                 SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
@@ -20157,467 +19686,6 @@ pub mod isi {
             assert_eq!(first, parliament_governance_head_root_v1(&41_u64));
             assert_ne!(first, parliament_governance_head_root_v1(&42_u64));
             assert_ne!(first, [0; 32]);
-        }
-
-        #[test]
-        fn kagemusha_policy_proposal_binds_exact_initial_head_and_requires_reducer_token() {
-            use iroha_data_model::kagemusha::{
-                KAGEMUSHA_WIRE_VERSION_V1, KagemushaGovernedVerifierRegistryV1,
-                KagemushaReleaseAuthorityPolicyV1,
-            };
-
-            let state = blank_test_state();
-            let header = first_test_block_header();
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
-            let policy = KagemushaReleaseAuthorityPolicyV1 {
-                version: KAGEMUSHA_WIRE_VERSION_V1,
-                authority_set_id: [0xA1; 32],
-                threshold: 1,
-                authorized_signers: vec![
-                    iroha_crypto::KeyPair::try_random()
-                        .expect("signer")
-                        .public_key()
-                        .clone(),
-                ],
-            };
-            let payload =
-                iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1 {
-                    proposal_operator: ALICE_ID.clone(),
-                    network_id: state_transaction.network_id.clone(),
-                    expected_predecessor: KagemushaGovernedVerifierRegistryV1::default(),
-                    authority_policy: policy.clone(),
-                };
-            ensure_kagemusha_policy_initial_predecessor_v1(&payload, &state_transaction)
-                .expect("exact empty predecessor");
-            let kind = ProposalKind::KagemushaVerifierPolicyInstall(payload.clone());
-            let initial_head =
-                parliament_expected_head_v1(&kind, &state_transaction).expect("initial head");
-            assert!(matches!(initial_head, GovernanceExpectedHeadV1::Present(_)));
-
-            let mut foreign = payload.clone();
-            foreign.network_id =
-                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                    iroha_data_model::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    Hash::new(b"foreign-kagemusha-policy-proposal-network"),
-                ));
-            assert!(validate_kagemusha_policy_proposal_v1(&foreign, &state_transaction).is_err());
-            let mut malformed = payload.clone();
-            malformed.expected_predecessor.version = 0;
-            assert!(validate_kagemusha_policy_proposal_v1(&malformed, &state_transaction).is_err());
-
-            let proposal = crate::state::GovernanceProposalRecord {
-                proposer: ALICE_ID.clone(),
-                kind: kind.clone(),
-                created_height: 1,
-                status: crate::state::GovernanceProposalStatus::Proposed,
-            };
-            let proposal_content_id =
-                iroha_data_model::governance::types::ProposalContentId::new(kind.fingerprint());
-            let certificate = GovernanceCertificateV1 {
-                proposal_content_id,
-                governance_attempt_id:
-                    iroha_data_model::governance::types::GovernanceAttemptId::derive_v1(
-                        proposal_content_id,
-                        0,
-                    ),
-                governance_attempt_sequence: 0,
-                risk_tier: iroha_data_model::governance::types::RiskTierV1::Constitutional,
-                body_bindings: Vec::new(),
-                policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
-                effect_preimage_hash: kind.effect_preimage_hash_v1(),
-                expected_head: initial_head,
-                certified_at_height: 1,
-                enact_at_height: 2,
-            };
-            apply_parliament_proposal_effect_v1(
-                kind.fingerprint(),
-                &proposal,
-                &certificate,
-                &mut state_transaction,
-            )
-            .expect("isolated effect stages the policy");
-
-            let mut installed = KagemushaGovernedVerifierRegistryV1::default();
-            installed
-                .initialize_authority_policy(policy)
-                .expect("test policy installs");
-            assert_eq!(
-                state_transaction.world.kagemusha_verifier_registry.get(),
-                &installed
-            );
-            assert!(
-                ensure_kagemusha_policy_initial_predecessor_v1(&payload, &state_transaction)
-                    .is_err()
-            );
-            let observed_head =
-                parliament_expected_head_v1(&kind, &state_transaction).expect("changed head");
-            assert_ne!(observed_head, initial_head);
-            assert_eq!(
-                state_transaction.world.kagemusha_verifier_registry.get(),
-                &installed
-            );
-            state_transaction.apply();
-            assert!(matches!(
-                block.commit_empty_block_for_testing(),
-                Err(crate::state::storage_transactions::TransactionsBlockError::KagemushaGovernanceUnavailable)
-            ));
-            assert_eq!(
-                state.world.kagemusha_verifier_registry.view().get(),
-                &KagemushaGovernedVerifierRegistryV1::default()
-            );
-        }
-
-        #[test]
-        fn kagemusha_policy_proposal_requires_bonded_operator_and_exact_predecessor() {
-            use iroha_data_model::kagemusha::{
-                KAGEMUSHA_WIRE_VERSION_V1, KagemushaGovernedVerifierRegistryV1,
-                KagemushaReleaseAuthorityPolicyV1,
-            };
-
-            let state = blank_test_state();
-            let mut block = state.block(first_test_block_header());
-            let mut transaction = block.transaction();
-            let payload =
-                iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1 {
-                    proposal_operator: ALICE_ID.clone(),
-                    network_id: transaction.network_id,
-                    expected_predecessor: KagemushaGovernedVerifierRegistryV1::default(),
-                    authority_policy: KagemushaReleaseAuthorityPolicyV1 {
-                        version: KAGEMUSHA_WIRE_VERSION_V1,
-                        authority_set_id: [0xB1; 32],
-                        threshold: 1,
-                        authorized_signers: vec![
-                            iroha_crypto::KeyPair::try_random()
-                                .expect("fixture signer")
-                                .public_key()
-                                .clone(),
-                        ],
-                    },
-                };
-            let propose = |proposal| gov::ProposeKagemushaVerifierPolicyInstallV1 { proposal };
-            assert!(
-                propose(payload.clone())
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            assert!(transaction.world.governance_proposals.is_empty());
-
-            transaction.gov.citizenship_bond_amount = Quantity::zero();
-            transaction.world.citizens.insert(
-                ALICE_ID.clone(),
-                crate::state::CitizenshipRecord {
-                    owner: ALICE_ID.clone(),
-                    amount: Quantity::zero(),
-                    bonded_height: 1,
-                },
-            );
-            let mut wrong_operator = payload.clone();
-            wrong_operator.proposal_operator = BOB_ID.clone();
-            assert!(
-                propose(wrong_operator)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut wrong_predecessor = payload.clone();
-            wrong_predecessor.expected_predecessor.version = 0;
-            assert!(
-                propose(wrong_predecessor)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            assert!(transaction.world.governance_proposals.is_empty());
-
-            propose(payload.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("bonded exact proposal admitted");
-            let proposal_id = ProposalKind::KagemushaVerifierPolicyInstall(payload).fingerprint();
-            assert!(
-                transaction
-                    .world
-                    .governance_proposals
-                    .get(&proposal_id)
-                    .is_some()
-            );
-            assert_eq!(
-                transaction.world.kagemusha_verifier_registry.get(),
-                &KagemushaGovernedVerifierRegistryV1::default()
-            );
-        }
-
-        #[test]
-        fn kagemusha_release_proposal_requires_bonded_operator_and_exact_predecessor() {
-            let fixture: gov::ProposeKagemushaVerifierReleaseInstallV1 =
-                norito::decode_canonical(include_bytes!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
-                )))
-                .expect("canonical authenticated release fixture");
-            let state = State::new_with_chain_and_network_id_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                "generic-testnet".parse().expect("fixture chain"),
-                fixture.proposal.network_id,
-            );
-            let mut block = state.block(first_test_block_header());
-            let mut transaction = block.transaction();
-            let mut payload = fixture.proposal;
-            payload.proposal_operator = ALICE_ID.clone();
-            *transaction.world.kagemusha_verifier_registry.get_mut() =
-                payload.expected_predecessor.clone();
-            let propose = |proposal| gov::ProposeKagemushaVerifierReleaseInstallV1 { proposal };
-            assert!(
-                propose(payload.clone())
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err(),
-                "unbonded authority cannot propose a release"
-            );
-
-            transaction.gov.citizenship_bond_amount = Quantity::zero();
-            transaction.world.citizens.insert(
-                ALICE_ID.clone(),
-                crate::state::CitizenshipRecord {
-                    owner: ALICE_ID.clone(),
-                    amount: Quantity::zero(),
-                    bonded_height: 1,
-                },
-            );
-            let mut wrong_operator = payload.clone();
-            wrong_operator.proposal_operator = BOB_ID.clone();
-            assert!(
-                propose(wrong_operator)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut wrong_network = payload.clone();
-            wrong_network.network_id =
-                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                    iroha_data_model::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    iroha_crypto::Hash::prehashed([0xEF; 32]),
-                ));
-            assert!(
-                propose(wrong_network)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut wrong_predecessor = payload.clone();
-            wrong_predecessor.expected_predecessor.version = 0;
-            assert!(
-                propose(wrong_predecessor)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut forged_receipt = payload.clone();
-            forged_receipt.receipt.source_tree_digest[0] ^= 1;
-            assert!(
-                propose(forged_receipt)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            assert!(transaction.world.governance_proposals.is_empty());
-
-            propose(payload.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("bonded exact authenticated release proposal admitted");
-            let proposal_id =
-                ProposalKind::KagemushaVerifierReleaseInstall(payload.clone()).fingerprint();
-            assert!(
-                transaction
-                    .world
-                    .governance_proposals
-                    .get(&proposal_id)
-                    .is_some()
-            );
-            assert_eq!(
-                transaction.world.kagemusha_verifier_registry.get(),
-                &payload.expected_predecessor,
-                "proposal admission cannot install before Parliament certification"
-            );
-        }
-
-        #[test]
-        fn kagemusha_activation_proposal_requires_bonded_operator_and_exact_standby() {
-            let fixture: gov::ProposeKagemushaVerifierReleaseActivateV1 =
-                norito::decode_canonical(include_bytes!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
-                )))
-                .expect("canonical verifier activation fixture");
-            let state = blank_test_state();
-            let mut block = state.block(first_test_block_header());
-            let mut transaction = block.transaction();
-            let mut payload = fixture.proposal;
-            payload.proposal_operator = ALICE_ID.clone();
-            payload.network_id = transaction.network_id;
-            *transaction.world.kagemusha_verifier_registry.get_mut() =
-                payload.expected_predecessor.clone();
-            let propose = |proposal| gov::ProposeKagemushaVerifierReleaseActivateV1 { proposal };
-            assert!(
-                propose(payload.clone())
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err(),
-                "unbonded authority cannot propose activation"
-            );
-            transaction.gov.citizenship_bond_amount = Quantity::zero();
-            transaction.world.citizens.insert(
-                ALICE_ID.clone(),
-                crate::state::CitizenshipRecord {
-                    owner: ALICE_ID.clone(),
-                    amount: Quantity::zero(),
-                    bonded_height: 1,
-                },
-            );
-            let mut wrong_operator = payload.clone();
-            wrong_operator.proposal_operator = BOB_ID.clone();
-            assert!(
-                propose(wrong_operator)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut wrong_network = payload.clone();
-            wrong_network.network_id =
-                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                    iroha_data_model::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    iroha_crypto::Hash::prehashed([0xEF; 32]),
-                ));
-            assert!(
-                propose(wrong_network)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut wrong_predecessor = payload.clone();
-            wrong_predecessor.expected_predecessor.releases.clear();
-            assert!(
-                propose(wrong_predecessor)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut missing_release = payload.clone();
-            missing_release.successor_release_id = [0xEF; 32];
-            assert!(
-                propose(missing_release)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            assert!(transaction.world.governance_proposals.is_empty());
-
-            propose(payload.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("bonded exact standby activation admitted");
-            let proposal_id =
-                ProposalKind::KagemushaVerifierReleaseActivate(payload.clone()).fingerprint();
-            assert!(
-                transaction
-                    .world
-                    .governance_proposals
-                    .get(&proposal_id)
-                    .is_some()
-            );
-            assert_eq!(
-                transaction.world.kagemusha_verifier_registry.get(),
-                &payload.expected_predecessor,
-                "proposal admission cannot activate before Parliament certification"
-            );
-        }
-
-        #[test]
-        fn kagemusha_retirement_proposal_requires_bonded_operator_and_exact_standby() {
-            let fixture: gov::ProposeKagemushaVerifierReleaseActivateV1 =
-                norito::decode_canonical(include_bytes!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
-                )))
-                .expect("canonical verifier activation fixture");
-            let state = blank_test_state();
-            let mut block = state.block(first_test_block_header());
-            let mut transaction = block.transaction();
-            let mut payload =
-                iroha_data_model::governance::types::KagemushaVerifierReleaseRetireProposalV1 {
-                    proposal_operator: fixture.proposal.proposal_operator,
-                    network_id: fixture.proposal.network_id,
-                    expected_predecessor: fixture.proposal.expected_predecessor,
-                    standby_release_id: fixture.proposal.successor_release_id,
-                };
-            payload.proposal_operator = ALICE_ID.clone();
-            payload.network_id = transaction.network_id;
-            *transaction.world.kagemusha_verifier_registry.get_mut() =
-                payload.expected_predecessor.clone();
-            let propose = |proposal| gov::ProposeKagemushaVerifierReleaseRetireV1 { proposal };
-            assert!(
-                propose(payload.clone())
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err(),
-                "unbonded authority cannot propose retirement"
-            );
-            transaction.gov.citizenship_bond_amount = Quantity::zero();
-            transaction.world.citizens.insert(
-                ALICE_ID.clone(),
-                crate::state::CitizenshipRecord {
-                    owner: ALICE_ID.clone(),
-                    amount: Quantity::zero(),
-                    bonded_height: 1,
-                },
-            );
-            let mut wrong_operator = payload.clone();
-            wrong_operator.proposal_operator = BOB_ID.clone();
-            assert!(
-                propose(wrong_operator)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut wrong_network = payload.clone();
-            wrong_network.network_id =
-                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                    iroha_data_model::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    iroha_crypto::Hash::prehashed([0xEF; 32]),
-                ));
-            assert!(
-                propose(wrong_network)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut wrong_predecessor = payload.clone();
-            wrong_predecessor.expected_predecessor.releases.clear();
-            assert!(
-                propose(wrong_predecessor)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            let mut missing_release = payload.clone();
-            missing_release.standby_release_id = [0xEF; 32];
-            assert!(
-                propose(missing_release)
-                    .execute(&ALICE_ID, &mut transaction)
-                    .is_err()
-            );
-            assert!(transaction.world.governance_proposals.is_empty());
-
-            propose(payload.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("bonded exact standby retirement admitted");
-            let proposal_id =
-                ProposalKind::KagemushaVerifierReleaseRetire(payload.clone()).fingerprint();
-            assert!(
-                transaction
-                    .world
-                    .governance_proposals
-                    .get(&proposal_id)
-                    .is_some()
-            );
-            propose(payload.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("exact duplicate proposal is idempotent");
-            assert_eq!(transaction.world.governance_proposals.len(), 1);
-            assert_eq!(
-                transaction.world.kagemusha_verifier_registry.get(),
-                &payload.expected_predecessor,
-                "proposal admission cannot retire before Parliament certification"
-            );
         }
 
         const PARLIAMENT_DUE_CERTIFICATE_HEIGHT: u64 = 60;
@@ -23569,6 +22637,7 @@ pub mod isi {
         include!("world_validation_fee_tests.rs");
         include!("world_parliament_due_effect_tests.rs");
         include!("world_parliament_initial_sortition_tests.rs");
+        include!("world_parliament_sortition_retry_tests.rs");
         include!("world_sccp_governance_tests.rs");
         include!("world_permission_association_tests.rs");
         world_test!(set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate {
@@ -26640,11 +25709,183 @@ seiyaku GovernanceLifecycle {
                     .is_none()
             );
         });
+        #[test]
+        fn manifest_verification_authenticates_exact_signed_content_and_refunds_its_frame() {
+            let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
+            let (_, manifest) = minimal_contract_artifact();
+            let key = checked_keypair_with_algorithm(Algorithm::Ed25519);
+            let manifest = manifest
+                .try_signed(signing.context(), signing.max_frame_bytes(), &key)
+                .unwrap();
+            let state = blank_test_state();
+            let mut block = state.block(first_test_block_header());
+            let transaction = block.transaction();
+            let budget = transaction.execution_budget();
+            let baseline = budget.reserved_bytes();
+            let provenance =
+                super::ensure_manifest_signature(&manifest, &transaction.world, &budget)
+                    .expect("the exact signed manifest verifies");
+            assert_eq!(provenance.signer, *key.public_key());
+            assert_eq!(budget.reserved_bytes(), baseline);
+            assert!(transaction.execution_deferral().is_none());
+
+            let mut tampered = manifest.clone();
+            tampered.features_bitmap = Some(manifest.features_bitmap.unwrap_or(0) ^ 1);
+            let error = super::ensure_manifest_signature(&tampered, &transaction.world, &budget)
+                .expect_err("changed signed content must be rejected");
+            assert_contains!(
+                format!("{error:?}"),
+                "manifest signature verification failed"
+            );
+            assert!(transaction.execution_deferral().is_none());
+            assert_eq!(budget.reserved_bytes(), baseline);
+        }
+
+        #[test]
+        fn manifest_verification_preserves_original_state_capacity_for_counter_and_frame() {
+            use std::{
+                future::Future as _,
+                pin::pin,
+                task::{Context, Poll, Waker},
+            };
+
+            let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
+            let (_, manifest) = minimal_contract_artifact();
+            let key = checked_keypair_with_algorithm(Algorithm::Ed25519);
+            let manifest = manifest
+                .try_signed(signing.context(), signing.max_frame_bytes(), &key)
+                .unwrap();
+            let frame_bytes = signing
+                .context()
+                .with(|| norito::canonical_frame_len(&manifest.signature_payload()))
+                .unwrap();
+            let counter_bytes = norito::core::DecodeBudgetContext::allocation_layout().size();
+            for available in [0, counter_bytes] {
+                let state = blank_test_state();
+                let mut block = state.block(first_test_block_header());
+                let transaction = block.transaction();
+                let budget = transaction.execution_budget();
+                let mut registration = crate::unit_test_support::release_registration(&budget);
+                let baseline = budget.reserved_bytes();
+                let occupied = budget
+                    .try_reserve_bytes(budget.limit_bytes() - baseline - available)
+                    .unwrap();
+                let error =
+                    super::ensure_manifest_signature(&manifest, &transaction.world, &budget)
+                        .expect_err("original State capacity must refuse this attempt");
+                assert!(matches!(
+                    error,
+                    InstructionExecutionError::InvariantViolation(_)
+                ));
+                let retained = transaction.execution_deferral().unwrap();
+                let Some(iroha_allocation::AllocationRefusal::Capacity {
+                    requested_bytes,
+                    release,
+                    ..
+                }) = retained.allocation_refusal()
+                else {
+                    panic!("manifest verification lost its original State pool refusal");
+                };
+                assert_eq!(
+                    *requested_bytes,
+                    if available == 0 {
+                        counter_bytes
+                    } else {
+                        frame_bytes
+                    }
+                );
+                assert_eq!(
+                    budget.reserved_bytes(),
+                    baseline + occupied.remaining_bytes()
+                );
+                {
+                    let mut wait = pin!(release.clone().wait_for_release(&mut registration));
+                    let before_release =
+                        wait.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+                    // A frame refusal retires the real counter before this call returns.
+                    assert_eq!(
+                        before_release,
+                        if available == 0 {
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(())
+                        }
+                    );
+                    drop(occupied);
+                    assert!(
+                        wait.as_mut()
+                            .poll(&mut Context::from_waker(Waker::noop()))
+                            .is_ready()
+                    );
+                }
+                assert_eq!(budget.reserved_bytes(), baseline);
+                drop(transaction);
+                let retry = block.transaction();
+                super::ensure_manifest_signature(&manifest, &retry.world, &budget)
+                    .expect("the same original manifest verifies after original credit is freed");
+                assert!(retry.execution_deferral().is_none());
+                assert_eq!(budget.reserved_bytes(), baseline);
+            }
+        }
+
+        #[test]
+        fn manifest_verification_keeps_native_counter_and_frame_allocator_refusals_local() {
+            use crate::test_allocations::refuse_one_layout_during;
+            let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
+            let (_, manifest) = minimal_contract_artifact();
+            let key = checked_keypair_with_algorithm(Algorithm::Ed25519);
+            let manifest = manifest
+                .try_signed(signing.context(), signing.max_frame_bytes(), &key)
+                .unwrap();
+            let frame_bytes = signing
+                .context()
+                .with(|| norito::canonical_frame_len(&manifest.signature_payload()))
+                .unwrap();
+            for layout in [
+                norito::core::DecodeBudgetContext::allocation_layout(),
+                std::alloc::Layout::array::<u8>(frame_bytes).unwrap(),
+            ] {
+                let state = blank_test_state();
+                let mut block = state.block(first_test_block_header());
+                let transaction = block.transaction();
+                let budget = transaction.execution_budget();
+                let baseline = budget.reserved_bytes();
+                let (result, refused) = refuse_one_layout_during(layout, || {
+                    super::ensure_manifest_signature(&manifest, &transaction.world, &budget)
+                });
+                assert!(
+                    refused,
+                    "the selected native allocation must actually be refused"
+                );
+                assert!(matches!(
+                    result,
+                    Err(InstructionExecutionError::InvariantViolation(_))
+                ));
+                let retained = transaction.execution_deferral().unwrap();
+                assert_eq!(
+                    retained.reason(),
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                );
+                assert!(retained.allocation_refusal().is_none());
+                assert_eq!(budget.reserved_bytes(), baseline);
+                drop(transaction);
+                let retry = block.transaction();
+                super::ensure_manifest_signature(&manifest, &retry.world, &budget)
+                    .expect("allocator refusal leaves the exact original manifest retryable");
+                assert!(retry.execution_deferral().is_none());
+                assert_eq!(budget.reserved_bytes(), baseline);
+            }
+        }
+
         world_test!(ensure_manifest_signature_rejects_malformed_ed25519_signature_r {
+            let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
+            let state = blank_test_state();
+            let mut block = state.block(first_test_block_header());
+            let transaction = block.transaction();
             let (_artifact, manifest) = minimal_contract_artifact();
             let key_pair = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let mut manifest = manifest
-                .try_signed(&key_pair)
+                .try_signed(signing.context(), signing.max_frame_bytes(), &key_pair)
                 .expect("checked manifest provenance signature");
             let provenance = manifest
                 .provenance
@@ -26661,8 +25902,9 @@ seiyaku GovernanceLifecycle {
                     .expect("manifest has provenance")
                     .signature =
                     signature_with_malformed_ed25519_r(&valid_signature, &replacement_r);
-                let err = ensure_manifest_signature(&manifest)
-                    .expect_err("malformed manifest signature R must be rejected");
+                let err = ensure_manifest_signature(
+                    &manifest, &transaction.world, &transaction.execution_budget()
+                ).expect_err("malformed manifest signature R must be rejected");
                 let message = format!("{err:?}");
                 assert_contains!(message, "manifest signature verification failed", "{label} manifest signature R produced unexpected error: {message}");
             }
@@ -29253,163 +28495,7 @@ seiyaku GovernanceLifecycle {
                 "asset definition should remain after rejected unregister"
             );
         });
-        world_test!(unregister_domain_rejects_outstanding_kagemusha_reserve_liability {
-            use crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::{
-                KAGEMUSHA_RESERVE_VERSION_V1, KagemushaReservePoolKeyV1, KagemushaReservePoolV1,
-            };
-            use iroha_data_model::isi::{KagemushaOperationKindV1, KagemushaReserveReceiptV1};
-
-            let state = blank_state();
-            let domain_id = DomainId::try_new("kagemusharetirement", "universal")
-                .expect("domain id parses");
-            state_transaction!(state, block, state_block, stx);
-            Register::domain(Domain::new(domain_id.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register asset domain");
-            let asset_definition_id = AssetDefinitionId::derive_from_components(
-                domain_id.clone(),
-                "backed".parse().expect("asset name"),
-            );
-            Register::asset_definition(AssetDefinition::numeric(
-                asset_definition_id.clone(),
-                "Backed asset",
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                Some(domain_id.clone()),
-            ))
-            .expect_execute(&ALICE_ID, &mut stx, "register backed asset definition");
-            let asset_definition = stx
-                .world
-                .asset_definition(&asset_definition_id)
-                .expect("registered asset definition");
-            crate::smartcontracts::isi::domain::isi::ensure_kagemusha_reserve_account(
-                &asset_definition,
-                &ALICE_ID,
-                &mut stx,
-            )
-            .expect("materialize deterministic reserve custody");
-            let reserve_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
-                stx.network_id(),
-                &asset_definition_id,
-            );
-            let reserve_asset_id = AssetId::new(asset_definition_id.clone(), reserve_account);
-            Mint::asset_quantity(1_u32, reserve_asset_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "fund reserve custody");
-            let network_id = *stx.network_id();
-            let incarnation = *stx
-                .world
-                .axt_asset_incarnations
-                .get(&asset_definition_id)
-                .expect("registered asset incarnation");
-            let key = KagemushaReservePoolKeyV1::new(
-                network_id,
-                asset_definition_id.clone(),
-                incarnation,
-            )
-            .expect("canonical reserve key");
-            let receipt = KagemushaReserveReceiptV1 {
-                version: KAGEMUSHA_RESERVE_VERSION_V1,
-                operation_id: [0x41; 32],
-                kind: KagemushaOperationKindV1::TopUp,
-                request_digest: [0x42; 32],
-                mint_statement_digest: [0x43; 32],
-                network_id,
-                asset: asset_definition_id.clone(),
-                asset_incarnation: incarnation,
-                scale: 0,
-                liability_pool_id: key.liability_pool_id,
-                amount: 1,
-                previous_pool_receipt_digest: [0; 32],
-                total_topups: 1,
-                total_redemptions: 0,
-                transaction_hash: [0x45; 32],
-                committed_at_ms: 1,
-            };
-            let pool = KagemushaReservePoolV1 {
-                version: KAGEMUSHA_RESERVE_VERSION_V1,
-                key,
-                scale: 0,
-                total_topups: 1,
-                total_redemptions: 0,
-                latest_receipt: Some(receipt),
-            };
-            pool.validate().expect("self-consistent reserve pool");
-            let pool_id = pool.key.liability_pool_id;
-            stx.world.kagemusha_reserve_pools.insert(pool_id, pool);
-
-            let error = Unregister::domain(domain_id.clone())
-                .expect_execute_err(&ALICE_ID, &mut stx, "outstanding reserve must block domain retirement");
-            assert_contains!(
-                format!("{error:?}"),
-                "1 outstanding Kagemusha V1 reserve atomic units",
-                "domain retirement must identify the outstanding liability: {error}"
-            );
-            assert!(stx.world.domains.get(&domain_id).is_some());
-            assert!(stx.world.asset_definitions.get(&asset_definition_id).is_some());
-            assert!(stx.world.assets.get(&reserve_asset_id).is_some());
-            assert!(stx.world.kagemusha_reserve_pools.get(&pool_id).is_some());
-        });
-        world_test!(unregister_domain_removes_kagemusha_reserve_mappings_for_domain_asset_definitions {
-            let state = blank_state();
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "universal").expect("domain id parses");
-            state_transaction!(state, block, state_block, stx);
-            Register::domain(Domain::new(domain_id.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
-            let reward_def = AssetDefinitionId::derive_from_components(
-                domain_id.clone(),
-                "kagemusha".parse().unwrap(),
-            );
-            Register::asset_definition(NewAssetDefinition {
-                id: reward_def.clone(),
-                name: "Kagemusha".to_owned(),
-                description: None,
-                alias: None,
-                spec: NumericSpec::integer(),
-                mintable: Mintable::Infinitely,
-                logo: None,
-                metadata: Metadata::default(),
-                balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-                owning_domain: Some(domain_id.clone()),
-            })
-            .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
-            assert!(
-                stx.world
-                    .domain_asset_definitions
-                    .get(&domain_id)
-                    .is_some_and(|definitions| definitions.contains(&reward_def)),
-                "fixture must register the asset definition in the cleanup domain"
-            );
-            let escrow = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
-                stx.network_id(),
-                &reward_def,
-            );
-            stx.settlement
-                .kagemusha
-                .reserve_accounts
-                .insert(reward_def.clone(), escrow);
-            assert!(
-                stx.settlement
-                    .kagemusha
-                    .reserve_accounts
-                    .get(&reward_def)
-                    .is_some(),
-                "Kagemusha reserve mapping should exist before domain unregister"
-            );
-            Unregister::domain(domain_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local Kagemusha reserve mapping");
-            assert!(
-                stx.settlement
-                    .kagemusha
-                    .reserve_accounts
-                    .get(&reward_def)
-                    .is_none(),
-                "Kagemusha reserve mapping should be removed with domain asset definitions"
-            );
-            assert!(
-                stx.world.domains.get(&domain_id).is_none(),
-                "domain should be removed"
-            );
-        });
-        world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_kagemusha_state {
+        world_test!(unregister_domain_preserves_accounts_with_active_settlement_and_oracle_state {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
@@ -33040,6 +32126,48 @@ seiyaku GovernanceLifecycle {
                 ivm::Memory::HEAP_MAX_SIZE
             );
         });
+        world_test!(set_parameter_executes_every_transaction_policy_and_emits_exact_change {
+            use iroha_data_model::{
+                events::data::prelude::{ConfigurationEvent, ParameterChanged},
+                parameter::system::TransactionParameter,
+            };
+            use core::num::NonZeroU16;
+
+            blank_state_transaction!(state, block, state_block, stx);
+            for next in [
+                TransactionParameter::MaxSignatures(NonZeroU64::new(2).unwrap()),
+                TransactionParameter::MaxInstructions(NonZeroU64::new(17).unwrap()),
+                TransactionParameter::IvmBytecodeSize(NonZeroU64::new(65_536).unwrap()),
+                TransactionParameter::MaxTxBytes(NonZeroU64::new(1_048_576).unwrap()),
+                TransactionParameter::MaxDecompressedBytes(NonZeroU64::new(2_097_152).unwrap()),
+                TransactionParameter::MaxMetadataDepth(NonZeroU16::new(7).unwrap()),
+                TransactionParameter::MaxTimeToLiveMs(NonZeroU64::new(60_000).unwrap()),
+                TransactionParameter::RequireHeightTtl(true),
+                TransactionParameter::RequireSequence(true),
+                TransactionParameter::RequireHeightTtl(false),
+                TransactionParameter::RequireSequence(false),
+            ] {
+                let old = stx.world.parameters.get().transaction().parameters()
+                    .find(|old| core::mem::discriminant(old) == core::mem::discriminant(&next))
+                    .expect("each governed transaction variant has a current value");
+                let next_parameter = Parameter::Transaction(next);
+                let mut expected_parameters = stx.world.parameters.get().clone();
+                expected_parameters.set_parameter(next_parameter.clone());
+                let internal_before = stx.world.internal_event_buf.len();
+                let external_before = stx.world.external_event_buf.len();
+                SetParameter::new(next_parameter.clone())
+                    .expect_execute(&ALICE_ID, &mut stx, "every governed transaction variant executes");
+                assert_eq!(stx.world.parameters.get(), &expected_parameters,
+                    "execution must change the requested field and preserve all other policy");
+                assert_eq!(stx.world.internal_event_buf.len(), internal_before + 1);
+                assert_eq!(stx.world.external_event_buf.len(), external_before + 1);
+                let expected_event: DataEvent = ConfigurationEvent::Changed(ParameterChanged {
+                    old_value: Parameter::Transaction(old),
+                    new_value: next_parameter,
+                }).into();
+                assert_eq!(stx.world.internal_event_buf.last().unwrap().as_ref(), &expected_event);
+            }
+        });
         world_test!(set_parameter_updates_host_output_limits {
             blank_state_transaction!(state, block, state_block, stx);
             let max_items = NonZeroU64::new(19).expect("non-zero item limit");
@@ -33217,27 +32345,6 @@ seiyaku GovernanceLifecycle {
             let error = SetParameter::new(Parameter::Custom(rollback.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "retention target rollback must fail");
             assert_contains!(format!("{error:?}"), "target did not advance");
-        });
-        world_test!(set_parameter_rejects_retired_kagemusha_epoch_authority_before_state_changes {
-            blank_state_transaction!(state, block, state_block, stx);
-            let id: iroha_data_model::parameter::CustomParameterId =
-                "kagemusha_mint_finality_next_epoch_v1".parse().expect("retired ID fixture");
-            let before = stx.world.parameters.get().clone();
-            for payload in ["{}", "17", "{\"roster\":null}"] {
-                let payload: iroha_primitives::json::Json = payload.parse().expect("valid JSON fixture");
-                let custom = iroha_data_model::parameter::CustomParameter::new(id.clone(), payload);
-                let error = SetParameter::new(Parameter::Custom(custom)).expect_execute_err(
-                    &ALICE_ID, &mut stx, "retired authority payloads must be rejected before interpretation",
-                );
-                match error {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
-                        assert_eq!(message, "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions");
-                    }
-                    other => panic!("unexpected error: {other:?}"),
-                }
-                assert_eq!(stx.world.parameters.get(), &before);
-                assert!(!stx.world.parameters.get().custom().contains_key(&id));
-            }
         });
         world_test!(set_parameter_rejects_zero_npos_reconfig_fields {
             let state = blank_state();
@@ -34664,6 +33771,7 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(commit_contract_deployment_enforces_cas_derivation_and_protected_rotation {
+            let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
             blank_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "seed deployment authority");
@@ -34684,7 +33792,7 @@ seiyaku GovernanceLifecycle {
                 code: artifact,
             }
             .expect_execute(&ALICE_ID, &mut stx, "register verified artifact");
-            { let scoped_manifest = manifest.signed(&ALICE_KEYPAIR); scode::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
+            { let scoped_manifest = manifest.try_signed(signing.context(), signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded deployment fixture manifest"); scode::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
             .expect_execute(&ALICE_ID, &mut stx, "register verified manifest");
             let artifact_permission: Permission =
                 iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode

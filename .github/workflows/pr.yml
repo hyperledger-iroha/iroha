@@ -31,6 +31,25 @@ jobs:
       - name: Exercise forbidden-target and artifact regressions
         run: python3 -m pytest -q pytests/scripts/ivm_only_guard_test.py
 
+  first_release_history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install -r scripts/requirements.txt
+      - name: Check the first-release history and cutover inventory against the source
+        run: python3 scripts/check_first_release_history.py
+      - name: Exercise the history guard and the obsolete-history evidence tool
+        run: >-
+          python3 -m pytest -q
+          pytests/scripts/first_release_history_guard_test.py
+          pytests/scripts/first_release_history_evidence_test.py
+
   pre_build:
     if: needs.rust_changes.outputs.has_binaries == 'true'
     needs: rust_changes
@@ -145,6 +164,23 @@ jobs:
       - name: Node driver, lanes and four-validator node tests
         run: cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
 
+  # The Rust lanes test default features only; this target needs the opt-in
+  # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by
+  # the foundation lane (`ci/rust_lanes.toml`).
+  zk_phase_tree_measurement:
+    name: ZK phase-tree measurement on a FASTPQ workload
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+      - name: FASTPQ prove and verify under the shared phase and resource recorder
+        run: cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement
+
   norito_rpc_verify:
     runs-on: ubuntu-latest
     container:
@@ -236,10 +272,6 @@ jobs:
           python-version: "3.11"
       - name: Install pinned router-test dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
-      - name: Verify the KAGEMUSHA first-release package surface
-        run: |
-          python3 -m pytest -q \
-            scripts/tests/kagemusha_package_surface_test.py
       - name: Verify exhaustive Rust lane ownership
         run: |
           python3 -I -S scripts/check_build_efficiency_provenance.py
@@ -268,6 +300,11 @@ jobs:
             scripts/tests/check_compile_unit_budget_test.py \
             scripts/tests/check_generated_artifacts_test.py \
             scripts/tests/check_nexus_provisioning_templates_test.py \
+            scripts/tests/check_zk_delivery_plan_test.py \
+            scripts/tests/check_fhe_ownership_map_test.py \
+            scripts/tests/check_zk_x509_presentation_interval_test.py \
+            scripts/tests/check_zk_resource_contract_test.py \
+            scripts/tests/zk_resource_harness_test.py \
             pytests/scripts/iso_xsd_fixture_verify_test.py \
             pytests/scripts/iso_xsd_profile_catalog_include_test.py
           python3 scripts/check_cargo_feature_hygiene.py
@@ -297,6 +334,10 @@ jobs:
             scripts.tests.shared_proc_macro_emitter_source_test
           python3 scripts/check_generated_artifacts.py
           python3 scripts/check_nexus_provisioning_templates.py
+          python3 -I -S scripts/check_zk_delivery_plan.py
+          python3 -I -S scripts/check_zk_x509_presentation_interval.py
+          python3 -I -S scripts/check_zk_resource_contract.py
+          python3 -I -S scripts/check_fhe_ownership_map.py
       - name: Classify the PR reverse-dependency closure
         id: classify
         env:

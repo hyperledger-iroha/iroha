@@ -73,6 +73,13 @@ impl<T> PayloadBuild<T> {
         &self.source
     }
 
+    /// Borrow the actual retained encoding for source/refund regressions.
+    /// This grants no input, parent or publication authority.
+    #[cfg(test)]
+    pub(crate) fn encoded_backing_for_test(&self) -> Option<&[u8]> {
+        self.bytes.as_ref().map(ChargedBuffer::as_slice)
+    }
+
     /// Encode directly into exact charged backing, then admit immutable shared custody.
     /// Completed encoding survives shared-control refusal without another writer call.
     ///

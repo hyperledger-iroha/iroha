@@ -57,6 +57,20 @@ def digest(path):
     return sha.hexdigest()
 
 
+def source_digest(path):
+    """Authenticate complete original source bytes, including valid empty files."""
+    path = custody.original_file(Path(path))
+    before = path.stat(); sha = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            sha.update(chunk)
+    after = custody.original_file(path).stat()
+    require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns),
+            "original source changed while hashed")
+    return sha.hexdigest()
+
+
 def duplicates(pairs):
     result = {}
     for name, value in pairs:
@@ -230,7 +244,7 @@ def validate_config(root, config):
 
 def current_consumed(root, metadata, before, receipts):
     """Re-capture exact graph membership, then compare only admitted consumed inputs."""
-    current = custody.capture(metadata, root, digest, PACKAGE)
+    current = custody.capture(metadata, root, source_digest, PACKAGE)
     return custody.consumed_source_projection(metadata, root, before, current, receipts, PACKAGE)
 
 
@@ -312,7 +326,7 @@ def check_record(record, root, output):
             "original actual Cargo terminal was rewritten or relabelled")
     require(record["broad_source_diagnostic"] == sorted(name for name in record["source_before"].keys() | record["source_after"].keys()
             if record["source_before"].get(name) != record["source_after"].get(name)), "broad original/current source diagnostic is relabelled")
-    custody.verify_dep_info(messages, record["dep_info"], root, record["source_before"], target, output / "dep-info", digest)
+    custody.verify_dep_info(messages, record["dep_info"], root, record["source_before"], target, output / "dep-info", source_digest)
     consumed = current_consumed(root, metadata, record["source_before"], record["dep_info"])
     require(consumed == record["consumed_inputs"] and record["policy"] == policy(root), "current consumed input/policy inventory differs")
     require(digest(output / "emitted-original.dylib") == record["emitted_sha256"]
@@ -369,7 +383,7 @@ def produce(root, target, output, config, acknowledge):
                "--filter-platform", HOSTS[platform.machine()]]
     metadata_receipt = run(command, root, env, output / "metadata.json", data_stdout=True)
     metadata = load(output / "metadata.json")
-    before = custody.capture(metadata, root, digest, PACKAGE)
+    before = custody.capture(metadata, root, source_digest, PACKAGE)
     record = {"schema": RECORD_SCHEMA, "artifact_scope": "local-unit", "cargo_profile": "debug",
               "build_provenance_version": 4, "release_qualified": False, "passed": False,
               "source_root": str(root), "target_dir": str(target), "source_before": before,
@@ -403,10 +417,10 @@ def produce(root, target, output, config, acknowledge):
     messages = custody.cargo_messages((output / "artifacts.jsonl").read_text(), duplicates)
     row, emitted = artifact(messages, root, target)
     record["cargo_artifact"] = row
-    record["dep_info"] = [custody.reconcile(item, root, before, output / "dep-info", digest, target)
+    record["dep_info"] = [custody.reconcile(item, root, before, output / "dep-info", source_digest, target)
                           for item in messages if item.get("reason") == "compiler-artifact"]
-    custody.verify_dep_info(messages, record["dep_info"], root, before, target, output / "dep-info", digest)
-    after = custody.capture(metadata, root, digest, PACKAGE)
+    custody.verify_dep_info(messages, record["dep_info"], root, before, target, output / "dep-info", source_digest)
+    after = custody.capture(metadata, root, source_digest, PACKAGE)
     record["source_after"] = after
     record["broad_source_diagnostic"] = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
     record["consumed_inputs"] = custody.consumed_source_projection(metadata, root, before, after, record["dep_info"], PACKAGE)

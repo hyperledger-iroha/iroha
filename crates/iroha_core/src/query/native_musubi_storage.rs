@@ -83,7 +83,8 @@ pub fn with_native_musubi_storage_v1<R>(
         if now_secs == 0
             || floor_height < 2
             || height < floor_height
-            || crate::sumeragi::lanes::routing::committed_root_scope(view.world())
+            || crate::sumeragi::lanes::routing::read_routing_root_scope(view.world())
+                .map_err(|_| Unavailable)?
                 != Some(SumeragiRootScope::Global)
         {
             return Err(Rejected);

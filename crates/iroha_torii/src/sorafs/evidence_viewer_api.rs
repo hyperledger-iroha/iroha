@@ -929,6 +929,14 @@ fn require_canonical_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &state.state,
         state.state.network_id_ref(),
@@ -937,6 +945,7 @@ fn require_canonical_auth(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) | Err(_) => Err(fixed_error(

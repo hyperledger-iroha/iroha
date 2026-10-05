@@ -1227,6 +1227,7 @@ async fn app_api_get_by_id_not_found_returns_404() {
         &uri,
         &[],
         Some(&caller),
+        crate::history_producer::HistoryProducerOwner::for_test().allocation_context(),
     )
     .expect("valid exact-network artifact request signature")
     .expect("authenticated artifact reader");
@@ -1296,6 +1297,7 @@ async fn app_api_get_by_id_not_found_returns_404() {
             &uri,
             &[],
             Some(&caller),
+            crate::history_producer::HistoryProducerOwner::for_test().allocation_context(),
         )
         .expect("fresh rate-limited request verifies")
         .expect("signed rate-limited caller");

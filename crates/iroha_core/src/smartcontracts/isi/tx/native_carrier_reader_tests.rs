@@ -6,6 +6,19 @@ use crate::{
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 
+fn history_read_budget() -> crate::state::CanonicalHistoryReadBudget {
+    crate::state::CanonicalHistoryReadBudget::new(
+        iroha_allocation::AllocationBudget::new(48 * 1024 * 1024),
+        norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            1_000_000,
+            48 * 1024 * 1024,
+            1_000_000,
+            48 * 1024 * 1024,
+            64,
+        )),
+    )
+}
+
 pub(super) fn chain() -> CertifiedTestChain {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     chain.commit(Vec::new());
@@ -49,6 +62,61 @@ fn native_carrier_charges_the_complete_source_and_preserves_exact_outputs() {
 }
 
 #[test]
+fn cold_checkpoint_reader_uses_original_frame_pool_and_refunds_after_last_block() {
+    let chain = chain();
+    let frames = iroha_allocation::AllocationBudget::new(0);
+    let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        1_000_000, 48_000_000, 1_000_000, 48_000_000, 64,
+    ));
+    let budget = crate::state::CanonicalHistoryReadBudget::new(frames.clone(), context.clone());
+    let height = NonZeroUsize::new(2).unwrap();
+    assert!(
+        chain
+            .state()
+            .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40, &budget)
+            .is_err()
+    );
+    assert_eq!(frames.reserved_bytes(), 0);
+    frames.set_limit_bytes(48_000_000);
+    let carrier = chain
+        .state()
+        .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40, &budget)
+        .unwrap();
+    assert!(carrier.block().belongs_to(&frames));
+    assert!(context.consumed_allocated_bytes() > carrier.wire_bytes() as u64);
+    let held = carrier.block().clone();
+    let charge = frames.reserved_bytes();
+    assert!(charge > 0);
+    drop(carrier);
+    assert_eq!(frames.reserved_bytes(), charge);
+    drop(held);
+    assert_eq!(frames.reserved_bytes(), 0);
+}
+
+#[test]
+fn cold_checkpoint_reader_refuses_native_allocation_expansion_before_graph_publication() {
+    let chain = chain();
+    let frames = iroha_allocation::AllocationBudget::new(48_000_000);
+    let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        1_000_000, 48_000_000, 1_000_000, 1, 64,
+    ));
+    let budget = crate::state::CanonicalHistoryReadBudget::new(frames.clone(), context.clone());
+    assert!(
+        chain
+            .state()
+            .read_executed_carrier_from_checkpoints(
+                NonZeroUsize::new(2).unwrap(),
+                1_000,
+                1 << 40,
+                &budget,
+            )
+            .is_err()
+    );
+    assert_eq!(frames.reserved_bytes(), 0);
+    assert_eq!(context.consumed_allocated_bytes(), 0);
+}
+
+#[test]
 fn checkpointed_carrier_reads_start_near_their_target() {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     for _ in 0..5 {
@@ -71,6 +139,7 @@ fn checkpointed_carrier_reads_start_near_their_target() {
                 NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap(),
                 1_000,
                 1 << 40,
+                &history_read_budget(),
             )
             .unwrap()
     };
@@ -104,6 +173,7 @@ fn checkpointed_carrier_reads_start_near_their_target() {
                 NonZeroUsize::new(3).unwrap(),
                 validation(3),
                 1 << 40,
+                &history_read_budget()
             ),
             Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
                 QueryExecutionFail::GasBudgetExceeded
@@ -134,9 +204,12 @@ fn checkpointed_reads_discard_foreign_journal_entries_and_recheck_execution() {
         },
     );
     let read = || {
-        chain
-            .state()
-            .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40)
+        chain.state().read_executed_carrier_from_checkpoints(
+            height,
+            1_000,
+            1 << 40,
+            &history_read_budget(),
+        )
     };
     let repaired =
         read().expect("foreign checkpoint is discarded and the tip authenticates history");
@@ -144,7 +217,13 @@ fn checkpointed_reads_discard_foreign_journal_entries_and_recheck_execution() {
         repaired.block().encode_wire().unwrap(),
         source.block().encode_wire().unwrap()
     );
-    assert_eq!(checkpoints.candidates(2, 2), [(2, authentic)]);
+    assert!(
+        checkpoints
+            .candidates(2, 2)
+            .iter()
+            .copied()
+            .eq([(2, authentic)])
+    );
 
     checkpoints.record(
         2,
@@ -181,11 +260,11 @@ fn checkpoint_warming_does_not_change_consensus_history_metering() {
     );
     let offchain_cold = chain
         .state()
-        .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40)
+        .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40, &history_read_budget())
         .unwrap();
     let offchain = chain
         .state()
-        .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40)
+        .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40, &history_read_budget())
         .unwrap();
     assert!(offchain.work_items() < offchain_cold.work_items());
     assert!(offchain.work_items() < warm.work_items());

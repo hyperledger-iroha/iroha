@@ -55,23 +55,38 @@ impl StateBlock<'_> {
             .native_usage()
     }
 
-    /// Consume the actual producer capsule for source-only SNS component controls.
-    /// This test boundary never grants output sealing or publication authority.
+    /// Consume the original complete seal for SNS source-inspection controls.
+    /// Mandatory quantity custody is retained by the genuine producer before
+    /// inspection. Every exit poisons this disposable owner; neither the caller's
+    /// proposal nor this boundary gains witness capture or publication authority.
     #[cfg(test)]
     pub(crate) fn finalize_sns_owned_sources_for_testing(
         &mut self,
         source: &iroha_data_model::block::SignedBlock,
     ) -> Result<(), String> {
-        self.inspect_owned_execution_sources_for_test(source, |state, sources| {
-            state
-                .finalize_owned_fastpq_source_inventory_with_pending(sources, None)
-                .map_err(|error| match error {
-                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
-                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => panic!(
-                        "completed source control encountered original local deferral: {reason}"
-                    ),
+        struct SnsSourceInspectionOwner<'owner, 'state> {
+            state: &'owner mut StateBlock<'state>,
+        }
+        impl Drop for SnsSourceInspectionOwner<'_, '_> {
+            fn drop(&mut self) {
+                self.state.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+            }
+        }
+
+        let owner = SnsSourceInspectionOwner { state: self };
+        let mut inspected = source.clone();
+        owner
+            .state
+            .seal_execution_outputs(&mut inspected, |state, original, routes| {
+                if original.network_entrypoint_count() != 0 || !routes.is_empty() {
+                    return Err("SNS inspection requires its empty Network producer".to_owned());
+                }
+                Ok::<_, String>(super::output_capacity::ExecutionOutputSealMetadata {
+                    committed_fragment_count: u64::try_from(state.committed_fragment_count())
+                        .map_err(|_| "SNS fragment count exceeds u64".to_owned())?,
                 })
-        })
+            })
+            .map_err(|error| format!("SNS original source seal refused: {error:?}"))
     }
 }
 

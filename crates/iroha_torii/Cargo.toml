@@ -262,21 +262,6 @@ path = "tests/grouped/zk.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "kagemusha_redeem_contract"
-path = "tests/kagemusha_redeem_contract.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "kagemusha_top_up_contract"
-path = "tests/kagemusha_top_up_contract.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "kagemusha_operation_contract"
-path = "tests/kagemusha_operation_contract.rs"
-required-features = ["app_api"]
-
-[[test]]
 name = "account_capabilities_contract"
 path = "tests/account_capabilities_contract.rs"
 required-features = ["node-api"]

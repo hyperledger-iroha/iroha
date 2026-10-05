@@ -1216,7 +1216,7 @@ mod preauth_connection_lifetime_tests {
         );
     }
     #[tokio::test]
-    async fn kagemusha_command_authentication_precedes_media_and_idempotency_validation() {
+    async fn transaction_authentication_precedes_media_validation() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         async fn error_code(response: Response) -> String {
             let body = response
@@ -1229,14 +1229,14 @@ mod preauth_connection_lifetime_tests {
                 norito::json::from_slice(&body).expect("decode typed error response");
             envelope.code().to_owned()
         }
-        let mut app = app_with_scheme_cap("http");
+        let mut app = app_with_scheme_cap("norito_rpc");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
         state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
         let handler_calls = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
             .route(
-                route_catalog::kagemusha::TOP_UP.path(),
+                route_catalog::pipeline::TRANSACTION.path(),
                 axum::routing::post({
                     let handler_calls = Arc::clone(&handler_calls);
                     move || {
@@ -1248,10 +1248,6 @@ mod preauth_connection_lifetime_tests {
                     }
                 }),
             )
-            .layer(axum::middleware::from_fn_with_state(
-                Arc::clone(&app),
-                enforce_kagemusha_command_prebody_admission,
-            ))
             .layer(axum::middleware::from_fn(capture_response_format))
             .layer(axum::middleware::from_fn(coalesce_accept_headers))
             .layer(axum::middleware::from_fn_with_state(
@@ -1263,19 +1259,19 @@ mod preauth_connection_lifetime_tests {
                 enforce_preauth,
             ))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-        let kagemusha_request =
+        let transaction_request =
             |token_count: usize, content_type: &'static str, accept: &'static str| {
                 let mut request = Request::builder()
                     .method(axum::http::Method::POST)
-                    .uri(route_catalog::kagemusha::TOP_UP.path())
+                    .uri(route_catalog::pipeline::TRANSACTION.path())
                     .header(header::ACCEPT, accept)
                     .header(header::CONTENT_TYPE, content_type)
                     .body(Body::from("{malformed-json"))
-                    .expect("KAGEMUSHA command request");
+                    .expect("transaction request");
                 request
                     .extensions_mut()
                     .insert(MatchedRouteMetadata::from_descriptor(
-                        route_catalog::kagemusha::TOP_UP,
+                        route_catalog::pipeline::TRANSACTION,
                     ));
                 for _ in 0..token_count {
                     request
@@ -1285,12 +1281,12 @@ mod preauth_connection_lifetime_tests {
                 request
             };
         let occupying_guard = app
-            .acquire_preauth(None, ConnScheme::Http)
+            .acquire_preauth(None, ConnScheme::NoritoRpc)
             .await
-            .expect("occupy the HTTP pre-auth slot");
+            .expect("occupy the transaction pre-auth slot");
         let at_capacity = router
             .clone()
-            .oneshot(kagemusha_request(
+            .oneshot(transaction_request(
                 0,
                 "application/json; charset==utf-8",
                 "application/json;q=2",
@@ -1302,7 +1298,7 @@ mod preauth_connection_lifetime_tests {
         drop(occupying_guard);
         let missing = router
             .clone()
-            .oneshot(kagemusha_request(
+            .oneshot(transaction_request(
                 0,
                 "application/json; charset==utf-8",
                 "application/json;q=2",
@@ -1313,7 +1309,7 @@ mod preauth_connection_lifetime_tests {
         assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
         assert_eq!(error_code(missing).await, "api_token_required");
         let mut missing_with_duplicate_content_type =
-            kagemusha_request(0, "application/json", "application/json");
+            transaction_request(0, "application/json", "application/json");
         missing_with_duplicate_content_type.headers_mut().append(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-norito"),
@@ -1327,7 +1323,7 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(error_code(missing).await, "api_token_required");
         let duplicate = router
             .clone()
-            .oneshot(kagemusha_request(
+            .oneshot(transaction_request(
                 2,
                 "application/json; charset==utf-8",
                 "application/json;q=2",
@@ -1339,7 +1335,7 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(error_code(duplicate).await, "api_token_required");
         let invalid_accept = router
             .clone()
-            .oneshot(kagemusha_request(
+            .oneshot(transaction_request(
                 1,
                 "application/x-norito",
                 "application/json;q=2",
@@ -1348,7 +1344,8 @@ mod preauth_connection_lifetime_tests {
             .expect("invalid-Accept response");
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
-        let mut non_ascii_accept = kagemusha_request(1, "application/x-norito", "application/json");
+        let mut non_ascii_accept =
+            transaction_request(1, "application/x-norito", "application/json");
         non_ascii_accept.headers_mut().append(
             header::ACCEPT,
             HeaderValue::from_bytes(&[0xff]).expect("opaque Accept fixture"),
@@ -1361,7 +1358,7 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
         let mut duplicate_content_type =
-            kagemusha_request(1, "application/x-norito", "application/json");
+            transaction_request(1, "application/x-norito", "application/json");
         duplicate_content_type.headers_mut().append(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-norito"),
@@ -1377,7 +1374,7 @@ mod preauth_connection_lifetime_tests {
             "request_content_type_invalid"
         );
         let mut non_ascii_content_type =
-            kagemusha_request(1, "application/x-norito", "application/json");
+            transaction_request(1, "application/x-norito", "application/json");
         non_ascii_content_type.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_bytes(&[0xff]).expect("opaque Content-Type fixture"),
@@ -1392,37 +1389,21 @@ mod preauth_connection_lifetime_tests {
             error_code(invalid_content_type).await,
             "request_content_type_invalid"
         );
-        let json_content_type = router
-            .clone()
-            .oneshot(kagemusha_request(1, "application/json", "application/json"))
-            .await
-            .expect("JSON content-type response");
         assert_eq!(
-            json_content_type.status(),
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
+            handler_calls.load(Ordering::SeqCst),
+            0,
+            "authentication and media failures must precede handler execution"
         );
-        assert_eq!(
-            error_code(json_content_type).await,
-            "request_content_type_unsupported"
-        );
-        let missing_idempotency_key = router
-            .oneshot(kagemusha_request(
+        let accepted = router
+            .oneshot(transaction_request(
                 1,
                 "application/x-norito",
                 "application/json",
             ))
             .await
-            .expect("missing-idempotency-key response");
-        assert_eq!(missing_idempotency_key.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            error_code(missing_idempotency_key).await,
-            "idempotency_key_missing"
-        );
-        assert_eq!(
-            handler_calls.load(Ordering::SeqCst),
-            0,
-            "admission failures must not invoke a handler or consume its body extractor"
-        );
+            .expect("authenticated transaction boundary response");
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     }
 }
 

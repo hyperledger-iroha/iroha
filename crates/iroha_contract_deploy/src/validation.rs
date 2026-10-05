@@ -19,6 +19,17 @@ impl From<&Config> for DeploymentReadContext {
 }
 
 pub fn validate_plan(record: &PlanRecord, config: &Config) -> DeploymentResult<()> {
+    let mut manifest_budget = ManifestEncodingBudget::new()
+        .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))?;
+    validate_plan_with_manifest_budget(record, config, &mut manifest_budget)
+}
+
+/// Authenticate using the prepare operation's original cumulative codec owner.
+pub(super) fn validate_plan_with_manifest_budget(
+    record: &PlanRecord,
+    config: &Config,
+    manifest_budget: &mut ManifestEncodingBudget,
+) -> DeploymentResult<()> {
     if record.preflight.authority != config.account
         || record.preflight.authority.try_signatory() != Some(config.key_pair.public_key())
     {
@@ -27,18 +38,29 @@ pub fn validate_plan(record: &PlanRecord, config: &Config) -> DeploymentResult<(
                 .to_owned(),
         ));
     }
-    validate_read_plan(record, &DeploymentReadContext::from(config))
+    validate_contents(
+        record,
+        &DeploymentReadContext::from(config),
+        manifest_budget,
+    )
+    .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))
 }
 
 pub fn validate_read_plan(
     record: &PlanRecord,
     reader: &DeploymentReadContext,
 ) -> DeploymentResult<()> {
-    validate_contents(record, reader)
+    let mut manifest_budget = ManifestEncodingBudget::new()
+        .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))?;
+    validate_contents(record, reader, &mut manifest_budget)
         .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))
 }
 
-fn validate_contents(record: &PlanRecord, reader: &DeploymentReadContext) -> Result<()> {
+fn validate_contents(
+    record: &PlanRecord,
+    reader: &DeploymentReadContext,
+    manifest_budget: &mut ManifestEncodingBudget,
+) -> Result<()> {
     let context = &record.preflight;
     if record.version != 1
         || context.network_id != reader.network_id
@@ -113,7 +135,7 @@ fn validate_contents(record: &PlanRecord, reader: &DeploymentReadContext) -> Res
         };
         let (name, expected) = match index.cmp(&chunks) {
             Ordering::Less => upload_stage(context, &artifact, index, chunks)?,
-            Ordering::Equal => manifest_stage(context, actual, &verified, signer)?,
+            Ordering::Equal => manifest_stage(context, actual, &verified, signer, manifest_budget)?,
             Ordering::Greater => commit_stage(context),
         };
         if step.name != name || actual.as_ref() != expected.as_slice() {
@@ -134,7 +156,7 @@ fn decode_bound_step(
 ) -> Result<SignedTransaction> {
     let context = &record.preflight;
     // Bounds precede Norito decoding; one transaction contains at most one 64 KiB chunk.
-    if step.norito_hex.len() > 2 * 1024 * 1024 {
+    if step.norito_hex.len() > 2 * MAX_DEPLOYMENT_TRANSACTION_BYTES {
         return Err(eyre!(
             "retained native transaction exceeds the fixed byte bound"
         ));
@@ -203,6 +225,7 @@ fn manifest_stage(
     actual: &[InstructionBox],
     verified: &ivm_artifact_admission::VerifiedContractArtifact,
     signer: &iroha_crypto::PublicKey,
+    manifest_budget: &mut ManifestEncodingBudget,
 ) -> Result<(String, Vec<InstructionBox>)> {
     if actual.len() != 1 {
         return Err(eyre!(
@@ -219,19 +242,24 @@ fn manifest_stage(
             "retained manifest artifact scope differs from the deployment context"
         ));
     }
-    let mut manifest = registration.manifest.clone();
+    let manifest = &registration.manifest;
     let provenance = manifest
         .provenance
-        .take()
+        .as_ref()
         .ok_or_else(|| eyre!("retained manifest has no signed provenance"))?;
-    if manifest != verified.manifest || provenance.signer != *signer {
+    if !manifest.same_signed_content(&verified.manifest) || provenance.signer != *signer {
         return Err(eyre!(
             "retained manifest or signer differs from the verified artifact and retained authority"
         ));
     }
-    provenance
-        .signature
-        .verify(&provenance.signer, &manifest.signature_payload_bytes())?;
+    let verification_frame = manifest_budget.reserve_frame(manifest)?;
+    let payload = manifest.signature_payload_bytes(
+        manifest_budget.context(),
+        verification_frame.remaining_bytes(),
+    )?;
+    provenance.signature.verify(&provenance.signer, &payload)?;
+    drop(payload);
+    drop(verification_frame);
     Ok((
         "register_manifest".to_owned(),
         vec![InstructionBox::from(registration.clone())],

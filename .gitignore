@@ -112,6 +112,11 @@ specs/da/_generated/threat_model_report.json
 
 # Developer-local caches and sandboxes
 .cargo-temp/
+/.cargo-target/
+# Swift Package Manager also writes scratch trees at the root and in examples.
+.build/
+# Personal agent permissions and settings are local to each checkout.
+**/.claude/settings.local.json
 /.codex_artifacts/
 /.codex-*/
 /.codex-target/
@@ -245,6 +250,8 @@ tmp/*
 /security_*
 _apalache-out*
 .tlacache/
+# TLC's default metadata directories contain generated states and checkpoints.
+/formal/**/states/
 
 # Root-level scratch artifacts from ad-hoc experiments or local builds
 /output/

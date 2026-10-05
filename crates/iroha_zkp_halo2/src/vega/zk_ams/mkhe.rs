@@ -1091,7 +1091,10 @@ impl PlaintextModulus {
     }
     fn residue(self, modulus: u64) -> u64 {
         match self {
-            Self::T256 => bytes_mod_u64(&VEGA_T256_SCALAR_MODULUS_BE_V1, modulus),
+            Self::T256 => iroha_fhe::modular::reduce_be_bytes_mod_u64(
+                &VEGA_T256_SCALAR_MODULUS_BE_V1,
+                modulus,
+            ),
             #[cfg(test)]
             Self::Tiny(value) => value % modulus,
         }
@@ -1146,11 +1149,11 @@ impl BgvProfile {
         {
             if !(3..(1_u64 << 62)).contains(&modulus)
                 || modulus % twice_degree != 1
-                || !is_prime_u64(modulus)
+                || !iroha_fhe::modular::is_prime_u64(modulus)
                 || root <= 1
                 || root >= modulus
-                || mod_pow(root, twice_degree, modulus) != 1
-                || mod_pow(
+                || iroha_fhe::modular::mod_pow_u64(root, twice_degree, modulus) != 1
+                || iroha_fhe::modular::mod_pow_u64(
                     root,
                     u64::try_from(self.ring_degree)
                         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
@@ -3601,6 +3604,10 @@ fn signed_mod(value: i64, modulus: u64) -> u64 {
         }
     }
 }
+// The scalar and wide-integer helpers below are test-only references. Production code takes this
+// arithmetic from `iroha_fhe`; the references stay independent of it so the test-only ring
+// arithmetic keeps its own derivation.
+#[cfg(test)]
 fn mod_add(left: u64, right: u64, modulus: u64) -> u64 {
     let sum = left + right;
     let (reduced, borrow) = sum.overflowing_sub(modulus);
@@ -3612,9 +3619,11 @@ fn mod_sub(left: u64, right: u64, modulus: u64) -> u64 {
     let (difference, borrow) = left.overflowing_sub(right);
     difference.wrapping_add(modulus & 0_u64.wrapping_sub(u64::from(borrow)))
 }
+#[cfg(test)]
 fn mod_mul(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
+#[cfg(test)]
 fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -3633,6 +3642,7 @@ fn mod_inverse(value: u64, modulus: u64) -> Option<u64> {
     }
     Some(mod_pow(value, modulus - 2, modulus))
 }
+#[cfg(test)]
 fn is_prime_u64(value: u64) -> bool {
     if value < 2 {
         return false;
@@ -3762,6 +3772,7 @@ fn negacyclic_multiply(
     }
     Ok(left_twisted)
 }
+#[cfg(test)]
 fn bytes_mod_u64(bytes: &[u8], modulus: u64) -> u64 {
     bytes.iter().fold(0_u64, |accumulator, byte| {
         mod_add(
@@ -3787,11 +3798,14 @@ fn t256_centered_residue_with_modulus_residue(
         mod_sub(residue, plaintext_modulus_residue, modulus)
     }
 }
+/// Word width of one fixed-width reconstruction value in the governed workspace accounting.
 const WIDE_LIMBS: usize = MAX_RNS_LIMBS_V1;
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct WideUint {
     limbs: [u64; WIDE_LIMBS],
 }
+#[cfg(test)]
 impl WideUint {
     #[cfg(test)]
     const fn zero() -> Self {
@@ -3919,8 +3933,10 @@ impl WideUint {
     }
 }
 fn modulus_product_bit_len(moduli: &[u64]) -> Result<usize, ZkAmsMkheErrorV1> {
-    Ok(modulus_product(moduli)?.bit_len())
+    iroha_fhe::rns::modulus_product_bit_len(moduli, MAX_RNS_LIMBS_V1)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn modulus_product(moduli: &[u64]) -> Result<WideUint, ZkAmsMkheErrorV1> {
     let mut product = WideUint::one();
     for &modulus in moduli {
@@ -4873,5 +4889,86 @@ mod tests {
             insufficient_workspace.validate(),
             Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
         );
+    }
+    /// The test-only scalar and wide-integer references share no code with `iroha_fhe`, which
+    /// production profile validation uses; they must agree on every profile modulus.
+    #[test]
+    fn test_only_scalar_references_agree_with_the_shared_owner() {
+        let profile = test_profile();
+        for &modulus in profile.moduli.iter().chain(&[3_u64, (1 << 62) - 57]) {
+            for (left, right) in [
+                (0, 0),
+                (1, modulus - 1),
+                (modulus - 1, modulus - 1),
+                (modulus / 2, modulus / 2 + 1),
+            ] {
+                assert_eq!(
+                    mod_add(left, right, modulus),
+                    iroha_fhe::modular::add_mod_u64(left, right, modulus)
+                );
+                assert_eq!(
+                    mod_sub(left, right, modulus),
+                    iroha_fhe::modular::sub_mod_u64(left, right, modulus)
+                );
+                assert_eq!(
+                    mod_mul(left, right, modulus),
+                    iroha_fhe::modular::mul_mod_u64(left, right, modulus)
+                );
+            }
+            assert_eq!(
+                mod_pow(3, modulus - 1, modulus),
+                iroha_fhe::modular::mod_pow_u64(3, modulus - 1, modulus)
+            );
+            assert_eq!(
+                bytes_mod_u64(&VEGA_T256_SCALAR_MODULUS_BE_V1, modulus),
+                iroha_fhe::modular::reduce_be_bytes_mod_u64(
+                    &VEGA_T256_SCALAR_MODULUS_BE_V1,
+                    modulus
+                )
+            );
+        }
+        for candidate in (0..2_048_u64).chain([3_215_031_751, 2_013_265_921, u64::MAX - 58]) {
+            assert_eq!(
+                is_prime_u64(candidate),
+                iroha_fhe::modular::is_prime_u64(candidate),
+                "candidate {candidate}"
+            );
+        }
+        assert_eq!(
+            modulus_product(profile.moduli).unwrap().bit_len(),
+            modulus_product_bit_len(profile.moduli).unwrap()
+        );
+        let too_wide = [u64::MAX; MAX_RNS_LIMBS_V1 + 1];
+        assert_eq!(
+            modulus_product_bit_len(&too_wide),
+            Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
+        );
+        assert_eq!(
+            modulus_product(&too_wide),
+            Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
+        );
+        let widest = [u64::MAX; MAX_RNS_LIMBS_V1];
+        assert_eq!(
+            modulus_product(&widest).unwrap().bit_len(),
+            modulus_product_bit_len(&widest).unwrap()
+        );
+    }
+    /// The test-only ring oracle and the shared negacyclic kernel are independent
+    /// implementations of the same product.
+    #[test]
+    fn test_only_ring_oracle_agrees_with_the_shared_negacyclic_kernel() {
+        let profile = test_profile();
+        for (&modulus, &psi) in profile.moduli.iter().zip(profile.negacyclic_roots) {
+            let left: Vec<u64> = (0..profile.ring_degree as u64)
+                .map(|index| (index * 0x9E37_79B9 + 17) % modulus)
+                .collect();
+            let right: Vec<u64> = (0..profile.ring_degree as u64)
+                .map(|index| (index * 0x0100_01B3 + 29) % modulus)
+                .collect();
+            assert_eq!(
+                negacyclic_multiply(&left, &right, modulus, psi).unwrap(),
+                iroha_fhe::ntt::negacyclic_multiply_ntt(&left, &right, psi, modulus).unwrap()
+            );
+        }
     }
 }

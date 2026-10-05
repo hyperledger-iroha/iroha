@@ -13,8 +13,6 @@ from typing import Any, Optional, Union, cast
 
 from ._account_id import decode_canonical_i105_account_id
 from ._canonical_values import _canonical_quantity, _offline_canonical_asset_definition_id
-from ._public_key_multihash import decode_canonical_public_key_multihash
-from .governance_kagemusha_release_schema_v1 import validate_release_schema_v1
 
 _U64_MAX = (1 << 64) - 1
 _JSON_SAFE_UINT_MAX = (1 << 53) - 1
@@ -1316,202 +1314,6 @@ class GovernanceProposalGlobalDataTriggerPermissionGovernance:
         return cls(_account_id(record["authority"], f"{context}.authority"), action)
 
 
-@dataclass(frozen=True)
-class GovernanceKagemushaEmptyVerifierRegistryV1:
-    """Exact empty predecessor registry required for policy installation."""
-
-    version: int
-    authority_policy: None
-    active_release_id: None
-    releases: tuple[()]
-
-    @classmethod
-    def from_payload(cls, value: Any, context: str) -> "GovernanceKagemushaEmptyVerifierRegistryV1":
-        record = _exact(value, frozenset({"version", "authority_policy", "active_release_id", "releases"}), context)
-        if (
-            _uint(record["version"], f"{context}.version", 1, positive=True) != 1
-            or record["authority_policy"] is not None
-            or record["active_release_id"] is not None
-            or record["releases"] != []
-            or not isinstance(record["releases"], list)
-        ):
-            raise TypeError(f"{context} must be the exact empty V1 verifier registry")
-        return cls(1, None, None, ())
-
-
-@dataclass(frozen=True)
-class GovernanceKagemushaReleaseAuthorityPolicyV1:
-    """Bounded, strictly ordered initial verifier authority policy."""
-
-    version: int
-    authority_set_id: tuple[int, ...]
-    threshold: int
-    authorized_signers: tuple[str, ...]
-
-    @classmethod
-    def from_payload(cls, value: Any, context: str) -> "GovernanceKagemushaReleaseAuthorityPolicyV1":
-        record = _exact(value, frozenset({"version", "authority_set_id", "threshold", "authorized_signers"}), context)
-        _uint(record["version"], f"{context}.version", 1, positive=True)
-        authority_set_id = _bytes32(record["authority_set_id"], f"{context}.authority_set_id", nonzero=True)
-        signers = record["authorized_signers"]
-        if not isinstance(signers, list) or not 1 <= len(signers) <= 32:
-            raise TypeError(f"{context}.authorized_signers must contain 1..32 keys")
-        threshold = _uint(record["threshold"], f"{context}.threshold", 32, positive=True)
-        if threshold > len(signers):
-            raise TypeError(f"{context}.threshold must not exceed signer count")
-        decoded = tuple(decode_canonical_public_key_multihash(signer, f"{context}.authorized_signers[{index}]") for index, signer in enumerate(signers))
-        if any(left[1] >= right[1] for left, right in zip(decoded, decoded[1:])):
-            raise TypeError(f"{context}.authorized_signers must be strictly ordered and unique")
-        return cls(1, authority_set_id, threshold, tuple(literal for literal, _ in decoded))
-
-
-@dataclass(frozen=True)
-class GovernanceProposalKagemushaVerifierPolicyInstall:
-    """One exact initial Kagemusha verifier authority installation proposal."""
-
-    proposal_operator: str
-    network_id: str
-    expected_predecessor: GovernanceKagemushaEmptyVerifierRegistryV1
-    authority_policy: GovernanceKagemushaReleaseAuthorityPolicyV1
-
-    @classmethod
-    def from_payload(cls, value: Any) -> "GovernanceProposalKagemushaVerifierPolicyInstall":
-        context = "KagemushaVerifierPolicyInstall payload"
-        record = _exact(value, frozenset({"proposal_operator", "network_id", "expected_predecessor", "authority_policy"}), context)
-        return cls(
-            _account_id(record["proposal_operator"], f"{context}.proposal_operator"),
-            _network_id(record["network_id"], f"{context}.network_id"),
-            GovernanceKagemushaEmptyVerifierRegistryV1.from_payload(record["expected_predecessor"], f"{context}.expected_predecessor"),
-            GovernanceKagemushaReleaseAuthorityPolicyV1.from_payload(record["authority_policy"], f"{context}.authority_policy"),
-        )
-
-
-@dataclass(frozen=True)
-class GovernanceProposalKagemushaVerifierReleaseInstall:
-    """One closed, immutable governed standby verifier-release proposal."""
-
-    proposal_operator: str
-    network_id: str
-    expected_predecessor: GovernanceCanonicalObject
-    manifest: GovernanceCanonicalObject
-    receipt: GovernanceCanonicalObject
-    attestation: GovernanceCanonicalObject
-
-    @classmethod
-    def from_payload(cls, value: Any) -> "GovernanceProposalKagemushaVerifierReleaseInstall":
-        context = "KagemushaVerifierReleaseInstall payload"
-        record = _exact(
-            value,
-            frozenset({"proposal_operator", "network_id", "expected_predecessor", "manifest", "receipt", "attestation"}),
-            context,
-        )
-        roots = {
-            "expected_predecessor": "GovernanceKagemushaGovernedVerifierRegistryV1",
-            "manifest": "GovernanceKagemushaReleaseManifestV1",
-            "receipt": "GovernanceKagemushaInternalValidationReceiptV1",
-            "attestation": "GovernanceKagemushaReleaseAttestationV1",
-        }
-        for field, schema in roots.items():
-            validate_release_schema_v1(schema, record[field])
-        predecessor = record["expected_predecessor"]
-        if predecessor["authority_policy"] is None:
-            raise TypeError(f"{context}.expected_predecessor requires a governed signer policy")
-        manifest = record["manifest"]
-        subject = record["attestation"]["subject"]
-        if subject["release_id"] != manifest["release_id"]:
-            raise TypeError(f"{context}.attestation.subject.release_id must match manifest.release_id")
-        return cls(
-            _account_id(record["proposal_operator"], f"{context}.proposal_operator"),
-            _network_id(record["network_id"], f"{context}.network_id"),
-            cast(GovernanceCanonicalObject, _freeze(predecessor)),
-            cast(GovernanceCanonicalObject, _freeze(manifest)),
-            cast(GovernanceCanonicalObject, _freeze(record["receipt"])),
-            cast(GovernanceCanonicalObject, _freeze(record["attestation"])),
-        )
-
-
-@dataclass(frozen=True)
-class GovernanceProposalKagemushaVerifierReleaseActivate:
-    """Exact first activation of the sole governed standby verifier release."""
-
-    proposal_operator: str
-    network_id: str
-    expected_predecessor: GovernanceCanonicalObject
-    successor_release_id: tuple[int, ...]
-
-    @classmethod
-    def from_payload(cls, value: Any) -> "GovernanceProposalKagemushaVerifierReleaseActivate":
-        context = "KagemushaVerifierReleaseActivate payload"
-        record = _exact(
-            value,
-            frozenset({"proposal_operator", "network_id", "expected_predecessor", "successor_release_id"}),
-            context,
-        )
-        predecessor = record["expected_predecessor"]
-        successor_release_id = record["successor_release_id"]
-        validate_release_schema_v1("GovernanceKagemushaGovernedVerifierRegistryV1", predecessor)
-        validate_release_schema_v1("GovernanceKagemushaBytes32V1", successor_release_id)
-        if predecessor["authority_policy"] is None:
-            raise TypeError(f"{context}.expected_predecessor requires a governed signer policy")
-        if predecessor["active_release_id"] is not None:
-            raise TypeError(f"{context}.expected_predecessor must be inactive")
-        releases = predecessor["releases"]
-        if len(releases) != 1:
-            raise TypeError(f"{context}.expected_predecessor requires exactly one standby release")
-        if releases[0]["status"] != 2 or releases[0]["release_id"] != successor_release_id:
-            raise TypeError(f"{context}.successor_release_id must select the sole standby release")
-        return cls(
-            _account_id(record["proposal_operator"], f"{context}.proposal_operator"),
-            _network_id(record["network_id"], f"{context}.network_id"),
-            cast(GovernanceCanonicalObject, _freeze(predecessor)),
-            tuple(successor_release_id),
-        )
-
-
-@dataclass(frozen=True)
-class GovernanceProposalKagemushaVerifierReleaseRetire:
-    """Exact unused standby retirement shape; native admission authenticates authority."""
-
-    proposal_operator: str
-    network_id: str
-    expected_predecessor: GovernanceCanonicalObject
-    standby_release_id: tuple[int, ...]
-
-    @classmethod
-    def from_payload(cls, value: Any) -> "GovernanceProposalKagemushaVerifierReleaseRetire":
-        context = "KagemushaVerifierReleaseRetire payload"
-        record = _exact(value, frozenset({"proposal_operator", "network_id", "expected_predecessor", "standby_release_id"}), context)
-        predecessor = record["expected_predecessor"]
-        selected = _bytes32(record["standby_release_id"], f"{context}.standby_release_id", nonzero=True)
-        validate_release_schema_v1("GovernanceKagemushaGovernedVerifierRegistryV1", predecessor)
-        if predecessor["authority_policy"] is None:
-            raise TypeError(f"{context}.expected_predecessor requires a governed signer policy")
-        GovernanceKagemushaReleaseAuthorityPolicyV1.from_payload(predecessor["authority_policy"], f"{context}.authority_policy")
-        releases = predecessor["releases"]
-        previous = None
-        active = []
-        for row in releases:
-            identity = tuple(row["release_id"])
-            if previous is not None and previous >= identity:
-                raise TypeError(f"{context}.releases must be strictly ordered and unique")
-            previous = identity
-            if any(not any(digest) for field, digest in row.items() if field != "status"):
-                raise TypeError(f"{context}.releases must contain nonzero identities")
-            if row["status"] == 1:
-                active.append(bytes(identity).hex().upper())
-        pointer = predecessor["active_release_id"]
-        if active != ([] if pointer is None else [pointer]) or (pointer is None and any(row["status"] != 2 for row in releases)):
-            raise TypeError(f"{context}.active_release_id must match the unique active release")
-        if not any(tuple(row["release_id"]) == selected and row["status"] == 2 for row in releases):
-            raise TypeError(f"{context}.standby_release_id must select an unused standby release")
-        return cls(
-            _account_id(record["proposal_operator"], f"{context}.proposal_operator"),
-            _network_id(record["network_id"], f"{context}.network_id"),
-            cast(GovernanceCanonicalObject, _freeze(predecessor)),
-            selected,
-        )
-
-
 GovernanceProposalPayload = Union[
     GovernanceProposalDeployContract,
     GovernanceProposalRuntimeUpgrade,
@@ -1523,15 +1325,11 @@ GovernanceProposalPayload = Union[
     GovernanceProposalContractLifecycleGovernance,
     GovernanceProposalContractEmergencyHold,
     GovernanceProposalGlobalDataTriggerPermissionGovernance,
-    GovernanceProposalKagemushaVerifierPolicyInstall,
-    GovernanceProposalKagemushaVerifierReleaseInstall,
-    GovernanceProposalKagemushaVerifierReleaseActivate,
-    GovernanceProposalKagemushaVerifierReleaseRetire,
 ]
 
 
 class GovernanceProposalKindTag(str, Enum):
-    """Exactly the fourteen current first-release `ProposalKind` tags."""
+    """Exactly the ten current first-release `ProposalKind` tags."""
 
     DEPLOY_CONTRACT = "DeployContract"
     RUNTIME_UPGRADE = "RuntimeUpgrade"
@@ -1543,10 +1341,6 @@ class GovernanceProposalKindTag(str, Enum):
     CONTRACT_LIFECYCLE_GOVERNANCE = "ContractLifecycleGovernance"
     CONTRACT_EMERGENCY_HOLD = "ContractEmergencyHold"
     GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE = "GlobalDataTriggerPermissionGovernance"
-    KAGEMUSHA_VERIFIER_POLICY_INSTALL = "KagemushaVerifierPolicyInstall"
-    KAGEMUSHA_VERIFIER_RELEASE_INSTALL = "KagemushaVerifierReleaseInstall"
-    KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE = "KagemushaVerifierReleaseActivate"
-    KAGEMUSHA_VERIFIER_RELEASE_RETIRE = "KagemushaVerifierReleaseRetire"
 
 
 @dataclass(frozen=True)
@@ -1562,7 +1356,7 @@ class GovernanceProposalKind:
         try:
             kind = GovernanceProposalKindTag(record["kind"])
         except (ValueError, TypeError) as exc:
-            raise TypeError("proposal kind tag is not one of the fourteen first-release variants") from exc
+            raise TypeError("proposal kind tag is not one of the ten first-release variants") from exc
         parser = {
             kind.DEPLOY_CONTRACT: GovernanceProposalDeployContract.from_payload,
             kind.RUNTIME_UPGRADE: GovernanceProposalRuntimeUpgrade.from_payload,
@@ -1574,10 +1368,6 @@ class GovernanceProposalKind:
             kind.CONTRACT_LIFECYCLE_GOVERNANCE: GovernanceProposalContractLifecycleGovernance.from_payload,
             kind.CONTRACT_EMERGENCY_HOLD: GovernanceProposalContractEmergencyHold.from_payload,
             kind.GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE: GovernanceProposalGlobalDataTriggerPermissionGovernance.from_payload,
-            kind.KAGEMUSHA_VERIFIER_POLICY_INSTALL: GovernanceProposalKagemushaVerifierPolicyInstall.from_payload,
-            kind.KAGEMUSHA_VERIFIER_RELEASE_INSTALL: GovernanceProposalKagemushaVerifierReleaseInstall.from_payload,
-            kind.KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE: GovernanceProposalKagemushaVerifierReleaseActivate.from_payload,
-            kind.KAGEMUSHA_VERIFIER_RELEASE_RETIRE: GovernanceProposalKagemushaVerifierReleaseRetire.from_payload,
         }[kind]
         payload = cast(GovernanceProposalPayload, parser(record["payload"]))
         return cls(kind, payload)
@@ -1612,11 +1402,6 @@ class GovernanceProposalRecord:
             raise TypeError(f"{context}.status is unsupported") from exc
         proposer = _account_id(record["proposer"], f"{context}.proposer")
         kind = GovernanceProposalKind.from_payload(record["kind"])
-        if (
-            isinstance(kind.payload, (GovernanceProposalKagemushaVerifierPolicyInstall, GovernanceProposalKagemushaVerifierReleaseInstall, GovernanceProposalKagemushaVerifierReleaseActivate, GovernanceProposalKagemushaVerifierReleaseRetire))
-            and kind.payload.proposal_operator != proposer
-        ):
-            raise TypeError(f"{context}.kind.payload.proposal_operator must match the retained proposer")
         return cls(proposer, kind, _uint(record["created_height"], f"{context}.created_height"), status)
 
 

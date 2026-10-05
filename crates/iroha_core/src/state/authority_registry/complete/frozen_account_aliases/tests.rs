@@ -353,11 +353,12 @@ fn stage_defect(block: &mut StateBlock<'_>, which: usize, repair: bool) {
 fn all_six_alias_defects_reject_either_original_image_before_leaf_allocation() {
     for prior in [false, true] {
         for which in 0..6 {
-            let mut world = fixture();
+            // Startup validates the initial alias/scope sources. Corrupt the actual
+            // original State only after valid construction, before either frozen image.
+            let mut state = state(fixture());
             if prior {
-                defect(&mut world, which);
+                defect(&mut state.world, which);
             }
-            let state = state(world);
             let mut block = state.block(header());
             stage_defect(&mut block, which, prior);
             freeze(&mut block);
