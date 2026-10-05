@@ -34,55 +34,55 @@ use super::{WalletResult, digest::kagemusha_wallet_is_canonical_field_v1, invali
 #[path = "poseidon_tests.rs"]
 pub(super) mod poseidon_tests;
 
-const fn domain_v1(ascii: &[u8; 8]) -> u64 {
-    u64::from_le_bytes(*ascii)
+const fn domain_v1(ascii: [u8; 8]) -> u64 {
+    u64::from_le_bytes(ascii)
 }
 
 /// Poseidon domain of the state commitment `P(core elements || rest digest)` (§3).
-pub const KAGEMUSHA_WALLET_CORE_DOMAIN_V1: u64 = domain_v1(b"kgwcore1");
+pub const KAGEMUSHA_WALLET_CORE_DOMAIN_V1: u64 = domain_v1(*b"kgwcore1");
 /// Poseidon domain of the rest digest (§3).
-pub const KAGEMUSHA_WALLET_REST_DOMAIN_V1: u64 = domain_v1(b"kgwrest1");
+pub const KAGEMUSHA_WALLET_REST_DOMAIN_V1: u64 = domain_v1(*b"kgwrest1");
 /// Poseidon domain of the σ public statement digest (§3.2).
-pub const KAGEMUSHA_WALLET_STATEMENT_DOMAIN_V1: u64 = domain_v1(b"kgwstmt1");
+pub const KAGEMUSHA_WALLET_STATEMENT_DOMAIN_V1: u64 = domain_v1(*b"kgwstmt1");
 /// Poseidon domain of `credit_id` over the 24 Request body elements (§5.1, owner answer Q1).
-pub const KAGEMUSHA_WALLET_CREDIT_DOMAIN_V1: u64 = domain_v1(b"kgwcrdt1");
+pub const KAGEMUSHA_WALLET_CREDIT_DOMAIN_V1: u64 = domain_v1(*b"kgwcrdt1");
 /// Poseidon domain of one `send_chain` append (§3).
-pub const KAGEMUSHA_WALLET_SEND_CHAIN_DOMAIN_V1: u64 = domain_v1(b"kgwschn1");
+pub const KAGEMUSHA_WALLET_SEND_CHAIN_DOMAIN_V1: u64 = domain_v1(*b"kgwschn1");
 /// Poseidon domain of one `recv_chain` append (§3).
-pub const KAGEMUSHA_WALLET_RECV_CHAIN_DOMAIN_V1: u64 = domain_v1(b"kgwrchn1");
+pub const KAGEMUSHA_WALLET_RECV_CHAIN_DOMAIN_V1: u64 = domain_v1(*b"kgwrchn1");
 /// Poseidon domain of consumed-credit leaves (permanent map).
-pub const KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwccrd1");
+pub const KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwccrd1");
 /// Poseidon domain of pending-outgoing leaves.
-pub const KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwpout1");
+pub const KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwpout1");
 /// Poseidon domain of load leaves of the load/redeem recovery map.
-pub const KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwload1");
+pub const KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwload1");
 /// Poseidon domain of redeem leaves of the load/redeem recovery map.
-pub const KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwrdm_1");
+pub const KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwrdm_1");
 /// Poseidon domain of fee-claim leaves.
-pub const KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwfee_1");
+pub const KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwfee_1");
 /// Poseidon domain of quota-usage leaves.
-pub const KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwquse1");
+pub const KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwquse1");
 /// Poseidon domain of lineage-level credit-digest leaves (§3).
-pub const KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwcdig1");
+pub const KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwcdig1");
 /// Poseidon domain of the empty sparse-tree leaf `P(kgwsmte1, [])`.
-pub const KAGEMUSHA_WALLET_SPARSE_EMPTY_DOMAIN_V1: u64 = domain_v1(b"kgwsmte1");
+pub const KAGEMUSHA_WALLET_SPARSE_EMPTY_DOMAIN_V1: u64 = domain_v1(*b"kgwsmte1");
 /// Poseidon domain of a sparse-tree node `P(kgwsmtn1, [left, right])`.
-pub const KAGEMUSHA_WALLET_SPARSE_NODE_DOMAIN_V1: u64 = domain_v1(b"kgwsmtn1");
+pub const KAGEMUSHA_WALLET_SPARSE_NODE_DOMAIN_V1: u64 = domain_v1(*b"kgwsmtn1");
 /// Poseidon domain of a blacklist gap leaf (§7).
-pub const KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1: u64 = domain_v1(b"kgwblkl1");
+pub const KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1: u64 = domain_v1(*b"kgwblkl1");
 /// Poseidon domain of a blacklist tree node (§7).
-pub const KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1: u64 = domain_v1(b"kgwblkn1");
+pub const KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1: u64 = domain_v1(*b"kgwblkn1");
 /// Poseidon domain of a quota window leaf (§7).
-pub const KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1: u64 = domain_v1(b"kgwqwin1");
+pub const KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1: u64 = domain_v1(*b"kgwqwin1");
 /// Poseidon domain of a quota windows tree node (§7).
-pub const KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1: u64 = domain_v1(b"kgwqwnd1");
+pub const KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1: u64 = domain_v1(*b"kgwqwnd1");
 /// `P_bytes` domain of `proof_digest` over `LE32 len(Ω) || Ω || LE32 len(σ) || σ` (Send, Unload,
 /// Retiring; §4.1).
-pub const KAGEMUSHA_WALLET_PROOF_DOMAIN_V1: u64 = domain_v1(b"kgwprf_1");
+pub const KAGEMUSHA_WALLET_PROOF_DOMAIN_V1: u64 = domain_v1(*b"kgwprf_1");
 /// `P_bytes` domain of the distinct σ-only `proof_digest` over `LE32 len(σ) || σ` (§4.1).
-pub const KAGEMUSHA_WALLET_STEP_PROOF_DOMAIN_V1: u64 = domain_v1(b"kgwstep1");
+pub const KAGEMUSHA_WALLET_STEP_PROOF_DOMAIN_V1: u64 = domain_v1(*b"kgwstep1");
 /// `P_bytes` domain of the Payment digest over the `payment` transcript (§5.1).
-pub const KAGEMUSHA_WALLET_PAYMENT_DOMAIN_V1: u64 = domain_v1(b"kgwpay_1");
+pub const KAGEMUSHA_WALLET_PAYMENT_DOMAIN_V1: u64 = domain_v1(*b"kgwpay_1");
 
 /// Every Poseidon domain of the wallet by use, in table order.
 pub const KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1: [(&str, u64); 22] = [

@@ -2181,12 +2181,15 @@ fn kagemusha_wallet_v1_state_core_and_rest_field_items() {
     assert_eq!(KAGEMUSHA_WALLET_REST_DOMAIN_V1.to_le_bytes(), *b"kgwrest1");
 }
 
+/// One named mutation of a wallet state.
+type StateMutation = (&'static str, fn(&mut KagemushaWalletStateV1));
+
 #[test]
 fn kagemusha_wallet_v1_state_commitment_binds_every_field() {
     let f = android();
     let state = busy_state(&f);
     let base = state.commitment().expect("commitment");
-    let mutations: [(&str, fn(&mut KagemushaWalletStateV1)); 14] = [
+    let mutations: [StateMutation; 14] = [
         ("balance", |s| s.core.balance += 1),
         ("burned_total", |s| s.core.burned_total += 1),
         ("sequence", |s| s.core.sequence += 1),

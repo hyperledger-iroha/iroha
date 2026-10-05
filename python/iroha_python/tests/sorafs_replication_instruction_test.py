@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from iroha_native import load_crypto_extension
 from iroha_python import (
     SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
     CompleteReplicationOrderInstruction,
@@ -152,14 +153,27 @@ def test_completion_authority_requires_its_exact_registered_signer() -> None:
     authority = _authority()
     assert authority.provider_owner != authority.completion_signer
     assert ProviderIngestCompletionAuthorityV1.from_payload(authority.to_payload()) == authority
+    native = load_crypto_extension()
+    finalized_anchor = ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH).to_payload()
+    native.Instruction.complete_replication_order(
+        _ORDER_ID, _PROVIDER_ID, 27, authority.to_payload(), 3, finalized_anchor
+    )
     missing_signer = authority.to_payload()
     del missing_signer["completion_signer"]
     with pytest.raises(ValueError, match="completion_signer"):
         ProviderIngestCompletionAuthorityV1.from_payload(missing_signer)
+    with pytest.raises(ValueError):
+        native.Instruction.complete_replication_order(
+            _ORDER_ID, _PROVIDER_ID, 27, missing_signer, 3, finalized_anchor
+        )
     malformed_signer = authority.to_payload()
     malformed_signer["completion_signer"] = f" {_COMPLETION_SIGNER}"
     with pytest.raises(ValueError, match="exact canonical I105"):
         ProviderIngestCompletionAuthorityV1.from_payload(malformed_signer)
+    with pytest.raises(ValueError):
+        native.Instruction.complete_replication_order(
+            _ORDER_ID, _PROVIDER_ID, 27, malformed_signer, 3, finalized_anchor
+        )
 
 
 def test_replication_instruction_decoders_are_schema_closed() -> None:

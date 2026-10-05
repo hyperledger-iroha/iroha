@@ -1,8 +1,9 @@
 # Status
 
-Reviewed 2026-10-04. Iroha 3 remains under implementation and qualification.
-Component checks cover substantial portions of the system, but the combined
-source has not passed the complete workspace, SDK, hardware and release gates.
+Reviewed 2026-10-05. Iroha 3 remains under implementation and qualification.
+The default-feature Rust workspace builds on macOS, including the daemon and
+CLI, and all-target compilation passes. Complete workspace runtime tests, SDK,
+hardware and release gates remain open.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
 hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
