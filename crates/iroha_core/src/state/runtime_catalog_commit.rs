@@ -54,6 +54,7 @@ fn validate_runtime_catalog_block_overlay(
 
 impl StateBlock<'_> {
     /// Validate the actual block journals without opening a competing live view.
+    #[cfg(test)]
     fn validate_owned_runtime_catalog_overlay(&self) -> Result<(), LaneLifecycleError> {
         let predecessor = self
             .canonical_runtime

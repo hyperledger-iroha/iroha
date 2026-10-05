@@ -235,11 +235,9 @@ pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
 /// Maximum canonical pinned-committee bytes stored in one lane metadata value.
 const MAX_AUTOSCALE_COMMITTEE_BYTES: usize = 32 * 1024;
-const MERGE_EXECUTION_WRITE_SET_DOMAIN: &[u8] = b"iroha:merge:execution-write-set:v1\0";
 /// Maximum number of settled VPN lease receipts retained in each account's read projection.
 pub const VPN_SETTLED_RECEIPT_HISTORY_LIMIT: usize = 24;
 include!("state/vpn_lease_validation.rs");
-const MERGE_QC_BLS_PROOF_BYTES: usize = 96;
 fn append_merge_write_set_component(out: &mut Vec<u8>, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     out.extend_from_slice(&len.to_le_bytes());
@@ -2447,17 +2445,7 @@ struct AutoscaleLaneCommitteeV1 {
     validator_count: u32,
     min_quorum: u32,
 }
-type MergeExecutionCanonicalOrderKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash, Hash);
 
-/// Return canonical committed identities for an ordered entrypoint slice.
-pub(crate) fn committed_entrypoint_hashes(
-    entrypoints: &[TransactionEntrypoint],
-) -> Vec<HashOf<TransactionEntrypoint>> {
-    entrypoints
-        .iter()
-        .map(TransactionEntrypoint::hash)
-        .collect()
-}
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
@@ -37630,88 +37618,6 @@ impl<'state> StateBlock<'state> {
                 }
             })
     }
-    fn merge_execution_call_hash(entrypoint: &TransactionEntrypoint) -> Hash {
-        Hash::from(entrypoint.execution_call_hash())
-    }
-    #[cfg(test)]
-    fn take_merge_lane_batch_transfer_outcomes(
-        &mut self,
-        entrypoints: &[TransactionEntrypoint],
-        results: &mut [TransactionResult],
-    ) -> Result<(), MergeLedgerCommitError> {
-        if entrypoints.len() != results.len() {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "lane execution cannot align batch-transfer outcomes with transaction results"
-                    .to_owned(),
-            ));
-        }
-        let mut seen_call_hashes = BTreeSet::new();
-        for (entrypoint, result) in entrypoints.iter().zip(results) {
-            let call_hash = Self::merge_execution_call_hash(entrypoint);
-            if !seen_call_hashes.insert(call_hash) {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced duplicate batch-transfer outcome call-hash bindings"
-                        .to_owned(),
-                ));
-            }
-            let outcome_key = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(call_hash);
-            let Some(outcomes) = self.batch_transfer_outcomes.remove(&outcome_key) else {
-                continue;
-            };
-            if outcomes.is_empty() {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced an empty batch-transfer outcome binding".to_owned(),
-                ));
-            }
-            result.set_batch_transfer_outcomes(outcomes);
-        }
-        Ok(())
-    }
-    /// Shared exact outer/call selection for old export and retained native output.
-    /// It validates every binding before either caller mutates transcript custody.
-    fn lane_fastpq_transcript_selection(
-        &self,
-        entrypoints: &[TransactionEntrypoint],
-    ) -> Result<(BTreeMap<Hash, Hash>, BTreeSet<Hash>), MergeLedgerCommitError> {
-        if self.fastpq_source_inventory.is_some() {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "lane execution cannot extract FASTPQ evidence after source inventory finalization"
-                    .to_owned(),
-            ));
-        }
-        let mut entrypoint_bindings = BTreeMap::new();
-        let mut call_hashes = BTreeSet::new();
-        let mut selected_call_hashes = BTreeSet::new();
-        for entrypoint in entrypoints {
-            let entrypoint_hash = Hash::from(entrypoint.hash());
-            let call_hash = Self::merge_execution_call_hash(entrypoint);
-            if !call_hashes.insert(call_hash)
-                || entrypoint_bindings
-                    .insert(entrypoint_hash, call_hash)
-                    .is_some()
-            {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced duplicate FASTPQ transcript call-hash bindings"
-                        .to_owned(),
-                ));
-            }
-            let Some(transcripts) = self.fastpq_transcripts.get(&call_hash) else {
-                continue;
-            };
-            if transcripts.is_empty()
-                || transcripts
-                    .iter()
-                    .any(|transcript| transcript.batch_hash != call_hash)
-            {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced malformed or duplicate FASTPQ transcript evidence"
-                        .to_owned(),
-                ));
-            }
-            selected_call_hashes.insert(call_hash);
-        }
-        Ok((entrypoint_bindings, selected_call_hashes))
-    }
     /// Commit changes aggregated during application of block.
     ///
     /// # Errors
@@ -38184,26 +38090,6 @@ impl<'state> StateBlock<'state> {
             self.prune_axt_replay_ledger(current_slot, retention_slots);
         }
         Ok(())
-    }
-    fn stage_merge_metadata_values(
-        &mut self,
-        entry_merge_hint_roots: &[Hash],
-        global_state_root: Hash,
-    ) {
-        let should_update_roots = self.world.merge_hint_roots.as_slice() != entry_merge_hint_roots;
-        if should_update_roots {
-            let mut tx = self.world.merge_hint_roots.transaction();
-            tx.clear();
-            tx.extend(entry_merge_hint_roots.iter().copied());
-            tx.apply();
-        }
-        let should_update_global =
-            self.world.merge_global_state_root.as_ref() != Some(&global_state_root);
-        if should_update_global {
-            let mut tx = self.world.merge_global_state_root.transaction();
-            *tx = Some(global_state_root);
-            tx.apply();
-        }
     }
     /// Run existing Time maintenance only within the sole borrowing output owner.
     /// The producer admits its phase before this helper and invokes it once.

@@ -37,6 +37,8 @@ use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
 #[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::isi::smart_contract_code::ActivateContractInstance;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_data_model::transaction::executable::ContractInvocation;
 use iroha_data_model::{
     errors::CanonicalErrorKind,
@@ -44,9 +46,7 @@ use iroha_data_model::{
     isi::{
         InstructionBox,
         settlement::{DvpIsi, PvpIsi, SettleAtomic, SettleFxCorridor, SettlementInstructionBox},
-        smart_contract_code::{
-            ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
-        },
+        smart_contract_code::{RegisterSmartContractBytes, RegisterSmartContractCode},
     },
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
@@ -56,17 +56,19 @@ use iroha_data_model::{
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use std::mem;
 #[cfg(all(test, feature = "telemetry"))]
 use std::time::Instant;
 use std::{
     collections::BTreeMap,
-    mem,
     num::NonZeroU64,
     sync::{Arc, OnceLock},
 };
@@ -125,6 +127,7 @@ struct OverlayLifecycleCompletion {
     contract_address: ContractAddress,
     pending: code::PendingContractLifecycle,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn smart_contract_heap_limit(state: &impl StateReadOnly) -> u64 {
     state.world().parameters().smart_contract().memory().get()
 }
@@ -185,6 +188,7 @@ fn validate_overlay_contract_runtime_context(
 }
 enum ContractDispatchSource<'a> {
     Bytecode(&'a [u8]),
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     Prepared(&'a ivm::PreparedContract),
 }
 impl ContractDispatchSource<'_> {
@@ -197,6 +201,7 @@ impl ContractDispatchSource<'_> {
                         "invalid contract artifact for contract call dispatch: {err}"
                     ))
                 }),
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             Self::Prepared(_) => Ok(true),
         }
     }
@@ -237,6 +242,7 @@ impl ContractDispatchSource<'_> {
                     descriptor.argument_schema.clone(),
                 ))
             }
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             Self::Prepared(contract) => {
                 let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
@@ -272,6 +278,7 @@ fn parse_raw_contract_call_execution_context(
         None,
     )
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn parse_prepared_contract_call_execution_context(
     metadata: &Metadata,
     contract: &ivm::PreparedContract,
@@ -545,6 +552,7 @@ fn map_artifact_admission_error(error: ivm::ContractArtifactError) -> OverlayBui
     }
     OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(error.to_string()))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn map_program_summary_error(error: ivm::VMError) -> OverlayBuildError {
     if crate::execution_attempt::ExecutionDeferred::from_vm_error(&error).is_some() {
         return OverlayBuildError::IvmLoad(error);
@@ -610,6 +618,7 @@ fn apply_contract_call_execution_context(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn begin_overlay_access_log<QS>(
     host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
     capture_access_log: bool,
@@ -623,6 +632,7 @@ where
     }
     Ok(())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn finish_overlay_access_log<QS>(
     host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
     capture_access_log: bool,
@@ -1120,12 +1130,14 @@ fn append_verified_contract_metadata_registration_without_state(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn prune_redundant_contract_ops<R: StateReadOnly>(
     state_ro: &R,
     queued: &mut Vec<InstructionBox>,
 ) {
     prune_redundant_contract_ops_with_metadata::<R, ()>(state_ro, queued, None);
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn prune_redundant_contract_ops_with_metadata<R, M>(
     state_ro: &R,
     queued: &mut Vec<InstructionBox>,
@@ -8245,6 +8257,7 @@ fn run_vm(vm: &mut ivm::IVM) -> Result<(), OverlayBuildError> {
         }
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn run_vm_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default>(
     vm: &mut ivm::IVM,
     host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
@@ -8254,6 +8267,7 @@ fn run_vm_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Def
     finish_vm_run_with_host(host, result)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn finish_vm_run_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default>(
     host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
     result: Result<(), ivm::VMError>,

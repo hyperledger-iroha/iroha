@@ -5,7 +5,7 @@ use super::*;
 use crate::native_projection_response::{capacity, encode};
 use iroha_core::{
     smartcontracts::isi::kagemusha::KagemushaReserveOperationRecordV1,
-    state::{AllocationBudget, StateReadOnly, WorldReadOnly},
+    state::{AllocationBudget, WorldReadOnly},
 };
 use iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1;
 use iroha_primitives::time::NativeContinuousReading;

@@ -133,6 +133,23 @@ NATIVE_CORE_TEST_OWNERS = (
         'original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry',
         'original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry',
         'replay_completion_retirement_keeps_exact_source_and_original_pool_retry',
+        'original_prepared_signature_owner_survives_refusal_validation_publication_apply_and_replay',
+        'explicit_signature_preparation_rejection_retires_only_its_original_source',
+        'later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner',
+    )),
+    ('native local empty signature preparation', 'sumeragi/executor.rs', 'sumeragi/executor_local_signature_preparation_tests.rs', 'local_signature_preparation_tests', 'sumeragi::executor::local_signature_preparation_tests', (
+        'original_local_payload_signature_refusal_keeps_job_and_exact_release_owner',
+        'original_local_payload_wire_refusal_retains_completed_leaf_without_repreparation',
+    )),
+    ('native completed decoded custody', 'sumeragi/executor.rs', 'sumeragi/executor_decoded_custody_tests.rs', 'decoded_custody_tests', 'sumeragi::executor::decoded_custody_tests', (
+        'completed_decoded_retry_borrows_original_graph_without_canonical_reentry',
+        'completed_decoded_foreign_pool_refusal_retains_exact_original_graph',
+        'completed_decoded_same_bytes_new_physical_source_cannot_replace_original',
+        'original_decoded_graph_survives_actual_prevalidation_policy_refusal_and_retry',
+        'original_validation_return_projection_refusal_keeps_typed_error_and_same_graph',
+        'original_validation_return_cannot_rebind_changed_header_to_authenticated_wire',
+        'explicit_completed_decoded_rejection_retires_only_original_height_view_hash',
+        'same_source_same_pool_distinct_prepared_signature_owner_is_refused_at_both_boundaries',
     )),
     ('native completed replay identity', 'sumeragi/executor/replay.rs', 'sumeragi/executor/replay/tests.rs', 'tests', 'sumeragi::executor::replay::tests', (
         'completed_replay_rejects_altered_certificate_and_source_without_losing_exact_retry',

@@ -482,7 +482,6 @@ impl DecodeField<0, String> for TagFields<'_> {
 /// work repeated by construction, refusal, filling or unchanged-source retry.
 pub struct PreparedDaCommitmentBundle {
     source: Identity,
-    span: SequenceSpan,
     sequence: SequenceSpan,
     flags: u8,
     count: usize,
@@ -538,7 +537,6 @@ impl PreparedDaCommitmentBundle {
         })?;
         Ok(Self {
             source: Identity::of(input.as_slice()),
-            span,
             sequence,
             flags,
             count,

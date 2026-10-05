@@ -831,18 +831,170 @@ struct GlobalPayloadSource {
     hashes: Vec<iroha_crypto::HashOf<TransactionEntrypoint>>,
 }
 
+impl super::driver::payload_build::PayloadSourcePreparation for GlobalPayloadSource {
+    type Error = iroha_data_model::block::BlockSignatureCustodyError;
+
+    fn prepared_for(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
+        self.block.is_resultless_proposal()
+            && self.block.signatures().len() == 0
+            && self.block.signatures_admitted_to(budget)
+    }
+
+    fn prepare_for(
+        &mut self,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<(), Self::Error> {
+        self.block.prepare_local_unsigned_signature_custody(budget)
+    }
+}
+
+type GlobalPayloadPreparationError = super::driver::payload_build::SourcePreparationError<
+    iroha_data_model::block::BlockSignatureCustodyError,
+>;
+
 struct GlobalPayloadBuild {
     height: u64,
     view: u64,
     max_bytes: u32,
     job: super::driver::payload_build::PayloadBuild<GlobalPayloadSource>,
+    /// Exact original pre-wire refusal; survives retry with this same source and job.
+    preparation_refusal: Option<GlobalPayloadPreparationError>,
 }
 
-/// Own the exact authenticated original source throughout partial signature preparation.
+/// Own the exact authenticated source, partial leaves and completed decoded proposal.
+/// Decoding custody grants no State, schedule, execution or finality authority.
 struct SignatureDecodeAttempt {
     block_hash: Hash32,
     source: AvailableBody,
     decoder: iroha_data_model::block::PreparedSignedBlockSignaturesDecode,
+    decoded: Option<SignedBlock>,
+    /// An original returned graph cannot be reused after an unfinished or mismatched projection.
+    returned_refusal: Option<ReturnedDecodedRefusal>,
+}
+
+/// Original failure retained beside the same graph after the validator returned ownership.
+enum ReturnedDecodedRefusal {
+    Codec(norito::Error),
+    SourceMismatch,
+}
+
+impl SignatureDecodeAttempt {
+    /// Complete the sole canonical decode once; retries borrow only that exact original graph.
+    fn original_decoded(
+        &mut self,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<&SignedBlock, payload::PayloadError> {
+        if !self.decoder.belongs_to(budget) {
+            return Err(payload::PayloadError::SignatureCustodyInvariant(
+                "completed proposal decoder belongs to another original pool".into(),
+            ));
+        }
+        let Some(source) = self.source.payload().charged_source(budget) else {
+            return Err(payload::PayloadError::SignatureCustodyInvariant(
+                "completed proposal has no original State-funded source".into(),
+            ));
+        };
+        if let Some(refusal) = &self.returned_refusal {
+            let reason = match refusal {
+                ReturnedDecodedRefusal::Codec(error) => {
+                    format!("original returned proposal projection is unfinished: {error}")
+                }
+                ReturnedDecodedRefusal::SourceMismatch => {
+                    "original returned proposal differs from its authenticated source".into()
+                }
+            };
+            return Err(payload::PayloadError::SignatureCustodyInvariant(reason));
+        }
+        // A completed graph remains owned by this attempt; a retry must not reconstruct it.
+        #[cfg(all(test, sumeragi_core_mutation = "HC130"))]
+        {
+            self.decoded = None;
+        }
+        if self.decoded.is_none() {
+            self.decoded = Some(payload::decode_prepared(source, &mut self.decoder)?);
+        }
+        let original = self.decoded.as_ref().expect("completed original decode");
+        // This rechecks the original address, length, whole-wire hash and pool, without
+        // reentering the canonical field walker or issuing new decode counters.
+        let original_control = self
+            .decoder
+            .retains_signature_custody(source, original)
+            .map_err(|error| payload::PayloadError::SignatureCustodyInvariant(error.to_string()))?;
+        // HC131 mutates only this physical-control obligation. The same source,
+        // pool, canonical wire and current authority checks remain mandatory.
+        if (!cfg!(all(test, sumeragi_core_mutation = "HC131")) && !original_control)
+            || !original.signatures_admitted_to(budget)
+        {
+            return Err(payload::PayloadError::SignatureCustodyInvariant(
+                "completed proposal lost its original signature custody".into(),
+            ));
+        }
+        Ok(original)
+    }
+
+    /// Recover only the actual block returned by the consuming production validator.
+    /// Its canonical projection must match the immutable original available wire exactly.
+    fn retain_validation_return(
+        &mut self,
+        original: SignedBlock,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<(), PublicationError> {
+        // The callsite takes this slot immediately before validation. It cannot replace
+        // or drop another completed owner while the validator holds the original graph.
+        debug_assert!(self.decoded.is_none());
+        let original = match original.into_resultless_proposal() {
+            Ok(original) => original,
+            Err((original, error)) => {
+                let reason = format!("original returned proposal projection: {error}");
+                self.decoded = Some(original);
+                self.returned_refusal = Some(ReturnedDecodedRefusal::Codec(error));
+                return Err(PublicationError::RecoveryRequired(reason));
+            }
+        };
+        self.decoded = Some(original);
+        if !self.decoder.belongs_to(budget) {
+            self.returned_refusal = Some(ReturnedDecodedRefusal::SourceMismatch);
+            return Err(PublicationError::RecoveryRequired(
+                "returned proposal decoder belongs to another original pool".into(),
+            ));
+        }
+        let Some(source) = self.source.payload().charged_source(budget) else {
+            self.returned_refusal = Some(ReturnedDecodedRefusal::SourceMismatch);
+            return Err(PublicationError::RecoveryRequired(
+                "returned proposal has no original State-funded source".into(),
+            ));
+        };
+        let original = self.decoded.as_ref().expect("original validation return");
+        let matches = match original.matches_resultless_proposal_wire(source.as_slice()) {
+            Ok(matches) => matches,
+            Err(error) => {
+                let reason = format!("original returned proposal source comparison: {error}");
+                self.returned_refusal = Some(ReturnedDecodedRefusal::Codec(error));
+                return Err(PublicationError::RecoveryRequired(reason));
+            }
+        };
+        if !matches || !original.signatures_admitted_to(budget) {
+            self.returned_refusal = Some(ReturnedDecodedRefusal::SourceMismatch);
+            return Err(PublicationError::RecoveryRequired(
+                "returned proposal differs from its original authenticated source or pool".into(),
+            ));
+        }
+        // Check the same ordinary decoder's source identity without entering the retry
+        // path, walking fields again, or replacing the returned graph.
+        match self.decoder.retains_signature_custody(source, original) {
+            Ok(original_control)
+                if original_control || cfg!(all(test, sumeragi_core_mutation = "HC131")) =>
+            {
+                Ok(())
+            }
+            _ => {
+                self.returned_refusal = Some(ReturnedDecodedRefusal::SourceMismatch);
+                Err(PublicationError::RecoveryRequired(
+                    "returned proposal lost its original decoder source custody".into(),
+                ))
+            }
+        }
+    }
 }
 
 struct Worker<'s> {
@@ -1324,19 +1476,16 @@ impl<'s> Worker<'s> {
                 block_hash,
                 source: block.clone(),
                 decoder,
+                decoded: None,
+                returned_refusal: None,
             });
         }
         let attempt = self
             .signature_decode
             .as_mut()
             .expect("original signature decode source");
-        let Some(source) = attempt.source.payload().charged_source(&budget) else {
-            return Err(PublicationError::RecoveryRequired(
-                "signature preparation has no original State-funded payload backing".into(),
-            ));
-        };
-        let iroha_block = match payload::decode_prepared(source, &mut attempt.decoder) {
-            Ok(block) => block,
+        match attempt.original_decoded(&budget) {
+            Ok(_) => {}
             Err(payload::PayloadError::DecodeResource(reason))
                 if !cfg!(all(test, sumeragi_core_mutation = "HC8")) =>
             {
@@ -1354,7 +1503,7 @@ impl<'s> Worker<'s> {
                 self.signature_decode = None;
                 return invalid_attempt(height, &error);
             }
-        };
+        }
         match self.state.view().latest_block() {
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -1394,13 +1543,18 @@ impl<'s> Worker<'s> {
         let pulse_context = control::pulse_context(block.header());
         let boundary_attestation = height == configured.epoch.last_height;
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
+        let iroha_block = self
+            .signature_decode
+            .as_ref()
+            .and_then(|attempt| attempt.decoded.as_ref())
+            .expect("original completed proposal remains before validation");
         if !proposal_matches_header(iroha_block.header(), block) {
             return invalid_attempt(
                 height,
                 &"the payload's height or view differs from the header",
             );
         }
-        if block.header().attest != (boundary_attestation || attestation_required(&iroha_block)) {
+        if block.header().attest != (boundary_attestation || attestation_required(iroha_block)) {
             return invalid_attempt(
                 height,
                 &"the attestation flag differs from the payload's rule",
@@ -1410,7 +1564,7 @@ impl<'s> Worker<'s> {
         // `specs/sumeragi_lanes.md`); the node waits for its lane stores within `E_max`.
         let expansion = match lanes::merge::expand(
             self.state,
-            &iroha_block,
+            iroha_block,
             &*self.context.lane_blocks,
             Duration::from_millis(scheduled.params.exec_budget_ms),
         ) {
@@ -1454,6 +1608,13 @@ impl<'s> Worker<'s> {
             .map(|member| member.validator.clone())
             .collect::<Vec<_>>();
         let topology = Topology::new(committee.clone());
+        // All current authority/source gates ran on the borrowed original. The expansion
+        // borrows only State; transfer that same graph to the real validator once.
+        let iroha_block = self
+            .signature_decode
+            .as_mut()
+            .and_then(|attempt| attempt.decoded.take())
+            .expect("original completed proposal transfers to validation");
         let validated = catch_unwind(AssertUnwindSafe(|| {
             ValidBlock::validate_sumeragi_block(
                 iroha_block,
@@ -1467,15 +1628,14 @@ impl<'s> Worker<'s> {
                 self.state,
             )
         }));
-        let Ok(validated) = validated else {
-            return Err(PublicationError::Retryable(
-                "block validation panicked".into(),
-            ));
+        let validated = match validation_result(validated) {
+            Ok(completed) => completed,
+            Err(recovery) => return Err(recovery),
         };
         let mut events = Vec::new();
         let (valid, mut overlay) = match validated.unpack(|event| events.push(event.into())) {
             Ok(executed) => executed,
-            Err((_, error)) => {
+            Err((returned, error)) => {
                 if !cfg!(all(test, sumeragi_core_mutation = "HC44"))
                     && let BlockValidationError::ExecutionDeferred(reason) = error.as_ref()
                 {
@@ -1497,7 +1657,16 @@ impl<'s> Worker<'s> {
                         pulse_context,
                     });
                 }
-                return classify(height, &error);
+                let outcome = classify(height, &error);
+                if outcome.is_err() {
+                    // Keep the actual original graph for a local validation refusal.
+                    // Completed intrinsic rejection explicitly retires it as before.
+                    self.signature_decode
+                        .as_mut()
+                        .expect("original validation attempt")
+                        .retain_validation_return(*returned, &budget)?;
+                }
+                return outcome;
             }
         };
         if let Err(error) = overlay.take_sumeragi_lanes() {
@@ -2654,6 +2823,7 @@ impl<'s> Worker<'s> {
                             self.state.ivm_execution_budget(),
                             max_bytes,
                         ),
+                        preparation_refusal: None,
                     });
                     return self.finish_payload_build();
                 }
@@ -2680,10 +2850,52 @@ impl<'s> Worker<'s> {
             height,
             view,
             max_bytes,
-            job,
+            mut job,
+            preparation_refusal,
         } = self.payload_build.take().ok_or_else(|| {
             PublicationError::RecoveryRequired("payload source disappeared".into())
         })?;
+        let preparation: Result<(), GlobalPayloadPreparationError> = {
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC128")))]
+            {
+                job.prepare_source()
+            }
+            #[cfg(all(test, sumeragi_core_mutation = "HC128"))]
+            {
+                Ok(())
+            }
+        };
+        if let Err(error) = preparation {
+            use super::driver::payload_build::SourcePreparationError;
+            use iroha_allocation::ChargedBufferError;
+            use iroha_data_model::block::BlockSignatureCustodyError;
+            // The original typed owner remains in the job. The driver receives the
+            // same refusal/ReleaseWait, not an error string standing in for custody.
+            let publication = match &error {
+                SourcePreparationError::Source(
+                    BlockSignatureCustodyError::ControlAdmission(original)
+                    | BlockSignatureCustodyError::Buffer(ChargedBufferError::Admission(original)),
+                ) => PublicationError::Deferred(PublicationDeferral::Execution(
+                    original.clone().into(),
+                )),
+                SourcePreparationError::Source(BlockSignatureCustodyError::ControlAllocation(
+                    original,
+                )) => PublicationError::Deferred(PublicationDeferral::SharedControl(*original)),
+                _ => PublicationError::RecoveryRequired(format!(
+                    "original local payload signature preparation: {error:?}"
+                )),
+            };
+            self.payload_build = Some(GlobalPayloadBuild {
+                height,
+                view,
+                max_bytes,
+                job,
+                preparation_refusal: Some(error),
+            });
+            return Err(publication);
+        }
+        // Only a new actual preparation probe may retire its previous refusal owner.
+        drop(preparation_refusal);
         match job.finish(
             |source| source.block.resultless_proposal_wire_len(),
             |source, writer| source.block.write_resultless_proposal_wire(writer),
@@ -2705,6 +2917,7 @@ impl<'s> Worker<'s> {
                     view,
                     max_bytes,
                     job,
+                    preparation_refusal: None,
                 });
                 let reason = format!("canonical payload admission: {error:?}");
                 Err(if retry {
@@ -2790,6 +3003,18 @@ fn execution_report(outcome: Result<Option<Hash32>, PublicationError>) -> ExecOu
         Ok(None) => ExecOutcome::Invalid,
         Err(error) => ExecOutcome::Failed(error.to_string()),
     }
+}
+
+/// A consuming validation unwind lost its original graph and cannot request a retry.
+fn validation_result<T>(outcome: std::thread::Result<T>) -> Result<T, PublicationError> {
+    outcome.map_err(|_| {
+        let reason = "block validation panicked".into();
+        if cfg!(all(test, sumeragi_core_mutation = "HC129")) {
+            PublicationError::Retryable(reason)
+        } else {
+            PublicationError::RecoveryRequired(reason)
+        }
+    })
 }
 
 /// Log a completed invalid attempt without manufacturing a local refusal.
@@ -2903,6 +3128,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn completed_validation_returns_the_same_original_funded_owner() {
+        let budget = iroha_allocation::AllocationBudget::new(4096);
+        let mut original = iroha_allocation::ChargedBuffer::<u8>::new(127, &budget).unwrap();
+        original.append(&[0x5a; 127]).unwrap();
+        let pointer = original.as_slice().as_ptr();
+        let retained = budget.reserved_bytes();
+        assert!(retained > 0);
+        let returned = validation_result(Ok(original)).unwrap();
+        assert_eq!(returned.as_slice().as_ptr(), pointer);
+        assert_eq!(returned.as_slice(), &[0x5a; 127]);
+        assert!(returned.belongs_to(&budget));
+        assert_eq!(budget.reserved_bytes(), retained);
+        drop(returned);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn consuming_validation_unwind_requires_recovery_after_original_owner_is_lost() {
+        let budget = iroha_allocation::AllocationBudget::new(4096);
+        let original = iroha_allocation::ChargedBuffer::<u8>::new(127, &budget).unwrap();
+        assert!(budget.reserved_bytes() > 0);
+        let caught: std::thread::Result<()> = catch_unwind(AssertUnwindSafe(move || {
+            drop(original);
+            panic!("controlled consuming validation unwind");
+        }));
+        assert_eq!(
+            budget.reserved_bytes(),
+            0,
+            "the consumed graph is already lost"
+        );
+        let error = validation_result(caught).unwrap_err();
+        assert!(matches!(error, PublicationError::RecoveryRequired(reason)
+            if reason == "block validation panicked"));
+    }
+
     /// Local conditions are retried (`Failed`); a property of the block is `Invalid`.
     #[test]
     fn classification_table() {
@@ -2966,6 +3227,10 @@ mod tests {
 mod validation_refusal_tests;
 
 #[cfg(test)]
+#[path = "executor_decoded_custody_tests.rs"]
+mod decoded_custody_tests;
+
+#[cfg(test)]
 mod archive_tests;
 #[cfg(test)]
 #[path = "executor_publication_tests.rs"]
@@ -3010,3 +3275,7 @@ mod native_execution_authorization_tests {
 #[cfg(test)]
 #[path = "executor_payload_refusal_tests.rs"]
 mod payload_refusal_tests;
+
+#[cfg(test)]
+#[path = "executor_local_signature_preparation_tests.rs"]
+mod local_signature_preparation_tests;
