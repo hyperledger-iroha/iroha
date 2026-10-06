@@ -216,7 +216,7 @@ impl<C: PastaCurve> FoldInputCells<C> {
             .glue
             .add(region, choices[0].word(), choices[1].word())?;
         let all = chip.glue.add(region, &short, choices[2].word())?;
-        GlueChip::assert_constant(region, &all, C::Base::ONE)?;
+        chip.glue.enforce_constant(region, &all, C::Base::ONE)?;
         let prefix_two = chip.glue.not(region, &choices[2])?;
         for (round, challenge) in challenges.iter().enumerate() {
             let low_zero = chip.glue.is_zero(region, challenge.lo().word())?;
@@ -227,7 +227,8 @@ impl<C: PastaCurve> FoldInputCells<C> {
             } else if round < 4 {
                 GlueChip::assert_equal(region, is_zero.word(), choices[0].word())?;
             } else {
-                GlueChip::assert_constant(region, is_zero.word(), C::Base::ZERO)?;
+                chip.glue
+                    .enforce_constant(region, is_zero.word(), C::Base::ZERO)?;
             }
         }
         Ok(Self {
@@ -377,12 +378,15 @@ impl<C: PastaCurve> FoldInputCells<C> {
         let prefix = K - source_k as usize;
         for (round, cells) in challenges.iter().enumerate() {
             if round < prefix {
-                GlueChip::assert_constant(region, cells.lo().word(), C::Base::ZERO)?;
-                GlueChip::assert_constant(region, cells.hi().word(), C::Base::ZERO)?;
+                chip.glue
+                    .enforce_constant(region, cells.lo().word(), C::Base::ZERO)?;
+                chip.glue
+                    .enforce_constant(region, cells.hi().word(), C::Base::ZERO)?;
             } else {
                 let value = chip.import(region, cells)?;
                 let nonzero = chip.nonzero(region, &value)?;
-                GlueChip::assert_constant(region, nonzero.word(), C::Base::ONE)?;
+                chip.glue
+                    .enforce_constant(region, nonzero.word(), C::Base::ONE)?;
             }
         }
         Ok(Self {
@@ -417,7 +421,8 @@ impl<C: PastaCurve> FoldInputCells<C> {
         let same_y = chip.glue.is_equal(region, original.g.y(), corrected.y())?;
         let same = chip.glue.and(region, &same_x, &same_y)?;
         let forbidden = chip.glue.and(region, mode.corrected(), &same)?;
-        GlueChip::assert_constant(region, forbidden.word(), C::Base::ZERO)?;
+        chip.glue
+            .enforce_constant(region, forbidden.word(), C::Base::ZERO)?;
         let selected = EccChip::<C>::select(
             &mut chip.glue,
             region,
@@ -647,7 +652,14 @@ impl<C: PastaCurve> VerifierChip<C> {
         let zeta = self.import(region, &zeta_cells)?;
         let mut powers = vec![z];
         for round in 1..K {
-            powers.push(self.arithmetic.square(region, &powers[round - 1])?);
+            powers.push(self.arithmetic.square(
+                &mut iroha_plonk_gadgets::range::u128::UintChip::new(
+                    &mut self.glue,
+                    &mut self.range,
+                ),
+                region,
+                &powers[round - 1],
+            )?);
         }
         let mut evaluation = self.constant(region, C::ScalarExt::ZERO)?;
         for input in inputs.iter().rev() {
@@ -723,7 +735,8 @@ impl<C: PastaCurve> VerifierChip<C> {
         let zero = EccChip::<C>::is_identity(&mut self.glue, region, &equation)?;
         self.combine(region, &mut valid, &zero)?;
         if mode == VerificationMode::Hard {
-            GlueChip::assert_constant(region, valid.word(), C::Base::ONE)?;
+            self.glue
+                .enforce_constant(region, valid.word(), C::Base::ONE)?;
         }
         let claim = self.fold_claim(region, plan, &valid, &suffix.value, &rounds)?;
         Ok(FoldOutputCells { valid, claim })

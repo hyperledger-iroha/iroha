@@ -68,7 +68,8 @@ impl RecordSnapshot {
         }
     }
     fn revalidate(&self) -> Result<()> {
-        self.directory.revalidate()?;
+        // Both readers begin with fresh native directory revalidation. The
+        // optional reader also revalidates custody before accepting absence.
         let bytes = if self.observed.is_some() {
             Some(self.directory.read(&self.name, self.maximum)?)
         } else {
@@ -102,7 +103,7 @@ impl NamesSnapshot {
         }
     }
     fn revalidate(&self) -> Result<()> {
-        self.directory.revalidate()?;
+        // entries brackets the native census with fresh directory revalidation.
         if self.directory.entries(self.maximum)? != self.names {
             return Err(invalid("retained enrollment namespace changed"));
         }
@@ -400,6 +401,18 @@ impl BodyHistory {
         owner: &ManagedStreamTokenCustody,
         purpose: CustodyPurpose,
     ) -> Result<Option<Self>> {
+        Self::open_with_imports(
+            owner,
+            purpose,
+            &mut crate::managed::service_authority::CheckpointImports::new(&owner.authority, None),
+        )
+    }
+
+    pub(super) fn open_with_imports(
+        owner: &ManagedStreamTokenCustody,
+        purpose: CustodyPurpose,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
+    ) -> Result<Option<Self>> {
         sequence(purpose)?;
         owner.authority.directory.revalidate()?;
         let name = purpose.directory_name()?;
@@ -420,6 +433,7 @@ impl BodyHistory {
             (reference, reference_snapshot),
             None,
             plan,
+            imports,
         ))
         .map(Some)
     }
@@ -451,6 +465,7 @@ impl BodyHistory {
             reference,
             Some(self),
             plan,
+            &mut crate::managed::service_authority::CheckpointImports::new(&owner.authority, None),
         ))?;
         require_retained_material(self.revalidate_handles())?;
         require_retained_material(self.require_retained_prefix(&current))?;
@@ -539,6 +554,7 @@ impl BodyHistory {
         reference: (Option<Reference>, RecordSnapshot),
         retained: Option<&Self>,
         plan: RetainedProviderServicePlan,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
     ) -> Result<Self> {
         let (reference, reference_snapshot) = reference;
         let root_names = checked_names(
@@ -706,7 +722,7 @@ impl BodyHistory {
             drop(raw);
             reservation
                 .unsigned
-                .validate(owner, purpose, || Ok(&plan))?;
+                .validate_with_imports(owner, purpose, || Ok(&plan), imports)?;
             selection.matches_unsigned(&reservation.unsigned)?;
             let previous = bodies.last();
             if reservation.ordinal != ordinal
@@ -761,7 +777,7 @@ impl BodyHistory {
                 if activation.is_none() || ordinal > anchor.active.unwrap_or(0) {
                     return Err(invalid("unsigned body has paid material before activation"));
                 }
-                owner.validate_original(original, purpose)?;
+                owner.validate_original_with_imports(original, purpose, imports)?;
                 reservation.unsigned.matches_original(original)?;
                 if unused.is_some() {
                     return Err(invalid("unused body contains a completed Original"));
@@ -821,7 +837,9 @@ impl BodyHistory {
             {
                 return Err(invalid("enrollment body prefix has a gap"));
             }
-            pending.unsigned.validate(owner, purpose, || Ok(&plan))?;
+            pending
+                .unsigned
+                .validate_with_imports(owner, purpose, || Ok(&plan), imports)?;
             selection.matches_unsigned(&pending.unsigned)?;
             if pending.outer != outer
                 || pending.previous_body
@@ -1864,3 +1882,7 @@ mod profile_plan_tests;
 #[cfg(test)]
 #[path = "body_history/parser_snapshot_tests.rs"]
 mod parser_snapshot_tests;
+
+#[cfg(test)]
+#[path = "body_history/snapshot_native_tests.rs"]
+mod snapshot_native_tests;

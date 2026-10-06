@@ -264,7 +264,7 @@ fn profile_node_secrets_resolve_and_fail_closed_on_custody() {
     ))
     .unwrap_or_else(|report| panic!("{report:?}"));
     // A real start authenticates any local genesis once, before resolving the secrets.
-    let authenticated_genesis = genesis
+    let _authenticated_genesis = genesis
         .as_ref()
         .map(|genesis| {
             validate_available_genesis_for_check(&config, genesis, None)
@@ -272,8 +272,8 @@ fn profile_node_secrets_resolve_and_fail_closed_on_custody() {
         })
         .transpose()
         .unwrap_or_else(|report| panic!("{report:?}"));
-    let dependencies = resolve_node_secrets_runtime_deps(&config, authenticated_genesis.as_ref())
-        .unwrap_or_else(|report| panic!("{report:?}"));
+    let dependencies =
+        resolve_node_secrets_runtime_deps(&config).unwrap_or_else(|report| panic!("{report:?}"));
     assert_eq!(
         dependencies
             .soracloud_runtime_mutation_signer
@@ -285,8 +285,7 @@ fn profile_node_secrets_resolve_and_fail_closed_on_custody() {
     );
     let signer = node.data_dir.secret(NodeSecretFile::RuntimeSigner);
     fs::set_permissions(&signer, fs::Permissions::from_mode(0o644)).expect("unsafe mode");
-    let Err(error) = resolve_node_secrets_runtime_deps(&config, authenticated_genesis.as_ref())
-    else {
+    let Err(error) = resolve_node_secrets_runtime_deps(&config) else {
         panic!("a world-readable signer is refused");
     };
     assert!(

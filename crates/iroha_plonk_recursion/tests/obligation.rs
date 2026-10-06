@@ -218,10 +218,7 @@ fn every_unsplit_obligation_is_consumed_exactly_once() {
             ),
             _ => (vec![], true, None),
         };
-        for q_count in [1_u16, 3] {
-            if variant == Variant::Bootstrap && q_count != 1 {
-                continue;
-            }
+        for q_count in [1_u16, 2, 3] {
             for own_k in [12, 14] {
                 let ledger =
                     Ledger::new(variant, q_count.try_into().unwrap(), own_k, incoming_sigma)
@@ -244,6 +241,23 @@ fn every_unsplit_obligation_is_consumed_exactly_once() {
                 actual.sort();
                 assert_eq!(actual, expected, "{variant:?}");
                 assert!(actual.windows(2).all(|pair| pair[0] != pair[1]));
+                if variant == Variant::Bootstrap {
+                    let destination = if q_count == 1 {
+                        Destination::PallasForward
+                    } else {
+                        Destination::PallasFold
+                    };
+                    let pallas: Vec<_> = ledger.inputs(destination).collect();
+                    assert_eq!(pallas.len(), usize::from(q_count));
+                    for (index, slot) in pallas.iter().enumerate() {
+                        assert_eq!(
+                            slot.source,
+                            Source::Claim(QOpening(u16::try_from(index).unwrap()))
+                        );
+                        assert_eq!(slot.source_k, 16);
+                        assert!(!slot.gated);
+                    }
+                }
                 let mut gated: Vec<_> = ledger
                     .slots()
                     .iter()
@@ -320,10 +334,6 @@ fn every_unsplit_obligation_is_consumed_exactly_once() {
 #[test]
 fn obligation_plan_rejects_variant_descriptor_mismatches() {
     let one = 1_u16.try_into().unwrap();
-    assert_eq!(
-        Ledger::new(Variant::Bootstrap, 2_u16.try_into().unwrap(), 12, None),
-        Err(LedgerError::BootstrapLeaves)
-    );
     for k in [0, 1, 13, 15, 16, u8::MAX] {
         assert_eq!(
             Ledger::new(Variant::Send, one, k, None),

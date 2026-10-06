@@ -1759,6 +1759,11 @@ impl TieredStateBackend {
             world.privacy_root_heads
         );
         collect_map!(
+            TieredSegment::KagemushaWalletLedger,
+            KagemushaWalletLedger,
+            world.kagemusha_wallet_ledger
+        );
+        collect_map!(
             TieredSegment::PrivateSettlementGovernance,
             PrivateSettlementGovernance,
             world.private_settlement_governance
@@ -3897,6 +3902,7 @@ enum TieredSegment {
     PrivacyCommitments,
     PrivacyRoots,
     PrivacyRootHeads,
+    KagemushaWalletLedger,
     PrivateSettlementGovernance,
     PrivateSettlementPools,
     PrivateSettlementRoots,
@@ -3973,6 +3979,7 @@ macro_rules! tiered_segment_table {
             PrivacyCommitments, PrivacyCommitment, "privacy_commitments", privacy_commitments;
             PrivacyRoots, PrivacyRoot, "privacy_roots", privacy_roots;
             PrivacyRootHeads, PrivacyRootHead, "privacy_root_heads", privacy_root_heads;
+            KagemushaWalletLedger, KagemushaWalletLedger, "kagemusha_wallet_ledger", kagemusha_wallet_ledger;
             PrivateSettlementGovernance, PrivateSettlementGovernance, "private_settlement_governance", private_settlement_governance;
             PrivateSettlementPools, PrivateSettlementPool, "private_settlement_pools", private_settlement_pools;
             PrivateSettlementRoots, PrivateSettlementRoot, "private_settlement_roots", private_settlement_roots;
@@ -4218,6 +4225,7 @@ pub(crate) enum TieredKeyHandle {
     PrivacyCommitment(crate::privacy_state::PrivacyCommitmentKeyV1),
     PrivacyRoot(crate::privacy_state::PrivacyRootKeyV1),
     PrivacyRootHead(crate::privacy_state::PrivacyRootHeadKeyV1),
+    KagemushaWalletLedger(crate::kagemusha_wallet_v1::LedgerKey),
     PrivateSettlementGovernance(
         crate::private_settlement::global_state::PrivateSettlementPoolKeyV1,
     ),
@@ -4312,6 +4320,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::PrivacyCommitment(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyRoot(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyRootHead(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::KagemushaWalletLedger(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivateSettlementGovernance(key)
             | TieredKeyHandle::PrivateSettlementPool(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivateSettlementRoot(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4488,6 +4497,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::PrivacyRoot(id) => write!(f, "privacy_root:{id:?}"),
             TieredKeyHandle::PrivacyRootHead(id) => {
                 write!(f, "privacy_root_head:{id:?}")
+            }
+            TieredKeyHandle::KagemushaWalletLedger(id) => {
+                write!(f, "kagemusha_wallet_ledger:{id:?}")
             }
             TieredKeyHandle::PrivateSettlementGovernance(id) => {
                 write!(f, "private_settlement_governance:{id:?}")

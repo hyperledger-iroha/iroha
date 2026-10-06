@@ -262,7 +262,7 @@ fn vector_blacklist(f: &MessageFixture, count: u32) -> KagemushaWalletBlacklistV
         })
         .collect();
     let mut byte_ordered = entries.clone();
-    byte_ordered.sort();
+    byte_ordered.sort_by_key(|entry| entry.account_digest);
     entries.sort_by(|left, right| {
         kagemusha_wallet_integer_cmp_v1(&left.account_digest, &right.account_digest)
     });
@@ -682,7 +682,30 @@ fn build_world() -> VectorWorld {
     credited_receive
         .verify_for(&scheme, &request, &payment)
         .expect("credited receive verifies");
-    let credited_status = f.credited_status(&payment, STATUS_LINEAGE_LEN, OPENING_OTHER_CREDITS);
+    let mut status = f.credit_status(&payment, STATUS_LINEAGE_LEN, OPENING_OTHER_CREDITS, false);
+    // The general message fixture uses a different stand-in σ length. Bind the vectored
+    // status and its receipt to the same allowlisted Receive proof as the package.
+    status.proof_digest = proof_digest;
+    let status_signer = KagemushaWalletReceiptSignerV1::from_lineage(&status.lineage.public)
+        .expect("status signer");
+    let status_receipt_body = KagemushaWalletReceiptBodyV1::derive(
+        &status_signer,
+        &status.statement,
+        &status.proof_digest,
+        status.receipt.capsule_digest,
+        status.receipt.payment_digest,
+    )
+    .expect("status receipt body");
+    status.receipt = KagemushaWalletReceiptV1::sign(
+        &receiver,
+        &status.statement,
+        &status.proof_digest,
+        status.receipt.capsule_digest,
+        status.receipt.payment_digest,
+        raw_output(&f.receiver.payment, &status_receipt_body.signing_message()),
+    )
+    .expect("status receipt");
+    let credited_status = KagemushaWalletCreditedV1::from_status(status).expect("credited status");
     credited_status
         .verify_for(&scheme, &request, &payment)
         .expect("credited status verifies");
@@ -2369,9 +2392,9 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
         .verify(w.receiver())
         .expect("package verifies");
     let allowlist_frame = w.allowlist.to_canonical_bytes().expect("allowlist frame");
-    let decoded_allowlist: KagemushaWalletVerifyingKeyAllowlistV1 = decode_frame_v1(
+    let decoded_allowlist = KagemushaWalletVerifyingKeyAllowlistV1::decode_canonical(
         &allowlist_frame,
-        KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
+        &w.manifest.body,
     )
     .expect("allowlist decode");
     vec![
@@ -5009,6 +5032,131 @@ fn kagemusha_wallet_v1_vector_world_objects_validate() {
         .expect("completion");
     let pool = std::ptr::from_ref(vector_world());
     assert_eq!(pool, std::ptr::from_ref(w), "built once");
+}
+
+#[test]
+fn kagemusha_wallet_v1_vector_artifacts_bind_manifest_and_exact_proof_lengths() {
+    let w = vector_world();
+    let key_set = w
+        .allowlist
+        .verifying_key_set_digest()
+        .expect("key-set digest");
+    assert_eq!(w.manifest.body.verifying_key_set_digest, key_set);
+    let relation = kagemusha_wallet_relation_id_v1(&EQ, &EP, &NATIVE, &key_set, &INVENTORY);
+    assert_eq!(w.scheme().relation_id, relation);
+    assert_eq!(w.f.receiver.scheme.relation_id, relation);
+    assert_eq!(w.manifest.body.relation_id, relation);
+    let allowlist_frame = w.allowlist.to_canonical_bytes().expect("allowlist frame");
+    assert_eq!(
+        KagemushaWalletVerifyingKeyAllowlistV1::decode_canonical(
+            &allowlist_frame,
+            &w.manifest.body
+        )
+        .expect("vectored manifest binds the allowlist"),
+        w.allowlist
+    );
+    let mut substituted = w.allowlist.clone();
+    substituted.lineage_verifying_key_digest[0] ^= 1;
+    assert!(matches!(
+        KagemushaWalletVerifyingKeyAllowlistV1::decode_canonical(
+            &substituted
+                .to_canonical_bytes()
+                .expect("substituted allowlist frame"),
+            &w.manifest.body,
+        ),
+        Err(KagemushaWalletValidationErrorV1::InvalidField {
+            field: "artifact_manifest.verifying_key_set_digest"
+        })
+    ));
+
+    let ledger = ledger_objects(w);
+    let KagemushaWalletCreditedEvidenceV1::Receive {
+        package: credited_receive,
+    } = &w.credited_receive.evidence
+    else {
+        panic!("Receive evidence");
+    };
+    for (name, package) in [
+        ("Payment", &w.payment.send),
+        ("Receive", &w.receive),
+        ("Credited::Receive", credited_receive),
+        ("Bootstrap", &w.bootstrap),
+        ("Unload", &ledger.unload_claim.package),
+        ("Activate", &ledger.activation.bootstrap),
+        ("CloseLoads", &ledger.close_loads.package),
+        ("FeeClaim Payment", &ledger.fee_claim.payment.send),
+    ] {
+        w.allowlist
+            .check_package(package, Some(&w.request.body))
+            .unwrap_or_else(|error| {
+                panic!("{name} proofs differ from the vectored allowlist: {error:?}");
+            });
+    }
+    w.allowlist
+        .check_lineage(&w.lineage.lineage)
+        .expect("Lineage Ω length");
+    w.allowlist
+        .check_lineage(&w.fold.lineage)
+        .expect("fold Ω length");
+    let status = w.status();
+    w.allowlist
+        .check_lineage(&status.lineage)
+        .expect("status Ω length");
+    assert_ne!(
+        w.lineage.lineage.proof, status.lineage.proof,
+        "distinct Ω proof bodies"
+    );
+    let status_entry = w
+        .allowlist
+        .entry(
+            KagemushaWalletOperationKindV1::Receive,
+            if w.request.body.receiver_blacklist_version == 0 {
+                0
+            } else {
+                KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1
+            },
+        )
+        .expect("status Receive selector");
+    let status_sigma = stand_in_proof(usize::try_from(status_entry.proof_bytes).expect("σ length"));
+    assert_eq!(
+        status.proof_digest,
+        kagemusha_wallet_proof_digest_v1(
+            KagemushaWalletOperationKindV1::Receive,
+            None,
+            &status_sigma
+        )
+        .expect("status σ digest")
+    );
+    let (kind, mask) = w
+        .receive
+        .verifying_key_selector(Some(&w.request.body))
+        .expect("Receive selector");
+    assert_eq!(w.capsule.kind, kind);
+    w.allowlist
+        .check_step_proof(kind, mask, &w.capsule.step_proof)
+        .expect("capsule σ length");
+    if let Some(lineage) = w.capsule.predecessor_lineage.lineage() {
+        w.allowlist
+            .check_lineage(lineage)
+            .expect("capsule Ω length");
+    }
+    let mut longer_step = w.receive.clone();
+    longer_step.step_proof.bytes.push(0);
+    assert!(matches!(
+        w.allowlist
+            .check_package(&longer_step, Some(&w.request.body)),
+        Err(KagemushaWalletValidationErrorV1::InvalidField {
+            field: "step_proof.length"
+        })
+    ));
+    let mut longer_lineage = status.lineage.clone();
+    longer_lineage.proof.push(0);
+    assert!(matches!(
+        w.allowlist.check_lineage(&longer_lineage),
+        Err(KagemushaWalletValidationErrorV1::InvalidField {
+            field: "lineage.proof_length"
+        })
+    ));
 }
 
 // ---------------------------------------------------------------------------------------

@@ -4489,7 +4489,7 @@
      "keygen_bounded_noise_from_seed",
      "keygen_bounded_noise_with_relinearization_from_seed"
     ],
-    "bfv.inline_unit_tests": ["mod first_release_hard_cut_tests", "mod shared_arithmetic_adapter_tests"],
+    "bfv.inline_unit_tests": ["mod bfv_goldilocks_digest_raw_wire_tests", "mod first_release_hard_cut_tests", "mod shared_arithmetic_adapter_tests"],
     "bfv.test_gated_helpers": [
      "bfv_full_bootstrap_goldilocks_add_v1",
      "bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1",

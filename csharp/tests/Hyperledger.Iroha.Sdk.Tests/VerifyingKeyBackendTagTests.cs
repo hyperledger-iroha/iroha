@@ -13,6 +13,7 @@ public sealed class VerifyingKeyBackendTagTests
         {
             (VerifyingKeyBackendTag.Halo2IpaPasta, 0U),
             (VerifyingKeyBackendTag.Stark, 1U),
+            (VerifyingKeyBackendTag.NativePipaRPasta, 2U),
         };
 
         Assert.Equal(expected.Length, Enum.GetValues<VerifyingKeyBackendTag>().Length);
@@ -26,6 +27,7 @@ public sealed class VerifyingKeyBackendTagTests
     [Theory]
     [InlineData(VerifyingKeyBackendTag.Halo2IpaPasta, "halo2-ipa-pasta")]
     [InlineData(VerifyingKeyBackendTag.Stark, "stark")]
+    [InlineData(VerifyingKeyBackendTag.NativePipaRPasta, "native-pipa-r-pasta")]
     public void CanonicalLabelsRoundTripExactly(
         VerifyingKeyBackendTag expected,
         string label)
@@ -38,9 +40,18 @@ public sealed class VerifyingKeyBackendTagTests
     }
 
     [Fact]
+    public void ExactNativeRegistryEngineMapping()
+    {
+        foreach (var label in new[] { "pipa-r/pasta", "pipa-r/pasta/kaigi-authorization-v1", "pipa-r/pasta/kaigi-usage-v1" })
+            Assert.Equal(VerifyingKeyBackendTag.NativePipaRPasta, VerifyingKeyBackendTags.RegistryTag(label));
+        Assert.Null(VerifyingKeyBackendTags.RegistryTag("halo2/pasta/kaigi-usage-v1"));
+        Assert.Null(VerifyingKeyBackendTags.RegistryTag("pipa-r/ipa/pasta/kaigi-usage-v1"));
+    }
+
+    [Fact]
     public void UnknownEnumValuesCannotAcquireAStringOrWireDiscriminant()
     {
-        var unknown = (VerifyingKeyBackendTag)2U;
+        var unknown = (VerifyingKeyBackendTag)3U;
 
         Assert.Throws<ArgumentOutOfRangeException>(() => unknown.CanonicalLabel());
         Assert.Throws<ArgumentOutOfRangeException>(() => unknown.NoritoDiscriminant());
@@ -106,8 +117,9 @@ public sealed class VerifyingKeyBackendTagTests
 
     [Theory]
     [InlineData("halo2/ipa")]
-    [InlineData("halo2/pasta/kaigi-authorization-v1")]
-    [InlineData("halo2/pasta/kaigi-usage-v1")]
+    [InlineData("pipa-r/pasta")]
+    [InlineData("pipa-r/pasta/kaigi-authorization-v1")]
+    [InlineData("pipa-r/pasta/kaigi-usage-v1")]
     [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
@@ -147,6 +159,9 @@ public sealed class VerifyingKeyBackendTagTests
         [
             null,
             "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/ipa/pasta/kaigi-authorization-v1",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "",

@@ -561,6 +561,13 @@ int32_t connect_norito_encode_envelope_sign_result_ok(
     const uint8_t* sig, unsigned long sig_len,
     uint8_t** out_ptr, unsigned long* out_len);
 
+// Encode the current signature algorithm and its exact signature bytes.
+int32_t connect_norito_encode_envelope_sign_result_ok_with_alg(
+    uint64_t seq,
+    const char* alg_ptr, unsigned long alg_len,
+    const uint8_t* sig_ptr, unsigned long sig_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+
 int32_t connect_norito_encode_envelope_sign_result_err(
     uint64_t seq,
     const uint8_t* code, unsigned long code_len,
@@ -1065,6 +1072,11 @@ int32_t connect_norito_decode_control_approve_account(
 int32_t connect_norito_decode_control_approve_sig(
     const uint8_t* inp, unsigned long inp_len,
     uint8_t* out_sig); // 64 bytes
+
+// Return the current wallet signature algorithm label from an Approve frame.
+int32_t connect_norito_decode_control_approve_sig_alg(
+    const uint8_t* inp_ptr, unsigned long inp_len,
+    char** out_alg_ptr, unsigned long* out_alg_len);
 
 int32_t connect_norito_decode_control_approve_account_json(
     const uint8_t* inp, unsigned long inp_len,

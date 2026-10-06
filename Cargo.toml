@@ -563,6 +563,15 @@ opt-level = 2
 [profile.test.package.fastpq_isi]
 opt-level = 2
 
+# FASTPQ proving and replay loops live in fastpq_prover, beyond fastpq_isi.
+# Optimize that owner identically for local nodes and tests while retaining
+# inherited assertions/overflow checks and the full canonical proof geometry.
+[profile.dev.package.fastpq_prover]
+opt-level = 2
+
+[profile.test.package.fastpq_prover]
+opt-level = 2
+
 # `iroha_data_model` is a very broad derive-heavy crate. LLVM `-O3` for this
 # one package exceeds the reviewed mobile release-build memory
 # envelope even with a single job and hundreds of codegen units. Measured O2

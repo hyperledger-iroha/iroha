@@ -271,7 +271,8 @@ pub fn decode_point<C: PastaCurve>(
     element: &LeElement<C::Base>,
 ) -> Result<NonIdentityPoint<C::Base>, Error> {
     let decoded = decode_point_soft(uint, ecc, region, element)?;
-    GlueChip::assert_constant(region, decoded.valid.word(), C::Base::ONE)?;
+    uint.glue()
+        .enforce_constant(region, decoded.valid.word(), C::Base::ONE)?;
     Ok(decoded.value)
 }
 

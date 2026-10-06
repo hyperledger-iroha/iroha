@@ -95,18 +95,13 @@
 //! flows, exercised by crash matrices over the simulated filesystem (process crashes, power
 //! loss with exhaustive survival subsets of unsynced directory operations, lost writebacks,
 //! faults during recovery and platform faults); run them with
-//! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Android Keystore/storage
-//! and iPhone Secure Enclave/keychain adapters exist in the SDKs. The shared state owner
-//! assembles G1 completions and retains its archive through this provider. The C callback
-//! adapter and opaque bridge handles exist; the authenticated proof-artifact loader, SDK
-//! registration and physical-phone qualification remain open.
-// TODO(G2-bridge): connect the Android JNI adapter and SDK platform registration to the
-// authenticated native owner. Foreign open fails closed until its proof-artifact loader exists.
-// TODO(G2-S): the E8 activation request and acknowledgement-driven capsule collection.
-// TODO(G2-iOS): physical-device tests of the Swift adapter's keychain power-loss durability
-// and residual anchor window.
-// TODO(G2-fs): typed descriptor-relative primitives in `iroha_fs` replace the path-based
-// `std::fs` backend in `store`.
+//! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Shared wallet state,
+//! authenticated archive indexes and descriptor-relative filesystem custody are implemented.
+//! Mobile callback adapters live in `connect_norito_bridge`; foreign open remains gated on
+//! the unfinished authenticated operation/Λ/Ω loader. Nothing here is phone qualification.
+// TODO(G3/G4): authenticated native proof-artifact loading and E8 activation integration.
+// TODO(G2-S): acknowledgement-driven retained witness collection.
+// TODO(G2-iOS): device tests of keychain power-loss durability and residual anchor window.
 
 mod advance;
 mod anchor;

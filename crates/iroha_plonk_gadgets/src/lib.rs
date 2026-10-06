@@ -62,10 +62,10 @@
 //! Every chip has typed assigned cells, a native reference, shared vectors,
 //! a per-cell tamper suite (each assigned advice cell, changed alone, must
 //! make the strict constraint checker fail) and an inventory test pinning
-//! its rows and cells per operation (`tests/`). Every gate has degree at
-//! most [`MAX_GATE_DEGREE`]: with exact cosets the quotient cost scales with
-//! `d - 1` (spec section 1 keeps the format cap at 9; this crate's policy is
-//! 6).
+//! its rows and cells per operation (`tests/`). Ordinary layouts have gate
+//! degree at most [`MAX_GATE_DEGREE`]. Explicit compact phase layouts use at
+//! most [`phase::MAX_COMPACT_GATE_DEGREE`] to share fixed columns; with exact
+//! cosets the quotient cost scales with `d - 1`. The format cap remains nine.
 //!
 //! # Layout
 //!
@@ -90,6 +90,7 @@ pub mod ecc;
 pub mod ff;
 pub mod imt;
 pub mod p256;
+pub mod phase;
 pub mod poseidon;
 pub mod pow5_fq;
 pub mod q_leaf;
@@ -108,3 +109,6 @@ pub use range::{LimbBits, RunningSumChip, RunningSumConfig, UintChip};
 
 /// The largest gate degree any chip of this crate uses.
 pub const MAX_GATE_DEGREE: usize = 6;
+
+pub mod word_hash;
+pub use word_hash::WordHasher;

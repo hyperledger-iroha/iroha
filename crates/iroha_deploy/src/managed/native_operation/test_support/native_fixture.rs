@@ -25,7 +25,7 @@ use iroha_core::{
     },
     state::{AllocationBudget, State, StateReadOnly},
     sumeragi::{
-        finality::{build_attestation, build_proof},
+        finality::{FinalityProofReader, build_attestation, build_proof, with_proof_reader},
         lanes::merge::NoLanes,
         node::NodeIdentity,
         test_chain::{CertifiedTestChain, PreparedTestChainConfig},
@@ -66,6 +66,7 @@ use iroha_torii_shared::{
 use iroha_version::codec::DecodeVersioned as _;
 use sorafs_manifest::deal::XorQuantity;
 use std::{
+    cell::RefCell,
     io::{self, Write as _},
     net::{Ipv4Addr, TcpListener},
     num::NonZeroU64,
@@ -222,10 +223,23 @@ impl NativeFixture {
     pub(in crate::managed) fn observe(&self, authority: &ServiceAuthority) -> FinalityVerifier {
         let genesis = self.finality_proof(NonZeroU64::new(1).unwrap()).unwrap();
         let mut verifier = FinalityVerifier::from_genesis(&authority.genesis, &genesis).unwrap();
-        assert_eq!(
-            verifier.observe(self, &rand::random()).unwrap().verified(),
-            4
-        );
+        // The original standalone genesis producer has returned before this lazy
+        // source exists. All four fresh attesters still use their independent native
+        // producers; only the later intermediate source reads share this immutable cut.
+        let view = self.chain.state().view();
+        with_proof_reader(&view, |reader| {
+            let source = NativeObservationSource {
+                native: self,
+                reader: RefCell::new(reader),
+            };
+            assert_eq!(
+                verifier
+                    .observe(&source, &rand::random())
+                    .unwrap()
+                    .verified(),
+                4
+            );
+        });
         assert_eq!(verifier.checkpoint().height(), self.chain.height());
         verifier
     }
@@ -306,6 +320,32 @@ impl NativeFixture {
         drop(charge);
         assert_eq!(budget.reserved_bytes(), 0);
         proof
+    }
+}
+
+// This transport borrows one callback-owned producer. It neither owns a second
+// history graph nor changes any attester's original status, signer or source checks.
+struct NativeObservationSource<'a, 'v, V: StateReadOnly> {
+    native: &'a NativeFixture,
+    reader: RefCell<&'a mut FinalityProofReader<'v, V>>,
+}
+
+impl<V: StateReadOnly> FinalitySource for NativeObservationSource<'_, '_, V> {
+    type Error = io::Error;
+
+    fn finality_proof(&self, height: NonZeroU64) -> io::Result<SumeragiFinalityProof> {
+        self.reader
+            .borrow_mut()
+            .proof(height.get())
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
+    fn latest_attestation(
+        &self,
+        peer: &PeerId,
+        challenge: &[u8; 32],
+    ) -> io::Result<SumeragiFinalityAttestation> {
+        self.native.latest_attestation(peer, challenge)
     }
 }
 
@@ -587,3 +627,7 @@ pub(in crate::managed) fn policy(authority: &ServiceAuthority) -> ReserveAuthori
         max_open_appeals_per_provider: 2,
     }
 }
+
+#[cfg(test)]
+#[path = "native_fixture/proof_reader_tests.rs"]
+mod proof_reader_tests;

@@ -778,7 +778,8 @@ pub fn assert_scalar_bytes<F: PastaField, G: PastaField>(
     region: &mut Region<'_, F>,
     element: &LeElement<F>,
 ) -> Result<(), Error> {
-    GlueChip::assert_constant(region, element.top.word(), F::ZERO)?;
+    uint.glue()
+        .enforce_constant(region, element.top.word(), F::ZERO)?;
     assert_le_max(
         uint,
         region,

@@ -15,6 +15,9 @@ PLATFORM_JNI_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/platform_jni.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
+  --self-test-missing-wallet-jni-symbol
+  --self-test-unknown-wallet-jni-symbol
+  --self-test-unknown-wallet-sign-symbol
   --self-test-retired-kagemusha-header-symbol
   --self-test-retired-kagemusha-rust-symbol
   --self-test-retired-kagemusha-jni-symbol
@@ -167,6 +170,10 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_resume_v1",
     "connect_norito_kagemusha_wallet_fold_v1",
     "connect_norito_kagemusha_wallet_credit_status_v1",
+}
+KAGEMUSHA_WALLET_JNI_EXPORTS = {
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
+    for method in ("revision", "open", "close", "activity", "call")
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_account_read_permission_multisig_signed_transaction",
@@ -414,6 +421,9 @@ exact("Rust KAGEMUSHA wallet", KAGEMUSHA_WALLET_EXPORTS, {
     name for name in native_c_exports if name.startswith("connect_norito_kagemusha_")
 })
 exact("C KAGEMUSHA wallet", KAGEMUSHA_WALLET_EXPORTS, header_exports("connect_norito_kagemusha_"))
+native_jni_exports = set(re.findall(r"\b(Java_[A-Za-z0-9_]*)\s*\(", native_rust))
+exact("current JNI wallet", KAGEMUSHA_WALLET_JNI_EXPORTS,
+      native_jni_exports & KAGEMUSHA_WALLET_JNI_EXPORTS)
 exact("retired Rust offline cash", set(), {
     name for name in native_c_exports if name.startswith("connect_norito_offline_cash_")
 })
@@ -428,8 +438,9 @@ exact(
     "retired JNI KAGEMUSHA",
     set(),
     {
-        name for name in re.findall(r"\b(Java_[A-Za-z0-9_]*)\s*\(", native_rust)
-        if "kagemusha" in name.lower() or name.startswith(retired_jni_prefixes)
+        name for name in native_jni_exports
+        if ("kagemusha" in name.lower() or name.startswith(retired_jni_prefixes))
+        and name not in KAGEMUSHA_WALLET_JNI_EXPORTS
     },
 )
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
@@ -728,6 +739,20 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-missing-wallet-jni-symbol)
+      replace_once "${tmp}/platform_jni/kagemusha_wallet_advance.rs" \
+        "fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call(" \
+        "fn removed_wallet_call("
+      expected_diagnostic="current JNI wallet inventory mismatch"
+      ;;
+    --self-test-unknown-wallet-jni-symbol)
+      printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_sign() -> jint { 0 }\n' >> "${tmp}/platform_jni/kagemusha_wallet_advance.rs"
+      expected_diagnostic="retired JNI KAGEMUSHA inventory mismatch"
+      ;;
+    --self-test-unknown-wallet-sign-symbol)
+      printf '\nint32_t connect_norito_kagemusha_wallet_sign_v1(void);\n' >> "${tmp_header}"
+      expected_diagnostic="C KAGEMUSHA wallet inventory mismatch: missing=[], extra=['connect_norito_kagemusha_wallet_sign_v1']"
+      ;;
     --self-test-retired-kagemusha-header-symbol)
       printf '\nint32_t connect_norito_kagemusha_retired_v1(void);\n' >> "${tmp_header}"
       expected_diagnostic="C KAGEMUSHA wallet inventory mismatch"

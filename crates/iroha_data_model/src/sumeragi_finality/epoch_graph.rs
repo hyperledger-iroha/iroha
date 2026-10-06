@@ -93,7 +93,8 @@ pub fn core_epoch(context: &ValidatorEpochContextV1) -> Result<EpochConfig, Sche
 /// At most two complete, immutable, fully validated contexts are retained. A hit requires
 /// exact value equality, never a caller-provided hash or epoch number. This has no certificate,
 /// source, freshness or authority verdict; consumers must still authenticate each current
-/// source and its signatures. Do not retain this workspace across proof walks or State views.
+/// source and its signatures. One operation may borrow it for independently selected checkpoint
+/// imports; it must be dropped when that operation returns. Do not retain it in State views.
 /// It cannot be serialized, cloned or populated with an unchecked decoded context.
 pub struct EpochValidationScope {
     entries: [Option<ValidatedEpoch>; 2],

@@ -1043,10 +1043,10 @@ fn the_indexed_tree_reproduces_the_g1_vectors() {
         let key = field_at(insertion, &["key_hex"]);
         let value = field_at(insertion, &["value_hex"]);
         let (low, low_slot, low_siblings) = leaf_opening_of(at(insertion, &["low"]));
-        let insertion = tree.insert(key, value).expect("insertion");
-        assert_eq!(insertion.leaf, low);
-        assert_eq!(insertion.leaf_slot, low_slot);
-        assert_eq!(insertion.leaf_siblings.to_vec(), low_siblings);
+        let inserted = tree.insert(key, value).expect("insertion");
+        assert_eq!(inserted.leaf, low);
+        assert_eq!(inserted.leaf_slot, low_slot);
+        assert_eq!(inserted.leaf_siblings.to_vec(), low_siblings);
         let linked = leaf_of(at(insertion, &["linked_low"]));
         assert_eq!(
             linked,
@@ -1066,9 +1066,9 @@ fn the_indexed_tree_reproduces_the_g1_vectors() {
             intermediate
         );
         let slot = at(insertion, &["slot"]).as_u64().expect("slot");
-        assert_eq!(u64::from(insertion.slot), slot);
+        assert_eq!(u64::from(inserted.slot), slot);
         let empty_siblings = fields_at(insertion, &["empty_slot_opening", "opening", "siblings"]);
-        assert_eq!(insertion.slot_siblings.to_vec(), empty_siblings);
+        assert_eq!(inserted.slot_siblings.to_vec(), empty_siblings);
         assert_eq!(
             path_root(INDEXED_NODE_DOMAIN, Fp::from(0_u64), slot, &empty_siblings),
             intermediate

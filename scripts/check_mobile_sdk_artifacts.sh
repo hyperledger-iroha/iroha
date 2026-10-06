@@ -485,6 +485,13 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_kagemusha_wallet_fold_v1
   connect_norito_kagemusha_wallet_credit_status_v1
 )
+REQUIRED_WALLET_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_open
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call
+)
 RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
   connect_norito_private_settlement_auditor_capsule_response
   verify
@@ -521,15 +528,24 @@ check_binary_symbols() {
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
   if [[ "$nm_mode" == "elf" ]]; then
+    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}"; do
+      if ! grep -Fxq "$symbol" <<<"$symbols"; then
+        fail "$label is missing $symbol"
+      fi
+    done
     local retired_jni_prefix
     for retired_jni_prefix in \
       Java_org_hyperledger_iroha_sdk_offline_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_probe_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_wallet_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_; do
-      if grep -Eq "^${retired_jni_prefix}" <<<"$symbols"; then
-        fail "$label exposes a retired KAGEMUSHA JNI namespace"
-      fi
+      while IFS= read -r symbol; do
+        [[ -n "$symbol" ]] || continue
+        case " ${REQUIRED_WALLET_JNI_SYMBOLS[*]} " in
+          *" ${symbol} "*) ;;
+          *) fail "$label exposes a retired KAGEMUSHA JNI namespace: $symbol" ;;
+        esac
+      done < <(grep -E "^${retired_jni_prefix}" <<<"$symbols" || true)
     done
   fi
   for symbol in "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"; do

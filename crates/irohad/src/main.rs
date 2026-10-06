@@ -12,6 +12,7 @@ pub mod beacon_bootstrap;
 mod compatibility_probe;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
+mod kagemusha_load_authorizer;
 /// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
 mod network_relay;
@@ -4867,6 +4868,16 @@ impl Iroha {
             }
         }
         let online_peers_provider = include!("main/online_peers_provider.rs");
+        let kagemusha_publisher = if emergency_fast {
+            None
+        } else {
+            kagemusha_load_authorizer::Service::new(
+                config.kagemusha_load_authorizer,
+                state.clone(),
+                queue.clone(),
+            )
+            .map_err(|message| Report::new(StartError::StartTorii).attach(message))?
+        };
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             NetworkId::from_genesis_hash(config.genesis.expected_hash),
@@ -4963,6 +4974,9 @@ impl Iroha {
             if let Some(child) = publication_child {
                 supervisor.monitor(child);
             }
+        }
+        if let Some(publisher) = kagemusha_publisher {
+            supervisor.monitor(publisher.start(supervisor.shutdown_signal()));
         }
         // Finalize NTS ownership only after every fallible startup preflight has
         // succeeded. Otherwise an early return would detach a task and retain
@@ -8536,7 +8550,6 @@ fn resolve_node_secrets_runtime_deps(config: &Config) -> ReportResult<IrohaRunti
 #[cfg(not(feature = "daemon"))]
 fn resolve_node_secrets_runtime_deps(
     _config: &Config,
-    _authenticated_genesis: Option<&crate::authenticated_genesis::AuthenticatedGenesis>,
 ) -> ReportResult<IrohaRuntimeDeps, MainError> {
     Err(Report::new(MainError::Config).attach("data_dir node secrets require the daemon feature"))
 }

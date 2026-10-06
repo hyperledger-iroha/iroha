@@ -19,7 +19,13 @@ use iroha_plonk_recursion::{
 };
 
 use super::{AFramePlan, LINEAGE_DOMAIN, LineagePublicCells};
-use crate::{operation_relation::statement::StatementCells, q_sigma::QSigmaPlan};
+use crate::{
+    operation_relation::{
+        incoming_statement::{IncomingStatementCells, StatementView},
+        statement::StatementCells,
+    },
+    q_sigma::QSigmaPlan,
+};
 
 /// Constrains a canonical Fq scalar to its injective native Fp subfield encoding.
 /// This is the bridge for the Bounded and Bits columns verified by A.
@@ -150,9 +156,15 @@ impl VestaClaimCells {
 /// Each field must be copied from the owning operation and byte-tape relation.
 #[derive(Clone, Debug)]
 pub struct SigmaBindingCells {
-    statement: StatementCells,
+    statement: BoundStatement,
     key_index: Word<Fp>,
     proof_chunks: Vec<Word<Fp>>,
+    step_digest: Option<Word<Fp>>,
+}
+#[derive(Clone, Debug)]
+enum BoundStatement {
+    Own(Box<StatementCells>),
+    Incoming(Box<IncomingStatementCells>),
 }
 impl SigmaBindingCells {
     /// Copies a validated statement, operation-derived selector and byte chunks.
@@ -164,14 +176,115 @@ impl SigmaBindingCells {
         proof_chunks: Vec<Word<Fp>>,
     ) -> Self {
         Self {
-            statement: statement.clone(),
+            statement: BoundStatement::Own(Box::new(statement.clone())),
             key_index,
             proof_chunks,
+            step_digest: None,
         }
     }
     /// The statement whose digest is bound to the Q slot.
-    pub const fn statement(&self) -> &StatementCells {
-        &self.statement
+    pub fn statement(&self) -> &dyn StatementView {
+        match &self.statement {
+            BoundStatement::Own(statement) => statement.as_ref(),
+            BoundStatement::Incoming(statement) => statement.as_ref(),
+        }
+    }
+    /// Hard own statement, unavailable for a total incoming statement.
+    ///
+    /// # Errors
+    /// The binding belongs to an incoming slot.
+    pub fn hard_statement(&self) -> Result<&StatementCells, Error> {
+        match &self.statement {
+            BoundStatement::Own(statement) => Ok(statement),
+            BoundStatement::Incoming(_) => Err(Error::Synthesis),
+        }
+    }
+    /// Copies a total incoming statement and its original proof carrier chunks.
+    /// Its semantic validity joins the incoming Q verdict during binding; it is
+    /// never asserted hard and its original digest is never replaced by a dummy.
+    pub fn from_incoming(
+        statement: &IncomingStatementCells,
+        key_index: Word<Fp>,
+        proof_chunks: Vec<Word<Fp>>,
+    ) -> Self {
+        Self {
+            statement: BoundStatement::Incoming(Box::new(statement.clone())),
+            key_index,
+            proof_chunks,
+            step_digest: None,
+        }
+    }
+
+    /// Bind the exact `LE32 length || sigma` tape and its sigma-only digest.
+    /// The primary segments must be the canonical contiguous 31-byte chunks;
+    /// a four-byte little-endian secondary segment carries the actual length.
+    /// These are the same chunks checked against the hard Q sigma export.
+    ///
+    /// # Errors
+    /// Wrong fixed framing, missing bounded chunks or layout failure. A wrong
+    /// actual length is unsatisfiable. Send/Unload/Retiring must separately hash
+    /// their complete Omega-plus-sigma carrier instead of this step digest.
+    pub fn from_run(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        statement: &StatementCells,
+        key_index: Word<Fp>,
+        run: &iroha_plonk_gadgets::bytes::tape::ByteRun<Fp>,
+    ) -> Result<Self, Error> {
+        use iroha_plonk_gadgets::{
+            UintChip,
+            bytes::{PBytes, tape::SegmentSpec},
+        };
+        let body = run.len().checked_sub(4).ok_or(Error::Synthesis)?;
+        if body == 0 || !body.is_multiple_of(32) {
+            return Err(Error::Synthesis);
+        }
+        let length = chip.uint().range_check::<32>(
+            region,
+            run.secondary_segment(SegmentSpec::little(0, 4))?.word(),
+        )?;
+        GlueChip::assert_constant(
+            region,
+            length.word(),
+            Fp::from(u64::try_from(body).map_err(|_| Error::BoundsFailure)?),
+        )?;
+        let mut bytes = PBytes::new();
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        for segment in run.primary() {
+            let expected = (run.len() - offset).min(31);
+            if segment.spec() != SegmentSpec::little(offset, expected) {
+                return Err(Error::Synthesis);
+            }
+            bytes.push_bounded(segment.bounded().ok_or(Error::Synthesis)?)?;
+            chunks.push(segment.word().clone());
+            offset += expected;
+        }
+        if bytes.len() != run.len() {
+            return Err(Error::Synthesis);
+        }
+        let lanes = chip.operation_lanes()?;
+        let mut uint = UintChip::new(lanes.glue, lanes.range);
+        let digest = bytes.digest(
+            uint.glue(),
+            lanes.hash,
+            region,
+            u64::from_le_bytes(*b"kgwstep1"),
+        )?;
+        Ok(Self {
+            statement: BoundStatement::Own(Box::new(statement.clone())),
+            key_index,
+            proof_chunks: chunks,
+            step_digest: Some(digest),
+        })
+    }
+
+    /// Same-tape sigma-only receipt digest, available only after `from_run`.
+    ///
+    /// # Errors
+    /// The binding was constructed without an authenticated digest tape.
+    pub fn step_digest(&self) -> Result<&Word<Fp>, Error> {
+        self.step_digest.as_ref().ok_or(Error::Synthesis)
     }
 }
 
@@ -186,10 +299,12 @@ pub struct BoundSigmaCells {
     pub incoming_mode: Option<ModeCells<Fp>>,
 }
 
-// Called only by bind_sigma after verify_sigma hard-verifies these exact cells
-// with QSigmaPlan's five fixed instance types. The hard verifier has already
-// proved Bounded/Bits membership, and ScalarCells retain canonical S6 bounds.
-// Recomposition is therefore injective in Fp without a duplicate comparison.
+// bind_sigma consumes the exact QSigmaPlan five-column frame. It is either
+// already hard-verified, or committed in a predecessor-first A1 context whose
+// mandatory A2 continuation hard-verifies these identical canonical S6 cells.
+// That complete relation proves Bounded/Bits membership, so recomposition is
+// injective in Fp without a duplicate comparison. A1/W alone cannot accept a
+// lineage or authenticate a deferred Q frame.
 fn verified_bounded_word(
     chip: &mut VerifierChip<Ep>,
     region: &mut Region<'_, Fp>,
@@ -206,8 +321,9 @@ fn verified_bounded_word(
 }
 
 /// Links every `Q_sigma` public value to its operation and supplied byte tape.
-/// Private to A: the sole caller passes the exact cells it has hard-verified
-/// using the plan's fixed five-column instance types.
+/// Private to A: callers pass cells hard-verified using the fixed five-column
+/// types, or context-committed cells whose identical values must be verified by
+/// the continuation before it can close. An intermediate A1/W is not accepted.
 /// Wrong incoming statements/selectors contribute a soft failure; own ones
 /// are hard. Chunk equalities are always hard so a witness cannot substitute
 /// different proof bytes merely to justify a burn.
@@ -232,7 +348,10 @@ pub(super) fn bind_sigma(
     }
     let mut incoming_valid = None;
     for (slot, binding) in bindings.iter().enumerate() {
-        let digest = binding.statement.digest();
+        if (slot == 0) != matches!(binding.statement, BoundStatement::Own(_)) {
+            return Err(Error::Synthesis);
+        }
+        let digest = binding.statement().digest();
         let actual = verified_bounded_word(chip, region, &instances[0][slot])?;
         let digest_matches = chip.uint().glue().is_equal(region, digest, &actual)?;
         let index = verified_bounded_word(chip, region, &instances[2][slot])?;
@@ -250,7 +369,10 @@ pub(super) fn bind_sigma(
         if slot == 0 {
             GlueChip::assert_constant(region, valid.word(), Fp::ONE)?;
         } else {
-            incoming_valid = Some(valid);
+            let BoundStatement::Incoming(statement) = &binding.statement else {
+                return Err(Error::Synthesis);
+            };
+            incoming_valid = Some(chip.uint().glue().and(region, &valid, statement.valid())?);
         }
         let chunks = plan.chunk_range(slot).ok_or(Error::Synthesis)?;
         if chunks.len() != binding.proof_chunks.len() {
@@ -304,11 +426,19 @@ pub fn lineage_digest(
     public: &LineagePublicCells,
     accumulator: &FoldInputCells<Ep>,
 ) -> Result<Word<Fp>, Error> {
+    lineage_digest_fields(chip, region, public.fields(), accumulator)
+}
+pub(super) fn lineage_digest_fields(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    fields: &[Word<Fp>; super::LINEAGE_FIELDS],
+    accumulator: &FoldInputCells<Ep>,
+) -> Result<Word<Fp>, Error> {
     if accumulator.source() != FoldSource::Fixed(16) {
         return Err(Error::Synthesis);
     }
     GlueChip::assert_constant(region, accumulator.source_k(), Fp::from(16))?;
-    let mut words = public.fields().to_vec();
+    let mut words = fields.to_vec();
     words.extend([accumulator.g().x().clone(), accumulator.g().y().clone()]);
     for scalar in accumulator.challenges() {
         words.extend([scalar.lo().word().clone(), scalar.hi().word().clone()]);
@@ -350,7 +480,16 @@ impl AOutputCells {
         region: &mut Region<'_, Fp>,
         plan: AFramePlan,
     ) -> Result<Vec<Word<Fp>>, Error> {
-        if self.sigma_part.source_k() != plan.part_source_k()
+        self.words_with_source(chip, region, plan, plan.part_source_k())
+    }
+    pub(super) fn words_with_source(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: AFramePlan,
+        source_k: u32,
+    ) -> Result<Vec<Word<Fp>>, Error> {
+        if self.sigma_part.source_k() != source_k
             || self.predecessor.is_some() != plan.has_predecessor()
             || self.incoming.is_some() != plan.has_incoming()
             || self
@@ -367,7 +506,7 @@ impl AOutputCells {
         let source = chip
             .uint()
             .glue()
-            .constant(region, Fp::from(u64::from(plan.part_source_k())))?;
+            .constant(region, Fp::from(u64::from(source_k)))?;
         let mut words = vec![self.digest.clone(), source];
         words.extend(self.sigma_part.words());
         let trivial = VestaClaimCells::trivial(chip, region)?;

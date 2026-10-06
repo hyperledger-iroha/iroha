@@ -6,9 +6,19 @@
 //! with it before the resulting circuit can authorize a lineage update.
 
 mod binding;
+pub mod bootstrap;
 pub mod context;
 mod frame;
+mod incoming_lineage;
+pub mod load;
+pub mod schedule;
+pub mod send;
+pub mod split;
+pub use incoming_lineage::IncomingLineageCells;
 mod proof;
+mod signature;
+
+pub use signature::{SignatureProofCells, bind_signature_q};
 
 pub use binding::{
     AOutputCells, BoundSigmaCells, IncomingVestaCells, SigmaBindingCells, VestaClaimCells,

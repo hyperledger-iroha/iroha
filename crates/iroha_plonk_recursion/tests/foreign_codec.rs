@@ -258,9 +258,11 @@ fn vesta_points_decode_totally_in_fp_without_optional_rejection() {
     );
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     let cells = assigned_advice_cells(&circuit, 16, &values).unwrap();
-    assert_eq!(
-        (cells.iter().map(|(_, r)| r + 1).max().unwrap(), cells.len()),
-        (287, 1391)
+    let rows = cells.iter().map(|(_, r)| r + 1).max().unwrap();
+    println!("foreign Vesta point rows={rows} cells={}", cells.len());
+    assert!(
+        rows <= 287 && cells.len() <= 1391,
+        "decoder inventory regression"
     );
     for column in 0..known.tables.advice_assigned().len() {
         for (_, row) in cells

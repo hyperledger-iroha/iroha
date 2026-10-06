@@ -8710,9 +8710,10 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
         case .withdrawn:
             status = 2
         }
-        let backendTag: UInt32 = request.backend.hasPrefix("stark/")
-            ? VerifyingKeyBackendTag.stark.noritoDiscriminant
-            : VerifyingKeyBackendTag.halo2IpaPasta.noritoDiscriminant
+        guard let engine = VerifyingKeyBackendTag.registryTag(request.backend) else {
+            throw invalid("request backend is not a canonical verifier registry label")
+        }
+        let backendTag = engine.noritoDiscriminant
         return ToriiVerifyingKeyExpectedRecord(
             version: request.version,
             circuitId: request.circuitId,

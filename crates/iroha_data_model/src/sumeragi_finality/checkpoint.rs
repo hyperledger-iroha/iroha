@@ -165,6 +165,25 @@ impl SumeragiFinalityCheckpoint {
     /// # Errors
     /// Empty, oversized, noncanonical or structurally malformed checkpoint.
     pub fn decode_canonical(bytes: &[u8]) -> Result<Self, FinalityError> {
+        Self::decode_canonical_with_validation(bytes, None)
+    }
+
+    /// Decode the original canonical frame with pure context work borrowed by one operation.
+    /// Every byte and allocation still uses the original finite decoder. An active enclosing
+    /// decoder owner ignores this workspace and preserves the independent bounds validation.
+    ///
+    /// # Errors
+    /// Exactly the same frame, structural and resource failures as [`Self::decode_canonical`].
+    pub fn decode_canonical_with_validation(
+        bytes: &[u8],
+        validation: Option<&mut EpochValidationScope>,
+    ) -> Result<Self, FinalityError> {
+        // Sample before entering the native decoder's own input-derived scope.
+        let validation = if norito::core::decode_limits_active() {
+            None
+        } else {
+            validation
+        };
         need(
             !bytes.is_empty() && bytes.len() <= MAX_FINALITY_CHECKPOINT_BYTES,
             "checkpoint frame exceeds bound",
@@ -174,7 +193,7 @@ impl SumeragiFinalityCheckpoint {
             norito::canonical_decode_limits(bytes.len()),
         )
         .map_err(malformed)?;
-        value.validate_bounds()?;
+        value.validate_bounds_with_validation(validation)?;
         Ok(value)
     }
     fn validate_bounds(&self) -> Result<(), FinalityError> {
@@ -325,7 +344,7 @@ impl SumeragiFinalityVerifier {
 
     /// Authenticate an owned or borrowed selected checkpoint before consuming its exact tip.
     ///
-    /// This is the single checkpoint import producer. The consumer runs exactly once after
+    /// This independent entry uses the single canonical producer. The consumer runs once after
     /// the complete signed-genesis, retained-decision and native tip authentication succeeds;
     /// it receives the original source owner, resumed verifier and already authenticated tip.
     /// Discarding consumers can return a small owner without returning the full decoded graph.
@@ -349,15 +368,45 @@ impl SumeragiFinalityVerifier {
     where
         C: std::borrow::Borrow<SumeragiFinalityCheckpoint>,
     {
-        // Optional epoch reuse is lexical to this complete import. An existing cumulative
-        // decoder owner keeps the original independent scopes and optional retention charges;
-        // never move its admitted work into a fresh shared scope. Signed genesis is fully
-        // authenticated and reconstructed before exact pure epoch reuse; every native frame,
-        // roster and certificate is reread.
-        let mut validation =
-            (!norito::core::decode_limits_active()).then(EpochValidationScope::new);
+        Self::from_trusted_checkpoint_with_validation_consumer(
+            checkpoint, network, chain_id, None, consume,
+        )
+    }
+
+    /// Authenticate a selected checkpoint while borrowing exact pure epoch work from its owner.
+    /// This is the single canonical producer behind independent and operation-scoped imports.
+    /// The two-slot workspace carries no proof, certificate, source or authority verdict.
+    /// Each entry independently ignores it under an active enclosing decoder owner, preserving
+    /// the original scopes, physical decode charges and refusal ordering. Native genesis and
+    /// the workspace borrow end before the consumer; an external workspace remains owned by
+    /// the enclosing operation, while an independent import drops its local workspace here.
+    ///
+    /// # Errors
+    /// Exactly the same signed source, bounds, network, retained decision, certificate and
+    /// canonical resource failures as [`Self::from_trusted_checkpoint_with_consumer`].
+    #[inline(never)]
+    pub fn from_trusted_checkpoint_with_validation_consumer<C, T>(
+        checkpoint: C,
+        network: &NetworkId,
+        chain_id: &str,
+        shared_validation: Option<&mut EpochValidationScope>,
+        consume: impl FnOnce(C, Self, VerifiedSumeragiBlock) -> T,
+    ) -> Result<T, super::FinalityReadError>
+    where
+        C: std::borrow::Borrow<SumeragiFinalityCheckpoint>,
+    {
+        // No caller callback runs until native authentication is complete. Intrinsic decoder
+        // scopes retain their original work; only an owner active at this entry disables reuse.
+        let active_owner = norito::core::decode_limits_active();
+        let mut local_validation =
+            (!active_owner && shared_validation.is_none()).then(EpochValidationScope::new);
+        let mut validation = if active_owner {
+            None
+        } else {
+            shared_validation.or(local_validation.as_mut())
+        };
         let selected = checkpoint.borrow();
-        selected.validate_bounds_with_validation(validation.as_mut())?;
+        selected.validate_bounds_with_validation(validation.as_deref_mut())?;
         need(
             selected.network_id == *network && selected.chain_id == chain_id,
             "checkpoint differs from independently selected network or chain",
@@ -390,7 +439,7 @@ impl SumeragiFinalityVerifier {
             &genesis,
             chain_id,
             selected.genesis_committee.clone(),
-            validation.as_ref(),
+            validation.as_deref(),
         )?;
         verifier.decisions = selected
             .decisions
@@ -417,11 +466,12 @@ impl SumeragiFinalityVerifier {
         }
         // Retain the capability produced by this complete single-witness verification.
         let tip = verifier
-            .verify_retained_decision_with_validation(&selected.tip, validation.as_mut())?;
+            .verify_retained_decision_with_validation(&selected.tip, validation.as_deref_mut())?;
         drop(genesis);
-        // Only exact, fully validated nonsecret epoch contexts were retained. Release this
-        // bounded workspace before transferring any source, verifier or tip to a consumer.
+        // End borrowed access before the consumer. Independent imports also release their
+        // bounded pure workspace here; a borrowed workspace remains with its operation owner.
         drop(validation);
+        drop(local_validation);
         Ok(consume(checkpoint, verifier, tip))
     }
 }

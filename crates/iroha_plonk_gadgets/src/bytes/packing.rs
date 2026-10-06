@@ -37,9 +37,10 @@ use super::{
     tape::{ByteRun, BytesChip, SegmentSpec},
 };
 use crate::{
+    WordHasher,
     arith::GlueChip,
     cells::Word,
-    poseidon::{AbsorbInput, SpongeChip},
+    poseidon::AbsorbInput,
     range::{running_sum::RunningSumChip, u128::UintChip},
 };
 
@@ -329,7 +330,7 @@ impl<F: PastaField> PBytes<F> {
     pub fn digest(
         &self,
         glue: &mut GlueChip<F>,
-        sponge: &mut SpongeChip<F>,
+        sponge: &mut impl WordHasher<F>,
         region: &mut Region<'_, F>,
         domain: u64,
     ) -> Result<Word<F>, Error>
@@ -338,7 +339,7 @@ impl<F: PastaField> PBytes<F> {
     {
         let items = self.items(glue, region)?;
         let inputs: Vec<AbsorbInput<'_, F>> = items.iter().map(PackedItem::absorb).collect();
-        sponge.hash(region, domain, &inputs)
+        sponge.hash_inputs(region, domain, &inputs)
     }
 }
 

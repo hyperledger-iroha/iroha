@@ -557,9 +557,8 @@ mod tests {
         );
         let manifest = &fixture.manifest;
         let signed_manifest = &fixture.signed_manifest;
-        assert_eq!(
-            manifest.signature_payload(),
-            signed_manifest.signature_payload(),
+        assert!(
+            manifest.same_signed_content(signed_manifest),
             "provenance must not change the signed payload"
         );
         let provenance = signed_manifest

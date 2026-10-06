@@ -14,8 +14,9 @@ public static class VerifierBackendRegistryLabels
     private static readonly string[] SupportedLabels =
     [
         "halo2/ipa",
-        "halo2/pasta/kaigi-authorization-v1",
-        "halo2/pasta/kaigi-usage-v1",
+        "pipa-r/pasta",
+        "pipa-r/pasta/kaigi-authorization-v1",
+        "pipa-r/pasta/kaigi-usage-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",

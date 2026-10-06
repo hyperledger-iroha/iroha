@@ -64,6 +64,12 @@ macro_rules! record_inventory {
 
 record_inventory! {
 record!(
+    kagemusha_wallet_ledger_v1,
+    crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
+    "iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1"
+);
+
+record!(
     sorafs_assert_publication_v1,
     crate::isi::sorafs::AssertSorafsPublicationV1,
     "iroha_data_model::isi::sorafs::AssertSorafsPublicationV1"

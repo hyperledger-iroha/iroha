@@ -11,6 +11,8 @@ use iroha_plonk::cs::{
     Advice, Column, ConstraintSystem, Expression, Fixed, Rotation, Selector, VirtualCells,
 };
 
+use crate::phase::{Enable, PhaseColumns};
+
 use super::{
     ECC_ADVICE_COLUMNS,
     native::{SplitConstants, beta, coordinates, two_pow, two_pow_128},
@@ -125,25 +127,25 @@ fn init_constraints<F: PastaField>(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Selectors {
     /// On-curve-or-identity of `(a0, a1)` and of `(a2, a3)`.
-    pub point: [Selector; 2],
+    pub point: [Enable; 2],
     /// On-curve (never the identity) of `(a0, a1)` and of `(a2, a3)`.
-    pub curve: [Selector; 2],
+    pub curve: [Enable; 2],
     /// The chain's initial row (non-identity base).
-    pub init: Selector,
+    pub init: Enable,
     /// The chain's initial row with the identity guard.
-    pub init_guarded: Selector,
+    pub init_guarded: Enable,
     /// One incomplete double-and-add iteration.
-    pub incomplete: Selector,
+    pub incomplete: Enable,
     /// The digit point of one complete iteration.
-    pub select: Selector,
+    pub select: Enable,
     /// The even-digit correction `-E`.
-    pub tail: Selector,
+    pub tail: Enable,
     /// One complete addition.
-    pub add: Selector,
+    pub add: Enable,
     /// The guarded output.
-    pub guard_out: Selector,
+    pub guard_out: Enable,
     /// The GLV split check.
-    pub split: Selector,
+    pub split: Enable,
 }
 
 /// The fixed-base columns and selectors.
@@ -169,24 +171,54 @@ pub(super) fn configure_variable_base<C: PastaCurve>(
     advice: Advices,
 ) -> Selectors {
     let selectors = Selectors {
-        point: [meta.selector(), meta.selector()],
-        curve: [meta.selector(), meta.selector()],
-        init: meta.selector(),
-        init_guarded: meta.selector(),
-        incomplete: meta.selector(),
-        select: meta.selector(),
-        tail: meta.selector(),
-        add: meta.selector(),
-        guard_out: meta.selector(),
-        split: meta.selector(),
+        point: [meta.selector().into(), meta.selector().into()],
+        curve: [meta.selector().into(), meta.selector().into()],
+        init: meta.selector().into(),
+        init_guarded: meta.selector().into(),
+        incomplete: meta.selector().into(),
+        select: meta.selector().into(),
+        tail: meta.selector().into(),
+        add: meta.selector().into(),
+        guard_out: meta.selector().into(),
+        split: meta.selector().into(),
     };
-    configure_points::<C>(meta, advice, &selectors);
-    configure_init::<C>(meta, advice, &selectors);
-    configure_iterations::<C>(meta, advice, &selectors);
+    configure_variable_base_with::<C>(meta, advice, &selectors)
+}
+
+/// Compact ECC phase; paired codes are mutually exclusive in the fixed layout.
+pub(super) fn configure_variable_base_phased<C: PastaCurve>(
+    meta: &mut ConstraintSystem<C::Base>,
+    advice: Advices,
+    phases: PhaseColumns,
+) -> Selectors {
+    let code = |column, code, largest| phases.enable(1, Some((column, code, largest)));
+    let selectors = Selectors {
+        point: [code(0, 1, 3), code(1, 1, 3)],
+        curve: [code(0, 2, 3), code(1, 2, 3)],
+        init: code(2, 1, 4),
+        init_guarded: code(2, 2, 4),
+        incomplete: code(3, 1, 3),
+        select: code(3, 2, 3),
+        tail: code(4, 1, 2),
+        add: code(4, 2, 2),
+        guard_out: code(5, 1, 4),
+        split: code(5, 2, 4),
+    };
+    configure_variable_base_with::<C>(meta, advice, &selectors)
+}
+
+fn configure_variable_base_with<C: PastaCurve>(
+    meta: &mut ConstraintSystem<C::Base>,
+    advice: Advices,
+    selectors: &Selectors,
+) -> Selectors {
+    configure_points::<C>(meta, advice, selectors);
+    configure_init::<C>(meta, advice, selectors);
+    configure_iterations::<C>(meta, advice, selectors);
     configure_complete_add(meta, advice, selectors.add);
     configure_guard_out(meta, advice, selectors.guard_out);
     configure_split::<C>(meta, advice, selectors.split);
-    selectors
+    *selectors
 }
 
 /// The on-curve gates.
@@ -199,7 +231,7 @@ fn configure_points<C: PastaCurve>(
     for (half, (point, curve)) in selectors.point.into_iter().zip(selectors.curve).enumerate() {
         let (x_column, y_column) = (2 * half, 2 * half + 1);
         meta.create_gate("ecc on curve or identity", |cells| {
-            let q = cells.query_selector(point);
+            let q = point.query(cells);
             let x = adv(cells, &advice, x_column, 0);
             let y = adv(cells, &advice, y_column, 0);
             let residue = y.clone() * y.clone() - x.clone() * x.clone() * x.clone() - constant(b);
@@ -212,7 +244,7 @@ fn configure_points<C: PastaCurve>(
             )
         });
         meta.create_gate("ecc on curve", |cells| {
-            let q = cells.query_selector(curve);
+            let q = curve.query(cells);
             let x = adv(cells, &advice, x_column, 0);
             let y = adv(cells, &advice, y_column, 0);
             gated(
@@ -235,7 +267,7 @@ fn configure_init<C: PastaCurve>(
     let beta = beta::<C>();
     let (g_x, g_y) = coordinates(&C::generator());
     meta.create_gate("ecc glv init", |cells| {
-        let q = cells.query_selector(selectors.init);
+        let q = selectors.init.query(cells);
         let x = adv(cells, &advice, 2, 0);
         let y = adv(cells, &advice, 3, 0);
         let lambda_d = adv(cells, &advice, 4, 0);
@@ -256,7 +288,7 @@ fn configure_init<C: PastaCurve>(
         gated(&q, polys)
     });
     meta.create_gate("ecc glv guarded init", |cells| {
-        let q = cells.query_selector(selectors.init_guarded);
+        let q = selectors.init_guarded.query(cells);
         let is_identity = adv(cells, &advice, 0, 0);
         let inverse = adv(cells, &advice, 1, 0);
         let x_in = adv(cells, &advice, 2, 0);
@@ -304,7 +336,7 @@ fn configure_iterations<C: PastaCurve>(
     let beta_squared = beta.square();
     let two = C::Base::from(2);
     meta.create_gate("ecc glv incomplete double-and-add", |cells| {
-        let q = cells.query_selector(selectors.incomplete);
+        let q = selectors.incomplete.query(cells);
         let cur: [Expression<C::Base>; ECC_ADVICE_COLUMNS] =
             core::array::from_fn(|column| adv(cells, &advice, column, 0));
         let [x_next, y_next, run_1_next, run_2_next] =
@@ -355,7 +387,7 @@ fn configure_iterations<C: PastaCurve>(
         gated(&q, polys)
     });
     meta.create_gate("ecc glv complete-iteration digit point", |cells| {
-        let q = cells.query_selector(selectors.select);
+        let q = selectors.select.query(cells);
         let run_1 = adv(cells, &advice, 2, 0);
         let run_2 = adv(cells, &advice, 3, 0);
         let base = [6, 7, 8, 9].map(|column| adv(cells, &advice, column, 0));
@@ -379,7 +411,7 @@ fn configure_iterations<C: PastaCurve>(
         gated(&q, polys)
     });
     meta.create_gate("ecc glv even-digit correction", |cells| {
-        let q = cells.query_selector(selectors.tail);
+        let q = selectors.tail.query(cells);
         let x_p = adv(cells, &advice, 6, 0);
         let y_p = adv(cells, &advice, 7, 0);
         let x_e = adv(cells, &advice, 0, 1);
@@ -410,10 +442,10 @@ fn configure_iterations<C: PastaCurve>(
 fn configure_complete_add<F: PastaField>(
     meta: &mut ConstraintSystem<F>,
     advice: Advices,
-    selector: Selector,
+    selector: Enable,
 ) {
     meta.create_gate("ecc complete addition", |cells| {
-        let q = cells.query_selector(selector);
+        let q = selector.query(cells);
         let cur: [Expression<F>; 9] = core::array::from_fn(|column| adv(cells, &advice, column, 0));
         let x_r = adv(cells, &advice, 2, 1);
         let y_r = adv(cells, &advice, 3, 1);
@@ -483,10 +515,10 @@ fn configure_complete_add<F: PastaField>(
 fn configure_guard_out<F: PastaField>(
     meta: &mut ConstraintSystem<F>,
     advice: Advices,
-    selector: Selector,
+    selector: Enable,
 ) {
     meta.create_gate("ecc glv guarded output", |cells| {
-        let q = cells.query_selector(selector);
+        let q = selector.query(cells);
         let is_identity = adv(cells, &advice, 0, 0);
         let x = adv(cells, &advice, 2, 0);
         let y = adv(cells, &advice, 3, 0);
@@ -510,7 +542,7 @@ fn configure_guard_out<F: PastaField>(
 fn configure_split<C: PastaCurve>(
     meta: &mut ConstraintSystem<C::Base>,
     advice: Advices,
-    selector: Selector,
+    selector: Enable,
 ) {
     let k = SplitConstants::<C::Base>::new::<C>();
     let two = C::Base::from(2);
@@ -519,7 +551,7 @@ fn configure_split<C: PastaCurve>(
     let two_136 = two_pow::<C::Base>(136);
     let two_67 = two_pow::<C::Base>(67);
     meta.create_gate("ecc glv split", |cells| {
-        let q = cells.query_selector(selector);
+        let q = selector.query(cells);
         let [f1, b1, f2, b2] = [0, 1, 2, 3].map(|column| adv(cells, &advice, column, -1));
         let [b2_high, lo, hi, h0] = [0, 1, 2, 3].map(|column| adv(cells, &advice, column, 0));
         let [h1, u_low, u_high, v_shifted] =

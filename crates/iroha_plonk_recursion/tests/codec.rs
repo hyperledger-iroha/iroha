@@ -598,27 +598,21 @@ fn tamper<C: PastaCurve>() {
             "scalar",
             &scalar,
             scalar_expected::<C>(&scalar.bytes, InstanceType::Bounded),
-            (
-                99,
-                if C::ScalarExt::MODULUS == Fp::MODULUS {
-                    240
-                } else {
-                    237
-                },
-            ),
+            if C::ScalarExt::MODULUS == Fp::MODULUS {
+                (34, 149)
+            } else {
+                (66, 204)
+            },
         ),
         (
             "invalid scalar",
             &invalid_scalar,
             scalar_expected::<C>(&invalid_scalar.bytes, InstanceType::Bounded),
-            (
-                99,
-                if C::ScalarExt::MODULUS == Fp::MODULUS {
-                    240
-                } else {
-                    237
-                },
-            ),
+            if C::ScalarExt::MODULUS == Fp::MODULUS {
+                (34, 149)
+            } else {
+                (66, 204)
+            },
         ),
         (
             "point",
@@ -637,7 +631,7 @@ fn tamper<C: PastaCurve>() {
             &challenge,
             expected_challenge,
             if C::ScalarExt::MODULUS == Fp::MODULUS {
-                (164, 232)
+                (163, 227)
             } else {
                 (66, 84)
             },
@@ -647,7 +641,7 @@ fn tamper<C: PastaCurve>() {
             &small_challenge,
             vec![C::Base::ONE, C::Base::ONE, C::Base::ZERO],
             if C::ScalarExt::MODULUS == Fp::MODULUS {
-                (164, 232)
+                (163, 227)
             } else {
                 (66, 84)
             },

@@ -57,6 +57,7 @@ macro_rules! governance_wire_id {
 /// Complete canonical wire-ID inventory for built-in instructions.
 pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(RegisterBox => "iroha.register"),
+    built_in_wire_id!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1 => "iroha.kagemusha.wallet.ledger.v1", register),
     built_in_wire_id!(UnregisterBox => "iroha.unregister"),
     built_in_wire_id!(MintBox => "iroha.mint"),
     built_in_wire_id!(BurnBox => "iroha.burn"),

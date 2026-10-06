@@ -40,12 +40,13 @@
 
 use iroha_pasta::poseidon::PoseidonField;
 use iroha_plonk::{
-    cs::{ConstraintSystem, Rotation, Selector},
+    cs::{ConstraintSystem, Rotation},
     frontend::{Error, Region},
 };
 
 use crate::{
     cells::{Word, assign_word},
+    phase::{Enable, PhaseColumns},
     poseidon::{
         Absorb, AbsorbInput, Pow5Chip, Pow5Columns, Pow5State, ROWS_PER_PERMUTATION,
         RoundConstantColumns, SpongeChip, SpongeConfig, raw_initial_state, raw_permutations,
@@ -82,7 +83,7 @@ fn padded_blocks<'w, F: PoseidonField>(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DuplexConfig<F> {
     sponge: SpongeConfig<F>,
-    q_tap: Selector,
+    q_tap: Enable,
 }
 
 impl<F: PoseidonField> DuplexConfig<F> {
@@ -96,9 +97,29 @@ impl<F: PoseidonField> DuplexConfig<F> {
         folded: &[(u64, usize)],
     ) -> Self {
         let sponge = SpongeConfig::configure(meta, lane, round_constants, folded);
-        let q_tap = meta.selector();
+        let q_tap = meta.selector().into();
+        Self::configure_tap(meta, lane, sponge, q_tap)
+    }
+
+    /// Configures transcript mode on the shared compact phase columns.
+    /// Every domain and arity is absorbed explicitly into the raw sponge.
+    pub fn configure_phased(
+        meta: &mut ConstraintSystem<F>,
+        lane: Pow5Columns,
+        phases: PhaseColumns,
+    ) -> Self {
+        let sponge = SpongeConfig::configure_phased(meta, lane, phases);
+        Self::configure_tap(meta, lane, sponge, phases.enable(2, Some((5, 2, 2))))
+    }
+
+    fn configure_tap(
+        meta: &mut ConstraintSystem<F>,
+        lane: Pow5Columns,
+        sponge: SpongeConfig<F>,
+        q_tap: Enable,
+    ) -> Self {
         meta.create_gate("duplex tap", |cells| {
-            let q = cells.query_selector(q_tap);
+            let q = q_tap.query(cells);
             let tap = cells.query_advice(lane.aux, Rotation::cur());
             let word1 = cells.query_advice(lane.state[1], Rotation::next());
             vec![("x - s1[next]", q * (tap - word1))]
@@ -136,7 +157,7 @@ impl<F: PoseidonField> Pending<F> {
 #[derive(Debug)]
 pub struct DuplexChip<F: PoseidonField> {
     sponge: SpongeChip<F>,
-    q_tap: Selector,
+    q_tap: Enable,
     state: Option<Pow5State<F>>,
     buffer: Vec<Pending<F>>,
 }
@@ -151,6 +172,28 @@ impl<F: PoseidonField> DuplexChip<F> {
             state: None,
             buffer: Vec::new(),
         }
+    }
+
+    /// Constructs an empty lane confined to `[0,end_row)`.
+    #[must_use]
+    pub fn bounded(config: DuplexConfig<F>, end_row: usize) -> Self {
+        let mut chip = Self::new(config);
+        chip.sponge
+            .lane_mut()
+            .bound_rows(end_row)
+            .expect("new lane is empty");
+        chip
+    }
+
+    /// Routes absorbed constants through a caller-reserved arithmetic lane.
+    /// Copies bind the fixed-coefficient result to the exact transcript cell.
+    ///
+    /// # Errors
+    /// The source is not a bounded shared coefficient-only lane containing
+    /// the transcript copy port, or this transcript already reserved rows.
+    pub fn with_constant_source(mut self, source: crate::GlueChip<F>) -> Result<Self, Error> {
+        self.sponge.lane_mut().set_constant_source(source)?;
+        Ok(self)
     }
 
     /// The lane.

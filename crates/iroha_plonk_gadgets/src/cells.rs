@@ -198,6 +198,48 @@ impl RowCursor {
     }
 }
 
+/// A deterministic reservation cursor shared by chips using the same columns.
+/// Clones retain the same cursor within one synthesis; they must never be
+/// retained across independent synthesis runs. Reservations are single-threaded
+/// and structural, with the same checked bound as [`RowCursor`].
+#[derive(Clone, Debug)]
+pub struct SharedRows {
+    next: std::rc::Rc<std::cell::Cell<usize>>,
+    end: usize,
+}
+impl SharedRows {
+    /// Shares a fresh cursor over the supplied interval.
+    #[must_use]
+    pub fn new(rows: RowCursor) -> Self {
+        Self {
+            next: std::rc::Rc::new(std::cell::Cell::new(rows.next_row())),
+            end: rows.end(),
+        }
+    }
+    /// The next unreserved row, including reservations by other owners.
+    #[must_use]
+    pub fn next_row(&self) -> usize {
+        self.next.get()
+    }
+    pub(crate) const fn is_bounded(&self) -> bool {
+        self.end != usize::MAX
+    }
+
+    /// Reserves one consecutive interval. A refusal leaves every clone intact.
+    ///
+    /// # Errors
+    /// Arithmetic overflow or the interval's fixed end would be exceeded.
+    pub fn take(&self, rows: usize) -> Result<usize, Error> {
+        let start = self.next.get();
+        let next = start
+            .checked_add(rows)
+            .filter(|next| *next <= self.end)
+            .ok_or(Error::BoundsFailure)?;
+        self.next.set(next);
+        Ok(start)
+    }
+}
+
 /// Assigns `value` to `column` at `row` and wraps it as a [`Word`].
 pub(crate) fn assign_word<F: PastaField>(
     region: &mut Region<'_, F>,
@@ -268,6 +310,21 @@ mod tests {
         assert_eq!(bounded.take(1), Ok(13));
         assert_eq!(bounded.take(0), Ok(14));
         assert_eq!(RowCursor::default().end(), usize::MAX);
+    }
+
+    #[test]
+    fn shared_rows_preserve_disjoint_reservations_and_refusal() {
+        let owner = SharedRows::new(RowCursor::bounded(8, 16));
+        let second = owner.clone();
+        assert_eq!(owner.take(3), Ok(8));
+        assert_eq!(second.take(2), Ok(11));
+        assert_eq!(owner.next_row(), 13);
+        assert_eq!(second.take(4), Err(Error::BoundsFailure));
+        assert_eq!(owner.next_row(), 13);
+        assert_eq!(owner.take(3), Ok(13));
+        assert_eq!(second.next_row(), 16);
+        let independent = SharedRows::new(RowCursor::starting_at(0));
+        assert_eq!(independent.next_row(), 0);
     }
 
     #[test]

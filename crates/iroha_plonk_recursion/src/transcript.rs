@@ -16,7 +16,7 @@ use iroha_plonk::{
     frontend::{Error, Region},
 };
 use iroha_plonk_gadgets::{
-    Word,
+    Word, WordHasher,
     ecc::NonIdentityPoint,
     pow5_fq::{DuplexChip, DuplexConfig},
     range::u128::UintChip,
@@ -37,17 +37,7 @@ impl<C: PastaCurve> crate::verifier::VerifierChip<C> {
         words: &[Word<C::Base>],
     ) -> Result<Word<C::Base>, Error> {
         let duplex = self.duplex.as_mut().ok_or(Error::Synthesis)?;
-        if !duplex.is_clear() || duplex.buffered() != 0 {
-            return Err(Error::Synthesis);
-        }
-        duplex.absorb_constant(C::Base::from(domain));
-        duplex.absorb_constant(C::Base::from(
-            u64::try_from(words.len()).map_err(|_| Error::BoundsFailure)?,
-        ));
-        for word in words {
-            duplex.absorb(word);
-        }
-        duplex.squeeze_and_clear(region)
+        duplex.hash_words(region, domain, words)
     }
 }
 

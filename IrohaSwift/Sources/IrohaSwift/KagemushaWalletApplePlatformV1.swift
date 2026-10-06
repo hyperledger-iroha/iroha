@@ -15,8 +15,8 @@ import Security
 // `errSecItemNotFound` observed while protected data was available before and after the
 // query; every other error is unavailable and never read as absence.
 //
-// TODO(G2-bridge): connect_norito_bridge registers this adapter as the C vtable behind the
-// Rust `KagemushaWalletPlatformV1` (kagemusha_wallet_advance_v1/platform.rs). The
+// KagemushaWalletV1 supplies the retained C vtable to Rust. Foreign open remains gated
+// on the authenticated operation/Λ/Ω artifact loader. The
 // vtable-facing methods stay internal so app code reaches the payment key and the anchor only
 // through the Rust provider: `keySign` with an arbitrary 32-byte message would bypass the
 // domain-checked signers that compute it. The bridge obtains the custody root path (which

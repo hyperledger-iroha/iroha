@@ -3122,6 +3122,14 @@
       }
     ]
   },
+  "CanManageKagemushaWallet": {
+    "Struct": [
+      {
+        "name": "asset_definition",
+        "type": "AssetDefinitionId"
+      }
+    ]
+  },
   "CanManagePeers": null,
   "CanManageRoles": null,
   "CanManageSmartContractCode": null,
@@ -3255,6 +3263,22 @@
       {
         "name": "deployment_id",
         "type": "String"
+      }
+    ]
+  },
+  "CanPublishKagemushaLoadVoucher": {
+    "Struct": [
+      {
+        "name": "asset_definition",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "scheme",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "authorizer_certificate",
+        "type": "Array<u8, 32>"
       }
     ]
   },
@@ -11472,6 +11496,254 @@
     ]
   },
   "Json": "String",
+  "KagemushaWalletLedgerActionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "register",
+        "type": "KagemushaWalletLedgerActionV1::Register"
+      },
+      {
+        "discriminant": 1,
+        "tag": "activate",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 2,
+        "tag": "abandon",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 3,
+        "tag": "close_loads",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 4,
+        "tag": "issue_load",
+        "type": "KagemushaWalletLedgerActionV1::IssueLoad"
+      },
+      {
+        "discriminant": 5,
+        "tag": "unload",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 6,
+        "tag": "claim_fee",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 7,
+        "tag": "retain_certificate",
+        "type": "KagemushaWalletLedgerActionV1::RetainCertificate"
+      },
+      {
+        "discriminant": 8,
+        "tag": "retain_credential",
+        "type": "KagemushaWalletLedgerActionV1::RetainCredential"
+      },
+      {
+        "discriminant": 9,
+        "tag": "retain_request",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 10,
+        "tag": "publish_voucher",
+        "type": "KagemushaWalletLedgerActionV1::PublishVoucher"
+      },
+      {
+        "discriminant": 11,
+        "tag": "rotate_load_authorizer",
+        "type": "KagemushaWalletLedgerActionV1::RotateLoadAuthorizer"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::IssueLoad": {
+    "Struct": [
+      {
+        "name": "wallet",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "request_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "charge",
+        "type": "Option<KagemushaWalletLoadChargeV1>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::PublishVoucher": {
+    "Struct": [
+      {
+        "name": "request_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "voucher",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::Register": {
+    "Struct": [
+      {
+        "name": "scheme",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "asset",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "reserve",
+        "type": "AccountId"
+      },
+      {
+        "name": "balance_scope",
+        "type": "AssetBalanceScope"
+      },
+      {
+        "name": "load_authorizer",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::RetainCertificate": {
+    "Struct": [
+      {
+        "name": "asset",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "certificate",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::RetainCredential": {
+    "Struct": [
+      {
+        "name": "credential",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "certificates",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::RotateLoadAuthorizer": {
+    "Struct": [
+      {
+        "name": "asset",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "certificate",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerV1": {
+    "Struct": [
+      {
+        "name": "scheme",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "action",
+        "type": "KagemushaWalletLedgerActionV1"
+      }
+    ]
+  },
+  "KagemushaWalletLoadChargeV1": {
+    "Struct": [
+      {
+        "name": "quote",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "beneficiary",
+        "type": "AccountId"
+      }
+    ]
+  },
+  "KagemushaWalletLoadIssuanceV1": {
+    "Struct": [
+      {
+        "name": "request_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "payer",
+        "type": "AccountId"
+      },
+      {
+        "name": "body",
+        "type": "KagemushaWalletLoadVoucherBodyV1"
+      },
+      {
+        "name": "voucher",
+        "type": "Option<Vec<u8>>"
+      }
+    ]
+  },
+  "KagemushaWalletLoadVoucherBodyV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "scheme_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "asset_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "wallet_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "ordinal",
+        "type": "u128"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "online_charge",
+        "type": "u128"
+      },
+      {
+        "name": "charge_quote",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "transaction_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "block_height",
+        "type": "u64"
+      },
+      {
+        "name": "authorizer_certificate",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "KaigiId": {
     "Struct": [
       {
@@ -16615,6 +16887,9 @@
   },
   "Option<HashOf<TransactionEntrypoint>>": {
     "Option": "HashOf<TransactionEntrypoint>"
+  },
+  "Option<KagemushaWalletLoadChargeV1>": {
+    "Option": "KagemushaWalletLoadChargeV1"
   },
   "Option<KeyedHash>": {
     "Option": "KeyedHash"

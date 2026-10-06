@@ -3689,6 +3689,8 @@ function encodeBackendTagValue(value, context) {
       return encodeEnumTagValue(0);
     case "stark":
       return encodeEnumTagValue(1);
+    case "native-pipa-r-pasta":
+      return encodeEnumTagValue(2);
     default:
       rejectError(`${context} uses unknown or non-canonical backend label ${backend}`);
   }
@@ -3703,6 +3705,8 @@ function decodeBackendTagValue(payload, context) {
       return "halo2-ipa-pasta";
     case 1:
       return "stark";
+    case 2:
+      return "native-pipa-r-pasta";
     default:
       rejectError(`${context}${TEXT_USES_UNSUPPORTED}backend tag ${tag}`);
   }

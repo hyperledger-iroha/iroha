@@ -67,7 +67,8 @@ pub struct AProofPlan {
 }
 impl AProofPlan {
     /// Fixes every hard Q, predecessor/incoming Omega and fold slot.
-    /// Bootstrap requires exactly one Q and has no Omega verifier or `F_P` proof.
+    /// Bootstrap has no Omega verifier. One Q is forwarded; multiple Q
+    /// openings require the fixed hard Q-only `F_P` fold.
     ///
     /// # Errors
     /// Any fixed descriptor, variant, slot count or instance-shape mismatch.
@@ -119,8 +120,8 @@ impl AProofPlan {
                 return Err(Error::Synthesis);
             }
         }
-        let pallas_fold = if frame.has_predecessor() {
-            let mut sources = vec![FoldSource::Fixed(16); 2];
+        let pallas_fold = if frame.has_predecessor() || q.len() > 1 {
+            let mut sources = vec![FoldSource::Fixed(16); 2 * usize::from(frame.has_predecessor())];
             if frame.has_incoming() {
                 sources.extend([FoldSource::Incoming(16); 2]);
             }
@@ -215,6 +216,7 @@ pub struct VerifiedQCells {
     pub(super) index: usize,
     pub(super) opening: FoldInputCells<Ep>,
     pub(super) instances: Vec<Vec<ScalarCells<Ep>>>,
+    pub(super) key_digest: Word<Fp>,
 }
 impl VerifiedQCells {
     /// The retained generator obligation; verifying the Q does not decide it.
@@ -249,6 +251,7 @@ pub fn verify_q(
     Ok(VerifiedQCells {
         index,
         instances: instances.to_vec(),
+        key_digest: output.key_digest.clone(),
         opening: FoldInputCells::from_claim(chip, region, &output.claim)?,
     })
 }
@@ -273,6 +276,7 @@ pub fn verify_sigma(
 /// A predecessor's hard proof and separately retained transported claims.
 #[derive(Clone, Debug)]
 pub struct PredecessorCells {
+    pub(super) public: [Word<Fp>; 18],
     pub(super) pallas: FoldInputCells<Ep>,
     pub(super) opening: FoldInputCells<Ep>,
     pub(super) vesta: VestaClaimCells,
@@ -341,6 +345,7 @@ pub fn verify_predecessor(
         successor.omega_key_digest(),
     )?;
     Ok(PredecessorCells {
+        public: public.fields().clone(),
         pallas: pallas.clone(),
         opening: FoldInputCells::from_claim(chip, region, &output.claim)?,
         vesta: vesta.clone(),
@@ -351,9 +356,14 @@ pub fn verify_predecessor(
 #[must_use = "include incoming.valid in the global branch rule"]
 #[derive(Clone, Debug)]
 pub struct IncomingOmegaCells {
+    pub(super) carried_key: Word<Fp>,
+    pub(super) lineage_valid: Bit<Fp>,
+    pub(super) public: [Word<Fp>; 18],
+    pub(super) vesta: VestaClaimCells,
+    pub(super) proof: ProofMessageCells,
     /// Proof, key continuity and both transported-decoder checks.
     pub valid: Bit<Fp>,
-    pallas: FoldInputCells<Ep>,
+    pub(super) pallas: FoldInputCells<Ep>,
     opening: FoldInputCells<Ep>,
 }
 
@@ -369,7 +379,7 @@ pub fn verify_incoming(
     region: &mut Region<'_, Fp>,
     plan: &AProofPlan,
     key: &VerifierKeyCells<Ep>,
-    public: &LineagePublicCells,
+    public: &super::IncomingLineageCells,
     carried_key: &Word<Fp>,
     pallas: &FoldInputCells<Ep>,
     vesta: &VestaClaimCells,
@@ -380,7 +390,7 @@ pub fn verify_incoming(
         return Err(Error::Synthesis);
     }
     let omega = plan.omega.as_ref().ok_or(Error::Synthesis)?;
-    let digest = lineage_digest(chip, region, public, pallas)?;
+    let digest = super::binding::lineage_digest_fields(chip, region, public.fields(), pallas)?;
     let instances = omega_instances(chip, region, &digest, vesta)?;
     let output = chip.verify(
         region,
@@ -398,10 +408,16 @@ pub fn verify_incoming(
         .glue()
         .is_equal(region, public.omega_key_digest(), carried_key)?;
     let mut valid = chip.uint().glue().and(region, &output.valid, &same_key)?;
+    valid = chip.uint().glue().and(region, &valid, public.valid())?;
     for bit in decode_bits {
         valid = chip.uint().glue().and(region, &valid, bit)?;
     }
     Ok(IncomingOmegaCells {
+        carried_key: carried_key.clone(),
+        lineage_valid: public.valid().clone(),
+        public: public.fields().clone(),
+        vesta: vesta.clone(),
+        proof: proof.clone(),
         valid,
         pallas: pallas.clone(),
         opening: FoldInputCells::from_claim(chip, region, &output.claim)?,
@@ -411,6 +427,9 @@ pub fn verify_incoming(
 /// Explicit mode-selected pair retaining both incoming Pallas obligations.
 #[derive(Clone, Debug)]
 pub struct SelectedPallasCells {
+    pub(super) origin: IncomingOmegaCells,
+    pub(super) modes: [ModeCells<Fp>; 2],
+    pub(super) corrected: [iroha_plonk_gadgets::ecc::NonIdentityPoint<Fp>; 2],
     pub(super) pallas: FoldInputCells<Ep>,
     pub(super) opening: FoldInputCells<Ep>,
 }
@@ -428,6 +447,9 @@ pub fn select_incoming(
     corrected: &[iroha_plonk_gadgets::ecc::NonIdentityPoint<Fp>; 2],
 ) -> Result<SelectedPallasCells, Error> {
     Ok(SelectedPallasCells {
+        origin: incoming.clone(),
+        modes: modes.clone(),
+        corrected: corrected.clone(),
         pallas: FoldInputCells::select_incoming(
             chip,
             region,
@@ -487,6 +509,13 @@ pub fn fold_pallas(
         || q.iter().enumerate().any(|(index, q)| index != q.index)
     {
         return Err(Error::Synthesis);
+    }
+    for (expected, value) in plan.q.iter().zip(q) {
+        let digest = expected
+            .key
+            .kagemusha_digest(expected.verifier.binding())
+            .map_err(|_| Error::Synthesis)?;
+        GlueChip::assert_constant(region, &value.key_digest, digest)?;
     }
     let Some(fold_plan) = &plan.pallas_fold else {
         if fold.is_some() || q.len() != 1 {

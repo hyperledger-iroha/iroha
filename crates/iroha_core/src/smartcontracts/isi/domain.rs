@@ -798,6 +798,12 @@ pub mod isi {
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata::try_from(permission) {
             return &permission.asset_definition == asset_definition_id;
         }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet::try_from(permission) {
+            return &permission.asset_definition == asset_definition_id;
+        }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher::try_from(permission) {
+            return &permission.asset_definition == asset_definition_id;
+        }
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
             return &permission.asset_definition == asset_definition_id;
         }
@@ -1340,6 +1346,16 @@ pub mod isi {
                     .into(),
                 )
                     .into());
+            }
+            if crate::kagemusha_wallet_v1::custody::is_reserve_account(
+                state_transaction.world(),
+                &account_id,
+            )
+            .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister account {account_id}: it is permanent KAGEMUSHA reserve custody").into(),
+                ).into());
             }
             if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
                 state_transaction,
@@ -2407,6 +2423,16 @@ pub mod isi {
                     .into(),
                 )
                     .into());
+            }
+            if crate::kagemusha_wallet_v1::custody::is_reserve_definition(
+                state_transaction.world(),
+                &asset_definition_id,
+            )
+            .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister asset definition {asset_definition_id}: it is permanent KAGEMUSHA reserve custody").into(),
+                ).into());
             }
             let privacy_reserve_custody =
                 crate::privacy_state::load_privacy_public_reserve_custody_v1(

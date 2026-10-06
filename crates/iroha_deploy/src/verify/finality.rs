@@ -29,9 +29,9 @@ use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, SignedBlock},
     sumeragi_finality::{
-        FinalityError as NativeFinalityError, FinalityValidator, ScheduledSlot,
-        SumeragiFinalityAttestation, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
-        SumeragiFinalityVerifier, VerifiedSumeragiBlock,
+        EpochValidationScope, FinalityError as NativeFinalityError, FinalityValidator,
+        ScheduledSlot, SumeragiFinalityAttestation, SumeragiFinalityCheckpoint,
+        SumeragiFinalityProof, SumeragiFinalityVerifier, VerifiedSumeragiBlock,
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -402,10 +402,25 @@ impl FinalityVerifier {
         expected_network: NetworkId,
         expected_chain: &str,
     ) -> Result<Self, FinalityError> {
-        SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+        Self::from_checkpoint_with_validation(checkpoint, expected_network, expected_chain, None)
+    }
+
+    pub(crate) fn from_checkpoint_with_validation(
+        checkpoint: SumeragiFinalityCheckpoint,
+        expected_network: NetworkId,
+        expected_chain: &str,
+        validation: Option<&mut EpochValidationScope>,
+    ) -> Result<Self, FinalityError> {
+        let validation = if norito::core::decode_limits_active() {
+            None
+        } else {
+            validation
+        };
+        SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
             checkpoint,
             &expected_network,
             expected_chain,
+            validation,
             |checkpoint, native, verified_tip| {
                 // The original importer discarded this verifier before the committee check.
                 drop(native);

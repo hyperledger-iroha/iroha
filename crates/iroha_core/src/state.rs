@@ -1232,6 +1232,7 @@ macro_rules! with_world_overlay_fields {
             privacy_consensus_policy,
             privacy_exact12_qualification,
             privacy_activations,
+            kagemusha_wallet_ledger,
             private_settlement_governance,
             private_settlement_pools,
             private_settlement_roots,
@@ -4075,6 +4076,8 @@ pub struct WorldData {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Canonical KAGEMUSHA reserve ledger, permanent replay indexes and historical objects.
+    pub(crate) kagemusha_wallet_ledger: Storage<crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
     /// Public pool-governance projections keyed by opaque route and pool identity.
     /// Restricted asset identifiers and commitment salts are never persisted here.
     pub(crate) private_settlement_governance:
@@ -5020,6 +5023,9 @@ pub struct WorldBlockFields<'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Canonical KAGEMUSHA ledger overlay.
+    pub(crate) kagemusha_wallet_ledger:
+        StorageField<'world, crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageField<
         'world,
@@ -5758,6 +5764,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.verifying_keys, VerifyingKey);
         collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
         collect_reverts!(self.privacy_activations, PrivacyActivation);
+        collect_reverts!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_reverts!(
             self.private_settlement_governance,
             PrivateSettlementGovernance
@@ -5859,6 +5866,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.verifying_keys, VerifyingKey);
         collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
         collect_payload!(self.privacy_activations, PrivacyActivation);
+        collect_payload!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_payload!(
             self.private_settlement_governance,
             PrivateSettlementGovernance
@@ -6070,6 +6078,7 @@ impl WorldBlock<'_> {
             poseidon_params,
             runtime_upgrades,
             privacy_activations,
+            kagemusha_wallet_ledger,
             private_settlement_governance,
             private_settlement_pools,
             private_settlement_roots,
@@ -6654,6 +6663,9 @@ pub struct WorldTransaction<'block, 'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Canonical KAGEMUSHA ledger transaction.
+    pub(crate) kagemusha_wallet_ledger:
+        StorageTransaction<'block, crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageTransaction<
         'block,
@@ -8873,6 +8885,10 @@ pub struct WorldView<'world> {
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
     /// Public private-settlement governance projection view.
+    /// Canonical KAGEMUSHA ledger read view.
+    pub(crate) kagemusha_wallet_ledger:
+        StorageView<'world, crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
+    /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageView<
         'world,
         PrivateSettlementPoolKeyV1,
@@ -20571,6 +20587,8 @@ macro_rules! world_ro_accessors {
     };
     (runtime_and_proofs, $mode:ident) => {
         world_ro_accessors!(@items $mode;
+            /// Canonical KAGEMUSHA reserve ledger and permanent replay indexes.
+            storage kagemusha_wallet_ledger: crate::kagemusha_wallet_v1::LedgerKey => Vec<u8>;
             /// Latest committed transaction sequence per authority (read-only).
             storage tx_sequences: AccountId => u64;
             /// Trigger set (read-only).
@@ -24385,6 +24403,7 @@ impl WorldTransaction<'_, '_> {
             privacy_consensus_policy: _,
             privacy_exact12_qualification: _,
             privacy_activations: _,
+            kagemusha_wallet_ledger: _,
             private_settlement_governance: _,
             private_settlement_pools: _,
             private_settlement_roots: _,
@@ -24608,6 +24627,7 @@ impl WorldTransaction<'_, '_> {
         self.privacy_consensus_policy.apply();
         self.privacy_exact12_qualification.apply();
         self.privacy_activations.apply();
+        self.kagemusha_wallet_ledger.apply();
         self.private_settlement_governance.apply();
         self.private_settlement_pools.apply();
         self.private_settlement_roots.apply();

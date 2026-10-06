@@ -843,7 +843,7 @@ mod tests {
         assert_eq!(one.glue_lane(), 0);
         assert_eq!(one.glue_start(), Ok(69 * 37));
         let two = LanePlan::new(send, 2);
-        // 17 | 17, then 15 onto 17 (lane 0 on the tie), 15 onto 17, 5 onto
+        // 18 | 18, then 14 onto 18 (lane 0 on the tie), 14 onto 18, 5 onto
         // the tie 32 | 32.
         assert_eq!(two.lane_permutations(), &[37, 32]);
         assert_eq!(two.lane_of(HashSite::Predecessor), 0);

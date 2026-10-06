@@ -6,6 +6,8 @@
 //! and the held scheme policy enables it; with every control off, no clock condition, list or
 //! quota blocks payment. Policies never undo completed credit (§7).
 
+use core::cmp::Ordering;
+
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -629,18 +631,7 @@ impl KagemushaWalletFeeScheduleV1 {
 /// Entries order by the limb integer `hi · 2^128 + lo` of the digest's two σ limbs, the 32
 /// bytes read as one little-endian integer (owner answer A4).
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Decode,
-    Encode,
-    IntoSchema,
-    norito::NoritoSchema,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Decode, Encode, IntoSchema, norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletBlacklistEntryV1"
@@ -648,6 +639,18 @@ impl KagemushaWalletFeeScheduleV1 {
 pub struct KagemushaWalletBlacklistEntryV1 {
     /// Listed account digest (`H("account", AccountId frame)`).
     pub account_digest: [u8; 32],
+}
+
+impl Ord for KagemushaWalletBlacklistEntryV1 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        kagemusha_wallet_integer_cmp_v1(&self.account_digest, &other.account_digest)
+    }
+}
+
+impl PartialOrd for KagemushaWalletBlacklistEntryV1 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Gap leaf `P(kgwblkl1, limbs(lower) || limbs(upper))` (§7): the two 32-byte account digests
@@ -682,13 +685,7 @@ fn blacklist_node_v1(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     poseidon_items_v1(KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1, &[*left, *right])
 }
 
-/// Whether `left < right` in limb order (owner answer A4).
-fn limb_less_v1(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    kagemusha_wallet_integer_cmp_v1(left, right) == core::cmp::Ordering::Less
-}
-
-/// Validate entry order: strictly ascending in limb order, at most the maximum, no sentinel
-/// value.
+/// Validate little-endian integer order: strictly ascending, at most the maximum, no sentinel.
 fn validate_blacklist_entries_v1(entries: &[KagemushaWalletBlacklistEntryV1]) -> WalletResult<()> {
     let count = u32::try_from(entries.len()).map_err(|_| overflow_v1("blacklist.entries"))?;
     if count > KAGEMUSHA_WALLET_BLACKLIST_ENTRIES_MAX_V1 {
@@ -702,7 +699,9 @@ fn validate_blacklist_entries_v1(entries: &[KagemushaWalletBlacklistEntryV1]) ->
         {
             return Err(invalid_v1("blacklist.sentinel"));
         }
-        if previous.is_some_and(|previous| !limb_less_v1(previous, digest)) {
+        if previous.is_some_and(|previous| {
+            kagemusha_wallet_integer_cmp_v1(previous, digest) != Ordering::Less
+        }) {
             return Err(invalid_v1("blacklist.order"));
         }
         previous = Some(digest);
@@ -763,8 +762,8 @@ fn blacklist_levels_v1(
     Ok((levels, padding))
 }
 
-/// Gap-tree root of a sorted entry list: a Poseidon tree of fixed depth 16 over 65,536 gap
-/// leaves (§7); one canonical σ-field value.
+/// Gap-tree root of an entry list sorted by little-endian integer order: a Poseidon tree of
+/// fixed depth 16 over 65,536 gap leaves (§7); one canonical σ-field value.
 ///
 /// Gap `i` lies between the limb-ordered sentinels `s_0 = 00..00`, the entries, and
 /// `s_{n+1} = FF..FF`; unused leaves are the gap leaf of `FF..FF || FF..FF`.
@@ -879,7 +878,8 @@ impl KagemushaWalletBlacklistGapOpeningV1 {
     /// Rejects an account outside the gap (a listed account or a sentinel) and a path that
     /// does not reach `entries_root`.
     pub fn verify(&self, entries_root: &[u8; 32], account_digest: &[u8; 32]) -> WalletResult<()> {
-        if !(limb_less_v1(&self.lower, account_digest) && limb_less_v1(account_digest, &self.upper))
+        if kagemusha_wallet_integer_cmp_v1(&self.lower, account_digest) != Ordering::Less
+            || kagemusha_wallet_integer_cmp_v1(account_digest, &self.upper) != Ordering::Less
         {
             return Err(invalid_v1("blacklist.listed"));
         }
@@ -1070,9 +1070,9 @@ impl KagemushaWalletBlacklistV1 {
         {
             return Err(invalid_v1("blacklist.account_digest"));
         }
-        let index = self
-            .entries
-            .partition_point(|entry| limb_less_v1(&entry.account_digest, account_digest));
+        let index = self.entries.partition_point(|entry| {
+            kagemusha_wallet_integer_cmp_v1(&entry.account_digest, account_digest) == Ordering::Less
+        });
         let upper = self
             .entries
             .get(index)

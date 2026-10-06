@@ -27,7 +27,7 @@ pub struct PlatformReply {
 impl Default for PlatformReply {
     fn default() -> Self {
         Self {
-            tag: 2,
+            tag: u32::MAX,
             reason: 4,
             code: 0,
             length: 0,

@@ -64,6 +64,10 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_fold_v1
   connect_norito_kagemusha_wallet_credit_status_v1
 )
+wallet_jni_symbols=()
+for method in revision open close activity call; do
+  wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
+done
 required_protocol_symbols=(
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
   "${wallet_symbols[@]}"
@@ -115,6 +119,7 @@ while IFS= read -r symbol; do
   required_fixture_symbols+=("$symbol")
 done < <(bash -c 'source "$1"; printf "%s\n" "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"' gate "$symbol_gate_dir/gate.sh")
 [[ "${#required_fixture_symbols[@]}" -gt 0 ]] || fail "required protocol symbols could not be read"
+required_jni_fixture_symbols=("${wallet_jni_symbols[@]}")
 retired_offline_prefix="$(bash -c 'source "$1"; printf "%s" "$RETIRED_KAGEMUSHA_C_PREFIX"' gate "$symbol_gate_dir/gate.sh")"
 [[ "$retired_offline_prefix" == connect_norito_*_ ]] || fail "retired offline prefix could not be read"
 
@@ -125,6 +130,9 @@ run_symbol_gate() {
   [[ "$mode" == "apple" ]] && prefix="_"
   {
     printf "${prefix}%s\n" "${required_fixture_symbols[@]}"
+    if [[ "$mode" == "elf" ]]; then
+      printf '%s\n' "${required_jni_fixture_symbols[@]}"
+    fi
     if [[ "$#" -gt 0 ]]; then
       printf '%s\n' "$@"
     fi
@@ -144,6 +152,9 @@ for mode in elf apple; do
     || fail "binary-symbol gate rejected the exact $mode protocol inventory"
 done
 for retired in \
+  "elf connect_norito_kagemusha_wallet_sign_v1" \
+  "elf connect_norito_kagemusha_wallet_open_v2" \
+  "elf Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_sign" \
   "elf connect_norito_kagemusha_wallet_v1_validate" \
   "elf connect_norito_kagemusha_wallet_unknown_v1" \
   "apple _connect_norito_kagemusha_wallet_commit_v2" \
@@ -161,6 +172,27 @@ for retired in \
   grep -Eq 'retired KAGEMUSHA (C|JNI) namespace' <<<"$output" \
     || fail "binary-symbol gate rejected $retired without naming the retired namespace"
 done
+retired_jni_symbols=()
+for ((index = 0; index < 2048; index++)); do
+  retired_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_unknown${index}")
+done
+if output="$(run_symbol_gate elf "${retired_jni_symbols[@]}")"; then
+  fail "binary-symbol gate accepted a large retired JNI inventory"
+fi
+grep -Fq 'retired KAGEMUSHA JNI namespace' <<<"$output" \
+  || fail "binary-symbol gate did not identify the large retired JNI inventory"
+for missing in "${wallet_jni_symbols[@]}"; do
+  required_jni_fixture_symbols=()
+  for symbol in "${wallet_jni_symbols[@]}"; do
+    [[ "$symbol" == "$missing" ]] || required_jni_fixture_symbols+=("$symbol")
+  done
+  if output="$(run_symbol_gate elf)"; then
+    fail "binary-symbol gate accepted missing wallet JNI export $missing"
+  fi
+  grep -Fq "missing $missing" <<<"$output" \
+    || fail "binary-symbol gate did not identify missing wallet JNI export $missing"
+done
+required_jni_fixture_symbols=("${wallet_jni_symbols[@]}")
 complete_required_symbols=("${required_fixture_symbols[@]}")
 required_fixture_symbols=("${complete_required_symbols[@]:1}")
 if run_symbol_gate elf >/dev/null; then

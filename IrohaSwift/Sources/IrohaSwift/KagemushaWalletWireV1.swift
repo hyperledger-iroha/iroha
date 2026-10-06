@@ -17,7 +17,7 @@ import Foundation
 // that they are canonical (``KagemushaWalletWireV1/isCanonicalFieldValue(_:)``).
 //
 // TODO(G4): typed Swift decoding and `validate()` of the wallet message bodies (or the shared
-// Rust core over the native bridge) when the Swift wallet wire migrates; structural envelope
+// Rust core over the native bridge); structural envelope
 // validation here carries no monetary or delivery authority on its own.
 
 /// Failure of a KAGEMUSHA wallet V1 wire helper.

@@ -619,6 +619,7 @@ mod tests {
             P::FxEscrowDeposit,
             P::NativeEscrowCustody,
             P::SorafsReserveCustody,
+            P::KagemushaReserveCustody,
             P::FxEscrowRelease,
             P::FeeSponsorCustody,
             P::OracleReward,

@@ -122,3 +122,5 @@ impl From<TranscriptError> for Error {
 
 #[cfg(test)]
 mod tests;
+
+pub mod operation;

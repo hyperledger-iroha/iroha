@@ -20,6 +20,25 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+/// Optional online finalized-load publication service defaults.
+pub mod kagemusha_load_authorizer {
+    /// Maximum encoded private Norito keyring bytes admitted at startup.
+    pub const KEYRING_MAX_BYTES: usize = 65_536;
+    /// Retry cadence while the chain, worker or submitter is unavailable.
+    pub const POLL_INTERVAL_MS: u64 = 1_000;
+    /// Bounded pending identities per tick.
+    pub const PAGE_SIZE: usize = 16;
+    /// Maximum original block frame bytes.
+    pub const BLOCK_BYTES: usize = 2 * 1024 * 1024;
+    /// Maximum original history bytes per tick.
+    pub const JOURNAL_BYTES: usize = 16 * 1024 * 1024;
+    /// Maximum original block frames per tick.
+    pub const BLOCK_COUNT: usize = 64;
+    /// Maximum Norito decoded allocation per tick.
+    pub const ALLOCATED_BYTES: usize = 32 * 1024 * 1024;
+    /// Normal online publication transaction expiration; vouchers themselves never expire here.
+    pub const TRANSACTION_TTL_MS: u64 = 60_000;
+}
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");

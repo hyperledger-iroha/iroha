@@ -272,6 +272,10 @@ pub fn check_receive<F: PoseidonField>(
 ) -> Result<Accepted<F>, ConsumerError> {
     check_common(StepRelation::Receive, relation_id, request, statement)?;
     require(
+        statement.enabled_controls & !crate::witness::CONTROLS_DEFINED == 0,
+        ConsumerError::Controls,
+    )?;
+    require(
         statement.lineage_burned_total == 0 && statement.lineage_pending_outgoing_root == F::ZERO,
         ConsumerError::BurnedTotal,
     )?;
@@ -320,6 +324,33 @@ mod tests {
         vectors::{Mutation, sample_witness},
         witness::{CONTROL_BLACKLIST, StepInputs},
     };
+
+    #[test]
+    fn receive_selects_the_recorded_blacklist_independently_of_current_controls() {
+        for relation in [
+            SigmaRelation::RECEIVE,
+            SigmaRelation::receive(CONTROL_BLACKLIST),
+        ] {
+            let receive = sample_witness::<Fp>(2, relation, Mutation::None);
+            let request = receive.request_body();
+            let mut statement = receive.statement(relation).expect("statement");
+            for mask in 0..=crate::witness::CONTROLS_DEFINED {
+                statement.enabled_controls = mask;
+                let accepted = check_receive(&receive.relation_id, &request, &statement);
+                assert_eq!(
+                    accepted.expect("recorded blacklist selector").relation,
+                    relation
+                );
+            }
+            for mask in [crate::witness::CONTROLS_DEFINED + 1, u32::MAX] {
+                statement.enabled_controls = mask;
+                assert_eq!(
+                    check_receive(&receive.relation_id, &request, &statement),
+                    Err(ConsumerError::Controls),
+                );
+            }
+        }
+    }
 
     #[test]
     fn honest_statements_pass_and_yield_the_proof_inputs() {

@@ -10,7 +10,8 @@ import java.util.Collections
  */
 enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
     HALO2_IPA_PASTA("halo2-ipa-pasta"),
-    STARK("stark");
+    STARK("stark"),
+    NATIVE_PIPA_R_PASTA("native-pipa-r-pasta");
 
     companion object {
         /** Exact native verifier configurations admitted by registry v1. */
@@ -18,13 +19,20 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
         val VERIFIER_BACKEND_REGISTRY_LABELS_V1: Set<String> = Collections.unmodifiableSet(
             linkedSetOf(
                 "halo2/ipa",
-                "halo2/pasta/kaigi-authorization-v1",
-                "halo2/pasta/kaigi-usage-v1",
+                "pipa-r/pasta",
+                "pipa-r/pasta/kaigi-authorization-v1",
+                "pipa-r/pasta/kaigi-usage-v1",
                 "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                 "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
                 "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             ),
+        )
+
+        private val productionNativePipaRPastaBackends = setOf(
+            "pipa-r/pasta",
+            "pipa-r/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1",
         )
 
         private val starkFriProductionBackends = setOf(
@@ -65,6 +73,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
         fun parse(value: String): VerifyingKeyBackendTag = when (value) {
             HALO2_IPA_PASTA.noritoValue -> HALO2_IPA_PASTA
             STARK.noritoValue -> STARK
+            NATIVE_PIPA_R_PASTA.noritoValue -> NATIVE_PIPA_R_PASTA
             else -> throw IllegalArgumentException("unsupported backend tag: $value")
         }
 
@@ -73,6 +82,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
         fun verifierBackendRegistryTagV1(label: String?): VerifyingKeyBackendTag? = when (label) {
             in productionNativeHalo2PastaBackends, "halo2/ipa" -> HALO2_IPA_PASTA
             in starkFriProductionBackends -> STARK
+            in productionNativePipaRPastaBackends -> NATIVE_PIPA_R_PASTA
             else -> null
         }
 
@@ -123,7 +133,8 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             }
             return backend == "halo2/ipa" ||
                 starkFriProductionBackends.contains(backend) ||
-                productionNativeHalo2PastaBackends.contains(backend)
+                productionNativeHalo2PastaBackends.contains(backend) ||
+                productionNativePipaRPastaBackends.contains(backend)
         }
 
         /** Requires an exact production verifier label and returns it unchanged. */
@@ -144,6 +155,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
         private fun parseOrNull(value: String): VerifyingKeyBackendTag? = when (value) {
             HALO2_IPA_PASTA.noritoValue -> HALO2_IPA_PASTA
             STARK.noritoValue -> STARK
+            NATIVE_PIPA_R_PASTA.noritoValue -> NATIVE_PIPA_R_PASTA
             else -> null
         }
 

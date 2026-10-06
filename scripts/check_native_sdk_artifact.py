@@ -90,6 +90,13 @@ KAGEMUSHA_WALLET_C_EXPORTS = (
     "connect_norito_kagemusha_wallet_fold_v1",
     "connect_norito_kagemusha_wallet_credit_status_v1",
 )
+KAGEMUSHA_WALLET_JNI_EXPORTS = (
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_open",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call",
+)
 RETIRED_KAGEMUSHA_C_PREFIX = (
     "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
 )
@@ -130,6 +137,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *KAGEMUSHA_WALLET_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
+        *KAGEMUSHA_WALLET_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
@@ -739,6 +747,7 @@ def is_retired_kagemusha_export(symbol: str) -> bool:
     return (
         symbol.startswith(RETIRED_KAGEMUSHA_EXPORT_PREFIXES)
         and symbol not in KAGEMUSHA_WALLET_C_EXPORTS
+        and symbol not in KAGEMUSHA_WALLET_JNI_EXPORTS
     )
 
 

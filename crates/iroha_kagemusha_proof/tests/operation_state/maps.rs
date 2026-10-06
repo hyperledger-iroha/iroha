@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use super::*;
 use iroha_kagemusha_proof::operation_relation::map_effects::{
-    ArchiveMapWitness, CONSUMED_DOMAIN, CREDIT_DOMAIN, FEE_DOMAIN, InsertCells, MapEffectsChip,
-    MapState, MapTransition, PENDING_DOMAIN, ReceiveMapWitness, RemoveCells, SendMapWitness,
+    ArchiveMapWitness, BLACKLIST_HISTORY_DOMAIN, CONSUMED_DOMAIN, CREDIT_DOMAIN, FEE_DOMAIN,
+    InsertCells, LOAD_DOMAIN, MapEffectsChip, MapState, MapTransition, PENDING_DOMAIN,
+    REDEEM_DOMAIN, ReceiveMapWitness, RemoveCells, SendMapWitness,
 };
 use iroha_plonk_gadgets::{
     Word,
@@ -99,6 +100,7 @@ impl<const N: usize> Tree<N> {
 
 #[derive(Clone)]
 struct MapCircuit<const N: usize = D> {
+    split_send: bool,
     variant: Variant,
     before: StateCircuit,
     after: StateCircuit,
@@ -230,7 +232,39 @@ impl<const N: usize> Circuit<Fp> for MapCircuit<N> {
                         fee: take_insert::<N>(&mut uint, &mut region, inputs, &mut at)?,
                     };
                     assert_eq!(at, inputs.len());
-                    MapEffectsChip::new(&mut glue, &mut range, &mut sponge).send(
+                    let mut maps = MapEffectsChip::new(&mut glue, &mut range, &mut sponge);
+                    if self.split_send {
+                        maps.send_pending(&mut region, &transition, &witness.pending)?;
+                        maps.send_fee_and_unchanged(
+                            &mut region,
+                            &transition,
+                            &witness.fee,
+                            &witness.fee_schedule,
+                        )?;
+                    } else {
+                        maps.send(&mut region, &transition, &witness)?;
+                    }
+                } else if self.variant == Variant::RefreshBlacklist {
+                    let mut at = 3;
+                    let insertion = take_insert::<N>(&mut uint, &mut region, inputs, &mut at)?;
+                    let lookup = take_opening::<N>(&mut uint, &mut region, inputs, &mut at)?;
+                    assert_eq!(at, inputs.len());
+                    let mut maps = MapEffectsChip::new(&mut glue, &mut range, &mut sponge);
+                    maps.refresh_blacklist(&mut region, &transition, &insertion)?;
+                    // A later Receive consults the history after this refresh.
+                    let verdict = maps.recorded_blacklist(
+                        &mut region,
+                        &after,
+                        &inputs[1],
+                        &inputs[2],
+                        &lookup,
+                    )?;
+                    GlueChip::assert_equal(&mut region, verdict.word(), &inputs[0])?;
+                } else if matches!(self.variant, Variant::Load | Variant::Unload) {
+                    let mut at = 1;
+                    let witness = take_insert::<N>(&mut uint, &mut region, inputs, &mut at)?;
+                    assert_eq!(at, inputs.len());
+                    MapEffectsChip::new(&mut glue, &mut range, &mut sponge).recovery(
                         &mut region,
                         &transition,
                         &witness,
@@ -316,6 +350,7 @@ impl<const N: usize> MapCircuit<N> {
         let mut after = before.clone();
         after.core[core::SEQUENCE] += Fp::ONE;
         Self {
+            split_send: false,
             variant,
             before,
             after,
@@ -335,7 +370,10 @@ impl<const N: usize> MapCircuit<N> {
         self.fields[9] = self.after.core[core::SEQUENCE];
         self.fields[10] = self.after.core[core::NEXT_LOAD];
         self.fields[11] = self.before.core[core::ENABLED_CONTROLS];
-        if self.variant == Variant::Send {
+        if matches!(
+            self.variant,
+            Variant::Send | Variant::Unload | Variant::Retiring
+        ) {
             self.fields[12] = self.before.lineage[14];
             self.fields[13] = self.before.lineage[15];
         }
@@ -511,10 +549,77 @@ fn receive(duplicate: bool, other_soft: bool, insert: bool) -> MapCircuit {
     receive_depth::<D>(duplicate, other_soft, insert)
 }
 
+fn recovery_depth<const N: usize>(variant: Variant, charge: u64) -> MapCircuit<N> {
+    use iroha_kagemusha_proof::operation_relation::administrative::NULLIFIER_DOMAIN;
+    let mut c = MapCircuit::<N>::new(variant);
+    let ordinal = Fp::from(2);
+    c.before.core[core::NEXT_LOAD] = ordinal;
+    c.before.core[core::NEXT_REDEEM] = ordinal;
+    c.after.core[core::NEXT_LOAD] = ordinal;
+    c.after.core[core::NEXT_REDEEM] = ordinal;
+    c.fields[16] = Fp::from(if variant == Variant::Load { 2 } else { 6 });
+    c.fields[17] = Fp::from(77);
+    c.fields[18] = ordinal;
+    c.fields[19] = Fp::from(12);
+    c.fields[20] = Fp::from(charge);
+    let kind = if variant == Variant::Load {
+        c.after.core[core::BALANCE] += Fp::from(12);
+        c.after.core[core::NEXT_LOAD] += Fp::ONE;
+        1_u64
+    } else {
+        c.fields[17] = hash_with_domain(
+            NULLIFIER_DOMAIN,
+            &[
+                c.before.core[core::SCHEME],
+                c.before.core[core::SCHEME + 1],
+                c.before.core[core::WALLET],
+                c.before.core[core::WALLET + 1],
+                ordinal,
+            ],
+        );
+        c.fields[21] = if charge == 0 { Fp::ZERO } else { Fp::from(88) };
+        c.after.core[core::BALANCE] -= Fp::from(12);
+        c.after.core[core::NEXT_REDEEM] += Fp::ONE;
+        c.after.core[core::BURNED_TOTAL] = c.before.lineage[14];
+        c.after.core[core::PENDING_OUTGOING_ROOT] = c.before.lineage[15];
+        2_u64
+    };
+    let two_to_128 = Fp::from_u128(1_u128 << 127).double();
+    let key = Fp::from(kind) * two_to_128 + ordinal;
+    let mut preimage = vec![ordinal, c.fields[17], c.fields[19]];
+    if kind == 2 {
+        preimage.push(c.fields[20]);
+    }
+    let value = hash_with_domain(
+        if kind == 1 {
+            LOAD_DOMAIN
+        } else {
+            REDEEM_DOMAIN
+        },
+        &preimage,
+    );
+    let mut tree = Tree::<N>::empty();
+    // A different recovery kind at the same ordinal is a different key.
+    tree.insert(
+        0,
+        1,
+        Fp::from(3 - kind) * two_to_128 + ordinal,
+        Fp::from(111),
+    );
+    c.before.core[core::LOAD_REDEEM_ROOT] = tree.root();
+    let paths = tree.insert(u32::from(kind != 1), 2, key, value);
+    c.after.core[core::LOAD_REDEEM_ROOT] = tree.root();
+    c.inputs = vec![Fp::ZERO];
+    c.inputs.extend(paths);
+    c.rebind();
+    c
+}
+
 #[test]
 fn send_exact_pending_fee_and_adjusted_roots() {
-    for fee in [0, 3] {
-        let c = send(fee);
+    for (fee, split_send) in [(0, false), (3, false), (0, true), (3, true)] {
+        let mut c = send(fee);
+        c.split_send = split_send;
         c.assert_accept();
         for index in [
             core::CONSUMED_CREDIT_ROOT,
@@ -613,13 +718,14 @@ fn receive_accept_burn_duplicate_and_first_record() {
 
 #[test]
 fn authenticated_routes_fixed_layout_and_burn_overflow() {
-    for c in [
-        send(0),
-        send(3),
-        receive(false, true, true),
-        receive(false, false, false),
-        receive(true, true, true),
-    ] {
+    for case in 0..5 {
+        let c = match case {
+            0 => send(0),
+            1 => send(3),
+            2 => receive(false, true, true),
+            3 => receive(false, false, false),
+            _ => receive(true, true, true),
+        };
         let known = synthesize(&c, MAP_K, Some(&[c.public()])).expect("known");
         let unknown = synthesize(&c.without_witnesses(), MAP_K, None).expect("unknown");
         assert_eq!(known.tables.fixed(), unknown.tables.fixed());
@@ -649,12 +755,15 @@ fn authenticated_routes_fixed_layout_and_burn_overflow() {
 
 #[test]
 fn production_depth_send_and_receive_maps_fit_k16() {
-    for c in [
-        send_depth::<32>(3),
-        receive_depth::<32>(false, true, true),
-        receive_depth::<32>(true, true, false),
-        archive_depth::<32>(Variant::ArchiveStatus, false),
-    ] {
+    for case in 0..6 {
+        let c = match case {
+            0 => send_depth::<32>(3),
+            1 => receive_depth::<32>(false, true, true),
+            2 => receive_depth::<32>(true, true, false),
+            3 => archive_depth::<32>(Variant::ArchiveStatus, false),
+            4 => recovery_depth::<32>(Variant::Unload, 3),
+            _ => blacklist_depth::<32>(1, 81),
+        };
         c.assert_accept();
         let layout = synthesize(&c, 16, Some(&[c.public()])).expect("production depth");
         let rows: Vec<_> = layout
@@ -706,4 +815,95 @@ fn archive_clears_core_and_only_valid_evidence_clears_lineage() {
             }
         }
     }
+}
+
+#[test]
+fn recovery_map_binds_kind_ordinal_value_and_charge() {
+    for variant in [Variant::Load, Variant::Unload] {
+        for charge in [0, 3] {
+            let c = recovery_depth::<D>(variant, charge);
+            c.assert_accept();
+            let mut root = c.clone();
+            root.after.core[core::LOAD_REDEEM_ROOT] = root.before.core[core::LOAD_REDEEM_ROOT];
+            root.reject_rebound();
+            for index in 17..20 {
+                let mut wrong = c.clone();
+                wrong.fields[index] += Fp::ONE;
+                assert!(!wrong.accepts());
+            }
+            if variant == Variant::Unload {
+                let mut wrong = c.clone();
+                wrong.fields[20] = Fp::from(2);
+                wrong.fields[21] = Fp::from(88);
+                assert!(!wrong.accepts());
+            }
+            for index in 1..c.inputs.len() {
+                let mut wrong = c.clone();
+                wrong.inputs[index] += Fp::ONE;
+                assert!(!wrong.accepts(), "{variant:?} path{index}");
+            }
+        }
+    }
+}
+
+fn blacklist_depth<const N: usize>(recorded: u64, root: u64) -> MapCircuit<N> {
+    let mut c = MapCircuit::<N>::new(Variant::RefreshBlacklist);
+    let mut tree = Tree::<N>::empty();
+    let first = hash_with_domain(BLACKLIST_HISTORY_DOMAIN, &[Fp::ONE, Fp::from(81)]);
+    tree.insert(0, 1, Fp::ONE, first);
+    c.before.rest[rest::BLACKLIST_HISTORY] = tree.root();
+    c.before.rest[rest::BLACKLIST] = Fp::from(71);
+    c.before.core[core::BLACKLIST_VERSION] = Fp::ONE;
+    c.before.core[core::BLACKLIST_ROOT] = Fp::from(81);
+    c.after.rest[rest::BLACKLIST] = Fp::from(72);
+    c.after.core[core::BLACKLIST_VERSION] = Fp::from(2);
+    c.after.core[core::BLACKLIST_ROOT] = Fp::from(82);
+    let second = hash_with_domain(BLACKLIST_HISTORY_DOMAIN, &[Fp::from(2), Fp::from(82)]);
+    let paths = tree.insert(1, 2, Fp::from(2), second);
+    c.after.rest[rest::BLACKLIST_HISTORY] = tree.root();
+    c.fields[16] = Fp::from(7);
+    c.fields[17] = Fp::from(3);
+    c.fields[18] = Fp::from(72);
+    let valid = matches!((recorded, root), (1, 81) | (2, 82));
+    c.inputs = vec![
+        Fp::from(u64::from(valid)),
+        Fp::from(recorded),
+        Fp::from(root),
+    ];
+    c.inputs.extend(paths);
+    c.inputs
+        .extend(tree.opening(if recorded == 1 { 1 } else { 2 }));
+    c.rebind();
+    c
+}
+
+#[test]
+fn blacklist_history_retains_recorded_pairs_and_authenticates_soft_failure() {
+    for (version, root) in [(1, 81), (2, 82), (1, 82), (3, 83)] {
+        let c = blacklist_depth::<D>(version, root);
+        c.assert_accept();
+        let mut inverted = c.clone();
+        inverted.inputs[0] = Fp::ONE - inverted.inputs[0];
+        assert!(!inverted.accepts());
+        for i in 3..c.inputs.len() {
+            let mut bad = c.clone();
+            bad.inputs[i] += Fp::ONE;
+            assert!(!bad.accepts(), "path {version} {root} {i}");
+        }
+        let mut changed = c.clone();
+        changed.after.rest[rest::BLACKLIST_HISTORY] += Fp::ONE;
+        changed.reject_rebound();
+    }
+    let mut duplicate = blacklist_depth::<D>(1, 81);
+    duplicate.after.core[core::BLACKLIST_VERSION] = Fp::ONE;
+    duplicate.reject_rebound();
+    let mut no_version = blacklist_depth::<D>(1, 81);
+    no_version.inputs[1] = Fp::ZERO;
+    assert!(!no_version.accepts());
+    let mut wide = blacklist_depth::<D>(1, 81);
+    wide.inputs[1] = Fp::from_u128(1 << 64);
+    assert!(!wide.accepts());
+    let mut no_root = blacklist_depth::<D>(1, 81);
+    no_root.inputs[2] = Fp::ZERO;
+    assert!(!no_root.accepts());
 }

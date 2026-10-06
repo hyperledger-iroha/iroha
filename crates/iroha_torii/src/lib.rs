@@ -67,6 +67,8 @@ mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
+#[cfg(feature = "app_api")]
+mod kagemusha_wallet;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
@@ -37206,6 +37208,7 @@ impl Torii {
             SORAFS_RESERVE_POLICY_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy);
             SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
             SORAFS_RESERVE_ACCOUNT_PROOF_GET => canonical_signature_get(reserve_account_proof::handler);
+            KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);

@@ -1,9 +1,10 @@
 //! Canonical core/rest openings and their binding to public lineage fields.
 
 use ff::{Field, PrimeField};
-use iroha_pasta::Fp;
+use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
-use iroha_plonk_gadgets::{Bit, GlueChip, SpongeChip, UintChip, Word};
+use iroha_plonk_gadgets::{Bit, GlueChip, UintChip, Word, WordHasher};
+use iroha_plonk_recursion::verifier::VerifierChip;
 
 use crate::{
     a_relation::LineagePublicCells,
@@ -52,52 +53,12 @@ impl StateCells {
     /// Layout failure; invalid self-contained state has no satisfying witness.
     pub fn constrain(
         uint: &mut UintChip<'_, Fp>,
-        sponge: &mut SpongeChip<Fp>,
+        sponge: &mut impl WordHasher<Fp>,
         region: &mut Region<'_, Fp>,
         core: &[Word<Fp>; CORE_FIELDS],
         rest: &[Word<Fp>; REST_FIELDS],
     ) -> Result<Self, Error> {
-        let lifecycle = uint
-            .glue()
-            .add_constant(region, &core[core::LIFECYCLE], -Fp::ONE)?;
-        uint.glue().assert_bool(region, &lifecycle)?;
-        for word in &core[core::SCHEME..core::CREDENTIAL] {
-            uint.range_check::<128>(region, word)?;
-        }
-        for index in [core::SCHEME, core::ASSET, core::WALLET] {
-            let sum = uint.glue().add(region, &core[index], &core[index + 1])?;
-            uint.glue().assert_nonzero(region, &sum)?;
-        }
-        for word in &core[core::BALANCE..=core::NEXT_REDEEM] {
-            uint.range_check::<128>(region, word)?;
-        }
-        for index in [
-            core::QUOTA_SHARE_EXPIRY,
-            core::BLACKLIST_VERSION,
-            core::BLACKLIST_ISSUED_AT,
-            core::BLACKLIST_MAX_AGE,
-            core::TIME_ANCHOR_MAX_RESPONSE,
-            core::LEASE_EXPIRY,
-            core::POLICY_EPOCH,
-            core::TIME_FLOOR,
-        ] {
-            uint.range_check::<64>(region, &core[index])?;
-        }
-        uint.range_check::<64>(region, &rest[rest_index::QUOTA_SHARE_ID])?;
-        for index in [
-            core::CREDENTIAL,
-            core::CONSUMED_CREDIT_ROOT,
-            core::PENDING_OUTGOING_ROOT,
-            core::LOAD_REDEEM_ROOT,
-            core::FEE_CLAIM_ROOT,
-            core::QUOTA_USAGE_ROOT,
-            core::STATE_NONCE,
-        ] {
-            uint.glue().assert_nonzero(region, &core[index])?;
-        }
-        uint.glue()
-            .assert_nonzero(region, &rest[rest_index::BLACKLIST_HISTORY])?;
-        controls(uint, region, core, rest)?;
+        validate_fields(uint, region, core, rest)?;
         let rest_digest = sponge.hash_words(region, REST_DOMAIN, rest)?;
         let mut preimage = core.to_vec();
         preimage.push(rest_digest.clone());
@@ -108,6 +69,27 @@ impl StateCells {
             rest_digest,
             commitment,
         })
+    }
+
+    /// Validate the state on A's shared recursive hash lane.
+    /// Uses the same field/control constraints as [`Self::constrain`].
+    ///
+    /// # Errors
+    /// Layout failure; invalid self-contained state has no satisfying witness.
+    pub fn constrain_with_verifier(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        core: &[Word<Fp>; CORE_FIELDS],
+        rest: &[Word<Fp>; REST_FIELDS],
+    ) -> Result<Self, Error> {
+        let lanes = chip.operation_lanes()?;
+        Self::constrain(
+            &mut UintChip::new(lanes.glue, lanes.range),
+            lanes.hash,
+            region,
+            core,
+            rest,
+        )
     }
 
     /// The canonical core words, in [`crate::witness::core_index`] order.
@@ -207,6 +189,56 @@ fn gated_zero(
 ) -> Result<(), Error> {
     let product = uint.glue().mul(region, enabled.word(), word)?;
     GlueChip::assert_constant(region, &product, Fp::ZERO)
+}
+
+fn validate_fields(
+    uint: &mut UintChip<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    core: &[Word<Fp>; CORE_FIELDS],
+    rest: &[Word<Fp>; REST_FIELDS],
+) -> Result<(), Error> {
+    let lifecycle = uint
+        .glue()
+        .add_constant(region, &core[core::LIFECYCLE], -Fp::ONE)?;
+    uint.glue().assert_bool(region, &lifecycle)?;
+    for word in &core[core::SCHEME..core::CREDENTIAL] {
+        uint.range_check::<128>(region, word)?;
+    }
+    for index in [core::SCHEME, core::ASSET, core::WALLET] {
+        let sum = uint.glue().add(region, &core[index], &core[index + 1])?;
+        uint.glue().assert_nonzero(region, &sum)?;
+    }
+    for word in &core[core::BALANCE..=core::NEXT_REDEEM] {
+        uint.range_check::<128>(region, word)?;
+    }
+    for index in [
+        core::QUOTA_SHARE_EXPIRY,
+        core::BLACKLIST_VERSION,
+        core::BLACKLIST_ISSUED_AT,
+        core::BLACKLIST_MAX_AGE,
+        core::TIME_ANCHOR_MAX_RESPONSE,
+        core::LEASE_EXPIRY,
+        core::POLICY_EPOCH,
+        core::TIME_FLOOR,
+    ] {
+        uint.range_check::<64>(region, &core[index])?;
+    }
+    uint.range_check::<64>(region, &rest[rest_index::QUOTA_SHARE_ID])?;
+    for index in [
+        core::CREDENTIAL,
+        core::CONSUMED_CREDIT_ROOT,
+        core::PENDING_OUTGOING_ROOT,
+        core::LOAD_REDEEM_ROOT,
+        core::FEE_CLAIM_ROOT,
+        core::QUOTA_USAGE_ROOT,
+        core::STATE_NONCE,
+    ] {
+        uint.glue().assert_nonzero(region, &core[index])?;
+    }
+    uint.glue()
+        .assert_nonzero(region, &rest[rest_index::BLACKLIST_HISTORY])?;
+    controls(uint, region, core, rest)?;
+    Ok(())
 }
 
 fn controls(

@@ -24,7 +24,7 @@ use iroha_pasta::{PastaField, poseidon::PoseidonField};
 use iroha_plonk::frontend::{Error, Region};
 
 use crate::{
-    Bit, GlueChip, RunningSumChip, SpongeChip, Uint, UintChip, Word,
+    Bit, GlueChip, RunningSumChip, SpongeChip, Uint, UintChip, Word, WordHasher,
     statement::assign_canonical_limbs,
 };
 
@@ -167,17 +167,17 @@ impl<F: PastaField> RecordCells<F> {
 
 /// An indexed-map view over the shared arithmetic, range and Poseidon chips.
 #[derive(Debug)]
-pub struct ImtChip<'a, F: PoseidonField> {
+pub struct ImtChip<'a, F: PoseidonField, H: WordHasher<F> = SpongeChip<F>> {
     uint: UintChip<'a, F>,
-    sponge: &'a mut SpongeChip<F>,
+    sponge: &'a mut H,
 }
 
-impl<'a, F: PoseidonField> ImtChip<'a, F> {
+impl<'a, F: PoseidonField, H: WordHasher<F>> ImtChip<'a, F, H> {
     /// Borrow chips whose row cursors remain shared with the caller.
     pub const fn new(
         glue: &'a mut GlueChip<F>,
         range: &'a mut RunningSumChip<F>,
-        sponge: &'a mut SpongeChip<F>,
+        sponge: &'a mut H,
     ) -> Self {
         Self {
             uint: UintChip::new(glue, range),

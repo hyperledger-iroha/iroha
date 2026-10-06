@@ -19,7 +19,9 @@ use iroha_plonk::{
     pcs::ipa::PinnedParams,
 };
 use iroha_plonk_gadgets::{GlueChip, GlueConfig, statement::foreign_limbs};
-use iroha_plonk_recursion::{AccumulatorT, FoldConfig, FoldInput, create_fold};
+use iroha_plonk_recursion::{
+    AccumulatorT, FoldConfig, FoldInput, create_fold, verifier::CompactSpans,
+};
 
 #[derive(Clone)]
 struct Frame(Vec<Fp>);
@@ -124,6 +126,16 @@ fn range_activity(
 #[test]
 #[ignore = "actual k16 A-frame component proofs and full Omega constraints; run in release"]
 fn uniform_omega_binds_all_source_choices_and_complete_frame() {
+    exercise_omega(false);
+}
+
+#[test]
+#[ignore = "actual source proofs and complete compact Omega diagnostic; run in release"]
+fn compact_omega_executes_complete_verifier_and_reports_capacity() {
+    exercise_omega(true);
+}
+
+fn exercise_omega(compact: bool) {
     let params = PinnedParams::<Eq>::derive(16).unwrap();
     let trivial = AccumulatorT::trivial(&params, MemoryBudget::DEFAULT)
         .unwrap()
@@ -191,6 +203,10 @@ fn uniform_omega_binds_all_source_choices_and_complete_frame() {
     let mut fixed = None;
     for (witness, public) in fixtures {
         let circuit = OmegaCircuit::new(plan.clone(), witness.clone()).unwrap();
+        if compact {
+            compact_diagnostic(&circuit, &public);
+            continue;
+        }
         assert!(is_satisfied(&circuit, &public));
         let assigned = synthesize(&circuit, 16, Some(&public)).unwrap();
         let unknown = synthesize(&circuit.without_witnesses(), 16, None).unwrap();
@@ -313,4 +329,93 @@ fn uniform_omega_binds_all_source_choices_and_complete_frame() {
             &public
         ));
     }
+}
+
+// The production k remains16. An explicit k17 diagnostic identifies occupancy
+// without silently accepting a proof outside the fixed production domain.
+fn compact_diagnostic(circuit: &OmegaCircuit, public: &[Vec<Fq>]) {
+    let spans = CompactSpans::new(16_384, 65_536, 131_066).unwrap();
+    let diagnostic = circuit.clone().with_compact_layout(spans);
+    let assigned = synthesize(&diagnostic, 17, Some(public)).unwrap();
+    let report = check(&assigned.cs, &assigned.tables, CheckMode::Strict).unwrap();
+    assert!(report.is_satisfied(), "{:?}", report.failures().first());
+    let unknown = synthesize(&diagnostic.without_witnesses(), 17, None).unwrap();
+    assert_eq!(assigned.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(assigned.tables.permutation(), unknown.tables.permutation());
+    assert_eq!(
+        assigned.tables.advice_assigned(),
+        unknown.tables.advice_assigned()
+    );
+    let assigned_rows = assigned.tables.advice_assigned();
+    let span_used = |start: usize, end: usize| {
+        assigned_rows[..10]
+            .iter()
+            .filter_map(|column| column[start..end].iter().rposition(|v| *v).map(|r| r + 1))
+            .max()
+            .unwrap_or(0)
+    };
+    let sponge_rows = span_used(0, 16_384).div_ceil(37) * 37;
+    let arithmetic_rows = span_used(16_384, 65_536);
+    let curve_rows = span_used(65_536, 131_066);
+    let range_rows = assigned_rows[10]
+        .iter()
+        .rposition(|v| *v)
+        .map_or(0, |r| r + 1);
+    let total = sponge_rows + arithmetic_rows + curve_rows;
+    let packed = circuit.clone().with_compact_layout(
+        CompactSpans::new(sponge_rows, sponge_rows + arithmetic_rows, total).unwrap(),
+    );
+    let packed_assigned = synthesize(&packed, 17, Some(public)).unwrap();
+    let packed_report = check(
+        &packed_assigned.cs,
+        &packed_assigned.tables,
+        CheckMode::Strict,
+    )
+    .unwrap();
+    assert!(
+        packed_report.is_satisfied(),
+        "{:?}",
+        packed_report.failures().first()
+    );
+    let finalized = packed_assigned
+        .cs
+        .finalize(packed_assigned.tables.selectors(), true)
+        .unwrap();
+    let layout = CircuitDescriptorV1::from_constraint_system(
+        &finalized,
+        DescriptorConfig {
+            curve: CurveV1::Pallas,
+            k: 16,
+            transcript: TranscriptV1::Blake2bChallenge255,
+            instance_mode: InstanceModeV1::Direct,
+            proof_suffix: ProofSuffixV1::FoldedGenerator,
+        },
+    )
+    .unwrap();
+    let descriptor = CircuitDescriptorV2::from_layout(
+        layout,
+        TranscriptV2::KagemushaPoseidonRp57Base,
+        OmegaPlan::instance_types().to_vec(),
+    )
+    .unwrap();
+    let protocol = Protocol::new(&descriptor).unwrap();
+    println!(
+        "COMPACT_OMEGA_FULL sponge={sponge_rows} arithmetic={arithmetic_rows} curve={curve_rows} shared_total={total} range={range_rows} shape={:?} descriptor_transport={} actual_outer_proof=false actual_source_A_frame_proof=true production_k16_fit={}",
+        protocol.shape(),
+        protocol.proof_length() + 1088,
+        total <= 65_530 && range_rows <= 65_530
+    );
+    if total <= 65_530 && range_rows <= 65_530 {
+        assert!(is_satisfied(&packed, public));
+    } else {
+        assert!(synthesize(&packed, 16, Some(public)).is_err());
+    }
+    let mut changed = public.to_vec();
+    changed[0][0] += Fq::ONE;
+    let changed = synthesize(&packed, 17, Some(&changed)).unwrap();
+    assert!(
+        !check(&changed.cs, &changed.tables, CheckMode::Strict)
+            .unwrap()
+            .is_satisfied()
+    );
 }

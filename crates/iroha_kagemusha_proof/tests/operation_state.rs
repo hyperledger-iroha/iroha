@@ -1,7 +1,14 @@
 //! Canonical G1 state openings, control consistency and public lineage bindings.
 
+#[path = "operation_state/incoming.rs"]
+mod incoming;
+
+#[path = "operation_state/administrative.rs"]
+mod administrative;
 #[path = "operation_state/maps.rs"]
 mod maps;
+#[path = "operation_state/refresh.rs"]
+mod refresh;
 
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
@@ -397,11 +404,12 @@ struct StatementCircuit {
     fields: [Fp; 26],
     states: Option<(Option<StateCircuit>, StateCircuit)>,
     known: bool,
+    administrative_effects: bool,
 }
 
 fn assign_state(
     uint: &mut UintChip<'_, Fp>,
-    sponge: &mut SpongeChip<Fp>,
+    sponge: &mut impl iroha_plonk_gadgets::WordHasher<Fp>,
     region: &mut Region<'_, Fp>,
     source: &StateCircuit,
     known: bool,
@@ -487,6 +495,38 @@ impl Circuit<Fp> for StatementCircuit {
                         &successor,
                         &lineage,
                     )?;
+                    if self.administrative_effects {
+                        use iroha_kagemusha_proof::operation_relation::{
+                            administrative,
+                            map_effects::{MapState, MapTransition},
+                        };
+                        if let Some((before, previous)) = &predecessor {
+                            administrative::monetary(
+                                &mut uint,
+                                &mut sponge,
+                                &mut region,
+                                &MapTransition {
+                                    statement: &statement,
+                                    predecessor: MapState {
+                                        state: before,
+                                        lineage: previous,
+                                    },
+                                    successor: MapState {
+                                        state: &successor,
+                                        lineage: &lineage,
+                                    },
+                                },
+                            )?;
+                        } else {
+                            administrative::bootstrap(
+                                &mut uint,
+                                &mut region,
+                                &statement,
+                                &successor,
+                                &lineage,
+                            )?;
+                        }
+                    }
                 }
                 let mut output = statement.fields().to_vec();
                 output.push(statement.digest().clone());
@@ -555,6 +595,7 @@ fn statement(variant: Variant) -> StatementCircuit {
         fields,
         states: None,
         known: true,
+        administrative_effects: false,
     }
 }
 
@@ -651,6 +692,7 @@ fn actual_sigma_statement_vectors_match() {
             fields,
             states: None,
             known: true,
+            administrative_effects: false,
         };
         assert!(c.accepts());
         assert_eq!(c.public()[26], field(&object["digest_hex"]));
