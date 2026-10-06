@@ -85,10 +85,9 @@ impl<T> InlineLeaf for HashOf<T> {
         original_complete_leaf(bytes)
     }
     fn read_field(field: CanonicalField<'_, Self>) -> Result<Self, DecodeIntoError<Infallible>> {
-        // The sole archived Hash kernel delegates to [u8; 32] before checking
-        // its marker. Alignment one avoids scratch, and the existing field
-        // decoder preserves malformed framed-array/limit error precedence.
-        // Do not wrap this in with_payload: that would enter its scope twice.
+        // Keep the nominal Hash decoder's raw width and marker checks.
+        // Alignment one avoids scratch, and the field already owns its
+        // depth and flags scope, so decode it once.
         field.decode_owned().map_err(DecodeIntoError::Codec)
     }
 }

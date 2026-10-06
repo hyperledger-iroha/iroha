@@ -16,8 +16,8 @@ use crate::kagemusha::kagemusha_wallet_v1::{
     state::{
         KagemushaWalletEffectV1, KagemushaWalletLifecycleV1, KagemushaWalletLineageSlotV1,
         state_tests::{
-            LINEAGE_PROOF_LEN, bootstrap_statement, send_effect, signed_package, stand_in_proof,
-            transition_statement,
+            LINEAGE_PROOF_LEN, bootstrap_statement, field_value, send_effect, signed_package,
+            stand_in_proof, transition_statement,
         },
     },
 };
@@ -41,13 +41,13 @@ fn entry(
     KagemushaWalletVerifyingKeyEntryV1 {
         kind,
         enabled_controls,
-        verifying_key_digest: [kind.tag() ^ u8::try_from(enabled_controls).expect("mask"); 32]
+        verifying_key_digest: [kind.tag() ^ enabled_controls.to_le_bytes()[0]; 32]
             .map(|byte| byte | 0x80),
         proof_bytes,
     }
 }
 
-/// One entry per operation, plus Send with the blacklist and quota masks.
+/// One entry per operation, plus Send with blacklist/quotas and Receive with blacklist.
 pub(in crate::kagemusha::kagemusha_wallet_v1) fn sample_allowlist()
 -> KagemushaWalletVerifyingKeyAllowlistV1 {
     let mut steps = Vec::new();
@@ -65,6 +65,13 @@ pub(in crate::kagemusha::kagemusha_wallet_v1) fn sample_allowlist()
                 SIGMA + 2,
             ));
         }
+        if kind == KagemushaWalletOperationKindV1::Receive {
+            steps.push(entry(
+                kind,
+                KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                SIGMA + 1,
+            ));
+        }
     }
     KagemushaWalletVerifyingKeyAllowlistV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
@@ -79,10 +86,11 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_layout_and_digest() {
     let allowlist = sample_allowlist();
     allowlist.validate().expect("allowlist");
     assert_eq!(KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES_V1, 41);
-    assert_eq!(KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1, 15);
+    assert_eq!(KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1, 16);
+    assert_eq!(KAGEMUSHA_WALLET_LINEAGE_PROOF_MAX_BYTES_V1, 7_812);
     let transcript = allowlist.transcript().expect("transcript");
     let mut expected = 1_u16.to_le_bytes().to_vec();
-    expected.extend_from_slice(&10_u32.to_le_bytes());
+    expected.extend_from_slice(&11_u32.to_le_bytes());
     for step in &allowlist.steps {
         expected.push(step.kind.tag());
         expected.extend_from_slice(&step.enabled_controls.to_le_bytes());
@@ -92,7 +100,7 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_layout_and_digest() {
     expected.extend_from_slice(&[0x4c; 32]);
     expected.extend_from_slice(&40_u32.to_le_bytes());
     assert_eq!(transcript, expected);
-    assert_eq!(transcript.len(), 2 + 4 + 10 * 41 + 32 + 4);
+    assert_eq!(transcript.len(), 2 + 4 + 11 * 41 + 32 + 4);
     assert_eq!(
         allowlist.verifying_key_set_digest().ok(),
         Some(kagemusha_wallet_digest_v1(Role::VerifyingKeySet, &expected))
@@ -104,6 +112,7 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_layout_and_digest() {
         .map(KagemushaWalletVerifyingKeyEntryV1::selector)
         .collect();
     assert_eq!(selectors[2..5], [(3, 0), (3, 1), (3, 3)]);
+    assert_eq!(selectors[5..7], [(4, 0), (4, 1)]);
     assert_eq!(norito_tag(&allowlist.steps[2].kind), 3);
 
     // Canonical frame round trip and the bound.
@@ -114,6 +123,139 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_layout_and_digest() {
         KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
     )
     .expect("decode");
+    assert_eq!(decoded, allowlist);
+}
+
+#[test]
+fn kagemusha_wallet_v1_verifying_key_selector_masks() {
+    use KagemushaWalletOperationKindV1 as Kind;
+    for kind in Kind::ALL {
+        for mask in 0..=KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 {
+            let expected = match kind {
+                Kind::Send => true,
+                Kind::Receive => mask == 0 || mask == KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                _ => mask == 0,
+            };
+            assert_eq!(
+                selector_mask_is_valid(kind, mask),
+                expected,
+                "{kind:?}/{mask}"
+            );
+            assert_eq!(entry(kind, mask, SIGMA).validate().is_ok(), expected);
+        }
+        for mask in [KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 + 1, u32::MAX] {
+            assert!(!selector_mask_is_valid(kind, mask));
+            assert_invalid(
+                entry(kind, mask, SIGMA).validate(),
+                "verifying_keys.enabled_controls",
+            );
+        }
+    }
+}
+
+#[test]
+fn kagemusha_wallet_v1_verifying_key_receive_blacklist_matches_supported_send_masks() {
+    use KagemushaWalletOperationKindV1 as Kind;
+    for mask in 0..=KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 {
+        let mut allowlist = sample_allowlist();
+        allowlist.steps.retain(|entry| entry.enabled_controls == 0);
+        if mask != 0 {
+            allowlist.steps.push(entry(Kind::Send, mask, SIGMA + 1));
+        }
+        let blacklist = mask & KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1 != 0;
+        if blacklist {
+            allowlist.steps.push(entry(
+                Kind::Receive,
+                KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                SIGMA + 1,
+            ));
+        }
+        allowlist
+            .steps
+            .sort_by_key(KagemushaWalletVerifyingKeyEntryV1::selector);
+        allowlist
+            .validate()
+            .expect("exact Receive blacklist coupling");
+        if blacklist {
+            allowlist
+                .entry(Kind::Receive, KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1)
+                .expect("Receive blacklist selected");
+            allowlist.steps.retain(|entry| {
+                entry.selector() != (Kind::Receive.tag(), KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1)
+            });
+        } else {
+            assert_invalid(
+                allowlist.entry(Kind::Receive, KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1),
+                "verifying_keys.selector",
+            );
+            allowlist.steps.push(entry(
+                Kind::Receive,
+                KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                SIGMA + 1,
+            ));
+            allowlist
+                .steps
+                .sort_by_key(KagemushaWalletVerifyingKeyEntryV1::selector);
+        }
+        assert_invalid(allowlist.validate(), "verifying_keys.receive_blacklist");
+        assert_invalid(
+            allowlist.verifying_key_set_digest(),
+            "verifying_keys.receive_blacklist",
+        );
+    }
+
+    // The largest selector has no blacklist bit, but an earlier supported Send does.
+    let mut allowlist = sample_allowlist();
+    allowlist.steps.retain(|entry| entry.enabled_controls == 0);
+    for mask in [KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1, 6] {
+        allowlist.steps.push(entry(Kind::Send, mask, SIGMA));
+    }
+    allowlist.steps.push(entry(
+        Kind::Receive,
+        KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+        SIGMA + 1,
+    ));
+    allowlist
+        .steps
+        .sort_by_key(KagemushaWalletVerifyingKeyEntryV1::selector);
+    allowlist
+        .validate()
+        .expect("any supported Send requires Receive blacklist");
+    allowlist
+        .steps
+        .retain(|entry| entry.selector() != (Kind::Receive.tag(), 1));
+    assert_invalid(allowlist.validate(), "verifying_keys.receive_blacklist");
+}
+
+#[test]
+fn kagemusha_wallet_v1_verifying_key_allowlist_accepts_all_sixteen_selectors() {
+    use KagemushaWalletOperationKindV1 as Kind;
+    let mut allowlist = sample_allowlist();
+    allowlist.steps.retain(|entry| entry.enabled_controls == 0);
+    for mask in 1..=KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 {
+        allowlist.steps.push(entry(Kind::Send, mask, SIGMA));
+    }
+    allowlist.steps.push(entry(
+        Kind::Receive,
+        KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+        SIGMA + 1,
+    ));
+    allowlist
+        .steps
+        .sort_by_key(KagemushaWalletVerifyingKeyEntryV1::selector);
+    assert_eq!(
+        allowlist.steps.len(),
+        KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1
+    );
+    allowlist.validate().expect("all supported selectors");
+    let frame = allowlist
+        .to_canonical_bytes()
+        .expect("full allowlist frame");
+    let decoded: KagemushaWalletVerifyingKeyAllowlistV1 = decode_frame_v1(
+        &frame,
+        KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
+    )
+    .expect("full allowlist decode");
     assert_eq!(decoded, allowlist);
 }
 
@@ -149,6 +291,22 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_rules() {
     reject(
         &|a| a.steps[4].enabled_controls = KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 + 1,
         "verifying_keys.enabled_controls",
+    );
+    for mask in [
+        KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1,
+        KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1,
+    ] {
+        reject(
+            &|a| a.steps[6].enabled_controls = mask,
+            "verifying_keys.enabled_controls",
+        );
+    }
+    reject(
+        &|a| {
+            a.steps
+                .retain(|entry| entry.selector() != (Kind::Receive.tag(), 0))
+        },
+        "verifying_keys.missing",
     );
     reject(
         &|a| a.steps[1].verifying_key_digest = [0; 32],
@@ -209,6 +367,45 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_rules() {
 }
 
 #[test]
+fn kagemusha_wallet_v1_verifying_key_lineage_cap_and_joint_budget_are_independent() {
+    use KagemushaWalletOperationKindV1 as Kind;
+    let cap = u32::try_from(KAGEMUSHA_WALLET_LINEAGE_PROOF_MAX_BYTES_V1).expect("cap");
+    let budget = u32::try_from(KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1).expect("budget");
+    assert_eq!(budget, 8_319);
+    let mut allowlist = sample_allowlist();
+    allowlist.lineage_proof_bytes = cap;
+    let largest_send = budget - cap;
+    for entry in &mut allowlist.steps {
+        if entry.kind == Kind::Send {
+            entry.proof_bytes = largest_send;
+        }
+    }
+    allowlist
+        .validate()
+        .expect("exact Credited and Payment bounds");
+    let mut over_cap = allowlist.clone();
+    over_cap.lineage_proof_bytes += 1;
+    for entry in &mut over_cap.steps {
+        if entry.kind == Kind::Send {
+            entry.proof_bytes -= 1;
+        }
+    }
+    assert_invalid(over_cap.validate(), "verifying_keys.lineage_proof_bytes");
+    assert_invalid(
+        over_cap.verifying_key_set_digest(),
+        "verifying_keys.lineage_proof_bytes",
+    );
+    let mut over_joint = allowlist;
+    over_joint
+        .steps
+        .iter_mut()
+        .find(|entry| entry.kind == Kind::Send)
+        .expect("Send")
+        .proof_bytes += 1;
+    assert_invalid(over_joint.validate(), "verifying_keys.budget");
+}
+
+#[test]
 fn kagemusha_wallet_v1_verifying_key_selection_and_lengths() {
     use KagemushaWalletOperationKindV1 as Kind;
     let allowlist = sample_allowlist();
@@ -220,6 +417,12 @@ fn kagemusha_wallet_v1_verifying_key_selection_and_lengths() {
     );
     assert_invalid(allowlist.entry(Kind::Load, 1), "verifying_keys.selector");
     assert_invalid(allowlist.entry(Kind::Send, 2), "verifying_keys.selector");
+    for mask in [2, 3, 4, 5, 6, 7, 8, u32::MAX] {
+        assert_invalid(
+            allowlist.entry(Kind::Receive, mask),
+            "verifying_keys.selector",
+        );
+    }
 
     let sigma = stand_in_proof(usize::try_from(SIGMA).expect("len"));
     assert_eq!(
@@ -232,6 +435,28 @@ fn kagemusha_wallet_v1_verifying_key_selection_and_lengths() {
     );
     assert_invalid(
         allowlist.check_step_proof(Kind::Receive, 0, &stand_in_proof(47)),
+        "step_proof.length",
+    );
+    let receive_blacklist = stand_in_proof(usize::try_from(SIGMA + 1).expect("length"));
+    assert_eq!(
+        allowlist
+            .check_step_proof(
+                Kind::Receive,
+                KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                &receive_blacklist
+            )
+            .ok(),
+        Some(
+            entry(
+                Kind::Receive,
+                KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                SIGMA + 1
+            )
+            .verifying_key_digest
+        )
+    );
+    assert_invalid(
+        allowlist.check_step_proof(Kind::Receive, KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1, &sigma),
         "step_proof.length",
     );
 
@@ -260,6 +485,33 @@ fn kagemusha_wallet_v1_verifying_key_selection_and_lengths() {
         allowlist.check_package(&bootstrap).ok(),
         Some(entry(Kind::Bootstrap, 0, SIGMA).verifying_key_digest)
     );
+
+    // Receive selects only BLACKLIST, even when the statement enables other defined bits.
+    for controls in 0..=KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 {
+        let mut statement = transition_statement(
+            &f,
+            3,
+            0,
+            KagemushaWalletLifecycleV1::Active,
+            KagemushaWalletEffectV1::Receive {
+                credit_id: field_value(0x75),
+                payer_wallet_id: [0x76; 32],
+                amount: 300,
+            },
+        );
+        statement.enabled_controls = controls;
+        let mask = controls & KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1;
+        let expected = allowlist
+            .entry(Kind::Receive, mask)
+            .expect("Receive selector");
+        let proof = stand_in_proof(usize::try_from(expected.proof_bytes).expect("length"));
+        let package = signed_package(&f, &f.credential, &statement, proof);
+        assert_eq!(package.verifying_key_selector(), (Kind::Receive, mask));
+        assert_eq!(
+            allowlist.check_package(&package).ok(),
+            Some(expected.verifying_key_digest)
+        );
+    }
 }
 
 #[test]

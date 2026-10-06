@@ -107,7 +107,7 @@ fn every_relation_selects_the_pinned_shapes() {
             budget.proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP),
             budget.proof_length::<Ep>(ProofFormat::KAGEMUSHA_STEP)
         );
-        // At k = 11 the G1 core needs two lanes (67 or 65 permutations do
+        // At k = 11 the G1 core needs two lanes (69 or 67 permutations do
         // not fit 2,048 rows), whose proof exceeds the budget.
         let one_lane = SigmaParams::new(relation, 1, limb_bits_for(11)).expect("params");
         assert!(SigmaShape::new(one_lane, 11).inventory::<Fp>().is_err());

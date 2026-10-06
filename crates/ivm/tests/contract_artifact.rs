@@ -851,9 +851,8 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
             // Structural rejection is an admission rejection before provenance is checked.
             continue;
         };
-        assert_ne!(
-            verified.manifest.signature_payload(),
-            signed.signature_payload(),
+        assert!(
+            !verified.manifest.same_signed_content(&signed),
             "{field} mutation retained the signed manifest payload"
         );
         let frame_bytes = context

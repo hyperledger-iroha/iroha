@@ -236,9 +236,16 @@ pub fn sample_witness<F: PastaField>(
     } else {
         rng.next_bytes()
     };
+    // An independent stream supplies the Request's account bindings without
+    // changing the established state and arithmetic witness distribution.
+    let mut account_rng = SplitMix64::new(seed ^ 0x6b67_7761_6363_7431);
+    let payer_account_digest = account_rng.next_bytes();
+    let receiver_account_digest = account_rng.next_bytes();
     let inputs = match relation.step() {
         StepRelation::Send => StepInputs::Send(Box::new(SendInputs {
+            payer_account_digest,
             receiver_wallet: counterparty,
+            receiver_account_digest,
             receiver_credential_digest: rng.next_bytes(),
             request,
             // A stand-in Request digest derived from the nonce.
@@ -254,6 +261,8 @@ pub fn sample_witness<F: PastaField>(
         })),
         StepRelation::Receive => StepInputs::Receive(Box::new(ReceiveInputs {
             payer_wallet: counterparty,
+            payer_account_digest,
+            receiver_account_digest,
             send_ordinal: u128::from(rng.next_u64()),
             // The Request was quoted under the receiver's current credential.
             receiver_credential_digest: identity.credential_digest,

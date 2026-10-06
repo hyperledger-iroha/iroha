@@ -8,7 +8,7 @@
 //!   13-element rest (also of the `controlled_state` vector, whose elements
 //!   are all distinct and named), the rest digest and head commitment,
 //!   `credit_id` over
-//!   the 24-element Request body, both chain appends and the 28-element
+//!   the 28-element Request body, both chain appends and the 28-element
 //!   statements that the G1 data model publishes in
 //!   `fixtures/kagemusha/wallet_v1_vectors.json` are reproduced by this
 //!   crate's native encodings, and its circuits compute the same
@@ -237,18 +237,20 @@ fn request_of(items: &Items<'_>) -> RequestBody {
         scheme_id: items.digest(1),
         asset_digest: items.digest(3),
         payer_wallet: items.digest(5),
-        receiver_wallet: items.digest(7),
-        send_ordinal: items.integer(9),
-        receiver_credential_digest: items.digest(10),
+        payer_account_digest: items.digest(7),
+        receiver_wallet: items.digest(9),
+        receiver_account_digest: items.digest(11),
+        send_ordinal: items.integer(13),
+        receiver_credential_digest: items.digest(14),
         terms: RequestTerms {
-            amount: items.integer(12),
-            fee_schedule: items.digest(13),
-            fee: items.integer(15),
-            policy_epoch: items.u64(16),
-            scheme_policy: items.digest(17),
-            request_time: items.u64(19),
-            certificates: items.digest(20),
-            nonce: items.digest(22),
+            amount: items.integer(16),
+            fee_schedule: items.digest(17),
+            fee: items.integer(19),
+            policy_epoch: items.u64(20),
+            scheme_policy: items.digest(21),
+            request_time: items.u64(23),
+            certificates: items.digest(24),
+            nonce: items.digest(26),
         },
     }
 }
@@ -323,6 +325,8 @@ fn receive_witness(vectors: &G1Vectors) -> StepWitness<Fp> {
         successor_nonce: Fp::from(9_u64),
         inputs: StepInputs::Receive(Box::new(ReceiveInputs {
             payer_wallet: request.payer_wallet,
+            payer_account_digest: request.payer_account_digest,
+            receiver_account_digest: request.receiver_account_digest,
             send_ordinal: request.send_ordinal,
             receiver_credential_digest: request.receiver_credential_digest,
             request: request.terms,
@@ -362,7 +366,9 @@ fn send_witness(vectors: &G1Vectors) -> StepWitness<Fp> {
         },
         successor_nonce: Fp::from(11_u64),
         inputs: StepInputs::Send(Box::new(SendInputs {
+            payer_account_digest: request.payer_account_digest,
             receiver_wallet: request.receiver_wallet,
+            receiver_account_digest: request.receiver_account_digest,
             receiver_credential_digest: request.receiver_credential_digest,
             request: request.terms,
             request_digest: statement.digest(24),
@@ -444,7 +450,7 @@ fn native_encodings_reproduce_the_g1_vectors() {
     assert_eq!(encode(&state.rest.fields::<Fp>()), vectors.rest_items);
     assert_eq!(state.rest.digest::<Fp>(), vectors.rest_digest);
     assert_eq!(state.commitment(), vectors.commitment);
-    // credit_id over the 24 Request elements: one element.
+    // credit_id over the 28 Request elements: one element.
     assert_eq!(
         encode(&vectors.request.fields::<Fp>()),
         vectors.request_items
@@ -643,6 +649,8 @@ fn the_controlled_state_pins_every_commitment_position() {
         successor_nonce: Fp::from(17_u64),
         inputs: StepInputs::Receive(Box::new(ReceiveInputs {
             payer_wallet: [0x5a; 32],
+            payer_account_digest: [0x60; 32],
+            receiver_account_digest: [0x61; 32],
             send_ordinal: 9,
             receiver_credential_digest: [0x5b; 32],
             request: terms,
@@ -702,7 +710,20 @@ fn the_packing_rule_and_large_input_digests_reproduce_the_g1_vectors() {
     let fixture = wallet_vectors();
     let poseidon = at(&fixture, &["poseidon"]);
     let kats = at(poseidon, &["kats"]).as_array().expect("kats");
-    assert_eq!(kats.len(), 22);
+    assert_eq!(kats.len(), 26);
+    let domains: Vec<&str> = kats
+        .iter()
+        .map(|kat| at(kat, &["domain"]).as_str().expect("domain"))
+        .collect();
+    assert_eq!(
+        domains,
+        [
+            "kgwcore1", "kgwrest1", "kgwstmt1", "kgwcrdt1", "kgwschn1", "kgwrchn1", "kgwccrd1",
+            "kgwpout1", "kgwload1", "kgwrdm_1", "kgwfee_1", "kgwquse1", "kgwcdig1", "kgwimlf1",
+            "kgwimnd1", "kgwblkl1", "kgwblkn1", "kgwqwin1", "kgwqwnd1", "kgwprf_1", "kgwstep1",
+            "kgwpay_1", "kgwlin_1", "kgwcopn1", "kgwcsts1", "kgwcrdd1",
+        ]
+    );
     let one_two_three = [1_u64, 2, 3].map(Fp::from).to_vec();
     for kat in kats {
         let label = at(kat, &["domain"]).as_str().expect("domain");
@@ -857,15 +878,15 @@ fn pinned_known_answers() {
 /// [`pinned_known_answers`], in [`RELATIONS`] order.
 const PINNED: [(&str, &str); 3] = [
     (
-        "c8fbc690290a2b326e62400d0d6c8a9215143af778bc27352e0fc1ee260e003b",
-        "f590cb60d749732105fcc2e51ab2e31877b2f0833498228827f0789c0e2b8e18",
+        "9aa2a120cffc5aba34caac774e775d14d259496d98a8bba3789017aeb0334728",
+        "bbf9a993bc8a9db0eb08a67298a47d88a532b9a237c076d1fa936d7ad4784f03",
     ),
     (
-        "3b036c87bcb6ee46a0b40691818774cef68927d03cdb1cf712748e1c09bf0320",
-        "f590cb60d749732105fcc2e51ab2e31877b2f0833498228827f0789c0e2b8e18",
+        "fa8d3050150620e5b86bd0ecdb6bce67ab6055c5c85aaa079b57ccd48122ae17",
+        "bbf9a993bc8a9db0eb08a67298a47d88a532b9a237c076d1fa936d7ad4784f03",
     ),
     (
-        "01c39b5df374bc1db6b10c6b5a87b8e6446ebb3658a288754186a84fdadfd224",
-        "b740c90bfa2f07fb35f41da7d3638fe81f37cb976cf2b6acc2edcc4ec31c971c",
+        "0ce26043593c3d8352ecb01098e4a0dc6bd32281de9271b51e1669c8d87fee2f",
+        "5b4fae97dff8d576f4fd63d94f585642ae434798e3557716c69b9c45c6530f37",
     ),
 ];

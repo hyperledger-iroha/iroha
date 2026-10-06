@@ -728,6 +728,109 @@ fn kagemusha_wallet_v1_blacklist_gap_openings() {
 }
 
 #[test]
+fn kagemusha_wallet_v1_blacklist_uses_little_endian_integer_order() {
+    let digest = |low: u8, high: u8| {
+        let mut digest = [0; 32];
+        digest[0] = low;
+        digest[31] = high;
+        digest
+    };
+    let entries = [
+        KagemushaWalletBlacklistEntryV1 {
+            account_digest: digest(0xff, 0x80),
+        },
+        KagemushaWalletBlacklistEntryV1 {
+            account_digest: digest(0x01, 0x90),
+        },
+        KagemushaWalletBlacklistEntryV1 {
+            account_digest: digest(0x00, 0xa0),
+        },
+    ];
+    // These stand-in account digests exceed the sigma field, and their byte order
+    // is the reverse of their integer order. Neither field canonicality nor
+    // array comparison is a valid account-ordering rule.
+    for entry in &entries {
+        assert!(
+            !super::super::digest::kagemusha_wallet_is_canonical_field_v1(&entry.account_digest)
+        );
+    }
+    for pair in entries.windows(2) {
+        assert!(pair[0].account_digest > pair[1].account_digest);
+        assert_eq!(pair[0].cmp(&pair[1]), Ordering::Less);
+        assert_eq!(pair[0].partial_cmp(&pair[1]), Some(Ordering::Less));
+    }
+    validate_blacklist_entries_v1(&entries).expect("integer-ordered entries");
+    let mut reversed = entries.to_vec();
+    reversed.reverse();
+    assert!(is_invalid(
+        validate_blacklist_entries_v1(&reversed),
+        "blacklist.order"
+    ));
+    reversed.sort();
+    assert_eq!(reversed, entries);
+    assert!(is_invalid(
+        validate_blacklist_entries_v1(&[entries[0], entries[0]]),
+        "blacklist.order"
+    ));
+
+    let f = policy_fixture();
+    let list = f.blacklist(1, T0_MS, entries.to_vec());
+    list.validate().expect("integer-ordered blacklist");
+    list.verify(f.scheme(), &f.regulator_certificate)
+        .expect("verify list");
+    let frame = norito::encode_canonical(&list).expect("encode");
+    let decoded = KagemushaWalletBlacklistV1::decode_canonical(&frame, &f.scheme_id())
+        .expect("decode integer-ordered list");
+    assert_eq!(decoded, list);
+    for listed in entries {
+        assert!(decoded.contains(&listed.account_digest));
+        assert!(is_invalid(
+            decoded.gap_opening(&listed.account_digest),
+            "blacklist.listed"
+        ));
+    }
+    for (account, leaf_index, lower, upper) in [
+        (digest(0x10, 0x70), 0, [0; 32], entries[0].account_digest),
+        (
+            digest(0x02, 0x85),
+            1,
+            entries[0].account_digest,
+            entries[1].account_digest,
+        ),
+        (
+            digest(0xfe, 0x95),
+            2,
+            entries[1].account_digest,
+            entries[2].account_digest,
+        ),
+        (digest(0x03, 0xb0), 3, entries[2].account_digest, [0xff; 32]),
+    ] {
+        assert!(!decoded.contains(&account));
+        let opening = decoded.gap_opening(&account).expect("integer gap");
+        assert_eq!(
+            (opening.leaf_index, opening.lower, opening.upper),
+            (leaf_index, lower, upper)
+        );
+        opening
+            .verify(&decoded.body.entries_root, &account)
+            .expect("verify integer gap");
+        for boundary in [lower, upper] {
+            assert!(is_invalid(
+                opening.verify(&decoded.body.entries_root, &boundary),
+                "blacklist.listed"
+            ));
+        }
+        let mut inverted = opening;
+        inverted.lower = upper;
+        inverted.upper = lower;
+        assert!(is_invalid(
+            inverted.verify(&decoded.body.entries_root, &account),
+            "blacklist.listed"
+        ));
+    }
+}
+
+#[test]
 fn kagemusha_wallet_v1_blacklist_sign_verify_decode() {
     let f = policy_fixture();
     let list = f.blacklist(4, T0_MS, vec![entry(0x10), entry(0x20)]);
@@ -774,7 +877,7 @@ fn kagemusha_wallet_v1_maximum_blacklist_fits_its_frame_cap() {
         ..=KAGEMUSHA_WALLET_BLACKLIST_ENTRIES_MAX_V1)
         .map(|index| {
             let mut account_digest = [0x01; 32];
-            account_digest[28..].copy_from_slice(&index.to_be_bytes());
+            account_digest[..4].copy_from_slice(&index.to_le_bytes());
             KagemushaWalletBlacklistEntryV1 { account_digest }
         })
         .collect();

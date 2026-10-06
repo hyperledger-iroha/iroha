@@ -18,9 +18,13 @@ fn challenge_for(
     tag: u8,
     index: u128,
 ) -> KagemushaAppOperationApprovalChallengeV1 {
-    let outgoing = matches!(
+    // Match the wrapper-owned incoming terminal family as well as outgoing subjects.
+    let commitments_required = matches!(
         operation,
-        KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
+        KagemushaOperationKindV1::MintFold
+            | KagemushaOperationKindV1::SendSplit
+            | KagemushaOperationKindV1::ReceiveFold
+            | KagemushaOperationKindV1::RedeemSplit
     );
     let subject = KagemushaHardwareTransitionSelectionV1 {
         version: 1,
@@ -38,8 +42,8 @@ fn challenge_for(
         hardware_epoch_generation: 10,
         operation_kind: operation,
         transition_statement_digest: [11; 32],
-        candidate_envelope_digest: [if outgoing { 12 } else { 0 }; 32],
-        terminal_body_commitment: [if outgoing { 13 } else { 0 }; 32],
+        candidate_envelope_digest: [if commitments_required { 12 } else { 0 }; 32],
+        terminal_body_commitment: [if commitments_required { 13 } else { 0 }; 32],
         secure_index_before: index,
         secure_index_after: index + 1,
     };
@@ -47,7 +51,7 @@ fn challenge_for(
         KeyPair::from_private_key(PrivateKey::from_bytes(Algorithm::Ed25519, &[0x42; 32]).unwrap())
             .unwrap();
     let account = AccountId::new(account_key.public_key().clone());
-    KagemushaAppOperationApprovalChallengeV1 {
+    let mut challenge = KagemushaAppOperationApprovalChallengeV1 {
         version: 1,
         purpose: KagemushaAppOperationApprovalPurposeV1::MonetaryTransition,
         operation_id: [0x20 + tag; 32],
@@ -56,12 +60,15 @@ fn challenge_for(
         authority_policy_digest: [0x24; 32],
         attested_key_id: [0x25; 32],
         enrollment_digest: [0x26; 32],
-        subject_signing_digest: Sha256::digest(subject.canonical_signing_bytes().unwrap()).into(),
+        subject_signing_digest: [0; 32],
         normalized_guard_digest: [0x28; 32],
         issued_at_ms: 1000,
         expires_at_ms: 2000,
         subject,
-    }
+    };
+    let s = challenge.canonical_subject_signing_bytes().unwrap();
+    challenge.subject_signing_digest = Sha256::digest(&s).into();
+    challenge
 }
 fn challenge() -> KagemushaAppOperationApprovalChallengeV1 {
     challenge_for(KagemushaOperationKindV1::MintFold, 1, 9)
@@ -91,7 +98,7 @@ fn mounted_rust_serializers_match_all_ten_actual_exported_s_and_w_vectors() {
         for index in [9, u128::MAX - 1] {
             let original = challenge_for(operation, tag, index);
             let name = format!("{name}_{index}");
-            let s = original.subject.canonical_signing_bytes().unwrap();
+            let s = original.canonical_subject_signing_bytes().unwrap();
             let w = original.canonical_signing_bytes().unwrap();
             assert_eq!(s, vector(&format!("s_{name}")));
             assert_eq!(w, vector(&format!("w_{name}")));
@@ -111,6 +118,7 @@ fn mounted_rust_serializers_match_all_ten_actual_exported_s_and_w_vectors() {
 #[test]
 fn w_refuses_changed_s_or_invalid_original_selector_and_time_shape() {
     let original = challenge();
+    assert!(original.canonical_signing_bytes().is_ok());
     let mut changed = original;
     changed.subject.secure_index_after = 9;
     assert!(changed.canonical_signing_bytes().is_err());
@@ -144,6 +152,7 @@ fn original_p256_der_verifies_w_and_not_s_or_any_other_signed_selector() {
     .unwrap();
     let original = challenge();
     let w = original.canonical_signing_bytes().unwrap();
+    assert_ne!(w, original.canonical_subject_signing_bytes().unwrap());
     let signature: Signature = key.sign(&w);
     let der = signature.to_der();
     let verifier = KagemushaDeviceSignatureV1::from_der_normalizing_low_s(der.as_bytes()).unwrap();
@@ -152,7 +161,7 @@ fn original_p256_der_verifies_w_and_not_s_or_any_other_signed_selector() {
         verifier
             .verify(
                 &public,
-                &original.subject.canonical_signing_bytes().unwrap()
+                &original.canonical_subject_signing_bytes().unwrap()
             )
             .is_err()
     );
@@ -168,7 +177,7 @@ fn original_p256_der_verifies_w_and_not_s_or_any_other_signed_selector() {
             6 => {
                 changed.subject.transition_statement_digest[0] ^= 1;
                 changed.subject_signing_digest =
-                    Sha256::digest(changed.subject.canonical_signing_bytes().unwrap()).into();
+                    Sha256::digest(changed.canonical_subject_signing_bytes().unwrap()).into();
             }
             7 => changed.normalized_guard_digest[0] ^= 1,
             _ => unreachable!(),
@@ -203,11 +212,14 @@ fn w_signature_cannot_be_relabelled_as_enrollment_possession() {
         key.verifying_key().to_encoded_point(false).as_bytes(),
     )
     .unwrap();
-    let signature: Signature = key.sign(&challenge().canonical_signing_bytes().unwrap());
-    assert!(
+    let original = challenge();
+    let w = original.canonical_signing_bytes().unwrap();
+    let signature: Signature = key.sign(&w);
+    let verifier =
         KagemushaDeviceSignatureV1::from_der_normalizing_low_s(signature.to_der().as_bytes())
-            .unwrap()
-            .verify(&public, &vector("e_enrollment_marker11"))
-            .is_err()
-    );
+            .unwrap();
+    assert!(verifier.verify(&public, &w).is_ok());
+    let enrollment = vector("e_enrollment_marker11");
+    assert_ne!(w, enrollment);
+    assert!(verifier.verify(&public, &enrollment).is_err());
 }

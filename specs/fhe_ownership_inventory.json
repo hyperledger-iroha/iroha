@@ -9632,7 +9632,6 @@
     {"path": "IrohaSwift/Sources/IrohaSwift/Confidential.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/IrohaPeerNearbyV1.swift", "purpose": "Peer-nearby session transcript keys."},
-    {"path": "IrohaSwift/Sources/IrohaSwift/KagemushaModelsV1.swift", "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."},
     {"path": "crates/iroha_cli/bins/tests/taikai_policy.rs", "purpose": "Taikai content-encryption-key rotation salt."},
     {"path": "crates/iroha_cli/src/commands/taikai.rs", "purpose": "Taikai content-encryption-key rotation salt."},
     {"path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/wire.rs", "purpose": "PQ-MASP labeled key derivation."},
@@ -9706,18 +9705,6 @@
     {
      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeerNearbyV1.kt",
      "purpose": "Peer-nearby session transcript keys."
-    },
-    {
-     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaModelsV1.kt",
-     "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."
-    },
-    {
-     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaNoritoV1.kt",
-     "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."
-    },
-    {
-     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWalletV1.kt",
-     "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."
     },
     {
      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt",
@@ -10004,7 +9991,6 @@
     {"path": "IrohaSwift/Sources/IrohaSwift/Confidential.swift", "patterns": ["hkdf"]},
     {"path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift", "patterns": ["hkdf"]},
     {"path": "IrohaSwift/Sources/IrohaSwift/IrohaPeerNearbyV1.swift", "patterns": ["hkdf"]},
-    {"path": "IrohaSwift/Sources/IrohaSwift/KagemushaModelsV1.swift", "patterns": ["hkdf"]},
     {"path": "crates/iroha_cli/bins/tests/taikai_policy.rs", "patterns": ["hkdf"], "test_only": true},
     {"path": "crates/iroha_cli/src/commands/taikai.rs", "patterns": ["hkdf"]},
     {"path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/wire.rs", "patterns": ["hkdf"]},
@@ -10059,9 +10045,6 @@
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt", "patterns": ["hkdf"]},
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/export/DeterministicKeyExporter.kt", "patterns": ["hkdf"]},
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeerNearbyV1.kt", "patterns": ["hkdf"]},
-    {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaModelsV1.kt", "patterns": ["hkdf"]},
-    {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaNoritoV1.kt", "patterns": ["hkdf"]},
-    {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWalletV1.kt", "patterns": ["hkdf"]},
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt", "patterns": ["hkdf"]},
     {
      "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/IrohaPeerNearbySessionV1Test.kt",

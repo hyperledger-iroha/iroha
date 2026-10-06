@@ -27,8 +27,11 @@ and no relation with an enabled control may be frozen into an allowlist yet.
 `sigma_send` and `sigma_recv` (`SigmaCircuit`) on Pow5 sponge lanes,
 running-sum range checks, checked `u128`/`u64` arithmetic and glue gates. A
 `SigmaRelation` is a step with the enabled-controls mask its verifying key is
-selected by: the G1 selector `(operation tag, mask)` (owner answer Q11),
-`(3, mask)` for `sigma_send` and `(4, 0)` for `sigma_recv`.
+selected by: `(3, mask)` for `sigma_send` and the implemented `(4, 0)` for
+`sigma_recv`. G1 also defines `(4, 1)` for Receive with BLACKLIST; that proof
+relation remains open. The consumer rejects its selection until it exists and
+never substitutes the empty-mask key. Other defined receiver control bits do not
+change the Receive selector.
 
 - **Hashes.** `P(d, items)` is the RP57 Poseidon `hash_with_domain` over Pasta
   `Fp`, under the G1 domains `kgwcore1`, `kgwrest1`, `kgwcrdt1`, `kgwschn1`,
@@ -49,7 +52,8 @@ selected by: the G1 selector `(operation tag, mask)` (owner answer Q11),
     Retiring, carried unchanged (a Retiring wallet keeps sending and
     receiving, spec section 6.3).
   - Require a nonzero `u128` amount and `sequence + 1 < 2^128`.
-  - Derive `credit_id = P(kgwcrdt1, 24-element Request body)` in circuit: one
+  - Derive `credit_id = P(kgwcrdt1, 28-element Request body)` in circuit,
+    binding the payer and receiver account digests beside their wallets: one
     element (owner answer Q1). The Request's scheme, asset and own wallet are
     the opened core cells.
   - Require distinct payer and receiver wallets.
@@ -105,8 +109,8 @@ consumer selects and the public input.
 - `select_shape` chooses the smallest `k`, then the fewest lanes, at which a
   key-generation synthesis fits. A proof byte budget is optional; the default
   is the 3.5 KB gate. Proof lengths are exact, taken from the descriptor.
-- Shapes (folded prefixes; `sigma_send` 67 permutations with or without the
-  blacklist control, `sigma_recv` 65):
+- Shapes (folded prefixes; `sigma_send` 69 permutations with or without the
+  blacklist control, `sigma_recv` 67):
 
   | `k` | Lanes (fewest that fit) | Proof |
   | --- | --- | --- |

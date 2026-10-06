@@ -264,6 +264,13 @@ pub fn check_receive<F: PoseidonField>(
     statement: &StatementV1<F>,
 ) -> Result<Accepted<F>, ConsumerError> {
     check_common(StepRelation::Receive, relation_id, request, statement)?;
+    // TODO(G3): support the Receive BLACKLIST selector once its non-membership
+    // relation exists. Until then it cannot select the empty-mask verifying key.
+    require(
+        statement.enabled_controls & crate::witness::CONTROL_BLACKLIST == 0
+            && statement.enabled_controls & !crate::witness::CONTROLS_DEFINED == 0,
+        ConsumerError::Controls,
+    )?;
     require(
         statement.lineage_burned_total == 0 && statement.lineage_pending_outgoing_root == F::ZERO,
         ConsumerError::BurnedTotal,
@@ -309,6 +316,34 @@ mod tests {
         vectors::{Mutation, sample_witness},
         witness::{CONTROL_BLACKLIST, StepInputs},
     };
+
+    #[test]
+    fn receive_refuses_a_blacklist_selector_without_its_relation() {
+        let receive = sample_witness::<Fp>(2, SigmaRelation::RECEIVE, Mutation::None);
+        let request = receive.request_body();
+        let mut statement = receive
+            .statement(SigmaRelation::RECEIVE)
+            .expect("statement");
+        for mask in 0..=crate::witness::CONTROLS_DEFINED {
+            statement.enabled_controls = mask;
+            let accepted = check_receive(&receive.relation_id, &request, &statement);
+            if mask & CONTROL_BLACKLIST == 0 {
+                assert_eq!(
+                    accepted.expect("empty blacklist selector").relation,
+                    SigmaRelation::RECEIVE
+                );
+            } else {
+                assert_eq!(accepted, Err(ConsumerError::Controls));
+            }
+        }
+        for mask in [crate::witness::CONTROLS_DEFINED + 1, u32::MAX] {
+            statement.enabled_controls = mask;
+            assert_eq!(
+                check_receive(&receive.relation_id, &request, &statement),
+                Err(ConsumerError::Controls),
+            );
+        }
+    }
 
     #[test]
     fn honest_statements_pass_and_yield_the_proof_inputs() {

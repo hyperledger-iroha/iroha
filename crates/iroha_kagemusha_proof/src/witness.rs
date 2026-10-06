@@ -34,7 +34,7 @@
 //! owner answer Q11). Both steps open the predecessor commitment, require the
 //! lifecycle to be Active or Retiring (carried unchanged: a Retiring wallet
 //! keeps sending and receiving, spec section 6.3), a nonzero `u128` amount
-//! and `sequence + 1 < 2^128`, hash the 24-element Request body into
+//! and `sequence + 1 < 2^128`, hash the 28-element Request body into
 //! `credit_id = P(kgwcrdt1, body)` (one element, owner answer Q1), require
 //! distinct payer and receiver wallets, append one chain and commit the
 //! successor with a fresh state nonce. The Request's scheme, asset and own
@@ -101,7 +101,7 @@ pub const REST_FIELDS: usize = 13;
 /// Inputs of the state commitment: the core and the rest digest.
 pub const COMMITMENT_ARITY: usize = CORE_FIELDS + 1;
 /// Elements of the Request body (the `credit_id` preimage).
-pub const REQUEST_FIELDS: usize = 24;
+pub const REQUEST_FIELDS: usize = 28;
 /// Inputs of a `send_chain` append: the chain and the 8 descriptor elements.
 pub const SEND_CHAIN_FIELDS: usize = 9;
 /// Inputs of a `recv_chain` append: the chain and 4 descriptor elements.
@@ -211,8 +211,11 @@ pub mod core_index {
 /// A step relation and the enabled-controls mask it enforces: the G1
 /// verifying-key selector `(operation tag, mask)` (owner answer Q11).
 ///
-/// `sigma_recv` has the empty mask (G1 selects every operation other than
-/// Send with mask 0); `sigma_send` has one relation per mask.
+/// This crate currently implements `sigma_recv` with the empty mask and one
+/// `sigma_send` relation per mask. The G1 wire allowlist also selects Receive
+/// by its blacklist bit.
+/// TODO(G3): implement the Receive blacklist relation and its non-membership
+/// witness before qualifying an artifact for the `(Receive, BLACKLIST)` selector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SigmaRelation {
     step: StepRelation,
@@ -516,7 +519,7 @@ pub struct RequestTerms {
     pub nonce: [u8; 32],
 }
 
-/// The canonical 24-element Request body (spec section 5.1; G1
+/// The canonical 28-element Request body (spec section 5.1; G1
 /// `KagemushaWalletRequestBodyV1::field_items`): the `credit_id` preimage,
 /// as both wallets and every consumer hold it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -527,8 +530,12 @@ pub struct RequestBody {
     pub asset_digest: [u8; 32],
     /// The payer wallet.
     pub payer_wallet: [u8; 32],
+    /// The account digest of the payer credential.
+    pub payer_account_digest: [u8; 32],
     /// The receiver wallet.
     pub receiver_wallet: [u8; 32],
+    /// The account digest of the receiver credential.
+    pub receiver_account_digest: [u8; 32],
     /// The payer send ordinal `s`.
     pub send_ordinal: u128,
     /// The digest of the receiver credential carried beside the body.
@@ -545,7 +552,9 @@ impl RequestBody {
         let [scheme_lo, scheme_hi] = pair(&self.scheme_id);
         let [asset_lo, asset_hi] = pair(&self.asset_digest);
         let [payer_lo, payer_hi] = pair(&self.payer_wallet);
+        let [payer_account_lo, payer_account_hi] = pair(&self.payer_account_digest);
         let [receiver_lo, receiver_hi] = pair(&self.receiver_wallet);
+        let [receiver_account_lo, receiver_account_hi] = pair(&self.receiver_account_digest);
         let [credential_lo, credential_hi] = pair(&self.receiver_credential_digest);
         let terms = &self.terms;
         let [schedule_lo, schedule_hi] = pair(&terms.fee_schedule);
@@ -560,8 +569,12 @@ impl RequestBody {
             asset_hi,
             payer_lo,
             payer_hi,
+            payer_account_lo,
+            payer_account_hi,
             receiver_lo,
             receiver_hi,
+            receiver_account_lo,
+            receiver_account_hi,
             F::from_u128(self.send_ordinal),
             credential_lo,
             credential_hi,
@@ -600,13 +613,17 @@ pub struct LineageInputs<F> {
 /// The `sigma_send` inputs beyond the predecessor state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SendInputs<F> {
+    /// The account digest of the payer credential carried by the Request.
+    pub payer_account_digest: [u8; 32],
     /// The receiver wallet.
     pub receiver_wallet: [u8; 32],
+    /// The account digest of the receiver credential carried by the Request.
+    pub receiver_account_digest: [u8; 32],
     /// The receiver credential digest of the Request.
     pub receiver_credential_digest: [u8; 32],
     /// The other Request terms.
     pub request: RequestTerms,
-    /// The digest of the signed Request (G1 `H("request", e || signature)`),
+    /// The digest of the signed Request (G1 `H("request", m || signature)`),
     /// bound by the Send effect and the chain append; `sigma_send` does not
     /// recompute it (SHA-256).
     pub request_digest: [u8; 32],
@@ -630,6 +647,10 @@ pub struct SendInputs<F> {
 pub struct ReceiveInputs<F> {
     /// The payer wallet.
     pub payer_wallet: [u8; 32],
+    /// The account digest of the payer credential carried by the Request.
+    pub payer_account_digest: [u8; 32],
+    /// The account digest of the receiver credential carried by the Request.
+    pub receiver_account_digest: [u8; 32],
     /// The payer send ordinal `s`.
     pub send_ordinal: u128,
     /// The receiver credential digest the Request was quoted under (equal
@@ -903,7 +924,9 @@ impl<F: PoseidonField> StepWitness<F> {
                 scheme_id: identity.scheme_id,
                 asset_digest: identity.asset_digest,
                 payer_wallet: identity.wallet_id,
+                payer_account_digest: send.payer_account_digest,
                 receiver_wallet: send.receiver_wallet,
+                receiver_account_digest: send.receiver_account_digest,
                 send_ordinal: core.next_send,
                 receiver_credential_digest: send.receiver_credential_digest,
                 terms: send.request,
@@ -912,7 +935,9 @@ impl<F: PoseidonField> StepWitness<F> {
                 scheme_id: identity.scheme_id,
                 asset_digest: identity.asset_digest,
                 payer_wallet: receive.payer_wallet,
+                payer_account_digest: receive.payer_account_digest,
                 receiver_wallet: identity.wallet_id,
+                receiver_account_digest: receive.receiver_account_digest,
                 send_ordinal: receive.send_ordinal,
                 receiver_credential_digest: receive.receiver_credential_digest,
                 terms: receive.request,
@@ -1210,8 +1235,8 @@ mod tests {
         assert_eq!(body.send_ordinal, core.next_send);
         let fields = body.fields::<Fp>();
         assert_eq!(fields[0], Fp::from(REQUEST_VERSION));
-        assert_eq!(fields[9], Fp::from_u128(core.next_send));
-        assert_eq!(fields[12], Fp::from_u128(body.terms.amount));
+        assert_eq!(fields[13], Fp::from_u128(core.next_send));
+        assert_eq!(fields[16], Fp::from_u128(body.terms.amount));
         assert_eq!(
             body.credit_id::<Fp>(),
             hash_with_domain(CREDIT_DOMAIN, &fields)
@@ -1229,6 +1254,62 @@ mod tests {
             inputs.receiver_credential_digest
         );
         assert_eq!(receive.inputs.terms(), &body.terms);
+    }
+
+    #[test]
+    fn request_account_limbs_follow_their_wallets() {
+        let witness = sample_witness::<Fp>(5, SigmaRelation::SEND, Mutation::None);
+        let mut body = witness.request_body();
+        // Distinct low and high limbs catch omitted, reversed or interleaved
+        // account bindings, including accidental reuse of a wallet digest.
+        body.payer_account_digest[..16].copy_from_slice(&101_u128.to_le_bytes());
+        body.payer_account_digest[16..].copy_from_slice(&102_u128.to_le_bytes());
+        body.receiver_account_digest[..16].copy_from_slice(&103_u128.to_le_bytes());
+        body.receiver_account_digest[16..].copy_from_slice(&104_u128.to_le_bytes());
+        let fields = body.fields::<Fp>();
+        assert_eq!(fields.len(), 28);
+        assert_eq!(fields[5..7], digest_fields::<Fp>(&body.payer_wallet));
+        assert_eq!(fields[7..9], [Fp::from(101_u64), Fp::from(102_u64)]);
+        assert_eq!(fields[9..11], digest_fields::<Fp>(&body.receiver_wallet));
+        assert_eq!(fields[11..13], [Fp::from(103_u64), Fp::from(104_u64)]);
+        assert_eq!(fields[13], Fp::from_u128(body.send_ordinal));
+        assert_eq!(
+            fields[14..16],
+            digest_fields::<Fp>(&body.receiver_credential_digest)
+        );
+        assert_eq!(fields[16], Fp::from_u128(body.terms.amount));
+    }
+
+    fn request_accounts_are_bound<F: PoseidonField>(relation: SigmaRelation) {
+        let witness = sample_witness::<F>(6, relation, Mutation::None);
+        let original = witness.evaluate(relation);
+        assert!(original.is_honest());
+        for payer in [true, false] {
+            for offset in [0, 16] {
+                let mut substituted = witness.clone();
+                let account = match &mut substituted.inputs {
+                    StepInputs::Send(send) if payer => &mut send.payer_account_digest,
+                    StepInputs::Send(send) => &mut send.receiver_account_digest,
+                    StepInputs::Receive(receive) if payer => &mut receive.payer_account_digest,
+                    StepInputs::Receive(receive) => &mut receive.receiver_account_digest,
+                };
+                account[offset] ^= 1;
+                let native = substituted.evaluate(relation);
+                assert!(native.is_honest());
+                assert_eq!(native.digests.predecessor, original.digests.predecessor);
+                assert_ne!(native.digests.credit, original.digests.credit);
+                assert_ne!(native.digests.chain, original.digests.chain);
+                assert_ne!(native.digests.statement, original.digests.statement);
+            }
+        }
+    }
+
+    #[test]
+    fn each_request_account_limb_binds_credit_chain_and_statement_on_both_fields() {
+        for relation in [SigmaRelation::SEND, SigmaRelation::RECEIVE] {
+            request_accounts_are_bound::<Fp>(relation);
+            request_accounts_are_bound::<Fq>(relation);
+        }
     }
 
     /// The statement encoding equals the gadgets' `StatementV1` for honest

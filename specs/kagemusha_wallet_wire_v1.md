@@ -19,15 +19,17 @@ digest). Proof bytes, relation bindings, verifying keys and the lineage roots of
 Payment's Ω(pred) in the vectors are labelled stand-ins; map roots, credit-digest roots
 and openings are computed.
 
-The second set of owner answers of 2026-10-05 is specified here and not yet
-implemented (TODO(G1)): the Poseidon signing message and the remaining SHA-256 roles
-(§1), the `P_bytes` lineage, credit-opening, credit-status and credited digests (§§1,
-3.2, 3.4), the depth-32 indexed map trees and their openings (§3.2), the limb-ordered
-blacklist and two-sided blacklist enforcement (§§3.3, 3.4), the Request account
-digests (§3.4), the Receive verifying-key selector (§3.1) and the vector consistency
-rules (§5). For these items this record governs, and the code and vectors change
-together to match it. Elsewhere the code is authoritative; a change to it updates this
-record and the vectors together.
+The native data model implements the second set of owner answers of 2026-10-05:
+the Poseidon signing message and 34 SHA-256 roles (§1), the `P_bytes` lineage,
+credit-opening, credit-status and credited digests (§§1, 3.2, 3.4), depth-32 indexed
+map trees and openings (§3.2), limb-ordered blacklists (§3.3), Request account
+bindings (§3.4), and the Receive verifying-key selector and proof budgets (§3.1).
+The shared fixture binds its manifest and relation identity to its computed allowlist;
+its proof bytes and keys remain stand-ins. Current Rust, Swift and Kotlin validation
+of these revised vectors is pending. Two-sided blacklist enforcement in the wallet
+operation flow and the corresponding proof relations remain open (TODO(G1/G3)).
+Code, this record and vectors change together; component validation does not establish
+monetary authority or release readiness.
 
 Notation: `‖` is concatenation; `LE16`…`LE128` are little-endian unsigned
 integers; every name without a width is a raw 32-byte digest, identifier, nonce or
@@ -68,7 +70,7 @@ input and the 31-byte chunk boundaries, and every value (§5).
   certificate digest. Only the `account`, `certificate-set`, `evidence`,
   `verifying-key-set`, `marker`, `capsule`, `completion` and `fold` roles and the
   lineage digest have variable-length bodies.
-- **Signing** (TODO(G1)). Every P-256 signature of the protocol signs, as its message,
+- **Signing**. Every P-256 signature of the protocol signs, as its message,
   the 32-byte canonical encoding `m` of `P_bytes(d, transcript)`, where `d` is the
   body's signing domain in the table below, with standard ECDSA-P256 over SHA-256: the
   ECDSA message hash is `SHA-256(m)`, one SHA-256 block in circuit. The Secure Enclave
@@ -256,7 +258,7 @@ is the body's fields in the order shown.
 |---|---|---|
 | Scheme (`scheme`) | `LE16 version ‖ network_id ‖ scheme_root_key(key) ‖ relation_id ‖ provider_contract` | `scheme_id = H("scheme", ·)`. `network_id` is the raw genesis `NetworkId`, carries the Iroha hash marker (last byte odd) and is not the marked zero `00…01`; `relation_id` nonzero; `provider_contract` is the V1 constant. Decoding requires the recomputed `scheme_id`. The root key signs certificates only. |
 | Relation (`relation`) | `LE16 1 ‖ eq_protocol_digest ‖ ep_protocol_digest ‖ native_profile_digest ‖ verifying_key_set_digest ‖ artifact_inventory_digest` | Gives `relation_id`, fixed for the scheme's lifetime: one scheme-level identity that every statement and Ω carries. `verifying_key_set_digest` is the `verifying-key-set` digest of the verifying-key allowlist (below). |
-| Verifying-key allowlist (`verifying-key-set`) | `LE16 version ‖ LE32 n ‖ n × (tag kind ‖ LE32 enabled_controls ‖ verifying_key_digest ‖ LE32 proof_bytes) ‖ lineage_verifying_key_digest ‖ LE32 lineage_proof_bytes` | Frame `{version, steps: [{kind, enabled_controls, verifying_key_digest, proof_bytes}], lineage_verifying_key_digest, lineage_proof_bytes}`. One σ entry per selector, strictly ascending by `(tag, mask)`, at most 16: every operation with mask 0, Send also once per supported enabled-controls mask (defined bits only), and Receive also once with mask 1 (BLACKLIST) exactly when some Send mask has bit 0; digests nonzero; lengths at least 1, σ at most 10,000. `lineage_proof_bytes` plus the largest Send `proof_bytes` is at most 8,319 (R9), and `lineage_proof_bytes` is at most 7,812 (the Credited bound with the fixed opening; §2, §4). A consumer selects σ's entry by the package's operation tag; for Send also by its mask (`Ω.enabled_controls`), and for Receive also by bit 0 of the statement's `enabled_controls` (selector `(Receive, enabled_controls & 1)`). It requires σ and Ω(pred) to have exactly the listed lengths. The Receive entry, the 8,319 budget and the 7,812 cap are TODO(G1). The frame decodes only against a manifest body whose `verifying_key_set_digest` it recomputes. |
+| Verifying-key allowlist (`verifying-key-set`) | `LE16 version ‖ LE32 n ‖ n × (tag kind ‖ LE32 enabled_controls ‖ verifying_key_digest ‖ LE32 proof_bytes) ‖ lineage_verifying_key_digest ‖ LE32 lineage_proof_bytes` | Frame `{version, steps: [{kind, enabled_controls, verifying_key_digest, proof_bytes}], lineage_verifying_key_digest, lineage_proof_bytes}`. One σ entry per selector, strictly ascending by `(tag, mask)`, at most 16: every operation with mask 0, Send also once per supported enabled-controls mask (defined bits only), and Receive also once with mask 1 (BLACKLIST) exactly when some Send mask has bit 0; digests nonzero; lengths at least 1, σ at most 10,000. `lineage_proof_bytes` plus the largest Send `proof_bytes` is at most 8,319 (R9), and `lineage_proof_bytes` is at most 7,812 (the Credited bound with the fixed opening; §2, §4). A consumer selects σ's entry by the package's operation tag; for Send also by its mask (`Ω.enabled_controls`), and for Receive also by bit 0 of the statement's `enabled_controls` (selector `(Receive, enabled_controls & 1)`). It requires σ and Ω(pred) to have exactly the listed lengths. The native allowlist enforces the Receive entry, the 8,319 budget and the 7,812 cap. The frame decodes only against a manifest body whose `verifying_key_set_digest` it recomputes. |
 | Provider contract | see §1 | Constant `52b501e3344547c36579684aafb2b15eb0caf3393e77aebdfbaa14ac57d0cc8d`. |
 | Asset scope (`asset-scope`) | `LE16 version ‖ asset UUID (16) ‖ asset_incarnation ‖ LE32 scale` | Frame `{version, asset: AssetDefinitionId, asset_incarnation, scale}`. UUIDv4 asset, valid `AxtAssetIncarnationV1`, `scale ≤ 28`. Gives `asset_digest`. |
 | Signer certificate (signed under `kgwcert1`) | `LE16 version ‖ scheme_id ‖ tag role ‖ key ‖ LE64 serial` | Signed by the scheme root. Roles: Enrollment 1, LoadAuthorization 2, RegulatoryPolicy 3, TimeAnchor 4, Artifact 5. Fixed depth one; no validity period or revocation is evaluated offline; the consumer requires the role it needs. |
@@ -307,7 +309,7 @@ the others are:
 | `kgwfee_1` | fee-claim value | `kgwcsts1` | credit-status digest (`P_bytes`) |
 | `kgwquse1` | quota-usage value | `kgwcrdd1` | credited digest (`P_bytes`) |
 
-**Indexed map trees** (TODO(G1)). The consumed-credit, pending-outgoing, load/redeem
+**Indexed map trees**. The consumed-credit, pending-outgoing, load/redeem
 recovery, fee-claim and quota-usage maps and the lineage-level credit-digest tree are
 each a depth-32 Poseidon indexed Merkle tree:
 
@@ -518,7 +520,7 @@ RegulatoryPolicy-role key except the time anchor (TimeAnchor role). Each body's
 | Time anchor (`kgwtanc1`) | `LE16 version ‖ scheme_id ‖ wallet_id ‖ nonce ‖ LE64 issuer_time_ms ‖ signer_certificate` | Answers one wallet nonce. |
 | Charge quote (`kgwchgq1`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ tag kind ‖ LE128 ordinal ‖ LE128 net_amount ‖ LE128 online_charge ‖ beneficiary_account_digest ‖ LE64 issued_at_ms ‖ signer_certificate` | Kinds Load 1, Unload 2. `online_charge > 0`. Load: the ledger debit `net_amount + online_charge` fits `u128`. Unload: `net_amount > 0` and the payout `net_amount − online_charge` does not underflow. |
 
-- **Blacklist order** (TODO(G1)). An account digest `a` orders by its limb integer
+- **Blacklist order**. An account digest `a` orders by its limb integer
   `int(a) = hi · 2^128 + lo`, where `lo` and `hi` are its two σ limbs (bytes 0–15 and
   16–31, each little-endian), so `int(a)` is the 32 bytes read as one little-endian
   integer. Entries, sentinels, gap leaves and openings follow this order: `x < y` iff
@@ -816,13 +818,10 @@ encryption and checksums never replace the wallet's verification.
 - TODO(G4): the Kotlin `inspectEnvelope` accepts a message whose own top-level version
   is not 1 or whose decode-time scheme field is malformed, which the Swift carrier
   and the Rust decoder reject (§6); no carrier checks nested version fields yet.
-- TODO(G1): the second-set items listed in the status paragraph: the signing message
-  and the 34-role SHA table (§1), the `P_bytes` lineage, credit-opening, credit-status
-  and credited digests, the indexed map trees and openings (§3.2), the blacklist limb
-  order and enforcement (§3.3), the Request account digests and the Request, Send and
-  Receive rules (§3.4), the Receive allowlist entry with the 8,319 and 7,812 budgets
-  (§3.1), the re-measured sizes (§4) and the vector consistency rules (§5), in the data
-  model, the vectors, the Advance provider, the platform signers and both SDKs.
+- TODO(G1/G4): qualify the revised shared vectors, frame sizes, native signing-message
+  handoff and SDK consumers together. The native wire objects implement the second-set
+  encodings; the Advance provider and wallet operation flow still need the two-sided
+  blacklist checks in the Request, Send and Receive rules (§§3.3, 3.4).
 - TODO(G3): the PIPA-v1 σ layout, the Ω transport-proof layout, their exact lengths
   and the frozen verifying keys. Once the artifacts freeze, the verifying-key allowlist
   (§3.1) carries them; its validation requires Ω proof + largest σ_send ≤ 8,319 bytes

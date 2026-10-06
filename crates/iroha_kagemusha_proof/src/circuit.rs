@@ -153,8 +153,8 @@ impl RelationShape {
         domain_permutations(arity, matches!(self.prefix, PrefixMode::Folded))
     }
 
-    /// The Pow5 permutations of the relation (`sigma_send` 67 and
-    /// `sigma_recv` 65 with folded prefixes, one more per hash absorbed).
+    /// The Pow5 permutations of the relation (`sigma_send` 69 and
+    /// `sigma_recv` 67 with folded prefixes, one more per hash absorbed).
     #[must_use]
     pub fn permutations(self) -> usize {
         Self::HASH_SITES
@@ -612,17 +612,17 @@ mod tests {
     fn permutation_counts_of_the_g1_core() {
         use PrefixMode::{Absorbed, Folded};
         let blacklist = SigmaRelation::send(CONTROL_BLACKLIST);
-        // Absorbed prefixes: openings 18 (33 inputs), credit 14, send chain
+        // Absorbed prefixes: openings 18 (33 inputs), credit 16, send chain
         // 6, receive chain 4, statement 16 (28 inputs).
-        assert_eq!(shape(SigmaRelation::SEND, Absorbed).permutations(), 72);
-        assert_eq!(shape(SigmaRelation::RECEIVE, Absorbed).permutations(), 70);
+        assert_eq!(shape(SigmaRelation::SEND, Absorbed).permutations(), 74);
+        assert_eq!(shape(SigmaRelation::RECEIVE, Absorbed).permutations(), 72);
         // Folding saves one permutation per hash; the controls add none.
-        assert_eq!(shape(SigmaRelation::SEND, Folded).permutations(), 67);
-        assert_eq!(shape(blacklist, Folded).permutations(), 67);
-        assert_eq!(shape(SigmaRelation::RECEIVE, Folded).permutations(), 65);
+        assert_eq!(shape(SigmaRelation::SEND, Folded).permutations(), 69);
+        assert_eq!(shape(blacklist, Folded).permutations(), 69);
+        assert_eq!(shape(SigmaRelation::RECEIVE, Folded).permutations(), 67);
         let send = shape(SigmaRelation::SEND, Folded);
         assert_eq!(send.site_permutations(HashSite::Statement), 15);
-        assert_eq!(send.site_permutations(HashSite::Credit), 13);
+        assert_eq!(send.site_permutations(HashSite::Credit), 15);
         assert_eq!(send.site_permutations(HashSite::Predecessor), 17);
         assert_eq!(send.site_permutations(HashSite::Chain), 5);
         assert_eq!(
@@ -645,33 +645,34 @@ mod tests {
     fn lane_plan_balances_longest_first() {
         let send = shape(SigmaRelation::SEND, PrefixMode::Folded);
         let one = LanePlan::new(send, 1);
-        assert_eq!(one.lane_permutations(), &[67]);
+        assert_eq!(one.lane_permutations(), &[69]);
         assert_eq!(one.glue_lane(), 0);
-        assert_eq!(one.glue_start(), Ok(67 * 37));
+        assert_eq!(one.glue_start(), Ok(69 * 37));
         let two = LanePlan::new(send, 2);
-        // 17 | 17, then 15 onto 17, 13 onto 17, 5 onto 30.
-        assert_eq!(two.lane_permutations(), &[32, 35]);
+        // 17 | 17, then credit 15 onto lane 0, statement 15 onto lane 1,
+        // and chain 5 onto lane 0 (the first lane on ties).
+        assert_eq!(two.lane_permutations(), &[37, 32]);
         assert_eq!(two.lane_of(HashSite::Predecessor), 0);
         assert_eq!(two.lane_of(HashSite::Successor), 1);
-        assert_eq!(two.lane_of(HashSite::Statement), 0);
-        assert_eq!(two.lane_of(HashSite::Credit), 1);
-        assert_eq!(two.lane_of(HashSite::Chain), 1);
-        assert_eq!(two.glue_lane(), 0);
+        assert_eq!(two.lane_of(HashSite::Statement), 1);
+        assert_eq!(two.lane_of(HashSite::Credit), 0);
+        assert_eq!(two.lane_of(HashSite::Chain), 0);
+        assert_eq!(two.glue_lane(), 1);
         assert_eq!(
             two.folded(send, 0),
-            vec![(CORE_DOMAIN, 33), (STATEMENT_DOMAIN, 28)]
-        );
-        assert_eq!(
-            two.folded(send, 1),
             vec![
                 (CORE_DOMAIN, 33),
-                (CREDIT_DOMAIN, 24),
+                (CREDIT_DOMAIN, 28),
                 (SEND_CHAIN_DOMAIN, 9)
             ]
         );
+        assert_eq!(
+            two.folded(send, 1),
+            vec![(CORE_DOMAIN, 33), (STATEMENT_DOMAIN, 28)]
+        );
         let absorbed = shape(SigmaRelation::SEND, PrefixMode::Absorbed);
         assert!(LanePlan::new(absorbed, 2).folded(absorbed, 0).is_empty());
-        assert_eq!(LanePlan::new(send, 0).lane_permutations(), &[67]);
+        assert_eq!(LanePlan::new(send, 0).lane_permutations(), &[69]);
         assert_eq!(least_loaded(&[3, 1, 1]), 1);
         assert_eq!(least_loaded(&[]), 0);
     }

@@ -258,6 +258,7 @@ pub use self::{
         kagemusha_wallet_unload_nullifier_transcript_v1, kagemusha_wallet_unload_nullifier_v1,
     },
     verifying_keys::{
+        KAGEMUSHA_WALLET_LINEAGE_PROOF_MAX_BYTES_V1,
         KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
         KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1,
         KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES_V1,

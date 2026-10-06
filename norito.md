@@ -401,6 +401,22 @@ Fixed byte-array fields retain their raw-field framing;
 other fields use the canonical child decoder relationship. Generic, skipped,
 flattened and whole-value validation-hook records are rejected by this initial
 opt-in rather than silently changing their contracts. No schema or V1 bytes change.
+The shared positional and Option prefix kernels bound and borrow each declared
+payload without charging its byte length as an allocation. Element-framed
+`[u8; N]` decoding likewise checks borrowed element prefixes while filling fixed
+stack storage without a heap charge. Generic fixed arrays always use their
+encoder's element-framed layout; explicit raw fields and nominal raw-byte types
+retain their fixed-width decoders. Input length never selects an array layout.
+Manual record walks use `framed_byte_array_field` for direct byte-array fields,
+and prepared destinations honor the decoder selected by that field constructor.
+Optional and sequence-element arrays keep the generic element-framed value
+format; raw record-field bytes cannot be passed to that value decoder.
+Archived generic arrays charge each actual element copy once. Their owning
+element decoder also requires `SerializePayload`: partial or unreported child
+access uses the same allocation-free canonical byte comparison as other fields,
+without imposing an additional deserialization lifetime bound. Actual archived
+realignment buffers and owned child storage retain their own allocation charges;
+field, flags, bounds, depth and complete-consumption checks remain active.
 
 `PreparedDecodeWorkspace` preadmits its two reusable physical counter controls
 from an explicit original `iroha_allocation` reservation. Active scopes borrow

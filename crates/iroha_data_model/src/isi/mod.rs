@@ -33,6 +33,66 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
     vec::Vec,
 };
+// Match direct byte-array syntax before a `ty` fragment makes it opaque.
+// Ordinary, optional, vector and nested array fields retain their canonical
+// value decoder; only the encoder's direct raw byte-array contract is special.
+macro_rules! impl_aos_decode_from_slice {
+    ($ty:ty { $first:ident: $($fields:tt)* }) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [bytes flags offset] [] [];
+            $first: $($fields)* ,
+        );
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*];) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice($bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let $flags = norito::core::effective_decode_flags()
+                    .unwrap_or_else(norito::core::default_encode_flags);
+                let mut $offset = 0usize;
+                $($reads)*
+                if $offset != $bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access($bytes, $offset);
+                Ok((Self { $($names),* }, $offset))
+            }
+        }
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*]; ,) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [$bytes $flags $offset] [$($names,)*] [$($reads)*];
+        );
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*];
+        $field:ident: [u8; $length:expr], $($rest:tt)*) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [$bytes $flags $offset] [$($names,)* $field,]
+            [$($reads)*
+                let $field = $crate::isi::decode_aos_byte_array_field::<{ $length }>(
+                    $bytes, &mut $offset, $flags,
+                )?;
+            ]; $($rest)*
+        );
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*];
+        $field:ident: $field_ty:ty, $($rest:tt)*) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [$bytes $flags $offset] [$($names,)* $field,]
+            [$($reads)*
+                let $field = $crate::isi::decode_aos_canonical_field::<$field_ty>(
+                    $crate::isi::read_aos_field($bytes, &mut $offset, $flags)?,
+                    $flags,
+                )?;
+            ]; $($rest)*
+        );
+    };
+}
+pub(crate) use impl_aos_decode_from_slice;
+
 /// Consensus key lifecycle instructions.
 pub mod consensus_keys;
 /// Domain endorsement management instructions.
@@ -1609,6 +1669,15 @@ pub(crate) fn read_aos_field<'a>(
     *offset = field_end;
     Ok(field)
 }
+/// Decode the encoder's direct raw byte-array member using the shared field prefix.
+pub(crate) fn decode_aos_byte_array_field<const N: usize>(
+    bytes: &[u8],
+    offset: &mut usize,
+    flags: u8,
+) -> Result<[u8; N], norito::core::Error> {
+    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+    norito::core::framed_byte_array_field::<N>(bytes, offset)?.decode_owned()
+}
 pub(crate) fn decode_aos_canonical_field<T>(
     field: &[u8],
     flags: u8,
@@ -2855,6 +2924,9 @@ mod tests;
 
 #[cfg(test)]
 mod framing_tests;
+
+#[cfg(test)]
+mod aos_field_decode_tests;
 
 #[cfg(test)]
 mod generated_argument_identity_tests;

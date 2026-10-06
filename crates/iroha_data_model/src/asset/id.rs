@@ -529,20 +529,46 @@ mod tests {
             norito::decode_from_bytes::<AssetDefinitionId>(&bytes).unwrap(),
             expected
         );
+        let no_allocation =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let (decoded, usage) = norito::core::with_decode_limits_measured(no_allocation, || {
+            norito::decode_from_bytes::<AssetDefinitionId>(&bytes)
+        });
+        assert_eq!(decoded.unwrap(), expected);
+        assert_eq!(usage.total_allocated_bytes(), 0);
+        let payload_len = norito::core::Header::read(&mut std::io::Cursor::new(&bytes))
+            .unwrap()
+            .length;
         let refused = norito::with_decode_limits_scope(
-            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, 0, usize::MAX),
             || norito::decode_from_bytes::<AssetDefinitionId>(&bytes),
         );
         assert!(
             matches!(
                 &refused,
-                Err(norito::Error::TotalAllocationExceeded { limit: 0, .. })
+                Err(norito::Error::FieldLengthExceeded { length, limit: 0 })
+                    if *length == payload_len
             ),
-            "fallible asset decoder erased the original allocation refusal: {refused:?}"
+            "fallible asset decoder erased the original field-length refusal: {refused:?}"
         );
         let retried = norito::decode_from_bytes::<AssetDefinitionId>(&bytes).unwrap();
         assert_eq!(retried, expected);
         norito::verify_exact_frame(&retried, &bytes).unwrap();
+        let owned = vec![expected.clone()];
+        let owned_bytes = norito::to_bytes(&owned).unwrap();
+        let refused = norito::with_decode_limits_scope(no_allocation, || {
+            norito::decode_from_bytes::<Vec<AssetDefinitionId>>(&owned_bytes)
+        });
+        assert!(
+            matches!(
+                &refused,
+                Err(norito::Error::TotalAllocationExceeded { limit: 0, .. })
+            ),
+            "fallible owned asset decoder erased the original allocation refusal: {refused:?}"
+        );
+        let retried = norito::decode_from_bytes::<Vec<AssetDefinitionId>>(&owned_bytes).unwrap();
+        assert_eq!(retried, owned);
+        norito::verify_exact_frame(&retried, &owned_bytes).unwrap();
         let invalid = AssetDefinitionId { aid_bytes: [0; 16] };
         let invalid_bytes = norito::to_bytes(&invalid).unwrap();
         assert!(

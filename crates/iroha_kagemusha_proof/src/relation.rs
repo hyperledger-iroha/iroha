@@ -156,6 +156,8 @@ struct CoreSlots {
 /// The Request terms `sigma_send` does not range-check (indices into the
 /// batch), or every term for `sigma_recv`.
 struct TermSlots {
+    payer_account: [usize; 2],
+    receiver_account: [usize; 2],
     receiver_credential: [usize; 2],
     send_ordinal: Option<usize>,
     fee: Option<usize>,
@@ -392,6 +394,14 @@ pub fn assign<F: PoseidonField>(
     let request_digest =
         is_send.then(|| batch.pair(value(send, |send| digest_fields::<F>(&send.request_digest))));
     let term_slots = TermSlots {
+        payer_account: batch.pair(value(witness, |witness| match &witness.inputs {
+            StepInputs::Send(send) => digest_fields::<F>(&send.payer_account_digest),
+            StepInputs::Receive(receive) => digest_fields::<F>(&receive.payer_account_digest),
+        })),
+        receiver_account: batch.pair(value(witness, |witness| match &witness.inputs {
+            StepInputs::Send(send) => digest_fields::<F>(&send.receiver_account_digest),
+            StepInputs::Receive(receive) => digest_fields::<F>(&receive.receiver_account_digest),
+        })),
         // The Request's receiver credential digest is a term for both steps:
         // the receiver is matched by `wallet_id`, never by credential digest
         // (owner answer Q8).
@@ -436,6 +446,8 @@ pub fn assign<F: PoseidonField>(
     let scheme = pair_at(&words, slots.scheme)?;
     let asset = pair_at(&words, slots.asset)?;
     let credential = pair_at(&words, slots.credential)?;
+    let payer_account = pair_at(&words, term_slots.payer_account)?;
+    let receiver_account = pair_at(&words, term_slots.receiver_account)?;
     let receiver_credential = pair_at(&words, term_slots.receiver_credential)?;
     let fee_schedule = pair_at(&words, term_slots.fee_schedule)?;
     let scheme_policy = pair_at(&words, term_slots.scheme_policy)?;
@@ -538,8 +550,12 @@ pub fn assign<F: PoseidonField>(
         asset[1],
         request_cells.payer[0],
         request_cells.payer[1],
+        payer_account[0],
+        payer_account[1],
         request_cells.receiver[0],
         request_cells.receiver[1],
+        receiver_account[0],
+        receiver_account[1],
         request_cells.ordinal,
         receiver_credential[0],
         receiver_credential[1],

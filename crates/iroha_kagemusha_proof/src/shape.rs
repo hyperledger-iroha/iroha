@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn a_receive_needs_four_lanes_at_k10() {
-        // 65 folded permutations (2,405 lane rows) and the glue rows do not
+        // 67 folded permutations (2,479 lane rows) and the glue rows do not
         // fit three lanes of 1,024 rows.
         let relation = RelationShape::new(SigmaRelation::RECEIVE, PrefixMode::Folded);
         for lanes in [1, 2, 3] {

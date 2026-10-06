@@ -3,14 +3,16 @@
 //!
 //! Statements and Ω carry one scheme-level relation identity. Each consumer selects σ's
 //! verifying key from this allowlist by the operation tag and, for Send, by the
-//! enabled-controls mask (`Ω.enabled_controls`); Λ uses the same allowlist. G1 defines the
+//! enabled-controls mask (`Ω.enabled_controls`); Receive selects by its blacklist bit. Λ uses
+//! the same allowlist. G1 defines the
 //! allowlist, with one entry per selector and its exact σ length, plus the Ω transport
 //! verifying key and its exact proof length. Its digest
 //! `H("verifying-key-set", transcript)` is the `verifying_key_set_digest` that the relation
 //! identity and the signed artifact manifest bind. The σ and Ω byte caps are these exact lengths
 //! (owner answer Q6): under R9 the Ω length plus the largest `σ_send` length fits the Payment
-//! budget [`KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`]. Until the artifacts freeze, structural
-//! validation of the wire objects enforces only the frame bounds.
+//! budget [`KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`]. The Ω length also fits the Credited
+//! envelope with its fixed indexed opening. These structural limits do not establish that
+//! the proof artifacts have frozen or qualify their proving and verification behavior.
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -20,7 +22,10 @@ use super::{
     WalletVersionsV1, decode_frame_v1,
     digest::{KagemushaWalletDigestRoleV1 as Role, WalletTranscriptV1, kagemusha_wallet_digest_v1},
     encode_frame_v1,
-    identity::{KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1, KagemushaWalletArtifactManifestBodyV1},
+    identity::{
+        KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1, KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1,
+        KagemushaWalletArtifactManifestBodyV1,
+    },
     invalid_v1, overflow_v1, require_nonzero_v1, require_version_v1,
     state::{
         KagemushaWalletLineageV1, KagemushaWalletOperationKindV1, KagemushaWalletPackageV1,
@@ -35,15 +40,31 @@ pub(super) mod verifying_keys_tests;
 /// Exact transcript bytes of one allowlist entry:
 /// `tag kind || LE32 enabled_controls || verifying_key_digest || LE32 proof_bytes`.
 pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES_V1: usize = 1 + 4 + 32 + 4;
-/// Maximum σ entries: one per non-Send operation and one per Send enabled-controls mask.
-pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1: usize = 7 + 8;
+/// Maximum σ entries: six other operations, eight Send masks and two Receive masks.
+pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1: usize = 6 + 8 + 2;
 /// Maximum standalone canonical frame of one verifying-key allowlist.
 pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1: usize = 2_048;
+/// Maximum Ω transport-proof length that fits a Credited envelope with its fixed indexed
+/// opening (§§2, 4). The joint Payment proof budget applies independently.
+pub const KAGEMUSHA_WALLET_LINEAGE_PROOF_MAX_BYTES_V1: usize = 7_812;
+
+fn selector_mask_is_valid(kind: KagemushaWalletOperationKindV1, enabled_controls: u32) -> bool {
+    match kind {
+        KagemushaWalletOperationKindV1::Send => {
+            enabled_controls & !KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 == 0
+        }
+        KagemushaWalletOperationKindV1::Receive => {
+            enabled_controls & !KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1 == 0
+        }
+        _ => enabled_controls == 0,
+    }
+}
 
 /// One σ verifying key of the allowlist and its selector (§3.2).
 ///
-/// Every operation other than Send has exactly one entry with a zero mask; Send has one entry
-/// per enabled-controls mask the scheme supports, including the empty mask.
+/// Every operation has a zero-mask entry. Send also has one entry per enabled-controls mask
+/// the scheme supports; Receive also has a blacklist entry exactly when some supported Send
+/// mask enables the blacklist control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletVerifyingKeyEntryV1"
@@ -51,7 +72,7 @@ pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1: usize = 2_048;
 pub struct KagemushaWalletVerifyingKeyEntryV1 {
     /// Operation tag of the step relation.
     pub kind: KagemushaWalletOperationKindV1,
-    /// Enabled-controls mask of a Send relation; zero for every other operation.
+    /// Enabled-controls mask for Send, the blacklist bit for Receive, zero otherwise.
     pub enabled_controls: u32,
     /// Digest of the frozen verifying key.
     pub verifying_key_digest: [u8; 32],
@@ -82,12 +103,7 @@ impl KagemushaWalletVerifyingKeyEntryV1 {
         if self.proof_bytes == 0 {
             return Err(invalid_v1("verifying_keys.proof_bytes"));
         }
-        let mask_ok = if self.kind == KagemushaWalletOperationKindV1::Send {
-            self.enabled_controls & !KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 == 0
-        } else {
-            self.enabled_controls == 0
-        };
-        if mask_ok {
+        if selector_mask_is_valid(self.kind, self.enabled_controls) {
             Ok(())
         } else {
             Err(invalid_v1("verifying_keys.enabled_controls"))
@@ -118,10 +134,11 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
     /// # Errors
     ///
     /// Rejects another version, more than [`KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1`]
-    /// entries, entries not strictly ascending by selector, a missing operation, a nonzero mask
-    /// outside Send or an undefined control bit, a Send without the empty-mask entry, zero
-    /// digests or lengths, and an Ω length plus the largest `σ_send` length above the Payment
-    /// budget (R9) or a σ longer than a message.
+    /// entries, entries not strictly ascending by selector, a missing zero-mask operation,
+    /// an invalid operation mask or undefined control bit, a Receive blacklist entry absent
+    /// when any Send mask enables blacklist or present otherwise, zero digests or lengths,
+    /// an Ω length above the Credited bound, an Ω length plus the largest `σ_send` length
+    /// above the Payment budget (R9), or a σ longer than a message.
     pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("verifying_keys.version", self.version)?;
         if self.steps.len() > KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1 {
@@ -149,11 +166,29 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
                 return Err(invalid_v1("verifying_keys.missing"));
             }
         }
+        let send_blacklist = self.steps.iter().any(|entry| {
+            entry.kind == KagemushaWalletOperationKindV1::Send
+                && entry.enabled_controls & KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1 != 0
+        });
+        let receive_blacklist = self.steps.iter().any(|entry| {
+            entry.selector()
+                == (
+                    KagemushaWalletOperationKindV1::Receive.tag(),
+                    KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                )
+        });
+        if send_blacklist != receive_blacklist {
+            return Err(invalid_v1("verifying_keys.receive_blacklist"));
+        }
         require_nonzero_v1(
             "verifying_keys.lineage_verifying_key_digest",
             &self.lineage_verifying_key_digest,
         )?;
-        if self.lineage_proof_bytes == 0 {
+        let lineage_proof_bytes = usize::try_from(self.lineage_proof_bytes)
+            .map_err(|_| overflow_v1("verifying_keys.lineage_proof_bytes"))?;
+        if lineage_proof_bytes == 0
+            || lineage_proof_bytes > KAGEMUSHA_WALLET_LINEAGE_PROOF_MAX_BYTES_V1
+        {
             return Err(invalid_v1("verifying_keys.lineage_proof_bytes"));
         }
         let largest_send = self
@@ -213,20 +248,20 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
         ))
     }
 
-    /// The σ entry of selector `(kind, enabled_controls)`; every operation other than Send
-    /// selects with the empty mask.
+    /// The σ entry of selector `(kind, enabled_controls)`: Send selects by its controls,
+    /// Receive by its blacklist bit, every other operation by the empty mask.
     ///
     /// # Errors
     ///
-    /// Rejects an invalid allowlist, a nonzero mask outside Send, and a selector without an
-    /// entry.
+    /// Rejects an invalid allowlist, an invalid mask for the operation and a selector without
+    /// an entry.
     pub fn entry(
         &self,
         kind: KagemushaWalletOperationKindV1,
         enabled_controls: u32,
     ) -> WalletResult<&KagemushaWalletVerifyingKeyEntryV1> {
         self.validate()?;
-        if kind != KagemushaWalletOperationKindV1::Send && enabled_controls != 0 {
+        if !selector_mask_is_valid(kind, enabled_controls) {
             return Err(invalid_v1("verifying_keys.selector"));
         }
         self.steps
@@ -272,8 +307,8 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
 
     /// Check a package's proof lengths: σ against the entry its verifying-key selector picks
     /// (operation tag and, for Send, the mask, which the consumer checks equate with
-    /// `Ω.enabled_controls`) and a carried Ω(pred) against the transport length. Returns the
-    /// selected verifying-key digest.
+    /// `Ω.enabled_controls`; for Receive, the statement's blacklist bit) and a carried Ω(pred)
+    /// against the transport length. Returns the selected verifying-key digest.
     ///
     /// # Errors
     ///
