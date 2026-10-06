@@ -306,12 +306,18 @@ failed at the PreviousRoot stage: four valid 7,744-byte A proofs preceded its
 68,931-row overflow. That failed source/binary is retained in
 `target/qualification/quota-split-recursive*`. The revised root-only path carries
 object digest/length/tape proposals; mandatory signed-original owners recompute
-all five originals, and the merge owner binds the signed issue/count. Full
-closure remains pending, with every revised stage preflighted before proving.
+all five originals, and the merge owner binds the signed issue/count. Two proposal
+binding/schema/layout tests pass (69.26 s), and independent code review found no
+binding gap conditional on complete source-bound closure. The following eight-stage
+preflight stopped before Refresh proofs: PreviousRoot fit at 65,490 rows, while
+WindowRoot/UsageRoot needed 67,303/70,411. The current seven-stage schedule places
+Effects+PreviousRoot at A0, WindowRoot at A1, UsageRoot at A2, Q-sigma at A3,
+update authorization at A4, current authorization at A5 and Merge at A6. Its full
+preflight and actual closure remain pending; all earlier overflows are retained.
 Exact native source artifact imports reject superseded arithmetic descriptors
 before checkpoint use. The installed `native::refresh` candidate now assembles
 all five kinds from actual predecessor/Q proofs and exact signed originals,
-using the fixed four- or eight-stage schedule. It consumes witnesses for proving,
+using the fixed four- or seven-stage schedule. It consumes witnesses for proving,
 self-verifies every A/W proof and restores original bytes with source-bound
 history and full accumulator decisions. Seven pure native rejection tests pass. Genuine Credential parity also passes
 (1,111.59 s): all four A and three W proofs reproduce exact diagnostic bytes under

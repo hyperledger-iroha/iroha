@@ -191,7 +191,7 @@ impl Plan {
                 .binding()
                 .descriptor()
                 .k
-                != operation.frame().part_source_k() as u8
+                != u8::try_from(operation.frame().part_source_k()).map_err(|_| Error::Artifact)?
         {
             return Err(Error::Artifact);
         }
