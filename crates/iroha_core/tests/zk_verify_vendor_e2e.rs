@@ -1,18 +1,18 @@
 #![doc = "End-to-end vendor bridge gating path for ZK verification"]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-//! End-to-end gating path: ZK verify (mocked) -> vendor bridge -> `CoreHost` gating.
+//! An injected verification latch cannot authorize an unadmitted native proof relation.
 //!
-//! A real development IPA proof remains inadmissible even if a test-only helper
+//! A real native transfer proof relabelled as a ballot remains inadmissible even if a test-only helper
 //! forces the prior-verification latch. Initial executor authority and the direct
 //! relation-role consumer are checked separately; the latter is an instruction
 //! unit boundary, not a successful production host handoff.
+#[path = "common/native_genesis.rs"]
+mod native_genesis;
 use iroha_core::smartcontracts::Execute;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::ivm::host::CoreHost,
-    state::{State, WorldReadOnly},
+    state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -88,12 +88,16 @@ fn forced_vendor_latch_cannot_admit_development_ballot() {
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = iroha_core::state::World::with([domain], [account], Vec::<AssetDefinition>::new());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(world, kura, query);
+    let mut state = native_genesis::certified_state(world);
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.zk.pipa_r.enabled = true;
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut stx = block.transaction();
     // Authority and host

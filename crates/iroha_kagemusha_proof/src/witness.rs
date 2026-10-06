@@ -1489,6 +1489,62 @@ mod tests {
         assert_eq!(receive.inputs.terms(), &body.terms);
     }
 
+    #[test]
+    fn request_account_limbs_follow_their_wallets() {
+        let witness = sample_witness::<Fp>(5, SigmaRelation::SEND, Mutation::None);
+        let mut body = witness.request_body();
+        // Distinct low and high limbs catch omitted, reversed or interleaved
+        // account bindings, including accidental reuse of a wallet digest.
+        body.payer_account[..16].copy_from_slice(&101_u128.to_le_bytes());
+        body.payer_account[16..].copy_from_slice(&102_u128.to_le_bytes());
+        body.receiver_account[..16].copy_from_slice(&103_u128.to_le_bytes());
+        body.receiver_account[16..].copy_from_slice(&104_u128.to_le_bytes());
+        let fields = body.fields::<Fp>();
+        assert_eq!(fields.len(), 26);
+        assert_eq!(fields[5..7], digest_fields::<Fp>(&body.payer_wallet));
+        assert_eq!(fields[7..9], [Fp::from(101_u64), Fp::from(102_u64)]);
+        assert_eq!(fields[9..11], digest_fields::<Fp>(&body.receiver_wallet));
+        assert_eq!(fields[11..13], [Fp::from(103_u64), Fp::from(104_u64)]);
+        assert_eq!(fields[13], Fp::from_u128(body.send_ordinal));
+        assert_eq!(
+            fields[14],
+            field_value::<Fp>(&body.receiver_credential_digest)
+        );
+        assert_eq!(fields[15], Fp::from_u128(body.terms.amount));
+    }
+
+    fn request_accounts_are_bound<F: PoseidonField>(relation: SigmaRelation) {
+        let witness = sample_witness::<F>(6, relation, Mutation::None);
+        let original = witness.evaluate(relation);
+        assert!(original.is_honest());
+        for payer in [true, false] {
+            for offset in [0, 16] {
+                let mut substituted = witness.clone();
+                let account = match &mut substituted.inputs {
+                    StepInputs::Send(send) if payer => &mut send.payer_account_digest,
+                    StepInputs::Send(send) => &mut send.receiver_account_digest,
+                    StepInputs::Receive(receive) if payer => &mut receive.payer_account_digest,
+                    StepInputs::Receive(receive) => &mut receive.receiver_account_digest,
+                };
+                account[offset] ^= 1;
+                let native = substituted.evaluate(relation);
+                assert!(native.is_honest());
+                assert_eq!(native.digests.predecessor, original.digests.predecessor);
+                assert_ne!(native.digests.credit, original.digests.credit);
+                assert_ne!(native.digests.chain, original.digests.chain);
+                assert_ne!(native.digests.statement, original.digests.statement);
+            }
+        }
+    }
+
+    #[test]
+    fn each_request_account_limb_binds_credit_chain_and_statement_on_both_fields() {
+        for relation in [SigmaRelation::SEND, SigmaRelation::RECEIVE] {
+            request_accounts_are_bound::<Fp>(relation);
+            request_accounts_are_bound::<Fq>(relation);
+        }
+    }
+
     /// The statement encoding equals the gadgets' `StatementV1` for honest
     /// witnesses.
     fn statement_matches_gadgets<F: PoseidonField>(relation: SigmaRelation) {

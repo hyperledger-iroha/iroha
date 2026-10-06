@@ -1112,6 +1112,10 @@ def main():
                         help="seconds per scenario deadline (0 disables its deadline)")
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")
     args = parser.parse_args()
+    if args.jobs < 1:
+        parser.error("--jobs must be positive")
+    if not 1 <= args.seeds <= (1 << 64) - 1:
+        parser.error("--seeds must be a positive u64 count")
     if args.strict and args.skip_baseline:
         parser.error("--strict requires the unmutated baseline")
     if args.target_dir is None:
@@ -1133,8 +1137,12 @@ def main():
         return 0
 
     selected = table
-    if args.only:
+    if args.only is not None:
         wanted = [x.strip() for x in args.only.split(",") if x.strip()]
+        if not wanted:
+            parser.error("--only must select at least one mutation id")
+        if len(wanted) != len(set(wanted)):
+            parser.error("--only contains duplicate mutation ids")
         unknown = [x for x in wanted if x not in by_id]
         if unknown:
             parser.error(f"unknown mutation id(s): {', '.join(unknown)}")

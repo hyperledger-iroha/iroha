@@ -196,7 +196,7 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
             || format!("{error:?}").contains("circuit mismatch")
     );
     assert!(stx.world.elections().get(&"e1".to_owned()).is_none());
-    // 2) Enqueue SubmitBallot via the vendor bridge
+    // 2) Generic programs cannot enter the operation-specific contract bridge.
     let mut code2 = Vec::new();
     code2.extend_from_slice(
         &encoding::wide::encode_sys(
@@ -228,11 +228,17 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
     let tlv2 = make_tlv(PointerType::NoritoBytes as u16, &sb_bytes);
     let ptr2 = store_tlv(&mut vm, &mut cursor, &tlv2);
     vm.set_register(10, ptr2);
-    vm.load_program(&prog2).expect("load vendor2");
-    vm.run().expect("run vendor2");
-    // 3) Generic proof success has not granted a ballot latch or governance authority.
-    let error = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut stx, &authority))
-        .expect_err("generic native verification cannot authorize SubmitBallot");
-    assert!(format!("{error:?}").contains("missing ZK_VOTE_VERIFY_BALLOT"));
+    assert_eq!(
+        vm.load_program(&prog2),
+        Err(ivm::VMError::GenericSyscallNotAllowed {
+            syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+        })
+    );
+    // Generic verification creates no queued instruction or governance authority.
+    assert!(
+        CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut stx, &authority))
+            .expect("empty generic effect queue")
+            .is_empty()
+    );
     assert!(stx.world.elections().get(&"e1".to_owned()).is_none());
 }

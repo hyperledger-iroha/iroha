@@ -1470,6 +1470,7 @@ impl<F: PastaField> FfChip<F> {
                 gates.modulus,
                 (&left, &right),
                 witness,
+                carry_layout,
             );
         }
         let gates = gates.fused.ok_or(Error::Synthesis)?;
@@ -1601,6 +1602,31 @@ impl<F: PastaField> FfChip<F> {
                 .is_some_and(|(_, padding)| padding.iter().all(|limb| *limb < 1 << 95))
     }
 
+    /// Selects only an envelope proved by the retained operand metadata.
+    fn carry_layout(
+        mode: Mode,
+        modulus: ForeignModulus,
+        a: Operand<'_, F>,
+        b: Operand<'_, F>,
+    ) -> CarryLayout {
+        match mode {
+            Mode::Mul
+                if a.is_proper()
+                    && b.is_proper()
+                    && modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt() =>
+            {
+                CarryLayout::ProperProduct
+            }
+            Mode::Mul if Self::bounded_product_admissible(modulus, &a.bounds(), &b.bounds()) => {
+                CarryLayout::BoundedPasta
+            }
+            Mode::Div if Self::bounded_division_admissible(modulus, &a.bounds(), &b.bounds()) => {
+                CarryLayout::BoundedPasta
+            }
+            Mode::Mul | Mode::Div => CarryLayout::Full,
+        }
+    }
+
     fn fused_mul(
         &mut self,
         region: &mut Region<'_, F>,
@@ -1616,15 +1642,7 @@ impl<F: PastaField> FfChip<F> {
             .limb_values()
             .zip(b.limb_values())
             .map(|(a, b)| mul_witness::<F>(modulus, &a, &b));
-        let carry_layout =
-            if a.is_proper() && b.is_proper() && modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt()
-            {
-                CarryLayout::ProperProduct
-            } else if Self::bounded_product_admissible(modulus, &a.bounds(), &b.bounds()) {
-                CarryLayout::BoundedPasta
-            } else {
-                CarryLayout::Full
-            };
+        let carry_layout = Self::carry_layout(Mode::Mul, modulus, a, b);
         let limbs = self.fused_block(
             region,
             gates,
@@ -1656,11 +1674,7 @@ impl<F: PastaField> FfChip<F> {
             .limb_values()
             .zip(b.limb_values())
             .map(|(a, b)| div_witness::<F>(modulus, &a, &b));
-        let carry_layout = if Self::bounded_division_admissible(modulus, &a.bounds(), &b.bounds()) {
-            CarryLayout::BoundedPasta
-        } else {
-            CarryLayout::Full
-        };
+        let carry_layout = Self::carry_layout(Mode::Div, modulus, a, b);
         let limbs = self.fused_block(
             region,
             gates,

@@ -37,6 +37,21 @@ struct Objects {
     index: u64,
     valid: bool,
     known: bool,
+    context: Option<ContextPlan>,
+    mutation: BindMutation,
+}
+#[derive(Clone, Copy)]
+enum BindMutation {
+    None,
+    Result,
+    Owner,
+    QDigest,
+    QIndex,
+    QBytes,
+    Own,
+    Receiver,
+    Header,
+    ActiveLength,
 }
 impl Circuit<Fp> for Objects {
     type Config = Config;
@@ -136,7 +151,7 @@ impl Circuit<Fp> for Objects {
                     &mut region,
                     10000,
                     &raw,
-                    &SigmaBindingCells::incoming_segments(32)?,
+                    &SigmaBindingCells::incoming_segments(self.sigma_view())?,
                 )?;
                 let index = chip
                     .uint()
@@ -148,7 +163,7 @@ impl Circuit<Fp> for Objects {
                     &statement,
                     index,
                     &sigma,
-                    32,
+                    self.sigma_view(),
                 )?;
                 let source = self.source.each_ref().map(|raw| {
                     raw.iter()
@@ -181,6 +196,19 @@ impl Circuit<Fp> for Objects {
                 )?;
                 assert_eq!(objects.context().len(), 6);
                 assert_eq!(objects.objects()[0].kind(), ObjectKind::Request);
+                if let Some(plan) = &self.context {
+                    self.bind_context(
+                        &mut chip,
+                        &mut bytes,
+                        &mut region,
+                        plan,
+                        &objects,
+                        &own,
+                        &receiver,
+                        &incoming,
+                        &sigma,
+                    )?;
+                }
                 Ok([
                     objects.payment().payment().digest().clone(),
                     objects.valid.word().clone(),
@@ -220,6 +248,309 @@ fn object_digest(kind: ObjectKind, source: &[u8]) -> Fp {
     hash_with_domain(kind.object_domain(), &words)
 }
 impl Objects {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "component fixture preserves each exact context source"
+    )]
+    fn bind_context(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        objects: &ReceiveObjects,
+        own: &StatementCells,
+        receiver: &LineagePublicCells,
+        incoming: &IncomingTransportCells,
+        sigma: &SigmaBindingCells,
+    ) -> Result<(), Error> {
+        use crate::a_relation::{
+            IncomingLineageCells,
+            context::{ContextIncoming, ContextPredecessor, ContextState},
+            results::{ReceiveResultClaims, ReceiveResultTag},
+        };
+        use crate::operation_relation::state::StateCells;
+        use iroha_plonk_recursion::codec::ScalarCells;
+        let zero = chip.uint().glue().constant(region, Fp::ZERO)?;
+        let mut words = plan
+            .operation()
+            .sigma
+            .instance_lengths()
+            .map(|n| vec![zero.clone(); n]);
+        words[0][0] = own.digest().clone();
+        words[0][1] = sigma.statement().digest().clone();
+        words[2][1] = sigma.key_index().clone();
+        for (i, chunk) in plan
+            .operation()
+            .sigma
+            .chunk_range(1)
+            .ok_or(Error::Synthesis)?
+            .zip(sigma.proof_chunks())
+        {
+            words[0][i] = chunk.clone();
+        }
+        let mutation_slot = match self.mutation {
+            BindMutation::QDigest => Some((0, 1)),
+            BindMutation::QIndex => Some((2, 1)),
+            BindMutation::QBytes => Some((
+                0,
+                plan.operation()
+                    .sigma
+                    .chunk_range(1)
+                    .ok_or(Error::Synthesis)?
+                    .start,
+            )),
+            _ => None,
+        };
+        if let Some((col, row)) = mutation_slot {
+            words[col][row] = chip
+                .uint()
+                .glue()
+                .add_constant(region, &words[col][row], Fp::ONE)?;
+        }
+        let instances = words
+            .iter()
+            .map(|column| {
+                column
+                    .iter()
+                    .map(|word| ScalarCells::from_native_word(&mut chip.uint(), region, word))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let instances = [instances];
+        let j: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../../../fixtures/kagemusha/wallet_v1_vectors.json"
+        ))
+        .unwrap();
+        let fields = |name: &str| {
+            j["field_encodings"]["controlled_state"][name]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| {
+                    if self.known {
+                        Value::known(fp(s.as_str().unwrap()))
+                    } else {
+                        Value::unknown()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let core = chip
+            .uint()
+            .glue()
+            .witnesses(region, &fields("core_items"))?
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        let rest = chip
+            .uint()
+            .glue()
+            .witnesses(region, &fields("rest_items"))?
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        let state = StateCells::constrain_with_verifier(chip, region, &core, &rest)?;
+        let own = if matches!(self.mutation, BindMutation::Own) {
+            let mut fields = own.fields().clone();
+            fields[17] = chip
+                .uint()
+                .glue()
+                .add_constant(region, &fields[17], Fp::ONE)?;
+            let lanes = chip.operation_lanes()?;
+            StatementCells::constrain(
+                &mut UintChip::new(lanes.glue, lanes.range),
+                lanes.hash,
+                region,
+                Variant::Receive,
+                &fields,
+            )?
+        } else {
+            own.clone()
+        };
+        let receiver = if matches!(self.mutation, BindMutation::Receiver) {
+            let mut fields = receiver.fields().clone();
+            fields[5] = chip
+                .uint()
+                .glue()
+                .add_constant(region, &fields[5], Fp::ONE)?;
+            LineagePublicCells::constrain(&mut chip.uint(), region, &fields)?
+        } else {
+            receiver.clone()
+        };
+        let public = if matches!(self.mutation, BindMutation::Header) {
+            let mut fields = incoming.public().fields().clone();
+            fields[5] = chip
+                .uint()
+                .glue()
+                .add_constant(region, &fields[5], Fp::ONE)?;
+            IncomingLineageCells::constrain(
+                &mut chip.uint(),
+                region,
+                &fields,
+                incoming.public().valid(),
+            )?
+        } else {
+            incoming.public().clone()
+        };
+        let mut context = objects.context().clone();
+        if matches!(self.mutation, BindMutation::ActiveLength) {
+            let mut raw = self.omega.clone();
+            raw.push(0);
+            let raw = if self.known {
+                Value::known(raw)
+            } else {
+                Value::unknown()
+            };
+            let active = ActiveBytes::assign(&mut chip.uint(), bytes, region, 8132, &raw, &[])?;
+            context[4] = ContextObjectCells::from_active(
+                chip,
+                region,
+                objects.specs[4],
+                context[4].authenticated_digest(),
+                &active,
+            )?;
+        }
+        let plan_result = plan.receive_results().ok_or(Error::Synthesis)?;
+        let mut values = [Value::known(true); 5];
+        values[ReceiveResultTag::Objects as usize - 1] = if self.known {
+            Value::known(self.valid ^ matches!(self.mutation, BindMutation::Result))
+        } else {
+            Value::unknown()
+        };
+        let claims = ReceiveResultClaims::assign(chip.uint().glue(), region, plan_result, values)?;
+        let input = ContextInputs {
+            own_statement: &own,
+            incoming_statement: Some(sigma.incoming_statement()?),
+            predecessor: Some(ContextPredecessor {
+                state: &state,
+                public: &receiver,
+                pallas: incoming.pallas(),
+                vesta: incoming.vesta(),
+            }),
+            successor: ContextState {
+                state: &state,
+                public: &receiver,
+            },
+            incoming: Some(ContextIncoming {
+                public: &public,
+                pallas: incoming.pallas(),
+                proof: incoming.proof(),
+                vesta: incoming.vesta(),
+            }),
+            q_instances: &instances,
+            objects: &context,
+            modes: &[],
+            pallas_corrections: &[],
+            vesta_corrections: &[],
+            receive_results: Some(&claims),
+        };
+        // This tests the Objects result's exact input links. It intentionally
+        // does not synthesize the complete context hash, stage proof or modes.
+        objects.bind_result(
+            chip,
+            region,
+            plan,
+            u32::from(matches!(self.mutation, BindMutation::Owner)),
+            &input,
+        )
+    }
+
+    fn with_context(mut self) -> Self {
+        use crate::a_relation::{
+            AProofPlan, QProofPlan, binding::tests::sigma_fixture, schedule::OperationTask,
+        };
+        use iroha_pasta::Fq;
+        use iroha_plonk::{
+            keys::{KeygenConfigV2, keygen_pk_v2},
+            pcs::ipa::PinnedParams,
+        };
+        use iroha_plonk_recursion::verifier::VerifierPlan;
+        #[derive(Clone)]
+        struct Export([usize; 5]);
+        impl Circuit<Fq> for Export {
+            type Config = (iroha_plonk_gadgets::GlueConfig, [Column<Instance>; 5]);
+            type Params = [usize; 5];
+            type FloorPlanner = SimpleFloorPlanner;
+            fn params(&self) -> Self::Params {
+                self.0
+            }
+            fn without_witnesses(&self) -> Self {
+                self.clone()
+            }
+            fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
+                Self::configure_with_params(meta, [1; 5])
+            }
+            fn configure_with_params(
+                meta: &mut ConstraintSystem<Fq>,
+                lengths: [usize; 5],
+            ) -> Self::Config {
+                let columns = core::array::from_fn(|_| meta.advice_column());
+                let fixed = meta.fixed_column();
+                let glue = iroha_plonk_gadgets::GlueConfig::configure(meta, columns, fixed);
+                let public = lengths.map(|n| {
+                    let col = meta.instance_column(n);
+                    meta.enable_equality(col);
+                    col
+                });
+                (glue, public)
+            }
+            fn synthesize(
+                &self,
+                (config, public): Self::Config,
+                mut layouter: impl Layouter<Fq>,
+            ) -> Result<(), Error> {
+                let mut glue = GlueChip::new(config);
+                let words = layouter.assign_region(
+                    || "export-link key fixture",
+                    |mut region| {
+                        (0..self.0.iter().sum::<usize>())
+                            .map(|_| glue.witness(&mut region, Value::unknown()))
+                            .collect::<Result<Vec<_>, _>>()
+                    },
+                )?;
+                let mut offset = 0;
+                for (column, len) in public.into_iter().zip(self.0) {
+                    for row in 0..len {
+                        layouter.constrain_instance(words[offset + row].cell(), column, row)?;
+                    }
+                    offset += len;
+                }
+                Ok(())
+            }
+        }
+        let sigma = sigma_fixture();
+        let params = PinnedParams::<Ep>::derive(16).unwrap();
+        let key = keygen_pk_v2(
+            &params,
+            &Export(sigma.instance_lengths()),
+            &KeygenConfigV2::pipa_r(crate::q_sigma::QSigmaPlan::instance_types().to_vec()),
+        )
+        .unwrap();
+        let verifier = VerifierPlan::new(key.binding().clone(), params.clone()).unwrap();
+        let q = QProofPlan::new(verifier, key.vk().clone()).unwrap();
+        let operation = AProofPlan::new(
+            Variant::Receive,
+            sigma,
+            vec![q],
+            Some(self.plan.verifier().clone()),
+            &params,
+        )
+        .unwrap();
+        let context = ContextPlan::with_schedule(
+            operation,
+            vec![vec![], vec![0]],
+            Some(0),
+            ReceiveObjects::context_specs(8132, 10000).unwrap().to_vec(),
+        )
+        .unwrap()
+        .with_operation_tasks(vec![
+            OperationTask::required(Variant::Receive).unwrap().to_vec(),
+            vec![],
+        ])
+        .unwrap();
+        self.context = Some(context);
+        self
+    }
+
     fn fixture() -> Self {
         let j: norito::json::Value = norito::json::from_str(include_str!(
             "../../../../../fixtures/kagemusha/wallet_v1_vectors.json"
@@ -326,6 +657,8 @@ impl Objects {
             index: 2,
             valid: true,
             known: true,
+            context: None,
+            mutation: BindMutation::None,
         };
         out.rebind();
         out
@@ -362,6 +695,16 @@ impl Objects {
             CheckMode::Strict,
         )
         .is_ok_and(|r| r.is_satisfied())
+    }
+    fn sigma_view(&self) -> usize {
+        self.context.as_ref().map_or(32, |c| {
+            c.operation()
+                .sigma
+                .class(1)
+                .unwrap()
+                .verifier()
+                .proof_length()
+        })
     }
     fn rejects(mut self) {
         self.valid = false;
@@ -407,6 +750,39 @@ fn active_receive_object_result_binds_raw_tapes_selector_and_joint_length() {
     short.omega.truncate(319);
     short.rebind();
     short.rejects();
+    let known = synthesize(&c, 16, None).unwrap();
+    let unknown = synthesize(&c.without_witnesses(), 16, None).unwrap();
+    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+}
+
+#[test]
+fn objects_result_cannot_change_owner_or_splice_context_inputs() {
+    let c = Objects::fixture().with_context();
+    assert!(c.accepts());
+    for mutation in [
+        BindMutation::Result,
+        BindMutation::Owner,
+        BindMutation::QDigest,
+        BindMutation::QIndex,
+        BindMutation::QBytes,
+        BindMutation::Own,
+        BindMutation::Receiver,
+        BindMutation::Header,
+        BindMutation::ActiveLength,
+    ] {
+        let wrong = Objects {
+            mutation,
+            ..c.clone()
+        };
+        assert!(!wrong.accepts());
+    }
+    let mut rejected = c.clone();
+    rejected.source[3][2] ^= 1;
+    rejected.valid = false;
+    assert!(rejected.accepts(), "exact bound false result is permitted");
+    rejected.mutation = BindMutation::Result;
+    assert!(!rejected.accepts(), "false producer cannot claim true");
     let known = synthesize(&c, 16, None).unwrap();
     let unknown = synthesize(&c.without_witnesses(), 16, None).unwrap();
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());

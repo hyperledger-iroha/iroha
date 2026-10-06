@@ -322,12 +322,25 @@ mod tests {
         )
         .unwrap();
         let hash = accepted.hash_as_entrypoint();
+        let budget = chain.state().ivm_execution_budget();
+        let before_admission = budget.reserved_bytes();
+        let shell_bytes = iroha_allocation::shared::Shared::<
+            CheckedTransaction<'static>,
+            resident_owner::QueueResidentCharge,
+        >::layout()
+        .size();
+        let ledger_bytes =
+            iroha_allocation::ChargedShared::<QueueResidentLedger>::allocation_layout().size();
         queue.push(accepted.clone(), chain.state().view()).unwrap();
         foreign
             .push(accepted.clone(), chain.state().view())
             .unwrap();
-        let budget = chain.state().ivm_execution_budget();
         let baseline = budget.reserved_bytes();
+        assert_eq!(
+            baseline,
+            before_admission + 2 * (ledger_bytes + shell_bytes),
+            "each original Queue prepays its own ledger and accepted-input shell"
+        );
         let view = chain.state().view();
         let original = capture_current(
             &queue,
@@ -382,7 +395,25 @@ mod tests {
         assert!(!queue.pending_payload_lease_is_current(chain.state(), &view, &replacement));
         drop(replacement);
         drop(original);
-        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_eq!(
+            budget.reserved_bytes(),
+            baseline + shell_bytes,
+            "lease hashes retire; the additional admitted input keeps its actual shell"
+        );
+        assert_eq!((queue.queued_len(), foreign.queued_len()), (2, 1));
+        queue.clear_all();
+        foreign.clear_all();
+        assert_eq!((queue.queued_len(), foreign.queued_len()), (0, 0));
+        assert_eq!((queue.retained_bytes(), foreign.retained_bytes()), (0, 0));
+        assert_eq!(
+            budget.reserved_bytes(),
+            before_admission + 2 * ledger_bytes,
+            "clearing the real inputs refunds all shells while both Queue ledgers remain live"
+        );
+        drop(queue);
+        assert_eq!(budget.reserved_bytes(), before_admission + ledger_bytes);
+        drop(foreign);
+        assert_eq!(budget.reserved_bytes(), before_admission);
     }
 
     #[test]
@@ -512,9 +543,18 @@ mod tests {
         )
         .unwrap();
         let hash = accepted.hash_as_entrypoint();
-        queue.push(accepted.clone(), chain.state().view()).unwrap();
         let budget = chain.state().ivm_execution_budget();
+        let before_admission = budget.reserved_bytes();
+        let shell_bytes = iroha_allocation::shared::Shared::<
+            CheckedTransaction<'static>,
+            resident_owner::QueueResidentCharge,
+        >::layout()
+        .size();
+        let ledger_bytes =
+            iroha_allocation::ChargedShared::<QueueResidentLedger>::allocation_layout().size();
+        queue.push(accepted.clone(), chain.state().view()).unwrap();
         let baseline = budget.reserved_bytes();
+        assert_eq!(baseline, before_admission + ledger_bytes + shell_bytes);
         let mut registration = crate::unit_test_support::release_registration(&budget);
         let registered = budget.reserved_bytes();
         let held = budget
@@ -575,8 +615,16 @@ mod tests {
             .is_none()
         );
         drop(original);
-        assert_eq!(budget.reserved_bytes(), registered);
+        assert_eq!(
+            budget.reserved_bytes(),
+            registered - shell_bytes,
+            "expiry already retired the original input shell; only the registered release and Queue ledger remain"
+        );
+        assert_eq!((queue.queued_len(), queue.retained_bytes()), (0, 0));
         drop(registration);
-        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_eq!(budget.reserved_bytes(), baseline - shell_bytes);
+        assert_eq!(budget.reserved_bytes(), before_admission + ledger_bytes);
+        drop(queue);
+        assert_eq!(budget.reserved_bytes(), before_admission);
     }
 }

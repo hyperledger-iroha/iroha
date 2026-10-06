@@ -230,6 +230,11 @@ fn fixture() -> Bindings {
     }
 }
 
+/// Fixed descriptor-only sigma classes for A input-link tests.
+pub(in crate::a_relation) fn sigma_fixture() -> QSigmaPlan {
+    fixture().plan
+}
+
 #[test]
 fn incoming_verifier_input_substitutions_cannot_manufacture_soft_false() {
     let c = fixture();

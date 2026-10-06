@@ -74,6 +74,7 @@ pub struct PaymentCells {
 /// predecessor's original structural verdict. It does not authenticate proofs,
 /// signatures, the receiver's quoted credential, or recorded blacklist history;
 /// those remain mandatory predicates of the owning Receive relation.
+#[must_use = "include the total consumer verdict and bind its deterministic sigma selector"]
 #[derive(Clone, Debug)]
 pub struct IncomingPaymentCells {
     payment: PaymentCells,

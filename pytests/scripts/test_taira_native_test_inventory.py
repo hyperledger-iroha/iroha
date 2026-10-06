@@ -63,10 +63,13 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 363)
+        self.assertEqual(len(names), 367)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
+            'native original Queue payload lease custody': (
+                ('queue.rs', 'queue/payload_leases.rs', 'payload_leases', 'queue::payload_leases::tests'),
+                ('pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue', 'pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection', 'pending_payload_lease_retires_on_actual_certified_state_publication', 'pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap')),
             'native original Queue resident custody': (
                 ('queue.rs', 'queue/resident_owner_tests.rs', 'resident_owner_tests', 'queue::tests::resident_owner_tests'),
                 ('removed_pending_owner_retains_original_resident_credit_until_last_reader', 'original_queue_shell_refusal_preserves_graph_and_exact_release_then_retries', 'first_queue_resident_ledger_refusal_keeps_original_input_and_retry_pool', 'every_queue_retirement_defers_original_refund_until_its_mutation_fence_releases', 'equal_limit_foreign_state_cannot_replace_original_queue_resident_pool', 'queue_drop_keeps_original_shell_and_ledger_charges_until_detached_last_owner', 'cold_queue_retirement_holds_original_fence_until_first_admission_can_publish')),

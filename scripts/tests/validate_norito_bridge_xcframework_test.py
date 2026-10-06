@@ -26,6 +26,10 @@ assert SPEC is not None and SPEC.loader is not None
 validator = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = validator
 SPEC.loader.exec_module(validator)
+WALLET_JNI_SYMBOLS = [
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
+    for method in ("revision", "open", "close", "activity", "call")
+]
 
 
 class StrictNoritoBridgeValidatorTests(unittest.TestCase):
@@ -218,11 +222,16 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
             encoding="utf-8"
         )
-        # The packaging checker refuses retired KAGEMUSHA exports by namespace; the
-        # exact forbidden inventory is owned by the validator and the builder above.
+        # The packaging checker requires exactly the current wallet ABI and
+        # rejects every other KAGEMUSHA export, including unknown wallet names.
         self.assertNotIn("RETIRED_KAGEMUSHA_C_SYMBOLS", checker)
-        current = {"connect_norito_kagemusha_wallet_" + method + "_v1" for method in ("revision", "open", "close", "activity", "commit", "retry", "resume", "fold", "credit_status")}
-        self.assertEqual(set(re.findall(r"connect_norito_kagemusha_[A-Za-z0-9_]+", checker)) - {"connect_norito_kagemusha_wallet_"}, current)
+        self.assertEqual(
+            re.findall(r"connect_norito_kagemusha_[A-Za-z0-9_]+", checker),
+            [
+                symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                if symbol.startswith("connect_norito_kagemusha_")
+            ],
+        )
         self.assertEqual(checker.count("grep -E '^_?connect_norito_kagemusha_'"), 1)
 
     def test_current_mobile_protocol_inventory_matches_required_bridge_exports(self) -> None:
@@ -291,7 +300,11 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         ]
         for mode in ("apple", "elf"):
             with self.subTest(mode=mode):
-                result = self.check_mobile_binary_symbols(current, mode)
+                exported = (
+                    ["_" + symbol for symbol in current]
+                    if mode == "apple" else [*current, *WALLET_JNI_SYMBOLS]
+                )
+                result = self.check_mobile_binary_symbols(exported, mode)
                 self.assertEqual(result.returncode, 0, result.stderr)
         for missing in (
             "connect_norito_bridge_abi_version",
@@ -299,11 +312,25 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "connect_norito_validation_fee_current_policy_proof_verify_v1",
             "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             "iroha_privacy_validate_exact12_capability_manifest_v1",
+            *(
+                symbol for symbol in current
+                if symbol.startswith("connect_norito_kagemusha_wallet_")
+            ),
         ):
-            with self.subTest(missing=missing):
-                result = self.check_mobile_binary_symbols(
-                    [symbol for symbol in current if symbol != missing]
-                )
+            for mode in ("apple", "elf"):
+                with self.subTest(missing=missing, mode=mode):
+                    exported = [symbol for symbol in current if symbol != missing]
+                    if mode == "apple":
+                        exported = ["_" + symbol for symbol in exported]
+                    else:
+                        exported += WALLET_JNI_SYMBOLS
+                    result = self.check_mobile_binary_symbols(exported, mode)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"missing {missing}", result.stderr)
+        for missing in WALLET_JNI_SYMBOLS:
+            with self.subTest(missing=missing, mode="elf"):
+                exported = [*current, *(symbol for symbol in WALLET_JNI_SYMBOLS if symbol != missing)]
+                result = self.check_mobile_binary_symbols(exported, "elf")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(f"missing {missing}", result.stderr)
 
@@ -322,12 +349,15 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         for symbol in (
             *retired_c,
             "connect_norito_kagemusha_unlisted_v1",
+            "connect_norito_kagemusha_wallet_unlisted_v1",
+            "connect_norito_kagemusha_wallet_commit_v2",
             "connect_norito_offline_cash_unlisted_v1",
         ):
             for mode in ("apple", "elf"):
                 with self.subTest(symbol=symbol, mode=mode):
                     exported = "_" + symbol if mode == "apple" else symbol
-                    result = self.check_mobile_binary_symbols([*current, exported], mode)
+                    inventory = current if mode == "apple" else [*current, *WALLET_JNI_SYMBOLS]
+                    result = self.check_mobile_binary_symbols([*inventory, exported], mode)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("retired KAGEMUSHA", result.stderr)
         # Former exports of each retired class family; the checker matches namespaces.
@@ -353,7 +383,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeUnlistedV1",
         ):
             with self.subTest(symbol=symbol):
-                result = self.check_mobile_binary_symbols([*current, symbol], "elf")
+                result = self.check_mobile_binary_symbols([*current, *WALLET_JNI_SYMBOLS, symbol], "elf")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("retired KAGEMUSHA JNI", result.stderr)
 

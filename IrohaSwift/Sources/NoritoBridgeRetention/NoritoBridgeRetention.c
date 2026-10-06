@@ -20,15 +20,6 @@ int soranet_mldsa_verify(uint32_t suite_id,
     const uint8_t *message, size_t message_len,
     const uint8_t *signature, size_t signature_len);
 
-// Current Connect exports implemented in crates/connect_norito_bridge/src/lib.rs.
-int32_t connect_norito_decode_control_approve_sig_alg(
-    const uint8_t *inp_ptr, unsigned long inp_len,
-    char **out_alg_ptr, unsigned long *out_alg_len);
-int32_t connect_norito_encode_envelope_sign_result_ok_with_alg(
-    uint64_t seq, const char *alg_ptr, unsigned long alg_len,
-    const uint8_t *sig_ptr, unsigned long sig_len,
-    uint8_t **out_ptr, unsigned long *out_len);
-
 typedef void (*NoritoBridgeExportReference)(void);
 
 // Volatile reads prevent optimization from discarding this address inventory.

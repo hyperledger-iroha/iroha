@@ -28,7 +28,7 @@ pub(super) fn state() -> State {
     // Isolate proof/lock admission from citizenship and asset escrow accounting.
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.gov.min_bond_amount = 0_u64.into();
-    state.zk.halo2.enabled = true;
+    state.zk.pipa_r.enabled = true;
     state
 }
 

@@ -5,14 +5,14 @@
 //! Backend tag acceptance tests for ZK attachments (pre-verify path).
 //! - Trusted-setup families (e.g., `groth16/*`) are rejected at VK admission.
 //! - Native PIPA-R curve mismatch is rejected at VK admission.
-use iroha_core::{
-    executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
-    state::State,
-};
+#[path = "common/zk_components.rs"]
+mod zk_components;
+use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
 use iroha_core_zk::test_utils::native_confidential_fixture_envelope;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
+use zk_components::execute_isi_component;
 #[path = "common/world_fixture.rs"]
 mod test_world;
 fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {
@@ -48,7 +48,6 @@ fn vk_record(
 fn trusted_setup_backend_label_is_unsupported() {
     let (state, header) = new_block_ctx();
     let mut block = state.block(header);
-    let exec = Executor::default();
     let mut stx = block.transaction();
     let authority = ALICE_ID.clone();
     let perm = Permission::new(
@@ -72,8 +71,7 @@ fn trusted_setup_backend_label_is_unsupported() {
         ),
     }
     .into();
-    let err = exec
-        .execute_instruction(&mut stx, &authority, reg_vk)
+    let err = execute_isi_component(&mut stx, &authority, reg_vk)
         .expect_err("trusted-setup VK backend should be rejected at admission");
     let msg = format!("{err:?}");
     assert!(
@@ -85,7 +83,6 @@ fn trusted_setup_backend_label_is_unsupported() {
 fn native_curve_mismatch_rejected_at_vk_admission() {
     let (state, header) = new_block_ctx();
     let mut block = state.block(header);
-    let exec = Executor::default();
     let authority = ALICE_ID.clone();
     let native_fixture = native_confidential_fixture_envelope();
     let vk_box = native_fixture
@@ -111,8 +108,7 @@ fn native_curve_mismatch_rejected_at_vk_admission() {
         ),
     }
     .into();
-    let err = exec
-        .execute_instruction(&mut stx, &authority, reg_vk)
+    let err = execute_isi_component(&mut stx, &authority, reg_vk)
         .expect_err("curve mismatch should be rejected at VK admission");
     let msg = format!("{err:?}");
     assert!(

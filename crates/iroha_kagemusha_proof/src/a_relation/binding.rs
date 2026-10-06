@@ -30,7 +30,7 @@ use crate::{
 };
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 /// Constrains a canonical Fq scalar to its injective native Fp subfield encoding.
 /// This is the bridge for the Bounded and Bits columns verified by A.

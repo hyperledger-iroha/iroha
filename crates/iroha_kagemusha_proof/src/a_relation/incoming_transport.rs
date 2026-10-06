@@ -38,6 +38,10 @@ pub struct IncomingTransportPlan {
     pallas: FoldInputDecodePlan<Ep>,
 }
 impl IncomingTransportPlan {
+    /// Descriptor-fixed incoming verifier used by this decoder's exact views.
+    pub const fn verifier(&self) -> &VerifierPlan<Ep> {
+        &self.omega
+    }
     /// Pin the incoming Omega descriptor and accumulator parameter set.
     /// # Errors
     /// The operation has no incoming Omega or its parameters are invalid.

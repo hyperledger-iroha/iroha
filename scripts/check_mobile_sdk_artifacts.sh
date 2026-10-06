@@ -437,15 +437,6 @@ require_literal() {
 }
 
 REQUIRED_PROTOCOL_C_SYMBOLS=(
-  connect_norito_kagemusha_wallet_revision_v1
-  connect_norito_kagemusha_wallet_open_v1
-  connect_norito_kagemusha_wallet_close_v1
-  connect_norito_kagemusha_wallet_activity_v1
-  connect_norito_kagemusha_wallet_commit_v1
-  connect_norito_kagemusha_wallet_retry_v1
-  connect_norito_kagemusha_wallet_resume_v1
-  connect_norito_kagemusha_wallet_fold_v1
-  connect_norito_kagemusha_wallet_credit_status_v1
   connect_norito_bridge_abi_version
   connect_norito_domain_id_validate_v1
   connect_norito_free
@@ -484,6 +475,22 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
   connect_norito_private_settlement_audit_approval_response_verify_v1
   connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json
+  connect_norito_kagemusha_wallet_revision_v1
+  connect_norito_kagemusha_wallet_open_v1
+  connect_norito_kagemusha_wallet_close_v1
+  connect_norito_kagemusha_wallet_activity_v1
+  connect_norito_kagemusha_wallet_commit_v1
+  connect_norito_kagemusha_wallet_retry_v1
+  connect_norito_kagemusha_wallet_resume_v1
+  connect_norito_kagemusha_wallet_fold_v1
+  connect_norito_kagemusha_wallet_credit_status_v1
+)
+REQUIRED_WALLET_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_open
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call
 )
 RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
   connect_norito_private_settlement_auditor_capsule_response
@@ -521,15 +528,24 @@ check_binary_symbols() {
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
   if [[ "$nm_mode" == "elf" ]]; then
+    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}"; do
+      if ! grep -Fxq "$symbol" <<<"$symbols"; then
+        fail "$label is missing $symbol"
+      fi
+    done
     local retired_jni_prefix
     for retired_jni_prefix in \
       Java_org_hyperledger_iroha_sdk_offline_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_probe_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_wallet_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_; do
-      if grep -E "^${retired_jni_prefix}" <<<"$symbols" | grep -Evq '^Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_(revision|open|close|activity|call)$'; then
-        fail "$label exposes a retired KAGEMUSHA JNI namespace"
-      fi
+      while IFS= read -r symbol; do
+        [[ -n "$symbol" ]] || continue
+        case " ${REQUIRED_WALLET_JNI_SYMBOLS[*]} " in
+          *" ${symbol} "*) ;;
+          *) fail "$label exposes a retired KAGEMUSHA JNI namespace: $symbol" ;;
+        esac
+      done < <(grep -E "^${retired_jni_prefix}" <<<"$symbols" || true)
     done
   fi
   for symbol in "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"; do
@@ -545,9 +561,16 @@ check_binary_symbols() {
   if grep -Eq "^_?${RETIRED_KAGEMUSHA_C_PREFIX}" <<<"$symbols"; then
     fail "$label exposes a retired KAGEMUSHA C namespace"
   fi
-  if grep -E '^_?connect_norito_kagemusha_' <<<"$symbols" | grep -Evq '^_?connect_norito_kagemusha_wallet_(revision|open|close|activity|commit|retry|resume|fold|credit_status)_v1$'; then
-    fail "$label exposes a retired KAGEMUSHA C namespace"
-  fi
+  # Only the exact current wallet entries above are admitted. Prefix matching
+  # identifies candidates for rejection; it never approves an unknown export.
+  while IFS= read -r symbol; do
+    [[ -n "$symbol" ]] || continue
+    symbol="${symbol#_}"
+    case " ${REQUIRED_PROTOCOL_C_SYMBOLS[*]} " in
+      *" ${symbol} "*) ;;
+      *) fail "$label exposes a retired KAGEMUSHA C namespace: $symbol" ;;
+    esac
+  done < <(grep -E '^_?connect_norito_kagemusha_' <<<"$symbols" || true)
 }
 
 check_apple() {

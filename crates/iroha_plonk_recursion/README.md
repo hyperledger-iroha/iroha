@@ -102,10 +102,11 @@ transport bytes. The earlier
 five-bus Load snapshot used 72,376 shared and 130,406 range rows; that evidence
 precedes later engine changes and also omits the complete per-step C4 current
 credential/certificate authorization. It is partial-relation evidence only.
-A fresh Q2/A4 Bootstrap candidate with the narrow-dot kernel, exact constant
-reuse and small-quotient lazy reduction produces 8,480-byte A proofs and uses 64,928 shared / 97,137 range rows
+A fresh Q2/A4 Bootstrap candidate with narrow dots, exact constant reuse,
+small-quotient lazy reduction and bounded Pasta three-carry products/divisions
+produces 8,480-byte A proofs and uses 64,928 shared / 94,792 range rows
 in pinned compact Omega. The shared lane fits the production k16 budget;
-**the range lane still exceeds it by 31,607 rows.** The
+**the range lane still exceeds it by 29,262 rows.** The
 compact measurement uses only a Bootstrap terminal key; it is not the release
 catalog. A separate generic Bootstrap/Load two-terminal diagnostic binds the
 actual common Omega digest before constructing both lineages and checks exact

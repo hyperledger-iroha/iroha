@@ -200,6 +200,7 @@ impl<F: PastaField> Circuit<F> for Kernel<F> {
                                 &left,
                                 &right,
                                 self.value(witness),
+                                CarryLayout::Full,
                             )?
                         }
                     }
@@ -225,15 +226,28 @@ impl<F: PastaField> Circuit<F> for Kernel<F> {
                             }
                             _ => unreachable!(),
                         }
-                        let result = kernel.ok_or(Error::Synthesis)?.constrain_short_product(
-                            &mut glue,
-                            &mut range,
-                            &mut region,
-                            Mode::Mul,
-                            (&left.limbs, &right.limbs),
-                            self.value(witness),
-                            super::super::CarryLayout::ProperProduct,
-                        )?;
+                        let result = if let Some(kernel) = kernel {
+                            kernel.constrain_short_product(
+                                &mut glue,
+                                &mut range,
+                                &mut region,
+                                Mode::Mul,
+                                (&left.limbs, &right.limbs),
+                                self.value(witness),
+                                CarryLayout::ProperProduct,
+                            )?
+                        } else {
+                            constrain_fused(
+                                &mut glue,
+                                &mut range,
+                                &mut region,
+                                Mode::Mul,
+                                self.modulus,
+                                (&left.limbs, &right.limbs),
+                                self.value(witness),
+                                CarryLayout::ProperProduct,
+                            )?
+                        };
                         FfValue::from_parts(result, PROPER_BOUNDS, self.modulus, Form::Proper)
                     }
                     TestMode::Canonical => unreachable!(),
@@ -242,16 +256,22 @@ impl<F: PastaField> Circuit<F> for Kernel<F> {
                     self.mode,
                     TestMode::Mul | TestMode::Div | TestMode::LazyMul | TestMode::WidenedMul
                 ) {
-                    assert_eq!(
-                        glue.next_row() - start_glue,
-                        if self.rotated != 0 { 4 } else { 19 }
-                    );
-                    let proper = self.rotated == 2
+                    let proper = self.rotated != 1
                         && self.mode == TestMode::Mul
                         && self.modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt();
-                    let bounded = self.rotated == 2
+                    let bounded = self.rotated != 1
                         && matches!(self.mode, TestMode::Div | TestMode::LazyMul)
                         && self.modulus.nat().cmp_vartime(&Nat::pow2(255)).is_lt();
+                    assert_eq!(
+                        glue.next_row() - start_glue,
+                        if self.rotated != 0 {
+                            4
+                        } else if proper || bounded {
+                            16
+                        } else {
+                            19
+                        }
+                    );
                     assert_eq!(
                         range.next_row() - start_range,
                         if proper {
@@ -436,7 +456,12 @@ fn rotated_boundary<F: PastaField>(profile: u8) {
                     assigned.tables.advice_assigned(),
                     unknown.tables.advice_assigned()
                 );
-                for i in 0..if profile == 2 && mode == TestMode::Mul {
+                // Both staged short products have three carry roots. Pasta
+                // division now shares that layout; P-256 division retains four.
+                for i in 0..if profile == 2
+                    && (mode == TestMode::Mul
+                        || matches!(modulus, ForeignModulus::PASTA_FP | ForeignModulus::PASTA_FQ))
+                {
                     15
                 } else {
                     16
@@ -532,7 +557,7 @@ fn staged_rotated_ff_all_fields_moduli_cells_and_boundaries() {
     rotated_boundary::<Fq>(2);
 }
 
-fn proper_product<F: PastaField>() {
+fn proper_product<F: PastaField>(profile: u8) {
     let maximum = Nat::pow2(256).wrapping_sub(&Nat::ONE);
     for modulus in [
         ForeignModulus::PASTA_FP,
@@ -546,7 +571,7 @@ fn proper_product<F: PastaField>() {
                 (Nat::ZERO, maximum),
                 (maximum, Nat::ONE),
             ] {
-                let circuit = fixture::<F>(2, modulus, mode, left, right);
+                let circuit = fixture::<F>(profile, modulus, mode, left, right);
                 assert!(satisfies(&circuit), "{modulus:?} {mode:?}");
                 let known = synthesize(&circuit, 10, Some(&[])).unwrap();
                 let unknown = synthesize(&circuit.without_witnesses(), 10, None).unwrap();
@@ -563,7 +588,7 @@ fn proper_product<F: PastaField>() {
             TestMode::ProperQuotientOverflow,
         ] {
             assert!(!satisfies(&fixture::<F>(
-                2,
+                profile,
                 modulus,
                 mode,
                 Nat::ONE,
@@ -580,21 +605,21 @@ fn proper_product<F: PastaField>() {
             ),
         ] {
             assert!(!satisfies(&fixture::<F>(
-                2,
+                profile,
                 modulus,
                 TestMode::ProperNativeForgery,
                 left,
                 right
             )));
         }
-        let circuit = fixture::<F>(2, modulus, TestMode::Mul, maximum, maximum);
+        let circuit = fixture::<F>(profile, modulus, TestMode::Mul, maximum, maximum);
         assert!(undetected_tampers(&circuit, 10, &[]).unwrap().is_empty());
     }
     // Small custom odd moduli remain valid for the original four-carry
     // multiplication; they must never enter the narrower product finish.
     let small = ForeignModulus::new([1, 0, 0, 1 << 60]).unwrap();
     assert!(satisfies(&fixture::<F>(
-        2,
+        profile,
         small,
         TestMode::Mul,
         maximum,
@@ -602,7 +627,13 @@ fn proper_product<F: PastaField>() {
     )));
     assert!(
         synthesize(
-            &fixture::<F>(2, small, TestMode::ProperNativeForgery, Nat::ONE, Nat::ONE),
+            &fixture::<F>(
+                profile,
+                small,
+                TestMode::ProperNativeForgery,
+                Nat::ONE,
+                Nat::ONE
+            ),
             10,
             Some(&[])
         )
@@ -612,6 +643,12 @@ fn proper_product<F: PastaField>() {
 
 #[test]
 fn staged_proper_product_bounds_aliases_and_all_cells_both_fields() {
-    proper_product::<Fp>();
-    proper_product::<Fq>();
+    proper_product::<Fp>(2);
+    proper_product::<Fq>(2);
+}
+
+#[test]
+fn serialized_proper_product_bounds_aliases_and_all_cells_both_fields() {
+    proper_product::<Fp>(0);
+    proper_product::<Fq>(0);
 }

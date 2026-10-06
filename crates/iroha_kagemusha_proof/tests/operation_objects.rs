@@ -5,14 +5,14 @@ use iroha_kagemusha_proof::operation_relation::objects::{ObjectKind, SignedObjec
 
 #[path = "operation_objects/credit_opening.rs"]
 mod credit_opening;
-#[path = "operation_objects/status.rs"]
-mod status;
 #[path = "operation_objects/payment.rs"]
 mod payment;
 #[path = "operation_objects/semantics.rs"]
 mod semantics;
 #[path = "operation_objects/send.rs"]
 mod send;
+#[path = "operation_objects/status.rs"]
+mod status;
 use iroha_pasta::{Fp, poseidon::hash_with_domain};
 use iroha_plonk::{
     check::{CheckMode, check_circuit},

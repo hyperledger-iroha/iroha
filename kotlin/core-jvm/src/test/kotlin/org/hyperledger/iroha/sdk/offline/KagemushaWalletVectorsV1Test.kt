@@ -696,21 +696,15 @@ class KagemushaWalletVectorsV1Test {
     }
 
     @Test fun `exchange binding rejects the retired Request body layout before Credited`() {
-        fun record(fields: List<ByteArray>): ByteArray = fields.fold(ByteArray(0)) { result, field ->
-            result + Varint.encode(field.size.toLong()) + field
-        }
-        fun envelopeOf(kind: KagemushaWalletMessageKindV1, message: ByteArray): ByteArray = frameOf(
-            record(listOf(byteArrayOf(1, 0), le32(kind.wireTag) + record(listOf(message)))),
-        )
         val request = recordFields(envelopeMessage(envelope("Request"))).toMutableList()
         val body = recordFields(request[0])
         assertEquals(19, body.size)
         // The removed 17-field form omitted the receiver's recorded blacklist version and root.
-        request[0] = record(body.filterIndexed { index, _ -> index != 15 && index != 16 })
+        request[0] = encodeRecord(body.filterIndexed { index, _ -> index != 15 && index != 16 })
         val payment = recordFields(envelopeMessage(envelope("Payment"))).toMutableList()
-        payment[1] = record(listOf(request[0], request[4]))
-        val oldRequest = envelopeOf(KagemushaWalletMessageKindV1.REQUEST, record(request))
-        val oldPayment = envelopeOf(KagemushaWalletMessageKindV1.PAYMENT, record(payment))
+        payment[1] = encodeRecord(listOf(request[0], request[4]))
+        val oldRequest = envelopeWithMessage(KagemushaWalletMessageKindV1.REQUEST, encodeRecord(request))
+        val oldPayment = envelopeWithMessage(KagemushaWalletMessageKindV1.PAYMENT, encodeRecord(payment))
         assertFailsWith<IllegalArgumentException> { KagemushaWalletWireV1.requireExchangeBinding(oldRequest, oldPayment) }
         assertFailsWith<IllegalArgumentException> {
             KagemushaWalletWireV1.requireExchangeBinding(oldRequest, oldPayment, envelope("Credited::Receive"))
@@ -751,6 +745,14 @@ class KagemushaWalletVectorsV1Test {
         assertEquals(26, items.size)
         assertElements(limbs(body[REQUEST_PAYER_ACCOUNT]), items.subList(7, 9), "payer account")
         assertElements(limbs(body[REQUEST_RECEIVER_ACCOUNT]), items.subList(11, 13), "receiver account")
+        for (field in listOf(REQUEST_PAYER_ACCOUNT, REQUEST_RECEIVER_ACCOUNT)) {
+            assertFailsWith<IllegalArgumentException>("another account in field $field") {
+                KagemushaWalletWireV1.requireExchangeBinding(
+                    withFlippedMessageField(envelope("Request"), listOf(0, field)),
+                    envelope("Payment"),
+                )
+            }
+        }
     }
 
     @Test fun `every kind accepts its bound and rejects bound plus one`() {
@@ -1573,6 +1575,28 @@ class KagemushaWalletVectorsV1Test {
         assertTrue(unsignedElement(usage[3]) <= unsignedElement(windows[0][3]), "usage within limit")
     }
 
+    @Test fun `the separate lineage proof cap fills the indexed Credited Status frame`() {
+        val original = envelope("Credited::Status")
+        fun withProofBytes(length: Int): ByteArray {
+            val credited = recordFields(envelopeMessage(original)).toMutableList()
+            val status = recordFields(recordFields(credited[2].copyOfRange(4, credited[2].size)).single()).toMutableList()
+            val lineage = recordFields(status[4]).toMutableList()
+            val proofCount = ByteArray(8) { index -> (length.toLong() ushr (8 * index)).toByte() }
+            lineage[1] = proofCount + ByteArray(length) { (it % 251).toByte() }
+            status[4] = encodeRecord(lineage)
+            credited[2] = le32(2) + encodeRecord(listOf(encodeRecord(status)))
+            return envelopeWithMessage(KagemushaWalletMessageKindV1.CREDITED, encodeRecord(credited))
+        }
+        val atCap = withProofBytes(KagemushaWalletWireV1.LINEAGE_PROOF_CAP_BYTES)
+        assertEquals(KagemushaWalletWireV1.MESSAGE_MAX_BYTES, atCap.size)
+        assertEquals(KagemushaWalletMessageKindV1.CREDITED, KagemushaWalletWireV1.inspectEnvelope(atCap).kind)
+        val overCap = withProofBytes(KagemushaWalletWireV1.LINEAGE_PROOF_CAP_BYTES + 1)
+        assertEquals(KagemushaWalletWireV1.MESSAGE_MAX_BYTES + 1, overCap.size)
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletWireV1.inspectEnvelope(overCap) }
+        assertTrue(KagemushaWalletWireV1.LINEAGE_PROOF_CAP_BYTES < KagemushaWalletWireV1.PAYMENT_PROOF_BUDGET_BYTES)
+    }
+
+
     @Test fun `the verifying-key allowlist binds the manifest and every vectored proof length`() {
         // Frame {version, steps: [{kind, enabled_controls, verifying_key_digest, proof_bytes}],
         // lineage_verifying_key_digest, lineage_proof_bytes} (owner answers Q6 and Q11).
@@ -1799,6 +1823,16 @@ class KagemushaWalletVectorsV1Test {
                 NoritoHeader.COMPACT_LEN,
                 NoritoHeader.COMPRESSION_NONE,
             ).encode() + ByteArray(KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES) + payload
+
+        /** Canonical envelope payload around a complete message record of [kind]. */
+        fun envelopeWithMessage(kind: KagemushaWalletMessageKindV1, message: ByteArray): ByteArray {
+            val tagged = le32(kind.wireTag) + Varint.encode(message.size.toLong()) + message
+            return frameOf(byteArrayOf(2, 1, 0) + Varint.encode(tagged.size.toLong()) + tagged)
+        }
+
+        /** Complete compact-length record of [fields], preserving every field's exact bytes. */
+        fun encodeRecord(fields: List<ByteArray>): ByteArray =
+            fields.fold(ByteArray(0)) { all, field -> all + Varint.encode(field.size.toLong()) + field }
 
         /**
          * A structurally valid envelope of exactly [frameLength] bytes whose message tag is [tag]
@@ -2057,6 +2091,29 @@ class KagemushaWalletVectorsV1Test {
             }
             bytes[end - 1] = (bytes[end - 1].toInt() xor 1).toByte()
             val crc = CRC64.compute(bytes.copyOfRange(payloadOffset, bytes.size))
+            for (index in 0 until 8) bytes[31 + index] = (crc ushr (8 * index)).toByte()
+            KagemushaWalletWireV1.inspectEnvelope(bytes)
+            return bytes
+        }
+
+        /** Flip a nested fixed-length message field and refresh the complete envelope CRC. */
+        fun withFlippedMessageField(frame: ByteArray, path: List<Int>): ByteArray {
+            fun changed(record: ByteArray, remaining: List<Int>): ByteArray {
+                val fields = recordFields(record).map { it.copyOf() }.toMutableList()
+                val index = remaining.first()
+                fields[index] = if (remaining.size == 1) {
+                    fields[index].also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
+                } else {
+                    changed(fields[index], remaining.drop(1))
+                }
+                return encodeRecord(fields)
+            }
+            val bytes = frame.copyOf()
+            val message = envelopeMessage(bytes)
+            val updated = changed(message, path)
+            check(message.size == updated.size)
+            updated.copyInto(bytes, bytes.size - message.size)
+            val crc = CRC64.compute(bytes.copyOfRange(48, bytes.size))
             for (index in 0 until 8) bytes[31 + index] = (crc ushr (8 * index)).toByte()
             KagemushaWalletWireV1.inspectEnvelope(bytes)
             return bytes

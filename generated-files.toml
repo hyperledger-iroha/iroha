@@ -145,6 +145,16 @@ inputs = [
 check = "bash ci/check_openapi_spec.sh"
 
 [[generated]]
+name = "petal-glyph-templates"
+kind = "file"
+outputs = ["crates/iroha_petal/src/glyph_templates.rs"]
+# The existing example emits source to stdout for staging and review.
+generator = "cargo run --locked -p iroha_petal --example gen_glyph_templates"
+generator_sources = ["crates/iroha_petal/examples/gen_glyph_templates.rs"]
+inputs = ["crates/iroha_petal/src/glyphs.rs"]
+check = "cargo test --locked -p iroha_petal --lib glyphs::tests::checked_in_templates_match_the_stroke_definitions -- --exact"
+
+[[generated]]
 name = "ivm-syscall-rust-assets"
 kind = "file"
 outputs = [

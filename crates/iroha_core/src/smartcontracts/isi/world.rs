@@ -31349,7 +31349,7 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(register_vk_reserves_every_exact12_privacy_circuit_label {
-            fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
+            fn native_record(circuit_id: String) -> VerifyingKeyRecord {
                 let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3]);
                 vk_record!(record, 1, circuit_id, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
                 record
@@ -31378,7 +31378,7 @@ seiyaku GovernanceLifecycle {
                     );
                     let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
-                        record: halo2_record(circuit_id.clone()),
+                        record: native_record(circuit_id.clone()),
                     }
                     .into();
                     let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
@@ -31402,7 +31402,7 @@ seiyaku GovernanceLifecycle {
                     );
                     let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
-                        record: halo2_record(circuit_id.clone()),
+                        record: native_record(circuit_id.clone()),
                     }
                     .into();
                     let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
@@ -31423,13 +31423,13 @@ seiyaku GovernanceLifecycle {
                     );
                     let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
-                        record: halo2_record(circuit_id.clone()),
+                        record: native_record(circuit_id.clone()),
                     }
                     .into();
                     let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
-                        .expect_err("unregistered Halo2 circuit near miss must not register");
+                        .expect_err("unregistered native circuit near miss must not register");
                     let message = smart_contract_error_message(error);
-                    assert_contains!(message, "production circuit registry", "unexpected rejection for {circuit_id:?}: {message}");
+                    assert_contains!(message, "compiled circuit registry", "unexpected rejection for {circuit_id:?}: {message}");
                     assert!(stx.world.verifying_keys.get(&id).is_none());
                 }
             }

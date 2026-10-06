@@ -51,6 +51,18 @@ pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1: usize = 8 + 7 + 1;
 /// Maximum standalone canonical frame of one verifying-key allowlist.
 pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1: usize = 2_048;
 
+fn selector_mask_is_valid(kind: KagemushaWalletOperationKindV1, enabled_controls: u32) -> bool {
+    match kind {
+        KagemushaWalletOperationKindV1::Send => {
+            enabled_controls & !KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 == 0
+        }
+        KagemushaWalletOperationKindV1::Receive => {
+            enabled_controls & !KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1 == 0
+        }
+        _ => enabled_controls == 0,
+    }
+}
+
 /// One σ verifying key of the allowlist and its selector (§3.2).
 ///
 /// Every operation has an entry with the empty mask; Send also has one entry per nonzero
@@ -95,16 +107,7 @@ impl KagemushaWalletVerifyingKeyEntryV1 {
         if self.proof_bytes == 0 {
             return Err(invalid_v1("verifying_keys.proof_bytes"));
         }
-        let mask_ok = match self.kind {
-            KagemushaWalletOperationKindV1::Send => {
-                self.enabled_controls & !KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 == 0
-            }
-            KagemushaWalletOperationKindV1::Receive => {
-                self.enabled_controls & !KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1 == 0
-            }
-            _ => self.enabled_controls == 0,
-        };
-        if mask_ok {
+        if selector_mask_is_valid(self.kind, self.enabled_controls) {
             Ok(())
         } else {
             Err(invalid_v1("verifying_keys.enabled_controls"))
@@ -262,12 +265,7 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
         enabled_controls: u32,
     ) -> WalletResult<&KagemushaWalletVerifyingKeyEntryV1> {
         self.validate()?;
-        let allowed = match kind {
-            KagemushaWalletOperationKindV1::Send => KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1,
-            KagemushaWalletOperationKindV1::Receive => KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
-            _ => 0,
-        };
-        if enabled_controls & !allowed != 0 {
+        if !selector_mask_is_valid(kind, enabled_controls) {
             return Err(invalid_v1("verifying_keys.selector"));
         }
         self.steps

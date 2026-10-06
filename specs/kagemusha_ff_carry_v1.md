@@ -1005,10 +1005,76 @@ rejected wider metadata, a noncanonical Proper alias followed by a rejected
 canonical comparison, every-cell mutation, known/unknown shape and final-row
 boundaries (`unsigned-lazy-reduction-final.log`, 3/3, 0.54 seconds, additionally checking
 unconfigured moduli and numeric envelope inequalities). The full compact native
-differential and exact descriptor suite passes3/3 in78.32 seconds. Actual Q2/A4
-Bootstrap source proofs and outer predicate pass in123.70 seconds; the pinned
-inventory is64,928 shared /97,137 range rows with unchanged4,768-byte transport
-(`unsigned-lazy-reduction-four-bus-bootstrap-omega.log`). Thus73 specialized
-reductions remove3,066 range rows, but the range gate still fails by31,607.
+differential and exact descriptor suite passes 3/3 in 78.32 seconds. Actual Q2/A4
+Bootstrap source proofs and outer predicate pass in 123.70 seconds; the pinned
+inventory is 64,928 shared / 97,137 range rows with unchanged 4,768-byte transport
+(`unsigned-lazy-reduction-four-bus-bootstrap-omega.log`). Thus 73 specialized
+reductions remove 3,066 range rows, but the range gate still fails by 31,607.
 This scoped review is not release qualification. No advice/fixed query, lookup
 or gate degree is added.
+
+## 25. Bounded unsigned Pasta products and padded division
+
+The staged kernel can select three offset-92, 93-bit carries and quotient
+limbs of 87/87/85 bits only after the ordinary admission and these additional
+structural conditions have been checked:
+
+- `2^254 < m < 2^255`;
+- multiplication: each operand limb is strictly below `2^88`, and the product
+  of the tracked integer maxima is strictly below `2^512`;
+- division `b*c + K = a + q*m`: numerator limbs retain the checked 94-bit
+  envelope, divisor limbs are below `2^89`, the tracked divisor integer is
+  below `2^257`, and each exact fixed padding limb is below `2^95`.
+
+The result is range checked with 87/87/81-bit limbs in this staged Pasta
+layout. It remains Proper, and canonical comparisons are still required at
+semantic boundaries. Metadata widening takes the full four-carry predicate;
+an honest small value never grants the shorter envelope. P-256 and custom
+moduli outside the stated interval cannot select this bounded layout.
+
+For either admitted mode, each of the first three unsigned column residuals
+has absolute value below `14*B^2`. Induction bounds honest signed carries by
+`15*B < 2^91`, within the chosen offset-92 certificate. Malicious checked
+offset carries lie in `[0,2^93)`, so every local residual remains below
+`2^180 < N` and is an exact integer equality. For multiplication the admitted
+product is below `2^512`; for division `b*c < 2^512`, while the numerator and
+exact padding are below `2^270`. The checked quotient is below `2^259` and
+`q*m < 2^514`. Consequently the complete signed residual has absolute value
+below `2^515`. The three low equalities make it divisible by `B^3`; the
+unchanged native residue makes it divisible by `N`. Since both Pasta native
+primes are strictly above `2^254`, `B^3*N > 2^515`, proving equality over the
+integers. All five staged product sums include the same exact padding, and
+the finish/carry gates bind their copied final-row values.
+
+The root reviewer independently rederived these bounds and inspected the
+actual admissions, ordered division roots, padding, quotient/carry widths and
+staged copies. After the adversarial results, the reviewer accepted this
+scoped implementation together with Section 24. This does **not** qualify
+subsequent ordinary serialized lowering, compact capacity, timing/memory
+gates, the release catalog or the complete construction.
+
+The reviewed pre-lowering source snapshot is retained in the diagnostic
+directory; its hashes are:
+
+| Reviewed source | SHA-256 |
+|---|---|
+| `target/qualification/bounded-pasta-reviewed-mod.rs` (then-current `ff/mod.rs`) | `5cf4bbe5c3062e9fa5f520a14c736581fe41a15bd75a4dc3b6e8ed94ab85ff45` |
+| `ff/rotated.rs` | `a50e5af85abb0ff903c4f5136a7435553badd68cab3b939a74ba8db947f0162d` |
+| `ff/reduction.rs` | `3d70e5bc2957dc7dbc9dd23c6b9c2c07618e004fd2631305b08b5b12346882d0` |
+| `ff/bounded_tests.rs` (staged-only snapshot) | `a272dce9eb31e2943469a8b463c240f8182d86939690219fdccd57ad3d7a17df` |
+
+`bounded-pasta-tests-v2.log` passes all three targeted tests, including both
+native fields, maximum tracked limbs, zero numerator/divisor, forged result,
+quotient and carry, every-cell mutations, known/unknown layout, final usable
+rows, metadata widening and excluded moduli. The full compact differential
+passes 3/3 (`bounded-pasta-interpreter.log`, 77.99 seconds); scoped strict lint
+passes. The retained staged corpus passes after its boundary test was updated
+to mutate the three carry roots actually present in Pasta division, rather
+than a nonexistent fourth root (`bounded-pasta-retained-boundary-fixed.log`).
+
+The genuine Q2/A4 Bootstrap diagnostic produces 8,480-byte source proofs and
+passes the full outer predicate in 142.90 seconds. The pinned compact layout
+uses **64,928 shared / 94,792 range rows**, with unchanged **4,768-byte**
+transport (`bounded-pasta-four-bus-bootstrap-omega.log`). Its 335 newly short
+blocks remove 2,345 range rows. It still exceeds the k16 range capacity by
+**29,262 rows**; there is no actual compact k16 outer proof or release claim.

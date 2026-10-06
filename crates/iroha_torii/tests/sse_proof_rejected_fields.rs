@@ -48,7 +48,10 @@ async fn proof_rejected_fields() {
         v.get("event").and_then(|x| x.as_str()),
         Some("ProofRejected")
     );
-    assert_eq!(v.get("backend").and_then(|x| x.as_str()), Some("pipa-r/pasta"));
+    assert_eq!(
+        v.get("backend").and_then(|x| x.as_str()),
+        Some("pipa-r/pasta")
+    );
     assert_eq!(
         v.get("call_hash").and_then(|x| x.as_str()),
         Some(hex::encode([0xBBu8; 32]).as_str())

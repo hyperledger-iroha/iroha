@@ -82,6 +82,12 @@ or ignored required controls. Derive World coverage from the current authoritati
 field inventory; never restore retired fields or pin an obsolete test count.
 Each new safety, liveness or custody rule requires its current registered named
 mutation control under spec §13.4. A prepared runner is not execution evidence.
+Mutation campaigns require a positive worker count and a simulator seed count
+that fits a positive `u64`. Explicit mutation selections must be nonempty and
+contain unique IDs; zero-case sweeps and duplicated kill counts cannot qualify.
+The PR Sumeragi job and every nightly Sumeragi owner install the repository-pinned
+Rust toolchain before cache restoration and native execution. A container image
+tag does not identify the compiler used by a validation run.
 
 Record source inputs, features, toolchain, artifact identity, invocation, results
 and elapsed time. Changed inputs require affected checks to run again; staging

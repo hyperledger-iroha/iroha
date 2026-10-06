@@ -96,7 +96,10 @@ async fn proof_verified_fields_and_filtering() {
         v.get("event").and_then(|x| x.as_str()),
         Some("ProofVerified")
     );
-    assert_eq!(v.get("backend").and_then(|x| x.as_str()), Some("pipa-r/pasta"));
+    assert_eq!(
+        v.get("backend").and_then(|x| x.as_str()),
+        Some("pipa-r/pasta")
+    );
     assert_eq!(
         v.get("call_hash").and_then(|x| x.as_str()),
         Some(hex::encode([0xAAu8; 32]).as_str())

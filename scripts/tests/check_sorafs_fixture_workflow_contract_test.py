@@ -1143,3 +1143,69 @@ def test_runtime_parser_registration_cannot_expand_to_framework_execution(select
     assert source.count(selector) == 1
     changed = source.replace(selector, selector.split("::", 1)[0])
     assert automation._javascript_child_python_controls_errors(changed)
+
+
+@pytest.fixture(scope="module")
+def mobile_host_jvm_prerequisite_checker():
+    import importlib.util
+    path = REPO_ROOT / "scripts/check_sorafs_release_automation.py"
+    spec = importlib.util.spec_from_file_location("mobile_host_jvm_prerequisite_contract", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_mobile_full_jvm_suite_builds_and_binds_its_fixture_generator(mobile_host_jvm_prerequisite_checker) -> None:
+    source = read(".github/workflows/mobile_sdk_artifacts.yml")
+    assert mobile_host_jvm_prerequisite_checker._mobile_host_jvm_prerequisite_errors(source) == []
+    assert '- "tools/kotlin-fixture-gen/**"' in source
+    # Preserve every original complete-suite consumer and publication command.
+    for task in (
+        ":core-jvm:test", ":tools:test", ":client-android:testDebugUnitTest",
+        ":client-android:testDebugHostNative", ":client-android:lintRelease",
+        ":kagemusha-wallet-android:testDebugUnitTest", ":kagemusha-wallet-android:lintRelease",
+        ":core-jvm:cyclonedxDirectBom", ":client-android:cyclonedxDirectBom",
+        ":kagemusha-wallet-android:cyclonedxDirectBom",
+        ":core-jvm:publishReleasePublicationToMavenLocal",
+        ":client-android:publishReleasePublicationToMavenLocal",
+        ":kagemusha-wallet-android:publishReleasePublicationToMavenLocal",
+        ":core-jvm:publishReleasePublicationToMobileSdkRepository",
+        ":client-android:publishReleasePublicationToMobileSdkRepository",
+        ":kagemusha-wallet-android:publishReleasePublicationToMobileSdkRepository",
+    ):
+        assert task in source
+
+
+@pytest.mark.parametrize("before,after", (
+    ('--features privacy-production-enabled', '--features dev-tools'),
+    ('cargo build --locked -p kotlin-fixture-gen', '# cargo build --locked -p kotlin-fixture-gen'),
+    ('--features dev-tools --bin kotlin-fixture-gen', '--bin kotlin-fixture-gen'),
+    ('--features dev-tools --bin kotlin-fixture-gen', '--features dev-tools --bin wrong-generator'),
+    ('fixture_generator="$CARGO_TARGET_DIR/debug/kotlin-fixture-gen"', 'fixture_generator="$GITHUB_WORKSPACE/target/debug/kotlin-fixture-gen"'),
+    ('&& ! -L "$fixture_generator" && -x "$fixture_generator"', '&& -x "$fixture_generator"'),
+    ('&& ! -L "$fixture_generator" && -x "$fixture_generator"', '&& ! -L "$fixture_generator"'),
+    ('echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$fixture_generator"', 'echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=stale-generator"'),
+    ('set -euo pipefail', 'set -uo pipefail'),
+    ('--no-build-cache --rerun-tasks', ''),
+))
+def test_mobile_full_jvm_suite_refuses_missing_wrong_or_unexecuted_generator_prerequisites(mobile_host_jvm_prerequisite_checker, before, after) -> None:
+    source = read(".github/workflows/mobile_sdk_artifacts.yml")
+    # Only the actual host prerequisite step is changed; other jobs keep their
+    # genuine source, ABI, artifact and SDK assertions.
+    start = source.index('      - name: Build host SoraFS reference native bridge\n')
+    prefix, body = source[:start], source[start:]
+    assert before in body
+    changed = prefix + body.replace(before, after, 1)
+    assert mobile_host_jvm_prerequisite_checker._mobile_host_jvm_prerequisite_errors(changed)
+
+
+def test_mobile_full_jvm_suite_rejects_late_generator_build(mobile_host_jvm_prerequisite_checker) -> None:
+    source = read(".github/workflows/mobile_sdk_artifacts.yml")
+    start = source.index('      - name: Build host SoraFS reference native bridge\n')
+    end = source.index('      - name: Build Android native bridge libraries\n', start)
+    block = source[start:end]
+    changed = source[:start] + source[end:]
+    position = changed.index('      - name: Collect canonical Kotlin runtime SBOMs\n')
+    changed = changed[:position] + block + changed[position:]
+    assert mobile_host_jvm_prerequisite_checker._mobile_host_jvm_prerequisite_errors(changed)

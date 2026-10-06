@@ -3,12 +3,14 @@
 #![cfg(feature = "zk-tests")]
 //! ZK attachment pre-verify wiring tests (dedup and basic sanity).
 #![cfg(feature = "zk-preverify")]
+#[path = "common/zk_components.rs"]
+mod zk_components;
 use iroha_core::{
     execution_attempt::ExecutionAttemptError,
     executor::Executor,
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, WorldReadOnly},
+    state::{State, StateReadOnly, WorldReadOnly},
 };
 use iroha_core_zk::test_utils::{FixtureEnvelope, native_confidential_fixture_envelope};
 use iroha_data_model::{
@@ -21,6 +23,7 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use zk_components::execute_isi_component;
 
 /// Unwrap a deterministic rejection; a local retry deferral is a test failure.
 fn rejected(err: ExecutionAttemptError<ValidationFail>) -> ValidationFail {
@@ -31,8 +34,11 @@ fn rejected(err: ExecutionAttemptError<ValidationFail>) -> ValidationFail {
         }
     }
 }
+#[path = "common/native_genesis.rs"]
+mod native_genesis;
 #[path = "common/world_fixture.rs"]
 mod test_world;
+use native_genesis::certified_state;
 const NATIVE_CIRCUIT_ID: &str = iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
 fn bound_native_fixture() -> FixtureEnvelope {
     native_confidential_fixture_envelope()
@@ -109,7 +115,7 @@ fn bounded_proof_attachments(
         .expect("test attachment set is a valid bounded proof list")
 }
 fn grant_vk_management(
-    exec: &Executor,
+    _exec: &Executor,
     stx: &mut iroha_core::state::StateTransaction<'_, '_>,
     authority: &AccountId,
 ) {
@@ -118,17 +124,20 @@ fn grant_vk_management(
         iroha_primitives::json::Json::new(()),
     );
     let grant: InstructionBox = Grant::account_permission(permission, authority.clone()).into();
-    exec.execute_instruction(stx, authority, grant)
-        .expect("grant vk management");
+    execute_isi_component(stx, authority, grant).expect("grant vk management");
 }
 #[test]
 fn duplicate_proof_in_same_block_is_rejected() {
     // Minimal node state and block context
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     // Build a transaction with proofs carrying a single inline attachment and no instructions
@@ -149,8 +158,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        exec.execute_instruction(&mut reg_stx, &authority, reg_vk)
-            .expect("register vk");
+        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register vk");
         reg_stx.apply();
     }
     let attachments =
@@ -219,8 +227,7 @@ fn verifyproof_isi_records_proof() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-        .expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
     // Verify a proof using VK reference
     let proof_box = fixture.proof_box("pipa-r/pasta");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -229,8 +236,7 @@ fn verifyproof_isi_records_proof() {
         vk_id.clone(),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
-        .expect("verify proof");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), verify).expect("verify proof");
     // Apply transaction and ensure a proof record exists
     let pid = iroha_data_model::proof::ProofId {
         backend: "pipa-r/pasta".into(),
@@ -265,16 +271,14 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-        .expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         fixture.proof_box("pipa-r/pasta"),
         vk_id.clone(),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("proof should exceed size cap");
     assert!(matches!(
         err,
@@ -314,15 +318,14 @@ fn verifyproof_rejects_when_block_cap_hit() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-        .expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         fixture1.proof_box("pipa-r/pasta"),
         vk_id.clone(),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect("first verify should succeed");
     let fixture2 = bound_native_fixture();
     let attachment2 = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -331,8 +334,7 @@ fn verifyproof_rejects_when_block_cap_hit() {
         vk_id.clone(),
     );
     let verify2: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment2).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify2)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify2)
         .expect_err("second verify should hit block cap");
     assert!(matches!(
         err,
@@ -344,10 +346,14 @@ fn verifyproof_rejects_when_block_cap_hit() {
 #[test]
 fn preverify_rejects_missing_vk_reference() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -382,10 +388,14 @@ fn preverify_rejects_missing_vk_reference() {
 #[test]
 fn preverify_rejects_proof_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -410,10 +420,14 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
 #[test]
 fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -447,7 +461,13 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            1,
+            0,
+        );
         let mut block = state.block(header);
         let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
         let exec = Executor::default();
@@ -485,7 +505,13 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            1,
+            0,
+        );
         let mut block = state.block(header);
         let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
         let exec = Executor::default();
@@ -515,10 +541,14 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
 #[test]
 fn preverify_rejects_commitment_only_missing_vk_reference() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -545,10 +575,14 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
 #[test]
 fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -569,8 +603,7 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        exec.execute_instruction(&mut reg_stx, &authority, reg_vk)
-            .expect("register proposed vk");
+        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register proposed vk");
         reg_stx.apply();
     }
     let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -609,8 +642,7 @@ fn verifyproof_requires_registered_verifying_key() {
         iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "missing_vk"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("verifyproof should require a registered verifying key");
     assert!(
         format!("{err:?}").contains(
@@ -634,8 +666,7 @@ fn verifyproof_rejects_proof_backend_mismatch_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("proof backend mismatch must fail before registry lookup");
     assert!(format!("{err:?}").contains("proof backend mismatch"));
 }
@@ -656,8 +687,7 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("vk_ref backend mismatch must fail before registry lookup");
     assert!(format!("{err:?}").contains("verifying key backend mismatch"));
 }
@@ -677,8 +707,7 @@ fn verifyproof_rejects_unsupported_backend_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("halo2/unknown-native-v1", "vk_missing"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("unsupported proof backend must fail before registry lookup");
     assert!(format!("{err:?}").contains("unsupported proof backends"));
 }
@@ -705,16 +734,14 @@ fn verifyproof_rejects_inactive_registered_verifying_key() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-        .expect("register inactive vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register inactive vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         fixture.proof_box("pipa-r/pasta"),
         vk_id,
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("verifyproof must reject inactive verifying keys");
     assert!(format!("{err:?}").contains("verifying key is not active"));
 }
@@ -747,7 +774,7 @@ fn verifyproof_enforces_verifying_key_activation_window() {
         }
         .into();
         grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-        exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk)
             .expect("register height-bounded vk");
 
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -756,8 +783,7 @@ fn verifyproof_enforces_verifying_key_activation_window() {
             vk_id,
         );
         let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-        let err = exec
-            .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+        let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
             .expect_err("proof verification must honor the key activation window");
         assert!(
             format!("{err:?}").contains("verifying key is not active"),
@@ -788,8 +814,7 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-        .expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
     let mut proof_box = fixture.proof_box("pipa-r/pasta");
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
@@ -798,8 +823,7 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("tampered envelope vk_hash must not verify");
     assert!(format!("{err:?}").contains("verifying key commitment mismatch"));
 }
@@ -825,8 +849,7 @@ fn verifyproof_rejects_duplicate_proof_record() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-        .expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         fixture.proof_box("pipa-r/pasta"),
@@ -834,21 +857,24 @@ fn verifyproof_rejects_duplicate_proof_record() {
     );
     let first: InstructionBox =
         iroha_data_model::isi::zk::VerifyProof::new(attachment.clone()).into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), first)
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), first)
         .expect("first proof verify records proof");
     let duplicate: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), duplicate)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), duplicate)
         .expect_err("duplicate proof record must be rejected");
     assert!(format!("{err:?}").contains("Repetition"));
 }
 #[test]
 fn preverify_rejects_empty_proof_as_malformed() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -868,8 +894,7 @@ fn preverify_rejects_empty_proof_as_malformed() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        exec.execute_instruction(&mut reg_stx, &authority, reg_vk)
-            .expect("register vk");
+        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register vk");
         reg_stx.apply();
     }
     let attachments =
@@ -898,10 +923,14 @@ fn preverify_rejects_empty_proof_as_malformed() {
 #[test]
 fn preverify_rejects_proof_too_big() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -923,8 +952,7 @@ fn preverify_rejects_proof_too_big() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        exec.execute_instruction(&mut reg_stx, &authority, reg_vk)
-            .expect("register vk");
+        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register vk");
         reg_stx.apply();
     }
     let attachments =
@@ -972,8 +1000,7 @@ fn verifyproof_records_rejected_malformed_native_envelope() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-        .expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
     let mut proof_box = fixture.proof_box("pipa-r/pasta");
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
@@ -984,7 +1011,7 @@ fn verifyproof_records_rejected_malformed_native_envelope() {
         iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
     let verify: InstructionBox =
         iroha_data_model::isi::zk::VerifyProof::new(attachment.clone()).into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
         .expect("verify should record even if rejected");
     let pid = iroha_data_model::proof::ProofId {
         backend: attachment.backend,

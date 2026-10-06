@@ -58,6 +58,7 @@ pub struct ReceiveObjectInputs<'a> {
 }
 
 /// Opaque Objects predicate derived from exact tapes and their consumer bindings.
+#[must_use = "bind the derived result and these exact objects to the fixed stage context"]
 #[derive(Clone, Debug)]
 pub struct ReceiveObjects {
     objects: [SignedObjectCells; 3],

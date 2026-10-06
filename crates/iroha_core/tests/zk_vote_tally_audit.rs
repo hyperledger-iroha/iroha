@@ -15,7 +15,7 @@ use iroha_data_model::{
         zk::VerifyProof,
     },
     proof::{ProofAttachment, ProofBox},
-    zk::OpenVerifyEnvelope,
+    zk::{NativePipaRProofV1, OpenVerifyEnvelope},
 };
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
@@ -79,7 +79,7 @@ fn unadmitted_native_key_and_schema_mutation_cannot_register() {
     let bundle = zk_testkit::unqualified_native_ballot_bundle();
     for mutated_schema in [false, true] {
         let mut transaction = block.transaction();
-        closed_state::grant_permissions(&mut transaction, "dev-membership");
+        closed_state::grant_permissions(&mut transaction, "unadmitted-native-role");
         let mut record = bundle.vk_record.clone();
         if mutated_schema {
             record.public_inputs_schema_hash[0] ^= 1;
@@ -90,7 +90,7 @@ fn unadmitted_native_key_and_schema_mutation_cannot_register() {
                 record,
             }
             .execute(&ALICE_ID, &mut transaction)
-            .expect_err("development key must not register"),
+            .expect_err("unadmitted key must not register"),
         );
         assert!(
             transaction
@@ -109,13 +109,16 @@ fn unadmitted_native_verify_isi_rejects_missing_and_retained_keys() {
     let bundle = zk_testkit::unqualified_native_ballot_bundle();
     // Preserve both original public-input mutation controls without attributing registry
     // rejection to a fictitious schema verifier. Actual raw-proof binding is tested above.
-    for tamper_column in [None, Some(0_usize), Some(1)] {
+    for tamper_row in [None, Some(0_usize), Some(6)] {
         for retained_key in [false, true] {
             let mut transaction = block.transaction();
             let mut envelope: OpenVerifyEnvelope =
                 norito::decode_from_bytes(&bundle.proof_bytes).unwrap();
-            if let Some(column) = tamper_column {
-                envelope.public_inputs[column * 32] ^= 1;
+            if let Some(row) = tamper_row {
+                let mut inner: NativePipaRProofV1 =
+                    norito::decode_from_bytes(&envelope.proof_bytes).unwrap();
+                inner.public_inputs[row][0] ^= 1;
+                envelope.proof_bytes = norito::to_bytes(&inner).unwrap();
             }
             let proof = ProofBox::new(bundle.backend.into(), norito::to_bytes(&envelope).unwrap());
             if retained_key {
@@ -135,7 +138,7 @@ fn unadmitted_native_verify_isi_rejects_missing_and_retained_keys() {
             assert_closed_registry(
                 VerifyProof::new(attachment)
                     .execute(&ALICE_ID, &mut transaction)
-                    .expect_err("development envelope must stay outside VerifyProof"),
+                    .expect_err("unadmitted envelope must stay outside VerifyProof"),
             );
             assert!(transaction.world.proofs().get(&proof_id).is_none());
             assert!(transaction.world.take_external_events().is_empty());

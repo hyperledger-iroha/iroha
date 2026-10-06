@@ -26029,7 +26029,7 @@ mod native_pipa_r_admission_tests {
             Err(ivm::host::ERR_PROOF_LEN)
         );
         assert!(host.curve_is_allowed("pipa-r/pasta", "vesta"));
-        for curve in ["vesta", "pasta", "Vesta", "vesta "] {
+        for curve in ["pallas", "pasta", "Vesta", "vesta "] {
             assert!(!host.curve_is_allowed("pipa-r/pasta", curve));
         }
         assert!(CoreHost::circuit_id_matches(

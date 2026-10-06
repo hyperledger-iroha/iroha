@@ -38,7 +38,7 @@ def _registry_literals(path: str, marker: str, end: str) -> frozenset[str]:
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs",
-            "private static readonly HashSet<string> ProductionNativePipaRPastaBackends =", "];", "pipa-r",
+            "private static readonly HashSet<string> ProductionNativePipaRPastaBackends =", "};", "pipa-r",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",

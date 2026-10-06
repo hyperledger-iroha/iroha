@@ -1,11 +1,12 @@
 //! The existing FF CRT predicate serialized onto shared Glue/range ports.
 //!
 //! No new gate, advice query, fixed column or lookup is configured here. Each
-//! of the four carry equations and the native residue from `fused_constraints`
-//! is lowered to standard Glue rows. Result limbs retain 87/87/82 bits,
-//! quotient limbs retain 87 bits and offset carries retain 105 bits. Operand
-//! admission is exactly the existing 94-bit-envelope/product-bound check;
-//! these are the same integer constraints, not a widened carry argument.
+//! carry equations and native residue are lowered to standard Glue rows. The
+//! ordinary 94-bit envelope retains four offset104/range105 carries. Explicit
+//! unsigned Proper products and bounded Pasta products/divisions select the
+//! separately proved three-carry envelopes shared with the staged kernel.
+//! Result limbs retain 87/87/82 bits; their form remains Proper. No admission
+//! is inferred from witness values or from an unchecked form tag.
 //!
 //! The complete recursive interpreter can select this profile explicitly.
 //! TODO: qualify the composed source/outer layouts; sharing these constraints
@@ -15,9 +16,9 @@ use iroha_pasta::PastaField;
 use iroha_plonk::frontend::{Error, Region, Value};
 
 use super::{
-    CARRIES, CARRY_OFFSET_BITS, FfChip, FfValue, ForeignModulus, Form, FusedWitness, LIMB_BITS,
-    LIMBS, Mode, Nat, PROPER_BOUNDS, TOP_LIMB_BITS, compare_witness, div_witness, from_limbs,
-    limb_fields, mul_witness,
+    CARRIES, CARRY_OFFSET_BITS, CarryLayout, FfChip, FfValue, ForeignModulus, Form, FusedWitness,
+    LIMB_BITS, LIMBS, Mode, Nat, Operand, PROPER_BOUNDS, TOP_LIMB_BITS, compare_witness,
+    div_witness, from_limbs, limb_fields, mul_witness,
 };
 use crate::{
     GlueChip, Word,
@@ -123,7 +124,13 @@ impl SerializedFf {
             .limb_values()
             .zip(right.limb_values())
             .map(|(a, b)| mul_witness(left.modulus, &a, &b));
-        fused(glue, range, region, Mode::Mul, left, right, witness)
+        let layout = FfChip::<F>::carry_layout(
+            Mode::Mul,
+            left.modulus,
+            Operand::value(left),
+            Operand::value(right),
+        );
+        fused(glue, range, region, Mode::Mul, left, right, witness, layout)
     }
 
     /// Divides using the same fixed padding and admission bound as fused FF.
@@ -148,7 +155,22 @@ impl SerializedFf {
             .limb_values()
             .zip(divisor.limb_values())
             .map(|(a, b)| div_witness(numerator.modulus, &a, &b));
-        fused(glue, range, region, Mode::Div, numerator, divisor, witness)
+        let layout = FfChip::<F>::carry_layout(
+            Mode::Div,
+            numerator.modulus,
+            Operand::value(numerator),
+            Operand::value(divisor),
+        );
+        fused(
+            glue,
+            range,
+            region,
+            Mode::Div,
+            numerator,
+            divisor,
+            witness,
+            layout,
+        )
     }
 }
 
@@ -216,6 +238,7 @@ pub(super) fn recompose<F: PastaField>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fused<F: PastaField>(
     glue: &mut GlueChip<F>,
     range: &mut RunningSumChip<F>,
@@ -224,6 +247,7 @@ fn fused<F: PastaField>(
     left: &FfValue<F>,
     right: &FfValue<F>,
     witness: Value<FusedWitness<F>>,
+    layout: CarryLayout,
 ) -> Result<FfValue<F>, Error> {
     let limbs = constrain_fused(
         glue,
@@ -233,6 +257,7 @@ fn fused<F: PastaField>(
         left.modulus,
         (&left.limbs, &right.limbs),
         witness,
+        layout,
     )?;
     Ok(FfValue::from_parts(
         limbs,
@@ -242,6 +267,7 @@ fn fused<F: PastaField>(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn constrain_fused<F: PastaField>(
     glue: &mut GlueChip<F>,
     range: &mut RunningSumChip<F>,
@@ -250,7 +276,22 @@ pub(super) fn constrain_fused<F: PastaField>(
     modulus: ForeignModulus,
     operands: (&[Word<F>; LIMBS], &[Word<F>; LIMBS]),
     witness: Value<FusedWitness<F>>,
+    layout: CarryLayout,
 ) -> Result<[Word<F>; LIMBS], Error> {
+    // The caller proves the operand envelope before discarding its metadata.
+    // Recheck mode/modulus restrictions here so a layout cannot cross domains.
+    if (layout != CarryLayout::Full && !modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt())
+        || (layout == CarryLayout::BoundedPasta
+            && !modulus.nat().cmp_vartime(&Nat::pow2(255)).is_lt())
+        || (layout == CarryLayout::ProperProduct && mode != Mode::Mul)
+    {
+        return Err(Error::Synthesis);
+    }
+    let (carry_count, offset_bits, quotient_top) = match layout {
+        CarryLayout::Full => (CARRIES, CARRY_OFFSET_BITS, LIMB_BITS),
+        CarryLayout::ProperProduct => (3, 89, 84),
+        CarryLayout::BoundedPasta => (3, 92, 85),
+    };
     let (left, right) = operands;
     let result = ranged(
         range,
@@ -258,13 +299,22 @@ pub(super) fn constrain_fused<F: PastaField>(
         witness.map(|w| w.c),
         [LIMB_BITS, LIMB_BITS, TOP_LIMB_BITS],
     )?;
-    let quotient = ranged(range, region, witness.map(|w| w.q), [LIMB_BITS; LIMBS])?;
-    let carries = ranged(
+    let quotient = ranged(
         range,
         region,
-        witness.map(|w| w.u),
-        [CARRY_OFFSET_BITS + 1; CARRIES],
+        witness.map(|w| w.q),
+        [LIMB_BITS, LIMB_BITS, quotient_top],
     )?;
+    let offset = F::from_u128(1 << offset_bits);
+    let carries = (0..carry_count)
+        .map(|i| {
+            range.witness_range_checked(
+                region,
+                witness.map(|w| w.u[i] - F::from_u128(1 << CARRY_OFFSET_BITS) + offset),
+                offset_bits + 1,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let (factor_left, factor_right, subtracted, padding) = match mode {
         Mode::Mul => (left, right, &result, [0; LIMBS]),
         Mode::Div => (
@@ -276,10 +326,9 @@ pub(super) fn constrain_fused<F: PastaField>(
     };
     let m = modulus.limbs();
     let radix = F::from_u128(1 << LIMB_BITS);
-    let offset = F::from_u128(1 << CARRY_OFFSET_BITS);
-    for column in 0..CARRIES {
+    for column in 0..carry_count {
         // Sum the non-product terms in at most two linear rows. Carries are
-        // stored offset by 2^104; remove the incoming offset here and restore
+        // stored with the selected offset; remove the incoming offset and restore
         // the outgoing offset in the final product row below.
         let mut terms = Vec::new();
         for (i, quotient) in quotient.iter().enumerate() {

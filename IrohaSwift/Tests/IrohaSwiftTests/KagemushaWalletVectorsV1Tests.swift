@@ -1182,6 +1182,20 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
 
   // MARK: Poseidon values
 
+  func testIndexedKeyOrderUsesLittleEndianIntegers() {
+    let zero = Data(count: 32)
+    let byteMaximum = Data([0xff]) + Data(count: 31)
+    let nextByte = Data([0, 1]) + Data(count: 30)
+    let lowLimbMaximum = Data(repeating: 0xff, count: 16) + Data(count: 16)
+    let nextLimb = Data(count: 16) + Data([1]) + Data(count: 15)
+    XCTAssertLessThan(compareLittleEndian(zero, byteMaximum), 0)
+    XCTAssertLessThan(compareLittleEndian(byteMaximum, nextByte), 0)
+    XCTAssertGreaterThan(compareLittleEndian(nextByte, byteMaximum), 0)
+    XCTAssertLessThan(compareLittleEndian(lowLimbMaximum, nextLimb), 0)
+    XCTAssertGreaterThan(compareLittleEndian(nextLimb, lowLimbMaximum), 0)
+    XCTAssertEqual(compareLittleEndian(nextLimb, nextLimb), 0)
+  }
+
   func testPoseidonKnownAnswersAndPackingFollowTheRules() throws {
     let poseidon = try object(loadFixture(), "poseidon")
     // One known answer per domain over [1, 2, 3]. Swift never recomputes `P`: it checks the
@@ -1256,7 +1270,7 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
     XCTAssertEqual(requestMessage.fields.count, 5)
     let body = try request.fields(requestMessage.fields[0]).map { request.data($0) }
     XCTAssertEqual(body.count, 19)
-    guard body.count == 17 else { return }
+    guard body.count == 19 else { return }
 
     // The payer's digest is the Offer credential's, the receiver's the Request credential's.
     let offer = try VectorFrame(envelopeFrame(fixture, "Offer"))

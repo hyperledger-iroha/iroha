@@ -447,7 +447,7 @@ pub fn assign<F: PoseidonField>(
         batch.push(value(terms, |terms| field_value::<F>(read(terms))))
     };
     // The Request digest the Send effect and chain bind (a witness:
-    // `sigma_send` does not recompute the SHA-256 digest; the statement
+    // `sigma_send` does not recompute the signed object's Poseidon digest; the statement
     // digest binds it).
     let request_digest =
         is_send.then(|| batch.push(value(send, |send| field_value::<F>(&send.request_digest))));

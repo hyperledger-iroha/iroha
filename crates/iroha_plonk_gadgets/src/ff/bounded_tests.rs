@@ -24,6 +24,7 @@ enum Attack {
 }
 #[derive(Clone)]
 struct Bounded<F> {
+    serialized: bool,
     modulus: ForeignModulus,
     mode: Mode,
     left: [u128; 3],
@@ -37,11 +38,15 @@ struct Bounded<F> {
     marker: core::marker::PhantomData<F>,
 }
 impl<F: PastaField> Circuit<F> for Bounded<F> {
-    type Config = (GlueConfig, RunningSumConfig, rotated::RotatedFfConfig);
+    type Config = (
+        GlueConfig,
+        RunningSumConfig,
+        Option<rotated::RotatedFfConfig>,
+    );
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = Option<ForeignModulus>;
+    type Params = Option<(ForeignModulus, bool)>;
     fn params(&self) -> Self::Params {
-        Some(self.modulus)
+        Some((self.modulus, self.serialized))
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -60,14 +65,11 @@ impl<F: PastaField> Circuit<F> for Bounded<F> {
         let constants = meta.fixed_column();
         let phases = PhaseColumns::allocate(meta);
         let glue = GlueConfig::configure_phased(meta, ports, constants, phases);
-        let sums = core::array::from_fn(|_| meta.advice_column());
-        let kernel = rotated::RotatedFfConfig::configure_staged_phased(
-            meta,
-            ports,
-            sums,
-            modulus.unwrap_or(ForeignModulus::PASTA_FP),
-            phases,
-        );
+        let (modulus, serialized) = modulus.unwrap_or((ForeignModulus::PASTA_FP, false));
+        let kernel = (!serialized).then(|| {
+            let sums = core::array::from_fn(|_| meta.advice_column());
+            rotated::RotatedFfConfig::configure_staged_phased(meta, ports, sums, modulus, phases)
+        });
         let column = meta.advice_column();
         let range = RunningSumConfig::configure_compact(meta, column, LimbBits::new(7).unwrap());
         (glue, range, kernel)
@@ -122,8 +124,10 @@ impl<F: PastaField> Circuit<F> for Bounded<F> {
                 assert_eq!(admitted, self.short);
                 let before = range.next_row();
                 let result = if self.attack == Attack::None {
-                    let mut ff = FfChip::serialized(glue.clone(), range.clone(), &[self.modulus])
-                        .with_rotated_kernel(&kernel)?;
+                    let mut ff = FfChip::serialized(glue.clone(), range.clone(), &[self.modulus]);
+                    if let Some(kernel) = kernel {
+                        ff = ff.with_rotated_kernel(&kernel)?;
+                    }
                     match self.mode {
                         Mode::Mul => ff.mul(&mut region, left, right)?,
                         Mode::Div => ff.div(&mut region, left, right)?,
@@ -150,7 +154,7 @@ impl<F: PastaField> Circuit<F> for Bounded<F> {
                                 }
                                 value
                             });
-                    FfValue::from_parts(
+                    let limbs = if let Some(kernel) = kernel {
                         kernel.constrain_short_product(
                             &mut glue,
                             &mut range,
@@ -159,8 +163,26 @@ impl<F: PastaField> Circuit<F> for Bounded<F> {
                             (&left.limbs, &right.limbs),
                             values,
                             CarryLayout::BoundedPasta,
-                        )?,
-                        NARROW_PROPER_BOUNDS,
+                        )?
+                    } else {
+                        serialized::constrain_fused(
+                            &mut glue,
+                            &mut range,
+                            &mut region,
+                            self.mode,
+                            self.modulus,
+                            (&left.limbs, &right.limbs),
+                            values,
+                            CarryLayout::BoundedPasta,
+                        )?
+                    };
+                    FfValue::from_parts(
+                        limbs,
+                        if self.serialized {
+                            PROPER_BOUNDS
+                        } else {
+                            NARROW_PROPER_BOUNDS
+                        },
                         self.modulus,
                         Form::Proper,
                     )
@@ -186,7 +208,7 @@ impl<F: PastaField> Circuit<F> for Bounded<F> {
         )
     }
 }
-fn cases<F: PastaField>() {
+fn cases<F: PastaField>(serialized: bool) {
     for modulus in [ForeignModulus::PASTA_FP, ForeignModulus::PASTA_FQ] {
         for mode in [Mode::Mul, Mode::Div] {
             let (left_bits, right_bits) = if mode == Mode::Mul {
@@ -195,6 +217,7 @@ fn cases<F: PastaField>() {
                 ([94; 3], [89, 89, 82])
             };
             let circuit = Bounded::<F> {
+                serialized,
                 modulus,
                 mode,
                 left: left_bits.map(|n| (1 << n) - 1),
@@ -317,11 +340,20 @@ fn cases<F: PastaField>() {
 }
 #[test]
 fn tracked_bounded_pasta_three_carries_and_all_cells_fp() {
-    cases::<Fp>();
+    cases::<Fp>(false);
 }
 #[test]
 fn tracked_bounded_pasta_three_carries_and_all_cells_fq() {
-    cases::<Fq>();
+    cases::<Fq>(false);
+}
+
+#[test]
+fn serialized_bounded_pasta_three_carries_and_all_cells_fp() {
+    cases::<Fp>(true);
+}
+#[test]
+fn serialized_bounded_pasta_three_carries_and_all_cells_fq() {
+    cases::<Fq>(true);
 }
 
 #[test]

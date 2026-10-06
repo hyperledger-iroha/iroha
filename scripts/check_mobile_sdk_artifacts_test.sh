@@ -45,15 +45,32 @@ export MOBILE_SDK_RUSTUP_BINARY="$TEST_RUSTUP_BINARY"
 bash -n "$CHECK_SCRIPT"
 "$CHECK_SCRIPT" --help >/dev/null
 
-# Retired/unknown namespaces remain refused. The only admitted names are the exact
-# current wallet owner contract; no arbitrary signer or alternative version is admitted.
-grep -Fq 'connect_norito_kagemusha_wallet_(revision|open|close|activity|commit|retry|resume|fold|credit_status)_v1$' "$CHECK_SCRIPT" \
-  || fail "current KAGEMUSHA C allowance must be exact"
-grep -Fq 'KagemushaWalletNativeV1_(revision|open|close|activity|call)$' "$CHECK_SCRIPT" \
-  || fail "current KAGEMUSHA JNI allowance must be exact"
+# The sole current wallet ABI is required exactly; all other KAGEMUSHA exports
+# remain refused by namespace, including previously unseen retired names.
+if grep -Eq 'Java_org_hyperledger_iroha_sdk_offline_(probe_|wallet_)?Kagemusha[A-Za-z0-9_]*_native' "$CHECK_SCRIPT"; then
+  fail "artifact checker must not enumerate retired KAGEMUSHA JNI exports"
+fi
+[[ "$(grep -Fc -- "grep -E '^_?connect_norito_kagemusha_' <<<\"\$symbols\"" "$CHECK_SCRIPT")" == "1" ]] \
+  || fail "artifact checker must reject the retired KAGEMUSHA C namespace exactly once"
 
+wallet_symbols=(
+  connect_norito_kagemusha_wallet_revision_v1
+  connect_norito_kagemusha_wallet_open_v1
+  connect_norito_kagemusha_wallet_close_v1
+  connect_norito_kagemusha_wallet_activity_v1
+  connect_norito_kagemusha_wallet_commit_v1
+  connect_norito_kagemusha_wallet_retry_v1
+  connect_norito_kagemusha_wallet_resume_v1
+  connect_norito_kagemusha_wallet_fold_v1
+  connect_norito_kagemusha_wallet_credit_status_v1
+)
+wallet_jni_symbols=()
+for method in revision open close activity call; do
+  wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
+done
 required_protocol_symbols=(
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
+  "${wallet_symbols[@]}"
 )
 required_protocol_block="$(sed -n '/^REQUIRED_PROTOCOL_C_SYMBOLS=(/,/^)/p' "$CHECK_SCRIPT")"
 for symbol in "${required_protocol_symbols[@]}"; do
@@ -102,6 +119,7 @@ while IFS= read -r symbol; do
   required_fixture_symbols+=("$symbol")
 done < <(bash -c 'source "$1"; printf "%s\n" "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"' gate "$symbol_gate_dir/gate.sh")
 [[ "${#required_fixture_symbols[@]}" -gt 0 ]] || fail "required protocol symbols could not be read"
+required_jni_fixture_symbols=("${wallet_jni_symbols[@]}")
 retired_offline_prefix="$(bash -c 'source "$1"; printf "%s" "$RETIRED_KAGEMUSHA_C_PREFIX"' gate "$symbol_gate_dir/gate.sh")"
 [[ "$retired_offline_prefix" == connect_norito_*_ ]] || fail "retired offline prefix could not be read"
 
@@ -112,6 +130,9 @@ run_symbol_gate() {
   [[ "$mode" == "apple" ]] && prefix="_"
   {
     printf "${prefix}%s\n" "${required_fixture_symbols[@]}"
+    if [[ "$mode" == "elf" ]]; then
+      printf '%s\n' "${required_jni_fixture_symbols[@]}"
+    fi
     if [[ "$#" -gt 0 ]]; then
       printf '%s\n' "$@"
     fi
@@ -130,15 +151,13 @@ for mode in elf apple; do
   run_symbol_gate "$mode" >/dev/null \
     || fail "binary-symbol gate rejected the exact $mode protocol inventory"
 done
-for method in revision open close activity call; do
-  run_symbol_gate elf "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}" >/dev/null \
-    || fail "binary-symbol gate rejected current wallet JNI method $method"
-done
 for retired in \
   "elf connect_norito_kagemusha_wallet_sign_v1" \
   "elf connect_norito_kagemusha_wallet_open_v2" \
   "elf Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_sign" \
   "elf connect_norito_kagemusha_wallet_v1_validate" \
+  "elf connect_norito_kagemusha_wallet_unknown_v1" \
+  "apple _connect_norito_kagemusha_wallet_commit_v2" \
   "apple _connect_norito_kagemusha_core_coordinator_open_v1" \
   "elf ${retired_offline_prefix}payment_validate" \
   "apple _${retired_offline_prefix}payment_validate" \
@@ -153,11 +172,46 @@ for retired in \
   grep -Eq 'retired KAGEMUSHA (C|JNI) namespace' <<<"$output" \
     || fail "binary-symbol gate rejected $retired without naming the retired namespace"
 done
+retired_jni_symbols=()
+for ((index = 0; index < 2048; index++)); do
+  retired_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_unknown${index}")
+done
+if output="$(run_symbol_gate elf "${retired_jni_symbols[@]}")"; then
+  fail "binary-symbol gate accepted a large retired JNI inventory"
+fi
+grep -Fq 'retired KAGEMUSHA JNI namespace' <<<"$output" \
+  || fail "binary-symbol gate did not identify the large retired JNI inventory"
+for missing in "${wallet_jni_symbols[@]}"; do
+  required_jni_fixture_symbols=()
+  for symbol in "${wallet_jni_symbols[@]}"; do
+    [[ "$symbol" == "$missing" ]] || required_jni_fixture_symbols+=("$symbol")
+  done
+  if output="$(run_symbol_gate elf)"; then
+    fail "binary-symbol gate accepted missing wallet JNI export $missing"
+  fi
+  grep -Fq "missing $missing" <<<"$output" \
+    || fail "binary-symbol gate did not identify missing wallet JNI export $missing"
+done
+required_jni_fixture_symbols=("${wallet_jni_symbols[@]}")
 complete_required_symbols=("${required_fixture_symbols[@]}")
 required_fixture_symbols=("${complete_required_symbols[@]:1}")
 if run_symbol_gate elf >/dev/null; then
   fail "binary-symbol gate accepted a missing required protocol export"
 fi
+required_fixture_symbols=("${complete_required_symbols[@]}")
+for missing in "${wallet_symbols[@]}"; do
+  required_fixture_symbols=()
+  for symbol in "${complete_required_symbols[@]}"; do
+    [[ "$symbol" == "$missing" ]] || required_fixture_symbols+=("$symbol")
+  done
+  for mode in elf apple; do
+    if output="$(run_symbol_gate "$mode")"; then
+      fail "binary-symbol gate accepted missing wallet export $missing in $mode"
+    fi
+    grep -Fq "missing $missing" <<<"$output" \
+      || fail "binary-symbol gate did not identify missing wallet export $missing"
+  done
+done
 required_fixture_symbols=("${complete_required_symbols[@]}")
 
 if MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=invalid "$CHECK_SCRIPT" --android-only >/dev/null 2>&1; then

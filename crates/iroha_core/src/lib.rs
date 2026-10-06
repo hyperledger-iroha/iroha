@@ -119,6 +119,8 @@ pub mod pipeline;
 pub(crate) use iroha_core_privacy::{
     execution_proofs, privacy_engines, privacy_profiles, privacy_state, privacy_verifier,
 };
+/// Reserve-backed KAGEMUSHA wallet ledger orchestration.
+pub mod kagemusha_wallet_v1;
 /// First-release privacy protocol governance and admission budgets.
 pub mod privacy;
 /// Native deterministic privacy release evidence, compiled only into explicit
@@ -137,8 +139,6 @@ pub mod queue;
 pub(crate) mod receiver_snapshot;
 /// Shared compiled validator identity and signed genesis input validation.
 pub mod release_identity;
-/// Reserve-backed KAGEMUSHA wallet ledger orchestration.
-pub mod kagemusha_wallet_v1;
 /// Native monthly retail fee accounting and read APIs.
 pub mod retail_fee;
 /// Retained P2P ownership through final gossip processing.

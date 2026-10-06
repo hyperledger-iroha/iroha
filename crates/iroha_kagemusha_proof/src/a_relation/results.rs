@@ -2,9 +2,10 @@
 //!
 //! A result plan describes which stage must derive each predicate. Its five
 //! boolean claims and fixed owner schema enter the original context, but this
-//! does not certify execution and exposes no acceptance verdict. TODO: bind
-//! every claim to its typed owning task and consume all five in the terminal
-//! iff rule before admitting a Receive terminal key.
+//! does not certify execution and exposes no acceptance verdict. The Objects
+//! producer binds its derived predicate and exact context inputs. TODO: compose
+//! the remaining typed owners and consume all five in the terminal iff rule
+//! before admitting a Receive terminal key.
 
 use iroha_pasta::Fp;
 use iroha_plonk::frontend::{Error, Region, Value};

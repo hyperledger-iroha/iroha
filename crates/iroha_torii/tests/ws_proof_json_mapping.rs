@@ -16,7 +16,10 @@ fn proof_verified_and_rejected_json_mapping() {
         j.get("event").and_then(|x| x.as_str()),
         Some("ProofVerified")
     );
-    assert_eq!(j.get("backend").and_then(|x| x.as_str()), Some("pipa-r/pasta"));
+    assert_eq!(
+        j.get("backend").and_then(|x| x.as_str()),
+        Some("pipa-r/pasta")
+    );
     assert_eq!(
         j.get("proof_hash").and_then(|x| x.as_str()),
         Some(hex::encode([0x12u8; 32]).as_str())

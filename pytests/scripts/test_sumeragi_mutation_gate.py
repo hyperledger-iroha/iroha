@@ -1734,6 +1734,70 @@ def test_nightly_core_mutations_keep_dependency_instrumentation_and_full_invento
     assert "target/sumeragi-core-mutants/logs" in job
 
 
+SUMERAGI_CI_JOBS = (
+    ("nightly_sumeragi.yml", "simulator"),
+    ("nightly_sumeragi.yml", "mutation_gate"),
+    ("nightly_sumeragi.yml", "core_mutation_gate"),
+    ("nightly_sumeragi.yml", "daemon_mutation_gate"),
+    ("pr.yml", "sumeragi"),
+)
+
+
+def require_pinned_sumeragi_toolchain(job):
+    """Check compiler selection before restoring or executing native artifacts."""
+    channel = re.search(
+        r'^channel\s*=\s*"([^"]+)"$',
+        (ROOT / "rust-toolchain.toml").read_text(), re.MULTILINE,
+    )
+    assert channel is not None
+    action = (
+        "      - uses: actions-rust-lang/setup-rust-toolchain@"
+        "166cdcfd11aee3cb47222f9ddb555ce30ddb9659\n"
+        "        with:\n"
+        '          cache: "false"\n'
+        f"          toolchain: {channel.group(1)}\n"
+    )
+    assert action in job, "Sumeragi must install the repository-pinned Rust toolchain"
+    setup = job.index(action)
+    assert setup < job.index("      - uses: Swatinem/rust-cache@")
+    assert setup < job.index("        run:")
+
+
+@pytest.mark.parametrize("workflow_name,job_name", SUMERAGI_CI_JOBS)
+def test_sumeragi_ci_installs_current_compiler_before_cache_and_execution(
+    workflow_name, job_name
+):
+    workflow = (ROOT / ".github/workflows" / workflow_name).read_text()
+    match = re.search(rf"(?ms)^  {job_name}:\n(.*?)(?=^  [a-z_]+:|\Z)", workflow)
+    assert match is not None
+    require_pinned_sumeragi_toolchain(match.group(1))
+
+
+@pytest.mark.parametrize("change", ("missing", "stale", "unreviewed", "late"))
+def test_sumeragi_ci_rejects_missing_stale_or_late_compiler_selection(change):
+    workflow = (ROOT / ".github/workflows/nightly_sumeragi.yml").read_text()
+    match = re.search(r"(?ms)^  simulator:\n(.*?)(?=^  [a-z_]+:|\Z)", workflow)
+    assert match is not None
+    job = match.group(1)
+    action = re.search(
+        r"(?m)^      - uses: actions-rust-lang/setup-rust-toolchain@[^\n]+\n"
+        r"        with:\n          cache: [^\n]+\n          toolchain: [^\n]+\n", job,
+    )
+    assert action is not None
+    if change == "missing":
+        job = job.replace(action.group(0), "")
+    elif change == "stale":
+        job = job.replace(action.group(0), re.sub(
+            r"toolchain: [^\n]+", "toolchain: retired-compiler", action.group(0),
+        ))
+    elif change == "unreviewed":
+        job = job.replace("166cdcfd11aee3cb47222f9ddb555ce30ddb9659", "v1")
+    else:
+        job = job.replace(action.group(0), "") + action.group(0)
+    with pytest.raises(AssertionError):
+        require_pinned_sumeragi_toolchain(job)
+
+
 def test_committee_boundary_mutations_use_their_exact_production_source_owners():
     registered = gate.index_mutations(gate.CORE_MUTATIONS)
     expected = {
@@ -2179,3 +2243,50 @@ def test_empty_mutant_named_tuple_refuses_before_source_build_or_unfiltered_run(
                            gate.m('SYNTHETIC_EMPTY', 'fixture', [], [next(iter(gate.SCENARIOS))]))
     assert result['verdict'] == 'error' and result['reason'] == 'no named test selectors'
     assert 'build' not in result and 'named' not in result and 'scenario' not in result
+
+
+@pytest.mark.parametrize("extra,message", [
+    (["--seeds", "0"], "positive u64 count"),
+    (["--seeds", "-1"], "positive u64 count"),
+    (["--seeds", str(1 << 64)], "positive u64 count"),
+    (["--seeds", str(-(1 << 64))], "positive u64 count"),
+    (["--jobs", "0"], "must be positive"),
+    (["--jobs", "-1"], "must be positive"),
+    (["--only", ""], "at least one mutation"),
+    (["--only", " , , "], "at least one mutation"),
+    (["--only", "MS1,MS1"], "duplicate mutation"),
+    (["--only", " MS1, MS1 "], "duplicate mutation"),
+])
+@pytest.mark.parametrize("strict", [False, True])
+def test_mutation_cli_invalid_counts_refuse_before_output_or_native_child(monkeypatch, tmp_path, capsys, extra, message, strict):
+    output = tmp_path / "unused-campaign"
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid counts reached execution")
+    monkeypatch.setattr(gate, "evaluate_baseline", forbidden)
+    monkeypatch.setattr(gate, "evaluate", forbidden)
+    monkeypatch.setattr(gate.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(sys, "argv", ["gate", "--target-dir", str(output), *(["--strict"] if strict else []), *extra])
+    with pytest.raises(SystemExit) as error:
+        gate.main()
+    assert error.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not output.exists()
+
+@pytest.mark.parametrize("seeds,jobs", [(1,1),(200,4),(10000,2),((1 << 64)-1,1)])
+def test_mutation_cli_valid_counts_and_unique_selection_keep_exact_report(monkeypatch, tmp_path, seeds, jobs):
+    import json
+    called=[]
+    def baseline(args, target, mutations):
+        called.append((args.seeds, args.jobs, [m.id for m in mutations]))
+        return {"id":"baseline", "verdict":"pass"}
+    monkeypatch.setattr(gate,"evaluate_baseline",baseline)
+    monkeypatch.setattr(gate,"evaluate",lambda args,target,mu:{"id":mu.id,"verdict":"killed_by_test","named":{"failed":["tests::named"]}})
+    monkeypatch.setattr(sys,"argv",["gate","--strict","--only"," MS1, MS2 ","--seeds",str(seeds),"--jobs",str(jobs),"--target-dir",str(tmp_path)])
+    assert gate.main()==0
+    assert called==[(seeds,jobs,["MS1","MS2"])]
+    report=json.loads((tmp_path/"report.json").read_text())
+    assert report["summary"]["mutations"]==2
+    assert report["summary"]["killed_by_test"]==["MS1","MS2"]
+    assert [m["id"] for m in report["mutations"]]==["MS1","MS2"]
+    assert report["seeds"]==seeds
+    assert report["fast"] is False

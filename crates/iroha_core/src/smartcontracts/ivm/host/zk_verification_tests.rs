@@ -704,3 +704,43 @@ fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
     assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
     assert_eq!(vm.register(12), 0);
 }
+
+#[test]
+fn queued_ballot_and_tally_require_their_distinct_verification_latches() {
+    let attachment = || {
+        iroha_data_model::proof::ProofAttachment::new_ref(
+            "pipa-r/pasta".into(),
+            iroha_data_model::proof::ProofBox::new("pipa-r/pasta".into(), vec![0xAB; 32]),
+            VerifyingKeyId::new("pipa-r/pasta", "fixture"),
+        )
+    };
+    let ballot: InstructionBox = DMZk::SubmitBallot {
+        election_id: "election1".into(),
+        ciphertext: vec![0; 32],
+        ballot_proof: attachment(),
+        nullifier: [1; 32],
+    }
+    .into();
+    let tally: InstructionBox = DMZk::FinalizeElection {
+        election_id: "election1".into(),
+        tally: vec![1, 0, 0],
+        tally_proof: attachment(),
+    }
+    .into();
+    for (instruction, expected) in [
+        (
+            ballot,
+            "missing ZK_VOTE_VERIFY_BALLOT prior to SubmitBallot",
+        ),
+        (
+            tally,
+            "missing ZK_VOTE_VERIFY_TALLY prior to FinalizeElection",
+        ),
+    ] {
+        let mut host = CoreHost::new(fixture_account("alice"));
+        assert_eq!(
+            host.validate_queued_for_zk(&[instruction]),
+            Err(ValidationFail::NotPermitted(expected.into()))
+        );
+    }
+}

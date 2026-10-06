@@ -7,7 +7,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{ElectionState, StandaloneBallotCorpusEntryV1, State, World, WorldReadOnly},
 };
-use iroha_core_zk::{native_pipa_r::BACKEND as NATIVE_BACKEND, hash_vk};
+use iroha_core_zk::{hash_vk, native_pipa_r::BACKEND as NATIVE_BACKEND};
 use iroha_data_model::{
     Registrable,
     account::Account,

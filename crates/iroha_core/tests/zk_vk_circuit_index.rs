@@ -2,15 +2,21 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! Verifying-key registry indexing by `(circuit_id, version)`.
+#[path = "common/zk_components.rs"]
+mod zk_components;
 use iroha_core::{
-    executor::Executor,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
 };
 use iroha_core_zk::hash_vk;
-use iroha_core_zk::{confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID as TRANSFER, native_pipa_r::{self, NativeRelationV1}, test_utils::native_confidential_fixture_envelope};
+use iroha_core_zk::{
+    confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID as TRANSFER,
+    native_pipa_r::{self, NativeRelationV1},
+    test_utils::native_confidential_fixture_envelope,
+};
+use zk_components::execute_isi_component;
 const FULL: &str = "pipa-r/pasta/confidential-unshield-full-v1";
 use iroha_data_model::{
     ValidationFail,
@@ -43,7 +49,6 @@ fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
     stx.apply();
 }
 fn register_vk(
-    exec: &Executor,
     block: &mut iroha_core::state::StateBlock<'_>,
     id: &VerifyingKeyId,
     record: &VerifyingKeyRecord,
@@ -54,8 +59,7 @@ fn register_vk(
         record: record.clone(),
     }
     .into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-        .expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), instr).expect("register vk");
     stx.apply();
 }
 fn base_record(circuit: &str, version: u32) -> VerifyingKeyRecord {
@@ -65,7 +69,9 @@ fn base_record(circuit: &str, version: u32) -> VerifyingKeyRecord {
         BackendTag::NativePipaRPasta,
         "vesta",
         iroha_crypto::Hash::new(native_pipa_r::public_schema(
-            native_pipa_r::relation("pipa-r/pasta", circuit).unwrap())).into(),
+            native_pipa_r::relation("pipa-r/pasta", circuit).unwrap(),
+        ))
+        .into(),
         [0xBB; 32],
     );
     rec.status = ConfidentialStatus::Active;
@@ -82,10 +88,9 @@ fn duplicate_circuit_version_registration_rejected() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-    let exec = Executor::default();
     let id_primary = VerifyingKeyId::new("pipa-r/pasta", "vk_primary");
     let rec_primary = base_record(TRANSFER, 1);
-    register_vk(&exec, &mut block, &id_primary, &rec_primary);
+    register_vk(&mut block, &id_primary, &rec_primary);
     let mut stx = block.transaction();
     let id_secondary = VerifyingKeyId::new("pipa-r/pasta", "vk_secondary");
     let rec_secondary = base_record(TRANSFER, 1);
@@ -94,8 +99,7 @@ fn duplicate_circuit_version_registration_rejected() {
         record: rec_secondary,
     }
     .into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), instr)
         .expect_err("duplicate circuit/version must be rejected");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {
@@ -113,10 +117,9 @@ fn update_rotates_circuit_version_index() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-    let exec = Executor::default();
     let id = VerifyingKeyId::new("pipa-r/pasta", "vk_upgrade");
     let rec_current = base_record(FULL, 1);
-    register_vk(&exec, &mut block, &id, &rec_current);
+    register_vk(&mut block, &id, &rec_current);
     // Upgrade to version 2
     let mut stx = block.transaction();
     let rec_v2 = base_record(FULL, 2);
@@ -125,8 +128,7 @@ fn update_rotates_circuit_version_index() {
         record: rec_v2,
     }
     .into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), update)
-        .expect("update vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), update).expect("update vk");
     stx.apply();
     let map = block.world.verifying_keys_by_circuit();
     let key_old = (String::from(FULL), 1);
@@ -139,16 +141,17 @@ fn update_rotates_circuit_version_index() {
 }
 fn register_native_vk(
     block: &mut iroha_core::state::StateBlock<'_>,
-    exec: &Executor,
     name: &str,
 ) -> (VerifyingKeyId, [u8; 32]) {
     let id = VerifyingKeyId::new("pipa-r/pasta", name);
     let mut record = base_record(TRANSFER, 1);
-    let vk_box = native_confidential_fixture_envelope().vk_box("pipa-r/pasta").unwrap();
+    let vk_box = native_confidential_fixture_envelope()
+        .vk_box("pipa-r/pasta")
+        .unwrap();
     record.key = Some(vk_box.clone());
     record.commitment = hash_vk(&vk_box);
     record.vk_len = u32::try_from(vk_box.bytes.len()).expect("bounded native key");
-    register_vk(exec, block, &id, &record);
+    register_vk(block, &id, &record);
     (id, record.commitment)
 }
 fn execute_verify_proof(
@@ -176,9 +179,9 @@ fn verify_proof_rejects_circuit_mismatch() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-    let exec = Executor::default();
-    let public_inputs = native_pipa_r::public_schema(NativeRelationV1::ConfidentialTransfer).to_vec();
-    let (vk_id, vk_commitment) = register_native_vk(&mut block, &exec, "vk_main");
+    let public_inputs =
+        native_pipa_r::public_schema(NativeRelationV1::ConfidentialTransfer).to_vec();
+    let (vk_id, vk_commitment) = register_native_vk(&mut block, "vk_main");
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::NativePipaRPasta,
         circuit_id: FULL.into(),
@@ -208,10 +211,10 @@ fn verify_proof_rejects_schema_hash_mismatch() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-    let exec = Executor::default();
-    let mut public_inputs = native_pipa_r::public_schema(NativeRelationV1::ConfidentialTransfer).to_vec();
+    let mut public_inputs =
+        native_pipa_r::public_schema(NativeRelationV1::ConfidentialTransfer).to_vec();
     public_inputs[0] ^= 1;
-    let (vk_id, vk_commitment) = register_native_vk(&mut block, &exec, "vk_main");
+    let (vk_id, vk_commitment) = register_native_vk(&mut block, "vk_main");
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::NativePipaRPasta,
         circuit_id: TRANSFER.into(),
@@ -241,9 +244,9 @@ fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-    let exec = Executor::default();
-    let public_inputs = native_pipa_r::public_schema(NativeRelationV1::ConfidentialTransfer).to_vec();
-    let (vk_id, commitment) = register_native_vk(&mut block, &exec, "vk_main");
+    let public_inputs =
+        native_pipa_r::public_schema(NativeRelationV1::ConfidentialTransfer).to_vec();
+    let (vk_id, commitment) = register_native_vk(&mut block, "vk_main");
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::NativePipaRPasta,
         circuit_id: TRANSFER.into(),
@@ -282,7 +285,6 @@ fn register_requires_circuit_and_schema_hash() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-    let exec = Executor::default();
     let mut rec = base_record(TRANSFER, 1);
     rec.circuit_id.clear();
     let id = VerifyingKeyId::new("pipa-r/pasta", "vk_bad");
@@ -292,8 +294,7 @@ fn register_requires_circuit_and_schema_hash() {
         record: rec.clone(),
     }
     .into();
-    let err = exec
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), instr)
         .expect_err("empty circuit_id must be rejected");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
@@ -311,8 +312,7 @@ fn register_requires_circuit_and_schema_hash() {
     rec.public_inputs_schema_hash = [0u8; 32];
     let mut stx2 = block.transaction();
     let instr2: InstructionBox = verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-    let err2 = exec
-        .execute_instruction(&mut stx2, &ALICE_ID.clone(), instr2)
+    let err2 = execute_isi_component(&mut stx2, &ALICE_ID.clone(), instr2)
         .expect_err("zero schema hash must be rejected");
     match err2 {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
