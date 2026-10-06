@@ -99,8 +99,6 @@ pub(super) fn result(
             parent_state_root: Hash::new(b"parent"),
             post_state_root: ordinary_root,
             ordinary_writes_root: ordinary_root,
-            kagemusha_top_up_root: None,
-            kagemusha_top_up_count: 0,
             parent_world_state_root: Hash::new(b"fixture parent world"),
             world_state_root: Hash::new(b"fixture world"),
             event_commitment: None,
@@ -248,13 +246,7 @@ impl Fixture {
     pub(crate) fn new() -> Self {
         use crate::{
             block::consensus::SumeragiGenesisContextParameters,
-            isi::{
-                InstructionBox, RegisterPeerWithPop, SetParameter,
-                kagemusha_v1::{
-                    KagemushaMintFinalityAuthorityGenerationTemplateV1,
-                    KagemushaMintFinalityGenesisParametersV1,
-                },
-            },
+            isi::{InstructionBox, RegisterPeerWithPop, SetParameter},
             parameter::{
                 CustomParameter, Parameter,
                 system::{
@@ -277,19 +269,11 @@ impl Fixture {
         let (crypto, _) = ProofCrypto::new(&validators).unwrap();
         let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
         let account = AccountId::new(authority.public_key().clone());
-        let epoch_fixture = crate::sumeragi::epoch::tests::fixture(4);
         let metadata = ConsensusHandshakeMetadata {
             mode: SumeragiConsensusMode::Permissioned,
             block_cadence_ms: NonZeroU64::new(1000).unwrap(),
             wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
-            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 {
-                authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                    version: 1,
-                    generation: 0,
-                    validators: epoch_fixture.authority.validators,
-                },
-            },
             sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         };
         let mut instructions = validators

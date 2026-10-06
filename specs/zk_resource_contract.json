@@ -13115,7 +13115,7 @@
         ]
       },
       {
-        "reason": "Per-instruction shape limits of product instructions (Parliament sortition batch, KAGEMUSHA operation result and finality seals, MUSUBI pin outbox frames, atomic settlement movements, SoraFS release manifest, election options, pin-allocation fees and frame). Each bounds one instruction of its product; that instruction travels in a transaction bounded by transaction.max_tx_bytes and transaction.max_instructions. Their products own them (P.8, P.20 and the product owners of the delivery plan).",
+        "reason": "Per-instruction shape limits of product instructions (Parliament sortition batch, KAGEMUSHA mint-finality validators and seals, MUSUBI pin outbox frames, atomic settlement movements, SoraFS release manifest, election options, pin-allocation fees and frame). Each bounds one instruction of its product; that instruction travels in a transaction bounded by transaction.max_tx_bytes and transaction.max_instructions. Their products own them (P.8, P.20 and the product owners of the delivery plan).",
         "files": [
           {
             "path": "crates/iroha_data_model/src/isi/governance/parliament.rs",
@@ -13126,7 +13126,6 @@
           {
             "path": "crates/iroha_data_model/src/isi/kagemusha_v1.rs",
             "symbols": [
-              "KAGEMUSHA_OPERATION_RESULT_MAX_BYTES_V1",
               "KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1",
               "KAGEMUSHA_MINT_FINALITY_MAX_SEALS_V1"
             ]
@@ -13166,11 +13165,12 @@
         ]
       },
       {
-        "reason": "Not resource bounds: a fixed witness depth and a domain-separation tag whose names contain a limit word, the length a decode-failure placeholder message is truncated to, and the output ceilings of the native wire-ID maintenance tool.",
+        "reason": "Not resource bounds: the largest decimal scale a reserve receipt admits (a value-domain check), a fixed witness depth and a domain-separation tag whose names contain a limit word, the length a decode-failure placeholder message is truncated to, and the output ceilings of the native wire-ID maintenance tool.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/isi/kagemusha_v1.rs",
             "symbols": [
+              "KAGEMUSHA_ASSET_SCALE_MAX_V1",
               "KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1",
               "RESERVE_RECEIPT_DOMAIN_V1"
             ]

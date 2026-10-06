@@ -29,3 +29,11 @@ ff = "0.13.1"
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # Deterministic recovery streams for reproducible test proofs.
 rand_chacha = "0.3.1"
+# Independent SHA-256 oracle for the SHA-256 chip tests (already a
+# dependency of `iroha_plonk`).
+sha2 = "0.10.9"
+# Independent big-integer oracle for the foreign-field chip tests.
+num-bigint = "0.4.6"
+# Independent P-256 ECDSA oracle for the P-256 chip tests (already in the
+# lockfile with these features through `iroha_data_model`).
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }

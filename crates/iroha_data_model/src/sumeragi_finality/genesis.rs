@@ -14,6 +14,7 @@ use crate::{
     },
     sumeragi::epoch::{
         ValidatorCommitteeMemberV1, ValidatorEpochAuthorizationV1, ValidatorEpochContextV1,
+        ValidatorGenerationV1,
     },
     transaction::{Executable, TransactionDomain},
 };
@@ -129,14 +130,7 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, G
             (policy.epoch_length_blocks, parameters.epoch_seed)
         }
     };
-    let authority = metadata
-        .kagemusha_mint_finality
-        .authority_generation
-        .bind_network_id(network_id)
-        .map_err(|error| error.to_string())?;
-    let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, last_height)
-        .map_err(|error| error.to_string())?;
-    let committee = super::genesis_registrations(genesis)
+    let committee: Vec<ValidatorCommitteeMemberV1> = super::genesis_registrations(genesis)
         .map_err(|error| error.to_string())?
         .into_iter()
         .map(
@@ -146,12 +140,15 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, G
             },
         )
         .collect();
+    // Generation zero is the signed registered roster itself; no separate key template exists.
+    let generation = ValidatorGenerationV1::from_committee(network_id, 0, &committee);
+    let authorization = ValidatorEpochAuthorizationV1::genesis(&generation, last_height)
+        .map_err(|error| error.to_string())?;
     let epoch = ValidatorEpochContextV1 {
         da_layout: metadata.sumeragi_context.da_layout,
         version: 1,
         network_id,
         mode,
-        authority,
         authorization,
         committee,
         leader_seed,

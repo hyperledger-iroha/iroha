@@ -350,9 +350,10 @@ impl ManagedStore {
             // Binary verification and durable status publication consume the caller's same
             // startup budget; the worker must not receive the earlier, larger remainder.
             let remaining = runtime::startup_remaining(started, request.startup_timeout)?;
+            let milliseconds = runtime::worker_startup_millis(remaining, request.startup_timeout)?;
             command
                 .arg("--startup-timeout-ms")
-                .arg(remaining.as_millis().to_string());
+                .arg(milliseconds.to_string());
             drop(reservations.take());
             let mut worker = command.spawn()?;
             // Reap this exact child eventually without blocking the CLI after successful startup.

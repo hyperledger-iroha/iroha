@@ -39,8 +39,8 @@ use iroha_pasta::poseidon::PoseidonField;
 use iroha_plonk_gadgets::statement::{StatementV1, StepRelation, digest_fields};
 
 use crate::witness::{
-    LIFECYCLE_ACTIVE, LIFECYCLE_RETIRING, RECEIVE_EFFECT_FIELDS, RequestBody, SEND_EFFECT_FIELDS,
-    SigmaRelation, StepPublic,
+    LIFECYCLE_ACTIVE, LIFECYCLE_RETIRING, RECEIVE_CONTROLS, RECEIVE_EFFECT_FIELDS, RequestBody,
+    SEND_EFFECT_FIELDS, SigmaRelation, StepPublic,
 };
 
 /// The public outputs of the predecessor's lineage proof Ω(pred) that a
@@ -252,7 +252,9 @@ pub fn check_send<F: PoseidonField>(
 /// The checks of a `sigma_recv` statement (for example Credited evidence)
 /// against the scheme's relation identity and the Request body the consumer
 /// holds. The receiver's credential digest is not compared with the
-/// Request's (owner answer Q8). Returns the `sigma_recv` relation and the
+/// Request's (owner answer Q8). Returns the `sigma_recv` relation the
+/// statement's blacklist bit selects (G1 `(4, enabled_controls & 1)`; the
+/// relation checks that bit against the receiver's core mask) and the
 /// public input to verify the proof against.
 ///
 /// # Errors
@@ -270,7 +272,7 @@ pub fn check_receive<F: PoseidonField>(
     )?;
     let statement_digest = statement.digest().ok_or(ConsumerError::Effect)?;
     Ok(Accepted {
-        relation: SigmaRelation::RECEIVE,
+        relation: SigmaRelation::receive(statement.enabled_controls & RECEIVE_CONTROLS),
         public: StepPublic {
             statement: statement_digest,
         },

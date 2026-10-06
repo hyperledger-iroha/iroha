@@ -68,13 +68,6 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
-/// Maintained typed credit encryption used by the actual Native ordinary cash owner.
-#[cfg(any(test, unix))]
-mod kagemusha_v1_crypto;
-/// Deterministic Kagemusha V1 fixtures shared by Core and Sumeragi tests.
-#[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
-#[doc(hidden)]
-pub mod kagemusha_v1_test_fixtures;
 /// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
 #[cfg(feature = "zk-stark")]
 pub mod stark;
@@ -100,34 +93,7 @@ pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, ver
 #[cfg(test)]
 pub(crate) mod frame_test_support;
 mod halo2_backend;
-/// P-256-specific nonnative curve primitives for original platform approval equations.
-///
-/// Production proving consumes only the signature-verification algorithms. Key generation
-/// and synthetic circuit fixtures remain confined to the module's test-only helpers.
-pub(crate) mod kagemusha_p256_curve_gadget;
-/// Core-owned confidential polynomial storage foundation for the consuming prover.
-pub mod kagemusha_polynomial_store_v1;
-pub mod kagemusha_sender_wire;
-/// Shared paired field-native Poseidon relations for Kagemusha V1.
-pub(crate) mod kagemusha_v1_poseidon;
-/// Fixed-profile paired-Pasta recursion and native accumulator decisions for Kagemusha V1.
-pub mod kagemusha_v1_recursion;
-/// Aggregate, hardware-guarded Kagemusha V1 host state machine.
-pub mod kagemusha_v1_state;
 pub mod kagemusha_wallet_advance_v1;
-/// Fixed opposite-field Pasta instructions used by paired Pasta recursion.
-pub(crate) mod pasta_cycle_loader;
-/// Dense normalized-GLV MSM used by paired Pasta recursion.
-pub(crate) mod pasta_dense_msm;
-/// Test accounting for direct-instance Pasta IPA recursive proofs.
-#[cfg(test)]
-pub(crate) mod pasta_ipa_recursion;
-/// Dedicated exact native Poseidon permutations for the paired Claim fold.
-pub(crate) mod pasta_native_poseidon;
-/// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
-pub(crate) mod pasta_sha256;
-/// Base-only SHA-256 compression candidate for resource-qualified internal hash proofs.
-pub(crate) mod pasta_sha256_table8;
 // TODO: Qualify the complete private RAM-LFE relation before admitting a circuit.
 // These internal experiments have no production verifier entry point.
 #[cfg(test)]
@@ -7467,13 +7433,9 @@ mod halo2_ipa_parameter_source_tests {
     }
 }
 #[cfg(test)]
-mod g3_proof_scaling_measurement_tests;
-#[cfg(test)]
 mod kaigi_authorization_v1_tests;
 #[cfg(test)]
 mod kaigi_usage_v1_tests;
-#[cfg(test)]
-mod prover_golden_tests;
 
 /// Halo2 envelope parsing helpers.
 ///

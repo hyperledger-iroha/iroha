@@ -126,14 +126,24 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
         return readBack(alias, challenge, level)
     }
 
-    /** Sign the exact [preimage] with `SHA256withECDSA`; the platform's DER is returned unmodified. */
-    fun sign(slot: ByteArray, preimage: ByteArray): KagemushaWalletAndroidSignatureV1 =
-        synchronized(lock) { signLocked(slot, preimage) }
+    /**
+     * Sign the exact 32-byte signing [message] with `SHA256withECDSA` (owner answer A1): the
+     * message is the canonical encoding of the Poseidon value `P_bytes(d, transcript)` that the
+     * Rust domain-checked signer computed, and KeyMint hashes it once with SHA-256. Nothing here
+     * prefixes, hashes or truncates it. The platform's DER is returned unmodified; Rust normalizes
+     * it to low S and verifies it under the payment key.
+     *
+     * @throws IllegalArgumentException for a message that is not exactly 32 bytes.
+     */
+    fun sign(slot: ByteArray, message: ByteArray): KagemushaWalletAndroidSignatureV1 =
+        synchronized(lock) { signLocked(slot, message) }
 
-    private fun signLocked(slot: ByteArray, preimage: ByteArray): KagemushaWalletAndroidSignatureV1 {
+    private fun signLocked(slot: ByteArray, signingMessage: ByteArray): KagemushaWalletAndroidSignatureV1 {
         val alias = kagemushaWalletAndroidAliasV1(slot)
-        val message = preimage.copyOf()
-        require(message.size in 1..KAGEMUSHA_WALLET_ANDROID_PREIMAGE_MAX_BYTES_V1) { "signing preimage is empty or oversized" }
+        val message = signingMessage.copyOf()
+        require(message.size == KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1) {
+            "signing message must be exactly $KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1 bytes"
+        }
         val key = when (val loaded = loadKey(alias)) {
             is Loaded.Key -> loaded.key
             Loaded.Absent -> return KagemushaWalletAndroidSignatureV1.Unavailable(
@@ -356,8 +366,8 @@ internal const val KAGEMUSHA_WALLET_ANDROID_MIN_API_V1: Int = 31
 
 private fun KagemushaWalletAndroidEnvironmentV1.keystore2(): Boolean = apiLevel >= KAGEMUSHA_WALLET_ANDROID_MIN_API_V1
 
-/** Largest preimage the payment key signs; provider preimages are role-tagged bodies of a few KiB. */
-internal const val KAGEMUSHA_WALLET_ANDROID_PREIMAGE_MAX_BYTES_V1: Int = 1 shl 20
+/** Exact length of every signing message the payment key signs: one canonical σ-field value. */
+internal const val KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1: Int = 32
 
 /** Attestation chain bounds, as in `AndroidKeyAttestationOriginalV1`. */
 internal const val KAGEMUSHA_WALLET_ANDROID_CHAIN_MAX_CERTIFICATES_V1: Int = 8

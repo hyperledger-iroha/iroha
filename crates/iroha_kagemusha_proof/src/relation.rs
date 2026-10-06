@@ -12,11 +12,16 @@
 //!   by the successor commitment; spec section 3.2 assigns root transitions
 //!   to the native Advance check and to the lineage relation);
 //! - a Request term (bound by `credit_id`, which the statement effect
-//!   carries and both wallets recompute from the Request body they hold);
+//!   carries and both wallets recompute from the Request body they hold),
+//!   both account digests included;
 //! - the Request digest of a Send (bound by the statement effect);
 //! - the lineage inputs of `sigma_send` and the scheme-level relation
 //!   identity (bound by the statement, which a consumer compares with the
 //!   lineage proof and the scheme).
+//!
+//! - a control opening (a blacklist gap, a quota-window slot, a usage-map
+//!   leaf or sibling), bound by the head-committed root it must reach
+//!   (`crate::control_circuit`).
 //!
 //! The scheme, asset and own-wallet limbs of the Request and of the
 //! statement are the opened core cells, never fresh witnesses. Every hash
@@ -33,9 +38,11 @@ use iroha_plonk_gadgets::{
 
 use crate::{
     circuit::{HashSite, Inventory, LanePlan, RelationOutput, RelationShape},
+    control_circuit::ControlChips,
     witness::{
-        CONTROL_BLACKLIST, CORE_FIELDS, CoreState, LIFECYCLE_ACTIVE, NativeStep, REQUEST_VERSION,
-        RequestTerms, StepDigests, StepInputs, StepWitness, core_index,
+        CONTROL_ATTESTATION_LEASE, CONTROL_BLACKLIST, CONTROL_QUOTAS, CORE_FIELDS, CoreState,
+        LIFECYCLE_ACTIVE, NativeStep, REQUEST_VERSION, RequestTerms, StepDigests, StepInputs,
+        StepWitness, core_index,
     },
 };
 
@@ -101,7 +108,9 @@ fn hash_site<F: PoseidonField>(
     site: HashSite,
     inputs: &[AbsorbInput<'_, F>],
 ) -> Result<Word<F>, Error> {
-    let (domain, arity) = shape.site_domain(site);
+    let &[(domain, arity)] = shape.site_hashes(site).as_slice() else {
+        return Err(Error::Synthesis);
+    };
     if inputs.len() != arity {
         return Err(Error::Synthesis);
     }
@@ -146,7 +155,8 @@ struct CoreSlots {
     /// The blacklist issue time and maximum age, unless the blacklist
     /// control range-checks them.
     blacklist_age: Option<[usize; 2]>,
-    lease_expiry: usize,
+    /// The lease expiry, unless the lease control range-checks it.
+    lease_expiry: Option<usize>,
     state_nonce: usize,
     /// `sigma_recv` only (`sigma_send` range-checks them): the send
     /// ordinal, the policy epoch and the accepted-time floor.
@@ -181,6 +191,8 @@ struct SendChecked<F: PoseidonField> {
     /// The blacklist issue time and maximum age, with the blacklist
     /// control.
     blacklist_age: Option<[U64<F>; 2]>,
+    /// The lease expiry, with the lease control.
+    lease: Option<U64<F>>,
 }
 
 /// The Request fields whose cells depend on the step.
@@ -267,6 +279,9 @@ pub fn assign<F: PoseidonField>(
     let terms = witness.map(|witness| witness.inputs.terms());
     let is_send = relation.step() == StepRelation::Send;
     let blacklist = relation.enforces(CONTROL_BLACKLIST);
+    let send_blacklist = is_send && blacklist;
+    let lease = is_send && relation.enforces(CONTROL_ATTESTATION_LEASE);
+    let quota = is_send && relation.enforces(CONTROL_QUOTAS);
 
     // Range-checked fields: the balance, the sequence and the amount always;
     // the send ordinal, policy epoch, accepted-time floor, lineage
@@ -288,7 +303,7 @@ pub fn assign<F: PoseidonField>(
             request_time: uint.assign_u64(region, value(terms, |terms| terms.request_time))?,
             lower: uint.assign_u64(region, value(send, |send| send.accepted_lower))?,
             upper: uint.assign_u64(region, value(send, |send| send.accepted_upper))?,
-            blacklist_age: if blacklist {
+            blacklist_age: if send_blacklist {
                 Some([
                     uint.assign_u64(
                         region,
@@ -299,6 +314,14 @@ pub fn assign<F: PoseidonField>(
                         value(controls, |controls| controls.blacklist_max_age_ms),
                     )?,
                 ])
+            } else {
+                None
+            },
+            lease: if lease {
+                Some(uint.assign_u64(
+                    region,
+                    value(controls, |controls| controls.lease_expires_at_ms),
+                )?)
             } else {
                 None
             },
@@ -339,13 +362,13 @@ pub fn assign<F: PoseidonField>(
         quota_windows_root: batch.push(core_field(core_index::QUOTA_WINDOWS_ROOT)),
         blacklist_version: batch.push(core_field(core_index::BLACKLIST_VERSION)),
         blacklist_root: batch.push(core_field(core_index::BLACKLIST_ROOT)),
-        blacklist_age: (!blacklist).then(|| {
+        blacklist_age: (!send_blacklist).then(|| {
             [
                 batch.push(core_field(core_index::BLACKLIST_ISSUED_AT)),
                 batch.push(core_field(core_index::BLACKLIST_MAX_AGE)),
             ]
         }),
-        lease_expiry: batch.push(core_field(core_index::LEASE_EXPIRY)),
+        lease_expiry: (!lease).then(|| batch.push(core_field(core_index::LEASE_EXPIRY))),
         state_nonce: batch.push(core_field(core_index::STATE_NONCE)),
         unchecked: (!is_send).then(|| {
             [
@@ -381,6 +404,16 @@ pub fn assign<F: PoseidonField>(
     let counterparty = batch.pair(value(witness, |witness| match &witness.inputs {
         StepInputs::Send(send) => digest_fields::<F>(&send.receiver_wallet),
         StepInputs::Receive(receive) => digest_fields::<F>(&receive.payer_wallet),
+    }));
+    // Both account digests of the Request (owner answer A5): terms bound by
+    // `credit_id`; the counterparty's is the one a blacklist control opens.
+    let payer_account = batch.pair(value(witness, |witness| match &witness.inputs {
+        StepInputs::Send(send) => digest_fields::<F>(&send.payer_account_digest),
+        StepInputs::Receive(receive) => digest_fields::<F>(&receive.payer_account_digest),
+    }));
+    let receiver_account = batch.pair(value(witness, |witness| match &witness.inputs {
+        StepInputs::Send(send) => digest_fields::<F>(&send.receiver_account_digest),
+        StepInputs::Receive(receive) => digest_fields::<F>(&receive.receiver_account_digest),
     }));
     // The Request terms that are not range-checked.
     let term = |batch: &mut Batch<F>, read: fn(&RequestTerms) -> &[u8; 32]| {
@@ -441,7 +474,12 @@ pub fn assign<F: PoseidonField>(
     let scheme_policy = pair_at(&words, term_slots.scheme_policy)?;
     let certificates = pair_at(&words, term_slots.certificates)?;
     let nonce = pair_at(&words, term_slots.nonce)?;
+    let payer_account = pair_at(&words, payer_account)?;
+    let receiver_account = pair_at(&words, receiver_account)?;
     let blacklist_version = word(slots.blacklist_version)?;
+    let blacklist_root = word(slots.blacklist_root)?;
+    let quota_windows_root = word(slots.quota_windows_root)?;
+    let quota_usage = word(slots.roots[4])?;
 
     // The step: balance, ordinal and window checks; the Request fields that
     // depend on the step.
@@ -471,6 +509,7 @@ pub fn assign<F: PoseidonField>(
     };
     let mut next_send_after = next_send.clone();
     let mut time_floor_after = time_floor.clone();
+    let mut quota_usage_after = quota_usage.clone();
     let successor_balance: Word<F>;
     let burned_after: Word<F>;
     let request_cells = if let Some(checked) = &checked_send {
@@ -503,9 +542,44 @@ pub fn assign<F: PoseidonField>(
         uint.assert_le(region, &checked.request_time, &checked.lower)?;
         uint.assert_le(region, &checked.lower, &checked.upper)?;
         time_floor_after = checked.lower.word().clone();
-        // The blacklist control: the maximum list age at the upper time.
+        // The blacklist control: the maximum list age at the upper time, and
+        // the receiver's account absent from the held list.
         if let Some(age) = &checked.blacklist_age {
             blacklist_age_rule(&mut uint, region, blacklist_version, age, &checked.upper)?;
+            ControlChips {
+                uint: &mut uint,
+                sponges,
+                plan,
+            }
+            .blacklist(
+                region,
+                blacklist_version,
+                blacklist_root,
+                receiver_account,
+                send.map(|send| &send.blacklist),
+            )?;
+        }
+        // The lease control: the upper time is before the lease expiry.
+        if let Some(lease) = &checked.lease {
+            uint.assert_lt(region, &checked.upper, lease)?;
+        }
+        // The quota control: charge every touched window and update the
+        // usage map.
+        if quota {
+            quota_usage_after = ControlChips {
+                uint: &mut uint,
+                sponges,
+                plan,
+            }
+            .quota(
+                region,
+                quota_windows_root,
+                quota_usage,
+                &checked.lower,
+                &checked.upper,
+                &debit,
+                send.map(|send| send.quota.as_ref()),
+            )?;
         }
         StepCells {
             payer: wallet,
@@ -516,6 +590,48 @@ pub fn assign<F: PoseidonField>(
             request_time: checked.request_time.word(),
         }
     } else {
+        // The core mask's defined bits; bit 0 (the blacklist control)
+        // selects this relation (G1 Receive selector `(4, mask & 1)`).
+        let controls = core.map(|core| core.controls.enabled);
+        let bits: Vec<_> = (0..3)
+            .map(|bit| {
+                uint.glue().boolean(
+                    region,
+                    value(controls.as_ref(), |mask| (*mask >> bit) & 1 == 1),
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        let recomposed = uint.glue().linear(
+            region,
+            &[
+                (F::ONE, bits[0].word()),
+                (F::from(2_u64), bits[1].word()),
+                (F::from(4_u64), bits[2].word()),
+            ],
+            F::ZERO,
+        )?;
+        GlueChip::assert_equal(region, &recomposed, enabled_controls)?;
+        GlueChip::assert_constant(
+            region,
+            bits[0].word(),
+            F::from(u64::from(relation.enabled_controls())),
+        )?;
+        // The receiver's blacklist: the payer's account absent from the
+        // held list.
+        if blacklist {
+            ControlChips {
+                uint: &mut uint,
+                sponges,
+                plan,
+            }
+            .blacklist(
+                region,
+                blacklist_version,
+                blacklist_root,
+                payer_account,
+                receive.map(|receive| &receive.blacklist),
+            )?;
+        }
         // balance + amount < 2^128.
         successor_balance = uint.checked_add(region, &balance, &amount)?.word().clone();
         burned_after = word(slots.burned_total)?.clone();
@@ -538,8 +654,12 @@ pub fn assign<F: PoseidonField>(
         asset[1],
         request_cells.payer[0],
         request_cells.payer[1],
+        payer_account[0],
+        payer_account[1],
         request_cells.receiver[0],
         request_cells.receiver[1],
+        receiver_account[0],
+        receiver_account[1],
         request_cells.ordinal,
         receiver_credential[0],
         receiver_credential[1],
@@ -609,19 +729,25 @@ pub fn assign<F: PoseidonField>(
 
     // Predecessor and successor commitments P(kgwcore1, core || rest).
     let rest_digest = word(rest_digest)?;
-    let [consumed, pending, load_redeem, fee_claim, quota_usage] = slots.roots;
-    let (consumed, pending, load_redeem, fee_claim, quota_usage) = (
+    let [consumed, pending, load_redeem, fee_claim, _] = slots.roots;
+    let (consumed, pending, load_redeem, fee_claim) = (
         word(consumed)?,
         word(pending)?,
         word(load_redeem)?,
         word(fee_claim)?,
-        word(quota_usage)?,
     );
     let next_load = word(slots.next_load)?;
     let next_redeem = word(slots.next_redeem)?;
-    let quota_windows_root = word(slots.quota_windows_root)?;
-    let blacklist_root = word(slots.blacklist_root)?;
-    let lease_expiry = word(slots.lease_expiry)?;
+    let lease_expiry = match (&checked_send, slots.lease_expiry) {
+        (
+            Some(SendChecked {
+                lease: Some(lease), ..
+            }),
+            None,
+        ) => lease.word(),
+        (_, Some(lease)) => word(lease)?,
+        _ => return Err(Error::Synthesis),
+    };
     let burned_total = word(slots.burned_total)?;
     let state_nonce = word(slots.state_nonce)?;
     let predecessor_core: [&Word<F>; CORE_FIELDS] = [
@@ -692,7 +818,7 @@ pub fn assign<F: PoseidonField>(
         pending_after,
         load_redeem,
         fee_claim_after,
-        quota_usage,
+        &quota_usage_after,
         enabled_controls,
         quota_windows_root,
         blacklist_version,

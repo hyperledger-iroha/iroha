@@ -1917,11 +1917,6 @@ impl TieredStateBackend {
             world.timed_ovn_evidence
         );
         collect_map!(
-            TieredSegment::ValidatorCandidateKeys,
-            ValidatorCandidateKeys,
-            world.validator_candidate_keys
-        );
-        collect_map!(
             TieredSegment::ValidatorCommitteeTransitions,
             ValidatorCommitteeTransition,
             world.validator_committee_transitions
@@ -1950,26 +1945,6 @@ impl TieredStateBackend {
             TieredSegment::GlobalBeaconPulses,
             GlobalBeaconPulse,
             world.global_beacon_pulses
-        );
-        collect_map!(
-            TieredSegment::KagemushaMintCreditOperations,
-            KagemushaMintCreditOperation,
-            world.kagemusha_mint_credit_operations
-        );
-        collect_map!(
-            TieredSegment::KagemushaIssuanceOperations,
-            KagemushaIssuanceOperation,
-            world.kagemusha_issuance_operations
-        );
-        collect_map!(
-            TieredSegment::KagemushaRedemptionIdOperations,
-            KagemushaRedemptionIdOperation,
-            world.kagemusha_redemption_id_operations
-        );
-        collect_map!(
-            TieredSegment::KagemushaTerminalNullifierOperations,
-            KagemushaTerminalNullifierOperation,
-            world.kagemusha_terminal_nullifier_operations
         );
         Ok(())
     }
@@ -3771,13 +3746,6 @@ mod measured_bytes_impls {
                 .saturating_add(norito::codec::Encode::encode(self).len())
         }
     }
-    impl MeasuredBytes for iroha_data_model::nexus::ValidatorCandidateKeysV1 {
-        fn measured_bytes(&self) -> usize {
-            size_of::<Self>()
-                .saturating_add(self.keys.validator.measured_bytes_extra())
-                .saturating_add(self.peer_signature.measured_bytes_extra())
-        }
-    }
     impl MeasuredBytes for iroha_data_model::nexus::ValidatorCommitteeTransitionV1 {
         fn measured_bytes(&self) -> usize {
             let preparation = &self.preparation;
@@ -3807,21 +3775,6 @@ mod measured_bytes_impls {
                 bytes = bytes
                     .saturating_add(seat.validator.measured_bytes_extra())
                     .saturating_add(seat.proof_of_possession.measured_bytes_extra());
-            }
-            if let Some(credentials) = &self.credentials {
-                bytes = bytes.saturating_add(
-                    credentials
-                        .authority
-                        .validators
-                        .capacity()
-                        .saturating_mul(size_of::<
-                        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1,
-                    >(
-                    )),
-                );
-                for keys in &credentials.authority.validators {
-                    bytes = bytes.saturating_add(keys.validator.measured_bytes_extra());
-                }
             }
             bytes
         }
@@ -3976,17 +3929,12 @@ enum TieredSegment {
     TleKeySessionLifecycles,
     TleActiveKeySession,
     TimedOvnEvidence,
-    ValidatorCandidateKeys,
     ValidatorCommitteeTransitions,
     GlobalBeaconDkg,
     GlobalBeaconKeySessions,
     GlobalBeaconActiveSession,
     GlobalBeaconLatestPulse,
     GlobalBeaconPulses,
-    KagemushaMintCreditOperations,
-    KagemushaIssuanceOperations,
-    KagemushaRedemptionIdOperations,
-    KagemushaTerminalNullifierOperations,
 }
 /// Every tiered segment in key-handle declaration order: segment variant, key-handle variant,
 /// on-disk directory name and backing `World` storage field. Each consumer expands its own
@@ -4057,17 +4005,12 @@ macro_rules! tiered_segment_table {
             TleKeySessionLifecycles, TleKeySessionLifecycle, "tle_key_session_lifecycles", tle_key_session_lifecycles;
             TleActiveKeySession, TleActiveKeySession, "tle_active_key_session", tle_active_key_session;
             TimedOvnEvidence, TimedOvnEvidence, "timed_ovn_evidence", timed_ovn_evidence;
-            ValidatorCandidateKeys, ValidatorCandidateKeys, "validator_candidate_keys", validator_candidate_keys;
             ValidatorCommitteeTransitions, ValidatorCommitteeTransition, "validator_committee_transitions", validator_committee_transitions;
             GlobalBeaconDkg, GlobalBeaconDkg, "global_beacon_dkg", global_beacon_dkg;
             GlobalBeaconKeySessions, GlobalBeaconKeySession, "global_beacon_key_sessions", global_beacon_key_sessions;
             GlobalBeaconActiveSession, GlobalBeaconActiveSession, "global_beacon_active_session", global_beacon_active_session;
             GlobalBeaconLatestPulse, GlobalBeaconLatestPulse, "global_beacon_latest_pulse", global_beacon_latest_pulse;
             GlobalBeaconPulses, GlobalBeaconPulse, "global_beacon_pulses", global_beacon_pulses;
-            KagemushaMintCreditOperations, KagemushaMintCreditOperation, "kagemusha_mint_credit_operations", kagemusha_mint_credit_operations;
-            KagemushaIssuanceOperations, KagemushaIssuanceOperation, "kagemusha_issuance_operations", kagemusha_issuance_operations;
-            KagemushaRedemptionIdOperations, KagemushaRedemptionIdOperation, "kagemusha_redemption_id_operations", kagemusha_redemption_id_operations;
-            KagemushaTerminalNullifierOperations, KagemushaTerminalNullifierOperation, "kagemusha_terminal_nullifier_operations", kagemusha_terminal_nullifier_operations;
         }
     };
 }
@@ -4313,17 +4256,12 @@ pub(crate) enum TieredKeyHandle {
     TleKeySessionLifecycle(iroha_data_model::governance::types::TleKeySessionId),
     TleActiveKeySession(u64),
     TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
-    ValidatorCandidateKeys([u8; 32]),
     ValidatorCommitteeTransition(u64),
     GlobalBeaconDkg([u8; 32]),
     GlobalBeaconKeySession([u8; 32]),
     GlobalBeaconActiveSession(u64),
     GlobalBeaconLatestPulse(u64),
     GlobalBeaconPulse([u8; 32]),
-    KagemushaMintCreditOperation([u8; 32]),
-    KagemushaIssuanceOperation([u8; 32]),
-    KagemushaRedemptionIdOperation([u8; 32]),
-    KagemushaTerminalNullifierOperation([u8; 32]),
 }
 impl TieredKeyHandle {
     fn segment(&self) -> TieredSegment {
@@ -4409,7 +4347,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::TleKeySessionLifecycle(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ValidatorCandidateKeys(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ValidatorCommitteeTransition(key) => {
                 Ok(norito::codec::Encode::encode(key))
             }
@@ -4420,12 +4357,6 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::KagemushaMintCreditOperation(key)
-            | TieredKeyHandle::KagemushaIssuanceOperation(key)
-            | TieredKeyHandle::KagemushaRedemptionIdOperation(key)
-            | TieredKeyHandle::KagemushaTerminalNullifierOperation(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
         }
     }
     fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
@@ -4626,9 +4557,6 @@ impl fmt::Display for TieredKeyHandle {
                 write!(f, "tle_active_key_session:{id}")
             }
             TieredKeyHandle::TimedOvnEvidence(id) => write!(f, "timed_ovn_evidence:{id}"),
-            TieredKeyHandle::ValidatorCandidateKeys(id) => {
-                write!(f, "validator_candidate_keys:{id:?}")
-            }
             TieredKeyHandle::ValidatorCommitteeTransition(id) => {
                 write!(f, "validator_committee_transitions:{id:?}")
             }
@@ -4647,26 +4575,6 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconPulse(id) => {
                 write!(f, "global_beacon_pulse:{}", id.encode_hex::<String>())
             }
-            TieredKeyHandle::KagemushaMintCreditOperation(id) => write!(
-                f,
-                "kagemusha_mint_credit_operation:{}",
-                id.encode_hex::<String>()
-            ),
-            TieredKeyHandle::KagemushaIssuanceOperation(id) => write!(
-                f,
-                "kagemusha_issuance_operation:{}",
-                id.encode_hex::<String>()
-            ),
-            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => write!(
-                f,
-                "kagemusha_redemption_id_operation:{}",
-                id.encode_hex::<String>()
-            ),
-            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => write!(
-                f,
-                "kagemusha_terminal_nullifier_operation:{}",
-                id.encode_hex::<String>()
-            ),
         }
     }
 }

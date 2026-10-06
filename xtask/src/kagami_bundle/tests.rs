@@ -153,6 +153,8 @@ fn copying_programs_refuses_occupied_names_without_changing_their_bytes_or_custo
         let mut incumbent = RetainedFile::create_new_private(&destination).unwrap();
         incumbent.file_mut().write_all(body).unwrap();
         let incumbent = incumbent.seal().unwrap();
+        drop(incumbent);
+        let incumbent = RetainedFile::open_private(&destination).unwrap();
         let identity = incumbent.snapshot().unwrap();
         let mut input = RetainedFile::open_regular(programs.get("iroha").unwrap()).unwrap();
         let snapshot = input.snapshot().unwrap();
@@ -328,23 +330,139 @@ fn complete_staging_and_source_substitution_never_publish_a_partial_installation
     let programs = source(temporary.path());
     let package = temporary.path().join("native-cli");
     assert!(
-        publish_checked(&programs, &package, "debug", None, &mut || {
-            assert!(!package.exists());
-            Err("injected failure before atomic publication".into())
-        })
+        publish_checked(
+            &programs,
+            &package,
+            "debug",
+            None,
+            &mut || {
+                assert!(!package.exists());
+                Err("injected failure before atomic publication".into())
+            },
+            &mut |_| Ok(())
+        )
         .is_err()
     );
     assert!(!package.exists());
     assert!(
-        publish_checked(&programs, &package, "debug", None, &mut || {
-            let kagami = programs.get("kagami").unwrap();
-            fs::rename(kagami, temporary.path().join("original-kagami"))?;
-            fs::write(kagami, b"substituted source")?;
-            Ok(())
-        })
+        publish_checked(
+            &programs,
+            &package,
+            "debug",
+            None,
+            &mut || {
+                let kagami = programs.get("kagami").unwrap();
+                fs::rename(kagami, temporary.path().join("original-kagami"))?;
+                fs::write(kagami, b"substituted source")?;
+                Ok(())
+            },
+            &mut |_| Ok(())
+        )
         .is_err()
     );
     assert!(!package.exists());
+}
+
+#[test]
+fn complete_cli_publication_reopens_exact_native_outputs_after_the_directory_rename() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let programs = source(&root);
+    let package = root.join("native-cli");
+    let mut saw_complete_publication = false;
+    publish_checked(
+        &programs,
+        &package,
+        "debug",
+        None,
+        &mut || Ok(()),
+        &mut |published| {
+            saw_complete_publication = true;
+            assert!(published.join("manifest.json").is_file());
+            for name in PROGRAMS {
+                assert_eq!(
+                    fs::read(
+                        KagamiBundleLayout::runtime_directory(published)
+                            .join(format!("{name}{}", env::consts::EXE_SUFFIX))
+                    )?,
+                    fs::read(&programs[name])?
+                );
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(saw_complete_publication);
+    InstalledRuntime::from_directory(&KagamiBundleLayout::runtime_directory(&package)).unwrap();
+}
+
+#[test]
+fn atomic_cli_publication_refuses_a_new_destination_collision_without_state_loss() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let programs = source(&root);
+    let package = root.join("occupied-native-cli");
+    assert!(
+        publish_checked(
+            &programs,
+            &package,
+            "debug",
+            None,
+            &mut || {
+                fs::create_dir(&package)?;
+                fs::write(
+                    package.join("previous-candidate"),
+                    b"keep this exact candidate",
+                )?;
+                Ok(())
+            },
+            &mut |_| panic!("an occupied name must never reach published validation")
+        )
+        .is_err()
+    );
+    assert_eq!(
+        fs::read(package.join("previous-candidate")).unwrap(),
+        b"keep this exact candidate"
+    );
+    assert_eq!(fs::read_dir(&package).unwrap().count(), 1);
+}
+
+#[test]
+fn equal_byte_substitution_after_cli_rename_refuses_a_success_result() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let programs = source(&root);
+    let package = root.join("native-cli");
+    let mut substituted = false;
+    assert!(
+        publish_checked(
+            &programs,
+            &package,
+            "debug",
+            None,
+            &mut || Ok(()),
+            &mut |published| {
+                let output = KagamiBundleLayout::runtime_directory(published)
+                    .join(format!("kagami{}", env::consts::EXE_SUFFIX));
+                let bytes = fs::read(&output)?;
+                fs::rename(&output, root.join("original-created-kagami"))?;
+                fs::write(&output, bytes)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    fs::set_permissions(&output, fs::Permissions::from_mode(0o700))?;
+                }
+                substituted = true;
+                Ok(())
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        substituted,
+        "the regression must reach actual post-rename substitution"
+    );
+    assert!(package.join("manifest.json").is_file());
 }
 
 #[test]
@@ -364,29 +482,104 @@ fn staged_program_profile_manifest_or_inventory_drift_refuses_atomic_publication
             network_profiles::development(&InstalledNetworkProfiles::new(Vec::new()).unwrap())
                 .unwrap();
         assert!(
-            publish_checked(&programs, &package, "debug", Some(&profiles), &mut || {
-                assert!(!package.exists());
-                let staging = fs::read_dir(temporary.path())?
-                    .map(|entry| entry.map(|entry| entry.path()))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .find(|path| {
-                        path.file_name().is_some_and(|name| {
-                            name.to_string_lossy().starts_with(".kagami-stage-")
+            publish_checked(
+                &programs,
+                &package,
+                "debug",
+                Some(&profiles),
+                &mut || {
+                    assert!(!package.exists());
+                    let staging = fs::read_dir(temporary.path())?
+                        .map(|entry| entry.map(|entry| entry.path()))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_iter()
+                        .find(|path| {
+                            path.file_name().is_some_and(|name| {
+                                name.to_string_lossy().starts_with(".kagami-stage-")
+                            })
                         })
-                    })
-                    .ok_or("private package staging is absent")?;
-                fs::write(
-                    staging.join(&relative),
-                    b"changed after completed validation",
-                )?;
-                Ok(())
-            })
+                        .ok_or("private package staging is absent")?;
+                    fs::write(
+                        staging.join(&relative),
+                        b"changed after completed validation",
+                    )?;
+                    Ok(())
+                },
+                &mut |_| Ok(())
+            )
             .is_err(),
             "changed {relative} must not publish a stale inventory"
         );
         assert!(!package.exists());
     }
+}
+
+#[test]
+fn occupied_cli_package_refuses_before_profile_selection_or_build() {
+    for directory in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("output");
+        fs::create_dir(&output).unwrap();
+        let package = output.join(format!(
+            "kagami-{}-{}-release",
+            env::consts::OS,
+            env::consts::ARCH,
+        ));
+        let retained = if directory {
+            fs::create_dir(&package).unwrap();
+            package.join("retained")
+        } else {
+            package.clone()
+        };
+        fs::write(&retained, b"original completed candidate").unwrap();
+        let original_type = fs::symlink_metadata(&package).unwrap().file_type();
+        for supplied in [None, Some(root.path().join("missing-profile-input"))] {
+            // Neither missing release input may mask an already occupied destination.
+            // The original source root has no release profile, so this never starts Cargo.
+            let error =
+                bundle_at(root.path(), &output, "release", supplied.as_deref()).unwrap_err();
+            assert!(error.to_string().contains("CLI package already exists"));
+            assert_eq!(
+                fs::read(&retained).unwrap(),
+                b"original completed candidate"
+            );
+            assert_eq!(
+                fs::symlink_metadata(&package).unwrap().file_type(),
+                original_type
+            );
+            assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn broken_cli_package_link_refuses_before_profile_selection_or_build() {
+    use std::os::unix::fs::{MetadataExt, symlink};
+
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("output");
+    fs::create_dir(&output).unwrap();
+    let package = output.join(format!(
+        "kagami-{}-{}-release",
+        env::consts::OS,
+        env::consts::ARCH,
+    ));
+    let missing = root.path().join("uncreated-link-target");
+    symlink(&missing, &package).unwrap();
+    let original = fs::symlink_metadata(&package).unwrap();
+    assert!(!package.try_exists().unwrap());
+    let error = bundle_at(root.path(), &output, "release", None).unwrap_err();
+    assert!(error.to_string().contains("CLI package already exists"));
+    let retained = fs::symlink_metadata(&package).unwrap();
+    assert!(retained.file_type().is_symlink());
+    assert_eq!(retained.dev(), original.dev());
+    assert_eq!(retained.ino(), original.ino());
+    assert_eq!(fs::read_link(&package).unwrap(), missing);
+    assert!(!missing.exists());
+    assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
 }
 
 #[test]

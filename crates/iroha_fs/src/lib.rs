@@ -648,7 +648,8 @@ impl OwnerDirectory {
         for (file, bytes) in files {
             directory.write_atomic(file, bytes, PublishMode::CreateNew)?;
         }
-        directory.sync()?;
+        // The nonempty loop's final atomic write already synced this staging directory.
+        // No owner mutation intervenes before the native rename revalidates and publishes it.
         directory.rename_to_sibling(name, PublishMode::CreateNew)
     }
 

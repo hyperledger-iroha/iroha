@@ -871,10 +871,7 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
     // The NPoS source leaves its XOR pin to the operator: materialize it with the dev XOR.
     let manifest = super::super::GenesisSourceTemplate::from_path(&path)
         .unwrap()
-        .materialize(
-            &super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-            Some(definition.clone()),
-        )
+        .materialize(Some(definition.clone()))
         .unwrap();
     let escrow = parse_account_id(&staking::stake_escrow_account_id(), "staking escrow").unwrap();
     let mut registered = false;
@@ -966,13 +963,6 @@ fn parse_allows_null_executor_in_canonical_manifest() {
             .expect("serialize Sumeragi genesis context"),
     );
     manifest_fields.insert(
-        "kagemusha_mint_finality".to_string(),
-        norito::json::value::to_value(
-            &super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-        )
-        .expect("serialize mint-finality authority"),
-    );
-    manifest_fields.insert(
         "transactions".to_string(),
         Value::Array(vec![Value::Object(norito::json::Map::new())]),
     );
@@ -1022,10 +1012,7 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         };
         let manifest = super::super::GenesisSourceTemplate::from_path(root.join(path))
             .unwrap_or_else(|error| panic!("{path}: {error:?}"))
-            .materialize(
-                &super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-                Some(xor),
-            )
+            .materialize(Some(xor))
             .unwrap_or_else(|error| panic!("{path}: {error:?}"));
         let sources = manifest
             .parse()
@@ -1078,10 +1065,7 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
             super::super::GenesisBuilder::new_without_executor(chain, root.join("defaults"))
         };
         let mut builder = builder
-            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-            .with_kagemusha_mint_finality_genesis_parameters(
-                super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-            );
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended());
         for index in 0..groups {
             if index != 0 {
                 builder = builder.next_transaction();

@@ -6,10 +6,12 @@
 //! field), so in-circuit digests equal the native domain hash and the shared
 //! `kagemusha_v1_poseidon` vectors of `fixtures/native_prover/kats_v1.json`.
 //!
-//! TODO(T17 follow-up): the transcript mode (intermediate squeezes with the
-//! state carried on, `floor(len / 2) + 1` permutations per squeeze) for the
-//! recursion transcript, and the measured 6-column variant (two full rounds
-//! and four partial rounds per row).
+//! The transcript mode (intermediate squeezes with the state carried on,
+//! `floor(len / 2) + 1` permutations per squeeze) is
+//! [`crate::pow5_fq::duplex`], generic over both fields.
+//!
+//! TODO(T17 follow-up): the measured 6-column variant (two full rounds and
+//! four partial rounds per row).
 
 pub mod pow5;
 pub mod sponge;

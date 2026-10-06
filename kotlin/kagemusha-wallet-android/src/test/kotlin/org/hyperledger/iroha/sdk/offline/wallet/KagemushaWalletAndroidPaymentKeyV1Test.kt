@@ -7,6 +7,7 @@ import android.content.pm.ApplicationInfo
 import android.security.keystore.KeyProperties
 import java.io.File
 import java.security.InvalidKeyException
+import java.security.MessageDigest
 import java.security.ProviderException
 import java.security.Signature
 import java.security.SignatureException
@@ -30,6 +31,14 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
     private fun slot(): ByteArray = ByteArray(32) { (nextSlot + it).toByte() }.also { nextSlot += 1 }
     private val challenge = ByteArray(32) { (0x40 + it).toByte() }
     private fun alias(slot: ByteArray) = kagemushaWalletAndroidAliasV1(slot)
+
+    /**
+     * The 32-byte Poseidon signing message `m = P_bytes(kgwrcpt1, transcript)` of the vectored
+     * Send receipt (`fixtures/kagemusha/wallet_v1_vectors.json`): what the Rust receipt signer
+     * hands to `key_sign`.
+     */
+    private val message = "cef66bb0a38d8d731b651b16c61f7991647e67b59b9418827a389b2111768420"
+        .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private fun platformCode(code: Int) = KagemushaWalletAndroidUnavailableV1.platform(code)
 
@@ -117,7 +126,7 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         )
         assertEquals(unsupported, assertIs<KagemushaWalletAndroidRemoveV1.Uncertain>(paymentKey.delete(slot())).reason)
         assertEquals(unsupported, assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.attestationChain(empty)).reason)
-        assertEquals(unsupported, assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(empty, byteArrayOf(1))).reason)
+        assertEquals(unsupported, assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(empty, message)).reason)
         assertTrue(keyStore.generated.isEmpty())
         assertEquals(0, keyStore.getKeyCalls)
         assertEquals(0, keyStore.deleteCalls)
@@ -350,26 +359,49 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(0))
     }
 
-    @Test fun `signing returns the platform DER over the exact preimage`() {
+    @Test fun `signing hands the exact 32-byte message to SHA256withECDSA and returns the platform DER`() {
+        // Owner answer A1: the payment key signs the 32-byte Poseidon message with standard
+        // ECDSA-P256-SHA256, so KeyMint hashes it once; DIGEST_NONE is never used.
+        assertEquals("SHA256withECDSA", KAGEMUSHA_WALLET_ANDROID_SIGNATURE_ALGORITHM_V1)
+        assertEquals(32, KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1)
         val slot = slot()
         val entry = keyStore.seed(alias(slot))
-        val preimage = "iroha:kagemusha:wallet:v1:receipt-body".toByteArray(Charsets.US_ASCII)
-        val der = assertIs<KagemushaWalletAndroidSignatureV1.Der>(paymentKey.sign(slot, preimage)).der()
+        val input = message.copyOf()
+        val der = assertIs<KagemushaWalletAndroidSignatureV1.Der>(paymentKey.sign(slot, input)).der()
+        assertContentEquals(message, keyStore.signedMessages.single(), "the message reaches the Keystore unchanged")
+        assertContentEquals(message, input, "the caller's message is not modified")
         assertTrue(Signature.getInstance("SHA256withECDSA").run {
             initVerify(entry.pair.public)
-            update(preimage)
+            update(message)
+            verify(der)
+        })
+        // The ECDSA hash is SHA-256(m): the DER verifies as a no-digest signature over SHA-256(m)
+        // and not over m itself, which a DIGEST_NONE key would have signed.
+        assertTrue(Signature.getInstance("NONEwithECDSA").run {
+            initVerify(entry.pair.public)
+            update(MessageDigest.getInstance("SHA-256").digest(message))
+            verify(der)
+        })
+        assertFalse(Signature.getInstance("NONEwithECDSA").run {
+            initVerify(entry.pair.public)
+            update(message)
             verify(der)
         })
         val raw = KagemushaP256Codec.rawLowSFromStrictDer(der)
-        assertTrue(KagemushaP256Codec.verifyRawLowS(testSec1V1(entry.pair.public), preimage, raw))
-        assertFailsWith<IllegalArgumentException> { paymentKey.sign(slot, ByteArray(0)) }
+        assertTrue(KagemushaP256Codec.verifyRawLowS(testSec1V1(entry.pair.public), message, raw))
+
+        // Anything other than one 32-byte message is refused before the Keystore is reached.
+        for (length in listOf(0, 1, 31, 33, 338)) {
+            assertFailsWith<IllegalArgumentException>("length $length") { paymentKey.sign(slot, ByteArray(length) { 7 }) }
+        }
+        assertEquals(1, keyStore.signCalls)
     }
 
     @Test fun `signing failures are unavailable and never touch the key`() {
         val slot = slot()
         assertEquals(
             platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEY_ABSENT),
-            assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(slot, byteArrayOf(1))).reason,
+            assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(slot, message)).reason,
         )
         val entry = keyStore.seed(alias(slot))
         val cases = listOf(
@@ -381,13 +413,13 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         )
         for ((failure, reason) in cases) {
             keyStore.signFailure = failure
-            assertEquals(reason, assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(slot, byteArrayOf(1))).reason)
+            assertEquals(reason, assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(slot, message)).reason)
         }
         keyStore.signFailure = null
         keyStore.getKeyFailure = IllegalStateException("keystore2 binder failure")
         assertEquals(
             platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE),
-            assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(slot, byteArrayOf(1))).reason,
+            assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(slot, message)).reason,
         )
         assertSame(entry, keyStore.entries.getValue(alias(slot)))
         assertEquals(0, keyStore.deleteCalls)

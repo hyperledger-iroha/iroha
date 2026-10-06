@@ -121,7 +121,8 @@ impl Fixture {
         }
     }
     pub(super) fn current(&self) -> (FinalityVerifier, VerifiedStreamTokenCustodyStateV1) {
-        let checkpoint = self.native.observe(&self.owner.authority);
+        let checkpoint =
+            fixture_observe(&self.native, &self.owner.authority, self.options.deadline).unwrap();
         let current =
             self.native
                 .bootstrap_custody(&self.owner.authority, &self.policy, &checkpoint);
@@ -146,6 +147,7 @@ impl Fixture {
             .unwrap();
         self.owner.bootstrap_native_body(
             &self.native,
+            &current,
             CustodyPurpose::Renewal(sequence),
             unsigned,
             utc,
@@ -267,6 +269,7 @@ fn generated_renewal_changes_native_head_and_preserves_initial_and_renewed_histo
     );
 
     let (old_checkpoint, old_current) = fixture.current();
+    let observed_at = now_ms().unwrap();
     let selected_initial = fixture
         .owner
         .select_retained_current_enrollment(
@@ -275,25 +278,77 @@ fn generated_renewal_changes_native_head_and_preserves_initial_and_renewed_histo
             initial.finalized().height,
             *initial.finalized().block_hash.as_ref(),
             &old_current,
-            now_ms().unwrap(),
+            observed_at,
             fixture.options.deadline,
         )
-        .unwrap();
+        .unwrap_or_else(|error| {
+            panic!(
+                "initial current-use refusal: {error:?}; observed_at={observed_at}; issued={}; expires={}; policy_from={}; policy_until={}; current_height={}",
+                fixture.initial.issued_at_unix_ms,
+                fixture.initial.expires_at_unix_ms,
+                fixture.policy.active_from_unix_ms,
+                fixture.policy.active_until_unix_ms,
+                old_current.height(),
+            )
+        });
     assert_eq!(selected_initial.bytes(), initial.bytes());
     assert_eq!(selected_initial.finalized(), initial.finalized());
 
-    assert!(
-        fixture
-            .owner
-            .select_renewal_unsigned(
-                2,
-                &fixture.policy,
-                &old_current,
-                &old_checkpoint,
-                &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
-                fixture.options.deadline
-            )
-            .is_err()
+    // Native current-use verification consumes real time. The clock may already have passed
+    // the original midpoint: classify the genuine selection's own observation, rather than
+    // assuming every host still reaches this call in the first ten seconds. The exact
+    // midpoint-minus-one refusal above remains unconditional.
+    let selection_started = now_ms().unwrap();
+    let selection = fixture.owner.select_renewal_unsigned(
+        2,
+        &fixture.policy,
+        &old_current,
+        &old_checkpoint,
+        &Terms::new(selection_started + 60_000, &fixture.options).unwrap(),
+        fixture.options.deadline,
+    );
+    let selection_finished = now_ms().unwrap();
+    match selection {
+        Err(crate::managed::Error::Invalid(message))
+            if message == "generated custody renewal is premature" =>
+        {
+            assert!(selection_started < midpoint);
+        }
+        Ok(unsigned) => {
+            assert!(unsigned.selected_at_unix_ms >= midpoint);
+            assert!(unsigned.selected_at_unix_ms >= selection_started);
+            assert!(unsigned.selected_at_unix_ms <= selection_finished);
+            assert_eq!(
+                unsigned.statement.issued_at_unix_ms,
+                unsigned.selected_at_unix_ms
+            );
+            assert_eq!(unsigned.statement.sequence, 2);
+            assert_eq!(unsigned.statement.anchor.height, initial.finalized().height);
+            assert_eq!(
+                unsigned.statement.anchor.block_hash,
+                *initial.finalized().block_hash.as_ref()
+            );
+            assert_eq!(
+                unsigned.checkpoint,
+                checkpoint_bytes(&old_checkpoint).unwrap()
+            );
+            assert_eq!(
+                unsigned.selection.current.as_ref().unwrap(),
+                old_current.current().unwrap().record()
+            );
+        }
+        other => panic!("genuine midpoint selection failed: {:?}", other.err()),
+    }
+    assert_eq!(fixture.native.chain.height(), initial.finalized().height);
+    assert_eq!(
+        old_current
+            .current()
+            .unwrap()
+            .control()
+            .active_head
+            .unwrap()
+            .sequence,
+        1
     );
     assert!(
         !fixture
@@ -989,10 +1044,15 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
 
 impl Fixture {
     pub(super) fn renewal_turn(&self) -> renewal::GeneratedRenewalTurn {
+        let mut diagnostic =
+            crate::managed::native_operation::deadline_diagnostics::StageGuard::enter(
+                crate::managed::native_operation::deadline_diagnostics::Stage::RetainedInitial,
+            );
         let initial = self
             .owner
             .retained_initial_enrollment(&self.policy, self.initial, self.options.deadline)
             .unwrap();
+        diagnostic.change(crate::managed::native_operation::deadline_diagnostics::Stage::Begin);
         renewal::GeneratedRenewalTurn::begin(
             &self.owner,
             &self.policy,
@@ -1061,6 +1121,63 @@ impl Fixture {
     }
 }
 
+// Use the production cursor/challenge/persistence owner. Only peer transport is supplied
+// by the genuinely executed fixture; every proof and signed attestation is still verified.
+fn fixture_observe(
+    native: &NativeFixture,
+    authority: &ServiceAuthority,
+    deadline: Instant,
+) -> Result<FinalityVerifier> {
+    let (checkpoint, verified) = authority.observe_finality_with_source(deadline, |_, _| {
+        Ok(NativeRenewalSource {
+            native,
+            trace: None,
+            replay_challenge: None,
+        })
+    })?;
+    assert_eq!(verified, 4);
+    assert_eq!(checkpoint.checkpoint().height(), native.chain.height());
+    Ok(checkpoint)
+}
+
+#[derive(Default)]
+struct ObservationTrace {
+    factories: Vec<u64>,
+    proofs: Vec<u64>,
+    challenges: Vec<[u8; 32]>,
+}
+struct NativeRenewalSource<'a> {
+    native: &'a NativeFixture,
+    trace: Option<&'a std::cell::RefCell<ObservationTrace>>,
+    replay_challenge: Option<[u8; 32]>,
+}
+impl crate::verify::finality::FinalitySource for NativeRenewalSource<'_> {
+    type Error = std::io::Error;
+    fn finality_proof(
+        &self,
+        height: std::num::NonZeroU64,
+    ) -> std::io::Result<iroha_data_model::sumeragi_finality::SumeragiFinalityProof> {
+        if let Some(trace) = self.trace {
+            trace.borrow_mut().proofs.push(height.get());
+        }
+        crate::verify::finality::FinalitySource::finality_proof(self.native, height)
+    }
+    fn latest_attestation(
+        &self,
+        peer: &iroha_model_base::peer::PeerId,
+        challenge: &[u8; 32],
+    ) -> std::io::Result<iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation> {
+        if let Some(trace) = self.trace {
+            trace.borrow_mut().challenges.push(*challenge);
+        }
+        crate::verify::finality::FinalitySource::latest_attestation(
+            self.native,
+            peer,
+            self.replay_challenge.as_ref().unwrap_or(challenge),
+        )
+    }
+}
+
 pub(super) struct FixtureReads<'a> {
     pub(super) native: &'a NativeFixture,
 }
@@ -1072,13 +1189,7 @@ impl renewal::RenewalReads for FixtureReads<'_> {
         deadline: Instant,
     ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
         require_deadline(deadline)?;
-        let mut checkpoint = self.native.observe(&owner.authority);
-        let observation = checkpoint.observe(self.native, &rand::random());
-        crate::managed::native_operation::retain_observation(
-            &owner.authority.directory,
-            &mut checkpoint,
-            observation,
-        )?;
+        let checkpoint = fixture_observe(self.native, &owner.authority, deadline)?;
         let current = self
             .native
             .bootstrap_custody(&owner.authority, policy, &checkpoint);
@@ -1534,4 +1645,325 @@ fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacemen
     );
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
+}
+
+#[test]
+fn renewal_observation_resumes_exact_cursor_with_fresh_quorum_and_persists_catchup() {
+    let _guard = crate::managed::native_test_guard();
+    let mut fixture = Fixture::enrolled(4_000);
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    let trace = std::cell::RefCell::new(ObservationTrace::default());
+    let observe = |fixture: &Fixture| {
+        fixture.owner.authority.observe_finality_with_source(
+            fixture.options.deadline,
+            |height, _| {
+                trace.borrow_mut().factories.push(height);
+                Ok(NativeRenewalSource {
+                    native: &fixture.native,
+                    trace: Some(&trace),
+                    replay_challenge: None,
+                })
+            },
+        )
+    };
+    assert!(
+        read_optional(
+            &fixture.owner.authority.directory,
+            "current-checkpoint.nrt",
+            MAX_CHECKPOINT_BYTES,
+        )
+        .unwrap()
+        .is_none()
+    );
+    let (first, verified) = observe(&fixture).unwrap();
+    assert_eq!(verified, 4);
+    assert_eq!(first.checkpoint().height(), 4);
+    assert_eq!(trace.borrow().factories, vec![1, 1]);
+    assert!(trace.borrow().proofs.contains(&1));
+    assert_eq!(trace.borrow().challenges.len(), 4);
+    let first_challenge = trace.borrow().challenges[0];
+    assert_ne!(first_challenge, [0; 32]);
+    assert!(
+        trace
+            .borrow()
+            .challenges
+            .iter()
+            .all(|value| value == &first_challenge)
+    );
+    let original = checkpoint_bytes(&first).unwrap();
+    assert_eq!(
+        fixture
+            .owner
+            .authority
+            .directory
+            .read("current-checkpoint.nrt", MAX_CHECKPOINT_BYTES)
+            .unwrap()
+            .as_slice(),
+        original.as_slice()
+    );
+
+    *trace.borrow_mut() = ObservationTrace::default();
+    let (resumed, verified) = observe(&fixture).unwrap();
+    assert_eq!(verified, 4);
+    assert_eq!(checkpoint_bytes(&resumed).unwrap(), original);
+    assert_eq!(trace.borrow().factories, vec![4]);
+    assert!(!trace.borrow().proofs.contains(&1));
+    assert_eq!(trace.borrow().challenges.len(), 4);
+    let resumed_challenge = trace.borrow().challenges[0];
+    assert_ne!(resumed_challenge, first_challenge);
+    assert!(
+        trace
+            .borrow()
+            .challenges
+            .iter()
+            .all(|value| value == &resumed_challenge)
+    );
+
+    // Valid signatures over a previous challenge must not renew the retained cursor.
+    *trace.borrow_mut() = ObservationTrace::default();
+    let stale = fixture.owner.authority.observe_finality_with_source(
+        fixture.options.deadline,
+        |height, _| {
+            trace.borrow_mut().factories.push(height);
+            Ok(NativeRenewalSource {
+                native: &fixture.native,
+                trace: Some(&trace),
+                replay_challenge: Some(first_challenge),
+            })
+        },
+    );
+    assert!(stale.is_err());
+    assert_eq!(trace.borrow().factories, vec![4]);
+    assert_eq!(trace.borrow().challenges.len(), 4);
+    assert_ne!(trace.borrow().challenges[0], first_challenge);
+    assert_eq!(
+        fixture
+            .owner
+            .authority
+            .directory
+            .read("current-checkpoint.nrt", MAX_CHECKPOINT_BYTES)
+            .unwrap()
+            .as_slice(),
+        original.as_slice()
+    );
+
+    fixture
+        .owner
+        .authority
+        .directory
+        .write_atomic("current-checkpoint.nrt", &[0xff], PublishMode::Replace)
+        .unwrap();
+    *trace.borrow_mut() = ObservationTrace::default();
+    assert!(observe(&fixture).is_err());
+    assert!(trace.borrow().factories.is_empty());
+    assert!(trace.borrow().proofs.is_empty());
+    assert!(trace.borrow().challenges.is_empty());
+    assert_eq!(
+        fixture
+            .owner
+            .authority
+            .directory
+            .read("current-checkpoint.nrt", MAX_CHECKPOINT_BYTES)
+            .unwrap()
+            .as_slice(),
+        [0xff].as_slice()
+    );
+    fixture
+        .owner
+        .authority
+        .directory
+        .write_atomic("current-checkpoint.nrt", &original, PublishMode::Replace)
+        .unwrap();
+
+    // A real paid native successor must be caught up from the retained H4, never accepted
+    // through the cursor alone. This exercises the same persistence owner as production.
+    let transaction = quote_instructions(
+        &fixture.native,
+        &fixture.owner.authority.config,
+        [InstructionBox::from(Log::new(
+            iroha_data_model::Level::INFO,
+            "renewal observation successor".into(),
+        ))],
+    );
+    assert_eq!(fixture.native.chain.commit(vec![transaction]), vec![true]);
+    assert_eq!(fixture.native.chain.height(), 5);
+    *trace.borrow_mut() = ObservationTrace::default();
+    let (advanced, verified) = observe(&fixture).unwrap();
+    assert_eq!(verified, 4);
+    assert_eq!(advanced.checkpoint().height(), 5);
+    assert_eq!(trace.borrow().factories, vec![4]);
+    assert!(!trace.borrow().proofs.contains(&1));
+    assert_eq!(trace.borrow().challenges.len(), 4);
+    assert_ne!(trace.borrow().challenges[0], resumed_challenge);
+    let retained = fixture
+        .owner
+        .authority
+        .directory
+        .read("current-checkpoint.nrt", MAX_CHECKPOINT_BYTES)
+        .unwrap();
+    assert_eq!(
+        retained.as_slice(),
+        checkpoint_bytes(&advanced).unwrap().as_slice()
+    );
+    assert_eq!(
+        fixture
+            .owner
+            .authority
+            .decode_checkpoint(&retained)
+            .unwrap(),
+        advanced
+    );
+    *trace.borrow_mut() = ObservationTrace::default();
+    let expired =
+        fixture
+            .owner
+            .authority
+            .observe_finality_with_source(Instant::now(), |height, _| {
+                trace.borrow_mut().factories.push(height);
+                Ok(NativeRenewalSource {
+                    native: &fixture.native,
+                    trace: Some(&trace),
+                    replay_challenge: None,
+                })
+            });
+    assert!(expired.is_err());
+    assert!(trace.borrow().factories.is_empty());
+    assert_eq!(
+        fixture
+            .owner
+            .authority
+            .directory
+            .read("current-checkpoint.nrt", MAX_CHECKPOINT_BYTES)
+            .unwrap(),
+        retained
+    );
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
+}
+
+#[test]
+fn generated_pending_signed_body_requires_fresh_quorum_before_dispatch_and_preserves_original() {
+    use iroha_wallet::operations::NativePreparationPhase;
+
+    let _guard = crate::managed::native_test_guard();
+    let mut fixture = Fixture::enrolled(4_000);
+    wait_until(
+        fixture.initial.issued_at_unix_ms + 2_000,
+        Duration::from_secs(4),
+    );
+    let mut turn = fixture.renewal_turn();
+    let history = fixture.select(2);
+    let (directory, original, signed) = fixture.prepare(&history);
+    let wire = signed.encode_wire_v1().unwrap();
+    let terms = original.terms.clone();
+    let wallet = original.directory().open_child("transaction").unwrap();
+    let inventory = wallet.entries(8).unwrap();
+    let records = ["preparation.json", "payload.json", "operation.json"]
+        .map(|name| (name, wallet.read(name, 4 * 1024 * 1024).unwrap()));
+    let body = directory
+        .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+        .unwrap();
+    let anchor = history
+        .root()
+        .read("anchor.nrt", MAX_CHECKPOINT_BYTES)
+        .unwrap();
+    let selection = history.root().read("original.nrt", 128 * 1024).unwrap();
+    assert_eq!(
+        history.outer_bytes().unwrap().as_slice(),
+        selection.as_slice()
+    );
+    let account = fixture.owner.wallet().unwrap();
+    assert_eq!(
+        original
+            .request(fixture.options.deadline)
+            .unwrap()
+            .inspect(&account, wallet.path())
+            .unwrap()
+            .phase(),
+        NativePreparationPhase::Signed
+    );
+    assert_eq!(fixture.native.chain.height(), 4);
+    assert!(!original.directory().path().join("carrier.nrt").exists());
+    assert!(!wallet.path().join("submission.json").exists());
+
+    // The material phase sees native head 1 and an existing signed Renewal 2. It must enter
+    // pending dispatch, preserve the paid body, and reach the ordinary fresh HTTP quorum gate.
+    // This transport refuses that gate; it supplies no invented pending or successful receipt.
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    let result = fixture.owner.reconcile_generated_with_reads(
+        &mut turn,
+        fixture.options.deadline,
+        &FixtureReads {
+            native: &fixture.native,
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(crate::managed::Error::Invalid(message))
+            if message == "fresh native operation quorum unavailable"
+    ));
+    {
+        let requests = peers.requests.lock().unwrap();
+        for peer in 0..4 {
+            assert!(requests.iter().any(|request| {
+                request.peer == peer
+                    && request.method == "GET"
+                    && request.path.split('?').next() == Some("/v1/bridge/finality/attestation/4")
+            }));
+        }
+        assert!(requests.iter().all(|request| {
+            request.method == "GET"
+                && matches!(
+                    request.path.split('?').next(),
+                    Some("/v1/node/capabilities" | "/v1/bridge/finality/attestation/4")
+                )
+        }));
+    }
+    peers.finish();
+
+    assert_eq!(fixture.native.chain.height(), 4);
+    assert_eq!(wallet.entries(8).unwrap(), inventory);
+    for (name, bytes) in records {
+        assert_eq!(wallet.read(name, 4 * 1024 * 1024).unwrap(), bytes);
+    }
+    assert!(!wallet.path().join("submission.json").exists());
+    assert!(!original.directory().path().join("carrier.nrt").exists());
+    assert!(!original.directory().path().join("replay.nrt").exists());
+    assert_eq!(
+        directory
+            .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+            .unwrap(),
+        body
+    );
+    assert_eq!(
+        history
+            .root()
+            .read("anchor.nrt", MAX_CHECKPOINT_BYTES)
+            .unwrap(),
+        anchor
+    );
+    assert_eq!(
+        history.root().read("original.nrt", 128 * 1024).unwrap(),
+        selection
+    );
+    let retained = fixture
+        .owner
+        .required_enrollment(CustodyPurpose::Renewal(2))
+        .unwrap();
+    assert_eq!(retained.directory().path(), original.directory().path());
+    assert!(retained.terms == terms);
+    let prepared = retained
+        .request(fixture.options.deadline)
+        .unwrap()
+        .inspect(&account, wallet.path())
+        .unwrap();
+    assert_eq!(prepared.phase(), NativePreparationPhase::Signed);
+    assert_eq!(
+        prepared
+            .into_signed_transaction()
+            .unwrap()
+            .encode_wire_v1()
+            .unwrap(),
+        wire
+    );
 }

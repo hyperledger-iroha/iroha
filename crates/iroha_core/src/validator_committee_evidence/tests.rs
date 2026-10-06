@@ -1,4 +1,4 @@
-//! Native committee evidence with exact BLS quorum, paired-Pasta boundary seals and real DKG.
+//! Native committee evidence with exact BLS quorums, neutral generations and real DKG.
 //! The constructed transcript tests offline proof admission; it does not execute NPoS custody
 //! transitions or qualify a network. Genesis is actually signed; no height-one QC is fabricated.
 //! Every successor binds its real resultless payload and original proposer-signed RS16 availability.
@@ -7,13 +7,11 @@ use super::*;
 use crate::{
     state::{WorldReadOnly as _, threshold_key_lifecycle_certificate_preimage_v1},
     sumeragi::{
-        attestation::{NativePastaVerifier, encode_native_seal, native_seal_message},
         commitment::{ExecutionResultCommitment, execution_commitment, result_of_preimage},
         crypto::{BlsCrypto, KeyPairSigner, core_key},
         payload,
         schedule::{self, ChainParamsRecord, ScheduleOutcome, ScheduledConfig, ScheduledSlot},
     },
-    zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
@@ -35,8 +33,8 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
     availability::{PayloadAuthoring, PayloadBytes},
-    crypto::{Signer as _, form_qc},
-    message::{BlockHeader, CommitAttestation, ResultWitness, Vote, VoteKind},
+    crypto::{NoAttestation, Signer as _, form_qc},
+    message::{BlockHeader, Vote, VoteKind},
     preimage::payload_hash,
     types::{ChainParams, Hash32},
 };
@@ -54,13 +52,12 @@ fn limits() -> NativeFinalityLimits {
         allocated_bytes: 512 * 1024 * 1024,
     }
 }
-fn verifier(journal: &NativeFinalityJournal, network: NetworkId) -> NativePastaVerifier {
+fn verifier(journal: &NativeFinalityJournal, network: NetworkId) -> NoAttestation {
     let genesis = journal.blocks[0].decode_block(limits()).unwrap();
     assert_eq!(genesis.hash(), network.into_genesis_hash());
-    NativePastaVerifier::new(
-        crate::sumeragi::node::root_instance(&genesis, &chain_id().to_string()).unwrap(),
-        network,
-    )
+    let instance = crate::sumeragi::node::root_instance(&genesis, &chain_id().to_string()).unwrap();
+    assert_ne!(instance, Hash32::ZERO);
+    NoAttestation
 }
 fn outputs(block: &mut SignedBlock) {
     let values = (0..block.external_transactions().count())
@@ -169,12 +166,11 @@ fn offline_proposal(
     )
 }
 
-fn certify(
-    keys: &[KeyPair],
-    header: &BlockHeader,
-    result: &ExecutionResultCommitment,
-    bytes: &[u8],
-) -> iroha_sumeragi::message::Qc {
+fn certify(keys: &[KeyPair], header: &BlockHeader, bytes: &[u8]) -> iroha_sumeragi::message::Qc {
+    assert!(
+        !header.attest,
+        "the neutral application never requests an attestation"
+    );
     let crypto = BlsCrypto::new();
     let pops = keys
         .iter()
@@ -202,25 +198,6 @@ fn certify(
                 sig: iroha_sumeragi::types::Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
                 attestation: None,
             };
-            if header.attest {
-                let message = native_seal_message(
-                    header.instance,
-                    result.schedule.current.network_id,
-                    &vote.statement(),
-                    bytes,
-                )
-                .unwrap();
-                let signer = KagemushaMintFinalitySignerV1::from_seed(
-                    zeroize::Zeroizing::new([0xA0 + index as u8; 32]),
-                    index,
-                    &result.schedule.current.authority,
-                )
-                .unwrap();
-                vote.attestation = Some(CommitAttestation {
-                    witness: ResultWitness::from_untrusted(bytes.to_vec()).unwrap(),
-                    signature: encode_native_seal(signer.sign(&message).unwrap()),
-                });
-            }
             vote.sig = KeyPairSigner::new(&keys[index as usize])
                 .unwrap()
                 .sign(&vote.preimage());
@@ -375,13 +352,12 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
                 parent.hash(),
                 seed,
             );
-            assert_eq!(fixture.incumbent, current.authority);
+            assert_eq!(fixture.incumbent, current.generation());
             let next = ValidatorEpochContextV1 {
                 da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                 version: 1,
                 network_id: network,
                 mode: ConsensusMode::Npos,
-                authority: current.authority.clone(),
                 authorization: fixture.authorization,
                 committee: current.committee.clone(),
                 leader_seed: crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
@@ -414,7 +390,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             availability_digest: Hash32::ZERO,
             proposer: 0,
             skipped_leaders: Vec::new(),
-            attest: boundary.is_some(),
+            attest: false,
             control_witness: crate::sumeragi::epoch_beacon::control::encode(pulse).unwrap(),
         };
         let config = ScheduledConfig {
@@ -467,7 +443,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         )
         .unwrap();
         let preimage = result.preimage().unwrap();
-        let qc = certify(&keys, &header, &result, &preimage);
+        let qc = certify(&keys, &header, &preimage);
         block = block.with_commit_certificate(Some(
             crate::sumeragi::block_store::commit_certificate(&header, &qc, preimage, availability)
                 .unwrap(),
@@ -518,20 +494,6 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             signature: Signature::new(key.private_key(), &preimage),
         })
         .collect();
-    let candidates = prep
-        .committee
-        .iter()
-        .map(|seat| {
-            view.validator_candidate_keys()
-                .get(&ValidatorCandidateKeysV1::key_id(
-                    network,
-                    1,
-                    &seat.validator,
-                ))
-                .unwrap()
-                .clone()
-        })
-        .collect();
     let blocks = history
         .iter()
         .map(|block| NativeFinalityArtifact::from_block(block, limits()).unwrap())
@@ -545,7 +507,6 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
                 transition: fixture.transition.clone(),
                 selecting_finality: blocks[9].clone(),
             }),
-            candidate_keys: candidates,
             pending_beacon_session: Some(record.session.record().clone()),
         },
         finality_journal: NativeFinalityJournal { blocks },
@@ -559,12 +520,113 @@ fn selection_evidence_fixture() -> ValidatorCommitteeSelectionEvidenceV1 {
     let selected = status.selected.as_mut().expect("frozen selection fixture");
     selected.transition.credentials = None;
     selected.transition.readiness.clear();
-    status.candidate_keys.clear();
     status.pending_beacon_session = None;
     ValidatorCommitteeSelectionEvidenceV1 {
         status,
         finality_journal: fixture.finality_journal,
     }
+}
+
+#[test]
+fn committee_boundary_requires_exact_native_quorum_without_application_attestation() {
+    let evidence = evidence_fixture();
+    let selecting = &evidence
+        .status
+        .selected
+        .as_ref()
+        .unwrap()
+        .selecting_finality;
+    let block = selecting.decode_block(limits()).unwrap();
+    let certificate = block.commit_certificate().unwrap();
+    let header: BlockHeader = norito::decode_canonical(certificate.consensus_header()).unwrap();
+    let result = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
+    let qc: iroha_sumeragi::message::Qc =
+        norito::decode_canonical(certificate.commit_qc()).unwrap();
+    assert_eq!(header.height, 10);
+    assert!(result.schedule.boundary.is_some());
+    assert!(!header.attest);
+    assert!(!qc.attest);
+    assert!(qc.attestations.is_empty());
+    assert!(qc.attestation_witness.is_none());
+    assert_eq!(qc.signers.count_ones(), 3);
+
+    let mut keys = (1..=4_u8)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+    let current = &result.schedule.current;
+    assert_eq!(
+        keys.iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>(),
+        current
+            .committee
+            .iter()
+            .map(|member| member.validator.clone())
+            .collect::<Vec<_>>()
+    );
+    let crypto = BlsCrypto::new();
+    let committee = iroha_data_model::sumeragi_finality::global_committee(
+        crypto
+            .admit_committee(current.committee.iter().map(|member| {
+                (
+                    member.validator.public_key(),
+                    member.proof_of_possession.as_slice(),
+                )
+            }))
+            .unwrap(),
+    )
+    .unwrap();
+    let epoch = schedule::core_epoch(current).unwrap();
+    let verifier =
+        iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee);
+    assert_eq!(verifier.verify_qc(&NoAttestation, &qc), Ok(()));
+    let resign = |qc: &mut iroha_sumeragi::message::Qc, count: usize| {
+        qc.signers =
+            iroha_sumeragi::types::Bitmap::from_indices(4, (0..count).map(|index| index as u32))
+                .unwrap();
+        let signatures = keys
+            .iter()
+            .take(count)
+            .map(|key| Signature::try_new(key.private_key(), &qc.preimage()).unwrap())
+            .collect::<Vec<_>>();
+        qc.agg_sig = iroha_sumeragi::types::AggregateSignature(
+            iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures
+                    .iter()
+                    .map(Signature::payload)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        );
+    };
+    let mut insufficient = qc.clone();
+    resign(&mut insufficient, 2);
+    assert!(verifier.verify_qc(&NoAttestation, &insufficient).is_err());
+    let mut flagged = qc.clone();
+    flagged.attest = true;
+    resign(&mut flagged, 3);
+    assert_eq!(verifier.verify_qc_signatures(&flagged), Ok(()));
+    assert!(verifier.verify_qc(&NoAttestation, &flagged).is_err());
+    let mut forbidden_witness = qc.clone();
+    forbidden_witness.attestation_witness = Some(
+        iroha_sumeragi::message::ResultWitness::from_untrusted(
+            certificate.result_preimage().to_vec(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(verifier.verify_qc_signatures(&forbidden_witness), Ok(()));
+    assert!(
+        verifier
+            .verify_qc(&NoAttestation, &forbidden_witness)
+            .is_err()
+    );
+    let mut foreign = qc;
+    foreign.instance.0[0] ^= 1;
+    resign(&mut foreign, 3);
+    assert!(verifier.verify_qc(&NoAttestation, &foreign).is_err());
 }
 
 #[test]
@@ -845,7 +907,7 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
         norito::json::from_slice::<ValidatorCommitteeProvisioningEvidenceV1>(&json).unwrap(),
         evidence
     );
-    for mutation in 0..8 {
+    for mutation in 0..10 {
         let mut changed = evidence.clone();
         match mutation {
             0 => changed
@@ -859,7 +921,15 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             3 => {
                 changed.finality_journal.blocks.remove(1);
             }
-            4 => changed.status.candidate_keys.swap(0, 1),
+            4 => changed
+                .status
+                .selected
+                .as_mut()
+                .unwrap()
+                .transition
+                .preparation
+                .committee
+                .swap(0, 1),
             5 => {
                 changed
                     .status
@@ -878,7 +948,32 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
                     .block_wire
                     .push(1);
             }
-            _ => changed.status.latest_finality.block_wire.push(0),
+            7 => changed.status.latest_finality.block_wire.push(0),
+            8 => {
+                changed
+                    .status
+                    .selected
+                    .as_mut()
+                    .unwrap()
+                    .transition
+                    .readiness[0]
+                    .beacon
+                    .proof
+                    .z_s[0] ^= 1
+            }
+            _ => {
+                changed
+                    .status
+                    .selected
+                    .as_mut()
+                    .unwrap()
+                    .transition
+                    .credentials
+                    .as_mut()
+                    .unwrap()
+                    .beacon
+                    .transcript_hash[0] ^= 1
+            }
         }
         assert!(verify(&changed).is_err(), "mutation {mutation}");
     }

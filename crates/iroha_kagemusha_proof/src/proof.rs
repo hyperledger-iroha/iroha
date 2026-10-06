@@ -35,7 +35,7 @@ use iroha_plonk_gadgets::statement::StepRelation;
 use crate::{
     circuit::{ParamsError, SigmaCircuit},
     shape::{ProofFormat, SigmaShape},
-    witness::{SigmaRelation, StepPublic, StepWitness, Violation},
+    witness::{RECEIVE_CONTROLS, SigmaRelation, StepPublic, StepWitness, Violation},
 };
 
 /// Why a step-relation operation failed.
@@ -484,7 +484,8 @@ pub const VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES: usize = 1 + 4 + 32 + 4;
 pub struct VerifyingKeyEntry {
     /// The operation tag.
     pub kind: u8,
-    /// The enabled-controls mask of a Send relation; zero otherwise.
+    /// The enabled-controls mask of a Send relation, the blacklist bit of a
+    /// Receive relation; zero otherwise.
     pub enabled_controls: u32,
     /// The verifying-key digest.
     pub verifying_key_digest: [u8; 32],
@@ -513,13 +514,13 @@ impl VerifyingKeyEntry {
 
 /// The G1 selector of a consumer's statement: the operation tag and, for
 /// Send, the enabled-controls mask (equal to Ω(pred)'s by the consumer
-/// checks); every other operation selects the empty mask (G1
+/// checks); for Receive the mask's blacklist bit (G1
 /// `KagemushaWalletPackageV1::verifying_key_selector`).
 #[must_use]
 pub const fn selector_for(step: StepRelation, enabled_controls: u32) -> SigmaRelation {
     match step {
         StepRelation::Send => SigmaRelation::send(enabled_controls),
-        StepRelation::Receive => SigmaRelation::RECEIVE,
+        StepRelation::Receive => SigmaRelation::receive(enabled_controls & RECEIVE_CONTROLS),
     }
 }
 
@@ -622,9 +623,13 @@ mod tests {
             selector_for(StepRelation::Send, CONTROL_BLACKLIST).selector(),
             (3, 1)
         );
-        // Every operation other than Send selects the empty mask.
+        // Receive selects by the blacklist bit alone.
         assert_eq!(
-            selector_for(StepRelation::Receive, CONTROL_BLACKLIST),
+            selector_for(StepRelation::Receive, CONTROL_BLACKLIST).selector(),
+            (4, 1)
+        );
+        assert_eq!(
+            selector_for(StepRelation::Receive, crate::witness::CONTROL_QUOTAS),
             SigmaRelation::RECEIVE
         );
         let entry = VerifyingKeyEntry {

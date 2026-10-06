@@ -13537,7 +13537,6 @@ pub mod tests {
             norito::json::to_value(state.as_ref()).expect("serialize marker-bearing state");
         assert!(matches!(
             crate::state::deserialize::KuraSeed {
-                operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
                 execution_budget: iroha_allocation::AllocationBudget::new(
                     iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ),

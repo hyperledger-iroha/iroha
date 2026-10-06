@@ -22,7 +22,8 @@ import java.io.IOException
  * The handle has no public operation. Its private methods are the JNI upcalls of the Rust
  * `KagemushaWalletPlatformV1` adapter (JNI ignores Kotlin visibility; `consumer-rules.pro` keeps
  * them): the tri-state payment-key probe, generation bound to the issuer challenge digest and the
- * enrollment's hardware profile, `SHA256withECDSA` signing that returns the platform DER, key
+ * enrollment's hardware profile, `SHA256withECDSA` signing of the exact 32-byte Poseidon signing
+ * message (KeyMint hashes it with SHA-256; never a no-digest mode) that returns the platform DER, key
  * deletion for custody deletion, attestation-chain export, the anchor policy (Android keeps no
  * rollback anchor), storage state and the custody root path. Only the Rust role-checked signers
  * reach the signing upcall, so app code holding the handle cannot sign arbitrary bytes with the
@@ -55,8 +56,8 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
         adapter.keyGenerate(slot, challengeDigest, profileTag)
 
     @Suppress("unused")
-    private fun keySign(slot: ByteArray, preimage: ByteArray): KagemushaWalletAndroidSignatureV1 =
-        adapter.keySign(slot, preimage)
+    private fun keySign(slot: ByteArray, message: ByteArray): KagemushaWalletAndroidSignatureV1 =
+        adapter.keySign(slot, message)
 
     @Suppress("unused")
     private fun keyDelete(slot: ByteArray): KagemushaWalletAndroidRemoveV1 = adapter.keyDelete(slot)
@@ -126,8 +127,11 @@ internal class KagemushaWalletAndroidPlatformAdapterV1(
         return paymentKey.generate(slot, challengeDigest, profile)
     }
 
-    /** Sign the exact digest [preimage] with the payment key of [slot]. */
-    fun keySign(slot: ByteArray, preimage: ByteArray): KagemushaWalletAndroidSignatureV1 = paymentKey.sign(slot, preimage)
+    /**
+     * Sign the exact 32-byte signing [message] (the Rust `KagemushaWalletSignMessageV1` bytes)
+     * with the payment key of [slot] through `SHA256withECDSA`.
+     */
+    fun keySign(slot: ByteArray, message: ByteArray): KagemushaWalletAndroidSignatureV1 = paymentKey.sign(slot, message)
 
     /** Delete the payment key of [slot]; the Rust provider calls this only at custody deletion. */
     fun keyDelete(slot: ByteArray): KagemushaWalletAndroidRemoveV1 = paymentKey.delete(slot)

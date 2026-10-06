@@ -61,7 +61,7 @@ default-filter = '''
     | (package(iroha_core) & kind(lib)
         & test(/^smartcontracts::isi::(domain|multisig|staking|triggers::set::detachment|world)::/))
     | (package(iroha_core_zk) & kind(lib)
-        & test(/^(debug_backend_tests|halo2_ipa_parameter_source_tests|kagemusha_polynomial_store_v1::tests::key_roles|kagemusha_v1_recursion::mint_helper|zkparse::production_parameter_cache_tests)::/))
+        & test(/^(debug_backend_tests|halo2_ipa_parameter_source_tests|zkparse::production_parameter_cache_tests)::/))
     | (package(iroha_torii) & kind(lib)
         & test(/^(app_api|app_routed_read_http_admission_tests|canonical_history|connect|da::commitments|da::pin_intents|mcp|openapi|push|routing|sns|sorafs::gateway::rate_limit|tests|tests_queue_metadata|tests_runtime_handlers|torii_routed_read_tests)::/))
     | (package(iroha_torii) & kind(test)

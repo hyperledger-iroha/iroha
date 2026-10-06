@@ -78,7 +78,6 @@ mod tests {
             Tag::RolePermission,
             Tag::ValidationFeePolicy,
             Tag::ParliamentTimedOvnCasting,
-            Tag::KagemushaReserveReceipt,
             Tag::FastpqOrdinarySourceStatements,
         ];
         assert!(

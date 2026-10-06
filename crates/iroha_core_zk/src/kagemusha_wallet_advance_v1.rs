@@ -14,7 +14,7 @@
 //! - `platform`: the platform interface the provider needs — tri-state key, anchor and storage
 //!   probes (`Present | Absent | Unavailable`, never inferring absence from an error), explicit
 //!   write outcomes (`Published | NotPublished | Uncertain`), the boot identity, a
-//!   sleep-inclusive monotonic clock, single-step filesystem operations, and the role-checked
+//!   sleep-inclusive monotonic clock, single-step filesystem operations, and the domain-checked
 //!   signer that freezes the hardware output with `kagemusha_wallet_freeze_signature_v1`.
 //! - `store`: the durable store composing filesystem steps into create-new, paired,
 //!   same-content-rewrite and removal primitives, its `std::fs` backend, and (tests and
@@ -76,7 +76,8 @@
 //! retirement, Selected-marker capabilities, the durable store and the receipt signer are
 //! private: a capability exists only for a marker published here or adopted after its exact
 //! bytes were read back, the receipt signer re-reads that marker immediately before signing,
-//! and the payment key's `key_sign` takes a preimage only the role-checked signers construct.
+//! and the payment key's `key_sign` takes exactly the 32-byte Poseidon signing message that
+//! only the domain-checked signers construct.
 //!
 //! # Durability doctrine
 //!
@@ -149,15 +150,15 @@ pub use self::{
     },
     marker::{KagemushaWalletMarkerPhaseV1, KagemushaWalletMarkerRecordV1},
     platform::{
-        KAGEMUSHA_WALLET_PAYMENT_KEY_ROLES_V1, KagemushaWalletAnchorPolicyV1,
+        KAGEMUSHA_WALLET_PAYMENT_KEY_DOMAINS_V1, KagemushaWalletAnchorPolicyV1,
         KagemushaWalletEntryKindV1, KagemushaWalletFsV1, KagemushaWalletKeyGenerationRequestV1,
         KagemushaWalletKeyGenerationV1, KagemushaWalletKeyProfileV1, KagemushaWalletListedEntryV1,
         KagemushaWalletNotPublishedV1, KagemushaWalletPlatformSignatureV1,
         KagemushaWalletPlatformV1, KagemushaWalletProbeV1, KagemushaWalletPublishOutcomeV1,
         KagemushaWalletReadV1, KagemushaWalletRemoveOutcomeV1, KagemushaWalletSignErrorV1,
-        KagemushaWalletSignPreimageV1, KagemushaWalletUnavailableV1,
+        KagemushaWalletSignMessageV1, KagemushaWalletUnavailableV1,
         kagemusha_wallet_boot_id_from_text_v1, kagemusha_wallet_native_boot_id_v1,
-        kagemusha_wallet_native_monotonic_ms_v1, kagemusha_wallet_sign_role_v1,
+        kagemusha_wallet_native_monotonic_ms_v1, kagemusha_wallet_sign_domain_v1,
     },
     provider::{
         KagemushaWalletProviderOptionsV1, KagemushaWalletProviderV1, KagemushaWalletSlotStatusV1,

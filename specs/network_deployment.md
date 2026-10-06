@@ -684,7 +684,7 @@ $ iroha network apply networks/taira.toml --release 2026.10.0   # shows the plan
 7. **Genesis.** Built in controller memory from:
    - the profile recipe, including `npos.max_validators = 4`, chain id and discriminant;
    - the node cards: roster, PoPs, lane-0 validator registrations, a Committee-role consensus key for every validator, and the mint-finality generation-0 authority;
-   - fresh network authority keys: faucet, onboarding, SoraFS council, KAGEMUSHA redemption;
+   - fresh network authority keys: faucet, onboarding, SoraFS council;
    - the profile's admin grants. These include `CanAdministerDataspaceRegistration` and the genesis parameters `nexus.dataspace_registration = permissioned` and `nexus.max_external_committee_peers = 12`.
    - a fresh VRF epoch seed.
 
@@ -973,7 +973,7 @@ There is no preinstalled dispatcher, no `guard.json` and no dispatcher transitio
 /var/lib/iroha/<net>/<node>/release -> /opt/iroha/releases/<id>     (+ release.prev)
 /var/lib/iroha/<net>/<node>/secrets/                                0700; files 0600 owned by the service user:
     validator.key transport.key streaming.key runtime_signer.key mint_finality.seed beacon.cred
-    authority/{faucet,onboarding,sorafs_council,kagemusha_redemption}.key
+    authority/{faucet,onboarding,sorafs_council}.key
 /var/lib/iroha/<net>/<node>/state/                                  Kura, snapshots, SoraFS, Torii, Inrou data
 /var/lib/iroha/<net>/<node>/{GENERATION, host-record.norito, genesis.nrt}
 /var/lib/iroha/<net>/<node>/previous/{<gen>, checkpoint-<op>}/      retired ledgers and upgrade checkpoints
@@ -1102,7 +1102,7 @@ Recommended outside the tool: `restrict,from="<controller IP>"` on the deploy ke
 | Gateway TLS keys (nodes, edge client) | On each host | Only certificates leave the host. `--rotate gateway-certs`; the watch timer warns at 30 days. |
 | Beacon seat credentials | On each validator host (`DealSeat`; its own share only) | Written to `secrets/beacon.cred` by the seat itself. Never leave the host. |
 | Install-certificate signatures | On each host (`SignInstallRange`) | Only signatures leave the host. |
-| Network authority keys (faucet, onboarding, SoraFS council, KAGEMUSHA redemption) | Controller memory at genesis | `WriteSecret` to every validator, then zeroized. Rotation requires a reset in the first release (TODO T10). |
+| Network authority keys (faucet, onboarding, SoraFS council) | Controller memory at genesis | `WriteSecret` to every validator, then zeroized. Rotation requires a reset in the first release (TODO T10). |
 | Admin key | `admin_key`, or generated into `<state>/keys/` | Operator custody; back it up. `--rotate admin`. |
 | Controller operator key | `<state>/keys/operator.key` | Allowlisted on every node; verify never needs it. `--rotate operator`. |
 | Onboarding tokens | Minted by the tool | Plaintext written once to `<state>/credentials/` (0600); only the blake3 hash goes into configs. `--rotate onboarding:<id>`. |
@@ -1252,7 +1252,6 @@ crossing test before deployment.
      - `network.{address,public_address}`;
      - `torii.{address,transport.trusted_proxy_cidrs,operator_signatures.allowed_public_keys,account_onboarding.{authority,credentials}}`;
      - the faucet authority id;
-     - the KAGEMUSHA V1 redemption authority id (`torii.kagemusha_v1_commands.redemption_authority`);
      - `genesis.*`;
      - `soracloud_runtime.submission.signer` (public binding);
      - `soracloud_runtime.inrou.{enabled,portable_vm_uid,portable_vm_gid,trusted_guest_manifest_digest_hex,trusted_guest_content_cid}`;
@@ -1260,11 +1259,11 @@ crossing test before deployment.
      - `node_tunable`.
 
      Anything else is a parse error. Files without `profile` stay ordinary flat configs.
-   - Node-bound templates: the profile's `torii.faucet`, `torii.account_onboarding` and `torii.kagemusha_v1_commands` sections apply only when the node file binds that section's authority (`authority`, or `redemption_authority` for KAGEMUSHA V1). A bound section's key comes from its fixed `<data_dir>/secrets/authority/*.key` file, and the parser rejects a key that does not sign for the bound authority. `sora-nexus-v1` carries Taira's KAGEMUSHA V1 commands (redemption minimum balance 1 XOR, operation registry 4096 entries and 593920 bytes), so the renderer enables them on every validator by emitting the redemption authority it created at genesis.
+   - Node-bound templates: the profile's `torii.faucet` and `torii.account_onboarding` sections apply only when the node file binds that section's `authority`. A bound section's key comes from its fixed `<data_dir>/secrets/authority/*.key` file, and the parser rejects a key that does not sign for the bound authority.
    - `NodeSecretFile::SorafsCouncilAuthority` names `authority/sorafs_council.key` in the fixed layout the deploy engine writes; no node configuration key reads it (the node verifies council signatures with public `trusted_council_keys`), so the node never opens it.
    - Profiles replace the `iroha3d_taira` exact-match guards (`taira_runtime_signer.rs:126-298`). Genesis-bound hashes (checked by `irohad` against the authenticated genesis Sumeragi context) and the `iroha_p2p` peer handshake still catch any divergence.
    - `--config-blake3` stays, because the node file is flat.
-2. **`data_dir`** (user, actual, defaults). A relative `data_dir` resolves against the directory of the file that sets it and is then made absolute against the working directory, so every derived path is absolute; the loader writes the resolved value to its own source, and the parser rejects a `data_dir` read without the loader (`ParseError::InvalidDataDir`). Every state path defaults under `<data_dir>/state/`. Secret paths default to fixed `<data_dir>/secrets/*` names, including `torii.account_onboarding.private_key_file`, the faucet authority key and the KAGEMUSHA V1 redemption key. This replaces the 11 paths rewritten by `validator_config.rs:139-190`.
+2. **`data_dir`** (user, actual, defaults). A relative `data_dir` resolves against the directory of the file that sets it and is then made absolute against the working directory, so every derived path is absolute; the loader writes the resolved value to its own source, and the parser rejects a `data_dir` read without the loader (`ParseError::InvalidDataDir`). Every state path defaults under `<data_dir>/state/`. Secret paths default to fixed `<data_dir>/secrets/*` names, including `torii.account_onboarding.private_key_file` and the faucet authority key. This replaces the 11 paths rewritten by `validator_config.rs:139-190`.
 3. **`irohad::node_secrets`** (about 500 lines). Builds `IrohaRuntimeDeps` for the Soracloud signer (when `production_mode` is set), the mint-finality authority, and the beacon partial signer (when `beacon.cred` exists). It verifies each against the rendered public binding.
 4. **Beacon ceremony extraction (P1).**
    - `encode_global_beacon_partial_signer_credential_v1`, `global_beacon_partial_signer_inventory_digest_v1` and `RuntimeGlobalBeaconShareProvisioningV1` move from `irohad/src/external_software_signer/consensus_threshold.rs:116,509` to `iroha_core::beacon::credential`.

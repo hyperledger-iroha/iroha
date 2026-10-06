@@ -15,13 +15,7 @@ use iroha_data_model::{
         GlobalThresholdBeaconDkgRecipientKeyV1, GlobalThresholdBeaconDkgSessionV1,
         GlobalThresholdBeaconDkgShareAcceptanceV1, GlobalThresholdBeaconDkgTranscriptV1,
     },
-    isi::{
-        kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-            KagemushaMintFinalityValidatorKeysV1,
-        },
-        staking::{PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer},
-    },
+    isi::staking::{PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer},
     nexus::{
         PublicLaneFeeRewardClaimV1, PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1,
         PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryRegistrationV1,
@@ -36,7 +30,7 @@ use iroha_data_model::{
     parameter::system::SumeragiNposParameters,
     sumeragi::epoch::{
         BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationV1,
-        ValidatorEpochDecisionV1,
+        ValidatorEpochDecisionV1, ValidatorGenerationV1,
     },
 };
 use iroha_model_base::{peer::PeerId, topology::LaneId};
@@ -61,24 +55,11 @@ fn peers() -> Vec<PeerId> {
     peers
 }
 
-fn authority(
-    network_id: NetworkId,
-    peers: &[PeerId],
-    generation: u64,
-) -> KagemushaMintFinalityAuthorityGenerationV1 {
-    KagemushaMintFinalityAuthorityGenerationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
+fn generation(network_id: NetworkId, peers: &[PeerId], generation: u64) -> ValidatorGenerationV1 {
+    ValidatorGenerationV1 {
         network_id,
         generation,
-        validators: peers
-            .iter()
-            .enumerate()
-            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                validator: validator.clone(),
-                eq_proof_public_key: [u8::try_from(index + 1).unwrap(); 32],
-                ep_proof_public_key: [u8::try_from(index + 11).unwrap(); 32],
-            })
-            .collect(),
+        validators: peers.to_vec(),
     }
 }
 
@@ -170,16 +151,16 @@ fn dkg_transcript(
 fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
     let network_id = network();
     let peers = peers();
-    let genesis_authority = authority(network_id, &peers, 0);
-    let successor_authority = authority(network_id, &peers, 1);
+    let genesis_generation = generation(network_id, &peers, 0);
+    let successor_generation = generation(network_id, &peers, 1);
     let genesis_authorization = ValidatorEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        version: 1,
         network_id,
         epoch: 0,
         first_height: 1,
         last_height: 100,
         authority_generation: 0,
-        authority_id: genesis_authority.authority_id().unwrap(),
+        authority_id: genesis_generation.generation_id().unwrap(),
         beacon: BeaconEpochBindingV1::Bootstrap,
         previous_authorization_id: [0; 32],
         transition_id: [0; 32],
@@ -192,13 +173,13 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         transcript_hash: [0x58; 32],
     };
     let activation = ValidatorEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        version: 1,
         network_id,
         epoch: 2,
         first_height: 201,
         last_height: 300,
         authority_generation: 1,
-        authority_id: successor_authority.authority_id().unwrap(),
+        authority_id: successor_generation.generation_id().unwrap(),
         beacon: BeaconEpochBindingV1::Installed(installed),
         previous_authorization_id: [0x59; 32],
         transition_id: [0x5a; 32],
@@ -241,12 +222,10 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
     preparation
         .validate()
         .expect("real frozen committee and policy");
+    assert_eq!(preparation.generation(), successor_generation);
     let transition = ValidatorCommitteeTransitionV1 {
         preparation,
-        credentials: Some(ValidatorCommitteeCredentialsV1 {
-            authority: successor_authority,
-            beacon: installed,
-        }),
+        credentials: Some(ValidatorCommitteeCredentialsV1 { beacon: installed }),
         readiness: Vec::new(),
         outcome: Some(activation),
     };
@@ -339,7 +318,6 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         SignatureOf::try_new(new_peer_key.private_key(), &consent).unwrap(),
     );
     let mut rows = vec![
-        ("authority_generation", genesis_authority.encode()),
         ("epoch_authorization", genesis_authorization.encode()),
         ("dkg_session", session.encode()),
         ("dkg_transcript", transcript.encode()),

@@ -2393,8 +2393,8 @@ limited to `max_exempt_transactions_per_block` per block. Every SCCP
 instruction routes to the universal dataspace.
 
 The only SCCP permission token is `CanProposeSccpRouteGovernance`, which only
-allows proposing. Its grant and revoke rule is `OnlyGenesis`, as for
-`CanManageKagemushaReserve` (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
+allows proposing. Its grant and revoke rule is `OnlyGenesis`
+(`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
 `crates/iroha_core/src/executor.rs`): genesis MAY grant it (for example to the
 reset operator's proposing account), and after genesis nobody can grant or
 revoke it. No manager role grants or revokes it. A holder can only put

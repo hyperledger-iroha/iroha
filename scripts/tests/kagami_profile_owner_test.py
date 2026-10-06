@@ -68,15 +68,15 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
     cargo.chmod(0o700)
     target = tmp_path / "target"
     target.mkdir(mode=0o700)
-    authority = tmp_path / "authority"
-    authority.mkdir(mode=0o700)
+    allocations = tmp_path / "allocations"
+    allocations.mkdir(mode=0o700)
     return [
         "--cargo",
         str(cargo),
         "--cargo-target-dir",
         str(target),
-        "--kagemusha-mint-finality-parameters-dir",
-        str(authority),
+        "--xor-allocations-dir",
+        str(allocations),
         "--cargo-lock-size",
         "311234",
         "--cargo-lock-sha256",
@@ -104,15 +104,15 @@ def test_profile_command_always_pins_one_profile_output_and_kagami() -> None:
         tools,
         "iroha3-dev",
         Path("/external/stage"),
-        Path("/external/authority"),
+        Path("/external/allocations"),
     )
     assert command == [
         "/external/target/debug/xtask",
         "kagami-profiles",
         "--profile",
         "iroha3-dev",
-        "--kagemusha-mint-finality-parameters-dir",
-        "/external/authority",
+        "--xor-allocations-dir",
+        "/external/allocations",
         "--out",
         "/external/stage/defaults/kagami",
         "--kagami",
@@ -120,6 +120,20 @@ def test_profile_command_always_pins_one_profile_output_and_kagami() -> None:
     ]
     assert "iroha3-nexus" not in command
     assert "all" not in command
+
+def test_cli_requires_current_xor_allocations_and_refuses_retired_mint_arguments(tmp_path: Path) -> None:
+    tail = _valid_cli_tail(tmp_path)
+    args = ["--write", "--profile", "iroha3-dev", "--output-root", str(tmp_path / "out"), *tail]
+    parsed = MODULE._parse_args(args)
+    assert parsed.xor_allocations_dir == str(tmp_path / "allocations")
+    assert not hasattr(parsed, "kagemusha_mint_finality_parameters_dir")
+    missing = args.copy()
+    index = missing.index("--xor-allocations-dir")
+    del missing[index:index + 2]
+    with pytest.raises(SystemExit):
+        MODULE._parse_args(missing)
+    with pytest.raises(SystemExit):
+        MODULE._parse_args([*args, "--kagemusha-mint-finality-parameters-dir", str(tmp_path / "retired")])
 
 
 def test_cargo_build_command_is_locked_offline_and_uses_exact_root_lock() -> None:
@@ -186,15 +200,58 @@ def test_lock_authentication_checks_identity_size_digest_and_permissions(tmp_pat
 
 def test_absent_root_is_external_private_normalized_and_nonoverlapping(tmp_path: Path) -> None:
     tmp_path.chmod(0o700)
-    admitted = MODULE._absent_external_root(str(tmp_path / "stage"), "stage")
-    assert admitted == tmp_path / "stage"
-    (tmp_path / "stage").mkdir()
-    with pytest.raises(MODULE.OwnerError, match="must be absent"):
-        MODULE._absent_external_root(str(tmp_path / "stage"), "stage")
+    if MODULE._is_relative_to(tmp_path.resolve(), REPO_ROOT):
+        with pytest.raises(MODULE.OwnerError, match="source repository|Git checkout"):
+            MODULE._absent_external_root(str(tmp_path / "stage"), "stage")
+    else:
+        assert MODULE._absent_external_root(str(tmp_path / "stage"), "stage") == tmp_path / "stage"
+        (tmp_path / "stage").mkdir()
+        with pytest.raises(MODULE.OwnerError, match="must be absent"):
+            MODULE._absent_external_root(str(tmp_path / "stage"), "stage")
     with pytest.raises(MODULE.OwnerError, match="source repository|group or world permissions"):
         MODULE._absent_external_root(str(REPO_ROOT / "stage"), "stage")
     with pytest.raises(MODULE.OwnerError, match="normalized absolute"):
         MODULE._absent_external_root("relative/stage", "stage")
+
+def test_private_virtual_external_owner_admits_absent_root_and_refuses_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Model separate private source/output roots without writing outside the repository.
+    # The actual source-overlap and Git-ancestor policy executes unchanged below.
+    virtual = Path(REPO_ROOT.anchor) / "virtual-profile-owner"
+    repository = virtual / "source"
+    owner = virtual / "output"
+    destination = owner / "stage"
+    metadata = os.stat_result((stat.S_IFDIR | 0o700, 1, 1, 1, 0, 0, 0, 0, 0, 0))
+    occupied: set[Path] = set()
+    git_checkout = False
+
+    def virtual_lstat(path: Path) -> os.stat_result:
+        if path.name == ".git":
+            if git_checkout and path == owner / ".git":
+                return metadata
+            raise FileNotFoundError(path)
+        if path in {repository, owner, virtual}:
+            return metadata
+        raise FileNotFoundError(path)
+
+    def virtual_resolve(path: Path, strict: bool = False) -> Path:
+        if strict and path not in {repository, owner, virtual}:
+            raise FileNotFoundError(path)
+        return path
+
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repository)
+    with monkeypatch.context() as filesystem:
+        filesystem.setattr(Path, "lstat", virtual_lstat)
+        filesystem.setattr(Path, "resolve", virtual_resolve)
+        filesystem.setattr(MODULE.os.path, "lexists", lambda path: Path(path) in occupied)
+        assert MODULE._absent_external_root(str(destination), "stage") == destination
+        occupied.add(destination)
+        with pytest.raises(MODULE.OwnerError, match="must be absent"):
+            MODULE._absent_external_root(str(destination), "stage")
+        with pytest.raises(MODULE.OwnerError, match="source repository"):
+            MODULE._absent_external_root(str(repository / "stage"), "stage")
+        git_checkout = True
+        with pytest.raises(MODULE.OwnerError, match="Git checkout"):
+            MODULE._absent_external_root(str(owner / "fresh"), "stage")
 
 
 @pytest.mark.skipif(

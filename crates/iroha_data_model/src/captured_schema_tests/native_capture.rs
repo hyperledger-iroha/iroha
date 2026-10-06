@@ -189,7 +189,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
             include_str!("../../tests/fixtures/native_current_codec_owner_identities.json");
         assert_eq!(
             hex::encode(Sha256::digest(source.as_bytes())),
-            "6bd8a9c34c620e4c47bca8c71a44f13f47bb58b723aa4eae26454ea192ecc428"
+            "3f78e3ede2218250f92515bcd7a7e8068a045e9dacc49884356b42aad54ff548"
         );
         let document: Value = json::from_str(source).expect("paired native owner inventory");
         assert_eq!(
@@ -203,7 +203,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
         );
         assert_eq!(document.get("schema").and_then(Value::as_u64), Some(1));
         let owners = document.get("owners").and_then(Value::as_array).unwrap();
-        assert_eq!(owners.len(), 105, "complete current compiler owner census");
+        assert_eq!(owners.len(), 102, "complete current compiler owner census");
         let mut result = BTreeMap::new();
         let mut roots = BTreeMap::new();
         let mut directions = BTreeMap::new();
@@ -259,7 +259,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
                 "duplicate captured owner"
             );
         }
-        assert_eq!(roots.len(), 1_551, "complete current nominal inventory");
+        assert_eq!(roots.len(), 1_472, "complete current nominal inventory");
         result
     })
 }
@@ -281,7 +281,7 @@ pub fn assert_current_owner(cases: &[Case], owner: &str) {
 
 #[test]
 fn current_native_fixture_has_complete_owner_inventory() {
-    assert_eq!(current_owner_fixture().len(), 105);
+    assert_eq!(current_owner_fixture().len(), 102);
 }
 
 // Apply only the closed feature conditions in the current typed inventory.
@@ -331,7 +331,7 @@ fn current_owner_inventory_excludes_retired_types_under_every_feature_shape() {
     for (name, owner) in owners {
         let complete = owner_for_current_inventory(owner, true);
         if name == "iroha_data_model::captured_schema_tests::current_release_capture" {
-            assert_eq!(complete["rows"].as_array().unwrap().len(), 3);
+            assert_eq!(complete["rows"].as_array().unwrap().len(), 1);
             assert!(complete["rows"].as_array().unwrap().iter().all(|row| {
                 !row["nominal"]
                     .as_str()
@@ -343,7 +343,7 @@ fn current_owner_inventory_excludes_retired_types_under_every_feature_shape() {
         }
         let minimal = owner_for_current_inventory(owner, false);
         let expected = match name.as_str() {
-            "iroha_data_model::captured_schema_tests::current_release_capture" => 3,
+            "iroha_data_model::captured_schema_tests::current_release_capture" => 1,
             "iroha_data_model::fraud::types::captured_types_schema_tests" => 7,
             _ => {
                 assert_eq!(minimal, *owner);

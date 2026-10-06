@@ -146,7 +146,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -198,7 +197,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -236,7 +234,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -282,7 +279,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -328,7 +324,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -374,7 +369,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -420,7 +414,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -480,7 +473,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -523,7 +515,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -566,7 +557,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -609,7 +599,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -652,7 +641,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -775,7 +763,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:d3e763fa3102de64028b3dbe7a70f85a3c64f2a3f2c9893b8d656117f867f3dd",
+    "manifest_fingerprint": "sha256:6dffa2c862078f7f558aeb3e3779a22182d8f2d1a196c016911fed0ccb970f3c",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -802,15 +790,15 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1092,
-        "declared_external_dependency_edges": 656,
-        "declared_external_packages": 180,
+        "declared_dependency_edges": 1085,
+        "declared_external_dependency_edges": 653,
+        "declared_external_packages": 177,
         "declared_local_packages": 82,
         "declared_path_packages": 4,
         "declared_workspace_packages": 78,
-        "required_dependency_edges": 937,
-        "required_external_dependency_edges": 530,
-        "required_external_packages": 130,
+        "required_dependency_edges": 930,
+        "required_external_dependency_edges": 527,
+        "required_external_packages": 127,
         "required_local_packages": 79,
         "required_path_packages": 4,
         "required_workspace_packages": 75
@@ -862,18 +850,18 @@
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 470,
-        "declared_external_dependency_edges": 331,
-        "declared_external_packages": 128,
-        "declared_local_packages": 46,
-        "declared_path_packages": 4,
-        "declared_workspace_packages": 42,
-        "required_dependency_edges": 354,
-        "required_external_dependency_edges": 238,
-        "required_external_packages": 89,
-        "required_local_packages": 42,
-        "required_path_packages": 4,
-        "required_workspace_packages": 38
+        "declared_dependency_edges": 367,
+        "declared_external_dependency_edges": 269,
+        "declared_external_packages": 116,
+        "declared_local_packages": 39,
+        "declared_path_packages": 3,
+        "declared_workspace_packages": 36,
+        "required_dependency_edges": 297,
+        "required_external_dependency_edges": 206,
+        "required_external_packages": 83,
+        "required_local_packages": 36,
+        "required_path_packages": 3,
+        "required_workspace_packages": 33
       },
       "roots": [
         "iroha"
@@ -882,15 +870,15 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1091,
-        "declared_external_dependency_edges": 663,
-        "declared_external_packages": 188,
+        "declared_dependency_edges": 1084,
+        "declared_external_dependency_edges": 660,
+        "declared_external_packages": 186,
         "declared_local_packages": 80,
         "declared_path_packages": 4,
         "declared_workspace_packages": 76,
-        "required_dependency_edges": 908,
-        "required_external_dependency_edges": 531,
-        "required_external_packages": 138,
+        "required_dependency_edges": 901,
+        "required_external_dependency_edges": 528,
+        "required_external_packages": 136,
         "required_local_packages": 75,
         "required_path_packages": 4,
         "required_workspace_packages": 71
@@ -902,15 +890,15 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2138,
-        "declared_external_dependency_edges": 1176,
-        "declared_external_packages": 239,
+        "declared_dependency_edges": 2129,
+        "declared_external_dependency_edges": 1173,
+        "declared_external_packages": 237,
         "declared_local_packages": 127,
         "declared_path_packages": 4,
         "declared_workspace_packages": 123,
-        "required_dependency_edges": 1961,
-        "required_external_dependency_edges": 1038,
-        "required_external_packages": 191,
+        "required_dependency_edges": 1952,
+        "required_external_dependency_edges": 1035,
+        "required_external_packages": 189,
         "required_local_packages": 127,
         "required_path_packages": 4,
         "required_workspace_packages": 123

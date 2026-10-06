@@ -7,10 +7,10 @@
 //!   and a different one changes them;
 //! - a mutated witness (overdraft, a debit that ignores the lineage
 //!   `burned_total`, newer policy epoch, early accepted time, a blacklist
-//!   older than the maximum age or issued after the accepted time, `u128`
-//!   overflow) is refused by [`SigmaProver::prove`] with its violation, and
-//!   the engine itself refuses it (a limb lookup input is missing from its
-//!   table);
+//!   older than the maximum age or issued after the accepted time, a Send at
+//!   the lease expiry, `u128` overflow) is refused by
+//!   [`SigmaProver::prove`] with its violation, and the engine itself
+//!   refuses it (a limb lookup input is missing from its table);
 //! - a forger who zeroes the failing range checks so every lookup passes
 //!   gets a proof from the engine, and the verifier rejects it (the zeroed
 //!   check breaks the copy from the checked value);
@@ -19,8 +19,10 @@
 //!
 //! Every byte of a proof, flipped, is rejected; a proof on Pallas verifies
 //! too; a forged identity proves only its own head; a proof under one
-//! selector does not verify under another; keys and proofs do not depend on
-//! the Rayon pool size. All tests here prove for real and are ignored in
+//! selector does not verify under another; a listed counterparty and the
+//! quota rule's violations have no accepted proof; the full mask proves and
+//! verifies at its single-lane `k = 16` shape; keys and proofs do not depend
+//! on the Rayon pool size. All tests here prove for real and are ignored in
 //! debug builds.
 
 mod common;
@@ -28,8 +30,9 @@ mod common;
 use core::fmt::Write as _;
 
 use common::{
-    CHECK_SEED, RELATION_CASES, RELATION_CHECK_CASES, RELATIONS, SEND_BLACKLIST, budget_shape,
-    case_label, folded, forged_witness, recovery, relation_shapes, vesta_params, vesta_prover,
+    CHECK_SEED, RECEIVE_BLACKLIST, RELATION_CASES, RELATION_CHECK_CASES, RELATIONS, SEND_BLACKLIST,
+    SEND_EVERY, SEND_QUOTAS, budget_shape, case_label, folded, forged_witness, pinned_shape,
+    recovery, relation_shapes, vesta_params, vesta_prover,
 };
 use ff::Field;
 use iroha_kagemusha_proof::{
@@ -41,7 +44,7 @@ use iroha_plonk::{ProverConfig, ProverError, create_proof, prove_circuit};
 use rayon::prelude::*;
 
 #[test]
-#[ignore = "20 cases with real proofs; run in release"]
+#[ignore = "30 cases with real proofs; run in release"]
 fn relation_checks_as_real_proofs() {
     let mut cases = 0;
     for relation in relation_shapes() {
@@ -230,7 +233,7 @@ fn pallas_step_proofs_verify() {
 /// A witness of the other step is refused before proving, and a proof
 /// verifies only under its own selector of the allowlist.
 #[test]
-#[ignore = "key generation for three selectors; run in release"]
+#[ignore = "key generation for five selectors; run in release"]
 fn proofs_verify_only_under_their_selector() {
     let mut allowlist = SigmaAllowlist::<Eq>::new();
     let mut provers = Vec::new();
@@ -248,7 +251,7 @@ fn proofs_verify_only_under_their_selector() {
             .iter()
             .map(VerifyingKeyEntry::selector)
             .collect::<Vec<_>>(),
-        vec![(3, 0), (3, 1), (4, 0)]
+        vec![(3, 0), (3, 1), (3, 4), (4, 0), (4, 1)]
     );
     for (entry, (_, prover)) in entries.iter().zip(&provers) {
         let length = prover
@@ -305,6 +308,120 @@ fn proofs_verify_only_under_their_selector() {
         allowlist.select(SigmaRelation::send(2)),
         Err(SigmaError::NoVerifier((3, 2)))
     ));
+}
+
+/// A refused witness the engine is asked to prove anyway: it errs, or its
+/// proof is rejected.
+fn engine_refuses(
+    prover: &SigmaProver<Eq>,
+    witness: &iroha_kagemusha_proof::StepWitness<Fp>,
+    label: &str,
+) {
+    let relation = prover.shape().params.relation().relation;
+    let circuit = prover.circuit(witness).expect("circuit");
+    let claimed = witness.evaluate(relation).public();
+    let engine = prove_circuit(
+        prover.params(),
+        prover.proving_key(),
+        &circuit,
+        &[claimed.instance()],
+        recovery(3),
+        ProverConfig::default(),
+    );
+    match engine {
+        Err(error) => println!("M12_REFUSED case={label} engine={error:?}"),
+        Ok(proof) => {
+            assert!(
+                prover.verifier().verify(&claimed, &proof).is_err(),
+                "{label}: the engine's proof of a refused witness verifies"
+            );
+            println!("M12_REFUSED case={label} engine=proved verdict=rejected");
+        }
+    }
+}
+
+/// A listed counterparty has no accepted proof under either step's
+/// blacklist relation; with no list held the same account is proved.
+#[test]
+#[ignore = "real proofs of the blacklist relations; run in release"]
+fn a_listed_counterparty_has_no_accepted_proof() {
+    for case in [SEND_BLACKLIST, RECEIVE_BLACKLIST] {
+        let prover = vesta_prover(budget_shape(folded(case)));
+        let listed = sample_witness::<Fp>(CHECK_SEED, case, Mutation::Listed);
+        assert_eq!(
+            prover.prove(&listed, recovery(2)).map(|proof| proof.bytes),
+            Err(SigmaError::RelationViolated(vec![
+                Violation::BlacklistListed
+            ]))
+        );
+        engine_refuses(&prover, &listed, &case.label());
+        let mut unheld = listed;
+        unheld.predecessor.core.controls.blacklist_version = 0;
+        let proof = prover.prove(&unheld, recovery(2)).expect("no list held");
+        assert_eq!(
+            prover.verifier().verify(&proof.public, &proof.bytes),
+            Ok(())
+        );
+    }
+}
+
+/// The quota relation and the full mask at their single-lane `k = 16`
+/// shape: honest proofs verify; an exceeded window and an untouched kind are
+/// refused by the library and the engine, and a forger who zeroes the
+/// exceeded window's failing range check gets a rejected proof.
+#[test]
+#[ignore = "k = 16 keys and proofs; run in release"]
+fn quota_relations_prove_at_k16() {
+    for case in [SEND_QUOTAS, SEND_EVERY] {
+        let shape = pinned_shape(folded(case), (16, 1));
+        let prover = vesta_prover(shape);
+        let verifier = prover.verifier();
+        let honest = sample_witness::<Fp>(CHECK_SEED + 1, case, Mutation::None);
+        let proof = prover.prove(&honest, recovery(2)).expect("honest proof");
+        assert_eq!(verifier.verify(&proof.public, &proof.bytes), Ok(()));
+        assert_eq!(
+            proof.bytes.len(),
+            shape
+                .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
+                .expect("length")
+        );
+        for (mutation, violation) in [
+            (Mutation::QuotaExceeded, Violation::QuotaExceeded),
+            (Mutation::QuotaUntouched, Violation::QuotaKindUntouched),
+        ] {
+            let witness = sample_witness::<Fp>(CHECK_SEED, case, mutation);
+            let label = format!("{} {mutation:?}", case.label());
+            assert_eq!(
+                prover.prove(&witness, recovery(2)).map(|proof| proof.bytes),
+                Err(SigmaError::RelationViolated(vec![violation])),
+                "{label}"
+            );
+            engine_refuses(&prover, &witness, &label);
+            assert!(
+                verifier
+                    .verify(&witness.evaluate(case).public(), &proof.bytes)
+                    .is_err()
+            );
+        }
+        let exceeded = sample_witness::<Fp>(CHECK_SEED, case, Mutation::QuotaExceeded);
+        let (forged, instance, _) = forged_witness(&prover, &exceeded);
+        let forged_proof = create_proof(
+            prover.params(),
+            prover.proving_key(),
+            &forged,
+            recovery(4),
+            ProverConfig::default(),
+        )
+        .expect("the engine proves the forged witness");
+        let claimed = exceeded.evaluate(case).public();
+        assert_eq!(claimed.instance(), instance);
+        assert!(verifier.verify(&claimed, &forged_proof).is_err());
+        println!(
+            "M12_QUOTA case={} k=16 lanes=1 bytes={} exceeded=refused untouched=refused forged=rejected",
+            case.label(),
+            proof.bytes.len()
+        );
+    }
 }
 
 /// A forger proves a Send from a state with a substituted asset (consistent:

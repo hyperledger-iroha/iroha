@@ -319,9 +319,15 @@ pub(super) fn read_intent(directory: &PrivateDirectory) -> Result<Option<Origina
     decode_original(&bytes).map(Some)
 }
 /// BodyHistory owns this directory census and anchored absence; the Original decoder is shared.
-pub(super) fn read_body_intent(directory: &PrivateDirectory) -> Result<Option<Original>> {
+/// Return the sole canonical decoded Original with the exact bounded bytes it consumed.
+/// BodyHistory binds its immutable snapshot to this read, never to a later replacement.
+pub(super) fn read_body_intent(
+    directory: &PrivateDirectory,
+) -> Result<Option<(Original, zeroize::Zeroizing<Vec<u8>>)>> {
     read_optional(directory, "original.nrt", MAX_ORIGINAL_BYTES)?
-        .map(|bytes| decode_original(&bytes))
+        .map(|bytes| {
+            decode_original(&bytes).map(|original| (original, zeroize::Zeroizing::new(bytes)))
+        })
         .transpose()
 }
 fn decode_original(bytes: &[u8]) -> Result<Original> {

@@ -254,11 +254,19 @@ pub fn build_attestation(
             committed,
         });
     }
-    let genesis_finality_proof = build_proof(view, 1).map_err(Error::GenesisFinalityProof)?;
-    let finality_proof = if height == 1 {
-        genesis_finality_proof.clone()
-    } else {
-        build_proof(view, height).map_err(Error::FinalityProof)?
+    // Both proof reads borrow this same immutable State cut. Retain the bounded native
+    // prefix only across genesis -> tip, while every original QC, availability relation and
+    // independent portable proof check remains mandatory. Drop it before the fresh fence.
+    let (genesis_finality_proof, finality_proof) = {
+        let proof_chain =
+            CertifiedChain::new(view).map_err(|error| Error::GenesisFinalityProof(error.into()))?;
+        let genesis = proof_from_chain(&proof_chain, 1).map_err(Error::GenesisFinalityProof)?;
+        let tip = if height == 1 {
+            genesis.clone()
+        } else {
+            proof_from_chain(&proof_chain, height).map_err(Error::FinalityProof)?
+        };
+        (genesis, tip)
     };
     let chain = CertifiedChain::new(view).map_err(|error| Error::FinalityProof(error.into()))?;
     if status.instance != chain.instance().0 {
@@ -335,13 +343,11 @@ mod tests {
             }
         );
         if require_native_boundary {
-            assert!(original.header().expect("native boundary header").attest);
-            assert!(
-                original
-                    .commit_qc()
-                    .expect("genuine boundary CommitQC")
-                    .attest
-            );
+            assert!(!original.header().expect("native boundary header").attest);
+            let qc = original.commit_qc().expect("genuine boundary CommitQC");
+            assert!(!qc.attest);
+            assert_eq!(qc.signers.count_ones(), 3);
+            assert!(qc.attestations.is_empty() && qc.attestation_witness.is_none());
             assert!(original.commitment().schedule.boundary.is_some());
         }
         Ok(SumeragiFinalityProof {
@@ -397,7 +403,7 @@ mod tests {
         );
         assert_eq!(
             served.qcs, once.qcs,
-            "the committee projection must not repeat the complete native quorum/Pasta verification"
+            "the committee projection must not repeat the complete native quorum verification"
         );
     }
 
@@ -418,14 +424,14 @@ mod tests {
     }
 
     #[test]
-    fn portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta() {
+    fn portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_quorum() {
         with_original_finality_boundary(
-            assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta,
+            assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_quorum,
         );
     }
 
     #[inline(never)]
-    fn assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta(
+    fn assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_quorum(
         chain: &CertifiedTestChain,
     ) {
         assert_single_certified_finality_source(
@@ -604,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_builder_verifies_original_pasta_boundary_witness() {
+    fn portable_builder_verifies_original_unflagged_boundary_quorum() {
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         chain.commit(Vec::new());
         let proof = build_proof(&chain.state().view(), 10).unwrap();
@@ -678,6 +684,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "finality/attestation_tests.rs"]
+mod attestation_tests;
 
 impl From<iroha_data_model::sumeragi_finality::FinalityReadError> for ProofError {
     fn from(error: iroha_data_model::sumeragi_finality::FinalityReadError) -> Self {

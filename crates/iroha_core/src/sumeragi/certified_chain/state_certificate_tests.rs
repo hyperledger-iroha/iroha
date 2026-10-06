@@ -426,7 +426,7 @@ fn state_certificate_checks_quorum_and_signed_availability_after_execution_authe
 }
 
 #[test]
-fn state_certificate_verifies_actual_attested_npos_boundary() {
+fn state_certificate_verifies_actual_native_npos_boundary() {
     let mut chain = CertifiedTestChain::npos_boundary_fixture();
     chain.commit(Vec::new());
     let view = chain.state().view();
@@ -434,21 +434,99 @@ fn state_certificate_verifies_actual_attested_npos_boundary() {
     let result = reader
         .certified_from_execution(NonZeroUsize::new(10).unwrap(), |_, _| Ok(()))
         .unwrap();
-    assert!(result.header().unwrap().attest);
+    assert!(!result.header().unwrap().attest);
     assert!(result.commitment().schedule.boundary.is_some());
     assert_eq!(result.id(), reader.certified(10).unwrap().id());
-    let original = frame(&chain, 10);
-    let forged = with_parts(&original, |_, qc, _| {
-        let mut seal = qc.attestations[0].as_slice().to_vec();
-        seal[8] ^= 1;
-        qc.attestations[0] =
-            iroha_sumeragi::message::AttestationSignature::try_from_slice(&seal).unwrap();
-    });
-    assert!(
-        reader
-            .verify_executed_successor(&chain.committed(9), read_frame(forged, 10).unwrap())
-            .is_err()
+    let quorum = result.commit_qc().unwrap();
+    assert_eq!(
+        quorum.signers,
+        iroha_sumeragi::types::Bitmap::from_indices(4, [0, 1, 2]).unwrap()
     );
+    assert!(quorum.attestations.is_empty() && quorum.attestation_witness.is_none());
+    let original = frame(&chain, 10);
+    let parent = chain.committed(9);
+    for (signers, expected) in [
+        (Signers::BelowQuorum, CertError::TooFewSigners),
+        (Signers::All, CertError::TooManySigners),
+    ] {
+        let changed = with_parts(&original, |_, qc, _| {
+            *qc = chain.commit_qc(10, qc.block_hash, qc.result, false, signers);
+        });
+        assert!(matches!(
+            reader.verify_executed_successor(&parent, read_frame(changed, 10).unwrap()),
+            Err(VerificationReadError::Source(ChainReadError::Certificate {
+                height: 10,
+                error,
+            })) if error == expected
+        ));
+    }
+    let forged = with_parts(&original, |_, qc, _| qc.agg_sig.0[8] ^= 1);
+    assert!(matches!(
+        reader.verify_executed_successor(&parent, read_frame(forged, 10).unwrap()),
+        Err(VerificationReadError::Source(ChainReadError::Certificate {
+            height: 10,
+            error: CertError::BadSignature,
+        }))
+    ));
+    // Re-sign the exact changed header and flag with the actual incumbent quorum. The
+    // signature-only relation is genuine; native NoAttestation still rejects its shape.
+    let flagged = with_parts(&original, |header, qc, _| {
+        header.attest = true;
+        *qc = chain.commit_qc(
+            10,
+            header.hash(&BlsCrypto::new()),
+            qc.result,
+            true,
+            Signers::Quorum,
+        );
+    });
+    let (_, flagged_quorum) = decode_certificate(flagged.commit_certificate().unwrap()).unwrap();
+    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
+        panic!("original parent authorizes the boundary");
+    };
+    let authority = VerifiedAuthority::new(
+        scheduled.epoch.clone(),
+        10,
+        &mut EpochValidationScope::new(),
+    )
+    .unwrap();
+    iroha_sumeragi::crypto::Verifier::new(
+        &authority.crypto,
+        &chain.instance(),
+        &authority.epoch,
+        &authority.committee,
+    )
+    .verify_qc_signatures(&flagged_quorum)
+    .unwrap();
+    assert!(matches!(
+        reader.verify_executed_successor(&parent, read_frame(flagged, 10).unwrap()),
+        Err(VerificationReadError::Source(ChainReadError::Certificate {
+            height: 10,
+            error: CertError::AttestationShape,
+        }))
+    ));
+    // A complete real result preimage cannot grant an unflagged native QC an application
+    // witness either. No application signature or retired monetary proof is fabricated.
+    let witnessed = with_parts(&original, |_, qc, preimage| {
+        qc.attestation_witness =
+            Some(iroha_sumeragi::message::ResultWitness::from_untrusted(preimage.clone()).unwrap());
+    });
+    assert!(matches!(
+        reader.verify_executed_successor(&parent, read_frame(witnessed, 10).unwrap()),
+        Err(VerificationReadError::Source(ChainReadError::Certificate {
+            height: 10,
+            error: CertError::AttestationShape,
+        }))
+    ));
+    let current = chain.committed(10);
+    let retried = reader
+        .verify_executed_successor(&parent, current.clone())
+        .unwrap();
+    assert_eq!(retried.id(), result.id());
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        retried.block(),
+        current.block()
+    ));
 }
 
 #[test]
@@ -837,21 +915,37 @@ fn state_certificate_pairing_constructor_refusal_preserves_original_source_for_r
     let current = chain.committed(3);
     let backing = iroha_crypto::BlsNormalAggregateScratch::<()>::backing_bytes();
     let check = |limit| {
-        norito::core::with_decode_limits_scope(
+        norito::core::with_decode_limits_measured(
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 128),
             || reader.verify_executed_successor(&parent, current.clone()),
         )
     };
     for _ in 0..2 {
+        let ((result, usage), relations) = relation_counts::measure(|| check(backing - 1));
+        assert!(
+            relations.qcs.is_empty(),
+            "constructor admission precedes any QC relation"
+        );
+        // Pure epoch validation first attempts its native context roundtrip under this same
+        // cumulative allowance. Refused optional insertion retains those original charges;
+        // the next failed charge must still be the exact pairing constructor backing.
+        let prelude = usage.total_allocated_bytes();
+        assert!(prelude > 0 && prelude < backing);
         assert!(matches!(
-            check(backing - 1),
+            result,
             Err(VerificationReadError::Resource(
                 norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit }
-            )) if attempted == backing as u64 && limit == (backing - 1) as u64
+            )) if attempted == u64::try_from(prelude.checked_add(backing).unwrap()).unwrap()
+                && limit == u64::try_from(backing - 1).unwrap()
         ));
+        assert_eq!(parent.id(), chain.committed(2).id());
+        assert_eq!(current.id(), chain.committed(3).id());
     }
+    // Each original refused scope and its counter owner has ended before this unchanged retry.
+    let ((certified, _), relations) = relation_counts::measure(|| check(1 << 26));
+    assert_eq!(relations.qcs, [3]);
     let certified =
-        check(1 << 26).expect("same authenticated body and parent retry after local refusal");
+        certified.expect("same authenticated body and parent retry after local refusal");
     assert_eq!(certified.id(), current.id());
     assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
         certified.block(),

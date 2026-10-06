@@ -88,7 +88,6 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
         .expect("capture exact pre-replay State");
     let unseeded = super::deserialize::KuraSeed {
         execution_budget: live.ivm_execution_budget(),
-        operation_index_budget: live.world.operation_index_budget().clone(),
         kura: std::sync::Arc::clone(&kura),
         lane_manifests: live.lane_manifests.read().clone(),
         query_handle: live.query_handle.clone(),
@@ -99,7 +98,6 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
     assert!(unseeded.is_err(), "default Nexus loses the required module");
     let isolated = super::deserialize::KuraSeed {
         execution_budget: live.ivm_execution_budget(),
-        operation_index_budget: live.world.operation_index_budget().clone(),
         kura: Arc::clone(&kura),
         lane_manifests: live.lane_manifests.read().clone(),
         query_handle: live.query_handle.clone(),

@@ -1,6 +1,7 @@
 //! Historical certification transcripts with genuine BLS votes and threshold pulses.
-//! These fixtures do not execute NPoS State transitions. Application attestations below use a
-//! test-only BLS verifier, not the production paired-Pasta signing/qualification path.
+//! These fixtures do not execute NPoS State transitions. Application attestations below exercise
+//! an explicit generic BLS verifier; the native default uses NoAttestation and rejects flagged
+//! certificates. Neither fixture establishes native State execution or monetary qualification.
 
 use super::*;
 use crate::state::WorldReadOnly as _;
@@ -10,13 +11,13 @@ use crate::sumeragi::{
     schedule::{ChainParamsRecord, ScheduleOutcome, ScheduledConfig, ScheduledSlot},
 };
 use iroha_data_model::sumeragi::epoch::{
-    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1,
+    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationV1,
+    ValidatorEpochDecisionV1, ValidatorGenerationV1,
 };
 use iroha_data_model::{
     NetworkId,
     block::{
         consensus::ExecWitness,
-        consensus::ValidatorPower,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
     },
     consensus::{GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconPulseContextV1},
@@ -51,8 +52,8 @@ fn members(keys: &[KeyPair]) -> Vec<ValidatorCommitteeMemberV1> {
         .collect()
 }
 
-/// Explicit test attestation authority. It checks actual signatures over the entire epoch-bound
-/// core statement; accepting these signatures does not qualify production Pasta attestations.
+/// Explicit generic application-verifier fixture. It checks actual signatures over the entire
+/// epoch-bound statement; it grants no native or monetary attestation authority.
 struct TestAttestations;
 impl AttestationVerifier for TestAttestations {
     fn verify(
@@ -283,7 +284,10 @@ fn transcript_proposal(
     proposal
 }
 
-fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock> {
+fn build_history(
+    retain: bool,
+    application_attestation: bool,
+) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     let original_keys = keys(false);
     let genesis_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
     let mut policy = SumeragiNposParameters::default();
@@ -364,7 +368,7 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
     let mut active_beacon = crate::beacon::tests::HistoricalBeaconFixture::new(
         network,
         [0x61; 32],
-        current.authority.generation,
+        current.authorization.authority_generation,
         &active_keys,
     );
     for height in 2..=14 {
@@ -422,57 +426,53 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
             } else {
                 keys(height == 6)
             };
-            let authority = if retain {
-                current.authority.clone()
-            } else {
-                let roster = members(&next_keys)
-                    .into_iter()
-                    .map(|member| ValidatorPower {
-                        validator: member.validator,
-                        power: 1,
-                    })
-                    .collect::<Vec<_>>();
-                crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-                    network,
-                    current.authority.generation + 1,
-                    &roster,
-                )
-            };
+            let generation = ValidatorGenerationV1::from_committee(
+                network,
+                if retain {
+                    current.authorization.authority_generation
+                } else {
+                    current.authorization.authority_generation + 1
+                },
+                &members(&next_keys),
+            );
             let next_beacon = (!retain).then(|| {
                 crate::beacon::tests::HistoricalBeaconFixture::new(
                     network,
                     [0x62 + (height / 12) as u8; 32],
-                    authority.generation,
+                    generation.generation,
                     &next_keys,
                 )
             });
             let record = next_beacon.as_ref().unwrap_or(&active_beacon).record();
             assert_eq!(
                 record.adaptive_dkg.session.authority_generation,
-                authority.generation
+                generation.generation
             );
-            let authorization =
-                crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-                    &current.authorization,
-                    &authority,
-                    height + 6,
-                    BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                        session_id: record.session_id,
-                        transcript_hash: record.transcript_hash,
-                    }),
-                    if retain {
-                        ValidatorEpochDecisionV1::Retain
-                    } else {
-                        ValidatorEpochDecisionV1::Activate
-                    },
-                    if retain { [0; 32] } else { [height as u8; 32] },
-                );
+            let authorization = ValidatorEpochAuthorizationV1 {
+                version: 1,
+                network_id: network,
+                epoch: current.authorization.epoch + 1,
+                first_height: current.authorization.last_height + 1,
+                last_height: height + 6,
+                authority_generation: generation.generation,
+                authority_id: generation.generation_id().unwrap(),
+                beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: record.session_id,
+                    transcript_hash: record.transcript_hash,
+                }),
+                previous_authorization_id: current.authorization.authorization_id().unwrap(),
+                transition_id: if retain { [0; 32] } else { [height as u8; 32] },
+                decision: if retain {
+                    ValidatorEpochDecisionV1::Retain
+                } else {
+                    ValidatorEpochDecisionV1::Activate
+                },
+            };
             let next = ValidatorEpochContextV1 {
                 da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                 version: 1,
                 network_id: network,
                 mode: ConsensusMode::Npos,
-                authority,
                 authorization,
                 committee: members(&next_keys),
                 leader_seed: crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
@@ -513,7 +513,7 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: 0,
             skipped_leaders: Vec::new(),
-            attest: boundary.is_some(),
+            attest: application_attestation && boundary.is_some(),
         };
         let budget = world.ivm_execution_budget();
         let mut backing = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
@@ -575,11 +575,17 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
 }
 fn history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
     static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
-    HISTORY.get_or_init(|| build_history(false)).clone()
+    HISTORY.get_or_init(|| build_history(false, true)).clone()
 }
 fn retained_history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
     static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
-    HISTORY.get_or_init(|| build_history(true)).clone()
+    HISTORY.get_or_init(|| build_history(true, true)).clone()
+}
+
+/// Full native-default transcript with matching signed RS16 availability at every height.
+fn native_history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
+    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
+    HISTORY.get_or_init(|| build_history(false, false)).clone()
 }
 
 #[test]
@@ -602,7 +608,10 @@ fn rotated_away_committee_verifies_from_authenticated_boundaries_with_bounded_au
         let cursor = reader.prefix.lock();
         let prefix = cursor.as_ref().unwrap();
         assert_eq!(prefix.tip.height(), 14);
-        assert_eq!(prefix.authority.material.authority.generation, 2);
+        assert_eq!(
+            prefix.authority.material.authorization.authority_generation,
+            2
+        );
         assert!(prefix.schedule.entries().len() <= 3);
     }
     let original = reader.certified(7).unwrap();
@@ -633,8 +642,8 @@ fn retained_generation_still_binds_new_epoch_and_fresh_leader_randomness() {
     let before = reader.certified(6).unwrap();
     let after = reader.certified(7).unwrap();
     assert_eq!(
-        before.commitment().schedule.current.authority,
-        after.commitment().schedule.current.authority
+        before.commitment().schedule.current.generation(),
+        after.commitment().schedule.current.generation()
     );
     assert_eq!(
         before.commitment().schedule.current.committee,
@@ -675,7 +684,7 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
                 1 => next.committee.swap(0, 1),
                 2 => next.committee[0].proof_of_possession.clear(),
                 3 => next.committee[0].proof_of_possession[0] ^= 1,
-                _ => next.authority.validators[0].ep_proof_public_key = [0xff; 32],
+                _ => next.authorization.authority_generation += 1,
             }
             // The compact wire derives both successor epochs from the boundary. Keep
             // that projection consistent so the reader tests the forged authority itself.
@@ -752,7 +761,7 @@ fn boundary_authority_and_parent_links_cannot_self_authorize() {
 }
 
 #[test]
-fn nonempty_boundary_requires_flagged_attestation_and_exact_fresh_pulse() {
+fn nonempty_boundary_checks_application_attestation_and_exact_fresh_pulse() {
     let original = history();
     let state = state_with_history(&original);
     let view = state.view();
@@ -785,7 +794,11 @@ fn nonempty_boundary_requires_flagged_attestation_and_exact_fresh_pulse() {
                 }
                 *bytes = result.preimage().unwrap();
             }
-            *qc = certificate(&keys(false), header, result_of_preimage(bytes), false);
+            // A correctly re-signed unflagged boundary is canonical. For the flag negative,
+            // retain the original signed QC so the altered header cannot self-authorize.
+            if mutation != 0 {
+                *qc = certificate(&keys(false), header, result_of_preimage(bytes), false);
+            }
             if mutation == 3 {
                 let mut changed = qc.attestations[0].as_slice().to_vec();
                 changed[0] ^= 1;
@@ -802,6 +815,49 @@ fn nonempty_boundary_requires_flagged_attestation_and_exact_fresh_pulse() {
             .certified(6);
         assert!(result.is_err(), "mutation {mutation}");
     }
+}
+
+#[test]
+fn native_boundary_accepts_exact_unflagged_quorum_and_rejects_application_attestations() {
+    let original = history();
+    let state = state_with_history(&original);
+    let view = state.view();
+    assert!(matches!(
+        CertifiedChain::new(&view).unwrap().certified(6),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate { height: 6, .. }
+        ))
+    ));
+    let unflagged = native_history();
+    let state = state_with_history(&unflagged);
+    let view = state.view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    assert_eq!(
+        reader
+            .walk(1, 14)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .len(),
+        14
+    );
+    let boundary = reader.certified(6).unwrap();
+    assert_eq!(boundary.verification(), QcVerification::Verified);
+    assert!(boundary.commitment().schedule.boundary.is_some());
+    assert!(boundary.header().unwrap().payload_len > 0);
+    assert!(!boundary.header().unwrap().attest);
+    let qc = boundary.commit_qc().unwrap();
+    assert_eq!(
+        qc.signers,
+        iroha_sumeragi::types::Bitmap::from_indices(4, [0, 1, 2]).unwrap()
+    );
+    assert!(qc.attestations.is_empty() && qc.attestation_witness.is_none());
+    let bad_signature = with_parts(&unflagged[5], |_, qc, _| qc.agg_sig.0[0] ^= 1);
+    assert!(matches!(
+        reader.check_certificate(bad_signature, 6),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate { height: 6, .. }
+        ))
+    ));
 }
 
 #[test]
@@ -925,7 +981,10 @@ fn pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor
         let cursor = reader.prefix.lock();
         let prefix = cursor.as_ref().unwrap();
         assert_eq!(prefix.tip.height(), 14);
-        assert_eq!(prefix.authority.material.authority.generation, 2);
+        assert_eq!(
+            prefix.authority.material.authorization.authority_generation,
+            2
+        );
         assert!(prefix.schedule.entries().len() <= 3);
     }
     // Old random reads replay the authenticated prefix; no rotated-away roster cache exists.
@@ -936,8 +995,8 @@ fn pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor
             .commitment()
             .schedule
             .current
-            .authority
-            .generation,
+            .authorization
+            .authority_generation,
         1
     );
     assert_eq!(
@@ -947,8 +1006,8 @@ fn pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor
             .commitment()
             .schedule
             .current
-            .authority
-            .generation,
+            .authorization
+            .authority_generation,
         2
     );
 }

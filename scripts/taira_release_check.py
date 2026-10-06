@@ -2079,11 +2079,6 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
         'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
     )),
-    ('scoped original World storage publication', (
-        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_foreign_owned_scope_before_writers',
-        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publish',
-        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values',
-    )),
     ('retained candidate descriptors and exact marker custody', (
     )),
     ('original service Queue retirement publication', (
@@ -2106,14 +2101,6 @@ CORE_ZK_STAGES = (
         'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
         'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
         'debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
-    )),
-    ('authenticated indexed polynomial key ownership', (
-        'kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
-        'kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
-    )),
-    ('Native process publication and bootstrap isolation', (
-        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
-        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
     )),
 )
 

@@ -7,13 +7,15 @@
 
 use iroha_data_model::kagemusha::{
     KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaWalletCompletionRecordV1,
-    KagemushaWalletEffectV1, KagemushaWalletEnrollmentChallengeV1, KagemushaWalletLifecycleV1,
-    KagemushaWalletLineagePublicV1, KagemushaWalletLineageSlotV1, KagemushaWalletLineageV1,
-    KagemushaWalletMarkerV1, KagemushaWalletOperationKindV1, KagemushaWalletOutputDescriptorV1,
-    KagemushaWalletReceiptV1, KagemushaWalletRecoveryCapsuleV1, KagemushaWalletRetainedInputRoleV1,
+    KagemushaWalletEffectV1, KagemushaWalletEnrollmentChallengeV1, KagemushaWalletIndexedTreeV1,
+    KagemushaWalletLifecycleV1, KagemushaWalletLineagePublicV1, KagemushaWalletLineageSlotV1,
+    KagemushaWalletLineageV1, KagemushaWalletMarkerV1, KagemushaWalletOperationKindV1,
+    KagemushaWalletOutputDescriptorV1, KagemushaWalletReceiptBodyV1, KagemushaWalletReceiptV1,
+    KagemushaWalletRecoveryCapsuleV1, KagemushaWalletRetainedInputRoleV1,
     KagemushaWalletRetainedInputV1, KagemushaWalletStateCommitmentV1, KagemushaWalletStateCoreV1,
     KagemushaWalletStateRestV1, KagemushaWalletStateV1, KagemushaWalletStatementV1,
     KagemushaWalletStepProofV1, kagemusha_wallet_proof_digest_v1,
+    kagemusha_wallet_provider_contract_v1,
 };
 use std::{
     collections::BTreeMap,
@@ -30,7 +32,7 @@ use super::{
     KagemushaWalletKeyGenerationRequestV1, KagemushaWalletKeyGenerationV1,
     KagemushaWalletKeyProfileV1, KagemushaWalletMarkerRecordV1, KagemushaWalletNotPublishedV1,
     KagemushaWalletPlatformSignatureV1, KagemushaWalletPlatformV1, KagemushaWalletProbeV1,
-    KagemushaWalletPublishOutcomeV1, KagemushaWalletRemoveOutcomeV1, KagemushaWalletSignPreimageV1,
+    KagemushaWalletPublishOutcomeV1, KagemushaWalletRemoveOutcomeV1, KagemushaWalletSignMessageV1,
     KagemushaWalletSimFsV1, KagemushaWalletSlotIdV1, KagemushaWalletUnavailableV1,
     kagemusha_wallet_prepare_root_v1, kagemusha_wallet_prepare_slot_dirs_v1,
 };
@@ -313,12 +315,30 @@ pub(super) fn capsule_for(
         predecessor_lineage,
         step_proof,
         payment_digest,
-        map_openings: vec![vec![1, 2, 3]],
+        map_openings: stand_in_map_openings(1),
         retained_inputs: retained_for(kind),
         output,
     };
     capsule.validate().expect("valid capsule");
     capsule
+}
+
+/// Stand-in capsule map openings: the insertion witness of key `seed` into an empty indexed
+/// tree as G1 §3.2 opening transcripts, the sentinel's leaf opening and the written slot's
+/// empty-slot opening, each with exactly 32 siblings (owner answer A2). Distinct seeds give
+/// distinct openings.
+pub(super) fn stand_in_map_openings(seed: u8) -> Vec<Vec<u8>> {
+    let mut key = [seed; 32];
+    key[31] = 0;
+    let mut value = [seed ^ 0x5a; 32];
+    value[31] = 0;
+    let insertion = KagemushaWalletIndexedTreeV1::new()
+        .insert(key, value)
+        .expect("stand-in insertion");
+    vec![
+        insertion.low_opening.leaf_transcript(&insertion.low),
+        insertion.slot_opening.empty_transcript(),
+    ]
 }
 
 /// Bootstrap capsule bound to the fixture's enrollment marker.
@@ -376,7 +396,7 @@ pub(super) fn next_capsule_variant(
         successor: commitment(tag),
         effect: KagemushaWalletEffectV1::ArchiveSent {
             credit_id: field_value(tag),
-            credited: [tag.wrapping_add(2).max(1); 32],
+            credited: field_value(tag.wrapping_add(2).max(1)),
         },
         ..previous.statement
     };
@@ -605,25 +625,20 @@ impl FakePlatformV1 {
     /// Record a violation unless the current visible marker of `slot` is the only one and is
     /// Selected for a receipt body (design I6, I10), or a terminal marker for a ledger control
     /// (design T3: the Abandon control is signed only after its terminal marker is durable).
-    fn check_signing(state: &mut FakeStateV1, slot: &KagemushaWalletSlotIdV1, message: &[u8]) {
+    fn check_signing(
+        state: &mut FakeStateV1,
+        slot: &KagemushaWalletSlotIdV1,
+        domain: iroha_data_model::kagemusha::KagemushaWalletSigningDomainV1,
+    ) {
         let Some(fs) = state.guard.as_ref() else {
             return;
         };
-        // The preimage is `prefix || role || 0x00 || LE64 len || body`.
-        let role_of = |role: iroha_data_model::kagemusha::KagemushaWalletDigestRoleV1| {
-            let empty = iroha_data_model::kagemusha::kagemusha_wallet_preimage_v1(role, &[]);
-            message.starts_with(&empty[..empty.len() - 8])
+        use iroha_data_model::kagemusha::KagemushaWalletSigningDomainV1 as Domain;
+        let expected = match domain {
+            Domain::Receipt => super::KagemushaWalletMarkerPhaseV1::Selected,
+            Domain::LedgerControl => super::KagemushaWalletMarkerPhaseV1::Terminal,
+            _ => return,
         };
-        let expected =
-            if role_of(iroha_data_model::kagemusha::KagemushaWalletDigestRoleV1::ReceiptBody) {
-                super::KagemushaWalletMarkerPhaseV1::Selected
-            } else if role_of(
-                iroha_data_model::kagemusha::KagemushaWalletDigestRoleV1::LedgerControlBody,
-            ) {
-                super::KagemushaWalletMarkerPhaseV1::Terminal
-            } else {
-                return;
-            };
         let dir = super::kagemusha_wallet_markers_dir_v1(slot);
         let names: Vec<String> = fs
             .visible_names(&dir)
@@ -697,13 +712,12 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
     fn key_sign(
         &self,
         slot: &KagemushaWalletSlotIdV1,
-        preimage: KagemushaWalletSignPreimageV1<'_>,
+        message: KagemushaWalletSignMessageV1<'_>,
     ) -> Result<KagemushaWalletPlatformSignatureV1, KagemushaWalletUnavailableV1> {
-        let message = preimage.as_bytes();
         self.with(|state| {
             let call = state.sign_calls;
             state.sign_calls += 1;
-            Self::check_signing(state, slot, message);
+            Self::check_signing(state, slot, message.domain());
             if state.sign_unavailable || state.sign_fault_at == Some(call) {
                 return Err(KagemushaWalletUnavailableV1::KeyUnusable);
             }
@@ -713,7 +727,8 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
                 .ok_or(KagemushaWalletUnavailableV1::KeyUnusable)?;
             // Randomized: a second signature over the same body differs, so byte-identical
             // retries can only come from retained records.
-            let signature: Signature = key.sign_with_rng(&mut rand_core_06::OsRng, message);
+            let signature: Signature =
+                key.sign_with_rng(&mut rand_core_06::OsRng, message.as_bytes());
             Ok(KagemushaWalletPlatformSignatureV1::Der(
                 signature.to_der().as_bytes().to_vec(),
             ))
@@ -895,8 +910,8 @@ impl FakePlatformV1 {
     }
 }
 
-/// Transition owner of the tests: a deterministic receipt body over the capsule digest and a
-/// completion record whose output embeds the receipt signature.
+/// Transition owner of the tests: the canonical receipt body over the capsule's frozen
+/// statement, proof and Payment digests, and a completion whose output embeds its signature.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct TestOwnerV1;
 
@@ -911,10 +926,25 @@ impl
         capsule: &KagemushaWalletRecoveryCapsuleV1,
         capsule_digest: &[u8; 32],
     ) -> Result<Vec<u8>, super::KagemushaWalletProviderErrorV1> {
-        let mut body = capsule_digest.to_vec();
-        body.extend_from_slice(&capsule.operation_id);
-        body.extend_from_slice(&capsule.statement.sequence.to_le_bytes());
-        Ok(body)
+        Ok(KagemushaWalletReceiptBodyV1 {
+            version: 1,
+            scheme_id: capsule.scheme_id,
+            wallet_id: capsule.wallet_id,
+            provider_contract: kagemusha_wallet_provider_contract_v1(),
+            sequence: capsule.statement.sequence,
+            operation_id: capsule.operation_id,
+            predecessor: capsule.statement.predecessor,
+            successor: capsule.statement.successor,
+            statement_digest: capsule.statement.statement_digest(),
+            proof_digest: capsule.proof_digest().map_err(|_| {
+                super::KagemushaWalletProviderErrorV1::Invalid {
+                    field: "receipt.proof_digest",
+                }
+            })?,
+            capsule_digest: *capsule_digest,
+            payment_digest: capsule.payment_digest,
+        }
+        .transcript())
     }
 
     fn assemble(

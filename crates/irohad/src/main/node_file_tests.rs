@@ -303,19 +303,6 @@ fn profile_node_secrets_resolve_and_fail_closed_on_custody() {
 }
 
 #[test]
-fn data_dir_launch_rejects_an_inherited_seed_descriptor() {
-    let mut config = Config::from_toml_source(iroha_config::base::toml::TomlSource::inline(
-        config_tests::minimal_config_table(),
-    ))
-    .expect("minimal config parses");
-    verify_node_secrets_seed_source(true, &config).expect("the fixed seed file is the only source");
-    config.sumeragi.mint_finality_seed_fd = Some(199);
-    assert!(verify_node_secrets_seed_source(true, &config).is_err());
-    verify_node_secrets_seed_source(false, &config)
-        .expect("other launches keep the inherited descriptor");
-}
-
-#[test]
 fn check_flags_parse_and_conflict() {
     let args = parse_args_from(
         test_build_metadata(),

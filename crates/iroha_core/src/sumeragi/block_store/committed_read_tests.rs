@@ -2,12 +2,11 @@
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{
-    attestation::NativePastaVerifier,
     crypto::BlsCrypto,
     schedule::ScheduledSlot,
     test_chain::{CertifiedTestChain, Signers},
 };
-use iroha_sumeragi::types::HeightConfig;
+use iroha_sumeragi::{crypto::NoAttestation, types::HeightConfig};
 
 struct FixedSchedule {
     instance: Hash32,
@@ -58,22 +57,19 @@ fn committed_read_returns_original_qc_backing_after_projection_refusal_and_retry
         .complete(&budget)
         .unwrap_or_else(|_| panic!("real original native certificate"));
     let original_bitmap = decoded.commit_qc.signers.as_bytes().as_ptr();
-    let original_shares = decoded.commit_qc.attestations.as_ptr();
-    let witness = decoded.commit_qc.attestation_witness.as_ref().unwrap();
-    let original_witness = witness.as_slice().as_ptr();
-    assert!(witness.admitted_to(&budget));
+    let original_signature = decoded.commit_qc.agg_sig;
+    assert!(!decoded.commit_qc.attest);
+    assert!(decoded.commit_qc.attestation_witness.is_none());
     assert!(!decoded.commit_qc.signers.as_bytes().is_empty());
-    assert_eq!(decoded.commit_qc.attestations.len(), 3);
+    assert_eq!(decoded.commit_qc.signers.count_ones(), 3);
+    assert!(decoded.commit_qc.attestations.is_empty());
     let original_header = decoded.header.clone();
     let mut read = CommittedRead {
         height: 10,
         budget: budget.clone(),
         crypto,
         schedule,
-        verifier: Arc::new(NativePastaVerifier::new(
-            chain.instance(),
-            chain.network_id(),
-        )),
+        verifier: Arc::new(NoAttestation),
         phase: Phase::Decoded(decoded),
     };
     let retained = budget.reserved_bytes();
@@ -97,18 +93,9 @@ fn committed_read_returns_original_qc_backing_after_projection_refusal_and_retry
         original_bitmap,
         "the original decoded bitmap must be moved, never copied"
     );
-    assert_eq!(
-        qc.attestations.as_ptr(),
-        original_shares,
-        "the original decoded signature vector must be moved, never copied"
-    );
-    let witness = qc.attestation_witness.as_ref().unwrap();
-    assert_eq!(witness.as_slice().as_ptr(), original_witness);
-    assert!(witness.admitted_to(&budget));
-    assert_eq!(
-        witness.as_slice(),
-        source.commit_certificate().unwrap().result_preimage()
-    );
+    assert_eq!(qc.agg_sig, original_signature);
+    assert!(qc.attestations.is_empty());
+    assert!(qc.attestation_witness.is_none());
     drop((body, qc, read));
     assert_eq!(
         budget.reserved_bytes(),
@@ -118,7 +105,7 @@ fn committed_read_returns_original_qc_backing_after_projection_refusal_and_retry
 }
 
 #[test]
-fn body_only_read_releases_original_qc_witness_before_returning_ready() {
+fn body_only_read_releases_refused_qc_attachment_before_untrusted_restoration() {
     use crate::sumeragi::body_read::{BodyReadJob, BodyReadPoll};
     use iroha_allocation::{ChargedBuffer, ChargedShared};
 
@@ -151,7 +138,40 @@ fn body_only_read_releases_original_qc_witness_before_returning_ready() {
         .expect("original block read attempt")
         .unwrap();
     let budget = AllocationBudget::new(1 << 27);
-    let decoded = CertificateRead::new(Clone::clone(&original), budget.clone())
+    let genuine = CertificateRead::new(Clone::clone(&original), budget.clone())
+        .complete(&budget)
+        .unwrap_or_else(|_| panic!("genuine original quorum"));
+    let source = certified_source(
+        &schedule,
+        &*crypto,
+        &NoAttestation,
+        10,
+        &genuine.header,
+        &genuine.commit_qc,
+    )
+    .unwrap();
+    drop(genuine);
+    // The independently selected body remains genuine. Its changed certificate is explicitly
+    // inadmissible; this adapter returns only untrusted body-restoration input, never finality.
+    let certificate = original.commit_certificate().unwrap();
+    let mut changed_qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+    changed_qc.attestation_witness = Some(
+        iroha_sumeragi::message::ResultWitness::from_untrusted(
+            certificate.result_preimage().to_vec(),
+        )
+        .unwrap(),
+    );
+    let changed = crate::block::reserve_block_for_tests().initialize(
+        original.as_ref().clone().with_commit_certificate(Some(
+            iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+                certificate.consensus_header().to_vec(),
+                norito::encode_canonical(&changed_qc).unwrap(),
+                certificate.result_preimage().to_vec(),
+                certificate.availability().to_vec(),
+            ),
+        )),
+    );
+    let decoded = CertificateRead::new(changed, budget.clone())
         .complete(&budget)
         .unwrap_or_else(|_| panic!("original certified artifacts"));
     // Keep one observer of the exact existing shared witness; this allocates no replacement.
@@ -164,15 +184,18 @@ fn body_only_read_releases_original_qc_witness_before_returning_ready() {
     assert!(witness.admitted_to(&budget));
     let witness_charge =
         witness.as_slice().len() + ChargedShared::<ChargedBuffer<u8>>::allocation_layout().size();
-    let source = certified_source(
-        &schedule,
-        &*crypto,
-        &NativePastaVerifier::new(chain.instance(), chain.network_id()),
-        10,
-        &decoded.header,
-        &decoded.commit_qc,
-    )
-    .unwrap();
+    assert!(
+        certified_source(
+            &schedule,
+            &*crypto,
+            &NoAttestation,
+            10,
+            &decoded.header,
+            &decoded.commit_qc,
+        )
+        .is_err(),
+        "the attachment cannot authenticate a native committed body"
+    );
     let mut read =
         body_read::StoredBodyRead::from_decoded(source.clone(), decoded, budget.clone(), crypto);
     let retained = budget.reserved_bytes();
@@ -238,10 +261,7 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
         instance: chain.instance(),
         config: scheduled.height_config().unwrap(),
     });
-    let verifier = Arc::new(NativePastaVerifier::new(
-        chain.instance(),
-        chain.network_id(),
-    ));
+    let verifier = Arc::new(NoAttestation);
     let block = chain
         .kura()
         .get_block(
@@ -264,14 +284,9 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
     )
     .unwrap();
     let bitmap = decoded.commit_qc.signers.as_bytes().as_ptr();
-    let shares = decoded.commit_qc.attestations.as_ptr();
-    let witness = decoded
-        .commit_qc
-        .attestation_witness
-        .as_ref()
-        .unwrap()
-        .as_slice()
-        .as_ptr();
+    let signature = decoded.commit_qc.agg_sig;
+    assert!(decoded.commit_qc.attestations.is_empty());
+    assert!(decoded.commit_qc.attestation_witness.is_none());
     let read = CommittedRead {
         height: 10,
         budget: budget.clone(),
@@ -322,14 +337,9 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
     let (body, qc) = store.committed_body(10).unwrap().unwrap();
     assert_eq!(body.source(), &source);
     assert_eq!(qc.signers.as_bytes().as_ptr(), bitmap);
-    assert_eq!(qc.attestations.as_ptr(), shares);
-    let original = qc.attestation_witness.as_ref().unwrap();
-    assert_eq!(original.as_slice().as_ptr(), witness);
-    assert_eq!(
-        original.as_slice(),
-        block.commit_certificate().unwrap().result_preimage()
-    );
-    assert!(original.admitted_to(&budget));
+    assert_eq!(qc.agg_sig, signature);
+    assert!(qc.attestations.is_empty());
+    assert!(qc.attestation_witness.is_none());
     assert!(store.read.lock().is_none());
     drop((body, qc, store));
     assert_eq!(budget.reserved_bytes(), 0);
@@ -384,10 +394,7 @@ fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
             instance: fixture.verifier().instance(),
             config: scheduled.height_config().unwrap(),
         }),
-        Arc::new(NativePastaVerifier::new(
-            fixture.verifier().instance(),
-            fixture.network_id(),
-        )),
+        Arc::new(NoAttestation),
     );
     let owners = read.retained_certificate_owners_for_test().unwrap();
     let (result, refused) =

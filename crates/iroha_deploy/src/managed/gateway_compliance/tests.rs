@@ -514,9 +514,9 @@ fn publication_promotes_exact_original_then_reopens_with_one_status_only() {
                     .advance(&mut TestLive::default(), deadline())
                     .unwrap()
             });
-        // Catalog and acknowledgement signing keep their independent Prepared source checks
-        // before and after signing. The repeated live-plan validations add no semantic parse.
-        assert_eq!(parses, 4);
+        // Signing, historical verification and live-plan access retain full source/lock checks
+        // on the held owner without another semantic profile parse.
+        assert_eq!(parses, 0);
         let original = bytes(&path, "original.nrt");
         let acknowledgement = bytes(&path, "acknowledgement.nrt");
         let catalog: GatewayComplianceCatalogV1 = decode(&original).unwrap();
@@ -667,11 +667,15 @@ fn malformed_foreign_trailing_oversized_and_gapped_originals_refuse_before_http(
     let (_foreign_temporary, foreign) = fixture("compliance-foreign");
     let publisher = ManagedGatewayCompliance::open(&prepared, provider).unwrap();
     let path = operation(&publisher);
-    let selected = prepared
-        .sign_gateway_compliance_catalog(provider, None, now_ms().unwrap() / 1_000)
+    let selected = publisher
+        .authority
+        .sign_gateway_compliance_catalog(None, now_ms().unwrap() / 1_000)
         .unwrap();
-    let foreign_catalog = foreign
-        .sign_gateway_compliance_catalog(self::provider(&foreign), None, now_ms().unwrap() / 1_000)
+    let foreign_publisher =
+        ManagedGatewayCompliance::open(&foreign, self::provider(&foreign)).unwrap();
+    let foreign_catalog = foreign_publisher
+        .authority
+        .sign_gateway_compliance_catalog(None, now_ms().unwrap() / 1_000)
         .unwrap();
     let exact = encode(&selected, MAX_RECORD_BYTES).unwrap();
     let mut trailing = exact.clone();
@@ -906,8 +910,9 @@ fn exact_promoted_catalog_expiry_boundary_and_pending_candidate_are_not_ready() 
     let (_temporary, prepared) = fixture("compliance-expiry-boundary");
     let provider = provider(&prepared);
     let publisher = ManagedGatewayCompliance::open(&prepared, provider).unwrap();
-    let catalog = prepared
-        .sign_gateway_compliance_catalog(provider, None, now_ms().unwrap() / 1_000)
+    let catalog = publisher
+        .authority
+        .sign_gateway_compliance_catalog(None, now_ms().unwrap() / 1_000)
         .unwrap();
     retain_catalog(&publisher, 1, &catalog);
     let path = operation(&publisher);
@@ -957,8 +962,9 @@ fn original_changed_during_initial_status_never_reaches_stage_or_promoted_return
             let (_temporary, prepared) = fixture("compliance-original-race");
             let provider = provider(&prepared);
             let publisher = ManagedGatewayCompliance::open(&prepared, provider).unwrap();
-            let catalog = prepared
-                .sign_gateway_compliance_catalog(provider, None, now_ms().unwrap() / 1_000)
+            let catalog = publisher
+                .authority
+                .sign_gateway_compliance_catalog(None, now_ms().unwrap() / 1_000)
                 .unwrap();
             retain_catalog(&publisher, 1, &catalog);
             let mut http = RuntimeHttp::start(

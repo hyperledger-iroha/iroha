@@ -42,10 +42,6 @@ use iroha_data_model::{
         GrantBox, RegisterBox, RevokeBox, SetAssetDefinitionAlias,
         alias_setup::EnsureAlias,
         consensus_keys::RegisterConsensusKey,
-        kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-            KagemushaMintFinalityGenesisParametersV1,
-        },
         nexus::{
             ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
             EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
@@ -384,8 +380,6 @@ fn taira_runtime_signer_policy_digest() -> [u8; 32] {
 pub const GENESIS_SEED: &[u8; 7] = b"genesis";
 const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-transport:v1|";
 const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:streaming-identity:v1|";
-const MINT_FINALITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:mint-finality-private:v1|";
-const MINT_FINALITY_SEED_DIRECTORY: &str = "mint-finality-signers";
 /// Total P2P connection bound: the other validators in the largest committee
 /// plus two authenticated observer connections.
 const LOCALNET_MAX_TOTAL_CONNECTIONS: usize = MAX_VALIDATORS_PER_HEIGHT - 1 + 2;
@@ -958,7 +952,6 @@ struct Peer {
     bls_pop: Vec<u8>,
     runtime_signer_public_key: iroha_crypto::PublicKey,
     runtime_signer_private_key: iroha_crypto::ExposedPrivateKey,
-    mint_finality_seed: Zeroizing<[u8; 32]>,
     api_port: u16,
     p2p_port: u16,
 }
@@ -1234,9 +1227,7 @@ fn generate_localnet_runtime<T: Write>(
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
     }
     if managed {
-        write_managed_mint_finality_seeds(&out_dir, &peers)?;
-    } else {
-        write_mint_finality_seeds(&out_dir, &peers)?;
+        prepare_managed_node_directories(&out_dir, peers.len())?;
     }
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode);
     let sora_profile_enabled = opts.sora_profile.is_some();
@@ -1267,8 +1258,7 @@ fn generate_localnet_runtime<T: Write>(
     let assets =
         effective_localnet_assets_for_client(&opts.assets, &client_identity.account_id, taira);
     let gas_account_id = localnet_gas_account_id(&genesis_public_key);
-    let mut genesis =
-        generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id, &peers)?;
+    let mut genesis = generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id)?;
     genesis = append_localnet_private_root_admission_policy(genesis, &chain_id)?;
     if opts.extra_accounts > 0 || !assets.is_empty() {
         genesis = extend_genesis(
@@ -1796,7 +1786,6 @@ fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) ->
                 bls_pop: pop,
                 runtime_signer_public_key,
                 runtime_signer_private_key,
-                mint_finality_seed: generate_mint_finality_seed(seed, nth)?,
                 api_port: base_api + nth,
                 p2p_port: base_p2p + nth,
             })
@@ -2535,9 +2524,6 @@ fn render_peer_config(
     root.insert("tiered_state".into(), Value::Table(tiered_state));
     let mut sumeragi = Table::new();
     sumeragi.insert("role".into(), Value::String("validator".to_owned()));
-    if !taira {
-        sumeragi.insert("mint_finality_seed_fd".into(), Value::Integer(199));
-    }
     let mut keys = Table::new();
     keys.insert(
         "allowed_algorithms".into(),
@@ -3328,7 +3314,6 @@ fn generate_raw_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
     consensus_mode: SumeragiConsensusMode,
     chain_id: &str,
-    peers: &[Peer],
 ) -> Result<RawGenesisTransaction> {
     let chain_id = chain_id
         .parse::<ChainId>()
@@ -3336,10 +3321,7 @@ fn generate_raw_genesis(
     let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         .then(|| localnet_npos_epoch_seed(&chain_id));
     let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."))
-        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-        .with_kagemusha_mint_finality_genesis_parameters(
-            localnet_kagemusha_mint_finality_genesis_parameters(peers)?,
-        );
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended());
     generate_default(
         builder,
         genesis_public_key,
@@ -3350,38 +3332,6 @@ fn generate_raw_genesis(
     )
 }
 
-fn localnet_kagemusha_mint_finality_genesis_parameters(
-    peers: &[Peer],
-) -> Result<KagemushaMintFinalityGenesisParametersV1> {
-    let mut peers = peers.iter().collect::<Vec<_>>();
-    peers.sort_by_key(|peer| PeerId::new(peer.public_key.clone()));
-    let validators = peers
-        .into_iter()
-        .map(|peer| {
-            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &peer.mint_finality_seed,
-                0,
-                PeerId::new(peer.public_key.clone()),
-            )
-            .map_err(|error| eyre!("derive localnet KAGEMUSHA mint-finality keys: {error}"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            generation: 0,
-            validators,
-        },
-    };
-    parameters
-        .validate()
-        .map_err(|error| eyre!("invalid localnet KAGEMUSHA mint-finality roster: {error}"))?;
-    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
-        &parameters,
-    )
-    .map_err(|error| eyre!("invalid localnet KAGEMUSHA curve keys: {error}"))?;
-    Ok(parameters)
-}
 fn extend_genesis(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
@@ -4866,15 +4816,7 @@ fn generated_config_parameter_name(id: &iroha_config::base::ParameterId) -> Opti
             ],
         ),
         (&["tiered_state"], &["cold_store_root", "da_store_root"]),
-        (
-            &["sumeragi"],
-            &[
-                "role",
-                "mint_finality_seed_fd",
-                "records_dir",
-                "installation_log",
-            ],
-        ),
+        (&["sumeragi"], &["role", "records_dir", "installation_log"]),
         (&["sumeragi", "keys"], &["allowed_algorithms"]),
         (
             &["nexus"],
@@ -5181,7 +5123,7 @@ mod config_error_tests {
 ///
 /// Only the native reader handles configuration and credential bodies. The public result
 /// binds the checked configuration hash and retained filesystem identities for an opaque
-/// FD 198/199/200 handoff by the generated launcher.
+/// FD 198/200 handoff by the generated launcher.
 ///
 /// # Errors
 /// Refuses unsafe paths or custody, changed node settings, mismatched beacon shares, and
@@ -5349,10 +5291,6 @@ pub fn validate_beacon_launch(
             .join("runtime")
             .join(TAIRA_RUNTIME_SIGNER_DIRECTORY)
             .join(format!("peer{peer_index}.private_key"));
-        let mint_path = network_dir
-            .join("runtime")
-            .join(MINT_FINALITY_SEED_DIRECTORY)
-            .join(format!("peer{peer_index}.seed"));
         let (signer, signer_identity) = read_beacon_launch_input(&signer_path, 71)?;
         ensure!(
             signer.len() == 71,
@@ -5381,17 +5319,11 @@ pub fn validate_beacon_launch(
                 == Some(hex::encode(public_bytes).as_str()),
             "runtime signer does not match this peer's native provider"
         );
-        let (mint, mint_identity) = read_beacon_launch_input(&mint_path, 32)?;
-        ensure!(
-            mint.len() == 32,
-            "mint signer requires its exact seed record"
-        );
         network.revalidate()?;
         let beacon_config_path = beacon_config.to_path_buf();
         let credential_path = beacon_credential.to_path_buf();
         let config_blake3 = blake3::hash(&beacon_bytes).to_hex().to_string();
         let signer_size = signer.len();
-        let mint_size = mint.len();
         let credential_size = credential_bytes.len();
         let result = norito::json!({
             "schema": "iroha.taira.private-beacon-launch.v1",
@@ -5403,7 +5335,6 @@ pub fn validate_beacon_launch(
             "config_blake3": config_blake3,
             "sources": [
                 {"descriptor": 198, "path": signer_path, "size": signer_size, "identity": signer_identity},
-                {"descriptor": 199, "path": mint_path, "size": mint_size, "identity": mint_identity},
                 {"descriptor": 200, "path": credential_path, "size": credential_size, "identity": credential_identity}
             ]
         });
@@ -5920,13 +5851,12 @@ mod private_beacon_launch_tests {
     }
 
     #[test]
-    fn private_beacon_launcher_hands_off_three_opaque_fds_and_rejects_changed_sources() {
+    fn private_beacon_launcher_hands_off_two_opaque_fds_and_rejects_changed_sources() {
         let root = localnet_test_helpers::private_tempdir().unwrap();
         for (name, bytes) in [
             ("initial.toml", b"initial exact bytes".as_slice()),
             ("beacon.toml", b"projected exact bytes".as_slice()),
             ("key", &[0x41; 71]),
-            ("mint", &[0x42; 32]),
             ("credential", &[0x43; 257]),
         ] {
             custody::write(root.path().join(name), bytes).unwrap();
@@ -5939,12 +5869,22 @@ def capture_taira_start(*_args):
     pass
 env = os.environ.copy()
 env.update(IROHA_PEER_LOG=os.path.join(root, "peer.log"), IROHA_PEER_PROCESS_RECORD=os.path.join(root, "peer.process.json"), IROHA_PEER_INDEX="0")
-records = [(os.path.join(root, source), os.path.join(root, "fd" + str(fd)), size, fd) for source, size, fd in (("key", 71, 198), ("mint", 32, 199), ("credential", 257, 200))]
+records = [(os.path.join(root, source), os.path.join(root, "fd" + str(fd)), size, fd) for source, size, fd in (("key", 71, 198), ("credential", 257, 200))]
 def selection():
     return {"initial_config": os.path.join(root, "initial.toml"), "initial_identity": _taira_file_identity(os.lstat(os.path.join(root, "initial.toml"))),
         "beacon_config": os.path.join(root, "beacon.toml"), "beacon_identity": _taira_file_identity(os.lstat(os.path.join(root, "beacon.toml"))),
         "sources": [{"path": source, "size": size, "descriptor": fd, "identity": _taira_file_identity(os.lstat(source))} for source, _launch, size, fd in records]}
-consumer = "import os; exec('for fd,size in ((198,71),(199,32),(200,257)):\\n assert len(os.read(fd,size+1))==size\\n os.lseek(fd,0,0)\\n assert os.write(fd,bytes(size))==size\\n os.fsync(fd)\\n os.ftruncate(fd,0)\\n os.fsync(fd)')"
+consumer = "import os; exec('for fd,size in ((198,71),(200,257)):\\n assert len(os.read(fd,size+1))==size\\n os.lseek(fd,0,0)\\n assert os.write(fd,bytes(size))==size\\n os.fsync(fd)\\n os.ftruncate(fd,0)\\n os.fsync(fd)')"
+signer_consumer = "import os; assert len(os.read(198,72))==71; os.lseek(198,0,0); assert os.write(198,bytes(71))==71; os.fsync(198); os.ftruncate(198,0); os.fsync(198)"
+process = launch_taira_process([sys.executable, "-c", signer_consumer], env, records[:1])
+assert process.wait(timeout=10) == 0
+assert os.lstat(records[0][1]).st_size == 0
+try:
+    _preflight_taira_runtime_paths(records[:1] + [(records[0][0], os.path.join(root, "fd199"), 32, 199)])
+except RuntimeError as error:
+    assert "fixed runtime descriptors" in str(error)
+else:
+    raise AssertionError("retired mint-finality descriptor was accepted")
 process = launch_taira_process([sys.executable, "-c", consumer], env, records, selection())
 assert process.wait(timeout=10) == 0
 assert all(os.lstat(launch).st_size == 0 for _source, launch, _size, _fd in records)
@@ -6174,26 +6114,6 @@ fn require_taira_private_output_outside_git(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn generate_mint_finality_seed(
-    base_seed: Option<&[u8]>,
-    peer_index: u16,
-) -> Result<Zeroizing<[u8; 32]>> {
-    let mut seed = Zeroizing::new([0_u8; 32]);
-    if let Some(base_seed) = base_seed {
-        let mut material = Zeroizing::new(Vec::new());
-        material.extend_from_slice(MINT_FINALITY_SEED_DOMAIN);
-        material.extend_from_slice(&u64::try_from(base_seed.len())?.to_be_bytes());
-        material.extend_from_slice(base_seed);
-        material.extend_from_slice(&peer_index.to_be_bytes());
-        *seed = Hash::new(material.as_slice()).into();
-    } else {
-        OsRng
-            .try_fill_bytes(seed.as_mut())
-            .map_err(|_| eyre!("operating-system entropy unavailable for mint-finality seed"))?;
-    }
-    Ok(seed)
-}
-
 fn generate_soranet_transport_key_pair(
     base_seed: Option<&[u8]>,
     peer_index: &[u8],
@@ -6305,155 +6225,6 @@ done
     Ok(())
 }
 
-const ORDINARY_MINT_FINALITY_LAUNCH_PY: &str = r#"
-import errno
-import os
-import stat
-import subprocess
-import time
-
-_MINT_SEED_BYTES = 32
-_MINT_SEED_FD = 199
-
-def _mint_identity(metadata):
-    return tuple(getattr(metadata, field) for field in (
-        "st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"))
-
-def _mint_validate(metadata, size):
-    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1
-            or metadata.st_size != size):
-        raise RuntimeError("untrusted localnet mint-finality seed descriptor")
-
-def _mint_erase_launch(descriptor, path, device, inode):
-    metadata = os.fstat(descriptor)
-    if (metadata.st_dev, metadata.st_ino) != (device, inode):
-        raise RuntimeError("localnet mint-finality launch inode changed")
-    named = os.lstat(path)
-    if (not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != (device, inode)
-            or named.st_uid != os.geteuid() or stat.S_IMODE(named.st_mode) != 0o600
-            or named.st_nlink != 1 or named.st_size > _MINT_SEED_BYTES):
-        raise RuntimeError("localnet mint-finality launch pathname changed")
-    if metadata.st_size:
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        zeros = bytes(_MINT_SEED_BYTES)
-        if os.write(descriptor, zeros) != _MINT_SEED_BYTES:
-            raise RuntimeError("short localnet mint-finality launch erasure")
-        os.fsync(descriptor)
-        os.ftruncate(descriptor, 0)
-        os.fsync(descriptor)
-    os.unlink(path)
-
-def launch_ordinary_validator_with_mint_seed(cmd, env):
-    source = os.path.join(env["IROHA_NETWORK_DIR"], "runtime", "mint-finality-signers",
-                          "peer{}.seed".format(env["IROHA_PEER_INDEX"]))
-    launch = os.path.join(env["IROHA_NETWORK_DIR"], "runtime", "mint-finality-signers",
-                          "peer{}.fd199".format(env["IROHA_PEER_INDEX"]))
-    for directory in (env["IROHA_NETWORK_DIR"], os.path.dirname(os.path.dirname(source)), os.path.dirname(source)):
-        metadata = os.lstat(directory)
-        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o700):
-            raise RuntimeError("untrusted localnet mint-finality seed directory")
-    if os.path.realpath(source) == os.path.realpath(launch):
-        raise RuntimeError("localnet retained and one-shot seed paths alias")
-    try:
-        os.fstat(_MINT_SEED_FD)
-    except OSError as error:
-        if error.errno != errno.EBADF:
-            raise
-    else:
-        raise RuntimeError("localnet private descriptor 199 is already occupied")
-    reserved = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
-    source_fd = None
-    launch_fd = None
-    created = None
-    process = None
-    completed = False
-    try:
-        if reserved != _MINT_SEED_FD:
-            os.dup2(reserved, _MINT_SEED_FD, inheritable=False)
-        source_fd = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-        before = os.fstat(source_fd)
-        _mint_validate(before, _MINT_SEED_BYTES)
-        try:
-            stale = os.lstat(launch)
-        except FileNotFoundError:
-            stale = None
-        if stale is not None:
-            _mint_validate(stale, 0)
-            stale_fd = os.open(launch, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
-            try:
-                if _mint_identity(os.fstat(stale_fd)) != _mint_identity(stale):
-                    raise RuntimeError("stale localnet seed changed before cleanup")
-                _mint_erase_launch(stale_fd, launch, stale.st_dev, stale.st_ino)
-            finally:
-                os.close(stale_fd)
-        launch_fd = os.open(launch, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
-        created = os.fstat(launch_fd)
-        _mint_validate(created, 0)
-        secret = bytearray(_MINT_SEED_BYTES)
-        view = memoryview(secret)
-        try:
-            offset = 0
-            while offset < _MINT_SEED_BYTES:
-                count = os.readv(source_fd, [view[offset:]])
-                if count <= 0:
-                    raise RuntimeError("short retained localnet mint-finality seed")
-                offset += count
-            if _mint_identity(os.fstat(source_fd)) != _mint_identity(before):
-                raise RuntimeError("retained localnet mint-finality seed changed during copy")
-            offset = 0
-            while offset < _MINT_SEED_BYTES:
-                count = os.write(launch_fd, view[offset:])
-                if count <= 0:
-                    raise RuntimeError("short localnet mint-finality child write")
-                offset += count
-        finally:
-            for index in range(_MINT_SEED_BYTES):
-                secret[index] = 0
-            view.release()
-        os.fsync(launch_fd)
-        os.lseek(launch_fd, 0, os.SEEK_SET)
-        ready = os.fstat(launch_fd)
-        _mint_validate(ready, _MINT_SEED_BYTES)
-        if (ready.st_dev, ready.st_ino) != (created.st_dev, created.st_ino):
-            raise RuntimeError("localnet mint-finality child inode changed")
-        os.dup2(launch_fd, _MINT_SEED_FD, inheritable=True)
-        with open(env["IROHA_PEER_LOG"], "ab", buffering=0) as log:
-            process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env,
-                close_fds=True, pass_fds=(_MINT_SEED_FD,), start_new_session=True)
-        deadline = time.monotonic() + 30.0
-        while os.fstat(launch_fd).st_size != 0:
-            if process.poll() is not None:
-                raise RuntimeError("validator exited before consuming its localnet mint-finality seed")
-            if time.monotonic() >= deadline:
-                raise RuntimeError("validator did not consume its localnet mint-finality seed")
-            time.sleep(0.05)
-        _mint_erase_launch(launch_fd, launch, created.st_dev, created.st_ino)
-        completed = True
-        return process
-    finally:
-        if process is not None and not completed:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5.0)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5.0)
-            else:
-                process.wait(timeout=0)
-        if launch_fd is not None:
-            if not completed and created is not None:
-                _mint_erase_launch(launch_fd, launch, created.st_dev, created.st_ino)
-            os.close(launch_fd)
-        if source_fd is not None:
-            os.close(source_fd)
-        if reserved != _MINT_SEED_FD:
-            os.close(_MINT_SEED_FD)
-        os.close(reserved)
-"#;
-
 const TAIRA_RUNTIME_LAUNCH_PY: &str = r#"
 def _taira_file_identity(metadata):
     return tuple(getattr(metadata, field) for field in (
@@ -6469,13 +6240,13 @@ def _require_taira_fd_vacant(descriptor):
     raise RuntimeError("refusing occupied Taira runtime descriptor {}".format(descriptor))
 
 def _reserve_taira_fds(reserved):
-    for descriptor in (198, 199, 200):
+    for descriptor in (198, 200):
         _require_taira_fd_vacant(descriptor)
     placeholder = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
-    if placeholder in (198, 199, 200):
+    if placeholder in (198, 200):
         reserved.add(placeholder)
     try:
-        for descriptor in (198, 199, 200):
+        for descriptor in (198, 200):
             if descriptor not in reserved:
                 _require_taira_fd_vacant(descriptor)
                 os.dup2(placeholder, descriptor, inheritable=False)
@@ -6484,9 +6255,9 @@ def _reserve_taira_fds(reserved):
         if placeholder not in reserved:
             os.close(placeholder)
 
-def _preflight_taira_seed_paths(records, expected_identities=None):
+def _preflight_taira_runtime_paths(records, expected_identities=None):
     descriptors = tuple(record[3] for record in records)
-    if descriptors not in ((198, 199), (198, 199, 200)):
+    if descriptors not in ((198,), (198, 200)):
         raise RuntimeError("Taira requires exactly the fixed runtime descriptors")
     if 200 in descriptors and expected_identities is None:
         raise RuntimeError("Taira beacon descriptor requires native validation")
@@ -6500,7 +6271,7 @@ def _preflight_taira_seed_paths(records, expected_identities=None):
     stale = []
     try:
         for source, launch, size, descriptor in records:
-            if ((descriptor, size) not in ((198, 71), (199, 32))
+            if ((descriptor, size) != (198, 71)
                     and not (descriptor == 200 and type(size) is int and 0 < size <= 16 * 1024 * 1024)):
                 raise RuntimeError("Taira private record length does not match its fixed descriptor")
             source_fd = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
@@ -6541,7 +6312,7 @@ def _preflight_taira_seed_paths(records, expected_identities=None):
             os.close(source_fd)
         raise
 
-def _stage_taira_seed(record, owned, source_path=None):
+def _stage_taira_runtime_record(record, owned, source_path=None):
     source_fd, before, launch, size, descriptor = record
     launch_fd = os.open(launch, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
     try:
@@ -6635,16 +6406,16 @@ def launch_taira_process(cmd, env, records, selection=None):
             if [(source["path"], source["size"], source["descriptor"]) for source in selection["sources"]] != [
                     (source, size, descriptor) for source, _launch, size, descriptor in records]:
                 raise RuntimeError("native Taira source selection does not match launch paths")
-        retained, stale = _preflight_taira_seed_paths(records, expected_identities)
+        retained, stale = _preflight_taira_runtime_paths(records, expected_identities)
         for launch, previous in stale:
             if _taira_file_identity(os.lstat(launch)) != _taira_file_identity(previous):
                 raise RuntimeError("Taira stale launch file changed before replacement")
             os.unlink(launch)
         for record, source in zip(retained, records):
-            _stage_taira_seed(record, owned, source[0])
+            _stage_taira_runtime_record(record, owned, source[0])
         if selection is not None:
             _check_taira_selection_files(selection)
-        pass_fds = (198, 199) if selection is None else (198, 199, 200)
+        pass_fds = (198,) if selection is None else (198, 200)
         with open(env["IROHA_PEER_LOG"], "ab", buffering=0) as log:
             process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env,
                 close_fds=True, pass_fds=pass_fds, start_new_session=True)
@@ -7104,9 +6875,9 @@ def select_taira_beacon_launch(env, config_path, credential_path, kagami):
             or re.fullmatch("[0-9a-f]{64}", selection["config_blake3"]) is None):
         raise RuntimeError("native Taira launch selection violates its exact public schema")
     sources = selection["sources"]
-    if type(sources) is not list or len(sources) != 3:
+    if type(sources) is not list or len(sources) != 2:
         raise RuntimeError("native Taira launch selection omits fixed descriptors")
-    for source, descriptor in zip(sources, (198, 199, 200)):
+    for source, descriptor in zip(sources, (198, 200)):
         if (type(source) is not dict or set(source) != {"descriptor", "path", "size", "identity"}
                 or type(source["descriptor"]) is not int or source["descriptor"] != descriptor
                 or type(source["path"]) is not str or not os.path.isabs(source["path"])
@@ -7115,7 +6886,7 @@ def select_taira_beacon_launch(env, config_path, credential_path, kagami):
     for identity in [selection["initial_identity"], selection["beacon_identity"]] + [source["identity"] for source in sources]:
         if type(identity) is not list or len(identity) != 9 or any(type(field) is not int for field in identity):
             raise RuntimeError("native Taira launch selection has an invalid file identity")
-    if sources[2]["path"] != credential_path:
+    if sources[1]["path"] != credential_path:
         raise RuntimeError("native Taira launch selection changed the beacon credential path")
     return selection
 "#;
@@ -7348,7 +7119,7 @@ fn write_start_script(
     if !taira {
         writeln!(
             start_file,
-            "command -v python3 >/dev/null 2>&1 || {{ echo \"python3 is required before starting validators with private FD 199\" >&2; exit 1; }}"
+            "command -v python3 >/dev/null 2>&1 || {{ echo \"python3 is required before starting localnet validators\" >&2; exit 1; }}"
         )?;
     }
     writeln!(start_file, "for i in $SELECTED_PEERS; do")?;
@@ -7443,13 +7214,9 @@ fn write_start_script(
             start_file,
             "    (os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{TAIRA_RUNTIME_SIGNER_DIRECTORY}\", \"peer{{}}.private_key\".format(env[\"IROHA_PEER_INDEX\"])), os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{TAIRA_RUNTIME_SIGNER_DIRECTORY}\", \"peer{{}}.fd198\".format(env[\"IROHA_PEER_INDEX\"])), 71, 198),"
         )?;
-        writeln!(
-            start_file,
-            "    (os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{MINT_FINALITY_SEED_DIRECTORY}\", \"peer{{}}.seed\".format(env[\"IROHA_PEER_INDEX\"])), os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{MINT_FINALITY_SEED_DIRECTORY}\", \"peer{{}}.fd199\".format(env[\"IROHA_PEER_INDEX\"])), 32, 199),"
-        )?;
         writeln!(start_file, "]")?;
         writeln!(start_file, "if selection is not None:")?;
-        writeln!(start_file, "    credential = selection[\"sources\"][2]")?;
+        writeln!(start_file, "    credential = selection[\"sources\"][1]")?;
         writeln!(
             start_file,
             "    records.append((credential[\"path\"], os.path.join(os.path.dirname(credential[\"path\"]), \"peer{{}}.fd200\".format(env[\"IROHA_PEER_INDEX\"])), credential[\"size\"], 200))"
@@ -7459,10 +7226,13 @@ fn write_start_script(
             "process = launch_taira_process(cmd, env, records, selection)"
         )?;
     } else {
-        start_file.write_all(ORDINARY_MINT_FINALITY_LAUNCH_PY.as_bytes())?;
         writeln!(
             start_file,
-            "process = launch_ordinary_validator_with_mint_seed(cmd, env)"
+            "with open(env[\"IROHA_PEER_LOG\"], \"ab\", buffering=0) as log:"
+        )?;
+        writeln!(
+            start_file,
+            "    process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, close_fds=True, start_new_session=True)"
         )?;
     }
     writeln!(start_file, "print(process.pid)")?;
@@ -7478,7 +7248,7 @@ fn write_start_script(
     } else {
         writeln!(
             start_file,
-            "    echo \"python3 is required to stage the validator's one-shot private FD 199\" >&2"
+            "    echo \"python3 is required to launch localnet validators\" >&2"
         )?;
         writeln!(start_file, "    exit 1")?;
     }
@@ -7817,54 +7587,14 @@ fn write_taira_runtime_signer_keys(out_dir: &Path, peers: &[Peer]) -> Result<()>
     }
     Ok(())
 }
-fn write_mint_finality_seeds(out_dir: &Path, peers: &[Peer]) -> Result<()> {
-    let runtime = out_dir.join("runtime");
-    if !runtime.exists() {
-        crate::localnet::custody::prepare_empty_private_directory(&runtime)
-            .wrap_err("prepare localnet private runtime directory")?;
-    }
-    let directory = runtime.join(MINT_FINALITY_SEED_DIRECTORY);
-    let directory = crate::localnet::custody::prepare_empty_private_directory(&directory)
-        .wrap_err("prepare private mint-finality signer directory")?;
-    for (peer_index, peer) in peers.iter().enumerate() {
-        let path = directory.join(format!("peer{peer_index}.seed"));
-        crate::localnet::custody::write_private_file_atomic(
-            &path,
-            peer.mint_finality_seed.as_ref(),
-        )
-        .wrap_err("write private mint-finality seed")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-            let metadata = fs::symlink_metadata(&path)
-                .wrap_err("inspect retained localnet mint-finality seed")?;
-            ensure!(
-                metadata.is_file()
-                    && metadata.uid() == rustix::process::geteuid().as_raw()
-                    && metadata.permissions().mode() & 0o7777 == 0o600
-                    && metadata.nlink() == 1
-                    && metadata.len() == 32,
-                "retained localnet mint-finality seed is not an exact owner-private single-link record"
-            );
-        }
-    }
-    Ok(())
-}
-
 fn managed_node_dir(out_dir: &Path, peer_index: usize) -> PathBuf {
     out_dir.join("nodes").join(format!("peer{peer_index}"))
 }
 
-fn write_managed_mint_finality_seeds(out_dir: &Path, peers: &[Peer]) -> Result<()> {
+fn prepare_managed_node_directories(out_dir: &Path, peer_count: usize) -> Result<()> {
     let nodes = iroha_fs::PrivateDirectory::open_or_create(&out_dir.join("nodes"))?;
-    for (index, peer) in peers.iter().enumerate() {
-        let node = nodes.create_child(&format!("peer{index}"))?;
-        let secrets = node.create_child("secrets")?;
-        secrets.write_atomic(
-            "mint_finality.seed",
-            peer.mint_finality_seed.as_ref(),
-            iroha_fs::PublishMode::CreateNew,
-        )?;
+    for index in 0..peer_count {
+        nodes.create_child(&format!("peer{index}"))?;
     }
     Ok(())
 }
@@ -7879,11 +7609,10 @@ fn managed_peer_config(rendered: &str, data_dir: &Path) -> Result<Zeroizing<Stri
         "data_dir".into(),
         Value::String(data_dir.to_string_lossy().into_owned()),
     );
-    let sumeragi = table
-        .get_mut("sumeragi")
-        .and_then(Value::as_table_mut)
-        .ok_or_else(|| eyre!("generated validator configuration has no sumeragi section"))?;
-    crate::secret_toml::remove(sumeragi, "mint_finality_seed_fd");
+    ensure!(
+        table.get("sumeragi").and_then(Value::as_table).is_some(),
+        "generated validator configuration has no sumeragi section"
+    );
     toml::to_string(&*table)
         .map(Zeroizing::new)
         .map_err(|_| eyre!("cannot encode managed validator configuration"))
@@ -7992,12 +7721,8 @@ mod managed_tests {
                 Some(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES as i64),
                 "every managed validator needs its finite developer storage cap"
             );
-            assert_eq!(
-                iroha_fs::read_private(node.join("secrets/mint_finality.seed"), 32)
-                    .unwrap()
-                    .len(),
-                32
-            );
+            let node = iroha_fs::PrivateDirectory::open(node).unwrap();
+            assert!(!node.path().join("secrets/mint_finality.seed").exists());
         }
         assert!(!root.join("start.sh").exists());
         assert!(!root.join("stop.sh").exists());
@@ -8017,9 +7742,8 @@ mod managed_tests {
     }
 
     #[test]
-    fn native_layout_uses_fixed_seed_custody_without_inherited_descriptor() {
-        let source =
-            "chain = 'local'\n[sumeragi]\nrole = 'validator'\nmint_finality_seed_fd = 199\n";
+    fn native_layout_uses_data_dir_without_inherited_descriptor() {
+        let source = "chain = 'local'\n[sumeragi]\nrole = 'validator'\n";
         let directory = Path::new("/private/runtime/peer0");
         let rendered = managed_peer_config(source, directory).unwrap();
         let table = rendered.parse::<toml::Table>().unwrap();
@@ -8036,27 +7760,18 @@ mod managed_tests {
     }
 
     #[test]
-    fn managed_generation_retains_exact_independent_authority_seeds() {
-        let _resources = crate::managed::native_test_guard();
-        let temporary = tempfile::tempdir().unwrap();
+    fn managed_generation_creates_private_node_directories_without_retired_seeds() {
+        let temporary = localnet_test_helpers::private_tempdir().unwrap();
         let directory = temporary.path().canonicalize().unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let peers = build_peers(4, None, 18080, 18337).unwrap();
-        write_managed_mint_finality_seeds(&directory, &peers).unwrap();
-        let mut seeds = BTreeSet::new();
-        for (index, peer) in peers.iter().enumerate() {
-            let node = managed_node_dir(&directory, index);
-            let bytes =
-                iroha_fs::read_private(node.join("secrets/mint_finality.seed"), 32).unwrap();
-            assert_eq!(bytes.as_slice(), peer.mint_finality_seed.as_ref());
-            assert!(seeds.insert(bytes.to_vec()));
+        prepare_managed_node_directories(&directory, 4).unwrap();
+        for index in 0..4 {
+            let node =
+                iroha_fs::PrivateDirectory::open(managed_node_dir(&directory, index)).unwrap();
+            assert!(node.path().read_dir().unwrap().next().is_none());
+            node.revalidate().unwrap();
         }
         assert!(!directory.join("runtime/mint-finality-signers").exists());
-        assert!(write_managed_mint_finality_seeds(&directory, &peers).is_err());
+        assert!(prepare_managed_node_directories(&directory, 4).is_err());
     }
 }
 
@@ -8218,7 +7933,7 @@ fn write_localnet_readme(
         .unwrap_or_default();
     let profile_notes = concat!(
         "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
-        "- Each validator retains its owner-private `runtime/mint-finality-signers/peerN.seed`; `start.sh` requires Python 3 and stages a fresh consumed FD 199 on every start\n",
+        "- The signed BLS validator topology and original proofs of possession establish generation zero\n",
         "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
         "Run `kagami docker` without `--seed` against this directory to validate the exact ",
         "validator identities, PoPs, signed body, verifier key, and expected hash as one ",

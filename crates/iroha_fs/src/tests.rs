@@ -227,6 +227,27 @@ fn atomic_staging_cleanup_refuses_links_modes_and_replaced_ancestors() {
 fn complete_private_directory_publication_never_exposes_partial_destination() {
     let (temporary, _) = store();
     let parent = OwnerDirectory::open(temporary.path()).unwrap();
+    let single = parent
+        .publish_private_child("single", &[("record", b"complete")])
+        .unwrap();
+    let single_identity = single.identity().unwrap();
+    assert_eq!(
+        single.entries(1).unwrap(),
+        vec![std::ffi::OsString::from("record")]
+    );
+    assert_eq!(single.read("record", 16).unwrap().as_slice(), b"complete");
+    // The published owner supplies canonical spelling even when the OS temporary root
+    // uses an alias such as macOS /var. Exact reopen must use that retained native path.
+    let reopened = PrivateDirectory::open_exact(single.path()).unwrap();
+    assert_eq!(reopened.identity().unwrap(), single_identity);
+    assert_eq!(reopened.read("record", 16).unwrap().as_slice(), b"complete");
+    assert!(
+        parent
+            .publish_private_child("single", &[("record", b"replacement")])
+            .is_err()
+    );
+    assert_eq!(single.identity().unwrap(), single_identity);
+    assert_eq!(single.read("record", 16).unwrap().as_slice(), b"complete");
     // A crash before rename leaves only an unpublished private sibling. A retry can still
     // publish the complete destination; no caller has to delete ambiguous operation evidence.
     let interrupted = parent.create_private_child("unpublished").unwrap();
@@ -236,6 +257,14 @@ fn complete_private_directory_publication_never_exposes_partial_destination() {
     let published = parent
         .publish_private_child("ready", &[("lock", b""), ("record", b"original")])
         .unwrap();
+    assert_eq!(
+        published.entries(2).unwrap(),
+        vec![
+            std::ffi::OsString::from("lock"),
+            std::ffi::OsString::from("record")
+        ]
+    );
+    assert!(published.read("lock", 1).unwrap().is_empty());
     assert_eq!(
         published.read("record", 16).unwrap().as_slice(),
         b"original"
@@ -251,10 +280,16 @@ fn complete_private_directory_publication_never_exposes_partial_destination() {
         published.read("record", 16).unwrap().as_slice(),
         b"original"
     );
+    let oversized_names: Vec<_> = (0..129).map(|index| format!("entry-{index}")).collect();
+    let oversized_files: Vec<_> = oversized_names
+        .iter()
+        .map(|name| (name.as_str(), b"x".as_slice()))
+        .collect();
     for files in [
         vec![],
         vec![("same", b"a".as_slice()), ("same", b"b".as_slice())],
         vec![("../escape", b"a".as_slice())],
+        oversized_files,
     ] {
         assert!(parent.publish_private_child("absent", &files).is_err());
         assert!(!temporary.path().join("absent").exists());
@@ -551,6 +586,40 @@ fn directory_publication_preserves_exact_tree_and_never_replaces() {
             .rename_to_sibling("src", PublishMode::Replace)
             .is_err()
     );
+}
+
+#[test]
+fn published_directory_keeps_original_identity_and_allows_independent_readers() {
+    let (_temporary, parent) = store();
+    let staging = parent.create_child("staged-readers").unwrap();
+    staging
+        .write_atomic("original", b"complete", PublishMode::CreateNew)
+        .unwrap();
+    let identity = staging.identity().unwrap();
+    let published = staging
+        .rename_to_sibling("published-readers", PublishMode::CreateNew)
+        .unwrap();
+    // Keep the returned publication owner alive while unrelated reader owners traverse it.
+    // A Windows DELETE publication handle must not escape into this ordinary read phase.
+    let reopened = PrivateDirectory::open_exact(published.path()).unwrap();
+    assert_eq!(reopened.identity().unwrap(), identity);
+    // Publication returns a normal owner: metadata durability and later writes remain usable.
+    // On Windows that requires WRITE_ATTRIBUTES without retaining DELETE authority.
+    published.sync().unwrap();
+    published
+        .write_atomic("later", b"retained", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(reopened.read("later", 8).unwrap().as_slice(), b"retained");
+    let namespace = ReaderDirectory::open(published.path()).unwrap();
+    let before = namespace.snapshot().unwrap();
+    let mut original = RetainedFile::open_private(published.path().join("original")).unwrap();
+    let mut bytes = Vec::new();
+    original.file_mut().read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"complete");
+    original.revalidate().unwrap();
+    assert_eq!(namespace.snapshot().unwrap(), before);
+    assert_eq!(published.identity().unwrap(), identity);
+    published.revalidate().unwrap();
 }
 
 #[test]

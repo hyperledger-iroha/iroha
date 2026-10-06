@@ -466,14 +466,6 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") });
     settlement_receipts: Storage<SettlementId, SettlementReceipt> => ("world.settlement_receipts",
         Role::Canonical(Canonical::Table { key: schema::<SettlementId>(), value: schema::<SettlementReceipt>() }));
-    kagemusha_mint_credit_operations: OperationIndex => ("world.kagemusha_mint_credit_operations",
-        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<[u8; 32]>() }));
-    kagemusha_issuance_operations: OperationIndex => ("world.kagemusha_issuance_operations",
-        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<[u8; 32]>() }));
-    kagemusha_redemption_id_operations: OperationIndex => ("world.kagemusha_redemption_id_operations",
-        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<[u8; 32]>() }));
-    kagemusha_terminal_nullifier_operations: OperationIndex => ("world.kagemusha_terminal_nullifier_operations",
-        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<[u8; 32]>() }));
     public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord> => ("world.public_lane_validators",
         Role::Canonical(Canonical::Table { key: schema::<(LaneId, AccountId)>(), value: schema::<PublicLaneValidatorRecord>() }));
     public_lane_stake_shares: Storage<(LaneId, AccountId, AccountId), PublicLaneStakeShare> => ("world.public_lane_stake_shares",
@@ -548,8 +540,6 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Table { key: schema::<u64>(), value: schema::<TleKeySessionId>() }));
     timed_ovn_evidence: Storage<BallotAttemptId, TimedOvnLifecycleStateV1> => ("world.timed_ovn_evidence",
         Role::Canonical(Canonical::Table { key: schema::<BallotAttemptId>(), value: schema::<TimedOvnLifecycleStateV1>() }));
-    validator_candidate_keys: Storage<[u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1> => ("world.validator_candidate_keys",
-        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<iroha_data_model::nexus::ValidatorCandidateKeysV1>() }));
     validator_committee_transitions: Storage<u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1> => ("world.validator_committee_transitions",
         Role::Canonical(Canonical::Table { key: schema::<u64>(), value: schema::<iroha_data_model::nexus::ValidatorCommitteeTransitionV1>() }));
     global_beacon_dkg: Storage<[u8; 32], GlobalThresholdBeaconDkgSnapshotV1> => ("world.global_beacon_dkg",

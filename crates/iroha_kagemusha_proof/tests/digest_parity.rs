@@ -7,12 +7,17 @@
 //! - spec section 3.2 shared vectors: the domains, the 32-element core and
 //!   13-element rest (also of the `controlled_state` vector, whose elements
 //!   are all distinct and named), the rest digest and head commitment,
-//!   `credit_id` over
-//!   the 24-element Request body, both chain appends and the 28-element
-//!   statements that the G1 data model publishes in
-//!   `fixtures/kagemusha/wallet_v1_vectors.json` are reproduced by this
-//!   crate's native encodings, and its circuits compute the same
-//!   commitment, `credit_id` and chain values in circuit;
+//!   `credit_id` over the 28-element Request body (both account digests
+//!   included), both chain appends and the 28-element statements that the
+//!   G1 data model publishes in `fixtures/kagemusha/wallet_v1_vectors.json`
+//!   are reproduced by this crate's native encodings, and its circuits
+//!   compute the same commitment, `credit_id` and chain values in circuit;
+//! - the trees the controls open: the limb-ordered blacklist gap tree (its
+//!   leaf, node, root and gap opening), the quota-window leaf, node and
+//!   root, and the indexed tree (empty root, insertions, openings and the
+//!   quota-usage update) are reproduced natively, and in circuit by a
+//!   `sigma_recv` with the blacklist bit, a `sigma_send` with the blacklist
+//!   control and a quota `sigma_send` against the vectored share and usage;
 //! - every digest the relation computes in circuit (predecessor, successor,
 //!   credit identifier, chain, statement) equals the native reference, for
 //!   many witnesses, every relation shape and both fields, and does not
@@ -25,9 +30,16 @@ mod common;
 use common::{RELATIONS, folded, in_circuit_digests, relation_shapes, repo_root, smallest_shape};
 use ff::PrimeField;
 use iroha_kagemusha_proof::{
-    Controls, CoreState, Identity, MapRoots, Mutation, PrefixMode, ReceiveInputs, RelationShape,
-    RequestBody, RequestTerms, SendInputs, SigmaParams, SigmaRelation, SigmaShape, StateRest,
-    StateV1, StepInputs, StepRelation, StepWitness, limb_bits_for, sample_witness,
+    BlacklistGap, CONTROL_BLACKLIST, CONTROL_QUOTAS, Controls, CoreState, Identity, MapRoots,
+    Mutation, PrefixMode, QuotaWitness, ReceiveInputs, RelationShape, RequestBody, RequestTerms,
+    SendInputs, SigmaParams, SigmaRelation, SigmaShape, StateRest, StateV1, StepInputs,
+    StepRelation, StepWitness, limb_bits_for, sample_witness,
+    tree::{
+        BLACKLIST_LEAF_DOMAIN, BLACKLIST_NODE_DOMAIN, BlacklistTree, INDEXED_LEAF_DOMAIN,
+        INDEXED_NODE_DOMAIN, IndexedLeaf, IndexedTree, QUOTA_NODE_DOMAIN, QUOTA_USAGE_DOMAIN,
+        QUOTA_WINDOW_DOMAIN, QuotaWindow, QuotaWindowTree, blacklist_leaf, indexed_empty,
+        path_root,
+    },
     witness::{
         CORE_DOMAIN, CORE_FIELDS, CREDIT_DOMAIN, LineageInputs, RECEIVE_CHAIN_DOMAIN,
         REQUEST_FIELDS, REST_DOMAIN, REST_FIELDS, SEND_CHAIN_DOMAIN,
@@ -230,25 +242,31 @@ fn rest_of(items: &Items<'_>) -> StateRest {
     }
 }
 
-/// The Request body of the `credit_id` items (request-body order).
+/// The Request body of the 28 `credit_id` items (request-body order:
+/// version; scheme, asset, payer wallet, payer account, receiver wallet,
+/// receiver account; send ordinal; receiver credential; amount; fee
+/// schedule; fee; policy epoch; scheme policy; receiver accepted time;
+/// certificates; nonce).
 fn request_of(items: &Items<'_>) -> RequestBody {
     assert_eq!(items.integer(0), 1, "request version");
     RequestBody {
         scheme_id: items.digest(1),
         asset_digest: items.digest(3),
         payer_wallet: items.digest(5),
-        receiver_wallet: items.digest(7),
-        send_ordinal: items.integer(9),
-        receiver_credential_digest: items.digest(10),
+        payer_account: items.digest(7),
+        receiver_wallet: items.digest(9),
+        receiver_account: items.digest(11),
+        send_ordinal: items.integer(13),
+        receiver_credential_digest: items.digest(14),
         terms: RequestTerms {
-            amount: items.integer(12),
-            fee_schedule: items.digest(13),
-            fee: items.integer(15),
-            policy_epoch: items.u64(16),
-            scheme_policy: items.digest(17),
-            request_time: items.u64(19),
-            certificates: items.digest(20),
-            nonce: items.digest(22),
+            amount: items.integer(16),
+            fee_schedule: items.digest(17),
+            fee: items.integer(19),
+            policy_epoch: items.u64(20),
+            scheme_policy: items.digest(21),
+            request_time: items.u64(23),
+            certificates: items.digest(24),
+            nonce: items.digest(26),
         },
     }
 }
@@ -323,10 +341,13 @@ fn receive_witness(vectors: &G1Vectors) -> StepWitness<Fp> {
         successor_nonce: Fp::from(9_u64),
         inputs: StepInputs::Receive(Box::new(ReceiveInputs {
             payer_wallet: request.payer_wallet,
+            payer_account_digest: request.payer_account,
+            receiver_account_digest: request.receiver_account,
             send_ordinal: request.send_ordinal,
             receiver_credential_digest: request.receiver_credential_digest,
             request: request.terms,
             successor_consumed_credit: Fp::from(7_u64),
+            blacklist: BlacklistGap::unused(),
         })),
     }
 }
@@ -362,7 +383,9 @@ fn send_witness(vectors: &G1Vectors) -> StepWitness<Fp> {
         },
         successor_nonce: Fp::from(11_u64),
         inputs: StepInputs::Send(Box::new(SendInputs {
+            payer_account_digest: request.payer_account,
             receiver_wallet: request.receiver_wallet,
+            receiver_account_digest: request.receiver_account,
             receiver_credential_digest: request.receiver_credential_digest,
             request: request.terms,
             request_digest: statement.digest(24),
@@ -374,6 +397,8 @@ fn send_witness(vectors: &G1Vectors) -> StepWitness<Fp> {
             },
             successor_pending_outgoing: Fp::from(13_u64),
             successor_fee_claim: Fp::from(15_u64),
+            blacklist: BlacklistGap::unused(),
+            quota: Box::new(QuotaWitness::unused()),
         })),
     }
 }
@@ -444,7 +469,7 @@ fn native_encodings_reproduce_the_g1_vectors() {
     assert_eq!(encode(&state.rest.fields::<Fp>()), vectors.rest_items);
     assert_eq!(state.rest.digest::<Fp>(), vectors.rest_digest);
     assert_eq!(state.commitment(), vectors.commitment);
-    // credit_id over the 24 Request elements: one element.
+    // credit_id over the 28 Request elements: one element.
     assert_eq!(
         encode(&vectors.request.fields::<Fp>()),
         vectors.request_items
@@ -624,8 +649,11 @@ fn the_controlled_state_pins_every_commitment_position() {
     assert_eq!(state.commitment(), commitment);
 
     // The circuits open the same commitment: a `sigma_recv` from the
-    // controlled state (Retiring, every control enabled) under a Request
-    // quoted with another receiver credential digest (owner answer Q8).
+    // controlled state (Retiring, every control enabled, so the Receive
+    // relation with the blacklist bit) under a Request quoted with another
+    // receiver credential digest (owner answer Q8). The controlled state's
+    // list root is a stand-in, so no gap opening exists; the commitment the
+    // circuit opens is the vector's all the same.
     let identity = state.core.identity;
     let terms = RequestTerms {
         amount: 5,
@@ -643,10 +671,13 @@ fn the_controlled_state_pins_every_commitment_position() {
         successor_nonce: Fp::from(17_u64),
         inputs: StepInputs::Receive(Box::new(ReceiveInputs {
             payer_wallet: [0x5a; 32],
+            payer_account_digest: [0x59; 32],
+            receiver_account_digest: [0x58; 32],
             send_ordinal: 9,
             receiver_credential_digest: [0x5b; 32],
             request: terms,
             successor_consumed_credit: Fp::from(19_u64),
+            blacklist: BlacklistGap::unused(),
         })),
     };
     assert_ne!(
@@ -654,11 +685,15 @@ fn the_controlled_state_pins_every_commitment_position() {
         identity.credential_digest
     );
     assert_eq!(witness.request_body().receiver_wallet, identity.wallet_id);
-    let native = witness.evaluate(SigmaRelation::RECEIVE);
-    assert!(native.is_honest(), "{:?}", native.violations);
+    let relation = SigmaRelation::receive(CONTROL_BLACKLIST);
+    let native = witness.evaluate(relation);
+    assert_eq!(
+        native.violations,
+        vec![iroha_kagemusha_proof::Violation::BlacklistListed]
+    );
     assert_eq!(native.digests.predecessor, commitment);
     for prefix in [PrefixMode::Folded, PrefixMode::Absorbed] {
-        let shape = smallest_shape(RelationShape::new(SigmaRelation::RECEIVE, prefix));
+        let shape = smallest_shape(RelationShape::new(relation, prefix));
         assert_eq!(
             in_circuit_digests(&shape, &witness).predecessor,
             commitment,
@@ -702,7 +737,7 @@ fn the_packing_rule_and_large_input_digests_reproduce_the_g1_vectors() {
     let fixture = wallet_vectors();
     let poseidon = at(&fixture, &["poseidon"]);
     let kats = at(poseidon, &["kats"]).as_array().expect("kats");
-    assert_eq!(kats.len(), 22);
+    assert_eq!(kats.len(), 43);
     let one_two_three = [1_u64, 2, 3].map(Fp::from).to_vec();
     for kat in kats {
         let label = at(kat, &["domain"]).as_str().expect("domain");
@@ -738,13 +773,11 @@ fn the_packing_rule_and_large_input_digests_reproduce_the_g1_vectors() {
             bytes.len()
         );
     }
-    let mut large = at(poseidon, &["proof_digests"])
+    let large = at(poseidon, &["large_input_digests"])
         .as_array()
-        .expect("proof digests")
-        .clone();
-    large.push(at(poseidon, &["payment_digest"]).clone());
+        .expect("large-input digests");
     let mut labels = Vec::new();
-    for vector in &large {
+    for vector in large {
         let body = hex_bytes(at(vector, &["body_hex"]).as_str().expect("body"));
         let items = packed(&body);
         let elements = at(vector, &["elements"]).as_u64().expect("elements");
@@ -757,7 +790,459 @@ fn the_packing_rule_and_large_input_digests_reproduce_the_g1_vectors() {
         );
         labels.push(label.to_owned());
     }
-    assert_eq!(labels, ["kgwprf_1", "kgwstep1", "kgwpay_1"]);
+    assert_eq!(
+        labels,
+        [
+            "kgwprf_1", "kgwstep1", "kgwpay_1", "kgwlin_1", "kgwcopn1", "kgwcsts1", "kgwcrdd1",
+            "kgwcrdd1"
+        ]
+    );
+}
+
+/// A canonical σ-field value at `path`.
+fn field_at(value: &Value, path: &[&str]) -> Fp {
+    Option::from(Fp::from_repr(bytes_at(value, path))).expect("canonical value")
+}
+
+/// The canonical σ-field values at `path`.
+fn fields_at(value: &Value, path: &[&str]) -> Vec<Fp> {
+    items_at(value, path)
+        .into_iter()
+        .map(|item| Option::from(Fp::from_repr(item)).expect("canonical value"))
+        .collect()
+}
+
+/// An indexed-tree leaf object `{key_hex, value_hex, next_key_hex,
+/// leaf_hex}`; its hash is checked against `leaf_hex`.
+fn leaf_of(value: &Value) -> IndexedLeaf<Fp> {
+    let leaf = IndexedLeaf {
+        key: field_at(value, &["key_hex"]),
+        value: field_at(value, &["value_hex"]),
+        next_key: field_at(value, &["next_key_hex"]),
+    };
+    assert_eq!(leaf.hash(), field_at(value, &["leaf_hex"]));
+    leaf
+}
+
+/// A leaf opening `{leaf, opening: {slot, siblings}, root_hex}`: the root
+/// its path reaches, checked against `root_hex`.
+fn leaf_opening_of(value: &Value) -> (IndexedLeaf<Fp>, u32, Vec<Fp>) {
+    let leaf = leaf_of(at(value, &["leaf"]));
+    let slot = u32::try_from(at(value, &["opening", "slot"]).as_u64().expect("slot")).expect("u32");
+    let siblings = fields_at(value, &["opening", "siblings"]);
+    assert_eq!(siblings.len(), 32);
+    assert_eq!(
+        path_root(INDEXED_NODE_DOMAIN, leaf.hash(), u64::from(slot), &siblings),
+        field_at(value, &["root_hex"])
+    );
+    (leaf, slot, siblings)
+}
+
+/// The limb-ordered blacklist gap tree of the vectors (owner answer A4): the
+/// entries sort by limb order, not unsigned byte order; the gap leaf, node,
+/// root and gap opening are this crate's.
+#[test]
+fn the_blacklist_tree_reproduces_the_g1_vectors() {
+    let fixture = wallet_vectors();
+    let blacklist = at(&fixture, &["poseidon", "blacklist"]);
+    let entries = items_at(blacklist, &["entries"]);
+    let unsigned = items_at(blacklist, &["entries_in_unsigned_byte_order"]);
+    assert_ne!(entries, unsigned, "the vectors separate the two orders");
+    let tree = BlacklistTree::new(unsigned).expect("tree");
+    assert_eq!(tree.entries(), entries.as_slice());
+    let root: Fp = tree.root();
+    assert_eq!(root, field_at(blacklist, &["entries_root_hex"]));
+    let leaf = at(blacklist, &["leaf_0"]);
+    assert_eq!(
+        domain_of(at(leaf, &["domain"]).as_str().expect("domain")),
+        BLACKLIST_LEAF_DOMAIN
+    );
+    let first: Fp = blacklist_leaf(&[0; 32], &entries[0]);
+    assert_eq!(first, field_at(leaf, &["digest_hex"]));
+    let node = at(blacklist, &["node_0_1"]);
+    let children = fields_at(node, &["items"]);
+    assert_eq!(children[0], first);
+    assert_eq!(children[1], blacklist_leaf(&entries[0], &entries[1]));
+    assert_eq!(
+        hash_with_domain(BLACKLIST_NODE_DOMAIN, &children),
+        field_at(node, &["digest_hex"])
+    );
+    let gap = at(blacklist, &["gap_opening"]);
+    let account = bytes_at(gap, &["account_digest_hex"]);
+    let opening: BlacklistGap<Fp> = tree.gap(&account).expect("absent account");
+    assert_eq!(
+        u64::from(opening.leaf_index),
+        at(gap, &["leaf_index"]).as_u64().expect("index")
+    );
+    assert_eq!(opening.lower, bytes_at(gap, &["lower_hex"]));
+    assert_eq!(opening.upper, bytes_at(gap, &["upper_hex"]));
+    assert_eq!(opening.siblings.to_vec(), fields_at(gap, &["siblings"]));
+    assert!(opening.proves_absent(&field_at(gap, &["root_hex"]), &account));
+    // Every listed entry has no gap opening.
+    for entry in &entries {
+        assert!(tree.gap::<Fp>(entry).is_none());
+    }
+}
+
+/// The vectored gap opening, in circuit: a `sigma_recv` with the blacklist
+/// bit whose payer is the vectored account and a `sigma_send` with the
+/// blacklist control whose receiver is, both against the vectored root.
+#[test]
+fn the_vectored_gap_opening_holds_in_circuit() {
+    let fixture = wallet_vectors();
+    let gap = at(&fixture, &["poseidon", "blacklist", "gap_opening"]);
+    let account = bytes_at(gap, &["account_digest_hex"]);
+    let root = field_at(gap, &["root_hex"]);
+    let entries = items_at(&fixture, &["poseidon", "blacklist", "entries"]);
+    let opening: BlacklistGap<Fp> = BlacklistTree::new(entries)
+        .expect("tree")
+        .gap(&account)
+        .expect("absent");
+    let vectors = g1_vectors();
+    let hold = |witness: &mut StepWitness<Fp>| {
+        let controls = &mut witness.predecessor.core.controls;
+        controls.enabled = CONTROL_BLACKLIST;
+        controls.blacklist_version = 1;
+        controls.blacklist_root = root;
+    };
+    let mut receive = receive_witness(&vectors);
+    hold(&mut receive);
+    if let StepInputs::Receive(inputs) = &mut receive.inputs {
+        inputs.payer_account_digest = account;
+        inputs.blacklist = opening;
+    }
+    let mut send = send_witness(&vectors);
+    hold(&mut send);
+    if let StepInputs::Send(inputs) = &mut send.inputs {
+        inputs.receiver_account_digest = account;
+        inputs.blacklist = opening;
+        // A list issued at the accepted upper time, under no age rule.
+        send.predecessor.core.controls.blacklist_issued_at_ms = inputs.accepted_upper;
+        send.predecessor.core.controls.blacklist_max_age_ms = 0;
+    }
+    for (relation, witness) in [
+        (SigmaRelation::receive(CONTROL_BLACKLIST), receive),
+        (SigmaRelation::send(CONTROL_BLACKLIST), send),
+    ] {
+        assert!(
+            witness.evaluate(relation).is_honest(),
+            "{}",
+            relation.label()
+        );
+        let shape = smallest_shape(RelationShape::new(relation, PrefixMode::Folded));
+        assert!(
+            common::check_witness(&shape, &witness).is_satisfied(),
+            "{}",
+            relation.label()
+        );
+        // The same opening under another root is refused.
+        let mut moved = witness.clone();
+        moved.predecessor.core.controls.blacklist_root += Fp::from(1_u64);
+        assert!(!common::check_witness(&shape, &moved).is_satisfied());
+    }
+}
+
+/// The quota-window leaf, empty slot, node and root of the vectored share.
+#[test]
+fn the_quota_window_tree_reproduces_the_g1_vectors() {
+    let fixture = wallet_vectors();
+    let quota = at(&fixture, &["poseidon", "quota_windows"]);
+    let (daily, monthly) = vectored_windows(quota);
+    assert_eq!(
+        daily.leaf::<Fp>(),
+        field_at(quota, &["window_0", "digest_hex"])
+    );
+    assert_eq!(
+        QuotaWindow::EMPTY.leaf::<Fp>(),
+        field_at(quota, &["empty_window_hex"])
+    );
+    let node = at(quota, &["node_0_1"]);
+    assert_eq!(
+        fields_at(node, &["items"]),
+        vec![daily.leaf::<Fp>(), monthly.leaf::<Fp>()]
+    );
+    assert_eq!(
+        hash_with_domain(QUOTA_NODE_DOMAIN, &fields_at(node, &["items"])),
+        field_at(node, &["digest_hex"])
+    );
+    let tree = QuotaWindowTree::new(&[daily, monthly]).expect("tree");
+    assert_eq!(tree.root::<Fp>(), field_at(quota, &["windows_root_hex"]));
+    assert_eq!(
+        domain_of(at(quota, &["window_0", "domain"]).as_str().expect("domain")),
+        QUOTA_WINDOW_DOMAIN
+    );
+}
+
+/// The vectored share's two windows: the daily one from its leaf items, the
+/// monthly one (whose leaf the node vector carries) over the same start.
+fn vectored_windows(quota: &Value) -> (QuotaWindow, QuotaWindow) {
+    let items = items_at(quota, &["window_0", "items"]);
+    let items = Items(&items);
+    let daily = QuotaWindow {
+        kind: u8::try_from(items.integer(0)).expect("kind"),
+        start_ms: items.u64(1),
+        end_ms: items.u64(2),
+        limit: items.integer(3),
+    };
+    let monthly = QuotaWindow {
+        kind: 2,
+        start_ms: daily.start_ms,
+        end_ms: daily.start_ms + 30 * 86_400_000,
+        limit: 500_000,
+    };
+    (daily, monthly)
+}
+
+/// The indexed tree of the vectors: the empty tree, insertions at the next
+/// free slot with every intermediate root, membership and non-membership
+/// openings, and the quota-usage value update.
+#[test]
+fn the_indexed_tree_reproduces_the_g1_vectors() {
+    let fixture = wallet_vectors();
+    let indexed = at(&fixture, &["poseidon", "indexed_tree"]);
+    let empty = IndexedTree::<Fp>::new();
+    assert_eq!(empty.root(), field_at(indexed, &["empty_root_hex"]));
+    assert_eq!(bytes_at(indexed, &["empty_slot_hex"]), [0; 32]);
+    let height_one = at(indexed, &["empty_subtree_height_1"]);
+    assert_eq!(
+        indexed_empty::<Fp>()[1],
+        field_at(height_one, &["digest_hex"])
+    );
+    assert_eq!(
+        domain_of(at(height_one, &["domain"]).as_str().expect("domain")),
+        INDEXED_NODE_DOMAIN
+    );
+    let sentinel = at(indexed, &["sentinel_leaf"]);
+    assert_eq!(
+        IndexedLeaf::<Fp>::sentinel().hash(),
+        field_at(sentinel, &["digest_hex"])
+    );
+    assert_eq!(
+        domain_of(at(sentinel, &["domain"]).as_str().expect("domain")),
+        INDEXED_LEAF_DOMAIN
+    );
+    // Insertions into the load/redeem map, from the empty tree.
+    let mut tree = IndexedTree::<Fp>::new();
+    for insertion in at(indexed, &["load_redeem_insertions"])
+        .as_array()
+        .expect("insertions")
+    {
+        assert_eq!(tree.root(), field_at(insertion, &["old_root_hex"]));
+        let key = field_at(insertion, &["key_hex"]);
+        let value = field_at(insertion, &["value_hex"]);
+        let (low, low_slot, low_siblings) = leaf_opening_of(at(insertion, &["low"]));
+        let upsert = tree.upsert(key, value).expect("insertion");
+        assert!(upsert.insert);
+        assert_eq!(upsert.leaf, low);
+        assert_eq!(upsert.leaf_slot, low_slot);
+        assert_eq!(upsert.leaf_siblings.to_vec(), low_siblings);
+        let linked = leaf_of(at(insertion, &["linked_low"]));
+        assert_eq!(
+            linked,
+            IndexedLeaf {
+                next_key: key,
+                ..low
+            }
+        );
+        let intermediate = field_at(insertion, &["intermediate_root_hex"]);
+        assert_eq!(
+            path_root(
+                INDEXED_NODE_DOMAIN,
+                linked.hash(),
+                u64::from(low_slot),
+                &low_siblings
+            ),
+            intermediate
+        );
+        let slot = at(insertion, &["slot"]).as_u64().expect("slot");
+        assert_eq!(u64::from(upsert.slot), slot);
+        let empty_siblings = fields_at(insertion, &["empty_slot_opening", "opening", "siblings"]);
+        assert_eq!(upsert.slot_siblings.to_vec(), empty_siblings);
+        assert_eq!(
+            path_root(INDEXED_NODE_DOMAIN, Fp::from(0_u64), slot, &empty_siblings),
+            intermediate
+        );
+        let written = leaf_of(at(insertion, &["leaf"]));
+        assert_eq!(
+            written,
+            IndexedLeaf {
+                key,
+                value,
+                next_key: low.next_key
+            }
+        );
+        assert_eq!(tree.root(), field_at(insertion, &["root_hex"]));
+    }
+    // Membership and the three non-membership openings of that tree.
+    let (member, _, _) = leaf_opening_of(at(indexed, &["membership"]));
+    assert_eq!(tree.get(&member.key), Some(member.value));
+    for name in [
+        "non_membership_through_sentinel",
+        "non_membership_through_interior_low_leaf",
+        "non_membership_above_the_largest_key",
+    ] {
+        let vector = at(indexed, &[name]);
+        let absent = field_at(vector, &["absent_key_hex"]);
+        let (low, _, _) = leaf_opening_of(at(vector, &["low"]));
+        assert!(low.brackets(&absent), "{name}");
+        assert_eq!(tree.low(&absent).map(|(_, leaf)| leaf), Some(low), "{name}");
+    }
+    // The quota-usage update: one usage leaf, its value replaced in place.
+    let update = at(indexed, &["quota_usage_update"]);
+    let (leaf, slot, siblings) = leaf_opening_of(at(update, &["leaf"]));
+    let mut usage = IndexedTree::<Fp>::new();
+    let _ = usage.upsert(leaf.key, leaf.value).expect("insert");
+    assert_eq!(usage.root(), field_at(update, &["old_root_hex"]));
+    let new_value = field_at(update, &["new_value_hex"]);
+    let upsert = usage.upsert(leaf.key, new_value).expect("update");
+    assert!(!upsert.insert);
+    assert_eq!((upsert.leaf, upsert.leaf_slot), (leaf, slot));
+    assert_eq!(upsert.leaf_siblings.to_vec(), siblings);
+    assert_eq!(usage.root(), field_at(update, &["root_hex"]));
+    // The usage key and value are the quota-usage map value's.
+    let map_value = at(&fixture, &["poseidon", "map_values", "quota_usage"]);
+    assert_eq!(leaf.key, field_at(map_value, &["key_hex"]));
+    let items = items_at(map_value, &["items"]);
+    let items = Items(&items);
+    let window = QuotaWindow {
+        kind: u8::try_from(items.integer(0)).expect("kind"),
+        start_ms: items.u64(1),
+        end_ms: items.u64(2),
+        limit: 0,
+    };
+    assert_eq!(window.usage_key::<Fp>(), leaf.key);
+    assert_eq!(
+        window.usage_value(Fp::from_u128(items.integer(3))),
+        leaf.value
+    );
+    assert_eq!(
+        domain_of(at(map_value, &["domain"]).as_str().expect("domain")),
+        QUOTA_USAGE_DOMAIN
+    );
+    assert_eq!(
+        window.usage_value(Fp::from_u128(items.integer(3) + 500)),
+        new_value
+    );
+}
+
+/// A quota `sigma_send` against the vectored share and usage map, in
+/// circuit: a gross 500 inside the vectored day updates the daily usage
+/// leaf to the vectored value (the vectored root, natively) and inserts the
+/// monthly one; the circuit commits the same usage root.
+#[test]
+fn a_quota_send_charges_the_vectored_share_in_circuit() {
+    use iroha_kagemusha_proof::{QuotaCharge, WindowSegment, WindowSlot};
+    let fixture = wallet_vectors();
+    let quota = at(&fixture, &["poseidon", "quota_windows"]);
+    let (daily, monthly) = vectored_windows(quota);
+    let windows = QuotaWindowTree::new(&[daily, monthly]).expect("tree");
+    let update = at(
+        &fixture,
+        &["poseidon", "indexed_tree", "quota_usage_update"],
+    );
+    let (leaf, _, _) = leaf_opening_of(at(update, &["leaf"]));
+    let map_value = items_at(
+        &fixture,
+        &["poseidon", "map_values", "quota_usage", "items"],
+    );
+    let used = Items(&map_value).integer(3);
+    let mut usage = IndexedTree::<Fp>::new();
+    let _ = usage.upsert(leaf.key, leaf.value).expect("insert");
+    let usage_root = usage.root();
+    let gross = 500_u128;
+    let daily_charge = usage
+        .upsert(
+            daily.usage_key(),
+            daily.usage_value(Fp::from_u128(used + gross)),
+        )
+        .expect("update");
+    assert_eq!(usage.root(), field_at(update, &["root_hex"]));
+    let monthly_charge = usage
+        .upsert(
+            monthly.usage_key(),
+            monthly.usage_value(Fp::from_u128(gross)),
+        )
+        .expect("insert");
+    let slot = |index: usize| WindowSlot {
+        window: windows.slot(index),
+        siblings: windows.siblings(index),
+    };
+    let unused = WindowSlot::<Fp> {
+        window: QuotaWindow::EMPTY,
+        siblings: [Fp::from(0_u64); 6],
+    };
+    let relation = SigmaRelation::send(CONTROL_QUOTAS);
+    let mut witness = sample_witness::<Fp>(17, relation, Mutation::None);
+    let core = &mut witness.predecessor.core;
+    core.controls.quota_windows_root = windows.root();
+    core.roots.quota_usage = usage_root;
+    let floor = core.accepted_time_floor_ms;
+    let StepInputs::Send(send) = &mut witness.inputs else {
+        panic!("send");
+    };
+    assert!(floor < daily.start_ms);
+    send.request.amount = gross;
+    send.request.fee = 0;
+    send.request.request_time = daily.start_ms;
+    send.accepted_lower = daily.start_ms + 1_000;
+    send.accepted_upper = daily.start_ms + 601_000;
+    *send.quota = QuotaWitness {
+        segments: [
+            WindowSegment {
+                base: 0,
+                slots: [unused, slot(0), slot(1), slot(2)],
+            },
+            WindowSegment {
+                base: 1,
+                slots: [slot(0), slot(1), slot(2), slot(3)],
+            },
+        ],
+        charges: [
+            QuotaCharge {
+                upsert: daily_charge,
+                used,
+            },
+            QuotaCharge::unused(),
+            QuotaCharge {
+                upsert: monthly_charge,
+                used: 0,
+            },
+            QuotaCharge::unused(),
+        ],
+    };
+    let native = witness.evaluate(relation);
+    assert!(native.is_honest(), "{:?}", native.violations);
+    let successor = native.successor_state.expect("successor");
+    assert_eq!(successor.core.roots.quota_usage, usage.root());
+    let shape = smallest_shape(RelationShape::new(relation, PrefixMode::Folded));
+    assert_eq!(in_circuit_digests(&shape, &witness), native.digests);
+    assert!(common::check_witness(&shape, &witness).is_satisfied());
+}
+
+/// The quota relations compute the native digests in circuit, also for
+/// violating witnesses.
+#[test]
+fn quota_relations_compute_the_native_digests() {
+    for relation in [
+        SigmaRelation::send(CONTROL_QUOTAS),
+        SigmaRelation::send(iroha_kagemusha_proof::CONTROLS_DEFINED),
+    ] {
+        let shape = smallest_shape(RelationShape::new(relation, PrefixMode::Folded));
+        for (seed, mutation) in [
+            (2, Mutation::None),
+            (3, Mutation::None),
+            (2, Mutation::QuotaExceeded),
+            (3, Mutation::QuotaUntouched),
+        ] {
+            let witness = sample_witness::<Fp>(seed, relation, mutation);
+            assert_eq!(
+                in_circuit_digests(&shape, &witness),
+                witness.evaluate(relation).digests,
+                "{} {seed} {mutation:?}",
+                relation.label()
+            );
+        }
+    }
 }
 
 fn parity_on<F: PoseidonField>(seeds: core::ops::Range<u64>) -> usize {
@@ -783,15 +1268,15 @@ fn parity_on<F: PoseidonField>(seeds: core::ops::Range<u64>) -> usize {
 
 #[test]
 fn in_circuit_digests_equal_the_native_reference_on_both_fields() {
-    assert_eq!(parity_on::<Fp>(0..2), 6 * 2 * 3);
-    assert_eq!(parity_on::<Fq>(2..3), 6 * 3);
+    assert_eq!(parity_on::<Fp>(0..2), 10 * 2 * 3);
+    assert_eq!(parity_on::<Fq>(2..3), 10 * 3);
 }
 
 #[test]
 #[ignore = "more witnesses; run in release"]
 fn in_circuit_digests_equal_the_native_reference_on_many_witnesses() {
-    assert_eq!(parity_on::<Fp>(0..16), 6 * 16 * 3);
-    assert_eq!(parity_on::<Fq>(0..16), 6 * 16 * 3);
+    assert_eq!(parity_on::<Fp>(0..16), 10 * 16 * 3);
+    assert_eq!(parity_on::<Fq>(0..16), 10 * 16 * 3);
 }
 
 #[test]
@@ -802,8 +1287,8 @@ fn digests_do_not_depend_on_the_prefix_mode_or_the_lanes() {
         for prefix in [PrefixMode::Folded, PrefixMode::Absorbed] {
             for lanes in 1..=3 {
                 let shape = RelationShape::new(relation, prefix);
-                let params = SigmaParams::new(shape, lanes, limb_bits_for(12)).expect("params");
-                let digests = in_circuit_digests(&SigmaShape::new(params, 12), &witness);
+                let params = SigmaParams::new(shape, lanes, limb_bits_for(13)).expect("params");
+                let digests = in_circuit_digests(&SigmaShape::new(params, 13), &witness);
                 assert_eq!(*seen.get_or_insert(digests), digests, "{prefix:?} {lanes}");
             }
         }
@@ -855,17 +1340,25 @@ fn pinned_known_answers() {
 
 /// The pinned statement digests and credit identifiers of
 /// [`pinned_known_answers`], in [`RELATIONS`] order.
-const PINNED: [(&str, &str); 3] = [
+const PINNED: [(&str, &str); 5] = [
     (
-        "c8fbc690290a2b326e62400d0d6c8a9215143af778bc27352e0fc1ee260e003b",
-        "f590cb60d749732105fcc2e51ab2e31877b2f0833498228827f0789c0e2b8e18",
+        "c672c7845c406ce3d60363f544db7353a792c0549d78d3a7632a6e327fef2518",
+        "eb5233ca225ca4eb7d614e38fd8ad54508e7e6217972a0a7586d29f8a766af06",
     ),
     (
-        "3b036c87bcb6ee46a0b40691818774cef68927d03cdb1cf712748e1c09bf0320",
-        "f590cb60d749732105fcc2e51ab2e31877b2f0833498228827f0789c0e2b8e18",
+        "69aeb344754937650633bfc37c3dc13e5069c316c2801de0005ebf2872e8052a",
+        "a9e11be1c98bb920b4a54c3a78cdb025afced976b73764558892cdd004b54b25",
     ),
     (
-        "01c39b5df374bc1db6b10c6b5a87b8e6446ebb3658a288754186a84fdadfd224",
-        "b740c90bfa2f07fb35f41da7d3638fe81f37cb976cf2b6acc2edcc4ec31c971c",
+        "5dbe2d7a377c93041a9268acbcb3c2bf7d315e440c901b4334b367fc7ee0ed1f",
+        "eb5233ca225ca4eb7d614e38fd8ad54508e7e6217972a0a7586d29f8a766af06",
+    ),
+    (
+        "37925de32fe090187192259c7e4115c1eb242a2c94cac8c3cafb64befac73b39",
+        "fec364659bb262f9a7204b103fb7bd01d23c7939f1545bf6d39247695cff343f",
+    ),
+    (
+        "d360665dc3f3b6d544e669d23893eb7078d42047bd12dcfdff8cf18f823e0d15",
+        "07211788786e3991ddd24f105da7dd508b41e192074e1b74ab159acc4244262d",
     ),
 ];

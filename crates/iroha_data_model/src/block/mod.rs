@@ -1,7 +1,7 @@
 //! This module contains `Block` and related implementations.
 //!
 //! `Block`s are organized into a linear sequence over time (also known as the block chain).
-#[cfg(feature = "transparent_api")]
+#[cfg(any(test, feature = "transparent_api"))]
 use self::execution_output::ExecutionOutputV1;
 use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
 use crate::da::commitment::{
@@ -45,7 +45,7 @@ fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
     }
     Ok(())
 }
-#[cfg(feature = "transparent_api")]
+#[cfg(any(test, feature = "transparent_api"))]
 #[doc = "Builder utilities for constructing blocks in transparent API mode."]
 pub mod builder;
 /// Sumeragi finality proof stored with a committed block.
@@ -72,7 +72,7 @@ mod proposal;
 mod shared;
 /// Canonical ordered block signatures and original-pool preparation.
 pub mod signatures;
-#[cfg(feature = "transparent_api")]
+#[cfg(any(test, feature = "transparent_api"))]
 use crate::fastpq::TransferTranscript;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
 pub use commit_certificate::{
@@ -199,7 +199,7 @@ impl SignedBlock {
     /// # Warning
     ///
     /// All transactions are categorized as valid
-    #[cfg(feature = "transparent_api")]
+    #[cfg(any(test, feature = "transparent_api"))]
     pub fn presigned(
         signature: BlockSignature,
         header: BlockHeader,
@@ -299,7 +299,7 @@ impl SignedBlock {
     /// # Errors
     /// Rejects malformed proposal/output structure, noncanonical policy, or any
     /// row/aggregate/complete-wire limit before changing this block.
-    #[cfg(feature = "transparent_api")]
+    #[cfg(any(test, feature = "transparent_api"))]
     #[allow(clippy::too_many_arguments)]
     pub fn set_execution_outputs(
         &mut self,

@@ -59,6 +59,9 @@ impl UnavailablePeers {
                     while !stop.load(Ordering::SeqCst) {
                         match listener.accept() {
                             Ok((mut socket, _)) => {
+                                // macOS can inherit the listener's nonblocking flag.
+                                // request_line retains bounded blocking reads/writes.
+                                socket.set_nonblocking(false)?;
                                 let (method, path) = request_line(&mut socket)?;
                                 let success = method == "GET" && path == "/v1/node/capabilities";
                                 let mut seen = requests.lock().unwrap();

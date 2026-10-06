@@ -1,13 +1,24 @@
 //! Measurement harness (M12): native `sigma_send` / `sigma_recv` step proofs
-//! of the G1 layout on Vesta in the KAGEMUSHA step format, at `k = 12` with
-//! one lane (the shape within the 3.5 KB budget), and at `k = 11` and
-//! `k = 10` with the fewest lanes that fit.
+//! of the G1 layout on Vesta in the KAGEMUSHA step format.
+//!
+//! - `sigma_send` without a control and `sigma_recv` without the blacklist
+//!   bit: at `k = 12` with one lane (the shape within the 3.5 KB budget),
+//!   and at `k = 11` and `k = 10` with the fewest lanes that fit;
+//! - `sigma_recv` with the blacklist bit at `k = 12` (one lane) and `k = 11`
+//!   (its smallest `k`: the 16-node gap path is one lane's site, 1,295
+//!   rows, more than a `k = 10` lane holds), and `sigma_send` with the
+//!   blacklist control at `k = 12`;
+//! - `sigma_send` with every control (the full mask: blacklist gap opening
+//!   and list age, quota windows and usage update, lease): at `k = 16`
+//!   with one lane (the single-lane shape R9 needs), and at `k = 15` and
+//!   `k = 14` with the fewest lanes (no shape at `k <= 13` fits within
+//!   [`iroha_kagemusha_proof::MAX_LANES`]).
 //!
 //! Each case prints one `M12` line per thread count: the shape, key
-//! generation (parameters excluded), and for [`RUNS`] proofs after one
-//! warm-up: prove wall time, prove CPU time, verification, each as
-//! min/median/p95/max (nearest rank), with the proof length and the
-//! 1-minute load average sampled before every proof.
+//! generation (parameters excluded), and for its runs (20, or 8 for the
+//! full mask) proofs after one warm-up: prove wall time, prove CPU time,
+//! verification, each as min/median/p95/max (nearest rank), with the proof
+//! length and the 1-minute load average sampled before every proof.
 //!
 //! - **CPU source.** Process CPU time from
 //!   `clock_gettime(CLOCK_PROCESS_CPUTIME_ID)` (nanosecond resolution on
@@ -35,8 +46,8 @@ mod common;
 use std::time::Instant;
 
 use common::{
-    BUDGET_SHAPE, K11_SHAPE, SEND_BLACKLIST, SMALLEST_SHAPE, folded, pinned_shape, recovery,
-    vesta_params,
+    BUDGET_SHAPE, K11_SHAPE, RECEIVE_BLACKLIST, SEND_BLACKLIST, SEND_EVERY, SMALLEST_SHAPE, folded,
+    pinned_shape, recovery, vesta_params,
 };
 use iroha_kagemusha_proof::{
     KeyOptions, Mutation, ProofFormat, SigmaProver, SigmaRelation, SigmaShape, sample_witness,
@@ -45,6 +56,9 @@ use iroha_pasta::{Eq, Fp};
 
 /// Timed proofs per series (after one warm-up proof).
 const RUNS: usize = 20;
+/// Timed proofs per series of a `k >= 14` shape (about 13 CPU-seconds each
+/// at `k = 16`).
+const LARGE_RUNS: usize = 8;
 /// The 1-minute load average at or above which a series is not gate-grade.
 const MAX_GATE_LOAD: f64 = 4.0;
 /// The CPU time source, as printed.
@@ -208,11 +222,12 @@ fn measure(label: &str, shape: SigmaShape, options: KeyOptions) {
     let bytes = shape
         .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
         .expect("length");
+    let runs = if shape.k >= 14 { LARGE_RUNS } else { RUNS };
     for (threads, keygen_ms) in [(1, keygen[0]), (4, keygen[1])] {
-        let s = series(&prover, relation.relation, threads, RUNS);
+        let s = series(&prover, relation.relation, threads, runs);
         println!(
             "M12 {label} case={} k={} lanes={} limb_bits={} advice_cols={} fixed_cols={} \
-             permutations={} cells={} threads={threads} runs={RUNS} params_ms={params_ms:.0} \
+             permutations={} cells={} threads={threads} runs={runs} params_ms={params_ms:.0} \
              keygen_ms={keygen_ms:.0} prove_wall_ms={} prove_cpu_ms={} verify_ms={} \
              proof_bytes={bytes} cpu_source={CPU_SOURCE} load1={} gate_grade={}",
             relation.label(),
@@ -237,74 +252,48 @@ fn measured(relation: SigmaRelation, at: (u32, usize)) -> SigmaShape {
     pinned_shape(folded(relation), at)
 }
 
-#[test]
-#[ignore = "M12 measurement; run in release, one case per process"]
-fn m12_send_k12() {
-    measure(
-        "k12",
-        measured(SigmaRelation::SEND, BUDGET_SHAPE),
-        KeyOptions::default(),
-    );
+/// The full mask's single-lane shape (the one R9 needs).
+const FULL_K16_SHAPE: (u32, usize) = (16, 1);
+/// The full mask's fewest lanes at `k = 15`.
+const FULL_K15_SHAPE: (u32, usize) = (15, 2);
+/// The full mask's fewest lanes at `k = 14` (its smallest `k`).
+const FULL_K14_SHAPE: (u32, usize) = (14, 4);
+
+/// Measurement and footprint tests of `relation` at a shape.
+macro_rules! cases {
+    ($($measure:ident, $footprint:ident: $relation:expr, $label:literal, $at:expr;)*) => {
+        $(
+            #[test]
+            #[ignore = "M12 measurement; run in release, one case per process"]
+            fn $measure() {
+                measure($label, measured($relation, $at), KeyOptions::default());
+            }
+
+            #[test]
+            #[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
+            fn $footprint() {
+                footprint($relation, $at, KeyOptions::default());
+            }
+        )*
+    };
 }
 
-#[test]
-#[ignore = "M12 measurement; run in release, one case per process"]
-fn m12_recv_k12() {
-    measure(
-        "k12",
-        measured(SigmaRelation::RECEIVE, BUDGET_SHAPE),
-        KeyOptions::default(),
-    );
-}
-
-#[test]
-#[ignore = "M12 measurement; run in release, one case per process"]
-fn m12_send_blacklist_k12() {
-    measure(
-        "k12",
-        measured(SEND_BLACKLIST, BUDGET_SHAPE),
-        KeyOptions::default(),
-    );
-}
-
-#[test]
-#[ignore = "M12 measurement; run in release, one case per process"]
-fn m12_send_k11() {
-    measure(
-        "k11",
-        measured(SigmaRelation::SEND, K11_SHAPE),
-        KeyOptions::default(),
-    );
-}
-
-#[test]
-#[ignore = "M12 measurement; run in release, one case per process"]
-fn m12_recv_k11() {
-    measure(
-        "k11",
-        measured(SigmaRelation::RECEIVE, K11_SHAPE),
-        KeyOptions::default(),
-    );
-}
-
-#[test]
-#[ignore = "M12 measurement; run in release, one case per process"]
-fn m12_send_k10() {
-    measure(
-        "k10",
-        measured(SigmaRelation::SEND, SMALLEST_SHAPE),
-        KeyOptions::default(),
-    );
-}
-
-#[test]
-#[ignore = "M12 measurement; run in release, one case per process"]
-fn m12_recv_k10() {
-    measure(
-        "k10",
-        measured(SigmaRelation::RECEIVE, SMALLEST_SHAPE),
-        KeyOptions::default(),
-    );
+cases! {
+    m12_send_k12, m12_footprint_send_k12: SigmaRelation::SEND, "k12", BUDGET_SHAPE;
+    m12_send_k11, m12_footprint_send_k11: SigmaRelation::SEND, "k11", K11_SHAPE;
+    m12_send_k10, m12_footprint_send_k10: SigmaRelation::SEND, "k10", SMALLEST_SHAPE;
+    m12_recv_k12, m12_footprint_recv_k12: SigmaRelation::RECEIVE, "k12", BUDGET_SHAPE;
+    m12_recv_k11, m12_footprint_recv_k11: SigmaRelation::RECEIVE, "k11", K11_SHAPE;
+    m12_recv_k10, m12_footprint_recv_k10: SigmaRelation::RECEIVE, "k10", SMALLEST_SHAPE;
+    m12_recv_blacklist_k12, m12_footprint_recv_blacklist_k12:
+        RECEIVE_BLACKLIST, "k12", BUDGET_SHAPE;
+    m12_recv_blacklist_k11, m12_footprint_recv_blacklist_k11:
+        RECEIVE_BLACKLIST, "k11", K11_SHAPE;
+    m12_send_blacklist_k12, m12_footprint_send_blacklist_k12:
+        SEND_BLACKLIST, "k12", BUDGET_SHAPE;
+    m12_send_full_k16, m12_footprint_send_full_k16: SEND_EVERY, "k16", FULL_K16_SHAPE;
+    m12_send_full_k15, m12_footprint_send_full_k15: SEND_EVERY, "k15", FULL_K15_SHAPE;
+    m12_send_full_k14, m12_footprint_send_full_k14: SEND_EVERY, "k14", FULL_K14_SHAPE;
 }
 
 /// Repeats `runs` proofs (or verifications) of the `k = 12` relation on one
@@ -375,52 +364,6 @@ fn footprint(relation: SigmaRelation, at: (u32, usize), options: KeyOptions) {
 }
 
 #[test]
-#[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
-fn m12_footprint_send_k12() {
-    footprint(SigmaRelation::SEND, BUDGET_SHAPE, KeyOptions::default());
-}
-
-#[test]
-#[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
-fn m12_footprint_recv_k12() {
-    footprint(SigmaRelation::RECEIVE, BUDGET_SHAPE, KeyOptions::default());
-}
-
-#[test]
-#[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
-fn m12_footprint_send_blacklist_k12() {
-    footprint(SEND_BLACKLIST, BUDGET_SHAPE, KeyOptions::default());
-}
-
-#[test]
-#[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
-fn m12_footprint_send_k11() {
-    footprint(SigmaRelation::SEND, K11_SHAPE, KeyOptions::default());
-}
-
-#[test]
-#[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
-fn m12_footprint_recv_k11() {
-    footprint(SigmaRelation::RECEIVE, K11_SHAPE, KeyOptions::default());
-}
-
-#[test]
-#[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
-fn m12_footprint_send_k10() {
-    footprint(SigmaRelation::SEND, SMALLEST_SHAPE, KeyOptions::default());
-}
-
-#[test]
-#[ignore = "M12 footprint; run in release under /usr/bin/time -l"]
-fn m12_footprint_recv_k10() {
-    footprint(
-        SigmaRelation::RECEIVE,
-        SMALLEST_SHAPE,
-        KeyOptions::default(),
-    );
-}
-
-#[test]
 #[ignore = "M12 measurement; run in release, one case per process"]
 fn m12_send_k12_tables() {
     measure(
@@ -487,8 +430,16 @@ fn summaries_and_probes() {
     assert!(!series.gate_grade());
     assert!(!series.cpu.is_empty() && !series.verify.is_empty());
     // The measured shapes are the pinned ones.
-    for at in [BUDGET_SHAPE, K11_SHAPE, SMALLEST_SHAPE] {
-        let shape = measured(SigmaRelation::SEND, at);
+    for (relation, at) in [
+        (SigmaRelation::SEND, BUDGET_SHAPE),
+        (SigmaRelation::SEND, K11_SHAPE),
+        (SigmaRelation::SEND, SMALLEST_SHAPE),
+        (RECEIVE_BLACKLIST, K11_SHAPE),
+        (SEND_EVERY, FULL_K16_SHAPE),
+        (SEND_EVERY, FULL_K15_SHAPE),
+        (SEND_EVERY, FULL_K14_SHAPE),
+    ] {
+        let shape = measured(relation, at);
         assert_eq!((shape.k, shape.params.lanes()), at);
         assert_eq!(
             shape.params.limb_bits(),

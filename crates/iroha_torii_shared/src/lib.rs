@@ -33,22 +33,12 @@ pub mod content_mime;
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
 pub mod governance_proposal_api;
-/// Public Torii DTOs for the KAGEMUSHA lifecycle.
-pub mod kagemusha_api;
-/// Native complete World snapshots and original KAGEMUSHA authority values.
-pub mod kagemusha_state;
 /// The list-query language (filter, sort, projection, pagination) shared by Torii, SDKs and CLI.
 pub mod list_query;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
 /// Original multisig execution records at a certified native World cut.
 pub mod multisig_execution_evidence;
-/// Exact payer-authenticated original ordinary debit finality read.
-pub mod ordinary_mint_finalized;
-/// Exact signed issuer-scoped original World grant for ordinary Mint.
-pub mod ordinary_mint_issuer_purpose;
-/// Actual signed account-scoped ordinary current-wallet original wire.
-pub mod ordinary_wallet_current;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
 pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.

@@ -363,15 +363,15 @@ def _profile_command(
     tools: BuiltTools,
     profile: str,
     temporary_root: Path,
-    authority_parameters: Path,
+    xor_allocations: Path,
 ) -> list[str]:
     return [
         os.fspath(tools.xtask),
         "kagami-profiles",
         "--profile",
         profile,
-        "--kagemusha-mint-finality-parameters-dir",
-        os.fspath(authority_parameters),
+        "--xor-allocations-dir",
+        os.fspath(xor_allocations),
         "--out",
         os.fspath(temporary_root / "defaults" / "kagami"),
         "--kagami",
@@ -501,7 +501,7 @@ def _generate_stage(
     tools: BuiltTools,
     environment: Mapping[str, str],
     expectation: LockExpectation,
-    authority_parameters: Path,
+    xor_allocations: Path,
 ) -> dict[str, ManagedFile]:
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.kagami-owner-", dir=destination.parent)
@@ -509,7 +509,7 @@ def _generate_stage(
     published = False
     try:
         _sealed_child(
-            _profile_command(tools, profile, temporary, authority_parameters),
+            _profile_command(tools, profile, temporary, xor_allocations),
             environment,
             expectation,
         )
@@ -540,7 +540,7 @@ def _parse_args(arguments: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stage-b")
     parser.add_argument("--cargo", required=True)
     parser.add_argument("--cargo-target-dir", required=True)
-    parser.add_argument("--kagemusha-mint-finality-parameters-dir", required=True)
+    parser.add_argument("--xor-allocations-dir", required=True)
     parser.add_argument("--cargo-lock-size", required=True, type=int)
     parser.add_argument("--cargo-lock-sha256", required=True)
     parsed = parser.parse_args(arguments)
@@ -574,9 +574,9 @@ def run(parsed: argparse.Namespace) -> None:
         external=True,
         private=True,
     )
-    authority_parameters = _existing_directory(
-        parsed.kagemusha_mint_finality_parameters_dir,
-        "KAGEMUSHA mint-finality public-parameter directory",
+    xor_allocations = _existing_directory(
+        parsed.xor_allocations_dir,
+        "XOR genesis allocation directory",
         external=True,
         private=False,
     )
@@ -591,7 +591,7 @@ def run(parsed: argparse.Namespace) -> None:
             tools,
             environment,
             expectation,
-            authority_parameters,
+            xor_allocations,
         )
         return
 
@@ -614,7 +614,7 @@ def run(parsed: argparse.Namespace) -> None:
         tools,
         environment,
         expectation,
-        authority_parameters,
+        xor_allocations,
     )
     second = _generate_stage(
         stage_b,
@@ -622,7 +622,7 @@ def run(parsed: argparse.Namespace) -> None:
         tools,
         environment,
         expectation,
-        authority_parameters,
+        xor_allocations,
     )
     checked = _snapshot(candidate, parsed.profile, closed_stage=False)
     _compare_snapshots(first, second, "two fresh profile generations")

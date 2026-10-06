@@ -22,7 +22,7 @@ pub mod isi {
     };
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
-        IntoKeyValue, NetworkId,
+        IntoKeyValue,
         account::{
             AccountController,
             curve::{CurveId, CurveRegistryError},
@@ -40,13 +40,9 @@ pub mod isi {
     };
     use iroha_logger::prelude::*;
     use iroha_model_base::domain::DomainId;
-    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use iroha_model_base::topology::DataSpaceId;
-    use std::{
-        collections::{BTreeSet, btree_map::Entry},
-        str::FromStr,
-    };
+    use std::{collections::BTreeSet, str::FromStr};
     /// Alias grace window after lease expiry (369 hours).
     const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
     include!("domain/asset_alias_scope.rs");
@@ -3530,7 +3526,6 @@ mod tests {
     use iroha_executor_data_model::permission::asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
     };
-    use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;

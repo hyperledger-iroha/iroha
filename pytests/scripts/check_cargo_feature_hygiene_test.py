@@ -86,7 +86,11 @@ def test_model_json_feature_cannot_return_as_an_empty_alias() -> None:
 
 
 def test_retired_kagemusha_switches_cannot_return_as_empty_aliases() -> None:
-    for package, retired in (("iroha", "kagemusha-ordinary-native"), ("iroha_core_zk", "kagemusha-production-prover")):
+    for package, retired in (
+        ("iroha", "kagemusha-ordinary-native"),
+        ("iroha_core_zk", "kagemusha-production-prover"),
+        ("iroha_core_zk", "kagemusha-real-proof-harness"),
+    ):
         document = _guarded_document(package)
         assert retired not in document["features"]
         changed = copy.deepcopy(document)
@@ -100,7 +104,8 @@ def test_production_exports_have_no_feature_opt_out() -> None:
         assert 'feature = "kagemusha-production-prover"' not in source.read_text(), source
     core_entry = (core / "lib.rs").read_text()
     assert 'pub mod kagemusha_v1_recursion;' in core_entry
-    assert 'pub mod kagemusha_v1_state;' in core_entry
+    assert 'mod kagemusha_v1_state;' not in core_entry
+    assert not (core / "kagemusha_v1_state").exists()
 
 
 def test_client_has_no_ordinary_native_surface() -> None:
@@ -143,11 +148,8 @@ def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> N
         for name in retired:
             assert f'feature = "{name}"' not in source.read_text(), (source, name)
     recursion = (core / "kagemusha_v1_recursion/mod.rs").read_text()
-    assert 'KagemushaProductionProverV1' in recursion
-    assert 'register_kagemusha_native_outgoing_witness_source_v1' in recursion
-    state = (core / "kagemusha_v1_state/mod.rs").read_text()
-    assert 'KagemushaNativeOrdinaryBootstrapOwnerV1' in state
-    assert 'KagemushaNativeOrdinaryCashOwnerV1' in state
+    assert 'mod mint_finality;' in recursion
+    assert 'derive_kagemusha_mint_finality_validator_keys_v1' in recursion
 
 
 def test_stark_owns_optional_fastpq_dependency_and_rejects_mutations() -> None:

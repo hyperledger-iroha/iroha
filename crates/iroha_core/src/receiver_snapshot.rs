@@ -693,78 +693,77 @@ mod tests {
         use iroha_data_model::{asset::AssetId, execution_witness::ExecutionWitnessKeyTagV1};
         use mv::storage::StorageReadOnly;
         crate::state::native_capture_fixture::with_native_capture_source(
-                true,
-                |state, mut state_block, _recording, mut source, source_hash| {
-                    let header = source.header();
-                    let tx_set_hash: [u8; 32] =
-                        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-                            source.external_entrypoints_slice().iter(),
-                        )
-                        .unwrap()
-                        .into();
-                    crate::state::native_capture_fixture::seal_native_source(
-                        &mut state_block,
-                        &mut source,
+            true,
+            |state, mut state_block, _recording, mut source, source_hash| {
+                let header = source.header();
+                let tx_set_hash: [u8; 32] =
+                    iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                        source.external_entrypoints_slice().iter(),
                     )
-                    .unwrap();
-                    // This root-composition control deliberately retains the one ordinary
-                    // balance leaf from the original test. Its bytes now come from the
-                    // genuine completed transfer and its actual applied World overlay;
-                    // the producer's quantity provenance remains owned by the D7 seal.
-                    assert_eq!(source.fastpq_transcripts().len(), 1);
-                    let transcripts = &source.fastpq_transcripts()[&source_hash];
-                    assert_eq!(transcripts.len(), 1);
-                    assert_eq!(transcripts[0].deltas.len(), 1);
-                    let delta = &transcripts[0].deltas[0];
-                    let asset =
-                        AssetId::of(delta.asset_definition.clone(), delta.from_account.clone());
-                    let post = state_block
-                        .world
-                        .assets
-                        .get(&asset)
-                        .expect("the genuine transfer retains its source balance")
-                        .as_ref();
-                    assert_eq!(post, &delta.from_balance_after);
-                    recorder::record_write_asset(&asset, post);
-                    let mut ordinary_key = vec![ExecutionWitnessKeyTagV1::AssetBalance as u8];
-                    ordinary_key.extend_from_slice(asset.to_string().as_bytes());
-                    let ordinary_value = iroha_primitives::json::Json::new(post.clone())
-                        .get()
-                        .as_bytes()
-                        .to_vec();
-                    assert_eq!(
-                        state_block
-                            .fastpq_source_inventory()
-                            .unwrap()
-                            .unwrap()
-                            .tx_set_hash(),
-                        tx_set_hash
-                    );
-                    state_block.capture_exec_witness().unwrap();
-                    let witness = state_block
-                        .take_exec_witness()
-                        .expect("actual captured witness");
-                    let encoded = norito::encode_canonical(witness.wire()).expect("encode witness");
-                    let decoded: ExecWitness =
-                        norito::decode_canonical(&encoded).expect("decode witness");
-                    assert_eq!(&decoded, witness.wire());
-                    assert_eq!(witness.writes.len(), 6);
-                    assert_eq!(witness.fastpq_transcripts.len(), 1);
-                    let mut ordinary = witness
-                        .writes
-                        .iter()
-                        .filter(|write| write.key == ordinary_key);
-                    assert_eq!(
-                        ordinary
-                            .next()
-                            .expect("the ordinary balance leaf is retained")
-                            .value,
-                        ordinary_value,
-                    );
-                    assert!(ordinary.next().is_none());
-                    // All four fixed native contexts and the ordinary source manifest
-                    // remain authenticated alongside this genuine transfer's writes.
-                    for key in [
+                    .unwrap()
+                    .into();
+                crate::state::native_capture_fixture::seal_native_source(
+                    &mut state_block,
+                    &mut source,
+                )
+                .unwrap();
+                // This root-composition control deliberately retains the one ordinary
+                // balance leaf from the original test. Its bytes now come from the
+                // genuine completed transfer and its actual applied World overlay;
+                // the producer's quantity provenance remains owned by the D7 seal.
+                assert_eq!(source.fastpq_transcripts().len(), 1);
+                let transcripts = &source.fastpq_transcripts()[&source_hash];
+                assert_eq!(transcripts.len(), 1);
+                assert_eq!(transcripts[0].deltas.len(), 1);
+                let delta = &transcripts[0].deltas[0];
+                let asset = AssetId::of(delta.asset_definition.clone(), delta.from_account.clone());
+                let post = state_block
+                    .world
+                    .assets
+                    .get(&asset)
+                    .expect("the genuine transfer retains its source balance")
+                    .as_ref();
+                assert_eq!(post, &delta.from_balance_after);
+                recorder::record_write_asset(&asset, post);
+                let mut ordinary_key = vec![ExecutionWitnessKeyTagV1::AssetBalance as u8];
+                ordinary_key.extend_from_slice(asset.to_string().as_bytes());
+                let ordinary_value = iroha_primitives::json::Json::new(post.clone())
+                    .get()
+                    .as_bytes()
+                    .to_vec();
+                assert_eq!(
+                    state_block
+                        .fastpq_source_inventory()
+                        .unwrap()
+                        .unwrap()
+                        .tx_set_hash(),
+                    tx_set_hash
+                );
+                state_block.capture_exec_witness().unwrap();
+                let witness = state_block
+                    .take_exec_witness()
+                    .expect("actual captured witness");
+                let encoded = norito::encode_canonical(witness.wire()).expect("encode witness");
+                let decoded: ExecWitness =
+                    norito::decode_canonical(&encoded).expect("decode witness");
+                assert_eq!(&decoded, witness.wire());
+                assert_eq!(witness.writes.len(), 6);
+                assert_eq!(witness.fastpq_transcripts.len(), 1);
+                let mut ordinary = witness
+                    .writes
+                    .iter()
+                    .filter(|write| write.key == ordinary_key);
+                assert_eq!(
+                    ordinary
+                        .next()
+                        .expect("the ordinary balance leaf is retained")
+                        .value,
+                    ordinary_value,
+                );
+                assert!(ordinary.next().is_none());
+                // All four fixed native contexts and the ordinary source manifest
+                // remain authenticated alongside this genuine transfer's writes.
+                for key in [
                         iroha_data_model::execution_witness::VALIDATION_FEE_POLICY_WITNESS_KEY_V1,
                         iroha_data_model::execution_witness::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
                         iroha_data_model::sumeragi_finality::SUMERAGI_LANE_STATE_WITNESS_KEY,
@@ -776,43 +775,42 @@ mod tests {
                             "the complete native context appears exactly once",
                         );
                     }
-                    assert_eq!(witness.writes.iter().filter(|write| write.key.as_slice() ==
+                assert_eq!(witness.writes.iter().filter(|write| write.key.as_slice() ==
                 iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1).count(), 1);
-                    let native_lanes =
-                        iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
-                            &decoded,
-                            &iroha_allocation::AllocationBudget::new(64 * 1024),
-                        )
-                        .expect("actual complete native lane state proof");
-                    let (fee, fee_root) =
-                        validation_fee_policy_witness_proof_v1(&decoded).expect("actual fee proof");
-                    let (casting, casting_root) =
-                        parliament_timed_ovn_casting_witness_proof_v1(&decoded)
-                            .expect("actual casting proof");
-                    let (fee_evidence, fee_evidence_root) = fee_evidence_block_proof_v1(&decoded)
-                        .expect("complete captured fee evidence");
-                    assert_eq!(fee_root, casting_root);
-                    assert_eq!(fee_root, fee_evidence_root);
-                    assert!(fee_evidence.verify(fee_root));
-                    assert!(fee_evidence.records.is_empty());
-                    let fee_snapshot = fee_evidence.snapshot_witness.commitment().unwrap();
-                    assert_eq!(fee_snapshot.evaluated_height, header.height().get());
-                    assert_eq!(fee_snapshot.count, 0);
-                    let mut omitted_fee = decoded.clone();
-                    omitted_fee.writes.retain(|write| {
-                        write.key
-                            != iroha_data_model::execution_witness::FEE_EVIDENCE_WITNESS_KEY_V1
-                    });
-                    assert!(fee_evidence_block_proof_v1(&omitted_fee).is_err());
-                    assert!(native_lanes.verify(
-                        *state.network_id_ref(),
-                        header.height().get(),
-                        fee_root
-                    ));
-                    assert!(fee.verify(fee_root));
-                    assert!(casting.verify(fee_root));
-                },
-            );
+                let native_lanes =
+                    iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
+                        &decoded,
+                        &iroha_allocation::AllocationBudget::new(64 * 1024),
+                    )
+                    .expect("actual complete native lane state proof");
+                let (fee, fee_root) =
+                    validation_fee_policy_witness_proof_v1(&decoded).expect("actual fee proof");
+                let (casting, casting_root) =
+                    parliament_timed_ovn_casting_witness_proof_v1(&decoded)
+                        .expect("actual casting proof");
+                let (fee_evidence, fee_evidence_root) =
+                    fee_evidence_block_proof_v1(&decoded).expect("complete captured fee evidence");
+                assert_eq!(fee_root, casting_root);
+                assert_eq!(fee_root, fee_evidence_root);
+                assert!(fee_evidence.verify(fee_root));
+                assert!(fee_evidence.records.is_empty());
+                let fee_snapshot = fee_evidence.snapshot_witness.commitment().unwrap();
+                assert_eq!(fee_snapshot.evaluated_height, header.height().get());
+                assert_eq!(fee_snapshot.count, 0);
+                let mut omitted_fee = decoded.clone();
+                omitted_fee.writes.retain(|write| {
+                    write.key != iroha_data_model::execution_witness::FEE_EVIDENCE_WITNESS_KEY_V1
+                });
+                assert!(fee_evidence_block_proof_v1(&omitted_fee).is_err());
+                assert!(native_lanes.verify(
+                    *state.network_id_ref(),
+                    header.height().get(),
+                    fee_root
+                ));
+                assert!(fee.verify(fee_root));
+                assert!(casting.verify(fee_root));
+            },
+        );
     }
 }
 

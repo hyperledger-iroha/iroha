@@ -361,16 +361,6 @@ record!(
     crate::isi::identifier::RevokeIdentifier,
     "iroha_data_model::isi::identifier::RevokeIdentifier"
 );
-record!(
-    kagemusha_v1_redeem_kagemusha_v1,
-    crate::isi::kagemusha_v1::RedeemKagemushaV1,
-    "iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1"
-);
-record!(
-    kagemusha_v1_top_up_kagemusha_v1,
-    crate::isi::kagemusha_v1::TopUpKagemushaV1,
-    "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1"
-);
 kaigi_record!(
     kaigi_create_kaigi,
     crate::isi::kaigi::CreateKaigi,

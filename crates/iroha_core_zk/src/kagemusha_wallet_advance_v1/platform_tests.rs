@@ -1,4 +1,4 @@
-//! Platform interface tests: tri-state answers, boot and clock helpers, and the role-checked
+//! Platform interface tests: tri-state answers, boot and clock helpers, and the domain-checked
 //! signer.
 
 use std::sync::{
@@ -83,10 +83,10 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
     fn key_sign(
         &self,
         _slot: &KagemushaWalletSlotIdV1,
-        preimage: KagemushaWalletSignPreimageV1<'_>,
+        message: KagemushaWalletSignMessageV1<'_>,
     ) -> Result<KagemushaWalletPlatformSignatureV1, KagemushaWalletUnavailableV1> {
         self.sign_calls.fetch_add(1, Ordering::SeqCst);
-        let message = preimage.as_bytes();
+        let message = message.as_bytes();
         let signature: Signature = self.key.sign(message);
         Ok(match *self.mode.lock().expect("mode") {
             SignModeV1::Der => {
@@ -309,7 +309,7 @@ fn wallet_advance_v1_platform_signature_output_borrows() {
 }
 
 #[test]
-fn wallet_advance_v1_platform_tags_and_preimage() {
+fn wallet_advance_v1_platform_tags_and_message() {
     for policy in [
         KagemushaWalletAnchorPolicyV1::NotRequired,
         KagemushaWalletAnchorPolicyV1::Keychain,
@@ -332,17 +332,29 @@ fn wallet_advance_v1_platform_tags_and_preimage() {
     }
     assert_eq!(KagemushaWalletKeyProfileV1::from_tag(0), None);
     assert_eq!(KagemushaWalletKeyProfileV1::from_tag(3), None);
-    let bytes = [7_u8; 5];
+    let bytes = [7_u8; 32];
     assert_eq!(
-        KagemushaWalletSignPreimageV1 { bytes: &bytes }.as_bytes(),
+        KagemushaWalletSignMessageV1 {
+            domain: KagemushaWalletSigningDomainV1::Offer,
+            bytes: &bytes,
+        }
+        .as_bytes(),
         &bytes
+    );
+    assert_eq!(
+        KagemushaWalletSignMessageV1 {
+            domain: KagemushaWalletSigningDomainV1::Offer,
+            bytes: &bytes,
+        }
+        .domain(),
+        KagemushaWalletSigningDomainV1::Offer
     );
 }
 
 #[test]
 fn wallet_advance_v1_platform_receipt_signer_freezes_and_verifies() {
     let (platform, _fs, store, capability) = selected_capability(0x51);
-    let body = b"opaque receipt-body transcript".to_vec();
+    let body = vec![7; KagemushaWalletSigningDomainV1::Receipt.transcript_bytes()];
     for mode in [SignModeV1::Der, SignModeV1::Raw, SignModeV1::RawHighS] {
         platform.set_mode(mode);
         let signature =
@@ -351,11 +363,15 @@ fn wallet_advance_v1_platform_receipt_signer_freezes_and_verifies() {
         signature.validate().expect("low S");
         kagemusha_wallet_verify_signature_v1(
             capability.payment_key(),
-            KagemushaWalletDigestRoleV1::ReceiptBody,
-            &body,
+            KagemushaWalletSigningDomainV1::Receipt,
+            &kagemusha_wallet_signing_message_v1(KagemushaWalletSigningDomainV1::Receipt, &body),
             &signature,
         )
-        .expect("verifies over the receipt-body preimage");
+        .expect("verifies over the 32-byte receipt signing message");
+        assert!(
+            signature.verify(capability.payment_key(), &body).is_err(),
+            "the receipt transcript itself is not the signed message"
+        );
     }
     // The real G1 receipt body is one admissible transcript.
     let receipt_body = KagemushaWalletReceiptBodyV1 {
@@ -451,7 +467,12 @@ fn wallet_advance_v1_platform_receipt_signer_failures_write_nothing() {
     ] {
         platform.set_mode(mode);
         assert_eq!(
-            kagemusha_wallet_sign_receipt_body_v1(&store, &platform, &capability, b"body"),
+            kagemusha_wallet_sign_receipt_body_v1(
+                &store,
+                &platform,
+                &capability,
+                &vec![7; KagemushaWalletSigningDomainV1::Receipt.transcript_bytes()],
+            ),
             Err(expected)
         );
     }
@@ -466,44 +487,92 @@ fn wallet_advance_v1_platform_receipt_signer_failures_write_nothing() {
         KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Locked)
     );
     assert_eq!(
-        KagemushaWalletProviderErrorV1::from(KagemushaWalletSignErrorV1::RoleNotPermitted),
+        KagemushaWalletProviderErrorV1::from(KagemushaWalletSignErrorV1::DomainNotPermitted),
         KagemushaWalletProviderErrorV1::Invalid {
-            field: "signer role"
+            field: "signer domain"
         }
     );
 }
 
 #[test]
-fn wallet_advance_v1_platform_role_signer_refuses_receipt_roles() {
+fn wallet_advance_v1_platform_domain_signer_refuses_receipt_and_issuer_domains() {
     let (platform, _fs, _store, capability) = selected_capability(0x53);
-    for role in KAGEMUSHA_WALLET_PAYMENT_KEY_ROLES_V1 {
-        let signature = kagemusha_wallet_sign_role_v1(
+    for domain in KAGEMUSHA_WALLET_PAYMENT_KEY_DOMAINS_V1 {
+        let body = vec![7; domain.transcript_bytes()];
+        let signature = kagemusha_wallet_sign_domain_v1(
             &platform,
             capability.slot(),
             capability.payment_key(),
-            role,
-            b"body",
+            domain,
+            &body,
         )
-        .expect("permitted role");
-        kagemusha_wallet_verify_signature_v1(capability.payment_key(), role, b"body", &signature)
-            .expect("verifies");
+        .expect("permitted domain");
+        kagemusha_wallet_verify_signature_v1(
+            capability.payment_key(),
+            domain,
+            &kagemusha_wallet_signing_message_v1(domain, &body),
+            &signature,
+        )
+        .expect("verifies");
+        assert!(signature.verify(capability.payment_key(), &body).is_err());
     }
     let calls = platform.calls();
-    for role in KagemushaWalletDigestRoleV1::ALL {
-        if KAGEMUSHA_WALLET_PAYMENT_KEY_ROLES_V1.contains(&role) {
+    for domain in KagemushaWalletSigningDomainV1::ALL {
+        if KAGEMUSHA_WALLET_PAYMENT_KEY_DOMAINS_V1.contains(&domain) {
             continue;
         }
         assert_eq!(
-            kagemusha_wallet_sign_role_v1(
+            kagemusha_wallet_sign_domain_v1(
                 &platform,
                 capability.slot(),
                 capability.payment_key(),
-                role,
+                domain,
                 b"body",
             ),
-            Err(KagemushaWalletSignErrorV1::RoleNotPermitted),
-            "{role:?}"
+            Err(KagemushaWalletSignErrorV1::DomainNotPermitted),
+            "{domain:?}"
         );
     }
-    assert_eq!(platform.calls(), calls, "refused roles never reach the key");
+    assert_eq!(
+        platform.calls(),
+        calls,
+        "refused domains never reach the key"
+    );
+}
+
+#[test]
+fn wallet_advance_v1_platform_signers_reject_wrong_transcript_lengths_before_signing() {
+    let (platform, _fs, store, capability) = selected_capability(0x56);
+    for domain in KAGEMUSHA_WALLET_PAYMENT_KEY_DOMAINS_V1 {
+        let expected = domain.transcript_bytes();
+        for actual in [expected - 1, expected + 1] {
+            assert_eq!(
+                kagemusha_wallet_sign_domain_v1(
+                    &platform,
+                    capability.slot(),
+                    capability.payment_key(),
+                    domain,
+                    &vec![7; actual],
+                ),
+                Err(KagemushaWalletSignErrorV1::InvalidTranscript { expected, actual })
+            );
+        }
+    }
+    let expected = KagemushaWalletSigningDomainV1::Receipt.transcript_bytes();
+    for actual in [expected - 1, expected + 1] {
+        assert_eq!(
+            kagemusha_wallet_sign_receipt_body_v1(&store, &platform, &capability, &vec![7; actual],),
+            Err(KagemushaWalletSignErrorV1::InvalidTranscript { expected, actual })
+        );
+    }
+    assert_eq!(platform.calls(), 0, "invalid lengths never reach the key");
+    assert_eq!(
+        KagemushaWalletProviderErrorV1::from(KagemushaWalletSignErrorV1::InvalidTranscript {
+            expected,
+            actual: expected - 1,
+        }),
+        KagemushaWalletProviderErrorV1::Invalid {
+            field: "signer transcript"
+        }
+    );
 }

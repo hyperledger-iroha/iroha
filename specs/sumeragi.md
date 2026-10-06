@@ -690,10 +690,10 @@ commitment, and the top-up root and count. The last three come from `R`'s preima
   validator's Pasta keys from that generation (keyed by the consensus key). No local execution
   is needed, so sync and `Status` verify flagged certificates of unexecuted blocks.
 
-The node's builder flags every payload containing a top-up and, as its own application rule
-(the core does not require it, A1), every NPoS epoch boundary. Every
-proposal carries nonempty work; an empty builder response is never proposed. A rejected top-up still needs a real source-complete seal: its canonical empty tree and
-zero leaf count authorize no mint. Genesis bootstrap stays unsigned and cannot be an ordinary
+As its own application rule (the core does not require it, A1), the node's builder flags every
+NPoS epoch boundary; no transaction flags a block, so the top-up root is always absent and the
+count zero. Every proposal carries nonempty work; an empty builder response is never proposed.
+Genesis bootstrap stays unsigned and cannot be an ordinary
 zero-leaf finality receipt. Every native seal binds the domain-separated complete core statement
 (instance, scheduling epoch/context, height, block hash and R), the exact authorization and
 immutable Pasta generation carried in R, the leaf projection and optional next authorization.
@@ -3913,10 +3913,8 @@ once per block, after `world_commit::PreparedWorldCommit::prepare_overlay_mutati
 ```text
 ExecutionCommitment {
     parent_state_root,              // witnessed pre-values: a per-block witness root, unchanged
-    post_state_root,                // witnessed writes with top-ups, unchanged
+    post_state_root,                // witnessed writes, unchanged
     ordinary_writes_root,           // unchanged
-    kagemusha_top_up_root,          // unchanged
-    kagemusha_top_up_count,         // unchanged
     parent_keyed_state_root,        // replaces parent_world_state_root: root(P_{h−1})
     keyed_state_root,               // replaces world_state_root: root(X_h)
     event_commitment,               // unchanged

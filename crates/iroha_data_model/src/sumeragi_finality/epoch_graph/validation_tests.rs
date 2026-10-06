@@ -8,6 +8,12 @@ use crate::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_sumeragi::types::ChainParams;
 
+fn fixture_other_network() -> crate::NetworkId {
+    crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"another epoch-scope network",
+    )))
+}
+
 fn params() -> ChainParamsRecord {
     ChainParamsRecord::from_core(&ChainParams::default())
 }
@@ -39,8 +45,6 @@ fn commitment(epoch: &ValidatorEpochContextV1) -> ExecutionResultCommitment {
             parent_state_root: Hash::new(b"scope parent"),
             post_state_root: ordinary_root,
             ordinary_writes_root: ordinary_root,
-            kagemusha_top_up_root: None,
-            kagemusha_top_up_count: 0,
             parent_world_state_root: Hash::new(b"scope parent world"),
             world_state_root: Hash::new(b"scope world"),
             event_commitment: None,
@@ -91,7 +95,7 @@ fn one_scope_validates_identical_epoch_once_across_complete_schedule_operations(
         validation.validations, 1,
         "one exact context owns the repeated pure work"
     );
-    assert_eq!(validation.entries.len(), 1);
+    assert_eq!(validation.entries.iter().flatten().count(), 1);
     assert_eq!(
         validation.core_epoch(&epoch).unwrap(),
         core_epoch(&epoch).unwrap()
@@ -141,8 +145,8 @@ fn warm_epoch_scope_rejects_substituted_credentials_and_authority_bindings() {
         match mutation {
             0 => invalid.committee[0].proof_of_possession[0] ^= 1,
             1 => invalid.committee[0].proof_of_possession.clear(),
-            2 => invalid.authority.validators[0].eq_proof_public_key = [0xff; 32],
-            3 => invalid.authority.validators[0].ep_proof_public_key = [0xff; 32],
+            2 => invalid.committee[1] = invalid.committee[0].clone(),
+            3 => invalid.authorization.network_id = fixture_other_network(),
             4 => invalid.authorization.authority_id[0] ^= 1,
             5 => invalid.authorization.authority_generation += 1,
             6 => invalid.committee.swap(0, 1),
@@ -152,9 +156,11 @@ fn warm_epoch_scope_rejects_substituted_credentials_and_authority_bindings() {
                 invalid.committee.pop();
             }
         }
-        if matches!(mutation, 2 | 3) {
-            // Preserve the declared authority hash so real point decoding must reject this.
-            invalid.authorization.authority_id = invalid.authority.authority_id().unwrap();
+        if mutation == 2 {
+            // Rebind the declared generation so the repeated roster seat itself must reject.
+            if let Ok(id) = invalid.generation().generation_id() {
+                invalid.authorization.authority_id = id;
+            }
         }
         assert!(
             invalid.validate().is_err(),
@@ -171,7 +177,7 @@ fn warm_epoch_scope_rejects_substituted_credentials_and_authority_bindings() {
             ExecutionResultCommitment::decode_with_validation(&bytes, &mut validation).is_err()
         );
         assert_eq!(
-            validation.entries.len(),
+            validation.entries.iter().flatten().count(),
             1,
             "invalid values never enter retained ownership"
         );
@@ -199,14 +205,14 @@ fn epoch_scope_is_exact_owned_and_bounded_with_revalidation_after_eviction() {
     );
     first.leader_seed[1] ^= 1;
     validation.core_epoch(&first).unwrap();
-    assert_eq!(validation.entries.len(), 2);
+    assert_eq!(validation.entries.iter().flatten().count(), 2);
     assert_eq!(validation.validations, 3);
     assert_eq!(validation.core_epoch(&original).unwrap(), first_core);
     assert_eq!(
         validation.validations, 4,
         "eviction requires full validation again"
     );
-    assert_eq!(validation.entries.len(), 2);
+    assert_eq!(validation.entries.iter().flatten().count(), 2);
     let mut independent = EpochValidationScope::new();
     independent.core_epoch(&original).unwrap();
     assert_eq!(
@@ -335,7 +341,7 @@ fn scoped_decode_keeps_inherited_resource_refusal_and_reuses_epoch_work_after_re
         ))
     ));
     assert_eq!(validation.validations, 0);
-    assert!(validation.entries.is_empty());
+    assert!(validation.entries.iter().all(Option::is_none));
     assert_eq!(bytes, original);
     for _ in 0..3 {
         assert_eq!(
@@ -344,5 +350,5 @@ fn scoped_decode_keeps_inherited_resource_refusal_and_reuses_epoch_work_after_re
         );
     }
     assert_eq!(validation.validations, 1);
-    assert_eq!(validation.entries.len(), 1);
+    assert_eq!(validation.entries.iter().flatten().count(), 1);
 }

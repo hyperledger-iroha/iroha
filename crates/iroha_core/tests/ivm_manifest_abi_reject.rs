@@ -152,7 +152,7 @@ fn install_current_lane_manifest_registry(state: &State) {
 // It does not apply signed genesis or establish an authenticated root or Network finality.
 fn manifest_admission_root_parameter() -> iroha_data_model::parameter::Parameter {
     use iroha_data_model::{
-        block::consensus::{SumeragiRootScope, ValidatorPower},
+        block::consensus::{SumeragiGenesisContextParameters, SumeragiRootScope},
         parameter::{
             Parameter,
             custom::CustomParameter,
@@ -162,22 +162,13 @@ fn manifest_admission_root_parameter() -> iroha_data_model::parameter::Parameter
             },
         },
     };
-    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
-        .into_iter()
-        .map(|(validator, _)| ValidatorPower {
-            validator,
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    let context = SumeragiGenesisContextParameters::recommended();
     assert_eq!(context.root_scope, SumeragiRootScope::Global);
     let metadata = ConsensusHandshakeMetadata {
         mode: SumeragiConsensusMode::Permissioned,
         block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
         wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         consensus_fingerprint: ConsensusFingerprint::new([0xA5; 32]),
-        kagemusha_mint_finality:
-            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
         sumeragi_context: context,
     };
     metadata

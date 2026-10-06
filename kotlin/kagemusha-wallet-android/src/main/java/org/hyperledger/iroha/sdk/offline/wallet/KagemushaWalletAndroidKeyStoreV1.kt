@@ -22,7 +22,9 @@ import java.security.spec.ECGenParameterSpec
  * Exact payment-key generation request (spec §§2.2, 2.3; G2 design rev 2 E3).
  *
  * Only [alias], [challengeDigest] and [strongBox] vary. The key is always EC secp256r1 with
- * `PURPOSE_SIGN` and `DIGEST_SHA256` only. [kagemushaWalletAndroidConfigureKeyGenV1] applies it
+ * `PURPOSE_SIGN` and `DIGEST_SHA256` only, never `DIGEST_NONE`: every signature of the protocol
+ * is standard ECDSA-P256-SHA256 over a 32-byte Poseidon signing message, so KeyMint itself hashes
+ * the message (owner answer A1). [kagemushaWalletAndroidConfigureKeyGenV1] applies it
  * through [KagemushaWalletAndroidKeyGenBuilderV1], which offers no user-authentication,
  * unlocked-device, usage-count, user-presence or user-confirmation setter: removing the screen
  * lock would otherwise invalidate the key and destroy the balance (spec §2.3).
@@ -121,8 +123,12 @@ internal interface KagemushaWalletAndroidKeyStoreV1 {
     /** `KeyInfo` readback of a present key. */
     fun facts(key: PrivateKey): KagemushaWalletAndroidKeyFactsV1
 
-    /** `SHA256withECDSA` over [preimage], returned as the platform's DER. */
-    fun sign(key: PrivateKey, preimage: ByteArray): ByteArray
+    /**
+     * [KAGEMUSHA_WALLET_ANDROID_SIGNATURE_ALGORITHM_V1] (`SHA256withECDSA`) over the exact 32-byte
+     * signing [message]: KeyMint hashes it with SHA-256 under the key's `DIGEST_SHA256`. Returns the
+     * platform's DER.
+     */
+    fun sign(key: PrivateKey, message: ByteArray): ByteArray
 
     /** `KeyStore.deleteEntry(alias)`. */
     fun deleteEntry(alias: String)
@@ -133,6 +139,12 @@ internal interface KagemushaWalletAndroidKeyStoreV1 {
 
 /** Keystore alias prefix of payment keys: `kgm-w1-<64 lowercase hex slot digits>`. */
 internal const val KAGEMUSHA_WALLET_ANDROID_ALIAS_PREFIX_V1: String = "kgm-w1-"
+
+/**
+ * JCA algorithm of every payment-key signature: ECDSA-P256 with SHA-256 over the 32-byte signing
+ * message (owner answer A1). The no-digest `NONEwithECDSA` is never used.
+ */
+internal const val KAGEMUSHA_WALLET_ANDROID_SIGNATURE_ALGORITHM_V1: String = "SHA256withECDSA"
 
 /** Production AndroidKeyStore access. */
 internal class KagemushaWalletAndroidSystemKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
@@ -161,10 +173,10 @@ internal class KagemushaWalletAndroidSystemKeyStoreV1 : KagemushaWalletAndroidKe
         return KagemushaWalletAndroidKeyInfoApi31V1.facts(info)
     }
 
-    override fun sign(key: PrivateKey, preimage: ByteArray): ByteArray =
-        Signature.getInstance(SIGNATURE_ALGORITHM).run {
+    override fun sign(key: PrivateKey, message: ByteArray): ByteArray =
+        Signature.getInstance(KAGEMUSHA_WALLET_ANDROID_SIGNATURE_ALGORITHM_V1).run {
             initSign(key)
-            update(preimage)
+            update(message)
             sign()
         }
 
@@ -177,7 +189,6 @@ internal class KagemushaWalletAndroidSystemKeyStoreV1 : KagemushaWalletAndroidKe
 
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        const val SIGNATURE_ALGORITHM = "SHA256withECDSA"
     }
 }
 

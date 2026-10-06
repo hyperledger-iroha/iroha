@@ -73,7 +73,7 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
     freeze_world(&mut block);
     assert_eq!(
         require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS),
-        Ok(217)
+        Ok(211)
     );
     let mut raw_count = 0;
     for owner in TABLE_MATERIALIZERS {
@@ -99,7 +99,7 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
             }
         );
     }
-    assert_eq!(raw_count, 192);
+    assert_eq!(raw_count, 186);
 }
 
 #[test]
@@ -375,50 +375,6 @@ fn real_replacement_keeps_rewound_rows_deletion_and_absent_undo() {
         original.root(),
         committed(&state, "world.smart_contract_state").root()
     );
-}
-
-#[test]
-fn all_four_prepaid_native_operation_indexes_use_the_actual_frozen_storage_mode() {
-    let state = new_state();
-    let mut block = state.block(header());
-    macro_rules! insert {
-        ($field:ident) => {
-            block
-                .world
-                .$field
-                .try_insert_admitted([7; 32], [8; 32])
-                .unwrap();
-        };
-    }
-    insert!(kagemusha_mint_credit_operations);
-    insert!(kagemusha_issuance_operations);
-    insert!(kagemusha_redemption_id_operations);
-    insert!(kagemusha_terminal_nullifier_operations);
-    freeze_world(&mut block);
-    macro_rules! check {
-        ($field:ident) => {
-            let rows = block.world.$field.frozen_images().unwrap();
-            assert!(rows.belongs_to(&state.world.$field));
-            assert_eq!(rows.mode(), mv::BlockMode::Ordinary);
-            assert_eq!(rows.current_entries().next(), Some((&[7; 32], &[8; 32])));
-            let table = concat!("world.", stringify!($field));
-            let original = capture(&block, table);
-            assert_eq!(original.row_count(), 1);
-            let control = super::super::super::CanonicalTableLeafSet::paired_table_from_rows(
-                table,
-                limits(),
-                &state.ivm_execution_budget(),
-                [([7_u8; 32], [8_u8; 32])].iter().map(|(k, v)| (k, v)),
-            )
-            .unwrap();
-            assert_equal(&original, &control);
-            assert_eq!(committed(&state, table).row_count(), 0);
-        };
-    }
-    check!(kagemusha_mint_credit_operations);
-    check!(kagemusha_issuance_operations);
-    check!(kagemusha_redemption_id_operations);
-    check!(kagemusha_terminal_nullifier_operations);
 }
 
 #[test]

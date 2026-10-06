@@ -369,13 +369,39 @@ impl PublicationOutput {
     }
 }
 
+/// The native workspace identity is separate from editable display text.
+/// Rendering a non-Unicode path must not select its lossy Unicode counterpart.
+struct WorkspacePath {
+    native: PathBuf,
+    text: String,
+}
+
+impl WorkspacePath {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            text: path.to_string_lossy().into_owned(),
+            native: path,
+        }
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let response = ui.add(egui::TextEdit::singleline(&mut self.text).desired_width(520.0));
+        if response.changed() {
+            // A deliberate edit selects the typed path. An untouched display retains the
+            // exact original native argument, including bytes Unicode cannot represent.
+            self.native = PathBuf::from(&self.text);
+        }
+        response
+    }
+}
+
 struct Desktop {
     runtime: Option<tokio::runtime::Runtime>,
     sender: Sender<(u64, Message)>,
     receiver: Receiver<(u64, Message)>,
     epoch: u64,
     busy: bool,
-    workspace_path: String,
+    workspace_path: WorkspacePath,
     workspace: Option<DeveloperWorkspace>,
     names: Vec<String>,
     new_name: String,
@@ -455,7 +481,7 @@ impl Desktop {
             receiver,
             epoch: 0,
             busy: false,
-            workspace_path: path.to_string_lossy().into_owned(),
+            workspace_path: WorkspacePath::new(path),
             workspace: None,
             names: Vec::new(),
             new_name: "local".into(),
@@ -504,6 +530,7 @@ impl Desktop {
 
     fn spawn(&mut self, work: impl FnOnce() -> Message + Send + 'static) {
         self.error = None;
+        self.notice = None;
         self.spawn_task(work);
     }
 
@@ -546,7 +573,7 @@ impl Desktop {
         self.attaching = None;
         self.attachment_progress = None;
         self.attachment_poll_pending = false;
-        let path = PathBuf::from(&self.workspace_path);
+        let path = self.workspace_path.native.clone();
         self.spawn(move || Message::Opened(open_workspace(path)));
     }
 
@@ -887,7 +914,7 @@ impl Desktop {
         ui.add_enabled_ui(!self.busy, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Workspace");
-                ui.add(egui::TextEdit::singleline(&mut self.workspace_path).desired_width(520.0));
+                self.workspace_path.show(ui);
                 if ui.button("Open").clicked() {
                     self.open();
                 }
@@ -1894,6 +1921,72 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn initial_workspace_keeps_native_path_when_its_display_names_another_path() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let original = temporary
+            .path()
+            .join(OsString::from_vec(b"project-\xff".to_vec()));
+        let displayed = PathBuf::from(original.to_string_lossy().as_ref());
+        // Unix paths retain arbitrary bytes, but macOS filesystems reject this filename.
+        // Linux additionally exercises two real directories with distinct native identities.
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::create_dir(&original).unwrap();
+            std::fs::create_dir(&displayed).unwrap();
+            assert_ne!(
+                original.canonicalize().unwrap(),
+                displayed.canonicalize().unwrap()
+            );
+        }
+
+        let mut desktop = Desktop::model(original.clone());
+        assert_eq!(desktop.workspace_path.native, original);
+        let context = egui::Context::default();
+        let _ = render_frame(&context, Vec::new(), &mut |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                desktop.workspace_path.show(ui);
+            });
+        });
+        assert_eq!(desktop.workspace_path.text, displayed.to_string_lossy());
+        assert_eq!(desktop.workspace_path.native, original);
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            desktop.workspace_path.native.canonicalize().unwrap(),
+            original.canonicalize().unwrap()
+        );
+        assert_ne!(desktop.workspace_path.native, displayed);
+    }
+
+    #[test]
+    fn workspace_editor_selects_the_explicitly_pasted_path() {
+        let mut path = WorkspacePath::new(PathBuf::new());
+        let context = egui::Context::default();
+        let mut editor = None;
+        let _ = render_frame(&context, Vec::new(), &mut |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                editor = Some(path.show(ui).id);
+            });
+        });
+        assert_eq!(path.native, PathBuf::new());
+        context.memory_mut(|memory| memory.request_focus(editor.unwrap()));
+        let selected = "a workspace/with spaces";
+        let _ = render_frame(
+            &context,
+            vec![egui::Event::Paste(selected.into())],
+            &mut |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    path.show(ui);
+                });
+            },
+        );
+        assert_eq!(path.text, selected);
+        assert_eq!(path.native, PathBuf::from(selected));
+    }
+
     #[test]
     fn new_localnet_dialog_emits_only_the_explicit_available_name() {
         let names = vec!["local".into(), "local-2".into(), "private".into()];
@@ -1993,6 +2086,7 @@ mod tests {
     fn automatic_observation_keeps_the_foreground_failure_until_another_action() {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
         desktop.error = Some("new localnet failed; prepared generation retained".into());
+        desktop.notice = Some("Original foreground observation".into());
         desktop.last_poll = Instant::now() - Duration::from_secs(6);
         // Exercise the exact task owner used by refresh_selection, without creating a
         // managed context or invoking native filesystem/process services from a UI test.
@@ -2010,11 +2104,16 @@ mod tests {
         assert!(!desktop.busy);
         assert_eq!(desktop.logs, "original context observation");
         assert_eq!(
+            desktop.notice.as_deref(),
+            Some("Original foreground observation")
+        );
+        assert_eq!(
             desktop.error.as_deref(),
             Some("new localnet failed; prepared generation retained")
         );
         desktop.spawn(|| Message::Logs(Ok("explicit action".into())));
         assert!(desktop.error.is_none());
+        assert!(desktop.notice.is_none());
         let completion = desktop
             .receiver
             .recv_timeout(Duration::from_secs(5))
@@ -2157,6 +2256,49 @@ mod tests {
                 .contains("Deployment applied")
         );
         assert!(desktop.selected.is_none());
+    }
+
+    #[test]
+    fn a_new_foreground_failure_cannot_keep_an_earlier_deployment_success_notice() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop
+            .sender
+            .send((
+                0,
+                Message::Deployed {
+                    result: Ok("Original Applied deployment receipt".into()),
+                    refreshed: Err("original workspace observation unavailable".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert!(
+            desktop
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Deployment applied")
+        );
+        // Exercise the real foreground task owner and failed Deployed completion path. No
+        // native deployment or authenticated plan is fabricated by this presentation control.
+        desktop.spawn(|| Message::Deployed {
+            result: Err("new deployment refused before dispatch".into()),
+            refreshed: Err("new workspace observation unavailable".into()),
+        });
+        assert!(desktop.busy);
+        assert!(desktop.notice.is_none());
+        let completion = desktop
+            .receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        desktop.sender.send(completion).unwrap();
+        desktop.poll();
+        assert!(!desktop.busy);
+        assert_eq!(
+            desktop.error.as_deref(),
+            Some("new deployment refused before dispatch")
+        );
+        assert!(desktop.notice.is_none());
     }
 
     #[test]

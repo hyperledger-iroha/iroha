@@ -16,7 +16,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::chain::ChainId;
-use iroha_sumeragi::crypto::AttestationVerifier;
+use iroha_sumeragi::crypto::{AttestationVerifier, NoAttestation};
 
 use super::certified_chain::{CertifiedChain, ChainReadError};
 use crate::execution_attempt::ExecutionAttemptError;
@@ -180,8 +180,9 @@ pub fn with_verified_native_journal<T>(
 
 /// One source-owned phase clock for a bounded offline committee operation.
 ///
-/// Each advancement is verified by the same native journal reader and production Pasta
-/// verifier. The retained tip is only a continuity pin; it never supplies a new epoch roster.
+/// Each advancement is verified by the same native journal reader. This application requests
+/// no commit attestation, so certificates verify with [`NoAttestation`]. The retained tip is
+/// only a continuity pin; it never supplies a new epoch roster.
 /// Refusal leaves the previous tip intact. Initial genesis authority has no finalized receipt:
 /// at least H2 must genuinely certify its parent result before this clock can advance.
 pub struct NativeJournalCursor {
@@ -189,7 +190,7 @@ pub struct NativeJournalCursor {
     network: NetworkId,
     limits: NativeFinalityLimits,
     budget: AllocationBudget,
-    attestations: super::attestation::NativePastaVerifier,
+    attestations: NoAttestation,
     tip: Option<super::certified_chain::CommittedBlock>,
 }
 impl NativeJournalCursor {
@@ -202,7 +203,8 @@ impl NativeJournalCursor {
         budget: &AllocationBudget,
     ) -> Result<Self, NativeJournalError> {
         limits.validate()?;
-        let instance = root_scope
+        // The configured root scope must derive this operation's native instance.
+        root_scope
             .instance_id(&super::crypto::BlsCrypto::new(), network, chain_id.as_str())
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -210,12 +212,12 @@ impl NativeJournalCursor {
             network,
             limits,
             budget: budget.clone(),
-            attestations: super::attestation::NativePastaVerifier::new(instance, network),
+            attestations: NoAttestation,
             tip: None,
         })
     }
-    /// Borrow the production verifier pinned to this operation's independent identity.
-    pub fn attestations(&self) -> &super::attestation::NativePastaVerifier {
+    /// Borrow the certificate attestation verifier; it accepts no application attestation.
+    pub fn attestations(&self) -> &NoAttestation {
         &self.attestations
     }
     /// Original operation pool retained across unchanged-source retries.
@@ -346,8 +348,8 @@ mod tests {
     fn actual_native_journal_authenticates_source_and_keeps_genesis_scope_explicit() {
         let (chain, journal) = fixture();
         let chain_id = ChainId::from("sumeragi-certified-test-chain");
-        // Permissioned ordinary certificates carry no Pasta requirement; this rejecting verifier
-        // is not a bypass for flagged boundaries (the production caller supplies NativePasta).
+        // This application flags no block, so its certificates carry no attestations and the
+        // rejecting verifier is exactly the production verifier.
         with_verified_native_journal(
             (&journal).into(),
             &chain_id,

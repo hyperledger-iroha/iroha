@@ -309,7 +309,7 @@ Generate an operator-owned network bundle without starting validators
 * `--extra-accounts <EXTRA_ACCOUNTS>` — Extra accounts to pre-register (in wonderland)
 
   Default value: `0`
-* `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in KAGEMUSHA V1 asset is always emitted
+* `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in localnet asset is always emitted
 
   Default value: `false`
 * `--asset-definition-id <ASSET_DEFINITION_ID>` — Register additional asset definition IDs owned by the generated client signer. Repeat the flag to register more than one asset definition. A localnet reserve is minted to the generated client signer for each requested asset definition
@@ -692,7 +692,7 @@ Commands related to genesis
 
 * `sign` — Sign the genesis block
 * `generate` — Generate a genesis configuration and standard-output in JSON format
-* `materialize` — Materialize an incomplete source template with operator-provisioned public authority
+* `materialize` — Materialize an incomplete source template with its explicit NPoS XOR selection
 * `validate` — Validate a genesis JSON file and report invalid identifiers
 * `validate-prepared` — Verify one exact bound-manifest/signed-genesis/signer/hash bundle
 * `embed-pop` — Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
@@ -737,7 +737,7 @@ Sign the genesis block
 
 Generate a genesis configuration and standard-output in JSON format
 
-**Usage:** `kagami genesis generate [OPTIONS] --ivm-dir <PATH> --genesis-public-key <MULTI_HASH> --kagemusha-mint-finality-parameters <PATH> [COMMAND]`
+**Usage:** `kagami genesis generate [OPTIONS] --ivm-dir <PATH> --genesis-public-key <MULTI_HASH> [COMMAND]`
 
 ###### **Subcommands:**
 
@@ -753,7 +753,6 @@ Generate a genesis configuration and standard-output in JSON format
 * `--executor <PATH>` — Optional path (relative to output) to the executor bytecode file (.to). If omitted, no executor upgrade is included in genesis
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
 * `--genesis-public-key <MULTI_HASH>`
-* `--kagemusha-mint-finality-parameters <PATH>` — Path to the explicitly provisioned public KAGEMUSHA mint-finality genesis parameters
 * `--ivm-gas-limit-per-block <U64>` — Optional: set the custom parameter `ivm_gas_limit_per_block` (u64) in genesis so all peers agree on the block gas budget. If omitted, a sensible default (1,680,000) is applied
 * `--consensus-mode <MODE>` — Select the consensus mode snapshot to seed in the genesis parameters (default: permissioned; profiles that require NPoS select it themselves)
 
@@ -806,9 +805,9 @@ Synthetic mode is useful when we need a semi-realistic genesis for stress-testin
 
 ## `kagami genesis materialize`
 
-Materialize an incomplete source template with operator-provisioned public authority
+Materialize an incomplete source template with its explicit NPoS XOR selection
 
-**Usage:** `kagami genesis materialize [OPTIONS] --kagemusha-mint-finality-parameters <PATH> <TEMPLATE_FILE>`
+**Usage:** `kagami genesis materialize [OPTIONS] <TEMPLATE_FILE>`
 
 ###### **Arguments:**
 
@@ -816,7 +815,6 @@ Materialize an incomplete source template with operator-provisioned public autho
 
 ###### **Options:**
 
-* `--kagemusha-mint-finality-parameters <PATH>` — Explicitly provisioned public KAGEMUSHA mint-finality genesis parameters
 * `--xor-asset-definition-id <ASSET_DEFINITION_ID>` — Explicit canonical XOR definition committed by an NPoS source template
 
 

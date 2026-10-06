@@ -61,9 +61,11 @@ pub use membership_storage::{
     MembershipAppendCleanup, MembershipAppendRange, MembershipStorageError,
 };
 #[cfg(test)]
+use norito::codec::DecodeAll;
+#[cfg(test)]
 use norito::core::{Header, MAGIC};
 use norito::{
-    codec::{Decode, DecodeAll, Encode},
+    codec::{Decode, Encode},
     json::Value as JsonValue,
 };
 use parking_lot::{Condvar, Mutex};
@@ -4843,7 +4845,6 @@ impl Kura {
             ));
         }
         Ok(Some(StableSidecarRead {
-            bytes_hash: Hash::new(bytes.as_ref()),
             bytes,
             metadata: path_after.expect("validated stable sidecar metadata exists"),
         }))
@@ -5927,7 +5928,6 @@ impl Kura {
     pub(crate) fn instance_identity(&self) -> KuraInstanceIdentity {
         KuraInstanceIdentity(Arc::clone(&self.instance_identity))
     }
-
 }
 include!("kura/durable_block_and_atomic_sidecar_io.rs");
 impl Kura {

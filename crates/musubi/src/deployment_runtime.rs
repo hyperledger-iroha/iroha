@@ -349,7 +349,9 @@ impl DeploymentRuntime {
         let slot = deployment_slot(&self.config, &self.journal_root, &alias);
         let session = DeploymentSlot::open(&slot)?;
         if let Some(journal) = session.current_journal()? {
-            let retained = service.retained_preflight(&journal)?;
+            let retained = service
+                .retained_preflight(&journal)
+                .map_err(|error| journal_failure(error, &journal))?;
             validate_journal_location(
                 &self.config,
                 session
@@ -364,9 +366,15 @@ impl DeploymentRuntime {
             let same_input =
                 retained.code_hash == artifact.code_hash && retained.contract_alias == alias;
             let disposition = if same_input {
-                after_review(&retained, review, || Ok(service.inspect_journal(&journal)?))?
+                after_review(&retained, review, || {
+                    service
+                        .inspect_journal(&journal)
+                        .map_err(|error| journal_failure(error, &journal))
+                })?
             } else {
-                service.inspect_journal(&journal)?
+                service
+                    .inspect_journal(&journal)
+                    .map_err(|error| journal_failure(error, &journal))?
             };
             match disposition {
                 JournalDisposition::Pending { .. } if same_input => {
@@ -392,12 +400,15 @@ impl DeploymentRuntime {
                     );
                 }
                 JournalDisposition::Completed(_) if same_input => {
-                    let receipt =
-                        service
-                            .current_completed_receipt(&journal)?
-                            .ok_or_else(|| {
-                                eyre!("completed deployment lost its authenticated receipt")
-                            })?;
+                    let receipt = service
+                        .current_completed_receipt(&journal)
+                        .map_err(|error| journal_failure(error, &journal))?
+                        .ok_or_else(|| {
+                            eyre!(
+                                "completed deployment lost its authenticated receipt\nDeployment journal: {}",
+                                journal.display()
+                            )
+                        })?;
                     return Ok(DeploymentRun { receipt, journal });
                 }
                 JournalDisposition::Completed(_)
@@ -449,7 +460,9 @@ impl DeploymentRuntime {
             .ok_or_else(|| eyre!("deployment journal has no slot"))?;
         let _session = DeploymentSlot::open(slot)?;
         let service = DeploymentService::new(self.config.clone())?;
-        let retained_preflight = service.retained_preflight(&retained)?;
+        let retained_preflight = service
+            .retained_preflight(&retained)
+            .map_err(|error| journal_failure(error, &retained))?;
         validate_journal_location(
             &self.config,
             &root,
@@ -492,7 +505,9 @@ impl DeploymentRuntime {
             .current_journal()?
             .ok_or_else(|| eyre!("contract alias has no retained deployment"))?;
         let service = DeploymentService::new(self.config.clone())?;
-        let preflight = service.retained_preflight(&journal)?;
+        let preflight = service
+            .retained_preflight(&journal)
+            .map_err(|error| journal_failure(error, &journal))?;
         if &preflight.contract_alias != alias {
             bail!("retained deployment resolves a different alias");
         }
@@ -503,7 +518,9 @@ impl DeploymentRuntime {
             alias,
             &plan_journal_id(&preflight)?,
         )?;
-        let contract = service.current_completed_contract(&journal)?;
+        let contract = service
+            .current_completed_contract(&journal)
+            .map_err(|error| journal_failure(error, &journal))?;
         Ok(CurrentDeployment { contract, journal })
     }
 }
@@ -607,10 +624,19 @@ impl DeploymentSlot {
     ) -> Result<PathBuf> {
         let id = plan_journal_id(prepared.preflight())?;
         let journal = self.writer.path().join(&id);
-        service.persist(prepared, &journal)?;
-        self.writer
-            .write_atomic("active-journal", id.as_bytes(), PublishMode::Replace)?;
+        service
+            .persist(prepared, &journal)
+            .map_err(|error| journal_failure(error, &journal))?;
+        self.publish_active_journal(&id, &journal)?;
         Ok(journal)
+    }
+
+    fn publish_active_journal(&self, id: &str, journal: &Path) -> Result<()> {
+        // The original plan is already durable. A pointer failure must retain its exact recovery
+        // path even though this slot cannot yet discover it through the active record.
+        self.writer
+            .write_atomic("active-journal", id.as_bytes(), PublishMode::Replace)
+            .map_err(|error| journal_failure(DeploymentError::Journal(error.into()), journal))
     }
 }
 
@@ -814,6 +840,87 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     }
 
     #[test]
+    fn repeated_deploy_and_resume_keep_original_journal_when_retained_plan_authentication_fails()
+    -> Result<()> {
+        let temporary = TempDir::new()?;
+        let root = PrivateDirectory::open_or_create(temporary.path().join("journals"))?;
+        let runtime = DeploymentRuntime::new(
+            config(),
+            root.path().to_path_buf(),
+            temporary.path().join("unused-cache"),
+        );
+        let bytes = kotodama_lang::compiler::Compiler::new()
+            .compile_source(SOURCE)
+            .map_err(|error| eyre!("{error}"))?;
+        let artifact = BuiltArtifact::from_bytes(bytes)?;
+        let selection = AliasSelection::Scope {
+            domain: None,
+            dataspace: "universal".into(),
+        };
+        let alias = artifact.alias(&selection)?;
+        let directory = PrivateDirectory::open_or_create(deployment_slot(
+            &runtime.config,
+            root.path(),
+            &alias,
+        ))?;
+        let id = hex::encode(iroha::crypto::Hash::new(b"original retained deployment").as_ref());
+        let journal = directory.create_child(&id)?;
+        let original_plan = b"invalid retained plan, never a new deployment";
+        journal.write_atomic("plan.json", original_plan, PublishMode::CreateNew)?;
+        let original_journal = journal.path().to_path_buf();
+        directory.write_atomic("active-journal", id.as_bytes(), PublishMode::CreateNew)?;
+        drop(journal);
+        drop(directory);
+
+        let repeated = runtime
+            .deploy_artifact(
+                artifact,
+                &selection,
+                FeePaymentIntent::authority(Vec::new(), None),
+                &mut |_| panic!("an unauthenticated retained plan must never reach review"),
+                &mut |_| panic!("an unauthenticated retained plan must never reach dispatch"),
+            )
+            .err()
+            .expect("invalid original plan must refuse another deployment");
+        let resumed = runtime
+            .resume(
+                &original_journal,
+                &mut |_| panic!("an unauthenticated retained plan must never reach review"),
+                &mut |_| panic!("an unauthenticated retained plan must never reach dispatch"),
+            )
+            .err()
+            .expect("invalid original plan must refuse recovery");
+        let current = runtime
+            .current_deployment(&alias)
+            .err()
+            .expect("invalid original plan must refuse the read-only deployment view");
+        for error in [repeated, resumed, current] {
+            assert!(matches!(
+                error.downcast_ref::<DeploymentError>(),
+                Some(DeploymentError::Journal(_))
+            ));
+            assert!(error.to_string().ends_with(&format!(
+                "Deployment journal: {}",
+                original_journal.display()
+            )));
+        }
+        assert_eq!(fs::read(original_journal.join("plan.json"))?, original_plan);
+        let directory =
+            PrivateDirectory::open(deployment_slot(&runtime.config, root.path(), &alias))?;
+        assert_eq!(
+            directory.read("active-journal", 64)?.as_slice(),
+            id.as_bytes()
+        );
+        assert_eq!(
+            fs::read_dir(directory.path())?.count(),
+            3,
+            "failure must not create a replacement journal"
+        );
+        assert!(!temporary.path().join("unused-cache").exists());
+        Ok(())
+    }
+
+    #[test]
     fn source_and_bytecode_ignore_neighboring_configuration() -> Result<()> {
         let temp = TempDir::new()?;
         let source = temp.path().join("arbitrary-filename.ko");
@@ -1006,6 +1113,52 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         assert!(session.ensure_previous_terminal(&service).is_err());
         drop(session);
         assert!(DeploymentSlot::open(&path).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn active_pointer_refusal_preserves_original_journal_and_reports_exact_recovery_path()
+    -> Result<()> {
+        let temp = TempDir::new()?;
+        let session = DeploymentSlot::open(&temp.path().join("slot"))?;
+        let id = hex::encode(iroha::crypto::Hash::new(b"original commit pointer").as_ref());
+        let original = session.writer.create_child(&id)?;
+        // This is an opaque filesystem-boundary payload. Native plan authentication belongs to
+        // DeploymentService::persist, which finishes before this pointer publication.
+        let plan = b"original durable plan bytes";
+        original.write_atomic("plan.json", plan, PublishMode::CreateNew)?;
+        let journal = original.path().to_path_buf();
+        let refused = session.writer.create_child("active-journal")?;
+        refused.write_atomic(
+            "sentinel",
+            b"original occupied pointer",
+            PublishMode::CreateNew,
+        )?;
+        let error = session
+            .publish_active_journal(&id, &journal)
+            .expect_err("a directory cannot be replaced by the active journal file");
+        assert!(matches!(
+            error.downcast_ref::<DeploymentError>(),
+            Some(DeploymentError::Journal(_))
+        ));
+        assert!(
+            error
+                .to_string()
+                .ends_with(&format!("Deployment journal: {}", journal.display()))
+        );
+        assert_eq!(original.read("plan.json", plan.len())?.as_slice(), plan);
+        assert_eq!(
+            refused.read("sentinel", 64)?.as_slice(),
+            b"original occupied pointer"
+        );
+        assert!(session.current_journal().is_err());
+        assert_eq!(fs::read_dir(session.writer.path())?.count(), 3);
+        let refused_path = refused.path().to_path_buf();
+        drop(refused);
+        fs::remove_dir_all(refused_path)?;
+        session.publish_active_journal(&id, &journal)?;
+        assert_eq!(session.current_journal()?, Some(journal));
+        assert_eq!(original.read("plan.json", plan.len())?.as_slice(), plan);
         Ok(())
     }
 

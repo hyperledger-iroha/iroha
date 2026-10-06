@@ -851,7 +851,13 @@ def test_native_policy_preserves_every_original_context_and_layer() -> None:
     assert len(policy["configurations"]) == 21
     assert hashlib.sha256(json.dumps(
         policy["configurations"], sort_keys=True, separators=(",", ":"),
-    ).encode()).hexdigest() == "2613ea761c6d3ec8f0b62d30523d8f19f8b627d1a85b864bb455f61e9ce6834c"
+    ).encode()).hexdigest() == "b095915d17f2d3e3371b2f8ec46529639d23a509c0341dea8e8ba2bb762d383e"
+    # The retired Kagemusha real-proof harness feature no longer exists to forbid.
+    assert all(
+        "kagemusha-real-proof-harness" not in features
+        for selection in policy["configurations"].values()
+        for features in selection["forbidden_features"].values()
+    )
     assert hashlib.sha256(json.dumps(
         policy["layers"], sort_keys=True, separators=(",", ":"),
     ).encode()).hexdigest() == "3cca600ca6223358c8889fe065f5d8b2a400b360e04083506dd23d2b007fb880"

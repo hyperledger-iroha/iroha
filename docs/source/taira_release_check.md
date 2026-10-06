@@ -416,11 +416,9 @@ call while an unrelated catalog route is idle. The early beacon stage checks
 that component commit topology leaves the scheduled network authority unchanged
 and authenticates the shared validator fixture before dependent regressions.
 Certificate verification and bounded transport component tests remain selected;
-they do not establish current multi-route execution support. In particular,
-Kagemusha top-up/redemption still require that unsupported admission contract and
-are not qualified by the basic DPN funding/deployment workflow. Their command
-wrappers reject before operation reservation, issuer signing or a Pending
-response, including when an identical operation already has an in-flight reservation.
+they do not establish current multi-route execution support. The KAGEMUSHA V1
+top-up/redemption commands that required that unsupported admission contract were
+deleted on 2026-10-05.
 Global status can query other peers, so only the additional local observation
 establishes each validator's own application. Peer clients ignore ambient client
 identity and endpoint overrides. Each status read uses the SDK routed request

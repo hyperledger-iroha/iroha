@@ -24,8 +24,6 @@ mod hash;
 #[cfg(feature = "pqc")]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
 pub mod hybrid;
-/// Qualified-provider cryptography for KAGEMUSHA V1 credit envelopes.
-pub mod kagemusha;
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;

@@ -8,13 +8,7 @@ use crate::{
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
         output_budget::ExecutionOutputLimits,
     },
-    isi::{
-        InstructionBox, Log, RegisterPeerWithPop, SetParameter,
-        kagemusha_v1::{
-            KagemushaMintFinalityAuthorityGenerationTemplateV1,
-            KagemushaMintFinalityGenesisParametersV1, KagemushaMintFinalityValidatorKeysV1,
-        },
-    },
+    isi::{InstructionBox, Log, RegisterPeerWithPop, SetParameter},
     level::Level,
     parameter::{
         CustomParameter, Parameter,
@@ -95,20 +89,6 @@ pub fn author_payload(
         .complete(instance, config, budget, &crypto, &signer)
         .unwrap_or_else(|(_, error)| panic!("genuine fixture availability authoring: {error:?}"))
 }
-
-// Existing reviewed public multiples 1..4 of the Pasta generator; no private monetary keys.
-const PALLAS: [&str; 4] = [
-    "00000000ed302d991bf94c09fc98462200000000000000000000000000000040",
-    "030000b067c50313fcac1144eee2fe0e0000000000000000000000000000001c",
-    "63d232eb3b8af0b75cfcf55ade47f6ff4cdf4e47a7454cb8ed67a9ba6f56e788",
-    "fc86bc8efbbcb878f49427618b6940409b9157e3d777a4c4c0514a8e0d92db18",
-];
-const VESTA: [&str; 4] = [
-    "0000000021eb468cdda89409fc98462200000000000000000000000000000040",
-    "03000070de065fede0093144eee2fe0e0000000000000000000000000000001c",
-    "5fce556feb6fee5a15560ddabae10224b026a5d0281af4c613955c39a8797837",
-    "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
-];
 
 /// A deterministic signed genesis and genuine exact-quorum native proof chain for tests.
 ///
@@ -217,27 +197,6 @@ impl NativeFinalityFixture {
             block_cadence_ms: NonZeroU64::new(1000).unwrap(),
             wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
-            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 {
-                authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                    version: 1,
-                    generation: 0,
-                    validators: validators
-                        .iter()
-                        .enumerate()
-                        .map(|(index, member)| KagemushaMintFinalityValidatorKeysV1 {
-                            validator: PeerId::new(member.public_key.clone()),
-                            eq_proof_public_key: hex::decode(PALLAS[index])
-                                .unwrap()
-                                .try_into()
-                                .unwrap(),
-                            ep_proof_public_key: hex::decode(VESTA[index])
-                                .unwrap()
-                                .try_into()
-                                .unwrap(),
-                        })
-                        .collect(),
-                },
-            },
             sumeragi_context: crate::block::consensus::SumeragiGenesisContextParameters {
                 root_scope,
                 ..crate::block::consensus::SumeragiGenesisContextParameters::recommended()
@@ -615,8 +574,6 @@ impl NativeFinalityFixture {
                 parent_state_root: Hash::new(b"fixture parent"),
                 post_state_root: ordinary_root,
                 ordinary_writes_root: ordinary_root,
-                kagemusha_top_up_root: None,
-                kagemusha_top_up_count: 0,
                 parent_world_state_root: Hash::new(b"fixture parent world"),
                 world_state_root: Hash::new(b"fixture world"),
                 event_commitment: None,

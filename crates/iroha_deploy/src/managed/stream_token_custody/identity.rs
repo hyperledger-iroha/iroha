@@ -54,7 +54,7 @@ impl ManagedStreamTokenCustody {
         original.validate()?;
         let verifier = self.authority.decode_checkpoint(&original.checkpoint)?;
         verifier
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original custody checkpoint"))?
             .verify_global_scope(
                 self.authority.config.network_id,
@@ -64,6 +64,17 @@ impl ManagedStreamTokenCustody {
         if original.selection.provider_id != self.authority.provider_id()? {
             return Err(invalid("original custody provider differs"));
         }
+        self.validate_original_action(original, purpose, &verifier)
+    }
+    // Action-owned decodes run only after the original checkpoint and Global root checks.
+    // This boundary keeps later enrollment scratch out of the cold native import caller.
+    #[inline(never)]
+    fn validate_original_action(
+        &self,
+        original: &Original,
+        purpose: CustodyPurpose,
+        verifier: &FinalityVerifier,
+    ) -> Result<()> {
         match &original.action {
             Action::Configure(policy) => {
                 self.validate_policy(policy)?;

@@ -30,10 +30,6 @@ use iroha_data_model::{
     isi::{
         Grant, InstructionBox, Mint, Revoke, SetParameter,
         consensus_keys::RegisterConsensusKey,
-        kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-            KagemushaMintFinalityGenesisParametersV1,
-        },
         register::Register,
     },
     parameter::{
@@ -274,7 +270,6 @@ pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
         None,
         None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-        None,
     )
     .0
 }
@@ -311,7 +306,6 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
-        None,
     )
     .0
 }
@@ -331,7 +325,6 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-    mint_finality_override: Option<KagemushaMintFinalityGenesisParametersV1>,
 ) -> (
     GenesisBlock,
     StagedGenesisPolicyHashes,
@@ -354,7 +347,6 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
-        mint_finality_override,
     )
 }
 fn strip_handshake_metadata_transactions(transactions: &mut [Vec<InstructionBox>]) {
@@ -395,39 +387,6 @@ fn decode_consensus_handshake_metadata(
     Ok(metadata)
 }
 
-fn test_kagemusha_mint_finality_genesis_parameters(
-    topology: &UniqueVec<PeerId>,
-) -> KagemushaMintFinalityGenesisParametersV1 {
-    let mut voters = topology.iter().cloned().collect::<Vec<_>>();
-    voters.sort();
-    let validators = voters
-        .into_iter()
-        .enumerate()
-        .map(|(index, validator)| {
-            let seed_byte = 0xA0_u8.wrapping_add(
-                u8::try_from(index).expect("test-network validator index fits in one byte"),
-            );
-            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &[seed_byte; 32],
-                0,
-                validator,
-            )
-            .expect("derive independent test-only paired-Pasta validator keys")
-        })
-        .collect();
-    let authority_generation = KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        generation: 0,
-        validators,
-    };
-    let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        authority_generation,
-    };
-    parameters
-        .validate()
-        .expect("test-network topology must form a canonical mint-finality template");
-    parameters
-}
 fn signed_genesis_consensus_mode(block: &GenesisBlock) -> Result<WireConsensusMode, Report> {
     let mut metadata_entries = Vec::new();
     for transaction in block.0.external_transactions() {
@@ -513,7 +472,6 @@ fn build_minimal_genesis_with_post_topology(
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
-        None,
     )
     .0
 }
@@ -533,7 +491,6 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-    mint_finality_override: Option<KagemushaMintFinalityGenesisParametersV1>,
 ) -> (
     GenesisBlock,
     StagedGenesisPolicyHashes,
@@ -566,7 +523,6 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
             consensus_handshake_meta,
             consensus_mode_override,
             confidential_policy_hash,
-            mint_finality_override,
         );
     genesis_policy::execute_generated_genesis(
         block,
@@ -609,7 +565,6 @@ fn build_minimal_genesis_unexecuted(
         None,
         None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-        None,
     );
     (block, account, peers, key_pair)
 }
@@ -627,7 +582,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-    mint_finality_override: Option<KagemushaMintFinalityGenesisParametersV1>,
 ) -> (
     GenesisBlock,
     AccountId,
@@ -706,10 +660,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .map(decode_consensus_handshake_metadata)
         .transpose()
         .expect("test-network consensus handshake metadata must be canonical");
-    assert!(
-        consensus_handshake_metadata.is_none() || mint_finality_override.is_none(),
-        "signed consensus metadata and a disposable Pasta override cannot both specify authority"
-    );
     if let (Some(metadata), Some(mode_override)) = (
         consensus_handshake_metadata.as_ref(),
         consensus_mode_override,
@@ -723,30 +673,11 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
         |metadata| metadata.mode,
     );
-    let (block_cadence_ms, sumeragi_context, kagemusha_mint_finality) =
-        consensus_handshake_metadata.map_or_else(
-            || {
-                (
-                    None,
-                    SumeragiGenesisContextParameters::recommended(),
-                    test_kagemusha_mint_finality_genesis_parameters(&topology),
-                )
-            },
-            |metadata| {
-                (
-                    Some(metadata.block_cadence_ms),
-                    metadata.sumeragi_context,
-                    metadata.kagemusha_mint_finality,
-                )
-            },
-        );
-    let kagemusha_mint_finality = mint_finality_override.unwrap_or(kagemusha_mint_finality);
-    kagemusha_mint_finality
-        .validate()
-        .expect("override must be a canonical generation-zero mint-finality authority");
-    builder = builder
-        .with_sumeragi_context_parameters(sumeragi_context)
-        .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality);
+    let (block_cadence_ms, sumeragi_context) = consensus_handshake_metadata.map_or_else(
+        || (None, SumeragiGenesisContextParameters::recommended()),
+        |metadata| (Some(metadata.block_cadence_ms), metadata.sumeragi_context),
+    );
+    builder = builder.with_sumeragi_context_parameters(sumeragi_context);
     if let Some(block_cadence_ms) = block_cadence_ms {
         builder = builder.with_block_cadence_ms(block_cadence_ms);
     }
@@ -1864,7 +1795,6 @@ mod tests {
             None,
             None,
             Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            None,
         );
         let grant_phases = raw
             .transactions()
@@ -1966,7 +1896,6 @@ mod tests {
             None,
             None,
             Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            None,
         );
         assert_eq!(
             block.0.external_transactions().count(),
@@ -2032,7 +1961,6 @@ mod tests {
                 None,
                 None,
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-                None,
             )
         }))
         .expect_err("the generator must refuse a twelfth caller-authored input");
@@ -2415,7 +2343,6 @@ mod tests {
                 None,
                 None,
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-                None,
             );
         let (block, _) = super::genesis_fixture_policy::bind_proposal(
             block,
@@ -2553,7 +2480,6 @@ mod tests {
                 None,
                 Some(SumeragiConsensusMode::Npos),
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-                None,
             );
         let expected_rejection_index = block
             .0
@@ -3092,7 +3018,6 @@ mod tests {
             None,
             None,
             Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            None,
         );
         let declared_hash = block
             .0

@@ -64,7 +64,7 @@ pub enum PublicLaneCommand {
     Stake(PublicLaneStakeArgs),
     /// Observe the current finality source and one target's frozen preparation and custody progress
     CommitteeStatus(PublicLaneCommitteeStatusArgs),
-    /// Submit one reviewed candidate publication, credential preparation or seat admission
+    /// Submit one reviewed credential preparation or seat admission
     CommitteeSubmit(PublicLaneCommitteeSubmitArgs),
 }
 
@@ -100,23 +100,10 @@ impl Run for PublicLaneCommitteeSubmitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use iroha::data_model::{isi::SetParameter, parameter::Parameter};
 
+        // Both operations bind their exact frozen transition. Core reconstructs the
+        // network-bound target generation and readiness challenge from that preparation.
         let operation: ValidatorCommitteeOperationV1 =
             crate::staking::load_committee_json(&self.file, "--file")?;
-        let network = match &operation {
-            ValidatorCommitteeOperationV1::PublishCandidate(candidate) => {
-                Some(candidate.network_id)
-            }
-            ValidatorCommitteeOperationV1::PrepareCredentials(preparation) => {
-                Some(preparation.credentials.authority.network_id)
-            }
-            // Seat evidence binds its exact transition. Core reconstructs the
-            // network-bound challenge from that committed preparation.
-            ValidatorCommitteeOperationV1::AdmitSeat(_) => None,
-        };
-        eyre::ensure!(
-            network.is_none_or(|network| network == context.config().network_id),
-            "--file must bind the configured submission network"
-        );
         let instruction = SetParameter::new(Parameter::Custom(operation.into_custom_parameter()));
         context.finish(vec![iroha::data_model::isi::InstructionBox::from(
             instruction,

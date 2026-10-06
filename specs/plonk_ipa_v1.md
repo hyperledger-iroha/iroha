@@ -605,8 +605,10 @@ adoption.
   `iroha_core_zk` path (snark-verifier `PoseidonTranscript`, then the vendored `G'_0` appended);
 - BlindingScheduleV1, the multiopen and the IPA.
 
-TODO(T16, `iroha_core_zk`): re-prove the KAGEMUSHA goldens themselves (`sigma_native_k11`,
-`p256_k16`, `rec_*`) natively. Their circuits live in `iroha_core_zk`'s private test module.
+The KAGEMUSHA goldens themselves (`sigma_native_k11`, `p256_k16`, `rec_*`) cannot be re-proved
+natively: their circuits were deleted with the old `iroha_core_zk` KAGEMUSHA code on 2026-10-05.
+Their pinned values stay in `fixtures/native_prover/kats_v1.json`. The native KAGEMUSHA relations
+in `iroha_kagemusha_proof` need their own goldens once their artifact set is frozen (G3).
 
 Every verdict difference from the vendored verifier is a stricter rejection listed below with a
 named test. The oracle's `deviation_registry` test ties every row to a named native test that
@@ -637,7 +639,7 @@ typed rejection.
 - **Oracle.** All vendored goldens are re-proved natively at 1, 2, 4 and 7 threads, on the Blake2b
   path and on the KAGEMUSHA path. VK and params bytes match, and native keygen is checked at the
   same thread counts. Verdicts match on the tamper corpora of both paths, apart from registered
-  deviations. TODO(T16): the `iroha_core_zk` KAGEMUSHA goldens (see section 14).
+  deviations. The deleted `iroha_core_zk` KAGEMUSHA goldens are not re-proved (section 14).
 - **Malicious prover.** The harness rewrites one message, recomputes every later message and
   challenge, and expects one specific reason. Its cases:
   - equal advice commitments with different evaluations (S1, S3);

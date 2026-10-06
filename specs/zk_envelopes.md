@@ -337,9 +337,8 @@ Verifier behavior (native STARK)
   guardrails additionally bind decoded `OpenVerifyEnvelope.circuit_id` values to
   the requested backend label: concrete native Halo2 labels must normalize to the
   same circuit. The generic `halo2/ipa` entry point uses a closed V1 circuit
-  registry containing Kaigi roster/usage, the protocol-private confidential
-  transfer/unshield circuits used by native escrow, and the authenticated
-  KAGEMUSHA V1 artifact set. Tiny arithmetic,
+  registry containing Kaigi roster/usage and the protocol-private confidential
+  transfer/unshield circuits used by native escrow. Tiny arithmetic,
   anonymous-transfer demos, vote-bool demos, the historical IVM overlay-binding
   stand-in, retired recursive-spend labels, cross-family ids, and trusted-setup
   ids all fail before verifier dispatch. Prefixing or otherwise normalizing a
@@ -350,9 +349,8 @@ Verifier behavior (native STARK)
 - Production Halo2 `ProofBox.bytes` is a canonical data-model
   `OpenVerifyEnvelope`. Its `public_inputs` field contains a schema descriptor,
   not the concrete instance columns. Every admitted circuit id normalizes to one
-  closed, authoritative descriptor (Kaigi roster/usage, confidential
-  transfer/full-unshield/change-unshield, or an authenticated
-  KAGEMUSHA V1 artifact role).
+  closed, authoritative descriptor (Kaigi roster/usage or confidential
+  transfer/full-unshield/change-unshield).
   Preverification, guardrails, final dispatch, and verifying-key record
   preparation require exact descriptor bytes or the Iroha hash of those bytes;
   arbitrary nonempty replacements and unmapped circuits fail closed.

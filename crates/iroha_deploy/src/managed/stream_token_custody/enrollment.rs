@@ -41,6 +41,77 @@ impl std::fmt::Debug for RetainedCustodyEnrollment {
     }
 }
 
+/// One call's fully verified original initial enrollment and its exact Configure policy.
+/// This historical prerequisite grants no current authority and is never cached across calls.
+pub(super) struct RetainedInitialPrerequisite {
+    pub(super) policy: SignerCustodyPolicyV1,
+    pub(super) enrollment: RetainedCustodyEnrollment,
+}
+
+/// One call's authenticated Configure input. The exact original native owners and carrier
+/// bytes stay held until reuse; this is never a current-state or cross-call cache.
+pub(super) struct RetainedConfiguration<'a> {
+    owner: &'a ManagedStreamTokenCustody,
+    original: Selected<Original>,
+    signed: SignedTransaction,
+    carrier: Vec<u8>,
+    policy: SignerCustodyPolicyV1,
+    finalized: ManagedTransactionFinality,
+}
+impl RetainedConfiguration<'_> {
+    pub(super) fn policy(&self) -> &SignerCustodyPolicyV1 {
+        &self.policy
+    }
+    fn require_carrier(&self) -> Result<()> {
+        let directory = self.original.directory();
+        directory.revalidate()?;
+        if read_optional(directory, "carrier.nrt", MAX_CHECKPOINT_BYTES)?.as_deref()
+            != Some(self.carrier.as_slice())
+        {
+            return Err(invalid("retained Configure carrier changed during handoff"));
+        }
+        directory.revalidate()?;
+        Ok(())
+    }
+    pub(super) fn into_initial_prerequisite(
+        self,
+        deadline: Instant,
+    ) -> Result<RetainedInitialPrerequisite> {
+        let owner = self.owner;
+        require_deadline(deadline)?;
+        owner.authority.validate_profile()?;
+        self.require_carrier()?;
+        // The selected graph rechecks original identities, all records and canonical wallets.
+        // Only the immutable native proof import is reused; wallet verification remains fresh.
+        let signed = owner.verify_wallet(self.original.directory(), &self.original, deadline)?;
+        if signed
+            .encode_wire_v1()
+            .map_err(|_| invalid("invalid retained Configure transaction wire"))?
+            != self
+                .signed
+                .encode_wire_v1()
+                .map_err(|_| invalid("invalid retained Configure transaction wire"))?
+        {
+            return Err(invalid("retained Configure wallet changed during handoff"));
+        }
+        self.require_carrier()?;
+        require_deadline(deadline)?;
+        drop(signed);
+        let Self {
+            owner: _,
+            original,
+            signed,
+            carrier,
+            policy,
+            finalized,
+        } = self;
+        drop((original, signed, carrier));
+        // End the Configure graph before the initial BodyHistory opens. The historical result
+        // reaches the same verifier at the same boundary as an ordinary Configure read.
+        owner.initial_prerequisite_after_configuration(policy, finalized, deadline)
+    }
+}
+
 impl ManagedStreamTokenCustody {
     /// Recover the exact initial enrollment for an independently selected original policy/interval.
     ///
@@ -372,6 +443,51 @@ impl ManagedStreamTokenCustody {
             return Err(invalid("retained enrollment policy differs"));
         }
         let original = self.required_enrollment(purpose)?;
+        self.verify_retained_enrollment(purpose, policy, interval, &configured, original, deadline)
+    }
+
+    /// Consume one canonical initial selection after verifying Configure once. The same owned
+    /// History that supplied its interval reaches wallet verification; no pathname reopen or
+    /// second complete history graph is needed between these read-only stages.
+    pub(super) fn retained_initial_prerequisite(
+        &self,
+        deadline: Instant,
+    ) -> Result<RetainedInitialPrerequisite> {
+        require_deadline(deadline)?;
+        self.authority.validate_profile()?;
+        let (policy, configured) = self.retained_configuration(deadline)?;
+        self.initial_prerequisite_after_configuration(policy, configured, deadline)
+    }
+
+    fn initial_prerequisite_after_configuration(
+        &self,
+        policy: SignerCustodyPolicyV1,
+        configured: ManagedTransactionFinality,
+        deadline: Instant,
+    ) -> Result<RetainedInitialPrerequisite> {
+        let (original, interval) = self
+            .inspect_initial_selection(&policy)?
+            .ok_or_else(|| invalid("original initial enrollment dispatch is not selected"))?;
+        let enrollment = self.verify_retained_enrollment(
+            CustodyPurpose::InitialEnroll,
+            &policy,
+            Some(interval),
+            &configured,
+            original,
+            deadline,
+        )?;
+        Ok(RetainedInitialPrerequisite { policy, enrollment })
+    }
+
+    fn verify_retained_enrollment(
+        &self,
+        purpose: CustodyPurpose,
+        policy: &SignerCustodyPolicyV1,
+        interval: Option<ManagedCustodyEnrollmentInterval>,
+        configured: &ManagedTransactionFinality,
+        original: Selected<Original>,
+        deadline: Instant,
+    ) -> Result<RetainedCustodyEnrollment> {
         let directory = original.directory();
         self.validate_original(&original, purpose)?;
         let Action::Enroll { enrollment, .. } = &original.action else {
@@ -436,6 +552,15 @@ impl ManagedStreamTokenCustody {
         &self,
         policy: &SignerCustodyPolicyV1,
     ) -> Result<Option<ManagedCustodyEnrollmentInterval>> {
+        Ok(self
+            .inspect_initial_selection(policy)?
+            .map(|(_, interval)| interval))
+    }
+
+    fn inspect_initial_selection(
+        &self,
+        policy: &SignerCustodyPolicyV1,
+    ) -> Result<Option<(Selected<Original>, ManagedCustodyEnrollmentInterval)>> {
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
         let Some(history) = body_history::BodyHistory::open(self, CustodyPurpose::InitialEnroll)?
@@ -452,27 +577,46 @@ impl ManagedStreamTokenCustody {
         };
         let selected = original.interval()?;
         self.authority.validate_profile()?;
-        Ok(Some(selected))
+        Ok(Some((original, selected)))
     }
 
     pub(super) fn retained_configuration(
         &self,
         deadline: Instant,
     ) -> Result<(SignerCustodyPolicyV1, ManagedTransactionFinality)> {
+        let retained = self.read_configuration(deadline)?;
+        Ok((retained.policy, retained.finalized))
+    }
+
+    pub(super) fn read_configuration(
+        &self,
+        deadline: Instant,
+    ) -> Result<RetainedConfiguration<'_>> {
+        #[cfg(test)]
+        prerequisite_tests::record_configuration_read();
         require_deadline(deadline)?;
         let operation = self.authority.directory.open_child("configure")?;
         let original = journal::required_original(&operation)?;
         let directory = original.directory();
         self.validate_original(&original, CustodyPurpose::Configure)?;
         let signed = self.verify_wallet(&directory, &original, deadline)?;
-        let finalized = self
-            .authority
-            .retained_finality(&directory, &signed)?
+        // Retain the same bytes fed to the sole native decoder, never a later path reread.
+        let carrier = read_optional(directory, "carrier.nrt", MAX_CHECKPOINT_BYTES)?
             .ok_or_else(|| invalid("configuration requires independent original inclusion"))?;
+        let verifier = self.authority.decode_checkpoint(&carrier)?;
+        let finalized = crate::managed::native_operation::verify_carrier(&verifier, &signed)?;
         let Action::Configure(policy) = &original.action else {
             return Err(invalid("configuration journal has another purpose"));
         };
-        Ok((policy.clone(), finalized))
+        let policy = policy.clone();
+        Ok(RetainedConfiguration {
+            owner: self,
+            original,
+            signed,
+            carrier,
+            policy,
+            finalized,
+        })
     }
 
     pub(super) fn unsigned_enrollment(
@@ -598,3 +742,7 @@ mod local_inspection_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "enrollment/prerequisite_tests.rs"]
+mod prerequisite_tests;
