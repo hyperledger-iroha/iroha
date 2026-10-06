@@ -51,7 +51,6 @@ fn evidence_resource_kind(
     let (stable, temporary) = name
         .strip_suffix(".tmp")
         .map_or((name, false), |stable| (stable, true));
-    let stem = stable.strip_suffix(".norito");
 
     // Reserved namespace ownership wins over generic known marker basenames.
     if directory == Some(fastpq_artifact_store::DIRECTORY) {

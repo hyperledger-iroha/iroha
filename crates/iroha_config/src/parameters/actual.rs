@@ -10734,7 +10734,7 @@ impl_default!(StreamingSync => {
         Self::from_defaults()
 });
 /// Settlement conversion routing configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Settlement {
     /// Router configuration for XOR conversion.
     pub router: Router,

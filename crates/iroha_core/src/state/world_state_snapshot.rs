@@ -7,8 +7,6 @@
 //! complete reconstructed root/count must match certified R; current typed targets
 //! that changed in the tail are refused. Decoded restoration requires native replay.
 
-#[path = "world_state_snapshot/ordinary_mint_issuer.rs"]
-mod ordinary_mint_issuer;
 #[path = "world_state_snapshot/ordinary_wallet.rs"]
 mod ordinary_wallet;
 #[path = "world_state_snapshot/reserve_account.rs"]
@@ -28,7 +26,6 @@ use iroha_allocation::{AllocationBudget, AllocationCharge, ChargedBuffer};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinition, AssetDefinitionId},
-    kagemusha::KagemushaGovernedVerifierRegistryV1,
     nexus::AxtAssetIncarnationV1,
     sumeragi_finality::{
         MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1,
@@ -565,7 +562,6 @@ impl State {
             &WorldStateSnapshotV1,
             &AssetDefinition,
             &AxtAssetIncarnationV1,
-            &KagemushaGovernedVerifierRegistryV1,
         ) -> Result<T, String>,
     ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
@@ -590,21 +586,10 @@ impl State {
                     Some(hash_value(asset_id)?),
                     hash_value(incarnation)?,
                 ),
-                (
-                    "world.kagemusha_verifier_registry",
-                    WorldStateElementKindV1::Cell,
-                    None,
-                    hash_value(world.kagemusha_verifier_registry.get())?,
-                ),
             ] {
                 require_target(snapshot, field, kind, key, value)?;
             }
-            consume(
-                snapshot,
-                definition,
-                incarnation,
-                world.kagemusha_verifier_registry.get(),
-            )
+            consume(snapshot, definition, incarnation)
         })
     }
 

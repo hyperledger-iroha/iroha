@@ -19,15 +19,18 @@ digest). Proof bytes, relation bindings, verifying keys and the lineage roots of
 Payment's Ω(pred) in the vectors are labelled stand-ins; map roots, credit-digest roots
 and openings are computed.
 
-The second set of owner answers of 2026-10-05 is specified here and not yet
-implemented (TODO(G1)): the Poseidon signing message and the remaining SHA-256 roles
-(§1), the `P_bytes` lineage, credit-opening, credit-status and credited digests (§§1,
-3.2, 3.4), the depth-32 indexed map trees and their openings (§3.2), the limb-ordered
-blacklist and two-sided blacklist enforcement (§§3.3, 3.4), the Request account
-digests (§3.4), the Receive verifying-key selector (§3.1) and the vector consistency
-rules (§5). For these items this record governs, and the code and vectors change
-together to match it. Elsewhere the code is authoritative; a change to it updates this
-record and the vectors together.
+The second set of owner answers of 2026-10-05 is partially implemented: native
+Poseidon signing messages and the 34 retained SHA-256 roles (§1), `P_bytes` lineage,
+credit-opening, credit-status and credited digests (§§1, 3.2, 3.4), depth-32 indexed
+map trees and their openings (§3.2), and both Request account digests (§3.4).
+Request construction authenticates the payer Offer before freezing an already-produced
+signature; the receiver session must still enforce that authentication before key use.
+The limb-ordered blacklist, two-sided blacklist enforcement (§§3.3, 3.4), Receive
+verifying-key selector (§3.1), and complete proof, bridge, platform and cross-language
+qualification remain open (TODO(G1)). The canonical Rust generator owns the vector
+bytes; SDKs carry native Poseidon values without recomputing them. For open design
+items this record governs, and code and vectors change together. Elsewhere code is
+authoritative; a change to it updates this record and the vectors together.
 
 Notation: `‖` is concatenation; `LE16`…`LE128` are little-endian unsigned
 integers; every name without a width is a raw 32-byte digest, identifier, nonce or
@@ -68,7 +71,7 @@ input and the 31-byte chunk boundaries, and every value (§5).
   certificate digest. Only the `account`, `certificate-set`, `evidence`,
   `verifying-key-set`, `marker`, `capsule`, `completion` and `fold` roles and the
   lineage digest have variable-length bodies.
-- **Signing** (TODO(G1)). Every P-256 signature of the protocol signs, as its message,
+- **Signing.** Every P-256 signature of the protocol signs, as its message,
   the 32-byte canonical encoding `m` of `P_bytes(d, transcript)`, where `d` is the
   body's signing domain in the table below, with standard ECDSA-P256 over SHA-256: the
   ECDSA message hash is `SHA-256(m)`, one SHA-256 block in circuit. The Secure Enclave

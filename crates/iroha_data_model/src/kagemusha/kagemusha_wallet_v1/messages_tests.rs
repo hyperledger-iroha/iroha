@@ -907,7 +907,7 @@ fn kagemusha_wallet_v1_message_transcript_lengths_are_pinned() {
         .opening;
     assert_eq!(
         opening.transcript().expect("opening").len(),
-        32 + 32 + 1 + 32 + 4 + 32 * OPENING_SIBLINGS
+        32 + 32 + 1 + 32 + 4 + 32 * KAGEMUSHA_WALLET_CREDIT_OPENING_DEPTH_V1
     );
 }
 

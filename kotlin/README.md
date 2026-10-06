@@ -550,9 +550,12 @@ Lane observations do not confer finality.
 
 ### KAGEMUSHA wallet peer transports
 
-`KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, domain-separated
-digest roles, envelope header validation and strict `kgm1:` text, matching the
-Rust owner `iroha_data_model::kagemusha::kagemusha_wallet_v1`.
+`KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, 34 retained SHA-256
+digest roles, explicit signing domains and immutable canonical 32-byte signing messages,
+envelope header validation and strict `kgm1:` text, matching the Rust owner
+`iroha_data_model::kagemusha::kagemusha_wallet_v1`. P-256 verifies exactly the native
+message bytes; domain context is not prepended. Kotlin carries native Poseidon values
+without recomputing them, and message construction grants no signer or monetary authority.
 `KagemushaP256Codec` is the P-256 device-key boundary: uncompressed SEC1 public
 keys and fixed-width low-S `r || s` signatures. The QR, NFC, and Nearby carriers
 (`IrohaPeer*`) move KAGEMUSHA wallet V1 envelope frames

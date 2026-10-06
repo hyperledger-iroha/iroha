@@ -289,7 +289,6 @@ impl<'state> StateBlock<'state> {
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             lane_incarnation_activation_heights,
-            kagemusha_v1_runtime_verifier,
             zk: _,
             nexus,
             pending_da_commitments,
@@ -478,37 +477,6 @@ impl<'state> StateBlock<'state> {
                 TransactionsBlockError::ExecutionDeferred(reason)
             }
         })?;
-        // Validate the original registry and local cache independently here. No
-        // instruction or Parliament effect owns a registry mutation, so publication
-        // refuses any change below. The actual top-up/redemption entry points must
-        // match this original registry before proof verification and defer
-        // stale/missing artifacts locally. No local key reload, clone, or role
-        // rebinding occurs during publication.
-        let verifier: &dyn std::any::Any = kagemusha_v1_runtime_verifier.as_ref();
-        let runtime_check = world
-            .kagemusha_verifier_registry
-            .get()
-            .validate()
-            .map_err(str::to_owned)
-            .and_then(|()| {
-                crate::smartcontracts::isi::kagemusha::validate_runtime_cache_for_publication(
-                    verifier,
-                    state_ref.network_id,
-                )
-            });
-        if let Err(error) = runtime_check {
-            error!(block_height, %error, "KAGEMUSHA governed registry or local artifact cache is invalid");
-            return Err(TransactionsBlockError::KagemushaVerifierAuthority);
-        }
-        let predecessor = state_ref.world.kagemusha_verifier_registry.view();
-        if world.kagemusha_verifier_registry.get() != predecessor.get() {
-            error!(
-                block_height,
-                "KAGEMUSHA registry changed without any State transition owner"
-            );
-            return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);
-        }
-        drop(predecessor);
         if tiered_snapshot.is_none() {
             *tiered_snapshot = Some(tiered_publication::PreparedTieredSnapshot::prepare(
                 world,

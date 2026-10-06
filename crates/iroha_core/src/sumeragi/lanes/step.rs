@@ -77,10 +77,19 @@ impl StateBlock<'_> {
         self.sumeragi_lanes_step = LaneStep::Requested(input);
     }
 
-    /// Run a requested lane step (the output seal's finalizer).
-    pub(crate) fn advance_requested_sumeragi_lanes(&mut self) {
-        if let LaneStep::Requested(input) = std::mem::take(&mut self.sumeragi_lanes_step) {
-            self.sumeragi_lanes_step = LaneStep::Done(advance(self, &input));
+    /// Run a requested lane step before the output seal completes.
+    ///
+    /// # Errors
+    /// Retains and returns the real lane outcome; an unfinished transition cannot be sealed.
+    pub(crate) fn advance_requested_sumeragi_lanes(&mut self) -> Result<(), LaneStepError> {
+        self.sumeragi_lanes_step = match std::mem::take(&mut self.sumeragi_lanes_step) {
+            LaneStep::Requested(input) => LaneStep::Done(advance(self, &input)),
+            original => original,
+        };
+        match &self.sumeragi_lanes_step {
+            LaneStep::Done(outcome) => outcome.clone(),
+            LaneStep::Off => Ok(()),
+            LaneStep::Requested(_) => unreachable!("original requested lane step ran"),
         }
     }
 

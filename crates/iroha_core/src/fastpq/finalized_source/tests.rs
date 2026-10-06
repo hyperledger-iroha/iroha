@@ -94,7 +94,7 @@ fn authority(chain: &CertifiedTestChain, height: u64) -> AuthenticatedExecutionB
 
 #[test]
 fn native_source_join_retains_original_block_and_witness_allocations() {
-    let (chain, joined, bundles, bytes) = original_source();
+    let (_chain, joined, bundles, bytes) = original_source();
     let FinalizedFastpqSource { native, witness } = joined;
     let original_block = native.block().clone();
     let joined = FinalizedFastpqSource::bind(witness, native).unwrap();

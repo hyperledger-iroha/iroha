@@ -76,7 +76,8 @@
 //! retirement, Selected-marker capabilities, the durable store and the receipt signer are
 //! private: a capability exists only for a marker published here or adopted after its exact
 //! bytes were read back, the receipt signer re-reads that marker immediately before signing,
-//! and the payment key's `key_sign` takes a preimage only the role-checked signers construct.
+//! and the payment key's `key_sign` takes the exact native 32-byte signing message with
+//! explicit domain context constructed by the role-checked signers.
 //!
 //! # Durability doctrine
 //!
@@ -94,16 +95,16 @@
 //! flows, exercised by crash matrices over the simulated filesystem (process crashes, power
 //! loss with exhaustive survival subsets of unsynced directory operations, lost writebacks,
 //! faults during recovery and platform faults); run them with
-//! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Platform adapters (Android
-//! Keystore and storage, iPhone Secure Enclave and keychain) and the bridge wiring are not
-//! implemented yet, and nothing here has run on a phone.
+//! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Android Keystore/storage
+//! and iPhone Secure Enclave/keychain adapters exist in the SDKs. Bridge registration,
+//! the monetary transition owner and physical-phone qualification remain open.
 // TODO(G2-bridge): JNI and C-vtable platform adapters and the exclusive per-process handle
 // (one provider per process; revoke the handle after an uncertain dispatch).
 // TODO(G2-S): the state owner's G1 transition owner (`assemble_output_v1`, receipt body from
 // the credential), its archive under `slots/<slot>/archive/`, the E8 activation request and
 // its acknowledgement-driven capsule collection.
-// TODO(G2-iOS): Swift adapter (canary, `kern.bootsessionuuid`, keychain anchor) and device
-// tests of keychain power-loss durability and the residual anchor window.
+// TODO(G2-iOS): physical-device tests of the Swift adapter's keychain power-loss durability
+// and residual anchor window.
 // TODO(G2-fs): typed descriptor-relative primitives in `iroha_fs` replace the path-based
 // `std::fs` backend in `store`.
 

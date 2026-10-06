@@ -1675,7 +1675,7 @@ impl<'s> Worker<'s> {
             Err(recovery) => return Err(recovery),
         };
         let mut events = Vec::new();
-        let (valid, mut overlay) = match validated.unpack(|event| events.push(event.into())) {
+        let (valid, overlay) = match validated.unpack(|event| events.push(event.into())) {
             Ok(executed) => executed,
             Err((returned, error)) => {
                 if !cfg!(all(test, sumeragi_core_mutation = "HC44"))
@@ -1711,11 +1711,33 @@ impl<'s> Worker<'s> {
                 return outcome;
             }
         };
+        if self
+            .retain_validated_execution(block, block_hash, valid, overlay, committee, events)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        finish(self)
+    }
+
+    /// Transfer one actual validator result into its completed owner. Witness extraction
+    /// checks the retained source; absence cannot promise a retry after these owners drop.
+    /// Some denotes the retained completed owner; None preserves intrinsic rejection.
+    fn retain_validated_execution(
+        &mut self,
+        block: &AvailableBody,
+        block_hash: Hash32,
+        valid: ValidBlock,
+        mut overlay: Box<StateBlock<'s>>,
+        committee: Vec<PeerId>,
+        events: Vec<EventBox>,
+    ) -> Result<Option<()>, PublicationError> {
+        let height = block.header().height;
         if let Err(error) = overlay.take_sumeragi_lanes() {
             if let lanes::step::LaneStepError::Deferred(reason) = &error {
                 self.routing_refusal = Some(reason.clone());
             }
-            return classify_lane_step(height, &error);
+            return classify_lane_step(height, &error).map(|_| None);
         }
         let inputs = match overlay.take_sumeragi_execution_inputs() {
             Ok(inputs) => inputs,
@@ -1726,17 +1748,28 @@ impl<'s> Worker<'s> {
                 {
                     self.routing_refusal = Some(reason.clone());
                 }
-                return classify(height, &error);
+                return classify(height, &error).map(|_| None);
             }
         };
         let applied_config = match inputs.get().schedule.applied_config() {
             Ok(config) => config,
-            Err(error) => return invalid_attempt(height, &error),
+            Err(error) => return invalid_attempt(height, &error).map(|_| None),
         };
         let Some(witness) = overlay.take_exec_witness() else {
-            return Err(PublicationError::Retryable(
-                "the execution witness was not captured".into(),
-            ));
+            if cfg!(all(test, sumeragi_core_mutation = "HC134")) {
+                return Err(PublicationError::Retryable(
+                    "the execution witness was not captured".into(),
+                ));
+            }
+            // Guard failure or prior extraction has no resumable captured owner. Latch
+            // recovery before this handoff consumes the sole valid block and overlay.
+            let reason = self
+                .recovery
+                .get_or_insert_with(|| {
+                    "the original execution witness is absent or no longer source-valid".into()
+                })
+                .clone();
+            return Err(PublicationError::RecoveryRequired(reason));
         };
         // The original valid block now retains the same immutable signature owner.
         // Retire only its preparation controls/source; later phases move this exact block.
@@ -1762,7 +1795,7 @@ impl<'s> Worker<'s> {
             archive_refusal: None,
             world_cut_refusal: None,
         });
-        finish(self)
+        Ok(Some(()))
     }
 
     /// Construct the mandatory context proof from the same original witness and input owner.

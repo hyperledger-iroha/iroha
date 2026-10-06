@@ -8798,7 +8798,7 @@ impl Queue {
 }
 /// Confidential asset and verifier configuration.
 /// User-level configuration container for `Settlement`.
-#[derive(Debug, ReadConfig, Clone, Default)]
+#[derive(Debug, ReadConfig, Clone, Copy, Default)]
 pub struct Settlement {
     /// Router configuration (shadow price, buffers).
     #[config(nested)]

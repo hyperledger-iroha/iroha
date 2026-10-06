@@ -343,3 +343,388 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
         assert_eq!(state.view().height(), height);
     });
 }
+
+/// Reach the native finalizer using only exact original-pool capacity refusals. This changes
+/// the test's local allocation ceiling, never signed policy, protocol behavior or an allocator.
+#[test]
+fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry() {
+    use crate::sumeragi::driver::traits::BlockStore as _;
+    use iroha_allocation::AllocationRefusal;
+    use iroha_data_model::{
+        parameter::{Parameter, system::SumeragiParameters},
+        sumeragi_lanes::{SumeragiLaneAutoscale, SumeragiLanePolicy},
+    };
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+
+    publication_tests::with_worker_from(
+        || {
+            let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
+                crate::state::World::new(),
+                1_000,
+            );
+            let mut policy = SumeragiLanePolicy::for_chain(
+                SumeragiParameters::default(),
+                iroha_sumeragi::availability::recommended_data_availability_layout(),
+            );
+            policy.autoscale = Some(SumeragiLaneAutoscale {
+                min_lane: LaneId::new(16),
+                max_lane_exclusive: LaneId::new(20),
+                dataspace: DataSpaceId::UNIVERSAL,
+                committee_size: 4,
+                per_lane_target_tps: 10,
+                window: 8,
+                scale_out_permille: 800,
+                scale_in_permille: 200,
+                cooldown: 3,
+            });
+            config
+                .genesis_parameters
+                .push(Parameter::Custom(policy.into_custom_parameter()));
+            crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+                .expect("actual signed autoscale genesis")
+        },
+        ConsensusMode::Permissioned,
+        |chain, worker, blocks, events| {
+            let block = publication_tests::proposal(chain, worker);
+            let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+            let budget = worker.state.ivm_execution_budget();
+            let original_limit = budget.limit_bytes();
+            let height = worker.state.view().height();
+            let sample_ptr = worker
+                .state
+                .view()
+                .world()
+                .sumeragi_lanes()
+                .samples
+                .as_ptr();
+            let mut attempt = SignatureDecodeAttempt {
+                block_hash: hash,
+                source: block.clone(),
+                decoder: iroha_data_model::block::PreparedSignedBlockSignaturesDecode::new(&budget)
+                    .expect("same State-pool decoder"),
+                decoded: None,
+                returned_refusal: None,
+            };
+            let entries = attempt
+                .original_decoded(&budget)
+                .unwrap()
+                .external_entrypoints_slice()
+                .as_ptr();
+            worker.signature_decode = Some(attempt);
+            // Keep MV reclamation out of this operation's exact capacity observations.
+            let epoch = crossbeam_epoch::pin();
+            let mut ceiling = budget.reserved_bytes();
+            let mut reached_lane_finalizer = false;
+            for _ in 0..128 {
+                budget.set_limit_bytes(ceiling);
+                let outcome = worker.run_execution(&block, hash);
+                let next_ceiling = match &outcome {
+                    Err(PublicationError::Deferred(source)) => match source.allocation_refusal() {
+                        Some(AllocationRefusal::Capacity {
+                            requested_bytes,
+                            reserved_bytes,
+                            ..
+                        }) => Some(reserved_bytes.checked_add(*requested_bytes).unwrap()),
+                        Some(AllocationRefusal::ExceedsLimit {
+                            requested_bytes, ..
+                        }) => Some(
+                            budget
+                                .reserved_bytes()
+                                .checked_add(*requested_bytes)
+                                .unwrap(),
+                        ),
+                        Some(AllocationRefusal::DemandOverflow) => {
+                            panic!("actual native demand overflowed")
+                        }
+                        None if source.execution().is_some_and(|original| {
+                            original.reason()
+                                == ivm::error::ExecutionDeferral::AllocationUnavailable
+                        }) =>
+                        {
+                            None
+                        }
+                        None => {
+                            panic!("capacity probe encountered another local owner: {source:?}")
+                        }
+                    },
+                    // The HC133 counterfactual reaches the executor's late lane take. That
+                    // path must fail the ownership assertion below, not re-decode a new graph.
+                    Err(PublicationError::Retryable(reason))
+                        if reason == "local lane custody allocation refused" =>
+                    {
+                        None
+                    }
+                    other => panic!("capacity probe did not reach a retained refusal: {other:?}"),
+                };
+                let returned = worker
+                    .signature_decode
+                    .as_ref()
+                    .and_then(|original| original.decoded.as_ref())
+                    .expect("late lane refusal must return the sole original graph before sealing");
+                assert_eq!(returned.external_entrypoints_slice().as_ptr(), entries);
+                assert!(returned.signatures_admitted_to(&budget));
+                assert!(
+                    returned
+                        .matches_resultless_proposal_wire(block.payload().as_slice())
+                        .unwrap()
+                );
+                assert_eq!(worker.state.view().height(), height);
+                assert_eq!(
+                    worker
+                        .state
+                        .view()
+                        .world()
+                        .sumeragi_lanes()
+                        .samples
+                        .as_ptr(),
+                    sample_ptr
+                );
+                assert!(worker.live.is_none());
+                assert!(worker.finishing.is_none());
+                assert!(worker.results.is_empty());
+                assert!(worker.pending_commit.is_none());
+                assert!(worker.quarantine_context.is_none());
+                assert!(worker.recovery.is_none());
+                assert!(worker.context.staging.get(&hash).is_none());
+                assert!(events.try_recv().is_err());
+                if let Some(next) = next_ceiling {
+                    assert!(
+                        next > ceiling,
+                        "one original capacity admission makes strict progress"
+                    );
+                    assert!(
+                        next <= original_limit,
+                        "source still fits its unchanged full pool"
+                    );
+                    ceiling = next;
+                } else {
+                    reached_lane_finalizer = true;
+                    break;
+                }
+            }
+            budget.set_limit_bytes(original_limit);
+            drop(epoch);
+            assert!(
+                reached_lane_finalizer,
+                "native capacity probes reached the real late lane step"
+            );
+            let Some(ExecOutcome::Valid(result)) = worker.execute(&block, hash) else {
+                panic!("the same original proposal retries after local capacity is restored");
+            };
+            let PublicationPhase::Executed { valid, .. } = &worker.live.as_ref().unwrap().phase
+            else {
+                panic!("same original graph finishes execution");
+            };
+            assert_eq!(
+                valid.as_ref().external_entrypoints_slice().as_ptr(),
+                entries
+            );
+            assert!(worker.signature_decode.is_none());
+            let qc = chain.commit_qc(
+                block.header().height,
+                hash,
+                result,
+                block.header().attest,
+                crate::sumeragi::test_chain::Signers::Quorum,
+            );
+            assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
+            let original = worker.context.staging.get(&hash).unwrap();
+            assert_eq!(
+                original.executed.external_entrypoints_slice().as_ptr(),
+                entries
+            );
+            blocks.append(&block, &qc).unwrap();
+            worker.commit(&block, &qc).unwrap();
+            let published = worker.state.view().latest_block().unwrap().unwrap();
+            assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+                &published,
+                &original.executed
+            ));
+            assert_eq!(worker.state.view().height(), height + 1);
+        },
+    );
+}
+
+/// Exercise the actual validator-to-Worker handoff, including the source guard's refusal.
+/// Faults use the existing one-shot accessor and transaction application API; they do not
+/// mutate the funded witness, fabricate a source or add a production injection hook.
+#[test]
+fn validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source() {
+    use crate::sumeragi::driver::traits::BlockStore as _;
+
+    // Zero is the ordinary publication control. One is prior one-shot extraction;
+    // two is a genuine empty application after the original output seal completed.
+    for fault in 0..3 {
+        publication_tests::with_worker(move |chain, worker, blocks, events| {
+            let block = publication_tests::proposal(chain, worker);
+            let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+            let budget = worker.state.ivm_execution_budget();
+            let height = worker.state.view().height();
+            let original_available = block.payload().as_slice().as_ptr();
+            let original_source = std::ptr::from_ref(block.source());
+            let mut attempt = SignatureDecodeAttempt {
+                block_hash: hash,
+                source: block.clone(),
+                decoder: iroha_data_model::block::PreparedSignedBlockSignaturesDecode::new(&budget)
+                    .expect("actual original-pool signature decoder"),
+                decoded: None,
+                returned_refusal: None,
+            };
+            let entries = attempt
+                .original_decoded(&budget)
+                .unwrap()
+                .external_entrypoints_slice()
+                .as_ptr();
+            let proposal = attempt.decoded.take().unwrap();
+            worker.signature_decode = Some(attempt);
+            let scheduled = worker.scheduled(block.header().height).unwrap();
+            let committee = scheduled
+                .epoch
+                .committee
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect::<Vec<_>>();
+            let topology = Topology::new(committee.clone());
+            let expansion = lanes::merge::expand(
+                worker.state,
+                &proposal,
+                &*worker.context.lane_blocks,
+                Duration::from_millis(scheduled.params.exec_budget_ms),
+            )
+            .unwrap();
+            let mut recorded_events = Vec::new();
+            let (valid, mut overlay) = ValidBlock::validate_sumeragi_block(
+                proposal,
+                &topology,
+                &worker.context.genesis_account,
+                Duration::from_millis(scheduled.params.block_time_ms),
+                worker.context.consensus_mode,
+                expansion,
+                block.header(),
+                block.payload().as_slice(),
+                worker.state,
+            )
+            .unpack(|event| recorded_events.push(event.into()))
+            .expect("actual available proposal seals its real execution and witness");
+            assert_eq!(
+                valid.as_ref().external_entrypoints_slice().as_ptr(),
+                entries
+            );
+            assert!(valid.as_ref().signatures_admitted_to(&budget));
+            let original_fragments = overlay.committed_fragment_count();
+            let detached = if fault == 1 {
+                let witness = overlay
+                    .take_exec_witness()
+                    .expect("first actual witness owner");
+                witness.verify_source_binding().unwrap();
+                Some(witness)
+            } else {
+                None
+            };
+            if fault == 2 {
+                // This normal State API rejects any application after the output seal.
+                // An empty transaction cannot change the original transaction or wire graph.
+                overlay.transaction().apply();
+                assert_eq!(overlay.committed_fragment_count(), original_fragments);
+                assert!(
+                    overlay
+                        .verify_execution_output_seal(valid.as_ref())
+                        .is_err()
+                );
+            }
+            let outcome = worker.retain_validated_execution(
+                &block,
+                hash,
+                valid,
+                overlay,
+                committee,
+                recorded_events,
+            );
+            if fault == 0 {
+                assert!(outcome.unwrap().is_some());
+                let original = worker.finishing.as_ref().unwrap();
+                assert_eq!(
+                    original
+                        .valid
+                        .as_ref()
+                        .external_entrypoints_slice()
+                        .as_ptr(),
+                    entries
+                );
+                original.witness.verify_source_binding().unwrap();
+                assert!(worker.recovery.is_none());
+                assert!(worker.signature_decode.is_none());
+                let Some(ExecOutcome::Valid(result)) = worker.execute(&block, hash) else {
+                    panic!("ordinary witness handoff completes the same actual execution");
+                };
+                let qc = chain.commit_qc(
+                    block.header().height,
+                    hash,
+                    result,
+                    block.header().attest,
+                    crate::sumeragi::test_chain::Signers::Quorum,
+                );
+                assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
+                let staged = worker.context.staging.get(&hash).unwrap();
+                assert_eq!(
+                    staged.executed.external_entrypoints_slice().as_ptr(),
+                    entries
+                );
+                blocks.append(&block, &qc).unwrap();
+                worker.commit(&block, &qc).unwrap();
+                let published = worker.state.view().latest_block().unwrap().unwrap();
+                assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+                    &published,
+                    &staged.executed
+                ));
+                assert_eq!(worker.state.view().height(), height + 1);
+                return;
+            }
+            let Err(PublicationError::RecoveryRequired(reason)) = outcome else {
+                panic!(
+                    "an absent or source-invalid original witness cannot promise retry: {outcome:?}"
+                );
+            };
+            assert_eq!(worker.recovery.as_deref(), Some(reason.as_str()));
+            assert_eq!(
+                reason,
+                "the original execution witness is absent or no longer source-valid"
+            );
+            assert!(worker.finishing.is_none());
+            assert!(worker.live.is_none());
+            assert!(worker.pending_commit.is_none());
+            assert!(worker.results.is_empty());
+            assert!(worker.quarantine_context.is_none());
+            assert!(worker.context.staging.get(&hash).is_none());
+            assert!(events.try_recv().is_err());
+            assert_eq!(worker.state.view().height(), height);
+            let original_decode = worker.signature_decode.as_ref().unwrap();
+            assert!(original_decode.decoded.is_none());
+            let decoder = std::ptr::from_ref(&original_decode.decoder);
+            let expected = PublicationError::RecoveryRequired(reason.clone()).to_string();
+            assert!(matches!(
+                worker.execute(&block, hash),
+                Some(ExecOutcome::Failed(report)) if report == expected
+            ));
+            assert_eq!(worker.recovery.as_deref(), Some(reason.as_str()));
+            assert_eq!(
+                std::ptr::from_ref(&worker.signature_decode.as_ref().unwrap().decoder),
+                decoder,
+                "execute observes latched recovery before another decode or State execution"
+            );
+            assert!(worker.signature_decode.as_ref().unwrap().decoded.is_none());
+            assert!(worker.results.is_empty());
+            assert!(worker.finishing.is_none());
+            assert!(worker.live.is_none());
+            assert!(events.try_recv().is_err());
+            assert_eq!(worker.state.view().height(), height);
+            assert_eq!(block.payload().as_slice().as_ptr(), original_available);
+            assert_eq!(std::ptr::from_ref(block.source()), original_source);
+            if let Some(original_witness) = detached {
+                // The actual first extracted owner remains separate and immutable;
+                // recovery never reimports it or fabricates a replacement witness.
+                original_witness.verify_source_binding().unwrap();
+            }
+        });
+    }
+}

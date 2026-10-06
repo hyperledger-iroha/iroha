@@ -1787,7 +1787,6 @@ CORE_STATE_VIEW_CONSUMER_STAGES = (("original State reader refusals through auth
     'state::authority_registry::lane_manifest_policy::tests::authority_captures_preserve_exact_state_reader_refusal',
     'state::world_projection::world_state_accumulator::world_state_snapshot::tests::snapshot_reader_refusal_preserves_original_source_and_does_not_call_consumer',
     'state::native_execution_tip::finalized_world::tests::source_bounds_corrupt_carrier_and_busy_publication_return_no_receipt',
-    'sumeragi::executor::validation_refusal_tests::prepared_certificate_busy_retries_same_execution_after_original_reader_release',
     'publication_rwlock::tests::admitted_reader_control_preserves_original_refusal_and_outlives_its_lock',
     'publication_lock::admitted_control_tests::original_fence_control_is_fallible_and_retained_by_its_release_observation',
 )), )

@@ -721,7 +721,7 @@ fn kagemusha_wallet_v1_operation_id_derivation() {
         field_value(0x75),
         // ArchiveSent binds its Credited digest, so a re-archive after a no-op branch is a new
         // operation (§§3.2, 4.1).
-        [0x78; 32],
+        field_value(0x78),
         sample_effects(&f)[5].operation_input(),
         [0x7a; 32],
         [0; 32],

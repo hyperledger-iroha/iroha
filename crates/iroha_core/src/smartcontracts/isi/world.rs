@@ -308,8 +308,6 @@ pub mod isi {
         status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
     };
-    #[cfg(test)]
-    use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, Quantity},

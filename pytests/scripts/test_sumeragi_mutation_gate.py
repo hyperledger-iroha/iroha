@@ -1662,3 +1662,35 @@ def test_committee_boundary_mutations_use_their_exact_production_source_owners()
     assert 'cfg!(all(test, sumeragi_core_mutation = "HC102"))' in plan
     assert '#[cfg(all(test, sumeragi_core_mutation = "HC101"))]' in plan
     assert '#[cfg(all(test, sumeragi_core_mutation = "HC103"))]' in plan
+
+
+def test_native_lane_finalizer_gate_requires_original_validator_return_and_publication():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC133"]
+    assert rule.tests == (
+        "sumeragi::executor::validation_refusal_tests::original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC133", core=True)
+    assert not gate.has_switch("HC133")
+
+
+def test_native_witness_handoff_gate_requires_source_guard_and_one_shot_recovery():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC134"]
+    assert rule.tests == (
+        "sumeragi::executor::validation_refusal_tests::validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC134", core=True)
+    assert not gate.has_switch("HC134")
+    assert not gate.has_switch("HC134", daemon=True)
+
+
+def test_borrowed_amx_clone_gate_requires_actual_paid_persisted_source():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC135"]
+    assert rule.tests == (
+        "sumeragi::amx::native::tests::paid_borrowed_custody::native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC135", core=True)
+    assert not gate.has_switch("HC135")
+    assert not gate.has_switch("HC135", daemon=True)

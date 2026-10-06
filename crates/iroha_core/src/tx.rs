@@ -674,7 +674,13 @@ pub struct AcceptedTransaction<'tx> {
 impl Clone for AcceptedTransaction<'_> {
     fn clone(&self) -> Self {
         Self {
-            entrypoint: Cow::Owned(self.entrypoint().clone()),
+            // A borrowed accepted source keeps its original owner and lifetime.
+            // TODO: replace owned graph copies at their complete physical custody boundary.
+            entrypoint: if cfg!(all(test, sumeragi_core_mutation = "HC135")) {
+                Cow::Owned(self.entrypoint().clone())
+            } else {
+                self.entrypoint.clone()
+            },
             validation_time: self.validation_time,
             entrypoint_hash: clone_once_lock(&self.entrypoint_hash),
             signed_hash: clone_once_lock(&self.signed_hash),

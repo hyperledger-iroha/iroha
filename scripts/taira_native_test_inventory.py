@@ -9,6 +9,9 @@ import re
 
 # (coverage, parent source, test source, registered module, full module path, exact test leaves)
 NATIVE_CORE_TEST_OWNERS = (
+    ('native borrowed paid AMX proof custody', 'sumeragi/amx/native/tests.rs', 'sumeragi/amx/native/tests/paid_borrowed_custody.rs', 'paid_borrowed_custody', 'sumeragi::amx::native::tests::paid_borrowed_custody', (
+        'native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime',
+    )),
     ('native proposal attestation policy', 'sumeragi/executor.rs', 'sumeragi/executor_attestation_policy_tests.rs', 'attestation_policy_tests', 'sumeragi::executor::attestation_policy_tests', (
         'native_top_up_proposal_requires_attestation_before_an_epoch_boundary',
         'ordinary_nonboundary_proposal_has_no_mint_attestation_requirement',
@@ -157,6 +160,13 @@ NATIVE_CORE_TEST_OWNERS = (
         'original_validation_return_cannot_rebind_changed_header_to_authenticated_wire',
         'explicit_completed_decoded_rejection_retires_only_original_height_view_hash',
         'same_source_same_pool_distinct_prepared_signature_owner_is_refused_at_both_boundaries',
+    )),
+    ('native validator return custody', 'sumeragi/executor.rs', 'sumeragi/executor_validation_refusal_tests.rs', 'validation_refusal_tests', 'sumeragi::executor::validation_refusal_tests', (
+        'original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_execution',
+        'original_post_merge_validation_refusal_retains_worker_owner_and_exact_available_retry',
+        'prepared_certificate_busy_retries_same_execution_after_original_reader_release',
+        'original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry',
+        'validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source',
     )),
     ('native completed replay identity', 'sumeragi/executor/replay.rs', 'sumeragi/executor/replay/tests.rs', 'tests', 'sumeragi::executor::replay::tests', (
         'completed_replay_rejects_altered_certificate_and_source_without_losing_exact_retry',

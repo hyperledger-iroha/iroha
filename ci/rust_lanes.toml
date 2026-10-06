@@ -76,7 +76,6 @@ packages = [
 [lanes.node]
 description = "Node, Torii, client, configuration, networking, and node test support."
 packages = [
-  "axum-core",
   "iroha",
   "iroha_cli",
   "iroha_cli_lib",

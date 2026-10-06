@@ -36,6 +36,8 @@ use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
+#[cfg(test)]
+use iroha_data_model::events::pipeline::PipelineEventBox;
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
 #[cfg(test)]
@@ -173,10 +175,6 @@ use iroha_data_model::{
     },
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
-};
-#[cfg(test)]
-use iroha_data_model::{
-    events::pipeline::PipelineEventBox, transaction::signed::TransactionResult,
 };
 #[cfg(test)]
 use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
@@ -30718,7 +30716,7 @@ impl State {
                 zk: self.zk.clone(),
                 gov: self.gov.clone(),
                 content: self.content.clone(),
-                settlement: self.settlement.clone(),
+                settlement: self.settlement,
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
@@ -37384,7 +37382,7 @@ impl<'state> StateBlock<'state> {
             block_zk: &mut fields.zk,
             gov: fields.gov.clone(),
             content: fields.content.clone(),
-            settlement: fields.settlement.clone(),
+            settlement: fields.settlement,
             settlement_engine: fields.settlement_engine.clone(),
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,

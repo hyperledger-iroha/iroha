@@ -1653,8 +1653,8 @@ impl KagemushaWalletEffectV1 {
         .finish()
     }
 
-    /// Append this variant's σ-field elements: `credit_id` is one element (§3), every other
-    /// digest two limbs.
+    /// Append this variant's σ-field elements: `credit_id` and `ArchiveSent.credited` are
+    /// one element each (§3); SHA-256 digests use two limbs.
     fn write_field_items(&self, items: WalletFieldItemsV1) -> WalletFieldItemsV1 {
         match self {
             Self::Bootstrap {

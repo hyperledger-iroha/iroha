@@ -15,9 +15,6 @@ use mv::{PublicationPreparationError, storage::StorageReadOnly};
 // final native identity check. The State fence rejects mixed publication cuts.
 // This remains scoped preparation, never a finalized execution anchor.
 macro_rules! grouped_capture {
-    ($function:ident, $checker:ident, $table:literal) => {
-        grouped_capture!($function, $checker, $table, 32);
-    };
     ($function:ident, $checker:ident, $table:literal, $work_per_row:expr) => {
         /// Capture exact canonical rows after checking every retained grouped index.
         pub(crate) fn $function(

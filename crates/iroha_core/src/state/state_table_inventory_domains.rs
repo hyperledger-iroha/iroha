@@ -333,7 +333,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:state:zk-verifying-key-ref:v1",
             r"iroha:state:zk:v1",
             r"musubi.v0.aliases",
-            r"state.kagemusha_v1_runtime_verifier",
             r"world.smart_contract_state.retail_day_v1",
         ],
     },

@@ -743,6 +743,13 @@ CORE_MUTATIONS = [
       ["sumeragi::executor::tests::consuming_validation_unwind_requires_recovery_after_original_owner_is_lost"]),
     m("HC132", "native proposal: omit the required top-up seal outside an epoch boundary",
       ["sumeragi::executor::attestation_policy_tests::native_top_up_proposal_requires_attestation_before_an_epoch_boundary"]),
+    m("HC133", "native lane finalizer: finish the output seal after original lane preparation refused",
+      ["sumeragi::executor::validation_refusal_tests::original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry"]),
+    m("HC134", "native witness handoff: promise retry after the original witness owner is absent or source-invalid",
+      ["sumeragi::executor::validation_refusal_tests::validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source"]),
+
+    m("HC135", "borrowed transaction custody: deep-copy the original accepted entrypoint graph",
+      ["sumeragi::amx::native::tests::paid_borrowed_custody::native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime"]),
 
 ]
 

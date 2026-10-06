@@ -134,14 +134,18 @@ and the monotonic clock.
 
 `KagemushaWalletWireV1` consumes `fixtures/kagemusha/wallet_v1_vectors.json` and
 mirrors only what an SDK needs before it hands bytes to the typed decoder: the
-SHA-256 domain-separated digests (`digest(role:body:)`, `signedObjectDigest`), the raw
-low-S P-256 signature rule, the canonical σ-field encoding check
+34 retained SHA-256 digest roles (`digest(role:body:)`, `digestPreimage`,
+`signedObjectDigest`), explicit signing domains with immutable native 32-byte
+`KagemushaWalletSigningMessageV1` values, the raw low-S P-256 signature rule, and
+the canonical σ-field encoding check
 (`isCanonicalFieldValue`), the envelope frame header with its per-kind bounds
 (`inspectEnvelope`, `validateEnvelope`) and the strict `kgm1:` text form
 (`encodeText`, `decodeText`). Poseidon values (`credit_id`, `proof_digest`, the
 Payment digest, commitments, chains, roots and openings) are computed only by the
 native Rust core; Swift carries them as opaque canonical σ-field values and never
-recomputes them. Structural envelope checks carry no monetary or delivery
+recomputes them. P-256 verifies exactly the native message bytes; domain
+context is not prepended to them. Message construction checks canonical encoding and
+carries no signer or monetary authority. Structural envelope checks carry no monetary or delivery
 authority; typed decoding and verification of the message bodies remain open
 (TODO(G4)).
 

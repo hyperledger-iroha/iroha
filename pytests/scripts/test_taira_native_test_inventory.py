@@ -63,10 +63,13 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 340)
+        self.assertEqual(len(names), 346)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
+            'native borrowed paid AMX proof custody': (
+                ('sumeragi/amx/native/tests.rs', 'sumeragi/amx/native/tests/paid_borrowed_custody.rs', 'paid_borrowed_custody', 'sumeragi::amx::native::tests::paid_borrowed_custody'),
+                ('native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime',)),
             'native proposal attestation policy': (
                 ('sumeragi/executor.rs', 'sumeragi/executor_attestation_policy_tests.rs', 'attestation_policy_tests', 'sumeragi::executor::attestation_policy_tests'),
                 (
@@ -111,6 +114,15 @@ class NativeInventoryTests(unittest.TestCase):
                     'explicit_signature_preparation_rejection_retires_only_its_original_source',
                     'later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner',
                     'global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve',
+                )),
+            'native validator return custody': (
+                ('sumeragi/executor.rs', 'sumeragi/executor_validation_refusal_tests.rs', 'validation_refusal_tests', 'sumeragi::executor::validation_refusal_tests'),
+                (
+                    'original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_execution',
+                    'original_post_merge_validation_refusal_retains_worker_owner_and_exact_available_retry',
+                    'prepared_certificate_busy_retries_same_execution_after_original_reader_release',
+                    'original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry',
+                    'validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source',
                 )),
             'native local empty signature preparation': (
                 ('sumeragi/executor.rs', 'sumeragi/executor_local_signature_preparation_tests.rs', 'local_signature_preparation_tests', 'sumeragi::executor::local_signature_preparation_tests'),
