@@ -1,5 +1,9 @@
 //! Validate configurable first-release bounds on public-lane staking work.
 
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use std::path::PathBuf;
 
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
@@ -7,9 +11,11 @@ use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 
 fn parse_actual_config(inline_toml: &str) -> ActualConfig {
@@ -20,7 +26,7 @@ fn parse_actual_config(inline_toml: &str) -> ActualConfig {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .expect("bounded staking configuration should complete")
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("bounded staking configuration should be valid")
 }
 

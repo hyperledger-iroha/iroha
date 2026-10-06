@@ -1,4 +1,8 @@
 //! Validate the sole signer stream-token configuration and independent public trust.
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -6,9 +10,11 @@ use iroha_data_model::account::AccountId;
 use std::{fmt::Write as _, path::PathBuf};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
@@ -18,7 +24,7 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .map_err(|error| format!("{error:?}"))?
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .map_err(|error| format!("{error:?}"))
 }
 fn public_key_hex(seed: u8) -> String {
@@ -379,7 +385,7 @@ fn retired_sorafs_environment_aliases_remain_unvisited() {
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("retired environment aliases are not schema inputs")
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("retired environment aliases cannot alter V1 configuration");
     assert!(!actual.torii.sorafs_storage.stream_tokens.enabled);
     let unvisited = env.unvisited();

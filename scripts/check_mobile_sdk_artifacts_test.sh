@@ -63,6 +63,7 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_resume_v1
   connect_norito_kagemusha_wallet_fold_v1
   connect_norito_kagemusha_wallet_credit_status_v1
+  connect_norito_kagemusha_wallet_snapshot_v1
 )
 wallet_jni_symbols=()
 for method in revision open close activity call; do

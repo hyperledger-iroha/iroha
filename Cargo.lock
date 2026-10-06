@@ -5102,6 +5102,7 @@ dependencies = [
  "iroha_pasta",
  "iroha_plonk",
  "iroha_plonk_gadgets",
+ "iroha_plonk_recursion",
  "iroha_primitives",
  "iroha_zkp_halo2",
  "iroha_zkp_poseidon",

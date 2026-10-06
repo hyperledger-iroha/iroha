@@ -32,6 +32,7 @@ use iroha_data_model::kagemusha::{
 
 use super::{
     KagemushaWalletProviderErrorV1,
+    enrollment::KagemushaWalletFreshGenerationV1,
     layout::{KagemushaWalletCustodyDirV1, KagemushaWalletSlotIdV1},
     marker::KagemushaWalletSelectedCapabilityV1,
     store::KagemushaWalletDurableStoreV1,
@@ -391,7 +392,8 @@ impl KagemushaWalletKeyProfileV1 {
 /// Bridge mapping. Android (JNI): `KeyGenParameterSpec.Builder(alias, PURPOSE_SIGN)` with
 /// secp256r1, `DIGEST_SHA256`, `setAttestationChallenge(challenge_digest)`,
 /// `setIsStrongBoxBacked(true)` and, for [`KagemushaWalletKeyProfileV1::SecureElementOrTee`]
-/// only, a TEE retry after `StrongBoxUnavailableException`; never any user-authentication,
+/// only, a TEE retry after `StrongBoxUnavailableException`. A platform without definitive
+/// absence requires a new explicit enrollment and fresh slot for that retry. Never any user-authentication,
 /// unlocked-device, usage-count or confirmation option. iPhone (C vtable): a Secure Enclave
 /// P-256 signing key with `.privateKeyUsage`; the challenge digest is the App Attest
 /// `clientDataHash` used at E5. The alias or keychain account is derived from the slot
@@ -402,6 +404,37 @@ pub struct KagemushaWalletKeyGenerationRequestV1 {
     pub challenge_digest: [u8; 32],
     /// Hardware key policy.
     pub profile: KagemushaWalletKeyProfileV1,
+}
+
+/// How a platform can authorize creation of an enrollment payment key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KagemushaWalletKeyGenerationPolicyV1 {
+    /// A definitive absence probe permits enrollment to resume on this slot.
+    DefinitiveAbsence,
+    /// The platform cannot establish absence. Only the original live enrollment call may
+    /// consume one fresh-slot grant; a loaded intent never authorizes generation.
+    FreshEnrollmentOnly,
+}
+
+impl KagemushaWalletKeyGenerationPolicyV1 {
+    /// Tag stored in the enrollment intent, including across OS upgrades.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::DefinitiveAbsence => 0,
+            Self::FreshEnrollmentOnly => 1,
+        }
+    }
+
+    /// Decode a policy without choosing a default for unknown records.
+    #[must_use]
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::DefinitiveAbsence),
+            1 => Some(Self::FreshEnrollmentOnly),
+            _ => None,
+        }
+    }
 }
 
 /// Whether the platform keeps a rollback anchor outside the custody files.
@@ -461,11 +494,25 @@ impl KagemushaWalletSignMessageV1<'_> {
     }
 }
 
+/// Resource bound for one complete payment-key enumeration. An oversized namespace is
+/// unavailable; it is never truncated into an apparently complete inventory.
+pub const KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1: usize = 4096;
+
 /// Platform services the provider needs. Implementations must never replace an existing
 /// key or anchor entry and must never report an error as absence.
 // The anchor value codec and the selection checks against it are in `anchor.rs`.
-// TODO(G2-bridge): JNI and C-vtable adapters implement this trait for Kotlin and Swift.
 pub trait KagemushaWalletPlatformV1: Send + Sync {
+    /// Complete ascending, unique inventory of nonzero payment-key slots in this app's
+    /// platform namespace. Required when Keychain keys can survive removal of app files.
+    /// An empty inventory is definitive only within protected-storage brackets.
+    ///
+    /// # Errors
+    /// Returns unavailable for an unsupported or failed enumeration, never an empty fallback.
+    /// Providers whose uninstall clears their key namespace use file-slot enumeration instead.
+    fn key_enumerate(&self) -> Result<Vec<KagemushaWalletSlotIdV1>, KagemushaWalletUnavailableV1> {
+        Err(KagemushaWalletUnavailableV1::Platform(0))
+    }
+
     /// Probe the payment key of `slot`.
     fn key_probe(
         &self,
@@ -480,6 +527,29 @@ pub trait KagemushaWalletPlatformV1: Send + Sync {
         slot: &KagemushaWalletSlotIdV1,
         request: &KagemushaWalletKeyGenerationRequestV1,
     ) -> KagemushaWalletKeyGenerationV1;
+
+    /// Creation policy of this platform. The default preserves platforms with definitive
+    /// absence; Android keystore1 selects fresh enrollment only. Query errors never select
+    /// the fresh path as a fallback.
+    ///
+    /// # Errors
+    /// Returns the actual platform/storage failure when the policy cannot be established.
+    fn key_generation_policy(
+        &self,
+    ) -> Result<KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletUnavailableV1> {
+        Ok(KagemushaWalletKeyGenerationPolicyV1::DefinitiveAbsence)
+    }
+
+    /// Consume one Native authorization for the first attempt on a fresh random slot.
+    /// Existing entries (including unusable keys) and throwing lookups refuse generation.
+    /// A null lookup remains unknown; it never becomes an absence verdict. Once invoked,
+    /// this attempt cannot be repeated, even after an error or a process restart.
+    fn key_generate_fresh(
+        &self,
+        _grant: KagemushaWalletFreshGenerationV1<'_>,
+    ) -> KagemushaWalletKeyGenerationV1 {
+        KagemushaWalletKeyGenerationV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
+    }
 
     /// Sign `message` (exactly 32 bytes; the platform hashes it with SHA-256) with
     /// the payment key of `slot`. Only the domain-checked signers can construct the message.

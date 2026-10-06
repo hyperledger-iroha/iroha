@@ -121,6 +121,55 @@ def test_client_has_no_ordinary_native_surface() -> None:
     assert "bin" not in document
 
 
+@pytest.mark.parametrize("package", ["iroha_core", "iroha_core_zk"])
+def test_native_kaigi_owner_is_mandatory_with_defaults_disabled(package: str) -> None:
+    """Neither node feature selection nor CoreZk defaults own native Kaigi."""
+    document = _guarded_document(package)
+    assert _guarded_errors(package, document) == []
+    assert document["dependencies"]["kaigi_zk"].get("optional", False) is False
+    changed = copy.deepcopy(document)
+    changed["features"]["default"] = []
+    assert FEATURE_HYGIENE._check_mandatory_kaigi_backend(changed, _manifest_path(package)) == []
+    if package == "iroha_core":
+        assert document["features"]["zk-halo2"] == []
+        assert FEATURE_HYGIENE.EXPECTED_FEATURES[package]["zk-halo2"] == ()
+
+
+@pytest.mark.parametrize("package", ["iroha_core", "iroha_core_zk"])
+@pytest.mark.parametrize("mutation", ["remove", "optional", "dev-only", "build-only", "foreign-path", "foreign-package"])
+def test_native_kaigi_owner_rejects_optional_or_replaced_dependencies(package: str, mutation: str) -> None:
+    """A stale feature-forwarder correction must not loosen backend ownership."""
+    document = _guarded_document(package)
+    changed = copy.deepcopy(document)
+    if mutation == "remove":
+        del changed["dependencies"]["kaigi_zk"]
+    elif mutation == "optional":
+        changed["dependencies"]["kaigi_zk"]["optional"] = True
+    elif mutation in ("dev-only", "build-only"):
+        section = "dev-dependencies" if mutation == "dev-only" else "build-dependencies"
+        changed.setdefault(section, {})["kaigi_zk"] = changed["dependencies"].pop("kaigi_zk")
+    elif mutation == "foreign-path":
+        changed["dependencies"]["kaigi_zk"]["path"] = "../iroha_plonk"
+    else:
+        changed["dependencies"]["kaigi_zk"]["package"] = "foreign_kaigi"
+    assert changed != document
+    assert any(
+        "mandatory Core backend `kaigi_zk` must retain its non-optional local owner" in error
+        for error in _guarded_errors(package, changed)
+    ), (package, mutation)
+
+
+def test_node_kaigi_feature_cannot_return_as_an_optional_dependency_forwarder() -> None:
+    """Native Kaigi cannot regain a feature opt-out through the old forwarder."""
+    document = _guarded_document("iroha_core")
+    changed = copy.deepcopy(document)
+    changed["features"]["zk-halo2"] = ["dep:kaigi_zk"]
+    assert any(
+        "feature `zk-halo2` must be [], found ('dep:kaigi_zk',)" in error
+        for error in _guarded_errors("iroha_core", changed)
+    )
+
+
 def test_core_backends_reject_optional_owners_and_missing_circuit_params() -> None:
     document = _guarded_document("iroha_core_zk")
     assert _guarded_errors("iroha_core_zk", document) == []

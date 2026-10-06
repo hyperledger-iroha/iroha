@@ -3,12 +3,13 @@
 //! Native proof verification is a mandatory injected dependency. Model validation alone never
 //! authorizes a transfer. The transaction owner atomically persists transfers and permanent
 //! replay indexes; finalized load vouchers have a separate source-bound publication boundary.
-// TODO(G6): install the authenticated native package artifact loader and qualify the
-// complete online/offline flow with the production A/Ω artifact set.
+// TODO(G3/G6): qualify the complete producer catalog and online/offline flow.
+// The ledger verifier mounts only the immutable authenticated World installation.
 
 use iroha_data_model::{account::AccountId, asset::AssetBalanceScope, kagemusha::*};
 use norito::{Decode, Encode};
 
+pub(crate) mod artifacts;
 mod authorizer;
 pub use authorizer::{
     LOAD_AUTHORIZER_KEYRING_MAX_BYTES, LOAD_AUTHORIZER_MAX_KEYS, LoadAuthorizer,

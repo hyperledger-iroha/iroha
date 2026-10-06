@@ -8,11 +8,14 @@ The existing local-unit producer remains the independent admission/packaging own
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -75,20 +78,61 @@ def collect_tools(root: Path):
     return cargo, rustc, {str(path): unit.tool_digest(path) for path in paths}
 
 
-def build_environment(rustc: Path, target: Path, jobs: int):
+def build_environment(rustc: Path, target: Path, jobs: int | None):
     """Use the repository's captured Cargo configuration without inherited build overrides."""
     forbidden = [key for key in os.environ if key.startswith(("CARGO_ENCODED_", "CARGO_PROFILE_",
                   "CARGO_TARGET_", "RUSTFLAGS", "RUSTDOCFLAGS", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS",
                   "CC_", "CXX_", "AR_", "RANLIB_", "HOST_CC", "HOST_CXX", "TARGET_CC", "TARGET_CXX"))
                  or key in {"RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTFLAGS",
-                            "CARGO_BUILD_TARGET", "CC", "CXX", "AR", "RANLIB", "LD"}]
+                            "CARGO_BUILD_TARGET", "CARGO_BUILD_JOBS", "CC", "CXX", "AR", "RANLIB", "LD"}]
     unit.require(not forbidden, "unreviewed inherited compiler overrides: " + ", ".join(sorted(forbidden)))
     environment = os.environ.copy()
-    environment.update(RUSTC=str(rustc), CARGO_TARGET_DIR=str(target), CARGO_BUILD_JOBS=str(jobs))
+    environment.update(RUSTC=str(rustc), CARGO_TARGET_DIR=str(target))
+    if jobs is not None:
+        environment["CARGO_BUILD_JOBS"] = str(jobs)
     return environment
 
 
-def host_build(root: Path, output: Path, target: Path, jobs: int):
+@contextmanager
+def warm_target_custody(target: Path):
+    """Retain a warm lane under a nonblocking exclusive emitter lock.
+
+    Existing Cargo outputs are preserved. The lock is additional coordination;
+    current Cargo messages, full dep-info and source/tool/archive guards remain
+    mandatory, including when Cargo truthfully reports a cached artifact.
+    """
+    custody.original_directory(target.parent)
+    if not os.path.lexists(target):
+        target.mkdir(mode=0o700)
+    custody.original_directory(target)
+    lock = target / ".guarded-host-sdk.lock"
+    try:
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    except OSError as error:
+        raise unit.Refused("cannot open original warm-lane lock: " + str(error)) from error
+    acquired = False
+    try:
+        held = os.fstat(fd)
+        unit.require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1
+                     and held.st_uid == os.getuid(), "warm-lane lock must be an app-owned original file")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise unit.Refused("warm build lane is already in use") from error
+        acquired = True
+        identity = file_identity(lock)
+        unit.require(identity[:2] == [held.st_dev, held.st_ino], "warm-lane lock changed before admission")
+        def assert_custody():
+            unit.require(file_identity(lock) == identity, "warm-lane lock changed during the build")
+        yield assert_custody
+        assert_custody()
+    finally:
+        if acquired:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def host_build(root: Path, output: Path, target: Path, jobs: int | None):
     """Capture prospective originals, build naturally, reconcile, retain and probe actual output."""
     unit.require(sys.platform == "darwin" and platform.machine() in unit.TARGETS,
                  "guarded host emitter requires a supported macOS host")
@@ -96,10 +140,24 @@ def host_build(root: Path, output: Path, target: Path, jobs: int):
     unit.external_root(root, output)
     unit.require(target.is_absolute() and target.resolve() == target
                  and target.is_relative_to(root / "target"), "target must be a canonical worktree target directory")
-    unit.require(not os.path.lexists(target), "target must be create-only for exclusive emitter custody")
-    custody.original_directory(target.parent)
+    with warm_target_custody(target) as assert_custody:
+        pins = _host_build_locked(root, output, target, jobs, assert_custody)
+    # Context exit must pass before publishing or announcing admissible receipt pins.
+    unit.save(output / "pins.json", pins)
+    print(str(output / "pins.json"))
+
+
+def admit_under_custody(root: Path, pins: dict, assert_custody):
+    """Recheck the original lock around independent admission; publish nothing here."""
+    assert_custody()
+    unit.admit(root, pins)
+    assert_custody()
+    return pins
+
+
+def _host_build_locked(root: Path, output: Path, target: Path, jobs: int | None, assert_custody):
+    """Emit and admit only actual outputs while holding the stable target lane."""
     output.mkdir(mode=0o700)
-    target.mkdir(mode=0o700)
     cargo, rustc, tools_before = collect_tools(root)
     compiler_version = run_text([str(rustc), "-vV"], root=root)
     unit.require("host: " + unit.TARGETS[platform.machine()] in compiler_version.splitlines(),
@@ -209,14 +267,13 @@ def host_build(root: Path, output: Path, target: Path, jobs: int):
                  "export_inventory_path": str(inventory), "export_inventory_sha256": unit.digest(inventory)}
     unit.require(not changes(identities_before, source_identities(root, component["source_after"])), "source changed during retention/probe")
     unit.require(not changes(tool_ids_before, tool_identities(component["toolchain_after"])), "tools changed during retention/probe")
+    assert_custody()
     unit.check_record_semantics(record, capture, component, emitter, emitter_sha, unit.TARGETS[platform.machine()])
     unit.save(output / "static-capture.json", capture)
     unit.save(output / "component.json", component)
     pins = {role: {"path": str(path), "sha256": unit.digest(path)} for role, path in {
         "emitter": emitter, "static_capture": output / "static-capture.json", "component": output / "component.json"}.items()}
-    unit.admit(root, pins)
-    unit.save(output / "pins.json", pins)
-    print(str(output / "pins.json"))
+    return admit_under_custody(root, pins, assert_custody)
 
 
 def main():
@@ -224,10 +281,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--target-dir", required=True, type=Path)
-    parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--target-dir", required=True, type=Path,
+                        help="stable warm worktree lane; existing Cargo outputs are retained")
+    parser.add_argument("--jobs", type=int,
+                        help="explicit operator override; defaults to Cargo's native jobserver")
     args = parser.parse_args()
-    unit.require(1 <= args.jobs <= 8, "jobs must be between one and eight")
+    unit.require(args.jobs is None or 1 <= args.jobs <= 8, "jobs must be between one and eight")
     host_build(args.root, args.output, args.target_dir, args.jobs)
 
 

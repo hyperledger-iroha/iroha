@@ -1213,7 +1213,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             seal.seal_inputs(self.root, profile, self.root / "Cargo.lock")
         self.assertEqual(closure.call_args.args[1], ("armv7-linux-androideabi",))
         self.assertEqual(seal.PLATFORM_TARGETS["android"],
-                         ("aarch64-linux-android", "x86_64-linux-android"))
+                         ("aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"))
         self.assertIn("scripts/inspect_android_armv7_diagnostic.py",
                       seal.PLATFORM_ROOT_INPUTS[profile])
 

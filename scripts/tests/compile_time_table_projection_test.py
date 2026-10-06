@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "5250447491e9c0a9ec4401d6555e96e8d0aa4104cf9792e83e6538ce7228b6a6"
+    "27cc0cc9f5bc2afe391e59ea22ab07b209a5dc3f2eb0bd8fbdc39b58a53a088a"
 )
 
 
@@ -437,16 +437,29 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             type_name = re.sub(r"\s+", "", match.group(2))
             mode = match.group(4) or "register_slice"
             rows.append((scope, type_name, mode, match.group(3)))
-        self.assertEqual(len(rows), 395)
+        self.assertEqual(len(rows), 394)
         self.assertEqual(len({row[1] for row in rows}), len(rows))
         self.assertEqual(len({row[3] for row in rows}), len(rows))
         self.assertEqual(
             collections.Counter(row[2] for row in rows),
             {
-                "register_slice": 361,
-                "register": 34,
+                "register_slice": 358,
+                "register": 36,
             },
         )
+        self.assertIn(
+            ("base", "crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1",
+             "register", "iroha.kagemusha.wallet.ledger.v1"),
+            rows,
+        )
+        for retired in (
+            "TopUpKagemushaV1", "TopUpKagemushaOrdinaryV1", "RedeemKagemushaV1",
+            "ProposeKagemushaVerifierPolicyInstallV1",
+            "ProposeKagemushaVerifierReleaseInstallV1",
+            "ProposeKagemushaVerifierReleaseActivateV1",
+            "ProposeKagemushaVerifierReleaseRetireV1",
+        ):
+            self.assertFalse(any(retired in row[1] for row in rows), retired)
         canonical = "".join("\t".join(row) + "\n" for row in rows).encode()
         self.assertEqual(hashlib.sha256(canonical).hexdigest(), REGISTRY_PROVIDER_SHA256)
         registry = (

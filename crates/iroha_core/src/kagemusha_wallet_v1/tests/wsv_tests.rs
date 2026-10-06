@@ -446,6 +446,283 @@ fn unavailable_production_artifacts_retain_local_deferral_and_no_activation() {
 }
 
 #[test]
+fn verifier_install_requires_actual_reserve_owner_before_artifact_parsing() {
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let result: Result<()> = transact(&mut state, 2, |tx| {
+        let rows = tx.world.kagemusha_wallet_ledger.iter().count();
+        let result = wsv::WsvLedger::new(tx, &memory.authority)?.install_verifier_pack(
+            memory.registration.scheme.scheme_id(),
+            memory.registration.asset.asset_digest(),
+            [3; 32],
+            vec![1],
+        );
+        assert!(matches!(result, Err(Error::Execution(_))));
+        assert_eq!(tx.world.kagemusha_wallet_ledger.iter().count(), rows);
+        result
+    });
+    assert!(matches!(result, Err(Error::Execution(_))));
+}
+
+#[test]
+#[ignore = "genuine complete signed native inventory; run optimized"]
+fn genuine_verifier_install_is_immutable_exact_retry_and_same_overlay_native_owner() {
+    use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
+        InstalledVerifierPackV1, engineering_fixture,
+    };
+    let (pack, installation) = engineering_fixture::signed_inventory();
+    let mut memory = Memory::new();
+    memory.registration.scheme =
+        KagemushaWalletSchemeV1::decode_canonical(&pack.scheme, &installation.scheme_id).unwrap();
+    memory.registration.load_authorizer = certificate(
+        &memory.registration.scheme,
+        KagemushaWalletSignerRoleV1::LoadAuthorization,
+        0x34,
+    );
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let original = pack.to_canonical_bytes().unwrap();
+    InstalledVerifierPackV1::load(&original, installation).unwrap();
+    let row_key = super::super::artifacts::key(installation.scheme_id);
+    let install = |tx: &mut StateTransaction<'_, '_>, pin, original| {
+        wsv::WsvLedger::new(tx, &memory.registration.reserve)?.install_verifier_pack(
+            installation.scheme_id,
+            memory.registration.asset.asset_digest(),
+            pin,
+            original,
+        )
+    };
+    let before_rows = state.view().world.kagemusha_wallet_ledger().iter().count();
+    transact(&mut state, 2, |tx| {
+        install(tx, installation.manifest_digest, original.clone())
+    })
+    .unwrap();
+    let retained = state
+        .view()
+        .world
+        .kagemusha_wallet_ledger()
+        .get(&row_key)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        state.view().world.kagemusha_wallet_ledger().iter().count(),
+        before_rows + 1
+    );
+    let (alternate, alternate_installation) =
+        engineering_fixture::alternate_authority(&pack, installation);
+    let alternate_original = alternate.to_canonical_bytes().unwrap();
+    InstalledVerifierPackV1::load(&alternate_original, alternate_installation).unwrap();
+    assert_ne!(alternate_original, original);
+    assert!(matches!(
+        transact(&mut state, 4, |tx| install(
+            tx,
+            alternate_installation.manifest_digest,
+            alternate_original
+        )),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        state.view().world.kagemusha_wallet_ledger().get(&row_key),
+        Some(&retained)
+    );
+    transact(&mut state, 3, |tx| {
+        install(tx, installation.manifest_digest, original.clone())
+    })
+    .unwrap();
+    assert_eq!(
+        state.view().world.kagemusha_wallet_ledger().get(&row_key),
+        Some(&retained)
+    );
+    assert_eq!(
+        state.view().world.kagemusha_wallet_ledger().iter().count(),
+        before_rows + 1
+    );
+    for changed_member in 0..5 {
+        let mut changed = pack.clone();
+        let member = match changed_member {
+            0 => &mut changed.signer_certificate,
+            1 => &mut changed.manifest,
+            2 => &mut changed.steps[0].artifact.descriptor,
+            3 => &mut changed.steps[0].artifact.verifying_key,
+            _ => &mut changed.lineage.verifying_key,
+        };
+        *member.last_mut().unwrap() ^= 1;
+        assert!(
+            transact(&mut state, 4, |tx| {
+                install(
+                    tx,
+                    installation.manifest_digest,
+                    changed.to_canonical_bytes().unwrap(),
+                )
+            })
+            .is_err()
+        );
+        assert_eq!(
+            state.view().world.kagemusha_wallet_ledger().get(&row_key),
+            Some(&retained)
+        );
+    }
+    assert!(
+        transact(&mut state, 4, |tx| install(
+            tx,
+            [0x52; 32],
+            original.clone()
+        ))
+        .is_err()
+    );
+    assert!(
+        transact(&mut state, 4, |tx| {
+            wsv::WsvLedger::new(tx, &memory.registration.reserve)?.install_verifier_pack(
+                installation.scheme_id,
+                [0x53; 32],
+                installation.manifest_digest,
+                original.clone(),
+            )
+        })
+        .is_err()
+    );
+    assert_eq!(
+        state.view().world.kagemusha_wallet_ledger().get(&row_key),
+        Some(&retained)
+    );
+    // The real same-overlay verifier exists, but unrelated fixture credentials/packages
+    // cannot obtain a verdict from this engineering-only installation.
+    transact(&mut state, 4, |tx| {
+        let verifier =
+            super::super::artifacts::LedgerVerifier::from_state(tx, installation.scheme_id);
+        let activation: KagemushaWalletActivationV1 = fixture("KagemushaWalletActivationV1");
+        assert!(
+            verifier
+                .verify(
+                    &memory.registration.scheme,
+                    &activation.credential,
+                    &activation.bootstrap
+                )
+                .is_err()
+        );
+        let value: super::super::artifacts::VerifierInstallation = storage::decode(
+            tx.world.kagemusha_wallet_ledger.get(&row_key).unwrap(),
+            super::super::artifacts::CAP,
+        )?;
+        value.require_registration(&memory.registration)?;
+        let mut changed_registration = memory.registration.clone();
+        changed_registration.asset.asset_incarnation[0] ^= 1;
+        assert!(value.require_registration(&changed_registration).is_err());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn verifier_install_rechecks_live_asset_permission_and_registered_scope() {
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    transact(&mut state, 2, |tx| {
+        tx.world
+            .account_permissions
+            .remove(memory.registration.reserve.clone());
+        Ok(())
+    })
+    .unwrap();
+    let result: Result<()> = transact(&mut state, 3, |tx| {
+        let rows = tx.world.kagemusha_wallet_ledger.iter().count();
+        let result = wsv::WsvLedger::new(tx, &memory.registration.reserve)?.install_verifier_pack(
+            memory.registration.scheme.scheme_id(),
+            memory.registration.asset.asset_digest(),
+            [3; 32],
+            vec![1],
+        );
+        assert!(matches!(result, Err(Error::Execution(_))));
+        assert_eq!(tx.world.kagemusha_wallet_ledger.iter().count(), rows);
+        result
+    });
+    assert!(matches!(result, Err(Error::Execution(_))));
+    assert!(
+        transact(&mut state, 3, |tx| {
+            wsv::WsvLedger::new(tx, &memory.registration.reserve)?.install_verifier_pack(
+                memory.registration.scheme.scheme_id(),
+                [7; 32],
+                [3; 32],
+                vec![1],
+            )
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn authorized_install_cannot_turn_missing_originals_into_a_verifier() {
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    for (manifest, original) in [
+        ([0; 32], vec![1]),
+        ([3; 32], Vec::new()),
+        ([3; 32], vec![1]),
+    ] {
+        assert!(
+            transact(&mut state, 2, |tx| {
+                let rows = tx.world.kagemusha_wallet_ledger.iter().count();
+                let result = wsv::WsvLedger::new(tx, &memory.registration.reserve)?
+                    .install_verifier_pack(
+                        memory.registration.scheme.scheme_id(),
+                        memory.registration.asset.asset_digest(),
+                        manifest,
+                        original,
+                    );
+                assert!(result.is_err());
+                assert_eq!(tx.world.kagemusha_wallet_ledger.iter().count(), rows);
+                assert!(
+                    tx.world
+                        .kagemusha_wallet_ledger
+                        .get(&super::super::artifacts::key(
+                            memory.registration.scheme.scheme_id()
+                        ),)
+                        .is_none()
+                );
+                result
+            })
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn package_quota_refuses_before_native_verifier_and_ledger_activation() {
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
+    };
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let activation: KagemushaWalletActivationV1 = fixture("KagemushaWalletActivationV1");
+    let verifier = Verifier::new(true);
+    let instruction = KagemushaWalletLedgerV1::new(
+        memory.registration.scheme.scheme_id(),
+        KagemushaWalletLedgerActionV1::Activate(activation.to_canonical_bytes().unwrap()),
+    );
+    assert!(
+        transact(&mut state, 2, |tx| {
+            tx.zk.max_proof_size_bytes = 1;
+            let rows = tx.world.kagemusha_wallet_ledger.iter().count();
+            let result = crate::smartcontracts::isi::kagemusha_wallet::execute_with_verifier(
+                instruction,
+                &memory.authority,
+                tx,
+                &verifier,
+            );
+            assert!(matches!(result, Err(Error::Execution(_))));
+            assert_eq!(verifier.calls.get(), 0);
+            assert_eq!(tx.world.kagemusha_wallet_ledger.iter().count(), rows);
+            result
+        })
+        .is_err()
+    );
+}
+
+#[test]
 fn real_reserve_pays_unload_once_and_online_controls_defer_without_consuming_it() {
     use iroha_data_model::{asset::AssetTransferAvailability, isi::SetAssetTransferAvailability};
     let mut memory = Memory::new();

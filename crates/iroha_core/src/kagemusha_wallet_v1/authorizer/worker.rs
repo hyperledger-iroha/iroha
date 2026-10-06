@@ -27,7 +27,7 @@ impl Drop for LoadAuthorizerKeyV1 {
     }
 }
 
-/// Canonical private file format for the optional online publisher. Old certificate keys
+/// Canonical private file format for the required online publisher. Old certificate keys
 /// remain in this bounded ring until their already-issued loads have been published.
 #[derive(Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kagemusha_wallet_v1::LoadAuthorizerKeyringV1")]

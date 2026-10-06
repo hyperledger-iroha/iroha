@@ -12,7 +12,36 @@ result records what the platform attested. The caller selects every scope value
 authenticated policy, never from the evidence, and composes the separate checks
 below itself. The credential issuer and the enrollment and renewal routes of the
 wallet design (`specs/kagemusha_single_design_proposal.md` §2.2) are not
-implemented in this package yet.
+implemented as a serving issuer in this package yet. `wallet_enrollment.py` now composes
+the retained real verifiers for current E1 enrollment; Native signing/HTTP/DATA ownership
+and the deployed private worker remain required before issuance is enabled.
+
+## Current E1 entry points
+
+`WalletEnrollmentScope` consumes the exact current 194-byte Native-selected challenge
+transcript and separately validated payment public key. It derives the model's E1 challenge
+and payment-key binding digests, with fixed current hash vectors in `test_wallet_enrollment`.
+`verify_android_wallet_payment_key_raw` passes the challenge unchanged to KeyMint validation;
+`verify_apple_wallet_attestation_raw` and `verify_apple_wallet_enrollment_assertion` pass the
+current H values unchanged as App Attest `clientDataHash`. No old `Selection` is reconstructed
+by these current consumers and no extra SHA256 is applied to an already hashed H value.
+
+`verify_android_wallet_enrollment` independently composes actual pinned KeyMint chain/app/key
+checks, live Google revocation and opaque-token Google Play Integrity decoding. Its exact
+ordered evidence items are the original leaf-first DER chain followed by the original server
+Google decoder response, recording enrollment-time PI in the evidence digest. This item-order
+extension requires matching wire documentation before publication. It creates no periodic PI
+lease. The caller supplies a configured Google-root policy; other roots need a real separate
+revocation adapter. `verify_apple_wallet_enrollment` verifies production App Attest plus a fresh
+payment-key binding assertion using the existing durable counter store. It never fabricates
+Secure Enclave attestation, OS/patch/jailbreak fields or hardware monetary-state authority.
+
+The private Native issuer must select policy and existing account ownership, retain/consume
+the exact E1 and originals with its audited DATA journal, and sign a compact credential using
+its actual root-delegated Enrollment-role P256 key. Python request input exposes no signing
+authority. An interrupted external attempt retrieves its original; it never resets a counter
+or repeats a consumed assertion. The old Python private worker/ZIP builder/native encoders are
+absent in current source, so these verifier components alone do not enable the Core endpoint.
 
 ## Modules
 

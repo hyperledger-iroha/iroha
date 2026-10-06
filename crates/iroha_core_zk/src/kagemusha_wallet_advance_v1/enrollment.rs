@@ -5,9 +5,11 @@
 //! - **E2** the NOREPLACE capability probe (an unsupported filesystem refuses enrollment; there
 //!   is no weaker fallback), the ballast, the slot directories, the iOS `NONE` anchor and the
 //!   create-new intent holding the issuer challenge, all durable;
-//! - **E3** the payment key is generated only after a definitive `Absent` probe in the state
-//!   "intent, no marker, not abandoned", under the issuer challenge digest (the Android
-//!   attestation challenge) and the hardware key profile recorded in the intent. A key found
+//! - **E3** the payment key is generated after definitive `Absent`, or once on a freshly
+//!   sampled slot through the Native-owned fresh-generation grant on platforms which cannot
+//!   establish absence. A loaded intent never grants the latter authority. Both paths bind
+//!   the issuer challenge digest (Android attestation) and the hardware profile in the intent.
+//!   A key found
 //!   before generation, or reported as already present, abandons the slot: a key without a
 //!   marker is a used incarnation and is never initialized (spec §§3.2, 4.2 step 3); the
 //!   caller starts again with a new slot and alias;
@@ -20,8 +22,9 @@
 //!   generation-1 marker is created with NOREPLACE and competes with abandonment).
 //!
 //! An interrupted enrollment resumes the same slot: an intent whose key is still definitively
-//! absent continues while the challenge is live and is abandoned otherwise; a durable
-//! enrollment marker continues at E5.
+//! absent continues while the challenge is live and its policy permits resumption; an
+//! interrupted fresh-only intent never generates again. A durable enrollment marker continues
+//! at E5. Older intent formats are retained but refused; no implicit migration or reset occurs.
 // TODO(G2-S): E8 activation uses the retained Bootstrap completion record as its request; the
 // state owner archives the activation response.
 
@@ -41,21 +44,22 @@ use super::{
     decode_envelope_v1, encode_envelope_v1,
     layout::{
         KAGEMUSHA_WALLET_ABANDONED_NAME_V1, KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1,
-        KAGEMUSHA_WALLET_INTENT_NAME_V1, KagemushaWalletCustodyDirV1, KagemushaWalletEntryNameV1,
-        KagemushaWalletSlotIdV1, kagemusha_wallet_credential_name_v1,
-        kagemusha_wallet_fixed_name_v1, kagemusha_wallet_prepare_slot_dirs_v1,
-        kagemusha_wallet_probe_noreplace_v1, kagemusha_wallet_require_published_v1,
-        kagemusha_wallet_slot_dir_v1,
+        KAGEMUSHA_WALLET_INTENT_NAME_V1, KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1,
+        KagemushaWalletCustodyDirV1, KagemushaWalletEntryNameV1, KagemushaWalletSlotIdV1,
+        kagemusha_wallet_credential_name_v1, kagemusha_wallet_fixed_name_v1,
+        kagemusha_wallet_prepare_slot_dirs_v1, kagemusha_wallet_probe_noreplace_v1,
+        kagemusha_wallet_require_published_v1, kagemusha_wallet_slot_dir_v1,
     },
     marker::{
         KagemushaWalletMarkerPublicationV1, KagemushaWalletMarkerRecordV1,
         kagemusha_wallet_publish_marker_v1,
     },
     platform::{
-        KagemushaWalletAnchorPolicyV1, KagemushaWalletFsV1, KagemushaWalletKeyGenerationRequestV1,
-        KagemushaWalletKeyGenerationV1, KagemushaWalletKeyProfileV1, KagemushaWalletNotPublishedV1,
-        KagemushaWalletPlatformV1, KagemushaWalletProbeV1, KagemushaWalletPublishOutcomeV1,
-        KagemushaWalletReadV1, KagemushaWalletUnavailableV1, kagemusha_wallet_boot_stamp_v1,
+        KagemushaWalletAnchorPolicyV1, KagemushaWalletFsV1, KagemushaWalletKeyGenerationPolicyV1,
+        KagemushaWalletKeyGenerationRequestV1, KagemushaWalletKeyGenerationV1,
+        KagemushaWalletKeyProfileV1, KagemushaWalletNotPublishedV1, KagemushaWalletPlatformV1,
+        KagemushaWalletProbeV1, KagemushaWalletPublishOutcomeV1, KagemushaWalletReadV1,
+        KagemushaWalletUnavailableV1, kagemusha_wallet_boot_stamp_v1,
     },
     provider::{KagemushaWalletProviderV1, KagemushaWalletSlotStatusV1},
     reconcile::KagemushaWalletSlotAbandonReasonV1,
@@ -64,6 +68,8 @@ use super::{
 
 /// Version of the enrollment-phase records.
 pub const KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1: u16 = 1;
+/// Intent codec including creation policy; older layouts are not silently reinterpreted.
+pub const KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1: u16 = 2;
 /// Maximum encoded intent or abandoned-slot record.
 pub const KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1: usize = 1_024;
 /// Maximum retained credential request.
@@ -71,13 +77,63 @@ pub const KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1: usize = 131_072;
 /// Envelope overhead of the request and credential records.
 const RECORD_OVERHEAD_BYTES: usize = 512;
 
+/// One live, move-only authorization for a newly sampled enrollment slot.
+///
+/// Only the Native enrollment owner constructs this after its original create-new intent
+/// and generation-attempt writes both report durable publication. It is not deserializable
+/// or cloneable and cannot be reconstructed from a journal, caller DTO or alias. The borrow
+/// keeps the exact platform owner alive until this authorization is consumed.
+///
+/// This is creation authority, not an absence verdict or a hardware anti-rollback claim.
+pub struct KagemushaWalletFreshGenerationV1<'a> {
+    owner: &'a dyn KagemushaWalletPlatformV1,
+    slot: KagemushaWalletSlotIdV1,
+    request: KagemushaWalletKeyGenerationRequestV1,
+}
+
+impl<'a> KagemushaWalletFreshGenerationV1<'a> {
+    /// Called only from the original enrollment call after both create-new publications.
+    fn new(
+        owner: &'a dyn KagemushaWalletPlatformV1,
+        slot: KagemushaWalletSlotIdV1,
+        request: KagemushaWalletKeyGenerationRequestV1,
+    ) -> Self {
+        Self {
+            owner,
+            slot,
+            request,
+        }
+    }
+
+    /// Consume the grant on the exact platform owner which received it. Adapters must call
+    /// this before crossing FFI, and must never retry or replace an occupied alias.
+    ///
+    /// # Errors
+    /// Returns unavailable for another owner; the rejected grant is still consumed.
+    pub fn consume(
+        self,
+        owner: &dyn KagemushaWalletPlatformV1,
+    ) -> Result<
+        (
+            KagemushaWalletSlotIdV1,
+            KagemushaWalletKeyGenerationRequestV1,
+        ),
+        KagemushaWalletUnavailableV1,
+    > {
+        if !std::ptr::addr_eq(self.owner, owner) {
+            return Err(KagemushaWalletUnavailableV1::Platform(0));
+        }
+        Ok((self.slot, self.request))
+    }
+}
+
 /// Durable enrollment intent of one slot (E2; create-new only).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::IntentV1")]
+#[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::IntentV2")]
 pub struct KagemushaWalletIntentV1 {
-    /// Version; exactly [`KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1`].
+    /// Version; exactly [`KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1`].
     pub version: u16,
     /// Slot.
     pub slot: [u8; 32],
@@ -90,9 +146,22 @@ pub struct KagemushaWalletIntentV1 {
     /// policy; a resumed enrollment generates under the same profile. The key handle (alias or
     /// keychain account) is derived from the slot.
     pub profile: u8,
+    /// Creation policy chosen at the original enrollment, never recomputed on resume.
+    pub generation_policy: u8,
 }
 
 impl KagemushaWalletIntentV1 {
+    /// Creation policy retained across process restarts and OS upgrades.
+    ///
+    /// # Errors
+    /// `UnavailableCustodyData("intent")` for an unknown tag.
+    pub fn key_generation_policy(
+        &self,
+    ) -> Result<KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletProviderErrorV1> {
+        KagemushaWalletKeyGenerationPolicyV1::from_tag(self.generation_policy)
+            .ok_or(KagemushaWalletProviderErrorV1::UnavailableCustodyData { object: "intent" })
+    }
+
     /// Anchor kind of the slot.
     ///
     /// # Errors
@@ -114,6 +183,19 @@ impl KagemushaWalletIntentV1 {
         KagemushaWalletKeyProfileV1::from_tag(self.profile)
             .ok_or(KagemushaWalletProviderErrorV1::UnavailableCustodyData { object: "intent" })
     }
+}
+
+/// Durable notice that the original fresh enrollment call consumed its generation attempt.
+/// This is recovery data, never grant authority, absence proof, or an anti-rollback anchor.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::KeyGenerationAttemptV1")]
+pub(super) struct KagemushaWalletKeyGenerationAttemptV1 {
+    version: u16,
+    slot: [u8; 32],
+    challenge_digest: [u8; 32],
+    profile: u8,
 }
 
 /// Abandoned-slot record (create-new only): the slot and its key are never used again.
@@ -310,17 +392,22 @@ where
         if !self.ballast_present()? && !self.write_ballast()? {
             return Err(KagemushaWalletProviderErrorV1::NoSpace);
         }
+        let generation_policy = self
+            .platform
+            .key_generation_policy()
+            .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
         let slot = KagemushaWalletSlotIdV1::generate()
             .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
         kagemusha_wallet_prepare_slot_dirs_v1(&self.store, &slot)?;
         kagemusha_wallet_create_anchor_v1(&self.platform, &slot)?;
         // The slot's anchor kind is fixed here, once; every marker of the slot carries it.
         let intent = KagemushaWalletIntentV1 {
-            version: KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1,
+            version: KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1,
             slot: slot.0,
             challenge: *challenge,
             anchor_kind: self.platform.anchor_policy().tag(),
             profile: profile.tag(),
+            generation_policy: generation_policy.tag(),
         };
         let bytes = encode_envelope_v1(&intent, KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1)?;
         match self.store.write_new(
@@ -333,6 +420,40 @@ where
                 return Ok(KagemushaWalletEnrollmentStepV1::Pending { slot });
             }
             outcome => kagemusha_wallet_require_published_v1(outcome)?,
+        }
+        if generation_policy == KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly {
+            // This branch is reachable only from the original CSPRNG slot and original
+            // write_new(Published) above. Neither resume nor a loaded attempt can enter it.
+            self.require_storage()?;
+            kagemusha_wallet_require_anchor_policy_v1(&self.platform, intent.anchor()?)?;
+            let request = KagemushaWalletKeyGenerationRequestV1 {
+                challenge_digest: intent.challenge.challenge_digest(),
+                profile,
+            };
+            let attempt = KagemushaWalletKeyGenerationAttemptV1 {
+                version: KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1,
+                slot: slot.0,
+                challenge_digest: request.challenge_digest,
+                profile: profile.tag(),
+            };
+            let bytes = encode_envelope_v1(&attempt, KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1)?;
+            match self.store.write_new(
+                &kagemusha_wallet_slot_dir_v1(&slot),
+                &kagemusha_wallet_fixed_name_v1(KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1),
+                &bytes,
+            ) {
+                KagemushaWalletPublishOutcomeV1::Published => {}
+                KagemushaWalletPublishOutcomeV1::Uncertain(_) => {
+                    return Ok(KagemushaWalletEnrollmentStepV1::Pending { slot });
+                }
+                outcome => kagemusha_wallet_require_published_v1(outcome)?,
+            }
+            self.require_storage()?;
+            let grant = KagemushaWalletFreshGenerationV1::new(&self.platform, slot, request);
+            let generated = self.platform.key_generate_fresh(grant);
+            // A storage error after generation leaves this attempt consumed and uncertain.
+            self.require_storage()?;
+            return self.finish_enrollment(&slot, &intent, generated);
         }
         self.continue_enrollment(&slot, &intent)
     }
@@ -359,6 +480,14 @@ where
                         .ok_or(KagemushaWalletProviderErrorV1::Unavailable(
                             KagemushaWalletUnavailableV1::Busy,
                         ))?;
+                if intent.key_generation_policy()?
+                    == KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly
+                {
+                    // A fresh generation grant cannot be recreated, even when an OS upgrade
+                    // can now report definitive absence. The caller may explicitly request
+                    // another enrollment with a new slot; no key or funded marker is reset.
+                    return Ok(KagemushaWalletEnrollmentStepV1::Pending { slot: *slot });
+                }
                 // The intent may come from an uncertain write of this boot: make it durable
                 // before a key is generated under it.
                 let bytes = encode_envelope_v1(&intent, KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1)?;
@@ -398,6 +527,11 @@ where
         slot: &KagemushaWalletSlotIdV1,
         intent: &KagemushaWalletIntentV1,
     ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        if intent.key_generation_policy()?
+            != KagemushaWalletKeyGenerationPolicyV1::DefinitiveAbsence
+        {
+            return Ok(KagemushaWalletEnrollmentStepV1::Pending { slot: *slot });
+        }
         let anchor = intent.anchor()?;
         let request = KagemushaWalletKeyGenerationRequestV1 {
             challenge_digest: intent.challenge.challenge_digest(),
@@ -416,7 +550,19 @@ where
                 return Err(KagemushaWalletProviderErrorV1::Unavailable(reason));
             }
         }
-        let payment_key = match self.platform.key_generate(slot, &request) {
+        let generated = self.platform.key_generate(slot, &request);
+        self.finish_enrollment(slot, intent, generated)
+    }
+
+    /// E4 after exactly one platform generation result. This never generates or retries.
+    fn finish_enrollment(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        intent: &KagemushaWalletIntentV1,
+        generated: KagemushaWalletKeyGenerationV1,
+    ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        let anchor = intent.anchor()?;
+        let payment_key = match generated {
             KagemushaWalletKeyGenerationV1::Generated(payment_key) => payment_key,
             KagemushaWalletKeyGenerationV1::AlreadyPresent => {
                 self.abandon_slot(slot, KagemushaWalletSlotAbandonReasonV1::KeyWithoutMarker)?;
@@ -686,10 +832,11 @@ where
         )?;
         match intent {
             Some(intent)
-                if intent.version == KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1
+                if intent.version == KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1
                     && intent.slot == slot.0
                     && intent.anchor().is_ok()
                     && intent.key_profile().is_ok()
+                    && intent.key_generation_policy().is_ok()
                     && intent.challenge.scheme_id == self.scheme_id
                     && intent.challenge.validate().is_ok() =>
             {
@@ -699,6 +846,36 @@ where
                 Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData { object: "intent" })
             }
             None => Ok(None),
+        }
+    }
+
+    /// Validate a recognized attempt record against its intent. It grants no authority.
+    pub(super) fn validate_generation_attempt(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+        intent: &KagemushaWalletIntentV1,
+    ) -> Result<(), KagemushaWalletProviderErrorV1> {
+        let attempt = read_record::<F, KagemushaWalletKeyGenerationAttemptV1>(
+            &self.store,
+            &kagemusha_wallet_slot_dir_v1(slot),
+            &kagemusha_wallet_fixed_name_v1(KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1),
+            KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1,
+            "key_generation_attempt",
+        )?;
+        match attempt {
+            Some(attempt)
+                if attempt.version == KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1
+                    && attempt.slot == slot.0
+                    && attempt.challenge_digest == intent.challenge.challenge_digest()
+                    && attempt.profile == intent.profile
+                    && intent.key_generation_policy()?
+                        == KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly =>
+            {
+                Ok(())
+            }
+            _ => Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                object: "key_generation_attempt",
+            }),
         }
     }
 

@@ -26,3 +26,6 @@
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletNativeReplyV1 { *; }
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletNativeV1 { *; }
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletCallV1 { *; }
+
+# Rust constructs the typed snapshot holder by its literal name and constructor descriptor.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletSnapshotReplyV1 { *; }

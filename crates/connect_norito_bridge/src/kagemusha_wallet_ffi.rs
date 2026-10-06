@@ -181,6 +181,7 @@ fn completion(value: Option<state::Completion>) -> Response {
     }
 }
 trait Wallet: Send {
+    fn snapshot(&mut self) -> Result<state::Snapshot>;
     fn commit(&mut self, frozen: state::FrozenTransition) -> Result<Response>;
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response>;
     fn resume(&mut self) -> Result<Response>;
@@ -197,6 +198,9 @@ where
     P: advance::KagemushaWalletPlatformV1,
     N: state::NativeProofs + Send,
 {
+    fn snapshot(&mut self) -> Result<state::Snapshot> {
+        Ok(state::Coordinator::snapshot(self)?)
+    }
     fn commit(&mut self, frozen: state::FrozenTransition) -> Result<Response> {
         Ok(completion(Some(self.commit(frozen)?)))
     }
@@ -329,16 +333,20 @@ pub(crate) fn activity(id: u64, foreground: bool, charging: bool) -> Result<()> 
     owner.scheduler.set_activity(foreground, charging);
     Ok(())
 }
-fn with_wallet(
+fn with_wallet<T>(
     id: u64,
     payment: bool,
-    action: impl FnOnce(&mut dyn Wallet) -> Result<Response>,
-) -> Result<Response> {
+    action: impl FnOnce(&mut dyn Wallet) -> Result<T>,
+) -> Result<T> {
     let owner = owner(id)?;
     // Signal and join before the owner lock. Reversing these locks deadlocks against proving.
     let _priority = payment.then(|| owner.scheduler.payment());
     let mut guard = owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?;
     action(guard.as_deref_mut().ok_or(Failure::code(CLOSED))?)
+}
+pub(crate) fn snapshot(id: u64) -> Result<state::Snapshot> {
+    // A view does not cancel a useful background fold. Call off the UI thread.
+    with_wallet(id, false, |wallet| wallet.snapshot())
 }
 pub(crate) fn commit(id: u64, bytes: &[u8]) -> Result<Response> {
     if bytes.len() > FROZEN_MAX {

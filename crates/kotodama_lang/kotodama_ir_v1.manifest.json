@@ -6,6 +6,28 @@
     "owner": "crates/kotodama_lang/src/lib.rs",
     "declaration": "pub mod ir;"
   },
+  "production_modules": [
+    {
+      "owner": "crates/kotodama_lang/src/ir.rs",
+      "declaration": "mod sum;",
+      "source": "crates/kotodama_lang/src/ir/sum.rs",
+      "bytes": 8860,
+      "sha256": "15b789d3490328433b2084fecbf01878e703080d55014fde4e194be970f1af6e",
+      "functions": [
+        "sum_layout_for_type",
+        "sum_active_payload_type",
+        "emit_sum_value",
+        "load_sum_tag",
+        "load_sum_payload",
+        "payload_word_address"
+      ],
+      "tests": [
+        "sum::tests::payload_addresses_cross_the_immediate_boundary_without_truncation",
+        "sum::tests::overflowing_payload_addresses_record_an_error_without_emitting_access",
+        "sum::tests::wide_payload_construction_and_loading_share_the_complete_address_range"
+      ]
+    }
+  ],
   "public_api": [
     "Temp",
     "Label",
@@ -246,7 +268,6 @@
     "\"actor_sign\"",
     "\"aggregate return word types checked\"",
     "\"canonical Bool key encodes\"",
-    "\"canonical sum tag fits int\"",
     "\"checked state parameter\"",
     "\"compiler could not allocate the bounded stack required to lower source nesting\"",
     "\"compiler-owned ListError schema encodes\"",
@@ -297,13 +318,10 @@
     "\"internal error: cannot rebuild List element\"",
     "\"internal error: cannot rebuild aggregate parameter `{}`\"",
     "\"internal error: cannot rebuild branch result\"",
-    "\"internal error: cannot rebuild sum payload\"",
     "\"internal error: canonical equality cannot compare `{leaf:?}`\"",
     "\"internal error: current block not finished\"",
     "\"internal error: invalid List layout\"",
     "\"internal error: invalid propagation return layout\"",
-    "\"internal error: invalid sum layout\"",
-    "\"internal error: invalid sum tag\"",
     "\"internal error: loop product word count mismatch\"",
     "\"internal error: malformed decimal-to-int intrinsic\"",
     "\"internal error: missing ABI word {index} for parameter `{}`\"",
@@ -318,11 +336,6 @@
     "\"internal error: propagation operand is not a sum\"",
     "\"internal error: recoverable numeric cast has non-Result type\"",
     "\"internal error: rounded numeric division requires dividend, divisor, scale, and mode\"",
-    "\"internal error: sum active payload mismatch\"",
-    "\"internal error: sum active payload width mismatch\"",
-    "\"internal error: sum allocation exceeds V1 limits\"",
-    "\"internal error: sum payload offset exceeds V1 limits\"",
-    "\"internal error: sum payload word count mismatch\"",
     "\"internal error: transfer_batch lost its bounded list type\"",
     "\"internal error: typed List literal lacks List type\"",
     "\"internal error: {error}\"",
@@ -975,12 +988,12 @@
     {
       "name": "emit_load64_imm",
       "sha256": "1da7afdd041c79382c39638966be626cea82bd9f6a3f2aa5691ff0d8a70156d0",
-      "calls": 17
+      "calls": 16
     },
     {
       "name": "emit_store64_imm",
       "sha256": "a24a5988a8ca824547c1a56a87a12b0a01747334a249178178833312393c9c59",
-      "calls": 10
+      "calls": 9
     },
     {
       "name": "emit_tuple_get",
@@ -1000,7 +1013,7 @@
     {
       "name": "emit_alloc",
       "sha256": "4680cf37d368d00ac0c2e4b9da8d94850913b9294242ca4795eb5620c5d2edf2",
-      "calls": 4
+      "calls": 3
     },
     {
       "name": "emit_pointer_to_norito",
@@ -1133,21 +1146,6 @@
       "rebuild_function_value_from_words",
       "emit_tuple_pack",
       "emit_tuple_pack(ctx,items)"
-    ],
-    [
-      "emit_sum_value",
-      "emit_alloc",
-      "emit_alloc(ctx,byte_count)"
-    ],
-    [
-      "emit_sum_value",
-      "emit_store64_imm",
-      "emit_store64_imm(ctx,value,0,tag_temp)"
-    ],
-    [
-      "load_sum_tag",
-      "emit_load64_imm",
-      "emit_load64_imm(ctx,value,0)"
     ],
     [
       "emit_data_ref",
@@ -1926,7 +1924,7 @@
   ],
   "take2_routing_sha256": "2d5f3d141b1f8fd640547ae19dba829cc68b8fd972c90d940831a0c2d742fa14",
   "source": {
-    "bytes": 406905,
-    "sha256": "abd38288f28ccc615dfc49563cad4db3da55dbd90762986a4ea9e8c508fdc8ce"
+    "bytes": 402506,
+    "sha256": "94a55a2b7377ba1566b66a3879b725f8d4059964b35dcfdbb2afff9c293d7ec7"
   }
 }

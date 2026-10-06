@@ -285,46 +285,51 @@ with concurrent source changes. All 52 failed cases retain ordinary coverage
 and require current-source validation. Full current ordinary and merged-source
 qualification remain open. The derive library, strict JSON
 and UI regressions pass, preserving diagnostics.
-SDK Native custody and genuine production proving are mandatory even with SDK
-defaults disabled; assembly tools remain explicit `dev-tools` targets. FASTPQ
-uses the existing STARK feature. The current manifest inventory has 127 source
-manifests and 121 workspace members, protecting the inactive Wayland patch.
-On the current recorded manifest cut, all 72 source-cost measurements match
-exactly; all 21 locked offline boundaries, feature hygiene, the legacy-codec guard
-and 309 checker controls pass. Shipping Oracle denials and the sole aggregate-model
-test exception remain intact. The reviewed cost changes include the model’s live
-Pasta field/hash dependency, direct allocation-owner dependencies and the proof
-crate’s development-only timing dependency. The unused direct daemon Sumeragi
-edge is removed; Core retains consensus ownership. Later Model/Torii repairs leave
-the graph unchanged. The vendor Tokio test feature refreshes the manifest
-fingerprint with every cost limit unchanged. Resolved metadata requires canonical
-`deps` and rejects malformed entries. Native qualification and requalification of changed selected
-inputs remain required.
+SDK custody and genuine proving qualification follow the canonical G1, Advance
+and PIPA owners; their bridge, SDK and ledger integration remains open. FASTPQ
+uses the existing STARK feature. The recorded signed optimization validation baseline is
+`4486aa78661b8f289d21238e034fc2ece10600d8`. Recorded static source-graph
+discovery lists 124 workspace members; current resolved Cargo metadata remains
+unqualified. Source-cost and feature-hygiene checks passed on that recorded cut
+with every cost limit exact.
+Recorded dependency boundaries, legacy-codec and checker controls retain their
+input cuts. Shipping Oracle denials and the aggregate-model test exception
+remain intact. Core retains consensus ownership after the unused direct daemon
+Sumeragi edge was removed.
 
 ABI argument-record and static numeric encoding belong to `ivm_abi`; consumers
 import the owner directly. IVM retains decoding, gas and memory custody.
-Surface/toolchain inherit workspace lints and Surface APIs are documented.
-Earlier Model/ABI/Surface and Core ZK results retain their recorded source and
-feature scope. Current strict Core ZK, toolchain, direct IVM/SDK, Wallet and
-workspace validation remain open. The 52 failed ordinary Privacy cases remain
-ordinary tests and require current regressions followed by the full suite.
+Compiler/toolchain, all 14 ABI/IVM phases, direct SDK consumers and workspace
+qualification remain open. Core ZK requires current strict default/no-default
+libraries, test-feature library/group coverage and canonical proof-owner and
+consumer checks. Its retired real-proof-harness feature is not a target.
+FASTPQ's ordinary runtime and raw-field regression remain pending. Privacy's
+previous failures remain ordinary tests and require current regressions followed
+by the full ordinary suite with stock ignores retained.
 
-Norito passes 581 ordinary tests, the original ignored snapshot utility and eight
-public heap controls on its recorded cut, before later Model/Torii changes.
-Journal strict lint and all 11 unfiltered ordinary tests pass on their current
-selected inputs, with zero ignores. Strict lint preserves 1,476 protected inputs;
-the test interval preserves all 1,490 inputs, invocation, tools and executable
-custody.
-Wallet rejects unknown native material in its shared retained reader before
-decoding, signing or HTTP. Its prospective macOS inventory retains all 191 earlier
-names and 15 custody controls across 216 cases; native qualification remains open.
-Foundation CI selection passes all 88 controls. The compiler fixture seal is
-current: 308 includes and 616 test names, with all 43 source-reader controls
-passing on their finite recorded cut. These reader tests do not qualify compiled
-bytecode. Executable metadata freshness passes on its recorded cut; current
-workspace, merged-candidate and timing qualification remain open. The
-[optimization goals](specs/compile_bloat_optimization_goals.md) retain completion
-criteria and separate pinned-runner resource requirements.
+The generic Norito array correction is applied and formatted, preserving explicit
+raw-field layouts and charging actual owned allocations once. Complete
+Primitives/P2P/Manifest and Norito/derive/Crypto suites passed on the recorded
+cut with stable source.
+The latter Cargo run succeeds; its original outer failure from a changed Git
+baseline is preserved. Independent comparison now joins both native Source/Git
+captures and the reviewed application to the genuine formatter baseline at that
+recorded cut. Subsequent commits and selected-input changes require fresh
+qualification. Broader native tool, artifact and consumer qualification remains
+open. Earlier
+Model and Python passes retain their
+original inputs; full current requalification remains pending. Drifted script
+runs remain diagnostic and interrupted unknown exits remain unresolved.
+Journal's recorded selected checks require requalification after selected input
+changes. Wallet rejects unknown native material before decoding, signing or
+HTTP; its expanded registry preserves prior cases and custody/frame controls,
+with Wallet and SDK native qualification pending. Compiler fixture/source-reader
+and CI controls retain their recorded scopes; compiled bytecode and actual CI
+execution remain unqualified. Executable metadata freshness passes on its
+recorded cut. Current workspace, merged-candidate, release and O7 timing
+qualification remain open. The
+[optimization goals](specs/compile_bloat_optimization_goals.md) retain all seven
+completion criteria and separate pinned-runner resource requirements.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit

@@ -877,6 +877,46 @@ fn node_key_admission_follows_the_allowlist_and_tunables() {
 }
 
 #[test]
+fn publisher_custody_admission_is_exact_for_every_compiled_profile() {
+    for id in ProfileId::ALL {
+        let profile = Profile::compiled(id).unwrap();
+        for admitted in [
+            "kagemusha_load_authorizer.keyring_file",
+            "kagemusha_load_authorizer.submitter_key_file",
+        ] {
+            assert!(profile.admits_node_key(admitted), "{id}: {admitted}");
+        }
+        for rejected in [
+            "kagemusha_load_authorizer",
+            "kagemusha_load_authorizer.enabled",
+            "kagemusha_load_authorizer.keyring",
+            "kagemusha_load_authorizer.submitter_key",
+            "kagemusha_load_authorizer.poll_interval_ms",
+            "kagemusha_load_authorizer.page_size",
+            "kagemusha_load_authorizer.block_bytes",
+            "kagemusha_load_authorizer.journal_bytes",
+            "kagemusha_load_authorizer.block_count",
+            "kagemusha_load_authorizer.allocated_bytes",
+            "kagemusha_load_authorizer.transaction_ttl_ms",
+            "kagemusha_load_authorizer.charge_limits",
+            "kagemusha_load_authorizer.keyring_file.inline",
+            "kagemusha_load_authorizer.submitter_key_file.inline",
+        ] {
+            assert!(!profile.admits_node_key(rejected), "{id}: {rejected}");
+        }
+        assert!(
+            !profile
+                .static_config()
+                .contains_key("kagemusha_load_authorizer")
+        );
+        assert!(!profile.policy().contains_key("kagemusha_load_authorizer"));
+        for role in ProfileRole::ALL {
+            assert!(!profile.role(role).contains_key("kagemusha_load_authorizer"));
+        }
+    }
+}
+
+#[test]
 fn layers_are_ordered_static_derive_policy_role() {
     let profile = sora();
     let geometry = profile.derive(4).unwrap();

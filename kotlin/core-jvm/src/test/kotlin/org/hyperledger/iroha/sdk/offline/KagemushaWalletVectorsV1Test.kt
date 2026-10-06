@@ -639,6 +639,127 @@ class KagemushaWalletVectorsV1Test {
         assertEquals(KagemushaWalletMessageKindV1.entries.toSet(), kinds)
     }
 
+    @Test fun `every message kind rejects its own unsupported or malformed version`() {
+        val covered = HashSet<KagemushaWalletMessageKindV1>()
+        for (vector in vectors.array("envelopes").map { it.jsonObject }) {
+            val frame = vector.hex("canonical_hex")
+            val kind = assertNotNull(KagemushaWalletMessageKindV1.fromWireTag(vector.int("tag")))
+            covered.add(kind)
+            val path = versionPath(kind)
+            for (version in listOf(0, 2, 65_535)) {
+                val changed = withReplacedMessageField(frame, path, le16(version))
+                assertRebuiltEnvelopeHeader(changed)
+                val rejected = assertFailsWith<IllegalArgumentException>("${vector.text("variant")} version $version") {
+                    KagemushaWalletWireV1.inspectEnvelope(changed)
+                }
+                assertTrue(rejected.message.orEmpty().contains("message version is unsupported"), rejected.message)
+            }
+            for (length in listOf(0, 1, 3)) {
+                val changed = withReplacedMessageField(frame, path, le16(1).copyOf(length))
+                assertRebuiltEnvelopeHeader(changed)
+                val rejected = assertFailsWith<IllegalArgumentException>("${vector.text("variant")} version length $length") {
+                    KagemushaWalletWireV1.inspectEnvelope(changed)
+                }
+                assertTrue(rejected.message.orEmpty().contains("message version field is not two bytes"), rejected.message)
+            }
+        }
+        assertEquals(KagemushaWalletMessageKindV1.entries.toSet(), covered)
+    }
+
+    @Test fun `every message kind rejects malformed decode-time scheme lengths`() {
+        val covered = HashSet<KagemushaWalletMessageKindV1>()
+        for (vector in vectors.array("envelopes").map { it.jsonObject }) {
+            val frame = vector.hex("canonical_hex")
+            val kind = assertNotNull(KagemushaWalletMessageKindV1.fromWireTag(vector.int("tag")))
+            covered.add(kind)
+            val path = schemePath(kind)
+            val scheme = fieldAt(envelopeMessage(frame), path)
+            assertEquals(32, scheme.size)
+            for (length in listOf(0, 31, 33)) {
+                val changed = withReplacedMessageField(frame, path, scheme.copyOf(length))
+                assertRebuiltEnvelopeHeader(changed)
+                val rejected = assertFailsWith<IllegalArgumentException>("${vector.text("variant")} scheme length $length") {
+                    KagemushaWalletWireV1.inspectEnvelope(changed)
+                }
+                assertTrue(rejected.message.orEmpty().contains("decode-time scheme field is not 32 bytes"), rejected.message)
+            }
+        }
+        assertEquals(KagemushaWalletMessageKindV1.entries.toSet(), covered)
+    }
+
+    @Test fun `selected message fields reject missing overrun and noncanonical unsigned lengths`() {
+        val covered = HashSet<KagemushaWalletMessageKindV1>()
+        for (vector in vectors.array("envelopes").map { it.jsonObject }) {
+            val frame = vector.hex("canonical_hex")
+            val kind = assertNotNull(KagemushaWalletMessageKindV1.fromWireTag(vector.int("tag")))
+            covered.add(kind)
+            for ((label, path) in listOf("version" to versionPath(kind), "scheme" to schemePath(kind))) {
+                val field = fieldAt(envelopeMessage(frame), path)
+                val parentPath = path.dropLast(1)
+                val index = path.last()
+                val parent = fieldAt(envelopeMessage(frame), parentPath)
+                val canonicalLength = Varint.encode(field.size.toLong())
+                check(canonicalLength.size == 1)
+                val malformed = listOf(
+                    "noncanonical" to byteArrayOf((canonicalLength[0].toInt() or 0x80).toByte(), 0),
+                    // Canonical unsigned 2^63 + field.size. It must not become a negative Long
+                    // that passes a one-sided bound and truncates back to the small field size.
+                    "unsigned high bit" to byteArrayOf((field.size or 0x80).toByte()) +
+                        ByteArray(8) { 0x80.toByte() } + byteArrayOf(1),
+                    "record overrun" to Varint.encode(parent.size.toLong() + 1),
+                )
+                for ((case, prefix) in malformed) {
+                    val changed = withReplacedMessageField(frame, path, field, prefix)
+                    assertRebuiltEnvelopeHeader(changed)
+                    assertFailsWith<IllegalArgumentException>("${vector.text("variant")} $label $case") {
+                        KagemushaWalletWireV1.inspectEnvelope(changed)
+                    }
+                }
+                for ((case, suffix) in listOf("missing" to byteArrayOf(), "truncated length" to byteArrayOf(0x80.toByte()))) {
+                    val changed = withChangedMessageRecord(frame, parentPath) { record ->
+                        encodeRecord(recordFields(record).take(index)) + suffix
+                    }
+                    assertRebuiltEnvelopeHeader(changed)
+                    assertFailsWith<IllegalArgumentException>("${vector.text("variant")} $label $case") {
+                        KagemushaWalletWireV1.inspectEnvelope(changed)
+                    }
+                }
+                // Rebuild each intermediate containing record as empty, preserving the outer
+                // framing and checksum. Deep Payment/Lineage and Offer/Request paths must fail.
+                for (depth in 1 until path.size) {
+                    val changed = withChangedMessageRecord(frame, path.take(depth)) { byteArrayOf() }
+                    assertRebuiltEnvelopeHeader(changed)
+                    assertFailsWith<IllegalArgumentException>("${vector.text("variant")} missing $label ancestor $depth") {
+                        KagemushaWalletWireV1.inspectEnvelope(changed)
+                    }
+                }
+            }
+        }
+        assertEquals(KagemushaWalletMessageKindV1.entries.toSet(), covered)
+    }
+
+    @Test fun `carrier version checks do not authenticate unrelated nested credential versions`() {
+        // The Request's own body version is checked at (0,0). The receiver credential body
+        // version at (1,0,0), its signature and all financial proofs remain typed-wallet scope.
+        val changed = withReplacedMessageField(envelope("Request"), listOf(1, 0, 0), le16(2))
+        assertRebuiltEnvelopeHeader(changed)
+        assertEquals(KagemushaWalletMessageKindV1.REQUEST, KagemushaWalletWireV1.inspectEnvelope(changed).kind)
+    }
+
+    @Test fun `exchange record parsing rejects unsigned high-bit lengths beyond inspected paths`() {
+        val request = envelope("Request")
+        val payment = envelope("Payment")
+        val signature = recordFields(envelopeMessage(request))[4]
+        assertEquals(64, signature.size)
+        val prefix = byteArrayOf(0xc0.toByte()) + ByteArray(8) { 0x80.toByte() } + byteArrayOf(1)
+        val changed = withReplacedMessageField(request, listOf(4), signature, prefix)
+        assertRebuiltEnvelopeHeader(changed)
+        // The selected body version/scheme remain valid; the fixed complete Request record
+        // parser must reject the canonical u64 length instead of truncating it to64.
+        assertEquals(KagemushaWalletMessageKindV1.REQUEST, KagemushaWalletWireV1.inspectEnvelope(changed).kind)
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletWireV1.requireExchangeBinding(changed, payment) }
+    }
+
     @Test fun `vector Request Payment and Credited envelopes are structurally bound`() {
         val frames = vectors.array("envelopes").associate {
             it.jsonObject.text("variant") to it.jsonObject.hex("canonical_hex")
@@ -1835,22 +1956,29 @@ class KagemushaWalletVectorsV1Test {
             fields.fold(ByteArray(0)) { all, field -> all + Varint.encode(field.size.toLong()) + field }
 
         /**
-         * A structurally valid envelope of exactly [frameLength] bytes whose message tag is [tag]
-         * and whose variant field is zero filler; only the header-level checks apply to it.
+         * Pad an actual Rust envelope's last top-level message field to [frameLength], retaining
+         * its own version and decode-time scheme path. The extra zero bytes are transport-only
+         * filler: no typed message, signature or financial proof validity is claimed.
          */
         fun envelopeFrame(tag: Int, frameLength: Int): ByteArray {
+            val vector = vectors.array("envelopes").map { it.jsonObject }.first { it.int("tag") == tag }
+            val kind = assertNotNull(KagemushaWalletMessageKindV1.fromWireTag(tag))
+            val fields = recordFields(envelopeMessage(vector.hex("canonical_hex"))).toMutableList()
+            val last = fields.last()
             val overhead = NoritoHeader.HEADER_LENGTH + KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES
-            var variantLength = 1
+            val prefixBytes = fields.dropLast(1).sumOf { Varint.encode(it.size.toLong()).size + it.size }
+            var padding = 0
             while (true) {
+                val lastLength = last.size + padding
+                val variantLength = prefixBytes + Varint.encode(lastLength.toLong()).size + lastLength
                 val messageLength = 4 + Varint.encode(variantLength.toLong()).size + variantLength
                 val total = overhead + 3 + Varint.encode(messageLength.toLong()).size + messageLength
                 if (total == frameLength) break
                 check(total < frameLength) { "no envelope of exactly $frameLength bytes" }
-                variantLength += 1
+                padding += 1
             }
-            val variant = Varint.encode(variantLength.toLong()) + ByteArray(variantLength)
-            val message = byteArrayOf(tag.toByte(), 0, 0, 0) + variant
-            return frameOf(byteArrayOf(2, 1, 0) + Varint.encode(message.size.toLong()) + message)
+            fields[fields.lastIndex] = last + ByteArray(padding)
+            return envelopeWithMessage(kind, encodeRecord(fields))
         }
 
         /** A canonical frame of [schemaHash] around [payload] after [padding] zero bytes. */
@@ -2061,6 +2189,48 @@ class KagemushaWalletVectorsV1Test {
         /** The field at record [path] below [record]. */
         fun fieldAt(record: ByteArray, path: List<Int>): ByteArray =
             path.fold(record) { current, index -> recordFields(current)[index] }
+
+        /** Path of the message's own version; unrelated nested versions stay typed-wallet scope. */
+        fun versionPath(kind: KagemushaWalletMessageKindV1): List<Int> = when (kind) {
+            KagemushaWalletMessageKindV1.OFFER, KagemushaWalletMessageKindV1.REQUEST -> listOf(0, 0)
+            else -> listOf(0)
+        }
+
+        /** Confirm the rebuilt header, length and CRC without invoking admission of its message. */
+        fun assertRebuiltEnvelopeHeader(frame: ByteArray) {
+            val offset = NoritoHeader.HEADER_LENGTH + KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES
+            assertContentEquals(frame, frameOf(frame.copyOfRange(offset, frame.size)))
+        }
+
+        /** Rebuild enclosing record lengths and the outer CRC after editing a record at [path]. */
+        fun withChangedMessageRecord(frame: ByteArray, path: List<Int>, edit: (ByteArray) -> ByteArray): ByteArray {
+            fun changed(record: ByteArray, remaining: List<Int>): ByteArray {
+                if (remaining.isEmpty()) return edit(record)
+                val fields = recordFields(record).toMutableList()
+                val index = remaining.first()
+                fields[index] = changed(fields[index], remaining.drop(1))
+                return encodeRecord(fields)
+            }
+            val offset = NoritoHeader.HEADER_LENGTH + KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES
+            val payload = frame.copyOfRange(offset, frame.size)
+            val tagOffset = Varint.decode(payload, Varint.decode(payload, 0).nextOffset + 2).nextOffset
+            val kind = assertNotNull(KagemushaWalletMessageKindV1.fromWireTag(readIntLe(payload, tagOffset)))
+            return envelopeWithMessage(kind, changed(envelopeMessage(frame), path))
+        }
+
+        /** Replace exact field bytes, optionally with a deliberately malformed length prefix.
+         * No inspection runs before the caller's expected rejection. */
+        fun withReplacedMessageField(
+            frame: ByteArray,
+            path: List<Int>,
+            replacement: ByteArray,
+            lengthPrefix: ByteArray = Varint.encode(replacement.size.toLong()),
+        ): ByteArray = withChangedMessageRecord(frame, path.dropLast(1)) { record ->
+            recordFields(record).foldIndexed(ByteArray(0)) { index, all, field ->
+                if (index == path.last()) all + lengthPrefix + replacement
+                else all + Varint.encode(field.size.toLong()) + field
+            }
+        }
 
         /** Record path of the decode-time scheme below an envelope message of [kind]. */
         fun schemePath(kind: KagemushaWalletMessageKindV1): List<Int> = when (kind) {
@@ -2273,6 +2443,9 @@ class KagemushaWalletVectorsV1Test {
         fun u64Element(value: Long): ByteArray = ByteArray(32).also { element ->
             for (index in 0 until 8) element[index] = (value ushr (8 * index)).toByte()
         }
+
+        /** Exact little-endian u16 version bytes for structural mutations. */
+        fun le16(value: Int): ByteArray = ByteArray(2) { index -> (value ushr (8 * index)).toByte() }
 
         /** `LE32` bytes of [value]. */
         fun le32(value: Int): ByteArray = ByteArray(4) { index -> (value ushr (8 * index)).toByte() }

@@ -79,7 +79,7 @@ impl Circuit<Fq> for WCircuit {
         self.inner.synthesize(config, layouter)
     }
 }
-/// A W identity obtained only from W-specific key generation. The continuation
+/// A W identity from W-specific key generation or authenticated artifact import. The continuation
 /// uses this circuit-fixed complete key, never a supplied proof's witness key.
 #[derive(Clone, Debug)]
 pub struct WKey {
@@ -117,6 +117,41 @@ impl WKey {
             key,
         ))
     }
+    /// Import a W key already authenticated by the native artifact owner.
+    ///
+    /// The context, stage and descriptor are installation metadata. They must
+    /// never be selected from a foreign proof. Import does not generate a key,
+    /// infer another profile or admit an internal W as the final Omega key.
+    ///
+    /// # Errors
+    /// Terminal/out-of-order stage, another descriptor, wrong public schema,
+    /// non-k16 parameters or an unsupported PIPA-R verifier profile.
+    pub fn from_artifact(
+        context: &ContextPlan,
+        stage: usize,
+        binding: DescriptorBinding,
+        params: PinnedParams<Ep>,
+        key: VerifyingKey<Ep>,
+    ) -> Result<Self, Error> {
+        let descriptor = binding.descriptor();
+        if stage >= context.stage_count().saturating_sub(1)
+            || descriptor.k != 16
+            || descriptor.instance_lengths != [1, 2, 16]
+            || descriptor.instance_types.as_deref() != Some(&OmegaPlan::instance_types())
+            || key.descriptor_digest() != binding.digest()
+        {
+            return Err(Error::Synthesis);
+        }
+        params.require_k(16).map_err(|_| Error::Synthesis)?;
+        let verifier = VerifierPlan::new(binding, params).map_err(|_| Error::Synthesis)?;
+        Ok(Self {
+            key,
+            verifier,
+            schema: context.schema().to_vec(),
+            stage,
+        })
+    }
+
     /// The fixed internal program, with Omega's three typed public columns.
     pub const fn verifier(&self) -> &VerifierPlan<Ep> {
         &self.verifier

@@ -18,6 +18,9 @@ mod data_availability_http_tests;
 mod data_availability_query_tests;
 mod dispatch;
 mod gateway_compliance;
+pub mod kagemusha;
+#[cfg(test)]
+mod kagemusha_http_tests;
 mod moderation;
 mod multisig_validation;
 pub mod musubi;

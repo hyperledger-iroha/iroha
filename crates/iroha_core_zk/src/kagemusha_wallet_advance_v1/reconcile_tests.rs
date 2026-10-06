@@ -890,3 +890,139 @@ fn wallet_advance_v1_reconcile_anchor_check_follows_the_slot() {
         .with(|state| state.policy = KagemushaWalletAnchorPolicyV1::Keychain);
     assert_eq!(android.open().status(&android_slot), policy);
 }
+
+#[test]
+fn wallet_advance_v1_reconcile_keychain_key_without_files_is_visible_and_never_recreated() {
+    let device = DeviceV1::new(IOS, 0xe1);
+    let mut provider = device.open();
+    let slot = KagemushaWalletSlotIdV1([0xe1; 32]);
+    device.platform.with(|state| {
+        state.keys.insert(slot, signing_key(0xe1));
+    });
+    let before = names(&device, &kagemusha_wallet_slots_dir_v1());
+    assert_eq!(provider.slots(), Ok(vec![slot]));
+    assert_eq!(
+        provider.status(&slot),
+        Err(KagemushaWalletProviderErrorV1::LostCustody(
+            KagemushaWalletLostCustodyV1::KeyWithoutMarker
+        ))
+    );
+    assert_eq!(names(&device, &kagemusha_wallet_slots_dir_v1()), before);
+    assert!(names(&device, &kagemusha_wallet_slot_dir_v1(&slot)).is_empty());
+    assert!(device.platform.key_of(&slot).is_some());
+    device.platform.with(|state| {
+        assert_eq!(state.generate_calls, 0);
+        assert_eq!(state.delete_calls, 0);
+        assert_eq!(state.sign_calls, 0);
+    });
+}
+
+#[test]
+fn wallet_advance_v1_reconcile_keychain_inventory_unions_file_slots_without_duplicates() {
+    let device = DeviceV1::new(IOS, 0xe2);
+    let provider = device.open();
+    let file_only = KagemushaWalletSlotIdV1([1; 32]);
+    let both = KagemushaWalletSlotIdV1([2; 32]);
+    let key_only = KagemushaWalletSlotIdV1([3; 32]);
+    for slot in [file_only, both] {
+        kagemusha_wallet_prepare_slot_dirs_v1(provider.store(), &slot).unwrap();
+    }
+    device.platform.with(|state| {
+        state.keys.insert(both, signing_key(0xe2));
+        state.keys.insert(key_only, signing_key(0xe3));
+    });
+    let before = names(&device, &kagemusha_wallet_slots_dir_v1());
+    assert_eq!(provider.slots(), Ok(vec![file_only, both, key_only]));
+    assert_eq!(names(&device, &kagemusha_wallet_slots_dir_v1()), before);
+    assert!(names(&device, &kagemusha_wallet_slot_dir_v1(&key_only)).is_empty());
+}
+
+#[test]
+fn wallet_advance_v1_reconcile_keychain_inventory_error_or_lock_never_means_empty() {
+    let device = DeviceV1::new(IOS, 0xe4);
+    let provider = device.open();
+    let slot = KagemushaWalletSlotIdV1([0xe4; 32]);
+    device.platform.with(|state| {
+        state.keys.insert(slot, signing_key(0xe4));
+    });
+    let before = names(&device, &kagemusha_wallet_slots_dir_v1());
+    for reason in [
+        KagemushaWalletUnavailableV1::Locked,
+        KagemushaWalletUnavailableV1::BeforeFirstUnlock,
+        KagemushaWalletUnavailableV1::Io(5),
+        KagemushaWalletUnavailableV1::Platform(0),
+    ] {
+        device.platform.with(|state| {
+            state.enumerate_override = Some(Err(reason));
+        });
+        assert_eq!(
+            provider.slots(),
+            Err(KagemushaWalletProviderErrorV1::Unavailable(reason))
+        );
+    }
+    device.platform.with(|state| {
+        state.enumerate_override = Some(Ok(vec![]));
+        state.storage_lock_after = Some(1);
+    });
+    assert_eq!(
+        provider.slots(),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(
+            KagemushaWalletUnavailableV1::Locked
+        ))
+    );
+    let calls = device.platform.with(|state| state.enumerate_calls);
+    assert_eq!(
+        provider.slots(),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(
+            KagemushaWalletUnavailableV1::Locked
+        ))
+    );
+    assert_eq!(
+        device.platform.with(|state| state.enumerate_calls),
+        calls,
+        "locked precheck must not query the key namespace"
+    );
+    assert_eq!(names(&device, &kagemusha_wallet_slots_dir_v1()), before);
+    assert!(device.platform.key_of(&slot).is_some());
+}
+
+#[test]
+fn wallet_advance_v1_reconcile_keychain_inventory_zero_duplicate_order_and_overflow_refuse() {
+    let device = DeviceV1::new(IOS, 0xe5);
+    let provider = device.open();
+    let slot = KagemushaWalletSlotIdV1([1; 32]);
+    let next = KagemushaWalletSlotIdV1([2; 32]);
+    for invalid in [
+        vec![KagemushaWalletSlotIdV1([0; 32])],
+        vec![slot, slot],
+        vec![next, slot],
+        vec![slot; KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1 + 1],
+    ] {
+        device.platform.with(|state| {
+            state.enumerate_override = Some(Ok(invalid));
+        });
+        assert_eq!(
+            provider.slots(),
+            Err(KagemushaWalletProviderErrorV1::Unavailable(
+                KagemushaWalletUnavailableV1::Platform(0)
+            ))
+        );
+    }
+    assert!(names(&device, &kagemusha_wallet_slots_dir_v1()).is_empty());
+    device.platform.with(|state| {
+        assert_eq!(state.generate_calls, 0);
+        assert_eq!(state.delete_calls, 0);
+        assert_eq!(state.sign_calls, 0);
+    });
+}
+
+#[test]
+fn wallet_advance_v1_reconcile_not_required_platform_does_not_depend_on_keychain_enumeration() {
+    let device = DeviceV1::new(ANDROID, 0xe6);
+    let provider = device.open();
+    device.platform.with(|state| {
+        state.enumerate_override = Some(Err(KagemushaWalletUnavailableV1::Platform(0)));
+    });
+    assert_eq!(provider.slots(), Ok(vec![]));
+    assert_eq!(device.platform.with(|state| state.enumerate_calls), 0);
+}

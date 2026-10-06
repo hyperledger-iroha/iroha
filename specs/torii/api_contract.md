@@ -189,9 +189,15 @@ whose marker appears on another route is replaced by the ordinary typed
 envelope. Errors after a stream has started follow that stream's terminal
 framing instead of the finite HTTP envelope.
 
-Torii serves no `/v1/kagemusha/*` routes. Clients must not use `/health` or
-`/readyz` as a wallet-feature admission gate, and Torii has no per-asset
-readiness response or selector query.
+The current KAGEMUSHA wallet route is the canonically authenticated private
+`GET /v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}` issuance read. It
+returns only the payer's finalized canonical Norito load body and voucher,
+requires `Accept: application/x-norito`, and keeps responses private with
+`Cache-Control: private, no-store`. The route is enabled by `app_api` and projected to
+the SDK; it has no OpenAPI or MCP projection. The retired readiness, top-up,
+redeem, operation-status and ordinary-wallet routes remain absent. Clients
+must not use `/health` or `/readyz` as a wallet-feature admission gate; Torii
+has no per-asset readiness response or selector query.
 
 Every HTTP response carries `X-Request-Id`. A client may supply an identifier
 containing 1–128 ASCII letters, digits, `-`, `_`, `.`, or `:`; Torii echoes it.

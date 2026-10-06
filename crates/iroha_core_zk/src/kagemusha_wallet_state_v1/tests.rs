@@ -247,6 +247,69 @@ fn bootstrap() -> FrozenTransition {
     )
 }
 
+// Structural refusal fixtures only. Issuer authentication and every operation proof remain
+// mandatory in NativeProofs; these tests establish no authentic credential reissuance.
+fn rebind_frozen_successor(value: &mut FrozenTransition) {
+    let c = &mut value.capsule;
+    c.statement.credential_digest = value.credential.credential_digest();
+    c.successor_state.core.credential_digest = c.statement.credential_digest;
+    c.statement.successor = c.successor_state.commitment().expect("successor state");
+    c.operation_id = c.statement.operation_id(&c.wallet_id).expect("operation");
+    c.output = KagemushaWalletOutputDescriptorV1::for_transition(
+        &c.statement,
+        &c.proof_digest().expect("proof digest"),
+        &c.payment_digest,
+    )
+    .expect("output");
+    // Each existing self-contained boundary still passes after the commitment is rebound.
+    c.to_canonical_bytes().expect("self-contained capsule");
+    value.credential.validate().expect("structural credential");
+    c.statement
+        .validate_for_credential(&value.credential)
+        .expect("statement credential");
+}
+
+#[test]
+fn frozen_rejects_rebound_successor_with_unenrolled_regulatory_controls() {
+    let mut value = bootstrap();
+    assert_eq!(
+        value.credential.body.regulatory_policy.permitted_controls,
+        0
+    );
+    value.capsule.successor_state.rest.permitted_controls = KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1;
+    rebind_frozen_successor(&mut value);
+    assert!(value.validate().is_err());
+}
+
+#[test]
+fn frozen_rejects_rebound_successor_with_another_credential_lease() {
+    let mut value = bootstrap();
+    // A structurally consistent lease policy on both objects isolates the lease mismatch.
+    // The changed fixture signature is deliberately not authenticated by this unit test.
+    value.credential.body.regulatory_policy.permitted_controls =
+        KAGEMUSHA_WALLET_CONTROL_ATTESTATION_LEASE_V1;
+    value
+        .credential
+        .body
+        .regulatory_policy
+        .time_anchor_max_response_ms = 1;
+    value.credential.body.lease_expires_at_ms = 1;
+    value.capsule.successor_state.rest.permitted_controls =
+        KAGEMUSHA_WALLET_CONTROL_ATTESTATION_LEASE_V1;
+    value
+        .capsule
+        .successor_state
+        .core
+        .time_anchor_max_response_ms = 1;
+    value.capsule.successor_state.core.lease_expires_at_ms = 2;
+    rebind_frozen_successor(&mut value);
+    assert_eq!(
+        value.capsule.successor_state.regulatory_policy(),
+        value.credential.body.regulatory_policy
+    );
+    assert!(value.validate().is_err());
+}
+
 #[derive(Clone)]
 pub(super) struct MemoryArchive {
     scheme: [u8; 32],
@@ -324,6 +387,11 @@ pub(super) struct TestCustody {
     unavailable: bool,
     delivery_lost: bool,
     pub(super) fail_publication: Option<bool>,
+    status_calls: usize,
+    status_replacement: Option<(usize, SlotStatus)>,
+    status_unavailable_at: Option<usize>,
+    checkpoint_calls: usize,
+    checkpoint_replacement: Option<(usize, ([u8; 32], Vec<u8>))>,
 }
 impl TestCustody {
     fn new() -> Self {
@@ -338,6 +406,11 @@ impl TestCustody {
             unavailable: false,
             delivery_lost: false,
             fail_publication: None,
+            status_calls: 0,
+            status_replacement: None,
+            status_unavailable_at: None,
+            checkpoint_calls: 0,
+            checkpoint_replacement: None,
         }
     }
 }
@@ -373,6 +446,12 @@ impl Custody for TestCustody {
         Ok(tombstone)
     }
     fn archive_checkpoint(&mut self) -> Result<Option<([u8; 32], Vec<u8>)>, ProviderError> {
+        self.checkpoint_calls += 1;
+        if let Some((at, replacement)) = &self.checkpoint_replacement {
+            if self.checkpoint_calls == *at {
+                return Ok(Some(replacement.clone()));
+            }
+        }
         Ok(self.checkpoint.clone())
     }
     fn publish_archive_checkpoint(
@@ -396,6 +475,23 @@ impl Custody for TestCustody {
             });
         }
         self.checkpoint = Some((digest, bytes.to_vec()));
+        // Test custody must select metadata exactly as production does, preserving the original
+        // payment selection and completion while publishing a new nonmonetary generation.
+        if let SlotStatus::Released(record) = &self.status {
+            let mut file: TestMarkerFile = archive::decode(record.file_bytes()).unwrap();
+            let mut marker = record.marker().clone();
+            marker.generation += 1;
+            file.marker = marker.to_canonical_bytes().unwrap();
+            file.archive_checkpoint = digest;
+            self.status = SlotStatus::Released(
+                MarkerRecord::decode(
+                    &archive::encode(&file).unwrap(),
+                    record.slot(),
+                    &marker.scheme_id,
+                )
+                .unwrap(),
+            );
+        }
         if fail == Some(true) {
             return Err(ProviderError::Invalid {
                 field: "test publication after commit",
@@ -405,6 +501,17 @@ impl Custody for TestCustody {
     }
 
     fn status(&mut self) -> Result<SlotStatus, ProviderError> {
+        self.status_calls += 1;
+        if self.status_unavailable_at == Some(self.status_calls) {
+            return Err(ProviderError::Unavailable(
+                crate::kagemusha_wallet_advance_v1::KagemushaWalletUnavailableV1::Locked,
+            ));
+        }
+        if let Some((at, replacement)) = &self.status_replacement {
+            if self.status_calls == *at {
+                return Ok(replacement.clone());
+            }
+        }
         if self.unavailable {
             return Err(ProviderError::Unavailable(
                 crate::kagemusha_wallet_advance_v1::KagemushaWalletUnavailableV1::Locked,
@@ -1604,4 +1711,371 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
         w.fee_claim(credit).unwrap().map(|claim| claim.payment),
         Some(payment)
     );
+}
+
+// Snapshot tests use the existing explicit mock NativeProofs. They establish source selection,
+// arithmetic and error propagation, not real σ/Ω verification or stock-device qualification.
+fn snapshot_test_fold(w: &mut Wallet) {
+    w.scheduler().set_activity(true, false);
+    assert!(matches!(
+        w.fold_once().unwrap(),
+        FoldStatus::Checkpoint { .. }
+    ));
+    assert!(matches!(w.fold_once().unwrap(), FoldStatus::Folded(_)));
+}
+fn snapshot_test_replace_fold(
+    w: &mut Wallet,
+    sequence: u128,
+    mutate: impl FnOnce(&mut RecordedFold),
+) {
+    let key = ArchiveKey::Fold(sequence);
+    let bytes = w.archive.get(key, 20_000).unwrap().unwrap();
+    let mut fold: RecordedFold = archive::decode(&bytes).unwrap();
+    mutate(&mut fold);
+    let bytes = archive::encode(&fold).unwrap();
+    // Deliberate source corruption/mock-proof public changes for negative arithmetic tests.
+    w.archive.records.lock().unwrap().insert(key, bytes.clone());
+    let (digest, mut manifest) = w.manifest().unwrap();
+    manifest.folds = manifest
+        .folds
+        .set(
+            &mut w.archive,
+            manifest::sequence_key(sequence),
+            &crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1(
+                "wallet-recorded-fold",
+                &bytes,
+            ),
+        )
+        .unwrap();
+    w.publish_manifest(digest, &manifest).unwrap();
+    w.verified_folds.clear();
+}
+
+#[test]
+fn snapshot_before_bootstrap_pending_or_locked_never_projects_a_balance() {
+    let mut w = wallet();
+    assert!(matches!(w.snapshot(), Err(Error::NoHead)));
+    w.custody.pause = true;
+    w.commit(bootstrap()).unwrap();
+    assert!(matches!(w.snapshot(), Err(Error::Pending)));
+    w.custody.unavailable = true;
+    assert!(matches!(
+        w.snapshot(),
+        Err(Error::Provider(ProviderError::Unavailable(_)))
+    ));
+}
+#[test]
+fn snapshot_unfolded_bootstrap_preserves_owned_value_and_reports_the_actual_backlog() {
+    let mut w = wallet();
+    let boot = bootstrap();
+    w.commit(boot.clone()).unwrap();
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.head, boot.capsule.statement.successor.value);
+    assert_eq!(
+        snapshot.credential_digest,
+        boot.credential.credential_digest()
+    );
+    assert_eq!(snapshot.balance, boot.capsule.successor_state.core.balance);
+    assert_eq!(
+        snapshot.known_burned_total,
+        boot.capsule.successor_state.core.burned_total
+    );
+    assert_eq!(snapshot.owned_balance, 20);
+    assert_eq!(snapshot.folded_balance, None);
+    assert_eq!(snapshot.verified_fold, None);
+    assert_eq!(snapshot.fold_backlog, 1);
+}
+#[test]
+fn snapshot_only_the_exact_current_fold_reports_folded_balance() {
+    let mut w = wallet();
+    let boot = bootstrap();
+    w.commit(boot.clone()).unwrap();
+    snapshot_test_fold(&mut w);
+    let before = w.snapshot().unwrap();
+    assert_eq!(before.folded_balance, Some(20));
+    assert_eq!(before.fold_backlog, 0);
+    let receive = frozen(
+        Some(&boot),
+        KagemushaWalletEffectV1::Receive {
+            credit_id: received_credit(),
+            payer_wallet_id: [0x88; 32],
+            amount: 1,
+        },
+    );
+    w.commit(receive.clone()).unwrap();
+    let after = w.snapshot().unwrap();
+    assert_eq!(after.head, receive.capsule.statement.successor.value);
+    assert_eq!(after.verified_fold.unwrap().head, before.head);
+    assert_eq!(after.verified_fold.unwrap().sequence, 0);
+    assert_eq!(after.owned_balance, 20);
+    assert_eq!(after.folded_balance, None);
+    assert_eq!(after.fold_backlog, 1);
+}
+#[test]
+fn snapshot_p4_burns_adjust_owned_value_even_when_the_retained_core_is_stale() {
+    let mut w = wallet();
+    let boot = bootstrap();
+    w.commit(boot.clone()).unwrap();
+    snapshot_test_fold(&mut w);
+    let receive = frozen(
+        Some(&boot),
+        KagemushaWalletEffectV1::Receive {
+            credit_id: received_credit(),
+            payer_wallet_id: [0x88; 32],
+            amount: 1,
+        },
+    );
+    w.commit(receive.clone()).unwrap();
+    snapshot_test_fold(&mut w);
+    snapshot_test_replace_fold(&mut w, 1, |fold| {
+        fold.record.lineage.public.burned_total = 5;
+    });
+    let folded = w.snapshot().unwrap();
+    assert_eq!(
+        (folded.core_burned_total, folded.known_burned_total),
+        (0, 5)
+    );
+    assert_eq!(
+        (folded.owned_balance, folded.folded_balance),
+        (15, Some(15))
+    );
+    let load = frozen(
+        Some(&receive),
+        KagemushaWalletEffectV1::Load {
+            voucher: field(80),
+            load_ordinal: 0,
+            amount: 1,
+            online_charge: 0,
+        },
+    );
+    w.commit(load).unwrap();
+    let unfolded = w.snapshot().unwrap();
+    assert_eq!(
+        (unfolded.core_burned_total, unfolded.known_burned_total),
+        (0, 5)
+    );
+    assert_eq!(
+        (unfolded.owned_balance, unfolded.folded_balance),
+        (15, None)
+    );
+    assert_eq!(unfolded.fold_backlog, 1);
+}
+#[test]
+fn snapshot_burns_above_gross_value_are_an_error_not_a_zero_balance() {
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    snapshot_test_fold(&mut w);
+    snapshot_test_replace_fold(&mut w, 0, |fold| {
+        fold.record.lineage.public.burned_total = 21;
+    });
+    assert!(w.snapshot().is_err());
+}
+#[test]
+fn snapshot_a_fold_cannot_substitute_another_key_head_or_credential() {
+    for field in 0..4 {
+        let mut w = wallet();
+        w.commit(bootstrap()).unwrap();
+        snapshot_test_fold(&mut w);
+        snapshot_test_replace_fold(&mut w, 0, |fold| match field {
+            0 => fold.record.lineage.public.head.value[0] ^= 1,
+            1 => fold.record.lineage.public.credential_digest[0] ^= 1,
+            2 => fold.record.lineage.public.wallet_id[0] ^= 1,
+            _ => {
+                let key = SigningKey::from_slice(&[77; 32]).unwrap();
+                fold.record.lineage.public.payment_key =
+                    KagemushaDevicePublicKeyV1::from_sec1_bytes(
+                        key.verifying_key().to_encoded_point(false).as_bytes(),
+                    )
+                    .unwrap();
+            }
+        });
+        assert!(w.snapshot().is_err());
+    }
+}
+#[test]
+fn snapshot_selected_fold_missing_or_replaced_never_looks_unfolded() {
+    for missing in [false, true] {
+        let mut w = wallet();
+        w.commit(bootstrap()).unwrap();
+        snapshot_test_fold(&mut w);
+        let mut records = w.archive.records.lock().unwrap();
+        if missing {
+            records.remove(&ArchiveKey::Fold(0));
+        } else {
+            records.insert(ArchiveKey::Fold(0), vec![1, 2, 3]);
+        }
+        drop(records);
+        assert!(matches!(w.snapshot(), Err(Error::WitnessLost(_))));
+    }
+}
+#[test]
+fn snapshot_a_native_fold_rejection_is_preserved() {
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    snapshot_test_fold(&mut w);
+    w.verified_folds.clear();
+    w.proofs.reject = true;
+    assert!(matches!(w.snapshot(), Err(Error::Proof(_))));
+}
+#[test]
+fn snapshot_rechecks_the_full_selected_marker_after_all_witness_reads() {
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    let SlotStatus::Released(record) = &w.custody.status else {
+        panic!("released");
+    };
+    let mut file: TestMarkerFile = archive::decode(record.file_bytes()).unwrap();
+    let mut marker = record.marker().clone();
+    marker.generation += 1;
+    file.marker = marker.to_canonical_bytes().unwrap();
+    let replacement = MarkerRecord::decode(
+        &archive::encode(&file).unwrap(),
+        record.slot(),
+        &marker.scheme_id,
+    )
+    .unwrap();
+    w.custody.status_calls = 0;
+    w.custody.status_replacement = Some((3, SlotStatus::Released(replacement)));
+    assert!(matches!(
+        w.snapshot(),
+        Err(Error::WitnessLost("snapshot source marker changed"))
+    ));
+}
+#[test]
+fn snapshot_rechecks_the_manifest_original_and_protected_storage_after_reads() {
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    let (_, mut manifest) = w.manifest().unwrap();
+    manifest.capsule[0] ^= 1;
+    let bytes = archive::encode(&manifest).unwrap();
+    let digest =
+        crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_checkpoint_digest_v1(&bytes);
+    w.custody.checkpoint_calls = 0;
+    w.custody.checkpoint_replacement = Some((3, (digest, bytes)));
+    assert!(matches!(
+        w.snapshot(),
+        Err(Error::WitnessLost("snapshot source manifest changed"))
+    ));
+    w.custody.checkpoint_replacement = None;
+    w.custody.status_calls = 0;
+    w.custody.status_unavailable_at = Some(4);
+    assert!(matches!(
+        w.snapshot(),
+        Err(Error::Provider(ProviderError::Unavailable(_)))
+    ));
+}
+#[test]
+fn snapshot_reads_one_indexed_head_instead_of_scanning_permanent_history() {
+    let mut w = wallet();
+    let mut previous = bootstrap();
+    w.commit(previous.clone()).unwrap();
+    for number in 1u8..=48 {
+        let next = frozen(
+            Some(&previous),
+            KagemushaWalletEffectV1::Receive {
+                credit_id: field(number + 100),
+                payer_wallet_id: [0x88; 32],
+                amount: 1,
+            },
+        );
+        w.commit(next.clone()).unwrap();
+        previous = next;
+    }
+    // An unselected fold file is never evidence of a verified source-indexed fold.
+    w.archive
+        .records
+        .lock()
+        .unwrap()
+        .insert(ArchiveKey::Fold(48), vec![1, 2, 3]);
+    let before = w.archive.reads.load(Ordering::SeqCst);
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.fold_backlog, 49);
+    assert_eq!(snapshot.verified_fold, None);
+    assert!(
+        w.archive.reads.load(Ordering::SeqCst) - before <= 260,
+        "one bounded index path and current capsule"
+    );
+}
+#[test]
+fn snapshot_retiring_reports_folded_remaining_value_without_an_operation_permission() {
+    let mut w = wallet();
+    let boot = bootstrap();
+    w.commit(boot.clone()).unwrap();
+    snapshot_test_fold(&mut w);
+    let step = w.released_steps().unwrap().remove(0);
+    let fold = w.read_fold(&step).unwrap().unwrap();
+    let mut retiring = frozen(Some(&boot), KagemushaWalletEffectV1::Retiring);
+    let c = &mut retiring.capsule;
+    // Retiring consumes the exact recorded Ω, including its authenticated lineage fields.
+    c.predecessor_lineage = KagemushaWalletLineageSlotV1::Present {
+        lineage: fold.record.lineage.clone(),
+    };
+    c.statement.lineage_burned_total = fold.record.lineage.public.burned_total;
+    c.statement.lineage_pending_outgoing_root = fold.record.lineage.public.pending_outgoing_root;
+    c.successor_state.core.burned_total = c.statement.lineage_burned_total;
+    c.statement.successor = c.successor_state.commitment().unwrap();
+    c.operation_id = c.statement.operation_id(&c.wallet_id).unwrap();
+    c.output = KagemushaWalletOutputDescriptorV1::for_transition(
+        &c.statement,
+        &c.proof_digest().unwrap(),
+        &c.payment_digest,
+    )
+    .unwrap();
+    retiring.validate().unwrap();
+    w.commit(retiring).unwrap();
+    snapshot_test_fold(&mut w);
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.lifecycle, KagemushaWalletLifecycleV1::Retiring);
+    assert_eq!(snapshot.folded_balance, Some(snapshot.owned_balance));
+}
+
+#[test]
+fn snapshot_fold_burns_cannot_regress_below_the_selected_core() {
+    let mut w = wallet();
+    let boot = bootstrap();
+    w.commit(boot.clone()).unwrap();
+    snapshot_test_fold(&mut w);
+    snapshot_test_replace_fold(&mut w, 0, |fold| {
+        fold.record.lineage.public.burned_total = 4;
+    });
+    let mut load = frozen(
+        Some(&boot),
+        KagemushaWalletEffectV1::Load {
+            voucher: field(80),
+            load_ordinal: 0,
+            amount: 1,
+            online_charge: 0,
+        },
+    );
+    // Explicit mock relation admits this inconsistent successor for a projection rejection test.
+    let c = &mut load.capsule;
+    c.successor_state.core.burned_total = 5;
+    // Load does not consume Ω, so its statement lineage inputs remain zero. The explicit
+    // mock still admits the inconsistent core to exercise snapshot's burn regression error.
+    c.statement.successor = c.successor_state.commitment().unwrap();
+    c.operation_id = c.statement.operation_id(&c.wallet_id).unwrap();
+    c.output = KagemushaWalletOutputDescriptorV1::for_transition(
+        &c.statement,
+        &c.proof_digest().unwrap(),
+        &c.payment_digest,
+    )
+    .unwrap();
+    load.validate().unwrap();
+    w.commit(load).unwrap();
+    assert!(matches!(
+        w.snapshot(),
+        Err(Error::WitnessLost("snapshot burn regression"))
+    ));
+}
+#[test]
+fn snapshot_source_manifest_cannot_name_a_future_fold_as_an_ancestor() {
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    let (digest, mut manifest) = w.manifest().unwrap();
+    manifest.folded = Some(1);
+    w.publish_manifest(digest, &manifest).unwrap();
+    assert!(matches!(
+        w.snapshot(),
+        Err(Error::WitnessLost("archive manifest binding"))
+    ));
 }

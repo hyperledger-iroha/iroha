@@ -1598,7 +1598,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         if item["class"] == "consensus" and item["source"] == "node_local"
     }
     assert listed == node_local, "every node-local validity bound is a catalog field"
-    assert len(node_local) == 74
+    assert len(node_local) == 76
     for identifier in node_local:
         assert bound(CONTRACT, identifier)["defect"]["owner"] == "F.4"
     pipeline = catalogs["execution_policy_digest_v1"]["fields"]
@@ -1613,6 +1613,8 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         assert field in pipeline
     zk = catalogs["zk_consensus_policy_hash"]["fields"]
     for field in (
+        "pipa_r.max_envelope_bytes",
+        "pipa_r.max_proof_bytes",
         "halo2.max_envelope_bytes",
         "halo2.max_transcript_label_len",
         "sccp.max_proofs_per_transaction",
@@ -1632,7 +1634,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         assert sorted(observed) == sorted(recorded)
         assert all(group["reason"] for group in catalog["excluded"])
     assert len(catalogs["execution_policy_digest_v1"]["fields"]) == 15
-    assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 49
+    assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 51
     assert len(catalogs["nexus_consensus_policy_v1"]["fields"]) == 10
     # The execution-policy digest binds 164 fields: ten committee sizes come from a loop.
     execution_source = (ROOT / catalogs["execution_policy_digest_v1"]["path"]).read_text(encoding="utf-8")
@@ -2384,3 +2386,28 @@ def test_lane_route_statements_state_that_there_is_no_rescue_above_the_global_bu
         test["name"] for test in proposer["tests"]
     }
     assert "if next > max_bytes {" in {site["contains"] for site in proposer["enforcement"]}
+
+
+def test_native_pipa_r_byte_bounds_record_current_owners_and_boundary_witnesses() -> None:
+    """Native envelope and proof caps stay real limits, with exact-cap verifier coverage."""
+    for field, value in (("max_envelope_bytes", MIB), ("max_proof_bytes", 192 * 1024)):
+        item = bound(CONTRACT, "proof.config_pipa_r_" + field)
+        assert (item["unit"], item["class"], item["source"], item["value"], item["inclusive"]) == (
+            "bytes", "consensus", "node_local", value, True)
+        assert item["owner"]["anchor"] == ["pub mod zk {", "pub mod pipa_r {"]
+        assert item["catalog"] == {"id": "zk_consensus_policy_hash", "field": "pipa_r." + field}
+        assert item["defect"]["owner"] == "F.4"
+        assert {test["name"] for test in item["tests"]} == {
+            "guardrails_from_config_copies_every_cap",
+            "native_real_proofs_obey_relation_policy_caps_and_preverify"}
+        without_site = edited(lambda contract: bound(contract, item["id"]).__setitem__("enforcement", []))
+        assert_fails(without_site, item["id"])
+    source = (ROOT / "crates/iroha_core_zk/src/native_pipa_r_tests.rs").read_text()
+    for marker in ("limits.pipa_r_max_envelope_bytes = proof.bytes.len() - 1;",
+                   "limits.pipa_r_max_proof_bytes = envelope.proof_bytes.len() - 1;",
+                   "Err(ProofVerificationError::EnvelopeTooLarge { .. })",
+                   "Err(ProofVerificationError::ProofTooLarge { .. })",
+                   "limits.pipa_r_max_proof_bytes += 1;",
+                   "limits.pipa_r_max_envelope_bytes = proof.bytes.len();",
+                   "assert!(crate::verify_for_relation(relation, &proof, &key, limits).is_ok());"):
+        assert marker in source

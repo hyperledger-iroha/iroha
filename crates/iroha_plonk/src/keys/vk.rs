@@ -162,7 +162,7 @@ fn bitmap_bytes(n: usize) -> usize {
 }
 
 /// The exact encoding length a descriptor implies.
-fn expected_len(binding: &DescriptorBinding) -> Option<usize> {
+pub(super) fn expected_len(binding: &DescriptorBinding) -> Option<usize> {
     let descriptor = binding.descriptor();
     let points =
         (descriptor.num_fixed_columns as usize).checked_add(descriptor.permutation.len())?;

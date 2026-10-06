@@ -47,6 +47,8 @@
 
 use std::borrow::Cow;
 
+pub mod artifact;
+
 use ff::{BatchInvert, Field, WithSmallOrderMulGroup};
 use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
 

@@ -135,7 +135,8 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "sm": ("iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"),
  "telemetry": (),
  "simd": ("iroha_primitives/simd-accel", "iroha_core_privacy/simd"),
- "zk-halo2": ("dep:kaigi_zk",),
+ # Native Kaigi is mandatory; this feature retains Core's build-policy marker.
+ "zk-halo2": (),
  "zk-halo2-ipa": ("zk-ipa-native",),
  "zk-ipa-native": (),
  "zk-preverify": ("iroha_core_zk/zk-preverify",),
@@ -852,16 +853,22 @@ def _check_mandatory_cli_runtime_dependencies(
     return errors
 
 
-def _check_mandatory_core_backends(document: dict[str, Any], manifest_path: Path) -> list[str]:
-    """Require the genuine Halo2/IPA dependencies even with all defaults disabled."""
-
+def _check_mandatory_kaigi_backend(document: dict[str, Any], manifest_path: Path) -> list[str]:
+    """Keep native Kaigi on its canonical, unconditional normal dependency."""
     dependencies = document.get("dependencies", {})
     kaigi = dependencies.get("kaigi_zk") if isinstance(dependencies, dict) else None
-    halo2 = dependencies.get("halo2_proofs") if isinstance(dependencies, dict) else None
-    errors: list[str] = []
     if (not isinstance(kaigi, dict) or kaigi.get("optional", False) is not False
-            or kaigi.get("path") != "../kaigi_zk"):
-        errors.append(f"{manifest_path}: mandatory Core backend `kaigi_zk` must retain its non-optional local owner")
+            or kaigi.get("path") != "../kaigi_zk"
+            or kaigi.get("package", "kaigi_zk") != "kaigi_zk"):
+        return [f"{manifest_path}: mandatory Core backend `kaigi_zk` must retain its non-optional local owner"]
+    return []
+
+
+def _check_mandatory_core_backends(document: dict[str, Any], manifest_path: Path) -> list[str]:
+    """Require native Kaigi and the remaining Halo2/IPA normal dependencies."""
+    dependencies = document.get("dependencies", {})
+    halo2 = dependencies.get("halo2_proofs") if isinstance(dependencies, dict) else None
+    errors = _check_mandatory_kaigi_backend(document, manifest_path)
     if (not isinstance(halo2, dict) or halo2.get("optional", False) is not False
             or halo2.get("features") != ["batch", "multicore", "circuit-params"]):
         errors.append(f"{manifest_path}: mandatory Core backend `halo2_proofs` must retain exact batch/multicore/circuit-params features")
@@ -890,6 +897,8 @@ def _check_expected_features(
         return []
 
     errors: list[str] = []
+    if package_name == "iroha_core":
+        errors.extend(_check_mandatory_kaigi_backend(document, manifest_path))
     if package_name == "irohad_lib":
         errors.extend(_check_mandatory_daemon_cuda(document, manifest_path))
     if package_name == "iroha_data_model":
