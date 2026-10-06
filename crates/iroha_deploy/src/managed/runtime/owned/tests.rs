@@ -139,3 +139,61 @@ fn original_guard_dies_on_owned_stop_and_cannot_be_reused_for_another_launch() {
     assert!(processes.generated().unwrap().is_none());
     assert!(!launch.active.load(Ordering::Acquire));
 }
+
+#[cfg(unix)]
+#[test]
+fn owned_start_refuses_an_unselected_or_changed_daemon_before_logs_and_launch_markers() {
+    use std::io::Write;
+    let _resources = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_store, directory, _prepared) =
+        crate::managed::tests::fixture(&temporary.path().join("state"), "selected");
+    let mut retained = crate::managed::generation::read(&directory).unwrap();
+    let path = temporary.path().join("daemon");
+    std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+    let selected = crate::managed::program::NativeProgram::capture(&path).unwrap();
+    retained.daemon = selected.pin().unwrap();
+    let ownership = crate::managed::store::acquire(&directory, "runtime.lock", "selected").unwrap();
+    let unselected =
+        crate::managed::program::NativeProgram::capture(&std::env::current_exe().unwrap()).unwrap();
+    let mut processes = PeerProcesses::default();
+    assert!(matches!(
+        processes.start(&directory, &retained, &ownership, &unselected, None),
+        Err(Error::Invalid(message)) if message == "daemon differs from the retained runtime path"
+    ));
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"changed selected daemon")
+        .unwrap();
+    assert!(
+        processes
+            .start(&directory, &retained, &ownership, &selected, None)
+            .is_err()
+    );
+    let changed = crate::managed::program::NativeProgram::capture(&path).unwrap();
+    assert!(matches!(
+        processes.start(&directory, &retained, &ownership, &changed, None),
+        Err(Error::Invalid(message)) if message == "daemon differs from the retained runtime contents"
+    ));
+    assert!(processes.children.is_empty());
+    assert!(processes.launch.is_none());
+    for (index, peer) in retained.prepared.peers.iter().enumerate() {
+        assert!(!directory.path().join(&peer.log_name).exists());
+        assert!(
+            !directory
+                .path()
+                .join(format!("peer{index}.launch"))
+                .exists()
+        );
+    }
+    std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+    assert!(selected.validate().is_err());
+    crate::managed::program::NativeProgram::matching(&retained.daemon)
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert!(processes.children.is_empty());
+    assert!(processes.launch.is_none());
+}

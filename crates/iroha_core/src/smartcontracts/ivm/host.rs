@@ -593,6 +593,7 @@ pub struct CoreHostImpl<QS> {
     halo2_config: ivm::host::ZkHalo2Config,
     zk_gas_schedule: ivm::gas::ZkGasScheduleV1,
     stark_config: iroha_config::parameters::actual::Stark,
+    pipa_r_config: iroha_config::parameters::actual::PipaR,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
     queued: Vec<QueuedInstruction>,
     instruction_queue_limits: HostOutputLimits,
@@ -2903,6 +2904,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             halo2_config: ivm::host::ZkHalo2Config::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             stark_config: iroha_config::parameters::actual::Stark::default(),
+            pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
             instruction_queue_limits: HostOutputLimits::default(),
@@ -3032,6 +3034,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             halo2_config: ivm::host::ZkHalo2Config::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             stark_config: iroha_config::parameters::actual::Stark::default(),
+            pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
             instruction_queue_limits: HostOutputLimits::default(),
@@ -3115,6 +3118,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             halo2_config: ivm::host::ZkHalo2Config::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             stark_config: iroha_config::parameters::actual::Stark::default(),
+            pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
             instruction_queue_limits: HostOutputLimits::default(),
@@ -4036,6 +4040,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.default.set_zk_gas_schedule(schedule);
         self.set_halo2_config(&cfg.halo2);
         self.set_stark_config(&cfg.stark);
+        self.pipa_r_config = cfg.pipa_r;
     }
     /// Return the immutable ZK gas schedule snapshot selected for this host.
     #[must_use]
@@ -4515,6 +4520,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         match rec.backend {
             BackendTag::Halo2IpaPasta => "halo2/ipa",
             BackendTag::Stark => "stark",
+            BackendTag::NativePipaRPasta => "pipa-r/pasta",
         }
         .to_string()
     }
@@ -4522,9 +4528,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         backend_label: &str,
         backend_tag: BackendTag,
     ) -> bool {
-        matches!(backend_tag, BackendTag::Halo2IpaPasta | BackendTag::Stark)
-            && crate::zk::verifier_backend_registry_tag_v1(backend_label)
-                .is_some_and(|expected| expected == backend_tag)
+        matches!(
+            backend_tag,
+            BackendTag::Halo2IpaPasta | BackendTag::Stark | BackendTag::NativePipaRPasta
+        ) && crate::zk::verifier_backend_registry_tag_v1(backend_label)
+            .is_some_and(|expected| expected == backend_tag)
     }
     #[cfg(test)]
     fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
@@ -4547,6 +4555,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     return Err(ivm::host::ERR_BACKEND);
                 }
             }
+            iroha_data_model::zk::BackendTag::NativePipaRPasta => {
+                if payload_len > self.pipa_r_config.max_envelope_bytes {
+                    return Err(ivm::host::ERR_ENVELOPE_SIZE);
+                }
+                if !self.pipa_r_config.enabled {
+                    return Err(ivm::host::ERR_DISABLED);
+                }
+            }
             iroha_data_model::zk::BackendTag::Stark => {
                 if payload_len > self.stark_config.max_envelope_bytes {
                     return Err(ivm::host::ERR_ENVELOPE_SIZE);
@@ -4557,36 +4573,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         }
         Ok(())
-    }
-    fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
-        if raw.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
-            || !iroha_data_model::zk::open_verify_circuit_id_is_portable(raw)
-            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
-                raw,
-            )
-        {
-            return None;
-        }
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
-            return (!rest.is_empty()).then(|| trimmed.to_string());
-        }
-        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        if let Some(rest) = trimmed.strip_prefix("halo2/ipa::") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        if let Some(rest) = trimmed.strip_prefix("halo2/ipa:") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        if let Some(rest) = trimmed.strip_prefix("halo2/ipa/") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        Some(format!("halo2/pasta/ipa/{trimmed}"))
     }
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         let is_admissible = |circuit_id: &str| {
@@ -4599,18 +4585,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if !is_admissible(record_id) || !is_admissible(env_id) {
             return false;
         }
-        if backend == "halo2/ipa" {
-            match (
-                Self::normalize_halo2_circuit_id(record_id),
-                Self::normalize_halo2_circuit_id(env_id),
-            ) {
-                (Some(rec), Some(env)) => rec == env,
-                _ => record_id == env_id,
-            }
-        } else {
-            record_id == env_id
+        if crate::zk::verifier_backend_registry_tag_v1(backend)
+            == Some(BackendTag::NativePipaRPasta)
+        {
+            return record_id == env_id
+                && crate::zk::pipa_r_open_verify_circuit_id_matches_backend(backend, record_id);
         }
+        crate::zk::is_stark_fri_v1_backend(backend) && record_id == env_id
     }
+
     fn load_vk_record_any_namespace(
         &self,
         vk_commitment: [u8; 32],
@@ -4655,6 +4638,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if open.envelope_bytes.len() > self.stark_config.max_proof_bytes {
                 return Err(ivm::host::ERR_PROOF_LEN);
             }
+        } else if env.backend == BackendTag::NativePipaRPasta {
+            if proof_len_bytes > self.pipa_r_config.max_proof_bytes {
+                return Err(ivm::host::ERR_PROOF_LEN);
+            }
         } else if proof_len_bytes > self.halo2_config.max_proof_bytes {
             return Err(ivm::host::ERR_PROOF_LEN);
         }
@@ -4666,6 +4653,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn curve_is_allowed(&self, backend_label: &str, curve_label: &str) -> bool {
         if crate::zk::is_stark_fri_v1_backend(backend_label) {
             return curve_label == "goldilocks";
+        }
+        if crate::zk::verifier_backend_registry_tag_v1(backend_label)
+            == Some(BackendTag::NativePipaRPasta)
+        {
+            return curve_label == "vesta";
         }
         match self.halo2_config.curve {
             ivm::host::ZkCurve::Pallas | ivm::host::ZkCurve::Pasta => {
@@ -4690,6 +4682,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.validate_envelope_header(&env, payload_len)?;
         let max_proof_bytes = match env.backend {
             BackendTag::Stark => self.stark_config.max_proof_bytes,
+            BackendTag::NativePipaRPasta => self.pipa_r_config.max_proof_bytes,
             _ => self.halo2_config.max_proof_bytes,
         };
         env.validate_with_bounds(OpenVerifyEnvelopeBounds {
@@ -4729,7 +4722,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             else {
                 return Err(ivm::host::ERR_DECODE);
             };
-            if k > self.halo2_config.max_k {
+            if env.backend == BackendTag::Halo2IpaPasta && k > self.halo2_config.max_k {
                 return Err(ivm::host::ERR_K);
             }
         }
@@ -4784,6 +4777,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     fn zk_verify_guardrails(&self) -> crate::zk::ZkVerifyGuardrails {
         crate::zk::ZkVerifyGuardrails {
+            pipa_r_enabled: self.pipa_r_config.enabled,
+            pipa_r_max_envelope_bytes: self.pipa_r_config.max_envelope_bytes,
+            pipa_r_max_proof_bytes: self.pipa_r_config.max_proof_bytes,
             halo2_enabled: self.halo2_config.enabled,
             halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
             halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
@@ -6654,17 +6650,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
     #[inline]
-    #[cfg_attr(not(feature = "zk-halo2-ipa"), allow(clippy::unnecessary_wraps))]
     #[cfg(test)]
     fn compute_envelope_hash(payload: &[u8]) -> Result<[u8; 32], ivm::VMError> {
-        #[cfg(feature = "zk-halo2-ipa")]
-        {
-            if norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(payload)
-                .is_err()
-            {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
-        }
+        norito::decode_canonical::<iroha_data_model::zk::OpenVerifyEnvelope>(payload)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
         Ok(iroha_crypto::Hash::new(payload).into())
     }
     fn len_to_u32(len: usize) -> Result<u32, ivm::VMError> {
@@ -15139,16 +15128,15 @@ mod tests {
             .clone();
         Json::from(payload)
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     fn sample_open_verify_envelope() -> iroha_data_model::zk::OpenVerifyEnvelope {
-        let fixture =
-            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
         iroha_data_model::zk::OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            circuit_id: "halo2/ipa:tiny-add".to_string(),
-            vk_hash: [1u8; 32],
-            public_inputs: fixture.public_inputs,
-            proof_bytes: fixture.proof_bytes,
+            backend: BackendTag::NativePipaRPasta,
+            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+            vk_hash: [1; 32],
+            public_inputs:
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
+                    .to_vec(),
+            proof_bytes: vec![1],
             aux: Vec::new(),
         }
     }
@@ -17318,7 +17306,7 @@ seiyaku OuterCaller {
             per_nullifier: u64::MAX,
             per_commitment: u64::MAX,
         });
-        let backend: iroha_schema::Ident = "halo2/ipa".into();
+        let backend: iroha_schema::Ident = "pipa-r/pasta".into();
         let proof = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), vec![0xa5]),
@@ -17476,7 +17464,7 @@ seiyaku OpaqueInstructionSubmission {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
         bind_test_contract_runtime(&mut host, 303);
-        let backend: iroha_schema::Ident = "halo2/ipa".into();
+        let backend: iroha_schema::Ident = "pipa-r/pasta".into();
         let instruction = InstructionBox::from(DMZk::SubmitBallot {
             election_id: "election".to_owned(),
             ciphertext: vec![0x11; 32],
@@ -18577,14 +18565,12 @@ seiyaku OpaqueInstructionSubmission {
         }
         iroha_crypto::Hash::new(payload)
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn compute_envelope_hash_rejects_invalid_payload() {
         let err = CoreHost::compute_envelope_hash(b"invalid envelope")
             .expect_err("invalid envelope should fail");
         assert!(matches!(err, ivm::VMError::NoritoInvalid));
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn compute_envelope_hash_accepts_norito_envelope() {
         let envelope = sample_open_verify_envelope();
@@ -18593,13 +18579,12 @@ seiyaku OpaqueInstructionSubmission {
         let expected: [u8; 32] = iroha_crypto::Hash::new(&payload).into();
         assert_eq!(hash, expected);
     }
-    #[cfg(not(feature = "zk-halo2-ipa"))]
     #[test]
-    fn compute_envelope_hash_accepts_bytes_without_feature_gate() {
-        let payload = b"opaque bytes";
-        let hash = CoreHost::compute_envelope_hash(payload).expect("hash payload");
-        let expected: [u8; 32] = iroha_crypto::Hash::new(payload).into();
-        assert_eq!(hash, expected);
+    fn compute_envelope_hash_rejects_opaque_bytes_unconditionally() {
+        assert_eq!(
+            CoreHost::compute_envelope_hash(b"opaque bytes"),
+            Err(ivm::VMError::NoritoInvalid)
+        );
     }
     #[test]
     fn norito_blob_roundtrips_with_header_decoder() {
@@ -22264,15 +22249,17 @@ seiyaku Callee {
     fn rejected_queued_confidential_instruction_retains_host_artifact_gas() {
         let authority = fixture_account("alice");
         let state = contract_test_state(&authority);
-        let fixture =
-            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add", [0_u8; 32]);
-        let proof = fixture.proof_box("halo2/ipa");
+        let fixture = crate::zk::test_utils::native_framing_fixture_envelope(
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            [0_u8; 32],
+        );
+        let proof = fixture.proof_box("pipa-r/pasta");
         let instruction: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(
             iroha_data_model::proof::ProofAttachment::new_ref(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 proof,
                 iroha_data_model::proof::VerifyingKeyId::new(
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     "missing-host-artifact-vk",
                 ),
             ),
@@ -22531,21 +22518,21 @@ seiyaku DurableOwner {
     }
     #[test]
     fn backend_label_prefers_stored_vk_backend_and_prefix() {
-        let id = VerifyingKeyId::new("halo2/ipa", "test_circuit");
+        let id = VerifyingKeyId::new("pipa-r/pasta", "test_circuit");
         let mut rec = VerifyingKeyRecord::new_with_owner(
             1,
             "halo2/ipa:test_circuit",
             None,
             "ns",
-            BackendTag::Halo2IpaPasta,
-            "pallas",
+            BackendTag::NativePipaRPasta,
+            "vesta",
             [0u8; 32],
             [1u8; 32],
         );
         // When no stored VK bytes are present, use the registry key backend.
         assert_eq!(
             CoreHost::backend_label_for_record(&id, &rec),
-            "halo2/ipa".to_string()
+            "pipa-r/pasta".to_string()
         );
         // Stored VK backend must override the circuit prefix.
         rec.key = Some(VerifyingKeyBox::new("custom/backend".into(), vec![1, 2, 3]));
@@ -22563,7 +22550,7 @@ seiyaku DurableOwner {
             schema_hash(
                 crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
             ),
-            "halo2/ipa",
+            "pipa-r/pasta",
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             Vec::new(),
@@ -22571,7 +22558,7 @@ seiyaku DurableOwner {
         rec.key = None;
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "ivm-execution-keyless"),
+            VerifyingKeyId::new("pipa-r/pasta", "ivm-execution-keyless"),
             rec,
         );
         host.set_verifying_keys(map)
@@ -22586,7 +22573,7 @@ seiyaku DurableOwner {
             schema_hash(
                 crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
             ),
-            "halo2/ipa",
+            "pipa-r/pasta",
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             Vec::new(),
@@ -22594,7 +22581,7 @@ seiyaku DurableOwner {
         rec.key = None;
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "ivm-execution-keyless"),
+            VerifyingKeyId::new("pipa-r/pasta", "ivm-execution-keyless"),
             rec,
         );
         host.set_verifying_keys(map)
@@ -22602,12 +22589,11 @@ seiyaku DurableOwner {
         let prepared = host
             .load_vk_record_any_namespace(commitment)
             .expect("commitment should resolve");
-        assert_eq!(prepared.backend_label.as_ref(), "halo2/ipa");
+        assert_eq!(prepared.backend_label.as_ref(), "pipa-r/pasta");
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
-    fn set_verifying_keys_rejects_malformed_halo2_material_during_rehydration() {
-        let backend = "halo2/ipa";
+    fn set_verifying_keys_rejects_malformed_native_material_during_rehydration() {
+        let backend = "pipa-r/pasta";
         let mut vk_bytes = b"ZK1\0CID1".to_vec();
         vk_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -22628,7 +22614,7 @@ seiyaku DurableOwner {
                 record,
             )]))
             .is_err(),
-            "state hydration must run the strict Halo2 registration validator"
+            "state hydration must run the strict native registration validator"
         );
         assert!(host.verifying_keys.is_empty());
         assert!(host.prepared_verifying_keys.is_empty());
@@ -22671,11 +22657,10 @@ seiyaku DurableOwner {
         assert!(host.verifying_keys.is_empty());
         assert!(host.prepared_verifying_keys.is_empty());
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_shares_records_and_caches_ipa_metadata() {
         let mut host = CoreHost::new(fixture_account("alice"));
-        let backend = "halo2/ipa";
+        let backend = "pipa-r/pasta";
         let vk_bytes = canonical_confidential_transfer_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let id = VerifyingKeyId::new(backend, "cached-vk");
@@ -22706,10 +22691,9 @@ seiyaku DurableOwner {
             Some(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K)
         );
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_rejects_missing_schedule_duplicates_and_updates_atomically() {
-        let backend = "halo2/ipa";
+        let backend = "pipa-r/pasta";
         let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let vk_bytes = canonical_confidential_transfer_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -22802,7 +22786,7 @@ seiyaku DurableOwner {
         ];
         for (label, circuit_id) in invalid_circuit_ids {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let rec = active_vk_record(
@@ -22816,7 +22800,7 @@ seiyaku DurableOwner {
             );
         }
         let mut host = CoreHost::new(fixture_account("alice"));
-        let backend = "halo2/ipa";
+        let backend = "pipa-r/pasta";
         let vk_bytes = vec![1, 2, 3, 4];
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let oversized_circuit_id =
@@ -22840,7 +22824,7 @@ seiyaku DurableOwner {
     fn set_verifying_keys_rejects_exact12_privacy_ids_during_state_rehydration() {
         for circuit_id in PrivacyProtocolIdV1::ALL.map(PrivacyProtocolIdV1::canonical_label) {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let record = active_vk_record(
@@ -22861,7 +22845,7 @@ seiyaku DurableOwner {
             ("uppercase", exact12.to_ascii_uppercase()),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let record = active_vk_record(
@@ -22881,7 +22865,7 @@ seiyaku DurableOwner {
             assert!(host.prepared_verifying_keys.is_empty());
         }
         let mut host = CoreHost::new(fixture_account("alice"));
-        let backend = "halo2/ipa";
+        let backend = "pipa-r/pasta";
         let vk_bytes = vec![1, 2, 3, 4];
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let near_miss = format!("generic-{exact12}");
@@ -22904,30 +22888,30 @@ seiyaku DurableOwner {
         const OVERSIZED_VERIFYING_KEY_FIELD_BYTES: usize = 257;
         let invalid_registry_ids = [
             ("blank-backend", " ", "vk"),
-            ("blank-name", "halo2/ipa", " "),
+            ("blank-name", "pipa-r/pasta", " "),
             ("uppercase-backend", "Halo2/ipa", "vk"),
-            ("uppercase-name", "halo2/ipa", "Vk"),
+            ("uppercase-name", "pipa-r/pasta", "Vk"),
             ("control-backend", "halo2/ipa\nforged", "vk"),
-            ("control-name", "halo2/ipa", "vk\nforged"),
+            ("control-name", "pipa-r/pasta", "vk\nforged"),
             ("zero-width-backend", "halo2/ipa\u{200B}", "vk"),
-            ("zero-width-name", "halo2/ipa", "vk\u{200B}forged"),
+            ("zero-width-name", "pipa-r/pasta", "vk\u{200B}forged"),
             ("path-traversal-backend", "halo2/ipa/../vk", "vk"),
-            ("path-traversal-name", "halo2/ipa", "vk/../forged"),
+            ("path-traversal-name", "pipa-r/pasta", "vk/../forged"),
             ("dot-segment-backend", "halo2/ipa/./vk", "vk"),
-            ("dot-segment-name", "halo2/ipa", "vk/./forged"),
+            ("dot-segment-name", "pipa-r/pasta", "vk/./forged"),
             ("hidden-backend", "halo2/.ipa", "vk"),
-            ("hidden-name", "halo2/ipa", ".vk"),
+            ("hidden-name", "pipa-r/pasta", ".vk"),
             ("slash-colon-backend", "halo2/ipa/:vk", "vk"),
-            ("colon-slash-name", "halo2/ipa", "vk:/forged"),
+            ("colon-slash-name", "pipa-r/pasta", "vk:/forged"),
             ("backslash-backend", "halo2\\ipa", "vk"),
-            ("backslash-name", "halo2/ipa", "vk\\forged"),
-            ("leading-delimiter-name", "halo2/ipa", "-vk"),
-            ("trailing-delimiter-name", "halo2/ipa", "vk_"),
+            ("backslash-name", "pipa-r/pasta", "vk\\forged"),
+            ("leading-delimiter-name", "pipa-r/pasta", "-vk"),
+            ("trailing-delimiter-name", "pipa-r/pasta", "vk_"),
             ("backend-double-colon-alias", "halo2/ipa::transfer", "vk"),
         ];
         for (label, id_backend, id_name) in invalid_registry_ids {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let rec = active_vk_record(
@@ -22953,12 +22937,12 @@ seiyaku DurableOwner {
             ),
             (
                 "oversized-name",
-                "halo2/ipa".to_string(),
+                "pipa-r/pasta".to_string(),
                 "a".repeat(OVERSIZED_VERIFYING_KEY_FIELD_BYTES),
             ),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let rec = active_vk_record(
@@ -22986,12 +22970,12 @@ seiyaku DurableOwner {
             (
                 "stark-registry-halo2-record",
                 "stark/fri",
-                "halo2/ipa",
+                "pipa-r/pasta",
                 "halo2/ipa:test-circuit",
             ),
             (
                 "halo2-registry-stark-record",
-                "halo2/ipa",
+                "pipa-r/pasta",
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1",
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1:zk-ace",
             ),
@@ -23023,7 +23007,7 @@ seiyaku DurableOwner {
             ("keyless-zero-commitment-and-schema-hash", true, true, true),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let schema_hash = if zero_schema_hash {
@@ -23133,7 +23117,7 @@ seiyaku DurableOwner {
         ];
         for (label, field, value) in cases {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let mut rec = active_vk_record(
@@ -23163,7 +23147,7 @@ seiyaku DurableOwner {
             ("inverted-window", Some(10), Some(9)),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_bytes = vec![1, 2, 3, 4];
             let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
             let mut rec = active_vk_record(
@@ -23278,10 +23262,10 @@ seiyaku DurableOwner {
     #[test]
     fn set_verifying_keys_rejects_readiness_claim_and_unsupported_backend_labels() {
         for (backend, backend_tag) in [
-            ("halo2/ipa:production-ready", BackendTag::Halo2IpaPasta),
-            ("halo2/ipa:mainnet-complete", BackendTag::Halo2IpaPasta),
+            ("halo2/ipa:production-ready", BackendTag::NativePipaRPasta),
+            ("halo2/ipa:mainnet-complete", BackendTag::NativePipaRPasta),
             ("stark/fri/audit-signoff", BackendTag::Stark),
-            ("halo2/unknown-native-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/unknown-native-v1", BackendTag::NativePipaRPasta),
             ("stark/fri/random-profile", BackendTag::Stark),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
@@ -23299,7 +23283,7 @@ seiyaku DurableOwner {
             rec.curve = if backend_tag == BackendTag::Stark {
                 "goldilocks".to_string()
             } else {
-                "pallas".to_string()
+                "vesta".to_string()
             };
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
@@ -24885,7 +24869,7 @@ seiyaku DurableOwner {
         election.finalized = true;
         election.tally = vec![large_weight, 1, 0];
         world.elections.insert("election-1".to_string(), election);
-        let backend = "halo2/ipa";
+        let backend = "pipa-r/pasta";
         let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let commitment = [0x61; 32];
         let schema_hash = schema_hash(
@@ -25071,14 +25055,14 @@ seiyaku DurableOwner {
             schema_hash(
                 crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
             ),
-            "halo2/ipa",
+            "pipa-r/pasta",
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
         prior_vk.key = None;
         host.set_verifying_keys(BTreeMap::from([(
-            VerifyingKeyId::new("halo2/ipa", "prior-snapshot-vk"),
+            VerifyingKeyId::new("pipa-r/pasta", "prior-snapshot-vk"),
             prior_vk,
         )]))
         .expect("seed prior verifying-key snapshot");
@@ -25267,7 +25251,7 @@ seiyaku DurableOwner {
         election.finalized = true;
         election.tally = vec![1, 2];
         world.elections.insert("election-1".to_string(), election);
-        let backend = "halo2/ipa";
+        let backend = "pipa-r/pasta";
         let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let commitment = [0x62; 32];
         let schema_hash = schema_hash(
@@ -25511,7 +25495,7 @@ seiyaku DurableOwner {
         proof_bytes: Vec<u8>,
     ) -> Vec<u8> {
         let env = iroha_data_model::zk::OpenVerifyEnvelope {
-            backend: BackendTag::Halo2IpaPasta,
+            backend: BackendTag::NativePipaRPasta,
             circuit_id: circuit_id.to_string(),
             vk_hash,
             public_inputs,
@@ -25538,7 +25522,6 @@ seiyaku DurableOwner {
         mutate(&mut env);
         norito::to_bytes(&env).expect("serialize mutated envelope")
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     fn canonical_confidential_transfer_vk_bytes() -> Vec<u8> {
         crate::zk::confidential_v2::confidential_transfer_v2_vk_box()
             .expect("canonical confidential-transfer verifier key")
@@ -25558,7 +25541,7 @@ seiyaku DurableOwner {
         let (backend_tag, curve) = if crate::zk::is_stark_fri_v1_backend(backend) {
             (BackendTag::Stark, "goldilocks")
         } else {
-            (BackendTag::Halo2IpaPasta, "pallas")
+            (BackendTag::NativePipaRPasta, "vesta")
         };
         let mut rec = VerifyingKeyRecord::new_with_owner(
             1,
@@ -25576,7 +25559,7 @@ seiyaku DurableOwner {
             if crate::zk::is_stark_fri_v1_backend(backend) {
                 "stark_default"
             } else {
-                "halo2_default"
+                "native_pipa_r_default"
             }
             .to_owned(),
         );
@@ -26000,3 +25983,73 @@ seiyaku PreparedBoundaryArguments {
 
 #[cfg(test)]
 mod return_resource_tests;
+
+#[cfg(test)]
+mod native_pipa_r_admission_tests {
+    use super::*;
+    use iroha_test_samples::ALICE_ID;
+
+    #[test]
+    fn native_policy_caps_curve_and_exact_circuit_are_independent_of_halo2() {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        let mut config = crate::state::default_zk_config();
+        config.halo2.enabled = false;
+        config.pipa_r.enabled = true;
+        config.pipa_r.max_envelope_bytes = 100;
+        config.pipa_r.max_proof_bytes = 2;
+        host.set_zk_config(&config);
+        let mut envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: BackendTag::NativePipaRPasta,
+            circuit_id: "pipa-r/pasta/kaigi-usage-v1".into(),
+            vk_hash: [1; 32],
+            public_inputs: vec![1],
+            proof_bytes: vec![1, 2],
+            aux: Vec::new(),
+        };
+        assert_eq!(host.validate_envelope_header(&envelope, 100), Ok(()));
+        assert_eq!(
+            host.validate_envelope_header(&envelope, 101),
+            Err(ivm::host::ERR_ENVELOPE_SIZE)
+        );
+        let record = VerifyingKeyRecord::new(
+            1,
+            &envelope.circuit_id,
+            BackendTag::NativePipaRPasta,
+            "vesta",
+            [1; 32],
+            [2; 32],
+        );
+        assert_eq!(
+            host.validate_proof_len(&record, "pipa-r/pasta", &envelope),
+            Ok(())
+        );
+        envelope.proof_bytes.push(3);
+        assert_eq!(
+            host.validate_proof_len(&record, "pipa-r/pasta", &envelope),
+            Err(ivm::host::ERR_PROOF_LEN)
+        );
+        assert!(host.curve_is_allowed("pipa-r/pasta", "vesta"));
+        for curve in ["vesta", "pasta", "Vesta", "vesta "] {
+            assert!(!host.curve_is_allowed("pipa-r/pasta", curve));
+        }
+        assert!(CoreHost::circuit_id_matches(
+            "pipa-r/pasta",
+            &envelope.circuit_id,
+            &envelope.circuit_id
+        ));
+        for alias in [
+            "halo2/pasta/ipa/kaigi-usage-v1",
+            "pipa-r/ipa/pasta/kaigi-usage-v1",
+            "kaigi-usage-v1",
+        ] {
+            assert!(!CoreHost::circuit_id_matches("pipa-r/pasta", alias, alias));
+        }
+        config.pipa_r.enabled = false;
+        host.set_zk_config(&config);
+        assert_eq!(
+            host.validate_envelope_header(&envelope, 100),
+            Err(ivm::host::ERR_DISABLED)
+        );
+        assert!(!host.zk_verify_guardrails().pipa_r_enabled);
+    }
+}

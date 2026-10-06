@@ -5095,11 +5095,13 @@ dependencies = [
  "fastpq_prover",
  "ff",
  "halo2-axiom",
- "halo2-base",
  "hex",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_fs",
+ "iroha_pasta",
+ "iroha_plonk",
+ "iroha_plonk_gadgets",
  "iroha_primitives",
  "iroha_zkp_halo2",
  "iroha_zkp_poseidon",
@@ -6709,10 +6711,11 @@ dependencies = [
 name = "kaigi_zk"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "halo2-axiom",
+ "ff",
  "iroha_crypto",
+ "iroha_pasta",
+ "iroha_plonk",
  "poseidon-primitives",
- "rand_core 0.6.4",
  "zeroize",
 ]
 
@@ -13349,7 +13352,7 @@ dependencies = [
  "ed25519-dalek",
  "eyre",
  "fastpq_isi",
- "halo2-axiom",
+ "ff",
  "hex",
  "integration_tests",
  "iroha",
@@ -13362,6 +13365,8 @@ dependencies = [
  "iroha_fs",
  "iroha_genesis",
  "iroha_model_base",
+ "iroha_pasta",
+ "iroha_plonk",
  "iroha_primitives",
  "iroha_service_model",
  "iroha_storage_client",

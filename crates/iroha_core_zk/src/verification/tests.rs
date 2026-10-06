@@ -5,6 +5,9 @@ use crate::{ZK_BACKEND_HALO2_IPA, ZK_BACKEND_STARK_FRI_V1};
 
 fn policy() -> ZkVerifyGuardrails {
     ZkVerifyGuardrails {
+        pipa_r_enabled: true,
+        pipa_r_max_envelope_bytes: 8 * 1024 * 1024,
+        pipa_r_max_proof_bytes: 8 * 1024 * 1024,
         halo2_enabled: true,
         halo2_max_envelope_bytes: 1024 * 1024,
         halo2_max_proof_bytes: 1024 * 1024,
@@ -57,33 +60,54 @@ fn admission_rejects_policy_and_size_before_decoding() {
 }
 
 #[test]
-fn every_admitted_halo2_circuit_has_one_explicit_relation() {
+fn every_admitted_native_circuit_has_one_explicit_relation() {
     use ProofRelation::*;
-    let relations = [
-        KaigiAuthorization,
-        KaigiUsage,
-        ConfidentialTransfer,
-        ConfidentialFullUnshield,
-        ConfidentialChangeUnshield,
-    ];
-    assert_eq!(
-        crate::HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.len(),
-        relations.len()
-    );
-    for (circuit, expected) in crate::HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1
-        .iter()
-        .zip(relations)
-    {
-        assert_eq!(
-            compiled_relation(ZK_BACKEND_HALO2_IPA, circuit),
-            Some(expected)
-        );
+    for (circuit, expected) in [
+        (
+            crate::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            ConfidentialTransfer,
+        ),
+        (
+            crate::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+            ConfidentialFullUnshield,
+        ),
+        (
+            crate::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            ConfidentialChangeUnshield,
+        ),
+    ] {
+        for backend in [crate::ZK_BACKEND_NATIVE_PIPA_R, circuit] {
+            assert_eq!(compiled_relation(backend, circuit), Some(expected));
+        }
+        assert_eq!(compiled_relation(ZK_BACKEND_HALO2_IPA, circuit), None);
         assert_eq!(compiled_relation(ZK_BACKEND_STARK_FRI_V1, circuit), None);
     }
     assert_eq!(
         compiled_relation(ZK_BACKEND_HALO2_IPA, "halo2/pasta/ipa/unreviewed"),
         None
     );
+    for (kind, expected) in [
+        (
+            kaigi_zk::native::NativeRelationV1::Authorization,
+            KaigiAuthorization,
+        ),
+        (kaigi_zk::native::NativeRelationV1::Usage, KaigiUsage),
+    ] {
+        for backend in [crate::ZK_BACKEND_NATIVE_PIPA_R, kind.circuit_id()] {
+            assert_eq!(
+                compiled_relation(backend, kind.circuit_id()),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            compiled_relation(ZK_BACKEND_HALO2_IPA, kind.circuit_id()),
+            None
+        );
+        assert_eq!(
+            compiled_relation(ZK_BACKEND_STARK_FRI_V1, kind.circuit_id()),
+            None
+        );
+    }
 }
 
 #[test]
@@ -130,29 +154,32 @@ fn public_binding_cannot_satisfy_a_confidential_requirement() {
 
 #[test]
 fn backend_confusion_and_unknown_circuits_reject_before_crypto() {
-    let key = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+    let key = VerifyingKeyBox::new(
+        super::super::ZK_BACKEND_NATIVE_PIPA_R.to_owned(),
+        Vec::new(),
+    );
     let wrong_backend = ProofBox::new(
-        ZK_BACKEND_HALO2_IPA.to_owned(),
-        envelope(BackendTag::Stark, "halo2/pasta/ipa/kaigi-usage-v1"),
+        super::super::ZK_BACKEND_NATIVE_PIPA_R.to_owned(),
+        envelope(BackendTag::Stark, "pipa-r/pasta/kaigi-usage-v1"),
     );
     assert_eq!(
         verify_for_relation(ProofRelation::KaigiUsage, &wrong_backend, &key, policy()),
         Err(ProofVerificationError::MalformedEnvelope)
     );
     let unknown = ProofBox::new(
-        ZK_BACKEND_HALO2_IPA.to_owned(),
-        envelope(BackendTag::Halo2IpaPasta, "halo2/pasta/ipa/unreviewed"),
+        super::super::ZK_BACKEND_NATIVE_PIPA_R.to_owned(),
+        envelope(BackendTag::NativePipaRPasta, "pipa-r/pasta/unreviewed"),
     );
     assert_eq!(
         verify_for_relation(ProofRelation::KaigiUsage, &unknown, &key, policy()),
         Err(ProofVerificationError::UnsupportedRelation)
     );
     let oversized = ProofBox::new(
-        ZK_BACKEND_HALO2_IPA.to_owned(),
-        envelope(BackendTag::Halo2IpaPasta, "halo2/pasta/ipa/kaigi-usage-v1"),
+        super::super::ZK_BACKEND_NATIVE_PIPA_R.to_owned(),
+        envelope(BackendTag::NativePipaRPasta, "pipa-r/pasta/kaigi-usage-v1"),
     );
     let mut limits = policy();
-    limits.halo2_max_proof_bytes = 0;
+    limits.pipa_r_max_proof_bytes = 0;
     assert_eq!(
         verify_for_relation(ProofRelation::KaigiUsage, &oversized, &key, limits),
         Err(ProofVerificationError::ProofTooLarge {

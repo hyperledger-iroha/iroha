@@ -7,12 +7,13 @@
 use ff::Field;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{GlueChip, UintChip, bytes::tape::BytesChip, p256::native::Affine};
+use iroha_plonk_gadgets::{GlueChip, UintChip, bytes::tape::BytesChip};
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
 
 use super::{
     SigmaBindingCells, SignatureProofCells,
     context::{ContextObjectCells, ContextObjectSpec},
+    own::{CurrentAuthorization, OwnPolicy, authenticate_current},
 };
 use crate::{
     operation_relation::{
@@ -27,35 +28,11 @@ use crate::{
     q_signature::SignatureKey,
 };
 
-/// Fixed scheme/provider identities and scheme-root key in the Load artifact.
-#[derive(Clone, Copy, Debug)]
-pub struct LoadPolicy {
-    scheme: [u128; 2],
-    provider: [u128; 2],
-    root: Affine,
-}
-impl LoadPolicy {
-    /// Validate the fixed identities and finite canonical scheme-root point.
-    ///
-    /// # Errors
-    /// A zero identity or invalid root key.
-    pub fn new(scheme: [u128; 2], provider: [u128; 2], root: Affine) -> Result<Self, Error> {
-        if scheme == [0; 2] || provider == [0; 2] || !root.is_valid() {
-            return Err(Error::Synthesis);
-        }
-        Ok(Self {
-            scheme,
-            provider,
-            root,
-        })
-    }
-}
-
-/// Exact certificate, finalized voucher and operation receipt, in this order.
+/// Load certificate, finalized voucher, own receipt, Enrollment certificate and current credential.
 #[derive(Clone, Debug)]
 pub struct LoadObjects {
-    objects: [SignedObjectCells; 3],
-    context: [ContextObjectCells; 3],
+    objects: [SignedObjectCells; 5],
+    context: [ContextObjectCells; 5],
 }
 /// State and authenticated Q outputs consumed by Load's signed-object relation.
 #[derive(Clone, Copy)]
@@ -66,7 +43,7 @@ pub struct LoadInputs<'a> {
     pub successor: MapState<'a>,
     /// Own exact statement and sigma-only proof digest from the Q-bound tape.
     pub sigma: &'a SigmaBindingCells,
-    /// Hard Q signature slots ordered receipt, voucher, fixed root certificate.
+    /// Slots for the owning task: receipt/voucher/Load certificate, or current credential/Enrollment certificate.
     pub signatures: &'a [SignatureProofCells],
 }
 impl LoadObjects {
@@ -74,12 +51,14 @@ impl LoadObjects {
     ///
     /// # Errors
     /// An impossible size conversion in the fixed schema.
-    pub fn context_specs() -> Result<[ContextObjectSpec; 3], Error> {
+    pub fn context_specs() -> Result<[ContextObjectSpec; 5], Error> {
         let mut out = Vec::new();
         for (tag, kind) in [
             (1, ObjectKind::Certificate),
             (2, ObjectKind::Voucher),
             (3, ObjectKind::Receipt),
+            (4, ObjectKind::Certificate),
+            (5, ObjectKind::Credential),
         ] {
             out.push(ContextObjectSpec {
                 tag,
@@ -96,7 +75,7 @@ impl LoadObjects {
         chip: &mut VerifierChip<Ep>,
         bytes: &mut BytesChip<Fp>,
         region: &mut Region<'_, Fp>,
-        source: [&[Value<u8>]; 3],
+        source: [&[Value<u8>]; 5],
     ) -> Result<Self, Error> {
         let mut objects = Vec::new();
         let mut context = Vec::new();
@@ -104,6 +83,8 @@ impl LoadObjects {
             ObjectKind::Certificate,
             ObjectKind::Voucher,
             ObjectKind::Receipt,
+            ObjectKind::Certificate,
+            ObjectKind::Credential,
         ]
         .into_iter()
         .zip(source)
@@ -137,8 +118,8 @@ impl LoadObjects {
             context: context.try_into().map_err(|_| Error::Synthesis)?,
         })
     }
-    /// Same-tape object commitments for both split halves.
-    pub const fn context(&self) -> &[ContextObjectCells; 3] {
+    /// Same-tape object commitments rebound by every split stage.
+    pub const fn context(&self) -> &[ContextObjectCells; 5] {
         &self.context
     }
 
@@ -156,7 +137,7 @@ impl LoadObjects {
         &self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
-        policy: LoadPolicy,
+        policy: OwnPolicy,
         input: LoadInputs<'_>,
     ) -> Result<(), Error> {
         let statement = input.sigma.hard_statement()?;
@@ -223,6 +204,33 @@ impl LoadObjects {
         )?;
         GlueChip::assert_constant(region, valid.word(), Fp::ONE)
     }
+    /// Reverify the current credential and its Enrollment certificate for this step.
+    /// # Errors
+    /// Wrong signature count/root/scope, wrong own state, or layout failure.
+    pub fn authenticate_current(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        policy: OwnPolicy,
+        input: LoadInputs<'_>,
+    ) -> Result<(), Error> {
+        if input.signatures.len() != 2 || input.sigma.hard_statement()?.variant() != Variant::Load {
+            return Err(Error::Synthesis);
+        }
+        authenticate_current(
+            chip,
+            region,
+            policy,
+            CurrentAuthorization {
+                credential: &self.objects[4],
+                certificate: &self.objects[3],
+                credential_proof: &input.signatures[0],
+                certificate_proof: &input.signatures[1],
+                current: input.predecessor,
+                statement: input.sigma.hard_statement()?,
+            },
+        )
+    }
     /// Prove the exact recovery insertion, arithmetic and unchanged-field rules.
     ///
     /// This hard map obligation can occupy a separate fixed split stage from
@@ -259,14 +267,14 @@ pub struct LoadStagePlan {
     context: super::context::ContextPlan,
 }
 impl LoadStagePlan {
-    /// Require recovery and authorization exactly once, with authorization
-    /// executed alongside the owning signature Q (slot1).
+    /// Require recovery, voucher/receipt authorization and current-credential
+    /// authorization exactly once, with hard signature Q slots1 and2 respectively.
     /// # Errors
     /// Wrong variant/task set, signature-Q count or stage assignment.
     pub fn new(context: super::context::ContextPlan) -> Result<Self, Error> {
         use super::schedule::OperationTask;
         if context.operation().frame().variant() != Variant::Load
-            || context.operation().q_count() != 2
+            || context.operation().q_count() != 3
             || context.object_specs() != LoadObjects::context_specs()?
         {
             return Err(Error::Synthesis);
@@ -276,13 +284,18 @@ impl LoadStagePlan {
             .collect::<Vec<_>>();
         OperationTask::validate(Variant::Load, &groups)?;
         for (stage, tasks) in groups.iter().enumerate() {
-            if tasks.contains(&OperationTask::LoadAuthorization)
-                && !context
-                    .q_partition(stage)
-                    .ok_or(Error::Synthesis)?
-                    .contains(&1)
-            {
-                return Err(Error::Synthesis);
+            for (task, q) in [
+                (OperationTask::LoadAuthorization, 1),
+                (OperationTask::LoadCurrentAuthorization, 2),
+            ] {
+                if tasks.contains(&task)
+                    && !context
+                        .q_partition(stage)
+                        .ok_or(Error::Synthesis)?
+                        .contains(&q)
+                {
+                    return Err(Error::Synthesis);
+                }
             }
         }
         Ok(Self { context })
@@ -301,9 +314,10 @@ impl LoadStagePlan {
         region: &mut Region<'_, Fp>,
         stage: usize,
         objects: &LoadObjects,
-        policy: LoadPolicy,
+        policy: OwnPolicy,
         input: LoadInputs<'_>,
         insertion: Option<&InsertCells>,
+        signature: Option<super::SignatureQContext<'_>>,
     ) -> Result<(), Error> {
         use super::schedule::OperationTask;
         let tasks = self
@@ -313,6 +327,30 @@ impl LoadStagePlan {
         if tasks.contains(&OperationTask::LoadRecovery) != insertion.is_some() {
             return Err(Error::Synthesis);
         }
+        let owning_q = if tasks.contains(&OperationTask::LoadAuthorization) {
+            Some(1)
+        } else if tasks.contains(&OperationTask::LoadCurrentAuthorization) {
+            Some(2)
+        } else {
+            None
+        };
+        if owning_q.is_some() != signature.is_some() {
+            return Err(Error::Synthesis);
+        }
+        let input = if let Some(q) = signature {
+            q.bundle.bind_context(
+                region,
+                self.context.operation(),
+                owning_q.ok_or(Error::Synthesis)?,
+                q.instances,
+            )?;
+            LoadInputs {
+                signatures: q.bundle.slots(),
+                ..input
+            }
+        } else {
+            input
+        };
         for task in tasks {
             match task {
                 OperationTask::LoadRecovery => {
@@ -320,6 +358,9 @@ impl LoadStagePlan {
                 }
                 OperationTask::LoadAuthorization => {
                     objects.authenticate(chip, region, policy, input)?
+                }
+                OperationTask::LoadCurrentAuthorization => {
+                    objects.authenticate_current(chip, region, policy, input)?
                 }
                 _ => return Err(Error::Synthesis),
             }

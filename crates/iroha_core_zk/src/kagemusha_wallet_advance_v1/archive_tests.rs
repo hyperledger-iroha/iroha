@@ -367,3 +367,47 @@ fn provider_archive_adapter_shares_custody_and_brackets_named_records() {
         Some(b"immutable witness".to_vec())
     );
 }
+
+#[test]
+fn scoped_archive_record_collection_keeps_protected_storage_and_exact_key() {
+    let (device, _, slot, _) = bootstrapped_device(Policy::Keychain, 0x75);
+    let mut provider = device.open();
+    provider
+        .with_archive(&slot, |archive| {
+            archive.write_record(&[1; 32], b"claim one")?;
+            archive.write_record(&[2; 32], b"claim two")
+        })
+        .unwrap();
+    provider
+        .with_archive(&slot, |archive| archive.remove_record(&[1; 32]))
+        .unwrap();
+    provider
+        .with_archive(&slot, |archive| archive.remove_record(&[1; 32]))
+        .unwrap();
+    assert_eq!(
+        provider
+            .with_archive(&slot, |archive| archive.read_record(&[1; 32], 9))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        provider
+            .with_archive(&slot, |archive| archive.read_record(&[2; 32], 9))
+            .unwrap(),
+        Some(b"claim two".to_vec())
+    );
+    device
+        .platform
+        .with(|state| state.storage_lock_after = Some(1));
+    assert!(matches!(
+        provider.with_archive(&slot, |archive| archive.remove_record(&[2; 32])),
+        Err(Error::Unavailable(_))
+    ));
+    device.platform.clear_faults();
+    assert_eq!(
+        provider
+            .with_archive(&slot, |archive| archive.read_record(&[2; 32], 9))
+            .unwrap(),
+        Some(b"claim two".to_vec())
+    );
+}

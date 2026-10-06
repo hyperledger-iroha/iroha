@@ -44,6 +44,67 @@ impl SignatureProofCells {
     }
 }
 
+/// Signature slots kept with their exact Q identity, instances and pending opening.
+/// A concrete stage binds this bundle to its committed instance cells and folds
+/// `verified()`; extracting slots never discards that deferred proof obligation.
+#[must_use = "bind to the owning context and retain the exact verified Q opening"]
+#[derive(Clone, Debug)]
+pub struct SignatureQCells {
+    verified: VerifiedQCells,
+    slots: Vec<SignatureProofCells>,
+}
+impl SignatureQCells {
+    /// Original hard Q result, including the exact pending generator opening.
+    pub const fn verified(&self) -> &VerifiedQCells {
+        &self.verified
+    }
+    /// Ordered opaque signature exports of that same Q proof.
+    pub fn slots(&self) -> &[SignatureProofCells] {
+        &self.slots
+    }
+    /// Bind to this stage's fixed Q identity and the exact `D_ctx` instance cells.
+    /// # Errors
+    /// Wrong index/key/shape, layout failure, or an unsatisfied instance equality.
+    pub fn bind_context(
+        &self,
+        region: &mut Region<'_, Fp>,
+        operation: &AProofPlan,
+        index: usize,
+        instances: &[Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+    ) -> Result<(), Error> {
+        let expected = operation.q(index).ok_or(Error::Synthesis)?;
+        if self.verified.index != index || self.verified.instances.len() != instances.len() {
+            return Err(Error::Synthesis);
+        }
+        GlueChip::assert_constant(
+            region,
+            &self.verified.key_digest,
+            expected
+                .key
+                .kagemusha_digest(expected.verifier().binding())
+                .map_err(|_| Error::Synthesis)?,
+        )?;
+        for (actual, expected) in self.verified.instances.iter().zip(instances) {
+            if actual.len() != expected.len() {
+                return Err(Error::Synthesis);
+            }
+            for (actual, expected) in actual.iter().zip(expected) {
+                GlueChip::assert_equal(region, actual.lo().word(), expected.lo().word())?;
+                GlueChip::assert_equal(region, actual.hi().word(), expected.hi().word())?;
+            }
+        }
+        Ok(())
+    }
+}
+/// A signature bundle paired with the instance cells committed by this stage's context.
+#[derive(Clone, Copy, Debug)]
+pub struct SignatureQContext<'a> {
+    /// Same Q proof whose pending opening enters this stage's fixed fold.
+    pub bundle: &'a SignatureQCells,
+    /// Exact Q column cells from `ContextInputs::q_instances`.
+    pub instances: &'a [Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+}
+
 /// Bind an admitted hard Q output to a fixed signature schema and extract its
 /// slots. The exact key digest, index and one-Bounded-column descriptor must
 /// agree with the operation plan. Raw limbs retain all128bits and may encode
@@ -59,7 +120,7 @@ pub fn bind_signature_q(
     index: usize,
     schema: &QSignaturePlan,
     verified: &VerifiedQCells,
-) -> Result<Vec<SignatureProofCells>, Error> {
+) -> Result<SignatureQCells, Error> {
     let fixed = operation.q(index).ok_or(Error::Synthesis)?;
     let descriptor = fixed.verifier().binding().descriptor();
     if verified.index != index
@@ -115,5 +176,8 @@ pub fn bind_signature_q(
             key_policy: slot.key,
         });
     }
-    Ok(out)
+    Ok(SignatureQCells {
+        verified: verified.clone(),
+        slots: out,
+    })
 }

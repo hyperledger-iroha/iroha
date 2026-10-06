@@ -13053,6 +13053,9 @@ mod exact_proof_circuit_id_tests {
                 Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
                     iroha_core_zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
                 }
+                Some(iroha_data_model::zk::BackendTag::NativePipaRPasta) => {
+                    iroha_core_zk::pipa_r_open_verify_circuit_id_matches_backend(backend, record_id)
+                }
                 Some(iroha_data_model::zk::BackendTag::Stark) => {
                     iroha_core_zk::stark_open_verify_circuit_id_matches_backend(backend, record_id)
                 }
@@ -13062,19 +13065,21 @@ mod exact_proof_circuit_id_tests {
 
     #[test]
     fn proof_metadata_uses_core_canonical_identity_without_aliases() {
-        let backend = iroha_core_zk::ZK_BACKEND_HALO2_IPA;
-        let canonical = "halo2/pasta/ipa/kaigi-usage-v1";
-        for halo2_backend in [backend, "halo2/pasta/kaigi-usage-v1"] {
-            assert!(circuit_id_matches(halo2_backend, canonical, canonical));
+        let canonical = "pipa-r/pasta/kaigi-usage-v1";
+        for native_backend in ["pipa-r/pasta", canonical] {
+            assert!(circuit_id_matches(native_backend, canonical, canonical));
             for alias in [
+                "halo2/pasta/kaigi-usage-v1",
+                "halo2/pasta/ipa/kaigi-usage-v1",
+                "pipa-r/ipa/pasta/kaigi-usage-v1",
                 "ivm-replay-binding-v1",
                 "halo2/pasta/ivm-replay-binding-v1",
                 "halo2/ipa:ivm-replay-binding-v1",
                 "halo2/pasta/ipa-v1/ivm-replay-binding-v1",
                 "halo2/pasta/ipa/ivm-execution-v1",
             ] {
-                assert!(!circuit_id_matches(halo2_backend, alias, alias));
-                assert!(!circuit_id_matches(halo2_backend, alias, canonical));
+                assert!(!circuit_id_matches(native_backend, alias, alias));
+                assert!(!circuit_id_matches(native_backend, alias, canonical));
             }
         }
         let stark = iroha_core_zk::ZK_BACKEND_STARK_FRI_V1;

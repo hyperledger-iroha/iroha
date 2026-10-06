@@ -10,7 +10,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, WorldReadOnly},
 };
-use iroha_core_zk::test_utils::{FixtureEnvelope, halo2_fixture_envelope};
+use iroha_core_zk::test_utils::{FixtureEnvelope, native_confidential_fixture_envelope};
 use iroha_data_model::{
     ValidationFail,
     confidential::ConfidentialStatus,
@@ -33,11 +33,9 @@ fn rejected(err: ExecutionAttemptError<ValidationFail>) -> ValidationFail {
 }
 #[path = "common/world_fixture.rs"]
 mod test_world;
-const TINY_ADD_CIRCUIT_ID: &str = "halo2/ipa:tiny-add-public";
-fn bound_halo2_fixture() -> FixtureEnvelope {
-    let seed = halo2_fixture_envelope(TINY_ADD_CIRCUIT_ID, [0; 32]);
-    let vk_hash = seed.vk_hash("halo2/ipa").expect("fixture verifying key");
-    halo2_fixture_envelope(TINY_ADD_CIRCUIT_ID, vk_hash)
+const NATIVE_CIRCUIT_ID: &str = iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+fn bound_native_fixture() -> FixtureEnvelope {
+    native_confidential_fixture_envelope()
 }
 const UNSUPPORTED_PROTOCOL_ATTACHMENT_BACKENDS: &[&str] = &[
     "halo2/ipa/orchard",
@@ -75,18 +73,18 @@ fn build_vk_record(
     let commitment = iroha_core_zk::hash_vk(&vk_box);
     let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
         1,
-        TINY_ADD_CIRCUIT_ID,
+        NATIVE_CIRCUIT_ID,
         None,
         "core",
-        BackendTag::Halo2IpaPasta,
-        "pallas",
+        BackendTag::NativePipaRPasta,
+        "vesta",
         schema_hash,
         commitment,
     );
     record.vk_len = vk_box.bytes.len() as u32;
     record.status = ConfidentialStatus::Active;
     record.key = Some(vk_box);
-    record.gas_schedule_id = Some("halo2_default".into());
+    record.gas_schedule_id = Some("native_pipa_r_default".into());
     record
 }
 fn signed_empty_tx_with_attachments(
@@ -136,9 +134,11 @@ fn duplicate_proof_in_same_block_is_rejected() {
     // Build a transaction with proofs carrying a single inline attachment and no instructions
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
-    let fixture = bound_halo2_fixture();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_preverify");
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let fixture = bound_native_fixture();
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_preverify");
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_record = build_vk_record("vk_preverify", vk_box, fixture.schema_hash);
     let exec = Executor::default();
     {
@@ -155,8 +155,8 @@ fn duplicate_proof_in_same_block_is_rejected() {
     }
     let attachments =
         bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            fixture.proof_box("halo2/ipa"),
+            "pipa-r/pasta".into(),
+            fixture.proof_box("pipa-r/pasta"),
             vk_id,
         )]);
     let tx1: SignedTransaction = TransactionBuilder::new(
@@ -207,9 +207,11 @@ fn verifyproof_isi_records_proof() {
     let mut stx = block.transaction();
     let exec = Executor::default();
     // Register a verifying key record
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_main");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_main");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_rec = build_vk_record("vk_main", vk_box, fixture.schema_hash);
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -220,9 +222,9 @@ fn verifyproof_isi_records_proof() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
         .expect("register vk");
     // Verify a proof using VK reference
-    let proof_box = fixture.proof_box("halo2/ipa");
+    let proof_box = fixture.proof_box("pipa-r/pasta");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
+        "pipa-r/pasta".into(),
         proof_box.clone(),
         vk_id.clone(),
     );
@@ -231,7 +233,7 @@ fn verifyproof_isi_records_proof() {
         .expect("verify proof");
     // Apply transaction and ensure a proof record exists
     let pid = iroha_data_model::proof::ProofId {
-        backend: "halo2/ipa".into(),
+        backend: "pipa-r/pasta".into(),
         proof_hash: iroha_core_zk::hash_proof(&proof_box),
     };
     assert!(stx.world.proofs().get(&pid).is_some());
@@ -251,9 +253,11 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_main");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_main");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_rec = build_vk_record("vk_main", vk_box, fixture.schema_hash);
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -264,8 +268,8 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
         .expect("register vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
         vk_id.clone(),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -298,9 +302,11 @@ fn verifyproof_rejects_when_block_cap_hit() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_main");
-    let fixture1 = bound_halo2_fixture();
-    let vk_box = fixture1.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_main");
+    let fixture1 = bound_native_fixture();
+    let vk_box = fixture1
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_rec = build_vk_record("vk_main", vk_box, fixture1.schema_hash);
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -311,17 +317,17 @@ fn verifyproof_rejects_when_block_cap_hit() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
         .expect("register vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture1.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture1.proof_box("pipa-r/pasta"),
         vk_id.clone(),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
         .expect("first verify should succeed");
-    let fixture2 = bound_halo2_fixture();
+    let fixture2 = bound_native_fixture();
     let attachment2 = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture2.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture2.proof_box("pipa-r/pasta"),
         vk_id.clone(),
     );
     let verify2: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment2).into();
@@ -348,12 +354,12 @@ fn preverify_rejects_missing_vk_reference() {
     // Build tx with attachment referencing a non-existent VK id
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_missing");
-    let fixture = bound_halo2_fixture();
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_missing");
+    let fixture = bound_native_fixture();
     let attachments =
         bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            fixture.proof_box("halo2/ipa"),
+            "pipa-r/pasta".into(),
+            fixture.proof_box("pipa-r/pasta"),
             vk_id,
         )]);
     let tx: SignedTransaction = TransactionBuilder::new(
@@ -384,9 +390,9 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
+        "pipa-r/pasta".into(),
         iroha_data_model::proof::ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
-        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_mismatch"),
+        iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_mismatch"),
     );
     let tx = signed_empty_tx_with_attachments(
         *state.network_id_ref(),
@@ -411,10 +417,10 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
-    let fixture = bound_halo2_fixture();
+    let fixture = bound_native_fixture();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
         iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_mismatch"),
     );
     let tx = signed_empty_tx_with_attachments(
@@ -516,11 +522,11 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
-    let fixture = bound_halo2_fixture();
+    let fixture = bound_native_fixture();
     let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
-        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "missing_but_committed"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
+        iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "missing_but_committed"),
     );
     attachment.vk_commitment = Some([0xAB; 32]);
     let tx = signed_empty_tx_with_attachments(
@@ -547,9 +553,11 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
     let authority = ALICE_ID.clone();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_proposed");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_proposed");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let mut vk_record = build_vk_record("vk_proposed", vk_box, fixture.schema_hash);
     vk_record.status = ConfidentialStatus::Proposed;
     let expected_commitment = vk_record.commitment;
@@ -566,8 +574,8 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
         reg_stx.apply();
     }
     let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
         vk_id,
     );
     attachment.vk_commitment = Some(expected_commitment);
@@ -594,11 +602,11 @@ fn verifyproof_requires_registered_verifying_key() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let fixture = bound_halo2_fixture();
+    let fixture = bound_native_fixture();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
-        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "missing_vk"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
+        iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "missing_vk"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
     let err = exec
@@ -621,9 +629,9 @@ fn verifyproof_rejects_proof_backend_mismatch_before_lookup() {
     let mut stx = block.transaction();
     let exec = Executor::default();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
+        "pipa-r/pasta".into(),
         iroha_data_model::proof::ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
-        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_not_consulted"),
+        iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
     let err = exec
@@ -641,10 +649,10 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let fixture = bound_halo2_fixture();
+    let fixture = bound_native_fixture();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
         iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -684,9 +692,11 @@ fn verifyproof_rejects_inactive_registered_verifying_key() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_inactive");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_inactive");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let mut vk_rec = build_vk_record("vk_inactive", vk_box, fixture.schema_hash);
     vk_rec.status = ConfidentialStatus::Proposed;
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
@@ -698,8 +708,8 @@ fn verifyproof_rejects_inactive_registered_verifying_key() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
         .expect("register inactive vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
         vk_id,
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -723,9 +733,11 @@ fn verifyproof_enforces_verifying_key_activation_window() {
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let exec = Executor::default();
-        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", name);
-        let fixture = bound_halo2_fixture();
-        let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", name);
+        let fixture = bound_native_fixture();
+        let vk_box = fixture
+            .vk_box("pipa-r/pasta")
+            .expect("fixture verifying key");
         let mut vk_rec = build_vk_record(name, vk_box, fixture.schema_hash);
         vk_rec.activation_height = activation_height;
         vk_rec.withdraw_height = withdraw_height;
@@ -739,8 +751,8 @@ fn verifyproof_enforces_verifying_key_activation_window() {
             .expect("register height-bounded vk");
 
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            fixture.proof_box("halo2/ipa"),
+            "pipa-r/pasta".into(),
+            fixture.proof_box("pipa-r/pasta"),
             vk_id,
         );
         let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -764,9 +776,11 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_tamper_hash");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_tamper_hash");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_rec = build_vk_record("vk_tamper_hash", vk_box, fixture.schema_hash);
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -776,13 +790,13 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
         .expect("register vk");
-    let mut proof_box = fixture.proof_box("halo2/ipa");
+    let mut proof_box = fixture.proof_box("pipa-r/pasta");
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
     envelope.vk_hash[0] ^= 0x80;
     proof_box.bytes = norito::to_bytes(&envelope).expect("encode tampered OpenVerifyEnvelope");
     let attachment =
-        iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+        iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
@@ -799,9 +813,11 @@ fn verifyproof_rejects_duplicate_proof_record() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_duplicate");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_duplicate");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_rec = build_vk_record("vk_duplicate", vk_box, fixture.schema_hash);
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -812,8 +828,8 @@ fn verifyproof_rejects_duplicate_proof_record() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
         .expect("register vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
+        "pipa-r/pasta".into(),
+        fixture.proof_box("pipa-r/pasta"),
         vk_id,
     );
     let first: InstructionBox =
@@ -838,9 +854,11 @@ fn preverify_rejects_empty_proof_as_malformed() {
     let exec = Executor::default();
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_empty_proof");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_empty_proof");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_record = build_vk_record("vk_empty_proof", vk_box, fixture.schema_hash);
     {
         let mut reg_stx = block.transaction();
@@ -856,8 +874,8 @@ fn preverify_rejects_empty_proof_as_malformed() {
     }
     let attachments =
         bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![]),
+            "pipa-r/pasta".into(),
+            iroha_data_model::proof::ProofBox::new("pipa-r/pasta".into(), vec![]),
             vk_id,
         )]);
     let tx: SignedTransaction = TransactionBuilder::new(
@@ -891,9 +909,11 @@ fn preverify_rejects_proof_too_big() {
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
     // Build a proof larger than the current preverify cap (1 MiB)
     let big = vec![0u8; 1_200_000];
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_big_proof");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_big_proof");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_record = build_vk_record("vk_big_proof", vk_box, fixture.schema_hash);
     {
         let mut reg_stx = block.transaction();
@@ -909,8 +929,8 @@ fn preverify_rejects_proof_too_big() {
     }
     let attachments =
         bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), big),
+            "pipa-r/pasta".into(),
+            iroha_data_model::proof::ProofBox::new("pipa-r/pasta".into(), big),
             vk_id,
         )]);
     let tx: SignedTransaction = TransactionBuilder::new(
@@ -931,7 +951,7 @@ fn preverify_rejects_proof_too_big() {
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("proof too big")));
 }
 #[test]
-fn verifyproof_records_rejected_malformed_halo2_envelope() {
+fn verifyproof_records_rejected_malformed_native_envelope() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -940,9 +960,11 @@ fn verifyproof_records_rejected_malformed_halo2_envelope() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_bad_proof");
-    let fixture = bound_halo2_fixture();
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_bad_proof");
+    let fixture = bound_native_fixture();
+    let vk_box = fixture
+        .vk_box("pipa-r/pasta")
+        .expect("fixture verifying key");
     let vk_record = build_vk_record("vk_bad_proof", vk_box, fixture.schema_hash);
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -952,14 +974,14 @@ fn verifyproof_records_rejected_malformed_halo2_envelope() {
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
         .expect("register vk");
-    let mut proof_box = fixture.proof_box("halo2/ipa");
+    let mut proof_box = fixture.proof_box("pipa-r/pasta");
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
     envelope.proof_bytes[0] ^= 0x01;
     proof_box.bytes = norito::to_bytes(&envelope).expect("encode tampered OpenVerifyEnvelope");
     // Registered VK reference and malformed proof on a supported backend should record rejection.
     let attachment =
-        iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+        iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
     let verify: InstructionBox =
         iroha_data_model::isi::zk::VerifyProof::new(attachment.clone()).into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), verify)

@@ -111,6 +111,11 @@ macro_rules! schema_types {
             MerkleTree<SignedTransaction>,
             iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
             iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadIssuanceV1,
+            iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
+            iroha_data_model::kagemusha::KagemushaWalletPayoutKeyV1,
+            iroha_data_model::kagemusha::KagemushaWalletPayoutRecordV1,
+            // Native proof payloads are opaque bytes in the generic envelope.
+            iroha_data_model::zk::NativePipaRProofV1,
             // Default permissions
             iroha_executor_data_model::permission::peer::CanManagePeers,
             iroha_executor_data_model::permission::domain::CanRegisterDomain,

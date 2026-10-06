@@ -368,9 +368,10 @@ fn preverify_basic() {
     let vk_commitment = [1u8; 32];
     let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
         backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".to_owned(),
+        circuit_id: "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
+            .to_owned(),
         vk_hash: vk_commitment,
-        public_inputs: KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        public_inputs: confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: vec![2],
         aux: Vec::new(),
     };

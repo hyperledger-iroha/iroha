@@ -53,6 +53,19 @@ pub trait Custody {
         &mut self,
         operation_id: &[u8; 32],
     ) -> Result<Lookup<KagemushaWalletCompletionRecordV1>, ProviderError>;
+    /// Remove exactly one older capsule's redundant copies after durable owner collection intent.
+    /// # Errors
+    /// Current-head attempts, uncertain storage or an unavailable protected-data bracket.
+    fn collect_capsule(&mut self, generation: u128, capsule: [u8; 32])
+    -> Result<(), ProviderError>;
+    /// Publish a permanent source tombstone before pruning an older completion.
+    /// # Errors
+    /// Unknown/current operations, conflicting tombstones or uncertain storage.
+    fn prune_completion(
+        &mut self,
+        operation: [u8; 32],
+        kind: u8,
+    ) -> Result<crate::kagemusha_wallet_advance_v1::KagemushaWalletTombstoneV1, ProviderError>;
     /// Select and complete one transition under the provider's durable commit protocol.
     ///
     /// # Errors
@@ -119,6 +132,21 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> Custody for AdvanceHa
     ) -> Result<Lookup<KagemushaWalletCompletionRecordV1>, ProviderError> {
         self.lock()?.lookup(&self.slot, operation_id)
     }
+    fn collect_capsule(
+        &mut self,
+        generation: u128,
+        capsule: [u8; 32],
+    ) -> Result<(), ProviderError> {
+        self.lock()?
+            .collect_capsule(&self.slot, generation, &capsule)
+    }
+    fn prune_completion(
+        &mut self,
+        operation: [u8; 32],
+        kind: u8,
+    ) -> Result<crate::kagemusha_wallet_advance_v1::KagemushaWalletTombstoneV1, ProviderError> {
+        self.lock()?.prune_completion(&self.slot, &operation, kind)
+    }
     fn advance(
         &mut self,
         owner: &TransitionOwner,
@@ -182,7 +210,7 @@ impl TransitionOwner {
                 field: "state_owner.request",
             })?
             .bytes;
-        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
+        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1 {
             return Err(ProviderError::Invalid {
                 field: "state_owner.request",
             });
@@ -329,6 +357,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> super::ArchiveStore
             return Err(super::Error::WitnessLost("provider archive authentication"));
         }
         Ok(Some(envelope.content))
+    }
+    fn remove(&mut self, key: super::ArchiveKey) -> Result<(), super::Error> {
+        use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
+        let identity = digest("wallet-archive-key", &super::archive::encode(&key)?);
+        let mut provider = self
+            .provider
+            .lock()
+            .map_err(|_| super::Error::Invalid("provider handle poisoned"))?;
+        provider.with_archive(&self.slot, |archive| archive.remove_record(&identity))?;
+        Ok(())
     }
     fn put(&mut self, key: super::ArchiveKey, bytes: &[u8]) -> Result<(), super::Error> {
         use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;

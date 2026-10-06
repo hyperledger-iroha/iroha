@@ -29,7 +29,7 @@ use iroha_pasta::PastaCurve;
 use iroha_plonk::{
     DescriptorBinding, Protocol, VerifyError, VerifyingKey,
     cs::{ConstraintSystem, DescriptorRule, InstanceModeV1, ProofSuffixV1, TranscriptV2},
-    frontend::{Error, Layouter, Region, Value},
+    frontend::{Cell, Error, Layouter, Region, Value},
     pcs::ipa::PinnedParams,
     protocol::{Challenge, CommonInput, ProofMessage, TranscriptStep},
     transcript::TranscriptRepr,
@@ -38,13 +38,16 @@ use iroha_plonk_gadgets::{
     Bit, GlueChip, GlueConfig, Uint, Word,
     bytes::{element::LeElement, tape::BytesConfig},
     cells::{RowCursor, SharedRows},
-    ecc::{AssignedPoint, EccChip, EccConfig, NonIdentityPoint, ScalarLimbs},
+    ecc::{AssignedPoint, EccChip, EccConfig, GlvScalar, NonIdentityPoint, ScalarLimbs},
     ff::{FfChip, FfConfig, rotated::RotatedFfConfig},
     poseidon::{Pow5Columns, RoundConstantColumns},
     pow5_fq::{DuplexChip, DuplexConfig},
     range::{LimbBits, RunningSumChip, RunningSumConfig, u128::UintChip},
 };
 use scalar::{Arithmetic, Scalar};
+
+#[cfg(test)]
+mod split_cache_tests;
 
 /// Whether proof failures become a constrained zero or an unsatisfied circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,7 +157,8 @@ impl<C: PastaCurve> GeneratorClaimCells<C> {
     }
 }
 
-/// Exact proof verdict, key digest, and an undecided claim (a fixed dummy on failure).
+/// Exact proof verdict, key digest, and an undecided claim. Soft failures return
+/// a fixed dummy; hard failures leave the required validity assertion unsatisfied.
 #[must_use = "bind the key digest and register the generator claim"]
 #[derive(Clone, Debug)]
 pub struct SuccinctOutput<C: PastaCurve> {
@@ -220,6 +224,29 @@ impl<C: PastaCurve> VerifierConfig<C> {
         meta: &mut ConstraintSystem<C::Base>,
         range_buses: usize,
     ) -> Result<Self, Error> {
+        Ok(Self::configure_serialized_lanes(meta, range_buses, None)?.0)
+    }
+
+    /// Uses the explicit serialized foreign-arithmetic profile with the same
+    /// fixed byte-tape prefix sharing used by [`Self::configure_with_byte_tape`].
+    /// All tape assignments must precede the reserved ECC start row.
+    ///
+    /// # Errors
+    /// The fixed bus count is outside `1..=8`.
+    pub fn configure_serialized_with_byte_tape(
+        meta: &mut ConstraintSystem<C::Base>,
+        range_buses: usize,
+        byte_rows: usize,
+    ) -> Result<(Self, BytesConfig), Error> {
+        let (config, bytes) = Self::configure_serialized_lanes(meta, range_buses, Some(byte_rows))?;
+        Ok((config, bytes.expect("requested byte tape is configured")))
+    }
+
+    fn configure_serialized_lanes(
+        meta: &mut ConstraintSystem<C::Base>,
+        range_buses: usize,
+        byte_rows: Option<usize>,
+    ) -> Result<(Self, Option<BytesConfig>), Error> {
         if !(1..=8).contains(&range_buses) {
             return Err(Error::Synthesis);
         }
@@ -236,17 +263,21 @@ impl<C: PastaCurve> VerifierConfig<C> {
         let range = ranges[0];
         let ecc_columns = core::array::from_fn(|_| meta.advice_column());
         let ecc = EccConfig::configure(meta, ecc_columns);
+        let bytes = byte_rows.map(|_| BytesConfig::configure(meta, ecc_columns[0], ecc_columns[1]));
         let columns = Pow5Columns::allocate(meta);
         let constants = RoundConstantColumns::allocate(meta);
         let duplex = DuplexConfig::configure(meta, columns, constants, &[]);
-        Ok(Self {
-            glue,
-            range,
-            ff: ArithmeticLayout::ParallelSerialized { ranges, kernel },
-            ecc,
-            ecc_start_row: 0,
-            duplex,
-        })
+        Ok((
+            Self {
+                glue,
+                range,
+                ff: ArithmeticLayout::ParallelSerialized { ranges, kernel },
+                ecc,
+                ecc_start_row: byte_rows.unwrap_or(0),
+                duplex,
+            },
+            bytes,
+        ))
     }
 
     fn configure_lanes(
@@ -295,6 +326,9 @@ pub struct VerifierChip<C: PastaCurve> {
     pub(crate) arithmetic: Arithmetic<C>,
     pub(crate) ecc: EccChip<C>,
     pub(crate) duplex: Option<DuplexChip<C::Base>>,
+    // One synthesis only. Complete cell identities use absolute column/row;
+    // equal witness values in different cells never share a checked split.
+    scalar_splits: std::collections::BTreeMap<[Cell; 2], GlvScalar<C::Base>>,
 }
 
 #[derive(Clone)]
@@ -340,6 +374,7 @@ impl<C: PastaCurve> VerifierChip<C> {
                 arithmetic: Arithmetic::new(FfChip::new(ff)),
                 ecc: EccChip::starting_at(&config.ecc, config.ecc_start_row),
                 duplex: Some(DuplexChip::new(config.duplex)),
+                scalar_splits: std::collections::BTreeMap::new(),
             },
             ArithmeticLayout::ParallelSerialized { ranges, kernel } => {
                 let range =
@@ -356,6 +391,7 @@ impl<C: PastaCurve> VerifierChip<C> {
                     arithmetic: Arithmetic::new(ff),
                     ecc: EccChip::starting_at(&config.ecc, config.ecc_start_row),
                     duplex: Some(DuplexChip::new(config.duplex)),
+                    scalar_splits: std::collections::BTreeMap::new(),
                 }
             }
             ArithmeticLayout::Serialized { spans, kernel } => Self::new_compact(
@@ -645,14 +681,18 @@ impl<C: PastaCurve> VerifierChip<C> {
         scalar: &Scalar<C>,
     ) -> Result<AssignedPoint<C::Base>, Error> {
         let scalar = self.export(region, scalar)?;
-        self.ecc
-            .mul(
-                region,
-                &mut self.range,
-                ScalarLimbs::new(scalar.lo(), scalar.hi()),
-                point,
-            )
-            .map(|(point, _)| point)
+        let key = [scalar.lo().cell(), scalar.hi().cell()];
+        if let Some(split) = self.scalar_splits.get(&key) {
+            return self.ecc.mul_with(region, split, point);
+        }
+        let (point, split) = self.ecc.mul(
+            region,
+            &mut self.range,
+            ScalarLimbs::new(scalar.lo(), scalar.hi()),
+            point,
+        )?;
+        self.scalar_splits.insert(key, split);
+        Ok(point)
     }
 }
 
@@ -871,6 +911,19 @@ impl<C: PastaCurve> VerifierChip<C> {
         if mode == VerificationMode::Hard {
             self.glue
                 .enforce_constant(region, valid.word(), C::Base::ONE)?;
+            // Every message/typed-instance check, round nonzero test and the
+            // complete IPA equation have entered `valid`. The hard assertion
+            // proves the original finite suffix and canonical round cells are
+            // already the accepted claim; no conditional dummy is needed.
+            return Ok(SuccinctOutput {
+                valid,
+                key_digest,
+                claim: GeneratorClaimCells {
+                    k: u32::from(descriptor.k),
+                    g: read.suffix.ok_or(Error::Synthesis)?,
+                    challenges: read.round_cells,
+                },
+            });
         }
         let suffix = read.suffix.ok_or(Error::Synthesis)?;
         let dummy = self.ecc.constant_point(region, &plan.dummy.to_curve())?;

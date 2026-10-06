@@ -13,7 +13,7 @@ acceptance plus rejection under the retired backend label.
 Halo2 and Pasta IPA are mandatory; the guard rejects their retired backend
 feature gates while retaining the developer-only fixture selection.
 The circuit-cache confusion control uses two distinct shared test circuits;
-the preverification fixture uses the admitted Kaigi usage schema after IVM
+the preverification fixture uses the admitted confidential transfer schema after IVM
 replay-binding retirement.
 """
 
@@ -57,7 +57,7 @@ SHARDS = (
         ),
         opening_lines=1_710,
         code_sha256=(
-            "9a79edabecf3f307df915207cc7225cf5507974aa8eaaa10715b8b55c5099507"
+            "bc9d1421f05928a8a4e96f76c6a1a7b068e06f3b1e21ef000ba5be1d81b12846"
         ),
         preimage_tests=(
             "vote_bool_commit_merkle8_mock_prover_succeeds",
@@ -434,10 +434,10 @@ class Halo2BackendSharedCircuitSourceTest(unittest.TestCase):
         self.assertNotEqual(final_backend, self.sources[1])
         mutations.append(((self.sources[0], final_backend), self.zk_source))
 
-        # The cache must distinguish circuits, and the admitted Kaigi fixture
+        # The cache must distinguish circuits, and the admitted confidential fixture
         # cannot be relabeled as retired IVM binding or a shortened identity.
         retired_binding = self.sources[0].replace(
-            '"halo2/pasta/ipa/kaigi-usage-v1"',
+            '"halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"',
             '"halo2/pasta/ipa/ivm-replay-binding-v1"',
             1,
         )
@@ -445,8 +445,8 @@ class Halo2BackendSharedCircuitSourceTest(unittest.TestCase):
         mutations.append(((retired_binding, self.sources[1]), self.zk_source))
 
         short_cid = self.sources[0].replace(
-            'circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".to_owned()',
-            'circuit_id: "kaigi-usage-v1".to_owned()',
+            'circuit_id: "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"',
+            'circuit_id: "confidential-transfer-2x2-merkle16-axiom-poseidon-v3"',
             1,
         )
         self.assertNotEqual(short_cid, self.sources[0])

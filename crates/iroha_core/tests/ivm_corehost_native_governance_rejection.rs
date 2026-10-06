@@ -1,21 +1,19 @@
-#![doc = "Positive gating path: with Halo2 enabled and within `max_k`, a prior\n`ZK_VOTE_VERIFY_BALLOT` sets the `CoreHost` latch and allows enqueued\n`SubmitBallot` (via vendor bridge) to apply."]
+//! Genuine native verification does not authorize a governance ballot through the vendor bridge.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-#![cfg(feature = "zk-ipa-native")]
 #![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
-use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::{Execute, ivm::host::CoreHost},
-    state::State,
+    state::{State, WorldReadOnly as _},
 };
-use iroha_core_zk::test_utils::halo2_fixture_envelope;
+use iroha_core_zk::test_utils::native_confidential_fixture_envelope;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     isi::verifying_keys,
     prelude::*,
-    proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
 use iroha_executor_data_model::permission::governance::{
@@ -24,8 +22,8 @@ use iroha_executor_data_model::permission::governance::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use mv::storage::StorageReadOnly as _;
 use nonzero_ext::nonzero;
-use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -69,7 +67,7 @@ fn derive_ballot_nullifier(
     out
 }
 #[test]
-fn verify_then_vendor_submit_ballot_applies() {
+fn generic_native_verification_cannot_authorize_vendor_ballot() {
     // Minimal node state
     let authority: AccountId = ALICE_ID.clone();
     let domain_id: iroha_model_base::domain::DomainId =
@@ -81,9 +79,9 @@ fn verify_then_vendor_submit_ballot_applies() {
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
     // Governance and ISI verification consult the node `Zk` config guardrails, so ensure
-    // halo2 verification is enabled here (in addition to the host-local halo2 config used by
+    // native verification is enabled here (in addition to the host-local native config used by
     // the syscall verifier).
-    state.zk.halo2.enabled = true;
+    state.zk.pipa_r.enabled = true;
     state.zk.verify_timeout = Duration::ZERO;
     let mut gov_cfg = state.gov.clone();
     gov_cfg.citizenship_bond_amount = 0_u64.into();
@@ -91,58 +89,38 @@ fn verify_then_vendor_submit_ballot_applies() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    // Authority and VM/host configured for Halo2 IPA (ToyP61), max_k >= 8
+    // Authority and VM/host use the fixed native PIPA-R relation
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     let chain_id_bytes = state.chain_id.to_string().into_bytes();
     host.set_chain_id_bytes(chain_id_bytes.clone());
-    let backend_label = "halo2/ipa";
-    let circuit_id = "halo2/ipa:tiny-add2inst-public";
-    let fixture_seed = halo2_fixture_envelope(circuit_id, [0u8; 32]);
-    let vk_bytes = fixture_seed.vk_bytes.clone().expect("fixture vk bytes");
-    let mut hasher = Sha256::new();
-    hasher.update(backend_label.as_bytes());
-    hasher.update(&vk_bytes);
-    let vk_commitment: [u8; 32] = hasher.finalize().into();
-    let fixture = halo2_fixture_envelope(circuit_id, vk_commitment);
+    let backend_label = "pipa-r/pasta";
+    let circuit_id = iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let fixture = native_confidential_fixture_envelope();
+    let vk_box = fixture.vk_box(backend_label).expect("actual native VK");
+    let vk_bytes = vk_box.bytes.clone();
+    let vk_commitment = iroha_core_zk::hash_vk(&vk_box);
     let schema_hash = fixture.schema_hash;
     let mut vk_record = VerifyingKeyRecord::new_with_owner(
         1,
         circuit_id,
         None,
         "ballot",
-        BackendTag::Halo2IpaPasta,
-        "pallas",
+        BackendTag::NativePipaRPasta,
+        "vesta",
         schema_hash,
         vk_commitment,
     );
     vk_record.status = ConfidentialStatus::Active;
-    vk_record.key = Some(VerifyingKeyBox::new(backend_label.into(), vk_bytes.clone()));
+    vk_record.key = Some(vk_box);
     vk_record.vk_len = u32::try_from(vk_bytes.len()).expect("vk length fits in u32");
     vk_record.max_proof_bytes = u32::MAX;
-    vk_record.gas_schedule_id = Some("halo2_default".into());
+    vk_record.gas_schedule_id = Some("native_pipa_r_default".into());
     let vk_record_for_state = vk_record.clone();
     let mut vk_map = BTreeMap::new();
     vk_map.insert(VerifyingKeyId::new(backend_label, "vk_ballot"), vk_record);
     host.set_verifying_keys(vk_map).expect("set registry");
-    host.set_halo2_config(&iroha_config::parameters::actual::Halo2 {
-        enabled: true,
-        curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-        backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-        max_k: 18,
-        verifier_budget_ms: 200,
-        verifier_max_batch: 8,
-        verifier_worker_threads: defaults::zk::halo2::VERIFIER_WORKER_THREADS,
-        verifier_queue_cap: defaults::zk::halo2::VERIFIER_QUEUE_CAP,
-        verifier_enqueue_wait_ms: defaults::zk::halo2::VERIFIER_ENQUEUE_WAIT_MS,
-        verifier_retry_ring_cap: defaults::zk::halo2::VERIFIER_RETRY_RING_CAP,
-        verifier_retry_max_attempts: defaults::zk::halo2::VERIFIER_RETRY_MAX_ATTEMPTS,
-        verifier_retry_tick_ms: defaults::zk::halo2::VERIFIER_RETRY_TICK_MS,
-        max_envelope_bytes: defaults::zk::halo2::MAX_ENVELOPE_BYTES,
-        max_proof_bytes: usize::MAX,
-        max_transcript_label_len: defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,
-        enforce_transcript_label_ascii: defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
-    });
+    host.set_zk_config(&state.zk);
     vm.set_host(host);
     // Grant authority permissions and register verifying keys in the WSV for governance plumbing.
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -160,7 +138,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     Grant::account_permission(perm_submit, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant submit ballot permission");
-    let vk_ballot = VerifyingKeyId::new("halo2/ipa", "vk_ballot");
+    let vk_ballot = VerifyingKeyId::new("pipa-r/pasta", "vk_ballot");
     let vk_tally = vk_ballot.clone();
     verifying_keys::RegisterVerifyingKey {
         id: vk_ballot.clone(),
@@ -168,7 +146,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     }
     .execute(&authority, &mut stx)
     .expect("register ballot vk");
-    // 1) Verify ballot: prepare envelope TLV in INPUT and run SCALL
+    // 1) Verify the genuine native proof through the generic proof syscall.
     let env_bytes = fixture.proof_bytes.clone();
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     let mut cursor = 0;
@@ -178,7 +156,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT as u8,
+            ivm_sys::SYSCALL_VERIFY_PROOF as u8,
         )
         .to_le_bytes(),
     );
@@ -197,11 +175,9 @@ fn verify_then_vendor_submit_ballot_applies() {
         verify_res, 0,
         "verify must succeed under enabled config (err code {verify_err})"
     );
-    // Seed an election so SubmitBallot can record an ordered ballot pair.
-    let mut commit_bytes = [0u8; 32];
-    let mut root_bytes = [0u8; 32];
-    commit_bytes.copy_from_slice(&fixture.public_inputs[..32]);
-    root_bytes.copy_from_slice(&fixture.public_inputs[32..64]);
+    // A genuine generic proof must not qualify a governance election.
+    let commit_bytes = [0x31; 32];
+    let root_bytes = [0x32; 32];
     let create = iroha_data_model::isi::zk::CreateElection {
         election_id: "e1".to_string(),
         options: 2,
@@ -212,9 +188,14 @@ fn verify_then_vendor_submit_ballot_applies() {
         vk_tally,
         domain_tag: "zkvote".to_string(),
     };
-    create
+    let error = create
         .execute(&authority, &mut stx)
-        .expect("create election in WSV");
+        .expect_err("generic native proof must not create a governance election");
+    assert!(
+        format!("{error:?}").contains("not qualified")
+            || format!("{error:?}").contains("circuit mismatch")
+    );
+    assert!(stx.world.elections().get(&"e1".to_owned()).is_none());
     // 2) Enqueue SubmitBallot via the vendor bridge
     let mut code2 = Vec::new();
     code2.extend_from_slice(
@@ -236,8 +217,8 @@ fn verify_then_vendor_submit_ballot_applies() {
         election_id: "e1".to_string(),
         ciphertext: commit_bytes.to_vec(),
         ballot_proof: iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            fixture.proof_box("halo2/ipa"),
+            "pipa-r/pasta".into(),
+            fixture.proof_box("pipa-r/pasta"),
             vk_ballot.clone(),
         ),
         nullifier,
@@ -249,7 +230,9 @@ fn verify_then_vendor_submit_ballot_applies() {
     vm.set_register(10, ptr2);
     vm.load_program(&prog2).expect("load vendor2");
     vm.run().expect("run vendor2");
-    // 3) Apply queued instructions; should succeed thanks to verify latch
-    CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut stx, &authority))
-        .expect("apply queued after verify");
+    // 3) Generic proof success has not granted a ballot latch or governance authority.
+    let error = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut stx, &authority))
+        .expect_err("generic native verification cannot authorize SubmitBallot");
+    assert!(format!("{error:?}").contains("missing ZK_VOTE_VERIFY_BALLOT"));
+    assert!(stx.world.elections().get(&"e1".to_owned()).is_none());
 }

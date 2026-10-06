@@ -74,6 +74,7 @@ pub(crate) fn verifying_key_to_processed_bytes(vk: &VerifyingKey) -> Vec<u8> {
 pub(crate) fn constraint_system_failure() -> Error {
     PlonkError::ConstraintSystemFailure
 }
+#[cfg(all(test, feature = "halo2-dev-tests"))]
 /// Read a processed Pasta verifying key, respecting the optional circuit-params API.
 pub(crate) fn read_verifying_key<C, R>(reader: &mut R) -> io::Result<VerifyingKey>
 where

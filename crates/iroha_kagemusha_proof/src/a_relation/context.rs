@@ -1,5 +1,6 @@
 //! Fixed A-split context framing; every continuation input is rebound by hash.
 
+use super::results::{RECEIVE_RESULTS_DOMAIN, ReceiveResultClaims, ReceiveResultPlan};
 use super::schedule::OperationTask;
 use super::{AProofPlan, LineagePublicCells, ProofMessageCells, VerifiedQCells, VestaClaimCells};
 use crate::operation_relation::{
@@ -12,7 +13,10 @@ use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
 use iroha_plonk_gadgets::{
     GlueChip, Uint, Word,
-    bytes::tape::{ByteOrder, ByteRun, SegmentSpec},
+    bytes::{
+        tape::{ByteOrder, ByteRun, SegmentSpec},
+        variable::ActiveBytes,
+    },
     ecc::NonIdentityPoint,
 };
 use iroha_plonk_recursion::{
@@ -25,6 +29,7 @@ use iroha_plonk_recursion::{
 /// Separate digest domain for an internal split context, never a lineage head.
 pub const CONTEXT_DOMAIN: [u8; 8] = *b"kgwctx_1";
 const TAPE_DOMAIN: [u8; 8] = *b"kgwctap1";
+const ACTIVE_TAPE_DOMAIN: [u8; 8] = *b"kgwcact1";
 
 /// A circuit-fixed external object category and exact carrier capacity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,9 +48,61 @@ pub struct ContextObjectCells {
     tape_digest: Word<Fp>,
 }
 impl ContextObjectCells {
+    pub(super) fn commitment_words(&self) -> [Word<Fp>; 3] {
+        [
+            self.authenticated_digest.clone(),
+            self.length.word().clone(),
+            self.tape_digest.clone(),
+        ]
+    }
     /// Digest of the object parsed from this same committed byte tape.
     pub const fn authenticated_digest(&self) -> &Word<Fp> {
         &self.authenticated_digest
+    }
+
+    /// Retain an original active raw object, including malformed short/long data.
+    ///
+    /// The capacity is fixed by the context schema. The exact active length and
+    /// length-prefixed original bytes are bound independently of any semantic
+    /// decoder output. The operation must derive `authenticated_digest` from
+    /// this same source; this context commitment alone does not authenticate it.
+    /// # Errors
+    /// Wrong capacity/tag, incompatible sponge lane or synthesis failure.
+    pub fn from_active(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        spec: ContextObjectSpec,
+        authenticated_digest: &Word<Fp>,
+        raw: &ActiveBytes<Fp>,
+    ) -> Result<Self, Error> {
+        if spec.tag == 0 || usize::try_from(spec.capacity).ok() != Some(raw.run().len()) {
+            return Err(Error::Synthesis);
+        }
+        let lanes = chip.operation_lanes()?;
+        let mut uint = iroha_plonk_gadgets::UintChip::new(lanes.glue, lanes.range);
+        let original = raw.packed().length_prefixed(&mut uint, region)?.digest(
+            &mut uint,
+            lanes.hash.sponge_mut()?,
+            region,
+            u64::from_le_bytes(ACTIVE_TAPE_DOMAIN),
+        )?;
+        let tag = uint
+            .glue()
+            .constant(region, Fp::from(u64::from(spec.tag)))?;
+        let capacity = uint
+            .glue()
+            .constant(region, Fp::from(u64::from(spec.capacity)))?;
+        let tape_digest = chip.hash_words(
+            region,
+            u64::from_le_bytes(ACTIVE_TAPE_DOMAIN),
+            &[tag, capacity, raw.length().word().clone(), original],
+        )?;
+        Ok(Self {
+            spec,
+            authenticated_digest: authenticated_digest.clone(),
+            length: raw.length().clone(),
+            tape_digest,
+        })
     }
     /// Commit an exact fixed-size object tape, prepending its pinned LE32 length.
     /// This reuses the bounded semantic parser's tape instead of assigning a
@@ -216,6 +273,9 @@ pub struct ContextInputs<'a> {
     /// Canonical foreign correction for incoming V, when present. Incoming
     /// sigma correction coordinates belong solely to the hard Q relation.
     pub vesta_corrections: &'a [[ScalarCells<Ep>; 2]],
+    /// Complete five-result commitment only for a complete Receive task plan.
+    /// These claims must be derived and bound by their typed owning stages.
+    pub receive_results: Option<&'a ReceiveResultClaims>,
 }
 /// Immutable operation/partition schema committed by both split halves.
 #[derive(Clone, Debug)]
@@ -226,6 +286,7 @@ pub struct ContextPlan {
     stage_tasks: Vec<Vec<OperationTask>>,
     objects: Vec<ContextObjectSpec>,
     constants: Vec<Fp>,
+    receive_results: Option<ReceiveResultPlan>,
 }
 impl ContextPlan {
     /// Pin a nonempty initial Q partition and every source Q key identity.
@@ -406,6 +467,23 @@ impl ContextPlan {
                 Fp::from(u64::from(spec.capacity)),
             ]);
         }
+        let receive_results = if matches!(
+            operation.frame().variant(),
+            Variant::Receive | Variant::ReceiveRenewed
+        ) && stage_tasks.iter().any(|tasks| !tasks.is_empty())
+        {
+            let plan = ReceiveResultPlan::from_tasks(operation.frame().variant(), &stage_tasks)?;
+            constants.extend([
+                Fp::from(u64::from_le_bytes(RECEIVE_RESULTS_DOMAIN)),
+                Fp::from(5),
+            ]);
+            for (tag, owner) in plan.schema() {
+                constants.extend([Fp::from(u64::from(tag)), Fp::from(u64::from(owner))]);
+            }
+            Some(plan)
+        } else {
+            None
+        };
         Ok(Self {
             operation,
             stage_q,
@@ -413,7 +491,13 @@ impl ContextPlan {
             stage_tasks,
             objects,
             constants,
+            receive_results,
         })
+    }
+    /// Complete result ownership fixed by an actual Receive task schedule.
+    /// Generic frame components and other operations have no result plan.
+    pub const fn receive_results(&self) -> Option<ReceiveResultPlan> {
+        self.receive_results
     }
     /// Fixed ordered external object categories and byte capacities.
     pub fn object_specs(&self) -> &[ContextObjectSpec] {
@@ -482,6 +566,7 @@ impl ContextPlan {
             || input.modes.len() != self.mode_count()
             || input.pallas_corrections.len() != 2 * usize::from(incoming_omega)
             || input.vesta_corrections.len() != usize::from(incoming_omega)
+            || input.receive_results.is_some() != self.receive_results.is_some()
         {
             return Err(Error::Synthesis);
         }
@@ -558,11 +643,15 @@ impl ContextPlan {
             if spec != &object.spec {
                 return Err(Error::Synthesis);
             }
-            words.extend([
-                object.authenticated_digest.clone(),
-                object.length.word().clone(),
-                object.tape_digest.clone(),
-            ]);
+            words.extend(object.commitment_words());
+        }
+        if let Some(plan) = self.receive_results {
+            words.extend(
+                input
+                    .receive_results
+                    .ok_or(Error::Synthesis)?
+                    .context_words(plan)?,
+            );
         }
         for mode in input.modes {
             words.extend([

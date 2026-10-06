@@ -417,6 +417,9 @@ mod tests {
     }
     fn test_guardrails() -> crate::zk::ZkVerifyGuardrails {
         crate::zk::ZkVerifyGuardrails {
+            pipa_r_enabled: true,
+            pipa_r_max_envelope_bytes: usize::MAX,
+            pipa_r_max_proof_bytes: usize::MAX,
             halo2_enabled: true,
             halo2_max_envelope_bytes: usize::MAX,
             halo2_max_proof_bytes: usize::MAX,

@@ -32,11 +32,15 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use iroha_pasta::PastaField;
 use iroha_plonk::{
-    cs::{Advice, Column, ConstraintSystem, Fixed, Rotation, Selector, TableColumn},
+    cs::{Advice, Column, ConstraintSystem, Expression, Fixed, Rotation, Selector, TableColumn},
     frontend::{Cell, Error, Layouter, Region, Value},
 };
 
 use crate::cells::{RowCursor, SharedRows, Word, assign_word, copy_word};
+
+#[cfg(test)]
+#[path = "tagged_tests.rs"]
+mod tagged_tests;
 
 /// The widest value a range check accepts (`2^252 < p` for both fields).
 pub const MAX_RANGE_BITS: usize = 252;
@@ -93,7 +97,7 @@ pub struct RangeShape {
     pub limbs: usize,
     /// The width `t` of the top limb (`1..=b`).
     pub top_bits: usize,
-    /// Rows: `L`, plus one shifted top-limb row when `t < b`.
+    /// Rows: ordinary layouts use `L + [t < b]`; the exact tagged layout uses `L`.
     pub rows: usize,
 }
 
@@ -121,7 +125,7 @@ impl RangeShape {
     /// Whether the check has a shifted top-limb row.
     #[must_use]
     pub const fn shifted(&self) -> bool {
-        self.top_bits < self.limb_bits
+        self.rows > self.limbs
     }
 }
 
@@ -145,9 +149,77 @@ enum Pattern {
     Fixed {
         step: Column<Fixed>,
     },
+    Tagged {
+        step: Column<Fixed>,
+        tag_table: TableColumn,
+    },
 }
 
 impl RunningSumConfig {
+    /// One tuple lookup authenticates `(width, limb)` against exact-width
+    /// subsets for widths `3..=15`. The table requires at least 65,528 usable
+    /// rows. Top widths one and two use algebraic checks.
+    /// Every check uses exactly `ceil(bits/15)` running-sum rows.
+    ///
+    /// The two fixed pattern columns have five codes: idle zero, step one,
+    /// tagged top two, one-bit top three, and two-bit top four. On a tagged top
+    /// the second column contains its exact width. An overlay may use that
+    /// column only when the pattern is zero, and must disable all four active
+    /// codes. A scalar union of offset intervals is deliberately not used:
+    /// the tuple's tag prevents cross-width aliases.
+    pub fn configure_tagged<F: PastaField>(
+        meta: &mut ConstraintSystem<F>,
+        z: Column<Advice>,
+    ) -> Self {
+        meta.enable_equality(z);
+        let table = meta.lookup_table_column();
+        let tag_table = meta.lookup_table_column();
+        let shift = meta.fixed_column();
+        let step = meta.fixed_column();
+        let indicator = |pattern: Expression<F>, code: u64| {
+            let mut expression = Expression::Constant(F::ONE);
+            let mut denominator = F::ONE;
+            for other in 0..=4 {
+                if other != code {
+                    expression =
+                        expression * (pattern.clone() - Expression::Constant(F::from(other)));
+                    denominator *= F::from(code) - F::from(other);
+                }
+            }
+            expression * denominator.invert().expect("distinct fixed pattern codes")
+        };
+        meta.lookup("exact tagged running-sum limb", |cells| {
+            let pattern = cells.query_fixed(step, Rotation::cur());
+            let active = indicator(pattern.clone(), 1);
+            let top = indicator(pattern, 2);
+            let width = cells.query_fixed(shift, Rotation::cur());
+            let cur = cells.query_advice(z, Rotation::cur());
+            let next = cells.query_advice(z, Rotation::next());
+            let tag = Expression::Constant(F::from(15))
+                + top.clone() * (width - Expression::Constant(F::from(15)));
+            let value = active * (cur.clone() - next * F::from(1 << 15)) + top * cur;
+            vec![(tag, tag_table), (value, table)]
+        });
+        meta.create_gate("algebraic narrow tagged top", |cells| {
+            let pattern = cells.query_fixed(step, Rotation::cur());
+            let value = cells.query_advice(z, Rotation::cur());
+            let binary = value.clone() * (value.clone() - Expression::Constant(F::ONE));
+            vec![
+                indicator(pattern.clone(), 3) * binary.clone(),
+                indicator(pattern, 4)
+                    * binary
+                    * (value.clone() - Expression::Constant(F::from(2)))
+                    * (value - Expression::Constant(F::from(3))),
+            ]
+        });
+        Self {
+            z,
+            table,
+            shift,
+            pattern: Pattern::Tagged { step, tag_table },
+            limb_bits: LimbBits::new(15).expect("fixed limb width"),
+        }
+    }
     /// Configures the chip on `z` (made equality-enabled) with a new table
     /// column of `2^b` rows.
     pub fn configure<F: PastaField>(
@@ -269,13 +341,24 @@ impl RunningSumConfig {
     /// Compact `(pattern, factor)` columns, or `None` for the selector
     /// layout. Pattern zero fully disables the range bus; another fixed gate
     /// may reuse the factor on those rows only. Its gate must be disabled at
-    /// both active pattern codes (one and two), and assignments must be on
+    /// every active code returned by [`Self::compact_pattern_codes`], and assignments must be on
     /// disjoint rows. This does not relax any active range check.
     #[must_use]
     pub const fn compact_patterns(&self) -> Option<(Column<Fixed>, Column<Fixed>)> {
         match self.pattern {
-            Pattern::Fixed { step } => Some((step, self.shift)),
+            Pattern::Fixed { step } | Pattern::Tagged { step, .. } => Some((step, self.shift)),
             Pattern::Selectors { .. } => None,
+        }
+    }
+
+    /// Active fixed pattern codes, all integers `1..=result`. Zero disables
+    /// the complete range relation. Selector-based configurations return zero.
+    #[must_use]
+    pub const fn compact_pattern_codes(&self) -> u64 {
+        match self.pattern {
+            Pattern::Selectors { .. } => 0,
+            Pattern::Fixed { .. } => 2,
+            Pattern::Tagged { .. } => 4,
         }
     }
 
@@ -486,16 +569,48 @@ impl<F: PastaField> RunningSumChip<F> {
     ///
     /// [`Error::Synthesis`] for a width outside `1..=252`.
     pub fn shape(&self, bits: usize) -> Result<RangeShape, Error> {
-        RangeShape::new(bits, self.config.limb_bits).ok_or(Error::Synthesis)
+        let mut shape = RangeShape::new(bits, self.config.limb_bits).ok_or(Error::Synthesis)?;
+        if matches!(self.config.pattern, Pattern::Tagged { .. }) {
+            shape.rows = shape.limbs;
+        }
+        Ok(shape)
     }
 
-    /// Loads the limb table `0 .. 2^b`.
+    /// Loads `0 .. 2^b`, or the exact tagged subsets for a tagged configuration.
     ///
     /// # Errors
     ///
     /// [`Error`] when the table does not fit the usable rows.
     pub fn load_table(&self, layouter: &mut impl Layouter<F>) -> Result<(), Error> {
         let table = self.config.table;
+        if let Pattern::Tagged { tag_table, .. } = self.config.pattern {
+            return layouter.assign_table(
+                || "exact tagged range table",
+                |mut cells| {
+                    let mut row = 0;
+                    // First/default tuple is (15,0), also used by every inactive
+                    // and algebraic-narrow row. Both columns are padded together.
+                    for bits in (3_u64..=15).rev() {
+                        for value in 0..1_u64 << bits {
+                            cells.assign_cell(
+                                || "width",
+                                tag_table,
+                                row,
+                                || Value::known(F::from(bits)),
+                            )?;
+                            cells.assign_cell(
+                                || "limb",
+                                table,
+                                row,
+                                || Value::known(F::from(value)),
+                            )?;
+                            row += 1;
+                        }
+                    }
+                    Ok(())
+                },
+            );
+        }
         let rows = self.config.limb_bits.table_rows();
         layouter.assign_table(
             || "running-sum limb table",
@@ -583,12 +698,24 @@ impl<F: PastaField> RunningSumChip<F> {
         for limb in 0..shape.limbs - 1 {
             match self.config.pattern {
                 Pattern::Selectors { step, .. } => step.enable(region, start + limb)?,
-                Pattern::Fixed { step } => {
+                Pattern::Fixed { step } | Pattern::Tagged { step, .. } => {
                     region.assign_fixed(step, start + limb, F::ONE)?;
                 }
             }
         }
         let top = start + shape.limbs - 1;
+        if let Pattern::Tagged { step, .. } = self.config.pattern {
+            let code = match shape.top_bits {
+                1 => 3,
+                2 => 4,
+                _ => 2,
+            };
+            region.assign_fixed(step, top, F::from(code))?;
+            if shape.top_bits >= 3 {
+                region.assign_fixed(self.config.shift, top, F::from(shape.top_bits as u64))?;
+            }
+            return Ok(());
+        }
         if let Pattern::Selectors { limb, .. } = self.config.pattern {
             region.enable_selector(String::new, &limb, top)?;
         } else if let Pattern::Fixed { step } = self.config.pattern {

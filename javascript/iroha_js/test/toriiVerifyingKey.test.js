@@ -1126,9 +1126,9 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "pipa-r/pasta",
     "pipa-r/pasta/kaigi-authorization-v1",
     "pipa-r/pasta/kaigi-usage-v1",
-    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    "pipa-r/pasta/confidential-transfer-v1",
+    "pipa-r/pasta/confidential-unshield-full-v1",
+    "pipa-r/pasta/confidential-unshield-change-v1",
     "stark/fri/poseidon-x7-goldilocks-6x64-v1",
   ];
   for (const [index, backend] of backends.entries()) {
@@ -1333,6 +1333,14 @@ test("verifying key registration rejects unsupported production backends before 
   });
   const base = sampleVerifyingKeyRegisterPayload();
   const cases = [
+    ...[
+      "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+      "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+      "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    ].flatMap((backend) => [
+      [`register retired confidential ${backend}`, () => client.registerVerifyingKey({ ...base, backend })],
+      [`update retired confidential ${backend}`, () => client.updateVerifyingKey({ ...base, backend })],
+    ]),
     ["register retired IVM binding backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/ivm-execution-v1" })],
     ["update retired IVM binding backend", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/ivm-execution-v1" })],
     ["register retired IVM replay binding backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/ivm-replay-binding-v1" })],

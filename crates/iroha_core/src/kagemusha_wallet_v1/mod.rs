@@ -27,7 +27,7 @@ pub use ledger::{
     abandon, activate, close_loads, issue_load, pay_fee, pay_unload, publish_voucher,
 };
 pub(crate) use storage::validate_snapshot;
-pub use storage::{CredentialRecord, LedgerKey, validate_row};
+pub use storage::{CredentialRecord, validate_row};
 #[cfg(test)]
 mod tests;
 
@@ -182,30 +182,6 @@ pub struct Issuance {
     /// First published canonical voucher bytes; immutable once present.
     pub voucher: Option<Vec<u8>>,
 }
-/// Separate replay namespaces prevent fee identities from colliding with unload nullifiers.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_core::kagemusha_wallet_v1::ClaimKey")]
-pub enum ClaimKey {
-    /// Domain-separated unload nullifier.
-    Unload(Digest),
-    /// Committed Send credit identity.
-    Fee(Digest),
-}
-/// Durable original payout result returned by every valid exact retry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kagemusha_wallet_v1::Payout")]
-pub struct Payout {
-    /// Permanent exact-once key.
-    pub key: ClaimKey,
-    /// Package digest (Unload) or Payment digest (fee).
-    pub source: Digest,
-    /// Total reserve liability released; includes a quoted unload charge.
-    pub amount: u128,
-    /// Ledger transaction which first paid this claim.
-    pub transaction: Digest,
-}
 /// One transfer of atomic asset units; reserve movements use the registered asset scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transfer {
@@ -228,7 +204,7 @@ pub struct Batch {
     /// Unique issuance insertion or first voucher publication, if any.
     issuance: Option<Issuance>,
     /// Exact-once payout insertion, if any.
-    payout: Option<Payout>,
+    payout: Option<KagemushaWalletPayoutRecordV1>,
     /// Transfers that commit in the same transaction as all indexes.
     transfers: Vec<Transfer>,
 }
@@ -276,7 +252,11 @@ pub trait Transaction {
         request: &Digest,
     ) -> Result<Option<Issuance>>;
     /// Read the original exact-once payout.
-    fn payout(&self, scheme: &Digest, key: ClaimKey) -> Result<Option<Payout>>;
+    fn payout(
+        &self,
+        scheme: &Digest,
+        key: KagemushaWalletPayoutKeyV1,
+    ) -> Result<Option<KagemushaWalletPayoutRecordV1>>;
     /// Read an immutable signer certificate by its object digest.
     fn certificate(
         &self,

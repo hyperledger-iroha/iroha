@@ -8,7 +8,12 @@
 //! admitted carries make each local residual smaller than2^194, below the
 //! native prime; the global residual is below2^518 while B^4*p>2^602.
 //! Thus CRT uniqueness proves integer equality. The result is Proper, not
-//! Canonical. Signed or lazy batches are deliberately outside this API.
+//! Canonical. The staged compact kernel separately admits three carries when
+//! 2^254<m<2^255 and every input is Canonical or has exact87/87/81 Proper
+//! bounds. Then S<2^513, q<2^259 and result<2^255; offset92/range93 carries
+//! give local residuals<2^180 and global residual<2^515<B^3*p. Its fixed
+//! selector is chosen from proved metadata only. Signed or lazy batches are
+//! deliberately outside either API.
 
 use super::{
     CARRIES, CARRY_OFFSET_BITS, FfValue, ForeignModulus, Form, FusedWitness, LIMB_BITS, LIMBS, Nat,
@@ -82,6 +87,28 @@ pub(super) fn admitted<F: PastaField>(
         return Err(Error::Synthesis);
     }
     Ok(modulus)
+}
+
+/// A stronger three-carry envelope, checked only after `admitted`. Canonical
+/// form proves the integer comparison, while Proper form must carry its exact
+/// narrower limb bounds. No witness value selects this route.
+pub(super) fn narrow<F: PastaField>(pairs: &[(&FfValue<F>, &FfValue<F>)]) -> bool {
+    let Some((first, _)) = pairs.first() else {
+        return false;
+    };
+    first.modulus.nat().cmp_vartime(&Nat::pow2(255)).is_lt()
+        && pairs
+            .iter()
+            .flat_map(|(left, right)| [left, right])
+            .all(|value| {
+                value.form == Form::Canonical
+                    || (value.form == Form::Proper
+                        && value
+                            .bounds
+                            .iter()
+                            .zip(super::NARROW_PROPER_BOUNDS)
+                            .all(|(bound, maximum)| *bound <= maximum))
+            })
 }
 pub(super) fn witness<F: PastaField>(
     modulus: ForeignModulus,

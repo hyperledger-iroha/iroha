@@ -32,6 +32,15 @@ struct ZkStarkPolicyV1 {
     max_proof_bytes: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha:state:zk-pipa-r:v1")]
+struct ZkPipaRPolicyV1 {
+    enabled: bool,
+    max_envelope_bytes: u64,
+    max_proof_bytes: u64,
+}
+
 macro_rules! sccp_policy {
     ($($field:ident: $type:ty),+ $(,)?) => {
         #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
@@ -160,6 +169,7 @@ struct ZkVerificationGasPolicyV1 {
 #[norito_schema(name = "iroha:state:zk:v1")]
 pub(super) struct ZkConsensusPolicyV1 {
     halo2: ZkHalo2PolicyV1,
+    pipa_r: ZkPipaRPolicyV1,
     stark: ZkStarkPolicyV1,
     sccp: ZkSccpPolicyV1,
     retention: ZkProofRetentionPolicyV1,
@@ -209,6 +219,11 @@ impl ZkConsensusPolicyV1 {
                 max_proof_bytes: count(config.halo2.max_proof_bytes),
                 max_transcript_label_len: count(config.halo2.max_transcript_label_len),
                 enforce_transcript_label_ascii: config.halo2.enforce_transcript_label_ascii,
+            },
+            pipa_r: ZkPipaRPolicyV1 {
+                enabled: config.pipa_r.enabled,
+                max_envelope_bytes: count(config.pipa_r.max_envelope_bytes),
+                max_proof_bytes: count(config.pipa_r.max_proof_bytes),
             },
             stark: ZkStarkPolicyV1 {
                 enabled: config.stark.enabled,
@@ -320,6 +335,16 @@ mod tests {
         );
         let _ambient = norito::core::DecodeFlagsGuard::enter(0);
         assert_eq!(norito::encode_canonical(&projected).unwrap(), encoded);
+    }
+
+    #[test]
+    fn pipa_r_admission_inputs_bind_projection() {
+        let baseline = policy();
+        let mut changed = baseline.clone();
+        changed.pipa_r.enabled = !changed.pipa_r.enabled;
+        assert_changed(&baseline, &changed, "pipa_r.enabled");
+        check_nested_number!(baseline, pipa_r.max_envelope_bytes);
+        check_nested_number!(baseline, pipa_r.max_proof_bytes);
     }
 
     #[test]

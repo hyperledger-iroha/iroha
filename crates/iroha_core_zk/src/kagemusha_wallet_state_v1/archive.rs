@@ -41,6 +41,8 @@ pub enum ArchiveKey {
     },
     /// The single self-verified Ω recorded for one head.
     Fold(u128),
+    /// Separate exact Payment retained until its earned fee has a finalized payout.
+    FeeClaim([u8; 32]),
 }
 
 impl ArchiveKey {
@@ -52,6 +54,7 @@ impl ArchiveKey {
                 format!("p-{sequence:032x}-{ordinal:08x}.arc")
             }
             Self::Fold(sequence) => format!("f-{sequence:032x}.arc"),
+            Self::FeeClaim(credit) => format!("q-{}.arc", hex::encode(credit)),
         }
     }
 }
@@ -75,6 +78,12 @@ pub trait ArchiveStore {
     /// # Errors
     /// I/O errors may follow publication; callers must reconcile, never infer no commit.
     fn put(&mut self, key: ArchiveKey, bytes: &[u8]) -> Result<(), Error>;
+    /// Remove both copies after a source-selected manifest has durably authorized collection.
+    /// Absence is idempotent; unavailability and uncertain directory durability are errors.
+    ///
+    /// # Errors
+    /// Failed removal or directory synchronization. No error restores deleted data.
+    fn remove(&mut self, key: ArchiveKey) -> Result<(), Error>;
 }
 
 #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -210,6 +219,19 @@ impl<F: Fs> FsArchive<F> {
 }
 
 impl<F: Fs> ArchiveStore for FsArchive<F> {
+    fn remove(&mut self, key: ArchiveKey) -> Result<(), Error> {
+        let name = key.name();
+        for name in [name.clone(), format!("{name}.r")] {
+            match self.fs.unlink(&self.directory, &name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.fs.sync_dir(&self.directory)?;
+        }
+        Ok(())
+    }
+
     fn binding(&self) -> ([u8; 32], [u8; 32]) {
         (self.scheme_id, self.wallet_id)
     }
@@ -250,6 +272,8 @@ fn parse_key(name: &str) -> Option<ArchiveKey> {
         ArchiveKey::Capsule(hex::decode(raw).ok()?.try_into().ok()?)
     } else if let Some(raw) = name.strip_prefix("o-").and_then(|s| s.strip_suffix(".arc")) {
         ArchiveKey::Object(hex::decode(raw).ok()?.try_into().ok()?)
+    } else if let Some(raw) = name.strip_prefix("q-").and_then(|s| s.strip_suffix(".arc")) {
+        ArchiveKey::FeeClaim(hex::decode(raw).ok()?.try_into().ok()?)
     } else if let Some(raw) = name.strip_prefix("f-").and_then(|s| s.strip_suffix(".arc")) {
         ArchiveKey::Fold(u128::from_str_radix(raw, 16).ok()?)
     } else {

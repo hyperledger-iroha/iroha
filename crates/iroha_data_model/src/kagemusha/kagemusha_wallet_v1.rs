@@ -63,6 +63,7 @@ mod digest;
 mod identity;
 mod keys;
 mod ledger;
+mod ledger_records;
 mod messages;
 mod policy;
 mod poseidon;
@@ -165,6 +166,9 @@ pub use self::{
         KagemushaWalletLedgerControlBodyV1, KagemushaWalletLedgerControlV1,
         KagemushaWalletLoadVoucherBodyV1, KagemushaWalletLoadVoucherV1,
         KagemushaWalletUnloadChargeV1, KagemushaWalletUnloadClaimV1, KagemushaWalletUnloadPayoutV1,
+    },
+    ledger_records::{
+        KagemushaWalletLedgerKeyV1, KagemushaWalletPayoutKeyV1, KagemushaWalletPayoutRecordV1,
     },
     messages::{
         KAGEMUSHA_WALLET_CREDIT_OPENING_TRANSCRIPT_BYTES_V1,

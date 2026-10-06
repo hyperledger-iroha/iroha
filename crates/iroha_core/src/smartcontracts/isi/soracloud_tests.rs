@@ -5648,6 +5648,9 @@ fn full_bootstrap_execution_bfv_native_air_rejects_wrapper_statement_retarget() 
     );
     let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
     let guardrails = crate::zk::ZkVerifyGuardrails {
+        pipa_r_enabled: true,
+        pipa_r_max_envelope_bytes: usize::MAX,
+        pipa_r_max_proof_bytes: usize::MAX,
         halo2_enabled: true,
         halo2_max_envelope_bytes: usize::MAX,
         halo2_max_proof_bytes: usize::MAX,
@@ -5741,6 +5744,9 @@ fn full_bootstrap_bfv_native_air_boundary_runs_before_dedicated_verifier_error()
         ),
     );
     let test_guardrails = crate::zk::ZkVerifyGuardrails {
+        pipa_r_enabled: true,
+        pipa_r_max_envelope_bytes: usize::MAX,
+        pipa_r_max_proof_bytes: usize::MAX,
         halo2_enabled: true,
         halo2_max_envelope_bytes: usize::MAX,
         halo2_max_proof_bytes: usize::MAX,

@@ -120,14 +120,16 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("pipa-r/pasta")]
     [InlineData("pipa-r/pasta/kaigi-authorization-v1")]
     [InlineData("pipa-r/pasta/kaigi-usage-v1")]
-    [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
-    [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
-    [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
+    [InlineData("pipa-r/pasta/confidential-transfer-v1")]
+    [InlineData("pipa-r/pasta/confidential-unshield-full-v1")]
+    [InlineData("pipa-r/pasta/confidential-unshield-change-v1")]
     [InlineData("stark/fri/poseidon-x7-goldilocks-6x64-v1")]
     public void VerifierRegistryAcceptsOnlyPinnedProfiles(string label)
     {
         Assert.True(VerifierBackendRegistryLabels.IsSupportedLabel(label));
         Assert.Equal(label, VerifierBackendRegistryLabels.RequireSupportedLabel(label));
+        if (label.StartsWith("pipa-r/", StringComparison.Ordinal))
+            Assert.Equal(VerifyingKeyBackendTag.NativePipaRPasta, VerifyingKeyBackendTags.RegistryTag(label));
         Assert.True(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(label));
         Assert.Equal(VerifyingKeyBackendCatalogTag.Production,
             VerifyingKeyBackendTags.FromCatalogLabel(label));
@@ -160,6 +162,9 @@ public sealed class VerifyingKeyBackendTagTests
             null,
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "halo2/pasta/kaigi-usage-v1",
             "pipa-r/ipa/pasta/kaigi-authorization-v1",
             "halo2/pasta/kaigi-roster-v1",

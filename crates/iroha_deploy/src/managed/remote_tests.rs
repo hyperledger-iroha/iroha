@@ -20,13 +20,13 @@ fn profile(seed: u8, floor: u64, url: &str) -> InstalledNetworkProfile {
 fn runtime(root: &Path, profiles: InstalledNetworkProfiles) -> InstalledRuntime {
     let directory = PrivateDirectory::open_or_create(root).unwrap();
     for binary in ["kagami", "iroha3d"] {
-        directory
-            .write_atomic(
-                &format!("{binary}{}", std::env::consts::EXE_SUFFIX),
-                b"fixture executable",
-                PublishMode::CreateNew,
-            )
-            .unwrap();
+        std::fs::copy(
+            std::env::current_exe().unwrap(),
+            directory
+                .path()
+                .join(format!("{binary}{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .unwrap();
     }
     directory
         .write_atomic(
@@ -260,14 +260,8 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
     let _guard = super::super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let root = PrivateDirectory::open_or_create(temporary.path().join("managed")).unwrap();
-    root.write_atomic(
-        "not-executable",
-        b"not a native worker",
-        PublishMode::CreateNew,
-    )
-    .unwrap();
     let store = ManagedStore::open(root.path()).unwrap();
-    let binary = root.path().join("not-executable");
+    let binary = std::env::current_exe().unwrap();
     let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     request.startup_timeout = Duration::from_secs(120);
@@ -378,16 +372,16 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
         );
         assert!(!network.path().join(STATUS).exists());
         assert!(!network.path().join(WORKER).exists());
+        // A Ready-triggered worker reads this same function before its request-lock
+        // acquisition. It must already have the foreground budget, not RELAY_TURN.
+        let worker_deadline = attachment_turn_deadline(&directory).unwrap();
+        assert!(worker_deadline > Instant::now() + RELAY_TURN);
+        assert!(worker_deadline <= original_deadline + Duration::from_millis(2));
         captured = Some(prepared.clone());
         Ok(())
     });
-    assert!(matches!(result, Err(Error::Io(_))));
-    let prepared = captured.expect("binding must precede the native spawn failure");
-    // A Ready-triggered worker reads this same function before its request-lock
-    // acquisition. It must already have the foreground budget, not RELAY_TURN.
-    let worker_deadline = attachment_turn_deadline(&directory).unwrap();
-    assert!(worker_deadline > Instant::now() + RELAY_TURN);
-    assert!(worker_deadline <= original_deadline + Duration::from_millis(2));
+    assert!(matches!(result, Err(Error::Timeout(timeout)) if timeout == request.startup_timeout));
+    let prepared = captured.expect("binding must precede the original-budget worker-start failure");
     drop(request_gate);
     assert_eq!(
         prepared, original,

@@ -8,7 +8,9 @@ use iroha_plonk::{
     transcript::decode_point,
 };
 use iroha_plonk_gadgets::{
-    Bit, GlueChip, Uint, Word, bytes::element::LeElement, statement::foreign_limbs,
+    Bit, GlueChip, Uint, Word,
+    bytes::{element::LeElement, variable::ActiveBytes},
+    statement::foreign_limbs,
 };
 use iroha_plonk_recursion::{
     K, VESTA_TRIVIAL_GENERATOR,
@@ -26,6 +28,9 @@ use crate::{
     },
     q_sigma::QSigmaPlan,
 };
+
+#[cfg(test)]
+mod tests;
 
 /// Constrains a canonical Fq scalar to its injective native Fp subfield encoding.
 /// This is the bridge for the Bounded and Bits columns verified by A.
@@ -160,6 +165,8 @@ pub struct SigmaBindingCells {
     key_index: Word<Fp>,
     proof_chunks: Vec<Word<Fp>>,
     step_digest: Option<Word<Fp>>,
+    carrier_length: Option<usize>,
+    active_carrier: Option<ActiveBytes<Fp>>,
 }
 #[derive(Clone, Debug)]
 enum BoundStatement {
@@ -167,6 +174,15 @@ enum BoundStatement {
     Incoming(Box<IncomingStatementCells>),
 }
 impl SigmaBindingCells {
+    pub(super) const fn key_index(&self) -> &Word<Fp> {
+        &self.key_index
+    }
+    pub(super) fn carrier_length(&self) -> Result<usize, Error> {
+        self.carrier_length.ok_or(Error::Synthesis)
+    }
+    pub(super) fn proof_chunks(&self) -> &[Word<Fp>] {
+        &self.proof_chunks
+    }
     /// Copies a validated statement, operation-derived selector and byte chunks.
     /// The caller must derive `key_index` from the authenticated operation
     /// controls and `proof_chunks` from the same supplied proof tape.
@@ -180,6 +196,8 @@ impl SigmaBindingCells {
             key_index,
             proof_chunks,
             step_digest: None,
+            carrier_length: None,
+            active_carrier: None,
         }
     }
     /// The statement whose digest is bound to the Q slot.
@@ -199,6 +217,15 @@ impl SigmaBindingCells {
             BoundStatement::Incoming(_) => Err(Error::Synthesis),
         }
     }
+    /// Total incoming statement, unavailable for an own hard slot.
+    /// # Errors
+    /// The binding belongs to an own slot.
+    pub fn incoming_statement(&self) -> Result<&IncomingStatementCells, Error> {
+        match &self.statement {
+            BoundStatement::Incoming(statement) => Ok(statement),
+            BoundStatement::Own(_) => Err(Error::Synthesis),
+        }
+    }
     /// Copies a total incoming statement and its original proof carrier chunks.
     /// Its semantic validity joins the incoming Q verdict during binding; it is
     /// never asserted hard and its original digest is never replaced by a dummy.
@@ -212,6 +239,8 @@ impl SigmaBindingCells {
             key_index,
             proof_chunks,
             step_digest: None,
+            carrier_length: None,
+            active_carrier: None,
         }
     }
 
@@ -231,6 +260,128 @@ impl SigmaBindingCells {
         key_index: Word<Fp>,
         run: &iroha_plonk_gadgets::bytes::tape::ByteRun<Fp>,
     ) -> Result<Self, Error> {
+        Self::from_tape(
+            chip,
+            region,
+            BoundStatement::Own(Box::new(statement.clone())),
+            key_index,
+            run,
+        )
+    }
+
+    /// Bind an incoming sigma's original length-prefixed tape without making
+    /// malformed length or statement semantics hard requirements. The Q soft
+    /// verifier and statement verdict must both join the final branch rule.
+    /// # Errors
+    /// Wrong fixed framing/segments or synthesis failure.
+    pub fn from_incoming_run(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        statement: &IncomingStatementCells,
+        key_index: Word<Fp>,
+        run: &iroha_plonk_gadgets::bytes::tape::ByteRun<Fp>,
+    ) -> Result<Self, Error> {
+        Self::from_tape(
+            chip,
+            region,
+            BoundStatement::Incoming(Box::new(statement.clone())),
+            key_index,
+            run,
+        )
+    }
+
+    /// Fixed decoder segments of an unframed original sigma buffer.
+    /// The buffer may be larger; only this prefix is supplied to the fixed Q
+    /// verifier, whose length verdict still uses the exact original length.
+    /// # Errors
+    /// Zero/non-message-aligned capacity or overflow.
+    pub fn incoming_segments(
+        proof_bytes: usize,
+    ) -> Result<Vec<iroha_plonk_gadgets::bytes::SegmentSpec>, Error> {
+        use iroha_plonk_gadgets::bytes::SegmentSpec;
+        if proof_bytes == 0 || !proof_bytes.is_multiple_of(32) {
+            return Err(Error::Synthesis);
+        }
+        u32::try_from(proof_bytes).map_err(|_| Error::BoundsFailure)?;
+        Ok((0..proof_bytes)
+            .step_by(31)
+            .map(|offset| SegmentSpec::little(offset, (proof_bytes - offset).min(31)))
+            .collect())
+    }
+
+    /// Bind an exact original sigma string to its safe Q view and byte digest.
+    ///
+    /// Q receives `LE32(actual length)` followed by the descriptor-sized prefix.
+    /// A short original is zero padded only for that view; a long original tail
+    /// remains in the exact external digest. No decoded witness bit can replace
+    /// this provenance. The statement and Q verifier verdicts remain soft.
+    /// # Errors
+    /// Invalid descriptor capacity, missing fixed segments or synthesis failure.
+    pub fn from_incoming_active(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        statement: &IncomingStatementCells,
+        key_index: Word<Fp>,
+        raw: &ActiveBytes<Fp>,
+        proof_bytes: usize,
+    ) -> Result<Self, Error> {
+        use iroha_plonk_gadgets::{
+            UintChip,
+            bytes::{BoundedBytes, PBytes},
+        };
+        if raw.run().len() < proof_bytes {
+            return Err(Error::Synthesis);
+        }
+        let mut fixed = PBytes::new();
+        // ActiveBytes owns this UInt32 certificate, so the LE32 bound is exact.
+        fixed.push_bounded(
+            BoundedBytes::trusted(raw.length().word().clone(), 4).ok_or(Error::Synthesis)?,
+        )?;
+        for spec in Self::incoming_segments(proof_bytes)? {
+            let chunk = raw
+                .run()
+                .secondary_segment(spec)?
+                .bounded()
+                .ok_or(Error::Synthesis)?;
+            fixed.push_bounded_split(&mut chip.uint(), region, &chunk)?;
+        }
+        let chunks = fixed
+            .chunk_words(chip.uint().glue(), region)?
+            .iter()
+            .map(|chunk| chunk.word().clone())
+            .collect();
+        let lanes = chip.operation_lanes()?;
+        let mut uint = UintChip::new(lanes.glue, lanes.range);
+        let digest = raw.packed().length_prefixed(&mut uint, region)?.digest(
+            &mut uint,
+            lanes.hash.sponge_mut()?,
+            region,
+            u64::from_le_bytes(*b"kgwstep1"),
+        )?;
+        Ok(Self {
+            statement: BoundStatement::Incoming(Box::new(statement.clone())),
+            key_index,
+            proof_chunks: chunks,
+            step_digest: Some(digest),
+            carrier_length: Some(proof_bytes.checked_add(4).ok_or(Error::BoundsFailure)?),
+            active_carrier: Some(raw.clone()),
+        })
+    }
+
+    /// Original sigma provenance required by total variable-length consumers.
+    /// # Errors
+    /// The binding came from a fixed buffer or field/chunk-only constructor.
+    pub fn active_carrier(&self) -> Result<&ActiveBytes<Fp>, Error> {
+        self.active_carrier.as_ref().ok_or(Error::Synthesis)
+    }
+
+    fn from_tape(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        statement: BoundStatement,
+        key_index: Word<Fp>,
+        run: &iroha_plonk_gadgets::bytes::tape::ByteRun<Fp>,
+    ) -> Result<Self, Error> {
         use iroha_plonk_gadgets::{
             UintChip,
             bytes::{PBytes, tape::SegmentSpec},
@@ -243,11 +394,13 @@ impl SigmaBindingCells {
             region,
             run.secondary_segment(SegmentSpec::little(0, 4))?.word(),
         )?;
-        GlueChip::assert_constant(
-            region,
-            length.word(),
-            Fp::from(u64::try_from(body).map_err(|_| Error::BoundsFailure)?),
-        )?;
+        if matches!(statement, BoundStatement::Own(_)) {
+            GlueChip::assert_constant(
+                region,
+                length.word(),
+                Fp::from(u64::try_from(body).map_err(|_| Error::BoundsFailure)?),
+            )?;
+        }
         let mut bytes = PBytes::new();
         let mut chunks = Vec::new();
         let mut offset = 0;
@@ -272,14 +425,16 @@ impl SigmaBindingCells {
             u64::from_le_bytes(*b"kgwstep1"),
         )?;
         Ok(Self {
-            statement: BoundStatement::Own(Box::new(statement.clone())),
+            statement,
             key_index,
             proof_chunks: chunks,
             step_digest: Some(digest),
+            carrier_length: Some(run.len()),
+            active_carrier: None,
         })
     }
 
-    /// Same-tape sigma-only receipt digest, available only after `from_run`.
+    /// Same-tape sigma-only receipt digest, available after either tape constructor.
     ///
     /// # Errors
     /// The binding was constructed without an authenticated digest tape.
@@ -293,7 +448,8 @@ impl SigmaBindingCells {
 pub struct BoundSigmaCells {
     /// Authenticated Q part, forwarded unchanged to the Vesta fold in Omega.
     pub part: VestaClaimCells,
-    /// Incoming sigma verification AND statement/index match, when present.
+    /// Incoming sigma verification AND original statement validity, when present.
+    /// Computed statement/index bindings are hard equalities, never soft failures.
     pub incoming_valid: Option<Bit<Fp>>,
     /// The same incoming mode cells committed by Q's instances.
     pub incoming_mode: Option<ModeCells<Fp>>,
@@ -324,9 +480,9 @@ fn verified_bounded_word(
 /// Private to A: callers pass cells hard-verified using the fixed five-column
 /// types, or context-committed cells whose identical values must be verified by
 /// the continuation before it can close. An intermediate A1/W is not accepted.
-/// Wrong incoming statements/selectors contribute a soft failure; own ones
-/// are hard. Chunk equalities are always hard so a witness cannot substitute
-/// different proof bytes merely to justify a burn.
+/// The statement's original semantic verdict and incoming proof verdict stay
+/// soft. Computed statement digests, deterministic selectors and chunk bindings
+/// are hard: selecting different verifier inputs cannot justify a burn.
 ///
 /// # Errors
 /// Fixed metadata/shape mismatch or layout errors.
@@ -372,6 +528,11 @@ pub(super) fn bind_sigma(
             let BoundStatement::Incoming(statement) = &binding.statement else {
                 return Err(Error::Synthesis);
             };
+            // These values are derived verifier inputs, not malformed original
+            // bytes. Otherwise a prover could verify a valid sigma against a
+            // different digest/key and manufacture a false verdict for burn.
+            GlueChip::assert_constant(region, digest_matches.word(), Fp::ONE)?;
+            GlueChip::assert_constant(region, index_matches.word(), Fp::ONE)?;
             incoming_valid = Some(chip.uint().glue().and(region, &valid, statement.valid())?);
         }
         let chunks = plan.chunk_range(slot).ok_or(Error::Synthesis)?;

@@ -1601,6 +1601,7 @@ mod tests {
             },
         },
             zk: iroha_config::parameters::actual::Zk {
+                pipa_r: iroha_config::parameters::actual::PipaR::default(),
                 halo2: iroha_config::parameters::actual::Halo2 {
                     enabled: false,
                     curve: iroha_config::parameters::actual::ZkCurve::Pallas,

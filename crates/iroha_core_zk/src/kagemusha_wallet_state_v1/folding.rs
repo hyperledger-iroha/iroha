@@ -334,6 +334,13 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 guard.token.check()?;
                 self.archive.put(ArchiveKey::Fold(sequence), &bytes)?;
                 let identity = digest("wallet-recorded-fold", &bytes);
+                let mut entry = self.step_entry(&manifest, sequence)?;
+                entry.checkpoints = ordinal;
+                manifest.steps = manifest.steps.set(
+                    &mut self.archive,
+                    manifest::sequence_key(sequence),
+                    &archive::encode(&entry)?,
+                )?;
                 manifest.folds = manifest.folds.set(
                     &mut self.archive,
                     manifest::sequence_key(sequence),

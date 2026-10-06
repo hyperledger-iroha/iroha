@@ -65,8 +65,12 @@ Focused validation: `cargo test -p musubi --lib deployment_runtime`.
 
 `generated_publication::publish_generated` accepts the source-bound generated publication context,
 an explicit package manifest, private publication state/cache roots, and the retained generated
-archive transport. Begin performs the owner-paid namespace binding through the existing wallet
-parent before resolving a fresh publication graph. Exact current binding permits a read-only skip
+archive transport. Generated Begin uses the shared local selection preflight: a member input
+binds that member, while a workspace-root input keeps defaults and explicit selection; exactly
+one member is required. Kagami and Mochi preflight before managed startup, and the canonical
+publication entry validates selection again before namespace or publication effects. Begin
+performs the owner-paid namespace binding through the existing wallet parent before resolving
+a fresh publication graph. Exact current binding permits a read-only skip
 only after the complete original parent census; missing custody is never recreated. Resume and
 sidecar recovery retain the original request and do not authorize a new namespace transaction.
 Generated TLS selection and fresh native provider discovery remain in the sole archive transport;

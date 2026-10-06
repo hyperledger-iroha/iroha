@@ -127,6 +127,7 @@ fn inspect_workspace(workspace: DeveloperWorkspace) -> UiResult<Opened> {
 enum Message {
     Opened(UiResult<Opened>),
     Selected(UiResult<Selection>),
+    SelectionObserved(UiResult<Selection>),
     LocalnetStarted {
         result: UiResult<Selection>,
         names: UiResult<Vec<String>>,
@@ -709,8 +710,10 @@ impl Desktop {
         };
         let name = selected.network.prepared().context.name.clone();
         self.last_poll = Instant::now();
-        // Periodic successful observations must not erase a foreground operation's failure.
-        self.spawn_task(move || Message::Selected(load_selection(&workspace, Some(&name))));
+        // A background failure withdraws live context without erasing completed deployment evidence.
+        self.spawn_task(move || {
+            Message::SelectionObserved(load_selection(&workspace, Some(&name)))
+        });
     }
 
     fn install_selection(&mut self, selection: Selection) {
@@ -796,6 +799,21 @@ impl Desktop {
                     Ok(selected) => self.install_selection(selected),
                     Err(error) => {
                         self.clear_network();
+                        self.error = Some(error);
+                    }
+                },
+                Message::SelectionObserved(result) => match result {
+                    Ok(selected) => self.install_selection(selected),
+                    Err(error) => {
+                        let receipt = self.receipt.take();
+                        let notice = self.notice.take();
+                        let publication_output = self.publication_output.take();
+                        let operation_id = std::mem::take(&mut self.publication.operation_id);
+                        self.clear_network();
+                        self.receipt = receipt;
+                        self.notice = notice;
+                        self.publication_output = publication_output;
+                        self.publication.operation_id = operation_id;
                         self.error = Some(error);
                     }
                 },
@@ -2256,6 +2274,88 @@ mod tests {
                 .contains("Deployment applied")
         );
         assert!(desktop.selected.is_none());
+    }
+
+    #[test]
+    fn completed_deployment_survives_automatic_selection_failure_until_explicit_selection() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        let receipt = "Applied on private dataspace original; exact retained receipt";
+        // Drive the real completion and polling owners; this is presentation evidence, not
+        // a synthesized native transaction or managed network.
+        desktop
+            .sender
+            .send((
+                desktop.epoch,
+                Message::Deployed {
+                    result: Ok(receipt.into()),
+                    refreshed: Err("original workspace observation unavailable".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert_eq!(desktop.receipt.as_deref(), Some(receipt));
+        let notice = desktop.notice.clone();
+        assert!(notice.as_deref().unwrap().contains("Deployment applied"));
+        let epoch = desktop.epoch;
+        desktop.logs = "original context log observation".into();
+        desktop.activity.push_back("original context event".into());
+
+        // Use the same task owner and completion variant as refresh_selection. The context
+        // must withdraw on failure while the original completed result remains inspectable.
+        desktop.spawn_task(|| {
+            Message::SelectionObserved(
+                Err("automatic observation lost its original context".into()),
+            )
+        });
+        assert!(desktop.busy);
+        let completion = desktop
+            .receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        desktop.sender.send(completion).unwrap();
+        desktop.poll();
+        assert!(!desktop.busy);
+        assert_eq!(desktop.epoch, epoch);
+        assert!(desktop.selected.is_none());
+        assert!(desktop.blocks.is_none());
+        assert!(desktop.events.is_none());
+        assert!(desktop.logs.is_empty());
+        assert!(desktop.activity.is_empty());
+        assert_eq!(desktop.receipt.as_deref(), Some(receipt));
+        assert_eq!(desktop.notice, notice);
+        assert_eq!(
+            desktop.error.as_deref(),
+            Some("automatic observation lost its original context")
+        );
+
+        desktop
+            .sender
+            .send((
+                epoch.wrapping_add(1),
+                Message::SelectionObserved(Err("stale context error".into())),
+            ))
+            .unwrap();
+        desktop.poll();
+        assert_eq!(desktop.receipt.as_deref(), Some(receipt));
+        assert_eq!(desktop.notice, notice);
+        assert_eq!(
+            desktop.error.as_deref(),
+            Some("automatic observation lost its original context")
+        );
+
+        // An explicit selection still follows the original clearing path.
+        desktop
+            .sender
+            .send((
+                epoch,
+                Message::Selected(Err("explicit selection failed".into())),
+            ))
+            .unwrap();
+        desktop.poll();
+        assert!(desktop.receipt.is_none());
+        assert!(desktop.notice.is_none());
+        assert_eq!(desktop.error.as_deref(), Some("explicit selection failed"));
+        assert_eq!(desktop.epoch, epoch);
     }
 
     #[test]

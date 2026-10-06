@@ -3,7 +3,7 @@
 use super::bootstrap_objects::{Signed, id, key, sec1, sign, small_id};
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
-    a_relation::load::LoadPolicy,
+    a_relation::own::OwnPolicy,
     admin_sigma::{BootstrapWitness, LoadWitness, StateWitness},
     operation_relation::{map_effects::LOAD_DOMAIN, objects::ObjectKind},
     tree::{IndexedInsert, IndexedTree},
@@ -94,6 +94,33 @@ pub fn receipt(w: &LoadWitness, sigma: &[u8]) -> Signed {
     body.extend(Fp::ZERO.to_repr());
     sign(ObjectKind::Receipt, body, 29, 53)
 }
-pub fn policy() -> LoadPolicy {
-    LoadPolicy::new([1, 2], [31, 32], key(23)).unwrap()
+pub fn policy() -> OwnPolicy {
+    OwnPolicy::new([1, 2], [31, 32], key(23)).unwrap()
+}
+
+/// Separate mandatory C4 signature leaf: current credential and fixed-root certificate.
+pub fn current_signatures(
+    witnesses: &[iroha_kagemusha_proof::q_signature::SignatureWitness; 2],
+) -> (
+    iroha_kagemusha_proof::q_signature::QSignatureCircuit,
+    [Vec<iroha_pasta::Fq>; 1],
+) {
+    use iroha_kagemusha_proof::q_signature::{
+        QSignatureCircuit, QSignaturePlan, SignatureKey, SignatureSlot,
+    };
+    use iroha_plonk_gadgets::p256::VerifyMode;
+    let plan = QSignaturePlan::new(vec![
+        SignatureSlot {
+            mode: VerifyMode::Hard,
+            key: SignatureKey::Variable,
+        },
+        SignatureSlot {
+            mode: VerifyMode::Hard,
+            key: SignatureKey::Fixed(key(23)),
+        },
+    ])
+    .unwrap();
+    let circuit = QSignatureCircuit::new(plan, witnesses.to_vec()).unwrap();
+    let instances = circuit.instances(&[true; 2]).unwrap();
+    (circuit, instances)
 }

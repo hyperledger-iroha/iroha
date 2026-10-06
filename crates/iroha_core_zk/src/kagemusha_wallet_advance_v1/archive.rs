@@ -377,6 +377,20 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletArchiveAccessV1<'_, F> {
         }
         Ok(None)
     }
+    /// Remove both copies of a state-owner record after its selected archive manifest records
+    /// the collection decision. This capability remains inside the protected-data bracket.
+    ///
+    /// # Errors
+    /// An unavailable or uncertain deletion is returned unchanged; absence is idempotent.
+    pub fn remove_record(&self, key: &[u8; 32]) -> Result<(), Error> {
+        let directory = kagemusha_wallet_archive_dir_v1(self.slot);
+        for name in record_names(key) {
+            super::layout::kagemusha_wallet_require_removed_v1(
+                self.store.remove_file(&directory, &name),
+            )?;
+        }
+        Ok(())
+    }
     /// Publish the exact bytes at an immutable key under the provider's custody capability.
     ///
     /// # Errors

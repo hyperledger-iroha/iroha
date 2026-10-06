@@ -168,6 +168,34 @@ pub struct ProofMessageCells {
     length: Uint<Fp, 32>,
 }
 impl ProofMessageCells {
+    /// Decode an embedded fixed-length proof. Its enclosing transport decoder
+    /// separately contributes the original outer-length verdict to `soft_ok`.
+    pub(super) fn fixed_slice(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        run: &ByteRun<Fp>,
+        offset: usize,
+        byte_length: usize,
+    ) -> Result<Self, Error> {
+        if byte_length == 0 || !byte_length.is_multiple_of(32) {
+            return Err(Error::Synthesis);
+        }
+        let end = offset
+            .checked_add(byte_length)
+            .ok_or(Error::BoundsFailure)?;
+        if end > run.len() {
+            return Err(Error::BoundsFailure);
+        }
+        let messages = (offset..end)
+            .step_by(32)
+            .map(|start| decode_le_element(&mut chip.uint(), region, run, start))
+            .collect::<Result<Vec<_>, _>>()?;
+        let length = chip.uint().constant::<32>(
+            region,
+            u128::from(u32::try_from(byte_length).map_err(|_| Error::BoundsFailure)?),
+        )?;
+        Ok(Self { messages, length })
+    }
     /// Decode LE32 actual length followed by a fixed message buffer.
     /// `run` must contain the length segment and the low/high segments from
     /// `le_message_segments(offset + 4, byte_length / 32)`.
@@ -276,6 +304,7 @@ pub fn verify_sigma(
 /// A predecessor's hard proof and separately retained transported claims.
 #[derive(Clone, Debug)]
 pub struct PredecessorCells {
+    pub(super) proof: ProofMessageCells,
     pub(super) public: [Word<Fp>; 18],
     pub(super) pallas: FoldInputCells<Ep>,
     pub(super) opening: FoldInputCells<Ep>,
@@ -345,6 +374,7 @@ pub fn verify_predecessor(
         successor.omega_key_digest(),
     )?;
     Ok(PredecessorCells {
+        proof: proof.clone(),
         public: public.fields().clone(),
         pallas: pallas.clone(),
         opening: FoldInputCells::from_claim(chip, region, &output.claim)?,

@@ -14,7 +14,7 @@ fn reader() -> ConfigReader {
 
 #[test]
 fn every_authorization_action_uses_one_explicit_governed_key_reference() {
-    let table = "[zk.kaigi_authorization_vk]\nbackend = \"halo2/ipa\"\nname = \"kaigi-final\"\n"
+    let table = "[zk.kaigi_authorization_vk]\nbackend = \"pipa-r/pasta/kaigi-authorization-v1\"\nname = \"kaigi-final\"\n"
         .parse()
         .unwrap();
     let config = reader()
@@ -24,7 +24,7 @@ fn every_authorization_action_uses_one_explicit_governed_key_reference() {
         .parse()
         .unwrap();
     let key = config.zk.kaigi_authorization_vk.unwrap();
-    assert_eq!(key.backend, "halo2/ipa");
+    assert_eq!(key.backend, "pipa-r/pasta/kaigi-authorization-v1");
     assert_eq!(key.name, "kaigi-final");
     assert!(config.zk.kaigi_usage_vk.is_none());
 }
@@ -32,9 +32,11 @@ fn every_authorization_action_uses_one_explicit_governed_key_reference() {
 #[test]
 fn retired_per_action_key_configuration_is_unknown() {
     for name in ["kaigi_roster_join_vk", "kaigi_roster_leave_vk"] {
-        let table = format!("[zk.{name}]\nbackend = \"halo2/ipa\"\nname = \"retired\"\n")
-            .parse()
-            .unwrap();
+        let table = format!(
+            "[zk.{name}]\nbackend = \"pipa-r/pasta/kaigi-authorization-v1\"\nname = \"retired\"\n"
+        )
+        .parse()
+        .unwrap();
         let error = reader()
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<Root>()

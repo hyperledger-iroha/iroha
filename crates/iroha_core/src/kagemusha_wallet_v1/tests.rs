@@ -84,7 +84,7 @@ pub(super) struct Memory {
     authority: AccountId,
     wallets: BTreeMap<Digest, WalletRecord>,
     issues: BTreeMap<(Digest, Digest), Issuance>,
-    payouts: BTreeMap<ClaimKey, Payout>,
+    payouts: BTreeMap<KagemushaWalletPayoutKeyV1, KagemushaWalletPayoutRecordV1>,
     balances: BTreeMap<AccountId, u128>,
     certs: BTreeMap<Digest, KagemushaWalletSignerCertificateV1>,
     unavailable: bool,
@@ -168,7 +168,11 @@ impl Transaction for Memory {
         }
         Ok(self.issues.get(&(*wallet, *request)).cloned())
     }
-    fn payout(&self, _: &Digest, key: ClaimKey) -> Result<Option<Payout>> {
+    fn payout(
+        &self,
+        _: &Digest,
+        key: KagemushaWalletPayoutKeyV1,
+    ) -> Result<Option<KagemushaWalletPayoutRecordV1>> {
         if self.unavailable {
             return Err(Error::Unavailable);
         }
@@ -668,7 +672,8 @@ fn world_ledger_table_participates_in_atomic_rollback_and_committed_views() {
     }
     assert_eq!(world.kagemusha_wallet_ledger.view().get(&key), Some(&bytes));
     let json = norito::json::to_json(&world.kagemusha_wallet_ledger).unwrap();
-    let restored: mv::storage::Storage<LedgerKey, Vec<u8>> = norito::json::from_str(&json).unwrap();
+    let restored: mv::storage::Storage<KagemushaWalletLedgerKeyV1, Vec<u8>> =
+        norito::json::from_str(&json).unwrap();
     assert_eq!(restored.view().get(&key), Some(&bytes));
     assert!(restored.block_and_revert().get(&key).is_none());
 }
@@ -680,10 +685,13 @@ fn ledger_key_encoding_is_bounded_and_rejects_aliases() {
     key.encode_json_key(&mut encoded);
     let unquoted: String = norito::json::from_str(&encoded).unwrap();
     assert_eq!(unquoted.len(), 194);
-    assert_eq!(LedgerKey::decode_json_key(&unquoted).unwrap(), key);
-    assert!(LedgerKey::decode_json_key(&unquoted.to_lowercase()).is_err());
-    assert!(LedgerKey::decode_json_key(&unquoted[..193]).is_err());
-    let storage: mv::storage::Storage<LedgerKey, Vec<u8>> =
+    assert_eq!(
+        KagemushaWalletLedgerKeyV1::decode_json_key(&unquoted).unwrap(),
+        key
+    );
+    assert!(KagemushaWalletLedgerKeyV1::decode_json_key(&unquoted.to_lowercase()).is_err());
+    assert!(KagemushaWalletLedgerKeyV1::decode_json_key(&unquoted[..193]).is_err());
+    let storage: mv::storage::Storage<KagemushaWalletLedgerKeyV1, Vec<u8>> =
         [(key, vec![1, 2, 3])].into_iter().collect();
     let ordinary = norito::json::to_json(&storage).unwrap();
     assert_eq!(

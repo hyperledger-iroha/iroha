@@ -2920,7 +2920,7 @@ pub mod torii {
     /// Allowlisted backend prefixes for the background prover worker.
     #[must_use]
     pub fn zk_prover_allowed_backends() -> Vec<String> {
-        vec!["halo2/".to_string()]
+        vec!["halo2/".to_string(), "pipa-r/pasta".to_string()]
     }
     /// Allowlisted circuit identifiers for the background prover worker.
     /// Empty list means "allow all circuits".
@@ -4143,6 +4143,15 @@ pub mod zk {
         pub const METAL_TRACE: bool = false;
         /// Whether to log Metal device enumeration details (off by default).
         pub const METAL_DEBUG_ENUM: bool = false;
+    }
+    /// Native PIPA-R verifier limits for the compiled circuit registry.
+    pub mod pipa_r {
+        /// Native PIPA-R verification is available by default.
+        pub const ENABLED: bool = true;
+        /// Maximum outer envelope size, shared with stateless pre-verification.
+        pub const MAX_ENVELOPE_BYTES: usize = super::preverify::MAX_BYTES;
+        /// Maximum canonical proof-payload size.
+        pub const MAX_PROOF_BYTES: usize = 192 * 1024;
     }
     /// Halo2 verifier configuration for host-side proof checking.
     pub mod halo2 {

@@ -55,6 +55,16 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::Seed,
+        reason: "KAGEMUSHA ledger lookup identifiers: a fixed custody-index key and derived reserve-asset, reserve-definition and pending-publication keys. They address exact identities in the committed ledger; they neither commit State contents nor establish finality, signing authority or completion",
+        literals: &[
+            r"iroha:kagemusha:ledger-custody-index:v1\0",
+            r"iroha:kagemusha:pending-publication:v1\0",
+            r"iroha:kagemusha:reserve-asset:v1\0",
+            r"iroha:kagemusha:reserve-definition:v1\0",
+        ],
+    },
+    OtherDomains {
         usage: Use::ResultBinding,
         reason: "Domain tags of the execution result R, of the certified block identity and of lane results: they bind the listed roots and the fields of the listed protocol carriers, and commit no State content of their own",
         literals: &[
@@ -254,11 +264,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         literals: &[r"iroha:telemetry:classified-journal:v1\0"],
     },
     OtherDomains {
-        usage: Use::LocalArtifact,
-        reason: "Unused domain constant of the merge write-set encoding: production uses that encoding only as an emptiness probe and forms no digest",
-        literals: &[r"iroha:merge:execution-write-set:v1\0"],
-    },
-    OtherDomains {
         usage: Use::Seed,
         reason: "Digests of the consensus projection of one lane configuration and of the lane catalog. They are compared for equality inside one process, to decide which lanes reset, and they are inputs of the static, configuration and lifecycle derivations of the lane incarnation, the identifier that State stores per lane. The two digests themselves are never stored or carried",
         literals: &[
@@ -327,6 +332,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:state:viral-incentives:v1",
             r"iroha:state:zk-confidential:v1",
             r"iroha:state:zk-halo2:v1",
+            r"iroha:state:zk-pipa-r:v1",
             r"iroha:state:zk-proof-retention:v1",
             r"iroha:state:zk-sccp:v1",
             r"iroha:state:zk-stark:v1",
@@ -351,6 +357,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.bpng.retail-identity.v1",
             r"iroha.consensus.threshold-key-lifecycle.apply.v1",
             r"iroha.faucet.claim.consumed.key.v1\0",
+            r"iroha.kagemusha.wallet.ledger.v1",
             r"iroha.offline.kagemusha.recursive_release.cancel.v1",
             r"iroha.offline.kagemusha.recursive_release.deactivate.v1",
             r"iroha.offline.kagemusha.recursive_release.enable.v1",
@@ -438,9 +445,9 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"halo2/ipa:ivm-execution-v1",
             r"halo2/ipa:ivm-replay-binding-v1",
             r"halo2/ipa:unknown-native-v1",
-            r"halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            r"halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            r"halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            r"pipa-r/pasta/confidential-transfer-v1",
+            r"pipa-r/pasta/confidential-unshield-change-v1",
+            r"pipa-r/pasta/confidential-unshield-full-v1",
             r"halo2/pasta/ipa-pasta-cycle-v1",
             r"halo2/pasta/ipa/ivm-execution-v1",
             r"halo2/pasta/ipa/ivm-replay-binding-v1",
@@ -479,6 +486,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"ivm-v1",
             r"kaigi-authorization-v1",
             r"kaigi-roster-v1",
+            r"kaigi-usage-v1",
             r"ml-kem-1024-xchacha20-poly1305-v1",
             r"ml-kem-768-xchacha20-poly1305-v1",
             r"monero-fcmp-plus-plus-v1",
@@ -487,6 +495,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"orchard-halo2-actions-v1",
             r"other-v1",
             r"pepper-social-v1",
+            r"pipa-r/ipa/pasta/kaigi-authorization-v1",
+            r"pipa-r/ipa/pasta/kaigi-usage-v1",
+            r"pipa-r/pasta/kaigi-authorization-v1",
+            r"pipa-r/pasta/kaigi-usage-v1",
+            r"pipa-r/pasta/kaigi-usage-v1/",
             r"policy-v1",
             r"poseidon-x7-goldilocks-6x64-v1",
             r"pq-masp-stark-v1",

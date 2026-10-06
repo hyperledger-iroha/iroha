@@ -9409,17 +9409,17 @@ pub(crate) mod tests {
 
         let native_chain = crate::block::tests::component_chain(state);
         let state = native_chain.state();
-        let fixture = crate::zk::test_utils::halo2_fixture_envelope(
-            "halo2/pasta/ipa/kaigi-usage-v1",
+        let fixture = crate::zk::test_utils::native_framing_fixture_envelope(
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             [0_u8; 32],
         );
-        let proof = fixture.proof_box("halo2/ipa");
+        let proof = fixture.proof_box("pipa-r/pasta");
         let proof_bytes = u64::try_from(proof.bytes.len()).expect("proof length fits u64");
         let instruction: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(
             iroha_data_model::proof::ProofAttachment::new_ref(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 proof,
-                iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "missing-overlay-vk"),
+                iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "missing-overlay-vk"),
             ),
         )
         .into();

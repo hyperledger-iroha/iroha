@@ -19,7 +19,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     }
 
     func testExactNativeRegistryEngineMapping() {
-        for label in ["pipa-r/pasta", "pipa-r/pasta/kaigi-authorization-v1", "pipa-r/pasta/kaigi-usage-v1"] {
+        for label in ["pipa-r/pasta", "pipa-r/pasta/kaigi-authorization-v1", "pipa-r/pasta/kaigi-usage-v1", "pipa-r/pasta/confidential-transfer-v1", "pipa-r/pasta/confidential-unshield-full-v1", "pipa-r/pasta/confidential-unshield-change-v1"] {
             XCTAssertEqual(VerifyingKeyBackendTag.registryTag(label), .nativePipaRPasta)
         }
         XCTAssertNil(VerifyingKeyBackendTag.registryTag("halo2/pasta/kaigi-usage-v1"))
@@ -84,9 +84,9 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "pipa-r/pasta",
             "pipa-r/pasta/kaigi-authorization-v1",
             "pipa-r/pasta/kaigi-usage-v1",
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "pipa-r/pasta/confidential-transfer-v1",
+            "pipa-r/pasta/confidential-unshield-full-v1",
+            "pipa-r/pasta/confidential-unshield-change-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1"
         ]
 
@@ -106,6 +106,9 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             nil,
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "halo2/pasta/kaigi-usage-v1",
             "pipa-r/ipa/pasta/kaigi-authorization-v1",
             "pipa-r/pasta/kaigi-usage-v1/",
@@ -222,6 +225,9 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
         let rejected = [
             "",
             "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "halo2/pasta/kaigi-usage-v1",
             "pipa-r/ipa/pasta/kaigi-authorization-v1",
             "pipa-r/pasta/kaigi-usage-v1/",

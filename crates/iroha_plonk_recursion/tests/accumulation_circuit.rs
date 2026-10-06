@@ -406,6 +406,18 @@ fn run<C: PastaCurve>() {
     let mut hard = circuit.clone();
     hard.mode = VerificationMode::Hard;
     assert!(check(&hard, true, &output));
+    let hard_instances = [hard.instances(true, &output)];
+    let hard_known = synthesize(&hard, 16, Some(&hard_instances)).unwrap();
+    let hard_unknown = synthesize(&hard.without_witnesses(), 16, None).unwrap();
+    assert_eq!(hard_known.tables.fixed(), hard_unknown.tables.fixed());
+    assert_eq!(
+        hard_known.tables.permutation(),
+        hard_unknown.tables.permutation()
+    );
+    assert_eq!(
+        hard_known.tables.advice_assigned(),
+        hard_unknown.tables.advice_assigned()
+    );
     let instances = [circuit.instances(true, &output)];
     let known = synthesize(&circuit, 16, Some(&instances)).unwrap();
     let unknown = synthesize(&circuit.without_witnesses(), 16, None).unwrap();
@@ -418,9 +430,9 @@ fn run<C: PastaCurve>() {
     let cells = assigned_advice_cells(&circuit, 16, &instances).unwrap();
     let rows = cells.iter().map(|(_, row)| row + 1).max().unwrap();
     let inventory = if C::CURVE_ID == "pallas" {
-        (8365, 105_407)
+        (6246, 90_270)
     } else {
-        (9505, 105_496)
+        (7386, 90_235)
     };
     assert_eq!(
         (rows, cells.len()),

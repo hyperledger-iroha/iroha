@@ -83,19 +83,62 @@ pub enum OperationTask {
     SendPending = 6,
     /// Send conditional fee insertion and untouched maps/burned total.
     SendFeeAndCarry = 7,
+    /// Mandatory current credential and Enrollment certificate re-verification on Load.
+    LoadCurrentAuthorization = 8,
+    /// Send own receipt, current credential and Enrollment certificate.
+    SendAuthorization = 9,
+    /// Exact public lineage/transport/sigma tape bound to the own receipt.
+    SendProof = 10,
+    /// Incoming Omega, sigma and transported-claim decoder verdicts on Receive.
+    ReceiveProofs = 11,
+    /// Exact incoming Payment, Request, payer and receipt body bindings.
+    ReceiveObjects = 12,
+    /// Incoming Request and Send receipt signatures, including quoted credential.
+    ReceiveSignatures = 13,
+    /// Authenticated consumed-credit search and its nonmembership verdict.
+    ReceiveNonmembership = 14,
+    /// Request-recorded blacklist history and exact sigma-key selection.
+    ReceiveBlacklist = 15,
+    /// Hard own receipt, current credential and Enrollment certificate.
+    ReceiveAuthorization = 16,
+    /// Exact own sigma bytes bound to the Receive receipt proof digest.
+    ReceiveOwnProof = 17,
+    /// OQ-3 consumed map, immutable credit record and adjusted burn accounting.
+    ReceiveEffects = 18,
 }
 impl OperationTask {
     /// Stable context-schema code, not an operation's wire tag.
     pub const fn code(self) -> u8 {
         self as u8
     }
-    /// Exact currently implemented complete operation task set.
+    /// Exact required operation task set; this metadata does not establish
+    /// that the operation's complete circuit composition is implemented.
     /// Other variants need their own task schema before complete composition.
     pub const fn required(variant: Variant) -> Option<&'static [Self]> {
         match variant {
             Variant::Bootstrap => Some(&[Self::BootstrapState, Self::BootstrapAuthorization]),
-            Variant::Load => Some(&[Self::LoadRecovery, Self::LoadAuthorization]),
-            Variant::Send => Some(&[Self::SendObjects, Self::SendPending, Self::SendFeeAndCarry]),
+            Variant::Load => Some(&[
+                Self::LoadRecovery,
+                Self::LoadAuthorization,
+                Self::LoadCurrentAuthorization,
+            ]),
+            Variant::Send => Some(&[
+                Self::SendObjects,
+                Self::SendPending,
+                Self::SendFeeAndCarry,
+                Self::SendAuthorization,
+                Self::SendProof,
+            ]),
+            Variant::Receive | Variant::ReceiveRenewed => Some(&[
+                Self::ReceiveProofs,
+                Self::ReceiveObjects,
+                Self::ReceiveSignatures,
+                Self::ReceiveNonmembership,
+                Self::ReceiveBlacklist,
+                Self::ReceiveAuthorization,
+                Self::ReceiveOwnProof,
+                Self::ReceiveEffects,
+            ]),
             _ => None,
         }
     }
@@ -137,10 +180,18 @@ mod tests {
     }
     #[test]
     fn operation_partitions_require_every_task_once_and_reject_relabelling() {
-        use OperationTask::{SendFeeAndCarry, SendObjects, SendPending};
-        let honest = vec![vec![SendObjects], vec![SendPending], vec![SendFeeAndCarry]];
+        use OperationTask::{
+            SendAuthorization, SendFeeAndCarry, SendObjects, SendPending, SendProof,
+        };
+        let honest = vec![
+            vec![SendObjects],
+            vec![SendPending],
+            vec![SendFeeAndCarry],
+            vec![SendAuthorization],
+            vec![SendProof],
+        ];
         assert!(OperationTask::validate(Variant::Send, &honest).is_ok());
-        for i in 0..3 {
+        for i in 0..5 {
             let mut missing = honest.clone();
             missing[i].clear();
             assert!(OperationTask::validate(Variant::Send, &missing).is_err());
@@ -247,9 +298,14 @@ mod circuit_tests {
         };
         let public = (0..16).map(Fp::from).collect::<Vec<_>>();
         assert!(
-            check_circuit(&circuit, 8, &[public.clone()], CheckMode::Strict)
-                .unwrap()
-                .is_satisfied()
+            check_circuit(
+                &circuit,
+                8,
+                std::slice::from_ref(&public),
+                CheckMode::Strict
+            )
+            .unwrap()
+            .is_satisfied()
         );
         for (i, value) in [
             (0, Fp::ONE),
@@ -261,7 +317,7 @@ mod circuit_tests {
             let mut wrong = circuit.clone();
             wrong.masks[i] = value;
             assert!(
-                !check_circuit(&wrong, 8, &[public.clone()], CheckMode::Strict)
+                !check_circuit(&wrong, 8, std::slice::from_ref(&public), CheckMode::Strict)
                     .unwrap()
                     .is_satisfied()
             );

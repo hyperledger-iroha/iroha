@@ -4225,7 +4225,7 @@ pub(crate) enum TieredKeyHandle {
     PrivacyCommitment(crate::privacy_state::PrivacyCommitmentKeyV1),
     PrivacyRoot(crate::privacy_state::PrivacyRootKeyV1),
     PrivacyRootHead(crate::privacy_state::PrivacyRootHeadKeyV1),
-    KagemushaWalletLedger(crate::kagemusha_wallet_v1::LedgerKey),
+    KagemushaWalletLedger(iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1),
     PrivateSettlementGovernance(
         crate::private_settlement::global_state::PrivateSettlementPoolKeyV1,
     ),

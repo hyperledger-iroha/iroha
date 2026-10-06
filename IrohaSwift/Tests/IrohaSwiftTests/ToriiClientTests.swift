@@ -10165,7 +10165,7 @@ final class ToriiClientHeaderTests: XCTestCase {
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "circuit_id": "pipa-r/pasta/confidential-unshield-change-v1",
             "owner_manifest_id": "confidential-v3",
             "namespace": "confidential",
             "backend": "halo2/ipa",
@@ -10215,7 +10215,7 @@ final class ToriiClientHeaderTests: XCTestCase {
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "circuit_id": "pipa-r/pasta/confidential-unshield-change-v1",
             "owner_manifest_id": "confidential-v3",
             "namespace": "confidential",
             "backend": "halo2/ipa",

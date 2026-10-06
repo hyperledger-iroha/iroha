@@ -38,11 +38,11 @@ def _registry_literals(path: str, marker: str, end: str) -> frozenset[str]:
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs",
-            "private static readonly HashSet<string> ProductionNativeHalo2PastaBackends =", "};", "pasta",
+            "private static readonly HashSet<string> ProductionNativePipaRPastaBackends =", "];", "pipa-r",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
-            "private static let productionNativeHalo2PastaBackends: Set<String> =", "]", "pasta",
+            "private static let productionNativePipaRPastaBackends: Set<String> =", "]", "pipa-r",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
@@ -70,8 +70,8 @@ def test_each_sdk_registry_mirror_matches_the_exact_rust_owner(
     assert len(canonical) == 8
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == canonical
     expected = (
-        frozenset(label for label in canonical if label.startswith("halo2/pasta/"))
-        if subset == "pasta" else canonical
+        frozenset(label for label in canonical if label.startswith("pipa-r/"))
+        if subset == "pipa-r" else canonical
     )
     assert _registry_literals(path, marker, end) == expected, path
 
@@ -83,9 +83,9 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "pipa-r/pasta",
             "pipa-r/pasta/kaigi-authorization-v1",
             "pipa-r/pasta/kaigi-usage-v1",
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "pipa-r/pasta/confidential-transfer-v1",
+            "pipa-r/pasta/confidential-unshield-full-v1",
+            "pipa-r/pasta/confidential-unshield-change-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         }
     )
@@ -107,6 +107,9 @@ def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() 
         "",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/kaigi-authorization-v1",
+        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
         "halo2/pasta/kaigi-usage-v1",
         "pipa-r/ipa/pasta/kaigi-authorization-v1",
         "pipa-r/pasta/kaigi-usage-v1/",

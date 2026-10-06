@@ -57,7 +57,10 @@ fn published_generation_survives_retry_with_an_unpublished_leftover() {
     let pin = read(&directory).unwrap().launcher;
     let mut request = LocalnetRequest::new(pin.path.clone(), pin.path);
     request.service_profile = prepared.service_profile;
-    assert!(matches!(store.up(&request), Err(Error::Io(_))));
+    assert!(matches!(
+        store.up(&request),
+        Err(Error::Timeout(timeout)) if timeout == request.startup_timeout
+    ));
     assert_eq!(encode(&read(&directory).unwrap()).unwrap(), before);
     assert_eq!(store.prepared("local").unwrap(), prepared);
 }
@@ -86,10 +89,7 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
     let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
     let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
     let directory = networks.create_child("private").unwrap();
-    directory
-        .write_atomic("binary", b"fixture bytes", PublishMode::CreateNew)
-        .unwrap();
-    let binary = directory.path().join("binary");
+    let binary = std::env::current_exe().unwrap();
     let pin = store::pin_binary(&binary).unwrap();
     let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
@@ -187,10 +187,7 @@ fn staged_global_generation_publishes_all_runtime_paths_and_custody() {
     let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
     let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
     let directory = networks.create_child("local").unwrap();
-    directory
-        .write_atomic("binary", b"fixture bytes", PublishMode::CreateNew)
-        .unwrap();
-    let binary = directory.path().join("binary");
+    let binary = std::env::current_exe().unwrap();
     let pin = store::pin_binary(&binary).unwrap();
     let request = LocalnetRequest::new(binary.clone(), binary);
     let _operation = store::acquire(&directory, "operation.lock", "local").unwrap();
@@ -242,10 +239,7 @@ fn staged_service_authorities_publish_exact_identity_and_private_custody() {
     let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
     let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
     let directory = networks.create_child("native-authorities").unwrap();
-    directory
-        .write_atomic("binary", b"fixture bytes", PublishMode::CreateNew)
-        .unwrap();
-    let binary = directory.path().join("binary");
+    let binary = std::env::current_exe().unwrap();
     let pin = store::pin_binary(&binary).unwrap();
     let mut request = LocalnetRequest::new(binary.clone(), binary);
     request.name = "native-authorities".into();

@@ -28,7 +28,7 @@ impl PendingPublication {
         ])
         .as_ref()
     }
-    pub(super) fn key(self, scheme: Digest, certificate: Digest) -> LedgerKey {
+    pub(super) fn key(self, scheme: Digest, certificate: Digest) -> KagemushaWalletLedgerKeyV1 {
         storage::entry_key(KIND, scheme, certificate, self.cursor())
     }
     pub(super) fn from_issuance(issuance: &Issuance) -> Self {

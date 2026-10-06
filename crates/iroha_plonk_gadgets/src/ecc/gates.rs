@@ -201,8 +201,8 @@ pub(super) fn configure_variable_base_phased<C: PastaCurve>(
         select: code(3, 2, 3),
         tail: code(4, 1, 2),
         add: code(4, 2, 2),
-        guard_out: code(5, 1, 4),
-        split: code(5, 2, 4),
+        guard_out: code(5, 1, 5),
+        split: code(5, 2, 5),
     };
     configure_variable_base_with::<C>(meta, advice, &selectors)
 }

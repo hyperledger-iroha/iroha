@@ -337,6 +337,14 @@ fn corruptions<C: PastaCurve>() {
     for (index, case) in cases.iter().enumerate() {
         assert_eq!(case.expected()[0], C::Base::ZERO, "corpus case {index}");
         check(case);
+        let mut hard = case.clone();
+        hard.hard = true;
+        assert!(
+            !check_circuit(&hard, 16, &[hard.expected()], CheckMode::Strict)
+                .expect("hard malformed proofs still synthesize")
+                .is_satisfied(),
+            "hard rejection of corpus case {index}"
+        );
     }
     identity.hard = true;
     let report = check_circuit(&identity, 16, &[identity.expected()], CheckMode::default())
@@ -891,15 +899,38 @@ fn compact_interpreter_cases<C: PastaCurve>() {
         if public[0][0] == C::Base::ZERO {
             source.hard = true;
             assert!(
-                !check_circuit(&CompactProgram(source), 16, &public, CheckMode::Strict)
-                    .unwrap()
-                    .is_satisfied()
+                !check_circuit(
+                    &CompactProgram(source.clone()),
+                    16,
+                    &public,
+                    CheckMode::Strict
+                )
+                .unwrap()
+                .is_satisfied()
             );
         }
         if mutation == 0 {
             let known = iroha_plonk::frontend::synthesize(&circuit, 16, Some(&public)).unwrap();
             let unknown =
                 iroha_plonk::frontend::synthesize(&circuit.without_witnesses(), 16, None).unwrap();
+            assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+            assert_eq!(
+                known.tables.advice_assigned(),
+                unknown.tables.advice_assigned()
+            );
+            let mut hard = source;
+            hard.hard = true;
+            let hard = CompactProgram(hard);
+            let hard_public = hard.public();
+            assert!(
+                check_circuit(&hard, 16, &hard_public, CheckMode::Strict)
+                    .unwrap()
+                    .is_satisfied()
+            );
+            let known = iroha_plonk::frontend::synthesize(&hard, 16, Some(&hard_public)).unwrap();
+            let unknown =
+                iroha_plonk::frontend::synthesize(&hard.without_witnesses(), 16, None).unwrap();
             assert_eq!(known.tables.fixed(), unknown.tables.fixed());
             assert_eq!(known.tables.permutation(), unknown.tables.permutation());
             assert_eq!(

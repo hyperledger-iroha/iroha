@@ -1,5 +1,8 @@
 //! Total incoming lineage widths, preserved originals and fixed arithmetic dummy.
 
+#[path = "a_incoming_lineage/tape.rs"]
+mod tape;
+
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::a_relation::IncomingLineageCells;
 use iroha_pasta::Fp;
@@ -81,6 +84,7 @@ impl Circuit<Fp> for Incoming {
                     &fields,
                     &encoding,
                 )?;
+                assert!(incoming.carrier().is_err());
                 GlueChip::assert_equal(
                     &mut region,
                     incoming.omega_key_digest(),

@@ -1016,7 +1016,7 @@ hard slot; MV14 skip the VK-digest equality in A; MV15 allow a Corrected slot wi
 |---|---|
 | G4.1 | Fiat–Shamir, CRT and PCD/containment memos written; PIPA-R and PIPA-AS text merged into `plonk_ipa_v1.md` with KATs |
 | G4.2 | In-circuit verify cells ≤ σ 191k; Q 297k + 0.45k per instance; A 337k; Ω 212k; PIPA-AS (r = 4) 91k |
-| G4.3 | Ω descriptor V ≤ 77 with one lookup; transport 4,736 B (hard limit 8,277 − max σ_send) |
+| G4.3 | Ω descriptor V ≤ 72 with exactly one lookup; transport ≤ 4,821 B with the measured largest σ_send of 3,456 B. The current compact descriptor computes 4,768 B; no compact proof is qualified |
 | G4.4 | PIPA-AS prover ≤ 3.5 s Mac 1t, ≤ 1.2 s 4t |
 | G4.5 | `msm_complete` at 2^16 measured on 4 threads; two decides ≤ 0.35 s Mac 4t |
 | G4.6 | Measured peak RSS ≤ 0.85 GiB for the A shape under the owned-witness API |
@@ -1080,8 +1080,8 @@ Named tests:
 | # | Risk | Effect | Mitigation |
 |---|---|---|---|
 | R1 | P-256 cost: estimated 0.2–0.4M cells, measured today at 1.47M | above 0.30M Receive needs the A-split (+48–65 s Mac); above 0.40M every operation gains a Q leaf | G3.1 first; window tables; precommitted own key |
-| R2 | Ω byte margin of 245 B (B6 adds 42 B to F_payment) | one more lookup argument, or m 6 with 12 advice columns, overruns by 43 B | G4.3; q_f sharing (−160 B); dropping the suffix (−32 B); 128-bit fold challenges (C-2) |
-| R3 | σ_send with enabled controls grows | above 3,541 B Payment breaks R9; the measured pre-B5 quota σ_send (3,584 B) already does | B5 usage array: single-lane k14 quota shape (≈ 3,424 B [C]), k13 with shared paths; G-Ω2 at artifact freeze |
+| R2 | Current compact descriptor computes 4,768 B, leaving 53 B under the 4,821 B cap; capacity and actual proof remain unqualified | any descriptor growth beyond 53 B breaks the current Payment bound | G4.3; preserve exactly one lookup and establish actual proof bytes before artifact freeze |
+| R3 | σ_send with enabled controls grows; largest measured revision-4 proof is 3,456 B | with a 4,768 B Ω, σ_send above 3,509 B breaks R9; the threshold is always 8,277 − actual Ω bytes | B5 fixed64 usage array and measured k14 controls; remeasure every allowlisted mask and apply G-Ω2 at artifact freeze |
 | R4 | No native measurement wider than k14; quotient cost of the wide gate sets | fold times 1.5–2× the model | G3.6, G3.7, G4.7 |
 | R5 | RAM: A at 0.84 GiB under the owned-witness API, close to 0.85 | over the cap | streaming (0.64 GiB); A-split; global scratch cap |
 | R6 | Phone performance: per-core ratio 1.1–2.3, 4-core wide-circuit speedup unmeasured, thermals | Receive up to ≈ 4 min on a slow phone | G5.6; fold while charging or in the foreground; preemption |
@@ -1127,9 +1127,10 @@ last were applied to the proposal and the wire record with the third set of owne
 
 Contingent owner questions, asked only if a threshold fails:
 
-- **C-1.** A σ_send shape for an enabled control exceeds 8,277 − |Ω| (3,541 B at the baseline
-  Ω), so Payment breaks R9 (proposal §8 requires a new owner decision). The measured pre-B5
-  quota σ_send (3,584 B) does; the B5 shape is expected to fit (§3.5).
-- **C-2.** The Ω descriptor exceeds V = 77 after q_f sharing and dropping the suffix: approve
+- **C-1.** A σ_send shape for an enabled control exceeds 8,277 − |Ω| (3,509 B with the
+  current 4,768 B compact descriptor), so Payment breaks R9 (proposal §8 requires a new
+  owner decision). The largest measured revision-4 σ_send is 3,456 B; the joint bound
+  must be rechecked against actual frozen Ω bytes (§3.5).
+- **C-2.** The Ω descriptor exceeds V = 72 after q_f sharing and dropping the suffix: approve
   128-bit fold challenges (Ω −512 B, about 120-bit per-query Fiat–Shamir security for those
   challenges)?

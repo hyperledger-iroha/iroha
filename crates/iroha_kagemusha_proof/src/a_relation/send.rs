@@ -1,8 +1,8 @@
 //! Send's current-credential, exact Request, held-fee and depth32 map composition.
 //!
-//! The hard predecessor authenticates the held credential and fee-schedule
-//! digests. Send has no local signature Q: the receiver owns its Request
-//! signature obligation, and issuer authorization occurred at installation.
+//! The hard predecessor authenticates held object digests. Every step also
+//! re-verifies the current credential, its certificate and the own receipt.
+//! The receiver owns the separate Request signature obligation.
 //! The complete A schedule must also hard-verify the exact control-selected
 //! sigma and retain all predecessor/Q opening obligations.
 
@@ -15,6 +15,7 @@ use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip}
 use super::{
     SigmaBindingCells,
     context::{ContextObjectCells, ContextObjectSpec},
+    own::{ConsumingProofCells, CurrentAuthorization, OwnPolicy, authenticate_current},
 };
 use crate::operation_relation::{
     map_effects::{InsertCells, MapEffectsChip, MapState, MapTransition},
@@ -251,24 +252,28 @@ impl SendObjects {
 pub struct SendStagePlan {
     context: super::context::ContextPlan,
 }
-/// Only the insertion paths owned by this fixed stage.
+/// Exact paths and own-authorization inputs owned by this fixed stage.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SendStagePaths<'a> {
+pub struct SendStageWitness<'a> {
     /// Present exactly in the pending insertion stage.
     pub pending: Option<&'a InsertCells>,
     /// Present exactly in the fee insertion/unchanged-fields stage.
     pub fee: Option<&'a InsertCells>,
+    /// Present exactly in the mandatory own signature authorization stage.
+    pub authorization: Option<SendAuthorization<'a>>,
+    /// Exact consuming-proof binding, present in the hard predecessor stage.
+    pub proof: Option<SendProofBinding<'a>>,
 }
 impl SendStagePlan {
-    /// Require all three Send tasks exactly once in the committed stage schema.
-    /// No local signature Q is accepted: the single Q is the own sigma relation.
+    /// Require every Send task exactly once in the committed stage schema.
+    /// Q0 is the own sigma and Q1 proves receipt/current credential/certificate.
     /// # Errors
     /// Wrong operation, task coverage or Q count.
     pub fn new(context: super::context::ContextPlan) -> Result<Self, Error> {
         use super::schedule::OperationTask;
         if context.operation().frame().variant() != Variant::Send
-            || context.operation().q_count() != 1
-            || context.object_specs() != SendObjects::context_specs()?
+            || context.operation().q_count() != 2
+            || context.object_specs() != Self::context_specs()?
         {
             return Err(Error::Synthesis);
         }
@@ -276,7 +281,30 @@ impl SendStagePlan {
             .map(|i| context.operation_tasks(i).unwrap_or_default().to_vec())
             .collect::<Vec<_>>();
         OperationTask::validate(Variant::Send, &groups)?;
+        for (stage, tasks) in groups.iter().enumerate() {
+            if tasks.contains(&OperationTask::SendProof)
+                && context.predecessor_stage() != Some(stage)
+            {
+                return Err(Error::Synthesis);
+            }
+            if tasks.contains(&OperationTask::SendAuthorization)
+                && !context
+                    .q_partition(stage)
+                    .ok_or(Error::Synthesis)?
+                    .contains(&1)
+            {
+                return Err(Error::Synthesis);
+            }
+        }
         Ok(Self { context })
+    }
+    /// Complete fixed object schema, including mandatory own certificate and receipt.
+    /// # Errors
+    /// An impossible fixed capacity conversion.
+    pub fn context_specs() -> Result<Vec<ContextObjectSpec>, Error> {
+        let mut specs = SendObjects::context_specs()?.to_vec();
+        specs.extend(SendAuthorizationObjects::context_specs()?);
+        Ok(specs)
     }
     /// Context whose exact task assignment is pinned in every stage key.
     pub const fn context(&self) -> &super::context::ContextPlan {
@@ -297,7 +325,7 @@ impl SendStagePlan {
         stage: usize,
         objects: &SendObjects,
         input: SendInputs<'_>,
-        paths: SendStagePaths<'_>,
+        paths: SendStageWitness<'_>,
     ) -> Result<(), Error> {
         use super::schedule::OperationTask;
         let tasks = self
@@ -306,6 +334,8 @@ impl SendStagePlan {
             .ok_or(Error::Synthesis)?;
         if tasks.contains(&OperationTask::SendPending) != paths.pending.is_some()
             || tasks.contains(&OperationTask::SendFeeAndCarry) != paths.fee.is_some()
+            || tasks.contains(&OperationTask::SendAuthorization) != paths.authorization.is_some()
+            || tasks.contains(&OperationTask::SendProof) != paths.proof.is_some()
         {
             return Err(Error::Synthesis);
         }
@@ -340,9 +370,176 @@ impl SendStagePlan {
                             objects.objects[1].word(10)?,
                         )?;
                 }
+                OperationTask::SendAuthorization => {
+                    let auth = paths.authorization.ok_or(Error::Synthesis)?;
+                    auth.signature.bundle.bind_context(
+                        region,
+                        self.context.operation(),
+                        1,
+                        auth.signature.instances,
+                    )?;
+                    auth.objects.constrain(chip, region, objects, input, auth)?;
+                }
+                OperationTask::SendProof => {
+                    let proof = paths.proof.ok_or(Error::Synthesis)?;
+                    proof
+                        .proof
+                        .bind(region, input.predecessor.lineage, input.sigma)?;
+                    GlueChip::assert_equal(
+                        region,
+                        proof.objects.objects[1].word(9)?,
+                        proof.proof.digest(),
+                    )?;
+                }
                 _ => return Err(Error::Synthesis),
             }
         }
         Ok(())
+    }
+}
+
+/// The additional same-tape Enrollment certificate and own Send receipt.
+#[derive(Clone, Debug)]
+pub struct SendAuthorizationObjects {
+    objects: [SignedObjectCells; 2],
+    context: [ContextObjectCells; 2],
+}
+/// Inputs bound by the owning hard signature Q and exact consuming proof tape.
+#[derive(Clone, Copy, Debug)]
+pub struct SendAuthorization<'a> {
+    /// The same original certificate and receipt committed by context.
+    pub objects: &'a SendAuthorizationObjects,
+    /// Fixed artifact's scheme/provider/root identity.
+    pub policy: OwnPolicy,
+    /// Opaque Q1 exports, ordered receipt, current credential, fixed-root certificate.
+    pub signature: super::SignatureQContext<'a>,
+}
+/// Original receipt and exact proof tape checked beside the hard predecessor.
+/// The fixed context commits these same receipt bytes in the signature stage.
+#[derive(Clone, Copy, Debug)]
+pub struct SendProofBinding<'a> {
+    /// The same certificate/receipt tapes retained by every operation stage.
+    pub objects: &'a SendAuthorizationObjects,
+    /// Exact Ω predecessor plus sigma digest with all transport claims linked.
+    pub proof: &'a ConsumingProofCells,
+}
+impl SendAuthorizationObjects {
+    /// Additional context slots after the three Send object slots.
+    /// # Errors
+    /// Impossible fixed capacity conversion.
+    pub fn context_specs() -> Result<[ContextObjectSpec; 2], Error> {
+        [ObjectKind::Certificate, ObjectKind::Receipt]
+            .into_iter()
+            .enumerate()
+            .map(|(i, kind)| {
+                Ok(ContextObjectSpec {
+                    tag: u32::try_from(i + 4).map_err(|_| Error::BoundsFailure)?,
+                    capacity: u32::try_from(kind.body_len() + 64)
+                        .map_err(|_| Error::BoundsFailure)?,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?
+            .try_into()
+            .map_err(|_| Error::Synthesis)
+    }
+    /// Decode both hard own objects and commit their identical original tapes.
+    /// # Errors
+    /// Wrong schema, malformed own object, or layout failure.
+    pub fn decode(
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+        sources: [&[Value<u8>]; 2],
+    ) -> Result<Self, Error> {
+        let mut objects = Vec::new();
+        let mut context = Vec::new();
+        for ((kind, source), spec) in [ObjectKind::Certificate, ObjectKind::Receipt]
+            .into_iter()
+            .zip(sources)
+            .zip(Self::context_specs()?)
+        {
+            let run = bytes.run(
+                region,
+                source,
+                &kind.primary_segments(),
+                &kind.secondary_segments(),
+            )?;
+            let lanes = chip.operation_lanes()?;
+            let object = SignedObjectCells::from_run(
+                &mut UintChip::new(lanes.glue, lanes.range),
+                lanes.hash,
+                region,
+                kind,
+                &run,
+            )?;
+            context.push(ContextObjectCells::from_exact_run(
+                chip,
+                region,
+                spec,
+                object.digest(),
+                &run,
+            )?);
+            objects.push(object);
+        }
+        Ok(Self {
+            objects: objects.try_into().map_err(|_| Error::Synthesis)?,
+            context: context.try_into().map_err(|_| Error::Synthesis)?,
+        })
+    }
+    /// Exact additional commitments appended to `SendObjects::context`.
+    pub const fn context(&self) -> &[ContextObjectCells; 2] {
+        &self.context
+    }
+    fn constrain(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        objects: &SendObjects,
+        input: SendInputs<'_>,
+        auth: SendAuthorization<'_>,
+    ) -> Result<(), Error> {
+        use crate::operation_relation::objects::receipt::{self, ReceiptContext};
+        if auth.signature.bundle.slots().len() != 3 {
+            return Err(Error::Synthesis);
+        }
+        let statement = input.sigma.hard_statement()?;
+        authenticate_current(
+            chip,
+            region,
+            auth.policy,
+            CurrentAuthorization {
+                credential: &objects.objects[0],
+                certificate: &self.objects[0],
+                credential_proof: &auth.signature.bundle.slots()[1],
+                certificate_proof: &auth.signature.bundle.slots()[2],
+                current: input.predecessor,
+                statement,
+            },
+        )?;
+        let provider = auth.policy.scope(chip, region)?.provider;
+        let key = core::array::from_fn(|i| input.predecessor.lineage.fields()[9 + i].clone());
+        let signature =
+            self.objects[1].bind_signature(region, &auth.signature.bundle.slots()[0], &key)?;
+        GlueChip::assert_constant(region, signature.word(), Fp::ONE)?;
+        let zero = chip.uint().glue().constant(region, Fp::ZERO)?;
+        let wallet = core::array::from_fn(|i| input.predecessor.lineage.fields()[6 + i].clone());
+        let lanes = chip.operation_lanes()?;
+        let valid = receipt::bind(
+            &mut UintChip::new(lanes.glue, lanes.range),
+            lanes.hash,
+            region,
+            &self.objects[1],
+            &ReceiptContext {
+                wallet: &wallet,
+                provider: &provider,
+                statement,
+                // SendProof independently binds this field to the verified
+                // predecessor and own sigma. D_ctx retains the entire receipt
+                // tape across the two mandatory fixed tasks.
+                proof_digest: self.objects[1].word(9)?,
+                payment_digest: &zero,
+            },
+        )?;
+        GlueChip::assert_constant(region, valid.word(), Fp::ONE)
     }
 }

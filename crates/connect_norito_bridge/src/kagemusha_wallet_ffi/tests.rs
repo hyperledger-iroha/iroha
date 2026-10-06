@@ -369,3 +369,10 @@ fn foreign_open_has_no_custody_side_effect_or_proof_verdict_fallback() {
     assert_eq!(state.calls.load(Ordering::SeqCst), 0);
     assert_eq!(state.retained.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn collected_receive_returns_existing_credit_status_response_kind() {
+    let response = completion(Some(state::Completion::CreditStatus(vec![1, 2, 3])));
+    assert_eq!(response.kind, 10);
+    assert_eq!(response.bytes, [1, 2, 3]);
+}

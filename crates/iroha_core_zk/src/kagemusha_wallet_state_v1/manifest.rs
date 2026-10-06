@@ -13,10 +13,23 @@ pub(super) struct Manifest {
     pub steps: IndexRoot,
     pub credits: IndexRoot,
     pub folds: IndexRoot,
+    pub claims: IndexRoot,
     pub folded: Option<u128>,
     pub checkpoint_count: u32,
     pub checkpoint_digest: [u8; 32],
     pub credit_tree: credit_tree::CreditTree,
+    pub collection: Option<super::collection::CollectionIntent>,
+}
+#[derive(Debug, Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::StepEntry")]
+pub(super) struct StepEntry {
+    pub capsule: [u8; 32],
+    pub operation: [u8; 32],
+    pub selected_generation: u128,
+    pub completion: [u8; 32],
+    pub kind: KagemushaWalletOperationKindV1,
+    pub checkpoints: u32,
+    pub collected: bool,
 }
 impl Manifest {
     fn empty(scheme_id: [u8; 32], wallet_id: [u8; 32]) -> Self {
@@ -28,10 +41,12 @@ impl Manifest {
             steps: IndexRoot::default(),
             credits: IndexRoot::default(),
             folds: IndexRoot::default(),
+            claims: IndexRoot::default(),
             folded: None,
             checkpoint_count: 0,
             checkpoint_digest: [0; 32],
             credit_tree: credit_tree::CreditTree::default(),
+            collection: None,
         }
     }
 }
@@ -101,19 +116,33 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         manifest: &Manifest,
         sequence: u128,
     ) -> Result<ReleasedStep, Error> {
-        let digest = manifest
-            .steps
-            .get(&mut self.archive, &sequence_key(sequence))?
-            .ok_or(Error::WitnessLost("step index"))?;
-        let step = self.checked_step(
-            digest
-                .try_into()
-                .map_err(|_| Error::WitnessLost("step digest"))?,
-        )?;
+        let entry = self.step_entry(manifest, sequence)?;
+        if entry.collected {
+            return Err(Error::Collected);
+        }
+        let step = self.checked_step(entry.capsule)?;
+        if step.retained.operation_id != entry.operation
+            || step.retained.selected_generation != entry.selected_generation
+            || step.retained.completion_digest != entry.completion
+            || step.frozen.capsule.kind != entry.kind
+        {
+            return Err(Error::WitnessLost("step metadata"));
+        }
         if step.frozen.capsule.statement.sequence != sequence {
             return Err(Error::WitnessLost("indexed sequence"));
         }
         Ok(step)
+    }
+    pub(super) fn step_entry(
+        &mut self,
+        manifest: &Manifest,
+        sequence: u128,
+    ) -> Result<StepEntry, Error> {
+        let bytes = manifest
+            .steps
+            .get(&mut self.archive, &sequence_key(sequence))?
+            .ok_or(Error::WitnessLost("step index"))?;
+        archive::decode(&bytes)
     }
     /// Recover only the unindexed tail. Each iteration retains one capsule and bounded index
     /// paths; permanent history is never collected into a vector on a payment/fold operation.
@@ -162,10 +191,20 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             if c.statement.sequence != current || c.statement.successor != head {
                 return Err(Error::WitnessLost("capsule chain"));
             }
-            manifest.steps =
-                manifest
-                    .steps
-                    .set(&mut self.archive, sequence_key(current), &digest)?;
+            let entry = StepEntry {
+                capsule: digest,
+                operation: c.operation_id,
+                selected_generation: step.retained.selected_generation,
+                completion: step.retained.completion_digest,
+                kind: c.kind,
+                checkpoints: 0,
+                collected: false,
+            };
+            manifest.steps = manifest.steps.set(
+                &mut self.archive,
+                sequence_key(current),
+                &archive::encode(&entry)?,
+            )?;
             if let KagemushaWalletEffectV1::Receive {
                 credit_id, amount, ..
             } = c.statement.effect
@@ -188,6 +227,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     &archive::encode(&entry)?,
                 )?;
             }
+            self.retain_fee_claim(&mut manifest, &step)?;
             digest = c.predecessor_capsule_digest;
             head = c.statement.predecessor;
             if current == 0 {

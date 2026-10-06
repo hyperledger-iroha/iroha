@@ -269,7 +269,7 @@ class ConfidentialWalletPhysicalDeviceTest {
 
     private fun assertProof(proof: ConfidentialProof, relation: ConfidentialProof.Relation, root: ByteArray, outputs: Int) {
         assertEquals(relation, proof.relation)
-        assertEquals("halo2/ipa", proof.backend)
+        assertEquals("pipa-r/pasta", proof.backend)
         assertTrue("A real locally verified proof is required", proof.proof.isNotEmpty())
         assertArrayEquals(root, proof.root)
         assertEquals(1, proof.nullifiers.size)

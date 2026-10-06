@@ -5607,7 +5607,7 @@ state_test! { sync rwas_status_and_frozen_iters_use_secondary_indexes
     );
 }
 state_test! { sync proofs_by_backend_iter_uses_backend_range
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let other_backend = "stark/fri";
     let_row! { first_id = ProofId { backend: backend.into(), proof_hash: [0x11; 32], } };
     let_row! { second_id = ProofId { backend: backend.into(), proof_hash: [0x22; 32], } };
@@ -5637,7 +5637,7 @@ state_test! { sync proofs_by_backend_iter_uses_backend_range
     );
 }
 state_test! { sync find_proof_records_by_status_uses_status_index_updates
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let_row! { verified_id = ProofId { backend: backend.into(), proof_hash: [0x11; 32], } };
     let_row! { rejected_id = ProofId { backend: backend.into(), proof_hash: [0x22; 32], } };
     let_row! { updated_id = ProofId { backend: backend.into(), proof_hash: [0x33; 32], } };
@@ -5672,7 +5672,7 @@ state_test! { sync find_proof_records_by_status_uses_status_index_updates
     assert_eq!(generic_by_backend_and_status, vec![rejected_id]);
 }
 state_test! { sync proof_status_index_roundtrips_through_state_json
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let_row! { verified_id = ProofId { backend: backend.into(), proof_hash: [0x11; 32], } };
     let_row! { rejected_id = ProofId { backend: backend.into(), proof_hash: [0x22; 32], } };
     let_row! { record = |id: &ProofId, status: ProofStatus| ProofRecord { id: id.clone(), vk_ref: None, vk_commitment: None, status, verified_at_height: Some(1), bridge: None, } };
@@ -8277,9 +8277,9 @@ state_test! { sync da_pin_intent_index_prune_keys_select_embedded_and_index_lane
 fn build_state_with_vk_order(order: &[(&str, &str)]) -> State {
     let mut world = World::new();
     for &(name, circuit) in order {
-        let id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", name);
+        let id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", name);
         let_row! { (schema_hash, commitment) = match name { "vk_alpha" => ([0xA1; 32], [0xB1; 32]), "vk_beta" => ([0xA2; 32], [0xB2; 32]), other => { let mut schema = [0u8; 32]; let mut commit = [0u8; 32]; let bytes = other.as_bytes(); let len = bytes.len().min(32); schema[..len].copy_from_slice(&bytes[..len]); commit[..len].copy_from_slice(&bytes[..len]); (schema, commit) } } };
-        let_row! { mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner( 1, circuit, None, "core", iroha_data_model::zk::BackendTag::Halo2IpaPasta, "pallas", schema_hash, commitment, ) };
+        let_row! { mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner( 1, circuit, None, "core", iroha_data_model::zk::BackendTag::NativePipaRPasta, "vesta", schema_hash, commitment, ) };
         record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         record.public_inputs_schema_hash = schema_hash;
         record.gas_schedule_id = Some(format!("sched_{name}"));
@@ -20684,7 +20684,6 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
     );
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 state_test! { sync confidential_digest_reflects_registry_commit
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -20714,7 +20713,7 @@ state_test! { sync confidential_digest_reflects_registry_commit
     let mut block2 = state.block(header2);
     {
         let mut stx = block2.transaction();
-        let id = VerifyingKeyId::new("halo2/ipa", "vk_cache");
+        let id = VerifyingKeyId::new("pipa-r/pasta", "vk_cache");
         let rec = crate::zk::confidential_v2::confidential_transfer_v2_vk_record("test", 1)
             .expect("canonical confidential-transfer verifier key");
         verifying_keys::RegisterVerifyingKey { id, record: rec }

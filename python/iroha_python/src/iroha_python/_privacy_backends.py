@@ -10,9 +10,6 @@ VerifierBackendTag = Literal["halo2-ipa-pasta", "stark", "native-pipa-r-pasta"]
 _HALO2_IPA_PASTA_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
     {
         "halo2/ipa",
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     }
 )
 _PIPA_R_PASTA_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
@@ -20,6 +17,9 @@ _PIPA_R_PASTA_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
         "pipa-r/pasta",
         "pipa-r/pasta/kaigi-authorization-v1",
         "pipa-r/pasta/kaigi-usage-v1",
+        "pipa-r/pasta/confidential-transfer-v1",
+        "pipa-r/pasta/confidential-unshield-full-v1",
+        "pipa-r/pasta/confidential-unshield-change-v1",
     }
 )
 _STARK_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(

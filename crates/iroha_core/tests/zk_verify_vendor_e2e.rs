@@ -1,7 +1,6 @@
 #![doc = "End-to-end vendor bridge gating path for ZK verification"]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-#![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 //! End-to-end gating path: ZK verify (mocked) -> vendor bridge -> `CoreHost` gating.
 //!
 //! A real development IPA proof remains inadmissible even if a test-only helper
@@ -93,14 +92,14 @@ fn forced_vendor_latch_cannot_admit_development_ballot() {
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
     state.gov.citizenship_bond_amount = 0_u64.into();
-    state.zk.halo2.enabled = true;
+    state.zk.pipa_r.enabled = true;
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     // Authority and host
     let mut vm = IVM::new(10_000_000);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
-    let ballot_bundle = super::zk_testkit::dev_vote_merkle8_bundle();
+    let ballot_bundle = super::zk_testkit::unqualified_native_ballot_bundle();
     let vk_commitment = ballot_bundle.vk_record.commitment;
     let vk_id = ballot_bundle.vk_id.clone();
     let vk_record = ballot_bundle.vk_record.clone();

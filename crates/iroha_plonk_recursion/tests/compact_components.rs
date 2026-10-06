@@ -285,7 +285,13 @@ impl<C: PastaCurve> Circuit<C::Base> for Prototype<C> {
                 );
                 assert_eq!(
                     range.next_row() - start_range,
-                    if self.range_bits == 15 { 70 } else { 143 }
+                    if self.phased {
+                        if self.range_bits == 15 { 60 } else { 123 }
+                    } else if self.range_bits == 15 {
+                        70
+                    } else {
+                        143
+                    }
                 );
                 let recovered = if let Some(ff) = &mut ff {
                     ff.div(&mut region, &product, &b)?
@@ -310,7 +316,11 @@ impl<C: PastaCurve> Circuit<C::Base> for Prototype<C> {
                     )?;
                 }
                 if let Some(ff) = &mut ff {
-                    let batch = ff.dot_proper(&mut region, &[(&a, &b); 8])?;
+                    // The shared ECC/CRT/Glue phase fixture exercises both
+                    // the three-carry product and the stronger bounded dot.
+                    let narrow_a = ff.assert_canonical(&mut region, &a)?;
+                    let narrow_b = ff.assert_canonical(&mut region, &b)?;
+                    let batch = ff.dot_proper(&mut region, &[(&narrow_a, &narrow_b); 8])?;
                     for (limb, value) in batch.limbs().iter().zip([21845 * 17 * 8, 0, 0]) {
                         glue.enforce_constant(&mut region, limb, C::Base::from(value))?;
                     }

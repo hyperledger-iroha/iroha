@@ -116,7 +116,7 @@ pub enum KagemushaWalletLedgerActionV1 {
     PublishVoucher {
         /// Original stable issuance request identity.
         request_id: [u8; 32],
-        /// Canonical voucher frame signed by the historical LoadAuthorization key.
+        /// Canonical voucher frame signed by the historical `LoadAuthorization` key.
         voucher: Vec<u8>,
     },
     /// Select the root-authenticated load signer used for future issuance. Existing

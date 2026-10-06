@@ -389,6 +389,9 @@ fn identifier_receipt_checks_policy_and_commitment_backends_before_decode() {
                 state.network_id_ref(),
                 1,
                 crate::zk::ZkVerifyGuardrails {
+                    pipa_r_enabled: true,
+                    pipa_r_max_envelope_bytes: usize::MAX,
+                    pipa_r_max_proof_bytes: usize::MAX,
                     halo2_enabled: true,
                     halo2_max_envelope_bytes: 1,
                     halo2_max_proof_bytes: 1,

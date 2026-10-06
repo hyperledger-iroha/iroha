@@ -79,8 +79,8 @@ use std::{
 };
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
-mod sccp;
 mod kagemusha_load_authorizer;
+mod sccp;
 pub use kagemusha_load_authorizer::{KagemushaLoadAuthorizer, KagemushaLoadAuthorizerCustody};
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
@@ -10471,6 +10471,8 @@ impl_default!(IsoReferenceData => {
 pub struct Zk {
     /// Halo2 (transparent) verification settings.
     pub halo2: Halo2,
+    /// Native PIPA-R verification policy.
+    pub pipa_r: PipaR,
     /// FASTPQ prover settings.
     pub fastpq: Fastpq,
     /// Native STARK/FRI verification settings.
@@ -10773,6 +10775,23 @@ pub enum Halo2Backend {
     /// Inner-Product Argument (transparent PCS).
     Ipa,
 }
+/// Native PIPA-R verification policy for the exact compiled circuit registry.
+#[derive(Debug, Clone, Copy)]
+pub struct PipaR {
+    /// Enable native PIPA-R verification in hosts.
+    pub enabled: bool,
+    /// Maximum canonical outer envelope length in bytes.
+    pub max_envelope_bytes: usize,
+    /// Maximum canonical proof-payload length in bytes.
+    pub max_proof_bytes: usize,
+}
+impl_default!(PipaR => {
+    Self {
+        enabled: defaults::zk::pipa_r::ENABLED,
+        max_envelope_bytes: defaults::zk::pipa_r::MAX_ENVELOPE_BYTES,
+        max_proof_bytes: defaults::zk::pipa_r::MAX_PROOF_BYTES,
+    }
+});
 /// Halo2 transparent verification settings.
 #[derive(Debug, Clone, Copy)]
 pub struct Halo2 {

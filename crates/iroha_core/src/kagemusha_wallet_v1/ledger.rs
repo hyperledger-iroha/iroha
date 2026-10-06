@@ -282,10 +282,10 @@ pub(super) fn retain_voucher(
 fn prior_payout(
     tx: &impl Transaction,
     scheme: &Digest,
-    key: ClaimKey,
+    key: KagemushaWalletPayoutKeyV1,
     source: Digest,
     amount: u128,
-) -> Result<Option<Payout>> {
+) -> Result<Option<KagemushaWalletPayoutRecordV1>> {
     let prior = tx.payout(scheme, key)?;
     if prior
         .as_ref()
@@ -304,17 +304,17 @@ pub fn pay_unload(
     tx: &mut impl Transaction,
     verifier: &impl NativePackageVerifier,
     claim: &KagemushaWalletUnloadClaimV1,
-) -> Result<Payout> {
+) -> Result<KagemushaWalletPayoutRecordV1> {
     let c = &claim.credential.body;
     let registration = tx.registration(&c.scheme_id, &c.asset_digest)?;
     registration.require(&c.scheme_id, &c.asset_digest)?;
     let paid = claim.verify(&registration.scheme)?;
     verifier.verify(&registration.scheme, &claim.credential, &claim.package)?;
-    let key = ClaimKey::Unload(paid.nullifier);
+    let key = KagemushaWalletPayoutKeyV1::Unload(paid.nullifier);
     if let Some(prior) = prior_payout(tx, &c.scheme_id, key, paid.package, paid.amount)? {
         return Ok(prior);
     }
-    let payout = Payout {
+    let payout = KagemushaWalletPayoutRecordV1 {
         key,
         source: paid.package,
         amount: paid.amount,
@@ -349,7 +349,7 @@ pub fn pay_fee(
     tx: &mut impl Transaction,
     verifier: &impl NativePackageVerifier,
     claim: &KagemushaWalletFeeClaimV1,
-) -> Result<Payout> {
+) -> Result<KagemushaWalletPayoutRecordV1> {
     let c = &claim.payment.request.body;
     let registration = tx.registration(&c.scheme_id, &c.asset_digest)?;
     registration.require(&c.scheme_id, &c.asset_digest)?;
@@ -361,11 +361,11 @@ pub fn pay_fee(
         &inputs.certificates,
     )?;
     verifier.verify(&registration.scheme, &inputs.payer, &claim.payment.send)?;
-    let key = ClaimKey::Fee(paid.credit_id);
+    let key = KagemushaWalletPayoutKeyV1::Fee(paid.credit_id);
     if let Some(prior) = prior_payout(tx, &c.scheme_id, key, paid.payment, paid.fee)? {
         return Ok(prior);
     }
-    let payout = Payout {
+    let payout = KagemushaWalletPayoutRecordV1 {
         key,
         source: paid.payment,
         amount: paid.fee,

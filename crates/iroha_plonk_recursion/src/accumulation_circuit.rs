@@ -737,6 +737,17 @@ impl<C: PastaCurve> VerifierChip<C> {
         if mode == VerificationMode::Hard {
             self.glue
                 .enforce_constant(region, valid.word(), C::Base::ONE)?;
+            // This assertion includes salt/length/source metadata, every
+            // canonical finite point, every round's nonzero challenge and the
+            // complete fold equation. Forward those exact certified cells.
+            return Ok(FoldOutputCells {
+                valid,
+                claim: GeneratorClaimCells {
+                    k: K_U32,
+                    g: suffix.value,
+                    challenges: rounds,
+                },
+            });
         }
         let claim = self.fold_claim(region, plan, &valid, &suffix.value, &rounds)?;
         Ok(FoldOutputCells { valid, claim })

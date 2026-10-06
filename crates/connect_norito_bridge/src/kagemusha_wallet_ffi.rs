@@ -120,7 +120,7 @@ impl From<state::Error> for Failure {
                 UNAVAILABLE,
                 advance::KagemushaWalletUnavailableV1::from_io(&error),
             ),
-            E::Invalid(_) => Self::code(INVALID),
+            E::Invalid(_) | E::Collected => Self::code(INVALID),
             E::WitnessLost(_) => Self::code(CUSTODY_LOST),
             E::CreditConflict => Self::code(CONFLICT),
             E::FoldRequired => Self::code(FOLD_REQUIRED),
@@ -149,6 +149,11 @@ fn completion(value: Option<state::Completion>) -> Response {
         None => Response::default(),
         Some(C::Complete(bytes)) => Response {
             kind: 1,
+            bytes,
+            ..Response::default()
+        },
+        Some(C::CreditStatus(bytes)) => Response {
+            kind: 10,
             bytes,
             ..Response::default()
         },

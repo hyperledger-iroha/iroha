@@ -30,19 +30,22 @@ mod strict_verifying_key_preparation_tests {
     fn portable_off_ledger_record() -> VerifyingKeyRecord {
         let mut record = VerifyingKeyRecord::new(
             1,
-            KAIGI_USAGE_CIRCUIT_ID_V1,
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pallas",
-            iroha_crypto::Hash::new(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1).into(),
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            iroha_data_model::zk::BackendTag::NativePipaRPasta,
+            "vesta",
+            iroha_crypto::Hash::new(
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            )
+            .into(),
             [0x42; 32],
         );
-        record.gas_schedule_id = Some("halo2_default".to_owned());
+        record.gas_schedule_id = Some("native_pipa_r_default".to_owned());
         record
     }
 
     #[test]
     fn record_preparation_rejects_empty_activation_window() {
-        let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "empty-window");
+        let id = VerifyingKeyId::new(ZK_BACKEND_NATIVE_PIPA_R, "empty-window");
         let mut record = portable_off_ledger_record();
         record.activation_height = Some(10);
         record.withdraw_height = Some(10);
@@ -53,7 +56,7 @@ mod strict_verifying_key_preparation_tests {
 
     #[test]
     fn record_preparation_rejects_nonportable_metadata() {
-        let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "bad-metadata");
+        let id = VerifyingKeyId::new(ZK_BACKEND_NATIVE_PIPA_R, "bad-metadata");
         let mut record = portable_off_ledger_record();
         record.metadata_uri_cid = Some("ipfs://cid?query".to_owned());
         let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
@@ -63,34 +66,39 @@ mod strict_verifying_key_preparation_tests {
 
     #[test]
     fn record_preparation_rejects_oversized_off_ledger_declaration() {
-        let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "oversized-off-ledger");
+        let id = VerifyingKeyId::new(ZK_BACKEND_NATIVE_PIPA_R, "oversized-off-ledger");
         let mut record = VerifyingKeyRecord::new(
             1,
-            KAIGI_USAGE_CIRCUIT_ID_V1,
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pallas",
-            iroha_crypto::Hash::new(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1).into(),
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            iroha_data_model::zk::BackendTag::NativePipaRPasta,
+            "vesta",
+            iroha_crypto::Hash::new(
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            )
+            .into(),
             [0x42; 32],
         );
-        record.vk_len =
-            u32::try_from(HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES + 1).expect("test length fits u32");
+        record.vk_len = u32::try_from(NATIVE_PIPA_R_VERIFYING_KEY_V1_MAX_BYTES + 1)
+            .expect("test length fits u32");
         let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
             .expect_err("an off-ledger key declaration must obey the backend container bound");
         assert!(error.contains("declared"), "unexpected error: {error}");
     }
     #[test]
-    fn record_preparation_rejects_noncanonical_halo2_schema_hash() {
-        let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "wrong-schema");
+    fn record_preparation_rejects_noncanonical_native_schema_hash() {
+        let id = VerifyingKeyId::new(ZK_BACKEND_NATIVE_PIPA_R, "wrong-schema");
         let mut record = portable_off_ledger_record();
         record.public_inputs_schema_hash = iroha_crypto::Hash::new(b"noncanonical-schema").into();
         let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
-            .expect_err("a production Halo2 key must bind the circuit's canonical schema");
+            .expect_err("a production native key must bind the circuit's canonical schema");
         assert!(error.contains("schema hash"), "unexpected error: {error}");
     }
     #[test]
     fn binding_only_ivm_verifier_records_are_not_admitted() {
         let halo2_id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "ivm-binding");
         let mut halo2_record = portable_off_ledger_record();
+        halo2_record.backend = iroha_data_model::zk::BackendTag::Halo2IpaPasta;
+        halo2_record.curve = "pallas".to_owned();
         halo2_record.circuit_id = "halo2/pasta/ipa/ivm-execution-v1".to_owned();
         halo2_record.public_inputs_schema_hash = [0x22; 32];
         let halo2_error = validate_and_prepare_verifying_key_record_v1(&halo2_id, &halo2_record)

@@ -2,6 +2,8 @@
 //! fold, public-input and known/unknown-shape adversaries.
 
 mod common;
+#[path = "q_sigma/serialized.rs"]
+mod serialized;
 
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{

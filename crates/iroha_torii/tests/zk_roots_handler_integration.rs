@@ -23,6 +23,7 @@ fn zk_config_with_tree_roots_history_len(
     tree_roots_history_len: NonZeroUsize,
 ) -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
+        pipa_r: iroha_config::parameters::actual::PipaR::default(),
         halo2: iroha_config::parameters::actual::Halo2 {
             enabled: false,
             curve: iroha_config::parameters::actual::ZkCurve::Pallas,

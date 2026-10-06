@@ -41,21 +41,22 @@ fn vk_register_update_emit_events() {
     // assert on verifying-key lifecycle events below.
     stx.world.take_external_events();
     // Prepare a VK record and Register
-    let id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_test");
-    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+    let id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_test");
+    let fixture = iroha_core_zk::test_utils::native_confidential_fixture_envelope();
+    let vk_box = fixture.vk_box("pipa-r/pasta").expect("compiled native key");
     let commitment = iroha_core_zk::hash_vk(&vk_box);
     let mut rec = iroha_data_model::proof::VerifyingKeyRecord::new(
         1,
-        "vk_test",
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        [0x5A; 32],
+        iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        BackendTag::NativePipaRPasta,
+        "vesta",
+        fixture.schema_hash,
         commitment,
     );
-    rec.vk_len = 3;
+    rec.vk_len = u32::try_from(vk_box.bytes.len()).unwrap();
     rec.key = Some(vk_box.clone());
     rec.status = ConfidentialStatus::Active;
-    rec.gas_schedule_id = Some("halo2_default".into());
+    rec.gas_schedule_id = Some("native_pipa_r_default".into());
     let reg_insn: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: id.clone(),
         record: rec.clone(),
@@ -66,16 +67,16 @@ fn vk_register_update_emit_events() {
     // Update to version 2
     let mut rec2 = iroha_data_model::proof::VerifyingKeyRecord::new(
         2,
-        "vk_test",
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        [0x5B; 32],
+        iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        BackendTag::NativePipaRPasta,
+        "vesta",
+        fixture.schema_hash,
         commitment,
     );
-    rec2.vk_len = 3;
+    rec2.vk_len = u32::try_from(vk_box.bytes.len()).unwrap();
     rec2.key = Some(vk_box);
     rec2.status = ConfidentialStatus::Active;
-    rec2.gas_schedule_id = Some("halo2_default".into());
+    rec2.gas_schedule_id = Some("native_pipa_r_default".into());
     let upd: InstructionBox = iroha_data_model::isi::verifying_keys::UpdateVerifyingKey {
         id: id.clone(),
         record: rec2.clone(),

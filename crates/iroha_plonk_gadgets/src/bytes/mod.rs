@@ -72,9 +72,16 @@
 //!
 //! # Scope
 //!
-//! Byte strings have lengths fixed by the circuit (a verifying key fixes the
-//! proof length, a variant fixes every transcript layout), so the length
-//! element is a constant. The point link does not check that `(x, y)` is on
+//! [`PBytes`] uses circuit-fixed lengths for valid proofs and fixed transcript
+//! layouts. Untrusted incoming proofs may have a different actual length:
+//! [`ActiveBytes`] retains their original bounded byte tapes, and
+//! [`VariablePBytes`] frames, concatenates and hashes their constrained active
+//! prefixes without introducing capacity padding. Decoder views can share the
+//! tape while retaining the exact original bytes for consuming digests.
+//! Variable lengths never change the circuit's layout. Its digest currently
+//! requires an ordinary sponge lane; compact phase lanes reject it.
+//!
+//! The point link does not check that `(x, y)` is on
 //! the curve; the curve chip does, and that check also excludes the identity
 //! `(0, 0)` because `5` is not a square in either Pasta field.
 //!
@@ -89,6 +96,7 @@
 pub mod element;
 pub mod packing;
 pub mod tape;
+pub mod variable;
 
 #[cfg(test)]
 mod tests;
@@ -108,6 +116,7 @@ pub use packing::{
     split_bounded,
 };
 pub use tape::{ByteOrder, ByteRun, BytesChip, BytesConfig, Segment, SegmentSpec, segment_value};
+pub use variable::{ActiveBytes, VariablePBytes};
 
 use crate::cells::Word;
 

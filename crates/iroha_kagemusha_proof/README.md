@@ -72,35 +72,44 @@ not final Omega/artifact, hardware, time/RSS or wallet acceptance qualification.
 
 `admin_sigma::LoadCircuit` proves both state openings, exact arithmetic,
 continuity and unchanged fields on the five-column k12 class (3,296 bytes).
-`a_relation::load` parses one certificate/voucher/receipt tape per object,
-requires the LoadAuthorization certificate role and fixed scheme-root policy,
-and binds the finalized voucher and receipt to the same state, statement and
-sigma proof digest. Its recovery method proves the exact depth32 insertion.
-The actual two-variable/one-fixed signature Q is 7,936 bytes. These components
-are being joined to the genuine rooted Bootstrap predecessor through the fixed
-predecessor-first A context. The fixed A1→W1→A2→W2→A3 chain separates
-predecessor/recovery, Q_sigma, and signature/authorization. All three stages
-fit k16 with five shared range buses and actual 8,960-byte A proofs, retaining
-the complete original context and every P/V carry. The four-bus Q_sigma stage
-exceeds k16. A common Bootstrap/Load descriptor, complete final Omega catalog,
-root-digest rebinding and final resource qualification remain open.
-The object/map component alone uses 19,092 sponge rows and 1,986 UInt rows on
-shared A lanes, before recursive verification and signature authorization.
+`a_relation::load` binds five original tapes: LoadAuthorization certificate,
+finalized voucher, own receipt, Enrollment certificate and current credential.
+The mandatory signature workload is three variable and two fixed signatures,
+split across two hard Q leaves. C4 re-verifies the current credential on every
+step; a predecessor proof does not replace that obligation. The fixed schedule
+now has separate predecessor/recovery, Q_sigma, voucher/receipt and current
+credential stages. All four current component stages prove at k16
+(maximum 63,085 rows, 8,480-byte A proofs), including the signature-Q bundle,
+full consuming-transcript and dropped/relabelled-opening regressions.
+Earlier three-stage measurements omitted C4 and do not qualify complete Load.
 
 ## Send composition
 
 `a_relation::send` binds the exact payer credential, signed Request and held-fee
 slot to the same state/statement cells and depth32 pending and fee map paths.
 Zero held fees permit a total malformed dummy slot; enabled fees require the
-exact held schedule and arithmetic. The Request signature belongs to its
-receiver's obligation, so Send has no extra local signature Q.
+exact held schedule and arithmetic. The receiver owns the Request signature.
+Send separately requires the hard own receipt/current credential/certificate
+Q and its mandatory fixed authorization task. `own::ConsumingProofCells` binds
+its receipt digest to the exact 320-byte public transcript, predecessor proof,
+both full-k16 transported claims and own sigma, including their lengths. The
+mandatory `SendProof` task checks those bytes beside the hard predecessor;
+the signature stage authenticates the same entire receipt tape in `D_ctx`.
 
-Actual mask0 sigma and object/map components pass, including missing or replaced
-map writes and cross-object substitution. The five-bus component uses35k sponge
-rows before recursive proofs. The fixed task schedule can place ownership,
-pending and fee/carry checks in separate stages and commits those assignments in
-`D_ctx`; metadata alone never proves an operation. Complete rooted Send remains
-pending the common canonical Bootstrap/Load Omega catalog and digest rebind.
+The genuine mask0 chain now composes all five A stages with the two-bus Q_sigma
+and four-bus A profiles. Every source proof is 8,480 bytes; stage maxima are
+50,098 / 56,018 / 57,868 / 61,864 / 60,051 rows, all within k16. This includes
+mandatory own authorization, exact consuming bytes, both maps and every
+retained opening. Its Bootstrap/Load predecessor catalog is rebuilt under the
+actual common Omega digest with identical source descriptors and terminal keys.
+The Send terminal key has not yet been added and rebound into that catalog;
+all eight control masks, the final uniform catalog and production Omega
+size/row qualification remain open. Task metadata alone never proves execution.
+
+Incoming lineage decoding now preserves the original byte source and derives
+the canonical/header/claim verdicts together. Exact active-byte ingestion
+separates a padded verifier view from the original short or overlong input;
+its total Receive composition and operation qualification remain open.
 
 ## Controls
 

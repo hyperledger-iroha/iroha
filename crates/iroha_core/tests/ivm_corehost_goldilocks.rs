@@ -98,7 +98,6 @@ mod goldilocks {
             assert_eq!(vm.register(11), ivm::host::ERR_DECODE);
         }
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn core_host_rejects_retired_ivm_ipa_registry_key() {
         use iroha_core_zk as zk;
@@ -110,8 +109,8 @@ mod goldilocks {
 
         let authority: AccountId = ALICE_ID.clone();
         let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
-        let id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "curve_policy");
-        let key = VerifyingKeyBox::new(zk::ZK_BACKEND_HALO2_IPA.into(), vec![0x11; 3]);
+        let id = VerifyingKeyId::new("halo2/ipa", "curve_policy");
+        let key = VerifyingKeyBox::new("halo2/ipa".into(), vec![0x11; 3]);
         let mut record = VerifyingKeyRecord::new_with_owner(
             1,
             "ivm-execution-v1",

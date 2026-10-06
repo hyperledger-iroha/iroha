@@ -115,11 +115,15 @@ impl<C: PastaCurve> VerifierChip<C> {
             }
         }
         let mut h = self.identity(region)?;
-        for index in (0..plan.protocol.shape().quotient_pieces).rev() {
-            h = self.scale_point(region, &h, xn)?;
-            h = self
-                .ecc
-                .add(region, &h, &read.point(ProofMessage::QuotientPiece(index))?)?;
+        for (step, index) in (0..plan.protocol.shape().quotient_pieces).rev().enumerate() {
+            let piece = read.point(ProofMessage::QuotientPiece(index))?;
+            h = if step == 0 {
+                // The initial accumulator is the circuit-fixed identity.
+                piece
+            } else {
+                let scaled = self.scale_point(region, &h, xn)?;
+                self.ecc.add(region, &scaled, &piece)?
+            };
         }
         let x1 = read.challenge(Challenge::X1)?;
         let x2 = read.challenge(Challenge::X2)?;
@@ -127,6 +131,7 @@ impl<C: PastaCurve> VerifierChip<C> {
         let x4 = read.challenge(Challenge::X4)?;
         let identity = self.identity(region)?;
         let mut commitments = vec![identity; opening.sets().len()];
+        let mut initialized = vec![false; opening.sets().len()];
         let mut set_values: Vec<Vec<Vec<Scalar<C>>>> = opening
             .sets()
             .iter()
@@ -157,8 +162,14 @@ impl<C: PastaCurve> VerifierChip<C> {
                 SlotKind::Vanishing => h.clone(),
                 SlotKind::Random => read.point(ProofMessage::Random)?,
             };
-            let scaled = self.scale_point(region, &commitments[slot.set], &x1)?;
-            commitments[slot.set] = self.ecc.add(region, &scaled, &point)?;
+            commitments[slot.set] = if initialized[slot.set] {
+                let scaled = self.scale_point(region, &commitments[slot.set], &x1)?;
+                self.ecc.add(region, &scaled, &point)?
+            } else {
+                // Static source-slot order, independent of commitment values.
+                initialized[slot.set] = true;
+                point
+            };
             for (values, evaluation) in set_values[slot.set].iter_mut().zip(&slot_evals[index]) {
                 values.push(evaluation.clone());
             }

@@ -56,13 +56,12 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         }
         return backend == "halo2/ipa"
             || starkFriProductionBackends.contains(backend)
-            || productionNativeHalo2PastaBackends.contains(backend)
             || productionNativePipaRPastaBackends.contains(backend)
     }
 
     /// Resolve an exact registry profile to its canonical wire engine.
     public static func registryTag(_ label: String) -> Self? {
-        if label == "halo2/ipa" || productionNativeHalo2PastaBackends.contains(label) {
+        if label == "halo2/ipa" {
             return .halo2IpaPasta
         }
         if starkFriProductionBackends.contains(label) { return .stark }
@@ -99,13 +98,10 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
     private static let productionNativePipaRPastaBackends: Set<String> = [
         "pipa-r/pasta",
         "pipa-r/pasta/kaigi-authorization-v1",
-        "pipa-r/pasta/kaigi-usage-v1"
-    ]
-
-    private static let productionNativeHalo2PastaBackends: Set<String> = [
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
+        "pipa-r/pasta/kaigi-usage-v1",
+        "pipa-r/pasta/confidential-transfer-v1",
+        "pipa-r/pasta/confidential-unshield-full-v1",
+        "pipa-r/pasta/confidential-unshield-change-v1"
     ]
 
     private static let trustedSetupBackendSegments: Set<String> = [
@@ -247,9 +243,9 @@ public enum VerifierBackendCatalogTag: Sendable, Equatable {
         "pipa-r/pasta",
         "pipa-r/pasta/kaigi-authorization-v1",
         "pipa-r/pasta/kaigi-usage-v1",
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+        "pipa-r/pasta/confidential-transfer-v1",
+        "pipa-r/pasta/confidential-unshield-full-v1",
+        "pipa-r/pasta/confidential-unshield-change-v1",
         "stark/fri/poseidon-x7-goldilocks-6x64-v1"
     ]
 }

@@ -21,9 +21,10 @@
 //! limbs `K_i>=B_i`, so `0<=a_i+K_i-b_i<=A_i+K_i`; negation has
 //! `0<=K_i-b_i<=K_i`. Each accepted bound is at most `2^94-1`, far below
 //! either native modulus, so those glue equations cannot wrap. Selection takes
-//! the componentwise maximum of the two bounds. The existing reduction path
-//! writes a proper result with bounds `(2^87-1,2^87-1,2^82-1)` before retrying
-//! an otherwise inadmissible operation. The actual integer may differ from
+//! the componentwise maximum of the two bounds. Reduction writes a Proper
+//! result before retrying an otherwise inadmissible operation. Serialized reduction separately proves
+//! `x=c+q*m` with q17 and one offset17/range18 carry; its 87/87/81 output
+//! for Pasta moduli is still Proper, not Canonical. The integer may differ from
 //! its canonical scalar by a multiple of `m`; its native-field residue must
 //! therefore never be used as the scalar value. Only the canonical integer
 //! bridge exports to S6, ECC scalar bits, transcript absorption or public cells.
@@ -51,6 +52,8 @@ enum Operation {
     Proper([Cell; 3]),
 }
 
+#[cfg(test)]
+mod bridge_cache_tests;
 #[cfg(test)]
 mod tests;
 
@@ -140,6 +143,10 @@ impl<C: PastaCurve> Arithmetic<C> {
             return Ok(cached.clone());
         }
         let scalar = self.ff.import_s6(uint, region, value.canonical())?;
+        // The exact integer bridge already proves that these canonical FF
+        // cells are the supplied S6 cells. Retain both directions of that
+        // certificate; never synthesize a second split for the same cells.
+        self.exports.insert(Self::cells(&scalar), value.clone());
         self.imports.insert(key, scalar.clone());
         Ok(scalar)
     }
@@ -159,9 +166,19 @@ impl<C: PastaCurve> Arithmetic<C> {
         if let Some(cached) = self.exports.get(&key) {
             return Ok(cached.clone());
         }
-        let value = self.canonicalize(region, value)?;
-        let value = self.ff.export_s6(uint, region, &value)?;
+        let canonical = self.canonicalize(region, value)?;
+        let canonical_key = Self::cells(&canonical);
+        if let Some(cells) = self.exports.get(&canonical_key).cloned() {
+            self.exports.insert(key, cells.clone());
+            return Ok(cells);
+        }
+        let value = self.ff.export_s6(uint, region, &canonical)?;
         let cells = ScalarCells::from_canonical(uint, region, value)?;
+        // Export may reduce a lazy source. Its inverse map must point only to
+        // that canonical result, never to the original unreduced integer.
+        self.imports
+            .insert([cells.lo().cell(), cells.hi().cell()], canonical);
+        self.exports.insert(canonical_key, cells.clone());
         self.exports.insert(key, cells.clone());
         Ok(cells)
     }

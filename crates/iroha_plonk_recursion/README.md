@@ -74,24 +74,45 @@ composed row/performance qualification remain release gates.
 
 `tests/compact_components.rs` exercises shared Glue, complete ECC, transcript,
 CRT, dot-product and algebraic/running-sum range constraints. The explicit compact
-profile has eleven advice columns, eleven fixed columns, one lookup and direct
-public gates. The staged CRT kernel binds five intermediate products while
-retaining the original sixteen roots and arithmetic bounds. Its constant values
+profile has eleven advice columns, twelve fixed columns, one lookup and direct
+public gates. The staged CRT kernel binds five intermediate products. Unsigned
+Proper single products with modulus above 2^254 use the separately reviewed
+three-carry finish. Unsigned dots additionally use three carries only when every
+input has a structural strict 255-bit bound and the modulus lies between 2^254
+and 2^255. Staged Pasta results explicitly range their top limb to81 bits and
+preserve that bound through copies; selection takes the wider arm bound. Lazy
+inputs, division and wider dots retain their original carry admission. Its constant values
 are constrained through fixed Glue coefficients on the same bounded shared
 cursor. The current degree-nine descriptor has 3,680 proof bytes plus the
 1,088-byte accumulator: **4,768 bytes**, within the 4,821-byte cap. This is a
 descriptor result; a complete production compact proof has not been generated.
 
-The actual authenticated Bootstrap five-bus source A2 proof is 8,960 bytes.
-Its complete compact Omega predicate passes in a diagnostic larger domain but
-requires 75,124 shared rows and 130,406 range rows after public/multiopen
-batching. Pinning its complete source key reduces shared rows to 72,376.
-The genuine five-bus Load terminal proof has the same measured occupancy.
-**The production k16 row gates fail.** The
-current catalog contains only Bootstrap; it is not the release catalog. An
-independent generic wrapper run binds the actual Omega digest before constructing
-the authenticated lineage and checks identical A2/Omega keys, but its transport
-is 10,944 bytes and remains over the cap.
+An explicit two-bus serialized Qσ profile produces a natively verified 7,008-byte
+proof for the complete two-sigma plus AS relation. Single k12/k14 and soft
+Trivial cases retain exact byte/public bindings and known/unknown shape.
+The default Q profile remains unchanged pending composed catalog qualification.
+Using Q2, the actual authenticated Bootstrap three-bus source A2 proof is 7,872
+bytes and its busiest range lane occupies 65,283 rows. Its complete compact
+Omega predicate passes in a diagnostic larger domain, requiring 63,889 shared
+rows with a pinned one-key catalog and 97,993 range rows. The exact tagged range
+table removes shifted-top rows: one `(width,value)` lookup contains the 65,528
+tuples for widths3..15, and algebraic roots check widths1/2. Its added fixed tag
+query is offset by removing the previous-row advice query, preserving 4,768
+transport bytes. The earlier
+five-bus Load snapshot used 72,376 shared and 130,406 range rows; that evidence
+precedes later engine changes and also omits the complete per-step C4 current
+credential/certificate authorization. It is partial-relation evidence only.
+A fresh Q2/A4 Bootstrap candidate with the narrow-dot kernel, exact constant
+reuse and small-quotient lazy reduction produces 8,480-byte A proofs and uses 64,928 shared / 97,137 range rows
+in pinned compact Omega. The shared lane fits the production k16 budget;
+**the range lane still exceeds it by 31,607 rows.** The
+compact measurement uses only a Bootstrap terminal key; it is not the release
+catalog. A separate generic Bootstrap/Load two-terminal diagnostic binds the
+actual common Omega digest before constructing both lineages and checks exact
+initial/rebound terminal keys. Its uncompressed outer proof is10,272 bytes plus
+1,088 bytes of accumulator, and remains over the cap. Genuine corrected Load
+with Q2 and three source range buses exceeds the k16 range budget, so a uniform
+three-bus source catalog is also unqualified.
 
 The explicit parallel serialized-FF profile keeps the verifier lanes parallel.
 Its fixed bank gives each range bus an independent scalar lookup against one

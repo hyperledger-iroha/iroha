@@ -2521,6 +2521,20 @@ pub(crate) fn publish_generated(
         archive_transport: &request.archive_transport,
     };
     let result = execution.validate().and_then(|()| {
+        let action = if matches!(&request.action, GeneratedPublishAction::Begin { .. }) {
+            crate::generated_publication::prepare_generated_publish_action(
+                &request.manifest_path,
+                request.action.clone(),
+            )
+            .map_err(|error| {
+                match error.downcast::<crate::workspace::WorkspaceError>() {
+                    Ok(error) => workspace_diagnostic(error),
+                    Err(error) => Diagnostic::new(ErrorCode::Usage, error.to_string()),
+                }
+            })?
+        } else {
+            request.action.clone()
+        };
         let mut args = PublishArgs {
             selection: SelectionArgs::default(),
             mode: GraphModeArgs::default(),
@@ -2529,7 +2543,7 @@ pub(crate) fn publish_generated(
             resume: None,
             recover: None,
         };
-        match &request.action {
+        match &action {
             GeneratedPublishAction::Begin { package, detach } => {
                 args.selection.packages.extend(package.iter().cloned());
                 args.detach = *detach;

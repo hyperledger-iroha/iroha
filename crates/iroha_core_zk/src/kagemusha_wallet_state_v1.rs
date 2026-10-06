@@ -17,11 +17,13 @@
 //! standalone store for tests/diagnostics and does not itself provide those brackets.
 //! No archive record grants monetary authority independently of Advance.
 //!
-//! The current slice conservatively retains all frozen inputs and completions. Collection
-//! after a covering fold and fee-claim acknowledgement is deliberately not enabled here.
-// TODO(G3/G4): connect the real native operation/Λ/Ω artifact provider and mobile bridge;
-// qualify this complete custody/proof lifetime on stock phones. Add multi-step run relations
-// and acknowledged collection without changing Advance.
+//! Collection records a source-selected intent before deleting historical witness objects.
+//! A newer verified Ω supplies coverage; Send additionally needs pending-map nonmembership.
+//! Earned-fee Payments have separate custody until their exact finalized payout is verified.
+// TODO(G3/G4): connect the qualified native operation/Λ/Ω artifact loader; qualify the complete
+// custody/proof lifetime on stock phones. Multi-step run relations remain artifact-dependent.
+// Persistent replay metadata and unreachable immutable index nodes remain retained; a future
+// compactor must preserve source-selected reachable roots without full-history hot-path scans.
 
 use std::collections::BTreeMap;
 
@@ -36,15 +38,19 @@ use crate::kagemusha_wallet_advance_v1::{
 };
 
 mod archive;
+mod collection;
 mod credit_tree;
 mod custody;
+mod fee_claims;
 mod folding;
 mod index;
 mod manifest;
 mod scheduling;
 
 pub use archive::{ArchiveKey, ArchiveStore, FsArchive};
+pub use collection::{CollectionStatus, OutgoingAbsent};
 pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
+pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
@@ -64,6 +70,9 @@ pub enum Error {
     /// Required source-bound input is absent or corrupt; never wait silently for it.
     #[error("wallet fold witness custody lost: {0}")]
     WitnessLost(&'static str),
+    /// Requested historical witnesses were intentionally collected after a covering fold.
+    #[error("historical witnesses were collected")]
+    Collected,
     /// A previously used credit identity names different canonical Payment bytes.
     #[error("conflicting Payment for an already consumed credit")]
     CreditConflict,
@@ -158,6 +167,13 @@ impl FrozenTransition {
 /// for any method. A production implementation must verify σ, all consumed objects and map
 /// roots before Advance, and both Pasta accumulator decides when verifying Ω.
 pub trait NativeProofs {
+    /// Trusted scheme and Global chain label selected when the authenticated artifacts were
+    /// loaded. Witnesses and payout evidence must never supply or override these identities.
+    ///
+    /// # Errors
+    /// Artifacts or their independently configured scheme/chain binding are unavailable.
+    fn ledger_scope(&self) -> Result<(KagemushaWalletSchemeV1, String), Error>;
+
     /// Ordered intermediate proof layouts from the authenticated artifact schedule for this
     /// operation. The final Ω follows these checkpoints and keeps its separate wire bound.
     ///
@@ -252,6 +268,8 @@ pub enum FoldProgress {
 pub enum Completion {
     /// Original released output bytes. This is the only successful completion result.
     Complete(Vec<u8>),
+    /// Fresh CreditStatus for an identical duplicate Receive whose old evidence was collected.
+    CreditStatus(Vec<u8>),
     /// A selected or uncertain operation needs reconciliation, never a new debit.
     Pending,
     /// The custody authority definitively did not select the operation.
@@ -298,8 +316,8 @@ struct RecordedFold {
 ///
 /// Permanent replay/step/fold indexes and the credit-digest tree have source-selected roots.
 /// Normal operations traverse bounded paths; interrupted indexing streams one tail capsule
-/// at a time. Witness collection is not enabled, so unresolved Payments and fee-claim inputs
-/// remain retained until a complete acknowledgement/covering-fold collection policy exists.
+/// at a time. Collection removes covered historical witness objects in bounded turns, while
+/// unresolved Sends and unpaid fee-claim Payments retain separate durable custody.
 pub struct Coordinator<C, A, N> {
     custody: C,
     archive: A,
@@ -322,6 +340,15 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         scheme_id: [u8; 32],
         wallet_id: [u8; 32],
     ) -> Result<Self, Error> {
+        let (scheme, chain) = proofs.ledger_scope()?;
+        valid(scheme.validate())?;
+        if scheme.scheme_id() != scheme_id
+            || chain.is_empty()
+            || chain.len() > 1024
+            || chain.chars().any(char::is_control)
+        {
+            return Err(Error::Invalid("native artifact ledger scope"));
+        }
         if archive.binding() != (scheme_id, wallet_id) {
             return Err(Error::Invalid("archive incarnation"));
         }
@@ -387,55 +414,30 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// This opt-in export allocates the full history; no normal coordinator operation uses it.
     ///
     /// # Errors
-    /// Pending custody is `Pending`; missing/corrupt retained witnesses are custody loss.
+    /// Pending custody is `Pending`; intentional witness collection is `Collected`, while
+    /// missing/corrupt retained witnesses outside a selected collection are custody loss.
     pub fn released_steps(&mut self) -> Result<Vec<ReleasedStep>, Error> {
-        let status = self.status()?;
-        let marker = match status {
-            SlotStatus::Released(record) => record,
-            SlotStatus::Enrollment(_) => return Ok(Vec::new()),
-            SlotStatus::Pending(_) => return Err(Error::Pending),
-            _ => return Err(Error::NoHead),
+        let (_, manifest) = self.sync_manifest()?;
+        let Some(last) = manifest.indexed else {
+            return Ok(Vec::new());
         };
-        let (_, _, mut digest) = marker.head().ok_or(Error::NoHead)?;
         let mut steps = Vec::new();
-        let mut expected_head = match marker.marker().state {
-            KagemushaWalletMarkerStateV1::Head { head, .. } => head,
-            _ => return Err(Error::NoHead),
-        };
-        let mut expected_sequence = marker.head().ok_or(Error::NoHead)?.0;
-        loop {
-            let frozen = self.frozen(digest)?;
-            let c = &frozen.capsule;
-            if c.statement.sequence != expected_sequence || c.statement.successor != expected_head {
+        let mut predecessor = KagemushaWalletStateCommitmentV1 { value: [0; 32] };
+        let mut previous_capsule = [0; 32];
+        for sequence in 0..=last {
+            // Intentional collection has its own error; it must not be relabelled custody loss.
+            let step = self.indexed_step(&manifest, sequence)?;
+            let capsule = &step.frozen.capsule;
+            if capsule.statement.predecessor != predecessor
+                || capsule.predecessor_capsule_digest != previous_capsule
+            {
                 return Err(Error::WitnessLost("capsule chain"));
             }
-            let Lookup::Retained(retained) = self.custody.lookup(&c.operation_id)? else {
-                return Err(Error::WitnessLost("released completion"));
-            };
-            if retained.capsule_digest != digest
-                || retained.frame != valid(retained.record.to_canonical_bytes())?
-                || retained.completion_digest != valid(retained.record.completion_digest())?
-            {
-                return Err(Error::WitnessLost("completion binding"));
-            }
-            valid(retained.record.verify(&frozen.credential, c))?;
-            digest = c.predecessor_capsule_digest;
-            expected_head = c.statement.predecessor;
-            steps.push(ReleasedStep {
-                frozen,
-                retained: *retained,
-            });
-            if expected_sequence == 0 {
-                break;
-            }
-            expected_sequence -= 1;
+            predecessor = capsule.statement.successor;
+            previous_capsule = valid(capsule.capsule_digest())?;
+            steps.push(step);
         }
-        if digest != [0; 32] || !expected_head.is_zero() {
-            return Err(Error::WitnessLost("bootstrap chain"));
-        }
-        // A protected-storage error never turns the chain into an absence result.
         self.status()?;
-        steps.reverse();
         Ok(steps)
     }
 
@@ -486,8 +488,15 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         let request = frozen.request()?;
         let owner = TransitionOwner::new(frozen.credential.clone());
-        // Let Advance enforce changed-input conflicts for an already selected operation.
-        if self.custody.lookup(&c.operation_id)? != Lookup::Unknown {
+        let lookup = self.custody.lookup(&c.operation_id)?;
+        // A released Receive is recognized by its permanent credit identity even after its
+        // completion was collected. Validate the original Payment below before returning its
+        // first evidence or a fresh CreditStatus. Pending and delivery-loss answers retain
+        // Advance's source authority and cannot be turned into a new Receive.
+        let released_receive =
+            matches!(c.statement.effect, KagemushaWalletEffectV1::Receive { .. })
+                && matches!(&lookup, Lookup::Retained(_) | Lookup::Archived(_));
+        if lookup != Lookup::Unknown && !released_receive {
             return self
                 .custody
                 .advance(&owner, &request)
@@ -497,8 +506,27 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let (_, manifest) = self.sync_manifest()?;
         if let KagemushaWalletEffectV1::Receive { credit_id, .. } = c.statement.effect {
             if let Some(credit) = self.indexed_credit(&manifest, &credit_id)? {
-                if credit.payment_digest != c.payment_digest {
+                let original = c
+                    .retained_inputs
+                    .iter()
+                    .find(|input| input.role == KagemushaWalletRetainedInputRoleV1::Payment)
+                    .ok_or(Error::Invalid("duplicate Payment original"))?;
+                let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
+                    &original.bytes,
+                    &self.scheme_id,
+                ))?;
+                let identity = valid(payment.digests())?;
+                if credit.payment_digest != c.payment_digest
+                    || identity.payment != credit.payment_digest
+                    || identity.credit_id != credit_id
+                    || payment.request.body.amount != credit.amount
+                {
                     return Err(Error::CreditConflict);
+                }
+                let entry = self.step_entry(&manifest, credit.sequence)?;
+                if entry.collected {
+                    let status = self.credit_status(&credit_id, &credit.payment_digest)?;
+                    return Ok(Completion::CreditStatus(archive::encode(&status)?));
                 }
                 return Ok(Completion::Complete(
                     self.indexed_step(&manifest, credit.sequence)?
@@ -507,6 +535,9 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                         .output,
                 ));
             }
+        }
+        if released_receive {
+            return Err(Error::WitnessLost("released Receive index"));
         }
         let predecessor = manifest
             .indexed

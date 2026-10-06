@@ -23,6 +23,11 @@ enum TestMode {
     Canonical,
     NativeForgery,
     CarryOverflow,
+    ProperNativeForgery,
+    ProperCarryOverflow,
+    ProperQuotientOverflow,
+    LazyMul,
+    WidenedMul,
     MixedModulus,
     Inadmissible,
 }
@@ -108,6 +113,12 @@ impl<F: PastaField> Circuit<F> for Kernel<F> {
                 if self.mode == TestMode::Inadmissible {
                     left.bounds = [1 << 94; LIMBS];
                 }
+                if self.mode == TestMode::LazyMul {
+                    left.form = Form::Bounded;
+                }
+                if self.mode == TestMode::WidenedMul {
+                    left.bounds[2] = (1 << 83) - 1;
+                }
                 if self.mode == TestMode::Canonical {
                     SerializedFf::assert_canonical(&mut glue, &mut range, &mut region, &left)?;
                     return Ok(());
@@ -136,7 +147,11 @@ impl<F: PastaField> Circuit<F> for Kernel<F> {
                 let start_glue = glue.next_row();
                 let start_range = range.next_row();
                 let result = match self.mode {
-                    TestMode::Mul | TestMode::MixedModulus | TestMode::Inadmissible => {
+                    TestMode::Mul
+                    | TestMode::LazyMul
+                    | TestMode::WidenedMul
+                    | TestMode::MixedModulus
+                    | TestMode::Inadmissible => {
                         if let Some(ff) = &mut ff {
                             ff.mul(&mut region, &left, &right)?
                         } else {
@@ -188,14 +203,65 @@ impl<F: PastaField> Circuit<F> for Kernel<F> {
                             )?
                         }
                     }
+                    TestMode::ProperNativeForgery
+                    | TestMode::ProperCarryOverflow
+                    | TestMode::ProperQuotientOverflow => {
+                        let mut witness = mul_witness(
+                            self.modulus,
+                            &super::super::nat_limbs(&Nat::from_words(self.left)),
+                            &super::super::nat_limbs(&Nat::from_words(self.right)),
+                        );
+                        match self.mode {
+                            TestMode::ProperNativeForgery => {
+                                witness.c = [F::ZERO; LIMBS];
+                                witness.q = [F::ZERO; LIMBS];
+                                witness.u = [F::from_u128(1 << CARRY_OFFSET_BITS); CARRIES];
+                            }
+                            TestMode::ProperCarryOverflow => {
+                                witness.u[2] = F::from_u128((1 << CARRY_OFFSET_BITS) + (1 << 89))
+                            }
+                            TestMode::ProperQuotientOverflow => {
+                                witness.q[2] = F::from_u128(1 << 84)
+                            }
+                            _ => unreachable!(),
+                        }
+                        let result = kernel.ok_or(Error::Synthesis)?.constrain_short_product(
+                            &mut glue,
+                            &mut range,
+                            &mut region,
+                            Mode::Mul,
+                            (&left.limbs, &right.limbs),
+                            self.value(witness),
+                            super::super::CarryLayout::ProperProduct,
+                        )?;
+                        FfValue::from_parts(result, PROPER_BOUNDS, self.modulus, Form::Proper)
+                    }
                     TestMode::Canonical => unreachable!(),
                 };
-                if matches!(self.mode, TestMode::Mul | TestMode::Div) {
+                if matches!(
+                    self.mode,
+                    TestMode::Mul | TestMode::Div | TestMode::LazyMul | TestMode::WidenedMul
+                ) {
                     assert_eq!(
                         glue.next_row() - start_glue,
                         if self.rotated != 0 { 4 } else { 19 }
                     );
-                    assert_eq!(range.next_row() - start_range, 143);
+                    let proper = self.rotated == 2
+                        && self.mode == TestMode::Mul
+                        && self.modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt();
+                    let bounded = self.rotated == 2
+                        && matches!(self.mode, TestMode::Div | TestMode::LazyMul)
+                        && self.modulus.nat().cmp_vartime(&Nat::pow2(255)).is_lt();
+                    assert_eq!(
+                        range.next_row() - start_range,
+                        if proper {
+                            123
+                        } else if bounded {
+                            128
+                        } else {
+                            143
+                        }
+                    );
                     let result = if self.rows.is_some() {
                         result
                     } else {
@@ -370,7 +436,11 @@ fn rotated_boundary<F: PastaField>(profile: u8) {
                     assigned.tables.advice_assigned(),
                     unknown.tables.advice_assigned()
                 );
-                for i in 0..16 {
+                for i in 0..if profile == 2 && mode == TestMode::Mul {
+                    15
+                } else {
+                    16
+                } {
                     let report = check_tampered(
                         &circuit,
                         10,
@@ -441,7 +511,11 @@ fn rotated_attachment<F: PastaField>() {
     assert!(serialized(&[modulus]).with_rotated_kernel(&other).is_err());
     let columns = core::array::from_fn(|_| meta.advice_column());
     let fused = super::super::FfConfig::configure(&mut meta, columns, &[modulus]);
-    assert!(FfChip::<F>::new(fused).with_rotated_kernel(&kernel).is_err());
+    assert!(
+        FfChip::<F>::new(fused)
+            .with_rotated_kernel(&kernel)
+            .is_err()
+    );
 }
 
 #[test]
@@ -456,4 +530,88 @@ fn staged_rotated_ff_all_fields_moduli_cells_and_boundaries() {
     run::<Fq>(2);
     rotated_boundary::<Fp>(2);
     rotated_boundary::<Fq>(2);
+}
+
+fn proper_product<F: PastaField>() {
+    let maximum = Nat::pow2(256).wrapping_sub(&Nat::ONE);
+    for modulus in [
+        ForeignModulus::PASTA_FP,
+        ForeignModulus::PASTA_FQ,
+        ForeignModulus::P256_BASE,
+        ForeignModulus::P256_ORDER,
+    ] {
+        for mode in [TestMode::Mul, TestMode::LazyMul, TestMode::WidenedMul] {
+            for (left, right) in [
+                (maximum, maximum),
+                (Nat::ZERO, maximum),
+                (maximum, Nat::ONE),
+            ] {
+                let circuit = fixture::<F>(2, modulus, mode, left, right);
+                assert!(satisfies(&circuit), "{modulus:?} {mode:?}");
+                let known = synthesize(&circuit, 10, Some(&[])).unwrap();
+                let unknown = synthesize(&circuit.without_witnesses(), 10, None).unwrap();
+                assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+                assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+                assert_eq!(
+                    known.tables.advice_assigned(),
+                    unknown.tables.advice_assigned()
+                );
+            }
+        }
+        for mode in [
+            TestMode::ProperCarryOverflow,
+            TestMode::ProperQuotientOverflow,
+        ] {
+            assert!(!satisfies(&fixture::<F>(
+                2,
+                modulus,
+                mode,
+                Nat::ONE,
+                Nat::ONE
+            )));
+        }
+        // Low three columns vanish, so this forgery is caught only by the
+        // native residual. Conversely N*1 vanishes natively but not modulo B^3.
+        for (left, right) in [
+            (Nat::pow2(174), Nat::pow2(87)),
+            (
+                Nat::from_field(&(-F::ONE)).wrapping_add(&Nat::ONE),
+                Nat::ONE,
+            ),
+        ] {
+            assert!(!satisfies(&fixture::<F>(
+                2,
+                modulus,
+                TestMode::ProperNativeForgery,
+                left,
+                right
+            )));
+        }
+        let circuit = fixture::<F>(2, modulus, TestMode::Mul, maximum, maximum);
+        assert!(undetected_tampers(&circuit, 10, &[]).unwrap().is_empty());
+    }
+    // Small custom odd moduli remain valid for the original four-carry
+    // multiplication; they must never enter the narrower product finish.
+    let small = ForeignModulus::new([1, 0, 0, 1 << 60]).unwrap();
+    assert!(satisfies(&fixture::<F>(
+        2,
+        small,
+        TestMode::Mul,
+        maximum,
+        maximum
+    )));
+    assert!(
+        synthesize(
+            &fixture::<F>(2, small, TestMode::ProperNativeForgery, Nat::ONE, Nat::ONE),
+            10,
+            Some(&[])
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn staged_proper_product_bounds_aliases_and_all_cells_both_fields() {
+    proper_product::<Fp>();
+    proper_product::<Fq>();
 }

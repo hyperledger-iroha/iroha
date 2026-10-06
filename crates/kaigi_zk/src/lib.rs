@@ -1,4 +1,4 @@
-//! Final V1 Halo2 relations for Kaigi authorization and host-bound usage.
+//! Final V1 native prover relations for Kaigi authorization and host-bound usage.
 //!
 //! [`authorization_v1`] binds complete network, call, host, subject, sequence,
 //! action and pre-state inputs. [`usage_v1`] opens the stored host commitment
@@ -8,20 +8,21 @@
 #![deny(missing_docs)]
 
 pub mod authorization_v1;
+pub mod native;
 mod relation_v1;
 pub mod usage_v1;
 
 use core::array;
-use halo2_proofs::{
-    circuit::Value,
-    halo2curves::{ff::Field, pasta::Fp},
-    plonk::{Advice, Column, ConstraintSystem, Fixed, Selector},
-    poly::Rotation,
+use ff::Field;
+use iroha_pasta::Fp;
+use iroha_plonk::{
+    cs::{Advice, Column, ConstraintSystem, Fixed, Rotation, Selector},
+    frontend::Value,
 };
 use poseidon_primitives::poseidon::primitives::Spec;
 use std::sync::OnceLock;
 
-/// Scalar field used by the Kaigi Halo2 circuits (Pasta Fp).
+/// Scalar field used by the Kaigi native prover circuits (Pasta Fp).
 pub type Scalar = Fp;
 const POSEIDON_WIDTH: usize = 3;
 const POSEIDON_RATE: usize = 2;
@@ -83,7 +84,7 @@ fn configure_poseidon(meta: &mut ConstraintSystem<Scalar>) -> KaigiPoseidonConfi
         (0..POSEIDON_WIDTH)
             .map(|row| {
                 let expected = (0..POSEIDON_WIDTH).fold(
-                    halo2_proofs::plonk::Expression::Constant(Scalar::ZERO),
+                    iroha_plonk::cs::Expression::Constant(Scalar::ZERO),
                     |accumulator, column| {
                         let current = meta.query_advice(state[column], Rotation::cur());
                         let round_constant =

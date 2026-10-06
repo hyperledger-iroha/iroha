@@ -165,9 +165,9 @@ Report schema (JSON):
   "created_ms": 1710000000000,
   "processed_ms": 1710000300000,
   "backend": "halo2/ipa",
-  "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
+  "vk_ref": { "backend": "pipa-r/pasta", "name": "vk_main" },
   "proof_hash": "…",
-  "circuit_id": "halo2/pasta/ipa/kaigi-usage-v1"
+  "circuit_id": "pipa-r/pasta/kaigi-usage-v1"
 }
 ```
 

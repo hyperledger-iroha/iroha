@@ -1,11 +1,11 @@
 //! Scaffold tests for ZK asset registration and authenticated commitment-tree state.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
+#![cfg(feature = "zk-tests")]
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{ConfidentialTreeProfile, State, StateTransaction, World, WorldReadOnly},
+    state::{State, StateTransaction, World, WorldReadOnly},
 };
 use iroha_core_zk::confidential_v2;
 use iroha_crypto::Hash;
@@ -25,7 +25,7 @@ use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::{num::NonZeroU64, str::FromStr};
-const HALO2_IPA_BACKEND: &str = "halo2/ipa";
+const NATIVE_PIPA_R_BACKEND: &str = "pipa-r/pasta";
 fn set_confidential_policy_mode(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset_definition_id: &AssetDefinitionId,
@@ -208,7 +208,7 @@ fn register_zk_asset_rejects_noncanonical_unshield_verifier() {
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     let wrong_vk_name = "transfer_key_misbound_as_unshield";
-    let wrong_vk_id = VerifyingKeyId::new(HALO2_IPA_BACKEND, wrong_vk_name);
+    let wrong_vk_id = VerifyingKeyId::new(NATIVE_PIPA_R_BACKEND, wrong_vk_name);
     let wrong_vk_record = confidential_v2::confidential_transfer_v2_vk_record(wrong_vk_name, 1)
         .expect("canonical transfer verifier");
     for instruction in [
@@ -684,6 +684,7 @@ fn zk_roots_are_bounded_in_world_state() {
     let mut state = State::new_for_testing(World::new(), kura, query);
     state
         .set_zk(cfg::Zk {
+            pipa_r: iroha_config::parameters::actual::PipaR::default(),
             halo2: cfg::Halo2 {
                 enabled: defaults::zk::halo2::ENABLED,
                 curve: cfg::ZkCurve::Pallas,
@@ -833,6 +834,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
     let mut state = State::new_for_testing(World::new(), kura, query);
     state
         .set_zk(cfg::Zk {
+            pipa_r: iroha_config::parameters::actual::PipaR::default(),
             halo2: cfg::Halo2 {
                 enabled: defaults::zk::halo2::ENABLED,
                 curve: cfg::ZkCurve::Pallas,

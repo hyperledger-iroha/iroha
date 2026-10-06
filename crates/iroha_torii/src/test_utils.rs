@@ -1204,6 +1204,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             Vec::new(),
         ),
         zk: A::Zk {
+            pipa_r: iroha_config::parameters::actual::PipaR::default(),
             halo2: A::Halo2 {
                 enabled: false,
                 curve: A::ZkCurve::Pallas,

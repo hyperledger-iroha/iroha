@@ -100,7 +100,7 @@ impl CompactPublicConfig {
 }
 impl<C: PastaCurve> VerifierConfig<C> {
     /// Configures the same complete interpreter on 11 advice columns, one range
-    /// lookup and 11 fixed columns, using explicit degree-nine phase gates.
+    /// lookup and 12 fixed columns, using explicit degree-nine phase gates.
     /// Returned direct public gates have the fixed Omega `[1,2,16]` schema.
     pub fn configure_compact(
         meta: &mut ConstraintSystem<C::Base>,
@@ -121,11 +121,7 @@ impl<C: PastaCurve> VerifierConfig<C> {
             Arithmetic::<C>::modulus(),
             phases,
         );
-        let range = RunningSumConfig::configure_compact(
-            meta,
-            advice[10],
-            LimbBits::new(15).expect("fixed limb width"),
-        );
+        let range = RunningSumConfig::configure_tagged(meta, advice[10]);
         let ecc = EccConfig::configure_phased(meta, core::array::from_fn(|i| advice[i]), phases);
         let duplex = DuplexConfig::configure_phased(
             meta,
@@ -151,9 +147,9 @@ impl<C: PastaCurve> VerifierConfig<C> {
                     _ => h,
                 };
                 let active = cells.query_fixed(pattern, Rotation::cur());
-                let q = q
-                    * (active.clone() - Expression::Constant(C::Base::ONE))
-                    * (active - Expression::Constant(C::Base::from(2)));
+                let q = (1..=range.compact_pattern_codes()).fold(q, |value, code| {
+                    value * (active.clone() - Expression::Constant(C::Base::from(code)))
+                });
                 let value = cells.query_advice(ports[i], Rotation::cur());
                 let expected = cells.query_instance(instance, Rotation::cur());
                 vec![q * (value - expected)]
@@ -188,7 +184,9 @@ impl<C: PastaCurve> VerifierChip<C> {
     ) -> Self {
         let arithmetic_rows = SharedRows::new(RowCursor::bounded(spans.sponge, spans.arithmetic));
         let range_rows = SharedRows::new(RowCursor::starting_at(16));
-        let glue = GlueChip::with_shared_cursor(glue, &arithmetic_rows);
+        let glue = GlueChip::with_shared_cursor(glue, &arithmetic_rows)
+            .with_shared_constant_cache()
+            .expect("bounded compact arithmetic lane");
         let range = RunningSumChip::with_shared_cursor(range, &range_rows);
         let ff = FfChip::serialized(glue.clone(), range.clone(), &[Arithmetic::<C>::modulus()])
             .with_rotated_kernel(kernel)
@@ -205,6 +203,7 @@ impl<C: PastaCurve> VerifierChip<C> {
             arithmetic: Arithmetic::new(ff),
             ecc,
             duplex: Some(duplex),
+            scalar_splits: std::collections::BTreeMap::new(),
         }
     }
     /// Reports actual structural row use after a complete transcript.
@@ -223,5 +222,124 @@ impl<C: PastaCurve> VerifierChip<C> {
             curve: self.ecc.next_row(),
             range: self.range.next_row(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_pasta::{Ep, Eq};
+    use iroha_plonk::{
+        Protocol,
+        cs::{
+            CircuitDescriptorV1, CircuitDescriptorV2, CurveV1, DescriptorConfig, DescriptorError,
+            DescriptorRule, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV1,
+            TranscriptV2,
+        },
+    };
+
+    #[derive(Clone, Copy, Debug)]
+    enum Trade {
+        Base,
+        ExistingPort,
+        ExistingPortDegreeTen,
+        NewAdvice,
+        NewState,
+    }
+    fn protocol<C: PastaCurve>(curve: CurveV1, trade: Trade) -> Result<Protocol, DescriptorError> {
+        let mut meta = ConstraintSystem::<C::Base>::default();
+        let (config, _) = VerifierConfig::<C>::configure_compact(
+            &mut meta,
+            CompactSpans {
+                sponge: 16384,
+                arithmetic: 32768,
+                curve: 65530,
+            },
+        );
+        match trade {
+            Trade::Base => {}
+            Trade::ExistingPort | Trade::ExistingPortDegreeTen => {
+                meta.enable_equality(config.ecc.advice()[5]);
+                if matches!(trade, Trade::ExistingPortDegreeTen) {
+                    meta.set_minimum_degree(10);
+                }
+            }
+            Trade::NewAdvice | Trade::NewState => {
+                let extra = meta.advice_column();
+                let state = matches!(trade, Trade::NewState);
+                if state {
+                    meta.enable_equality(extra);
+                }
+                // Query-count experiment only, not a proposed range predicate.
+                meta.create_gate("extra-column inventory", |cells| {
+                    let current = cells.query_advice(extra, Rotation::cur());
+                    vec![if state {
+                        current - cells.query_advice(extra, Rotation::next())
+                    } else {
+                        current
+                    }]
+                });
+            }
+        }
+        let selectors = vec![vec![false; 1 << 16]; meta.num_selectors()];
+        let finalized = meta.finalize(&selectors, true).unwrap();
+        let layout = CircuitDescriptorV1::from_constraint_system(
+            &finalized,
+            DescriptorConfig {
+                curve,
+                k: 16,
+                transcript: TranscriptV1::Blake2bChallenge255,
+                instance_mode: InstanceModeV1::Direct,
+                proof_suffix: ProofSuffixV1::FoldedGenerator,
+            },
+        )?;
+        let descriptor = CircuitDescriptorV2::from_layout(
+            layout,
+            TranscriptV2::KagemushaPoseidonRp57Base,
+            vec![
+                InstanceType::Bounded,
+                InstanceType::Field,
+                InstanceType::Bounded,
+            ],
+        )
+        .unwrap();
+        Ok(Protocol::new(&descriptor).unwrap())
+    }
+    fn descriptor<C: PastaCurve>(curve: CurveV1) {
+        let protocol = protocol::<C>(curve, Trade::Base).unwrap();
+        assert_eq!(protocol.shape().num_advice, 11);
+        assert_eq!(protocol.shape().num_fixed, 12);
+        assert_eq!(protocol.shape().advice_queries, 25);
+        assert_eq!(protocol.shape().permutation_columns, 5);
+        assert_eq!(protocol.shape().degree, 9);
+        assert_eq!(protocol.shape().lookups, 1);
+        assert_eq!(protocol.proof_length() + 1088, 4768);
+    }
+
+    #[test]
+    fn complete_compact_configuration_preserves_exact_transport_budget() {
+        descriptor::<Ep>(CurveV1::Vesta);
+        descriptor::<Eq>(CurveV1::Pallas);
+    }
+
+    #[test]
+    fn compact_range_column_and_degree_trade_inventory() {
+        for (trade, expected) in [
+            (Trade::ExistingPort, 4800),
+            (Trade::NewAdvice, 4832),
+            (Trade::NewState, 4896),
+        ] {
+            let protocol = protocol::<Eq>(CurveV1::Pallas, trade).unwrap();
+            eprintln!(
+                "COMPACT_RANGE_TRADE {trade:?} shape={:?} transport={} predicate=false",
+                protocol.shape(),
+                protocol.proof_length() + 1088
+            );
+            assert_eq!(protocol.proof_length() + 1088, expected);
+        }
+        assert!(matches!(
+            protocol::<Eq>(CurveV1::Pallas, Trade::ExistingPortDegreeTen),
+            Err(DescriptorError::Invalid(DescriptorRule::Degree))
+        ));
     }
 }

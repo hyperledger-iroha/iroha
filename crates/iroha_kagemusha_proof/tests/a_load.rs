@@ -14,7 +14,8 @@ use ff::Field;
 use iroha_kagemusha_proof::{
     a_relation::{
         LineagePublicCells, SigmaBindingCells,
-        load::{LoadInputs, LoadObjects, LoadPolicy},
+        load::{LoadInputs, LoadObjects},
+        own::OwnPolicy,
     },
     admin_sigma::{LoadCircuit, LoadWitness, StateWitness},
     operation_relation::{
@@ -49,7 +50,7 @@ use iroha_plonk_recursion::{
 pub(crate) struct LoadMaps {
     pub(crate) witness: LoadWitness,
     pub(crate) insertion: IndexedInsert<Fp>,
-    pub(crate) objects: [bootstrap_objects::Signed; 3],
+    pub(crate) objects: [bootstrap_objects::Signed; 5],
     pub(crate) known: bool,
 }
 #[derive(Clone, Debug)]
@@ -154,7 +155,7 @@ impl Circuit<Fp> for LoadMaps {
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
-        let public = meta.instance_column(3);
+        let public = meta.instance_column(5);
         meta.enable_equality(public);
         Config {
             verifier,
@@ -269,11 +270,13 @@ pub(crate) fn fixture_from(
     .unwrap();
     opening.decide(&params, MemoryBudget::DEFAULT).unwrap();
     let receipt = load_objects::receipt(&witness, &proof.proof);
+    let (_, enrollment, current) = bootstrap_objects::enrollment();
+    assert_eq!(current.digest(), before.core[7]);
     (
         LoadMaps {
             witness,
             insertion,
-            objects: [certificate, voucher, receipt],
+            objects: [certificate, voucher, receipt, enrollment, current],
             known: true,
         },
         proof.proof,
@@ -282,10 +285,10 @@ pub(crate) fn fixture_from(
 #[test]
 fn load_policy_requires_fixed_nonzero_scope_and_finite_root() {
     use iroha_plonk_gadgets::p256::native::{Affine, P};
-    assert!(LoadPolicy::new([1, 2], [3, 4], Affine::GENERATOR).is_ok());
-    assert!(LoadPolicy::new([0; 2], [3, 4], Affine::GENERATOR).is_err());
-    assert!(LoadPolicy::new([1, 2], [0; 2], Affine::GENERATOR).is_err());
-    assert!(LoadPolicy::new([1, 2], [3, 4], Affine { x: P, y: [0; 4] }).is_err());
+    assert!(OwnPolicy::new([1, 2], [3, 4], Affine::GENERATOR).is_ok());
+    assert!(OwnPolicy::new([0; 2], [3, 4], Affine::GENERATOR).is_err());
+    assert!(OwnPolicy::new([1, 2], [0; 2], Affine::GENERATOR).is_err());
+    assert!(OwnPolicy::new([1, 2], [3, 4], Affine { x: P, y: [0; 4] }).is_err());
     let _ = load_objects::policy();
 }
 #[test]
@@ -332,7 +335,15 @@ fn genuine_load_sigma_signed_objects_and_recovery_share_exact_roots() {
 #[test]
 fn actual_load_signature_q_proves_role2_voucher_and_receipt_bytes() {
     let (circuit, _) = fixture();
-    let (signature, instances) = bootstrap_objects::signatures(&circuit.objects);
+    let (signature, instances) =
+        bootstrap_objects::signatures(&core::array::from_fn(|i| circuit.objects[i].clone()));
+    let (current, current_instances) = load_objects::current_signatures(&[
+        circuit.objects[4].signature,
+        circuit.objects[3].signature,
+    ]);
+    let current_report =
+        check_circuit(&current, 16, &current_instances, CheckMode::Strict).unwrap();
+    assert!(current_report.is_satisfied(), "{current_report:?}");
     let params = PinnedParams::<Ep>::derive(16).unwrap();
     let config = KeygenConfigV2::pipa_r(
         iroha_kagemusha_proof::q_signature::QSignaturePlan::instance_types().to_vec(),

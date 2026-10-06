@@ -65,8 +65,8 @@ use std::{
 };
 use thiserror::Error;
 mod app_routed_read_config;
-mod musubi_publication_installation;
 mod kagemusha_load_authorizer;
+mod musubi_publication_installation;
 pub use kagemusha_load_authorizer::KagemushaLoadAuthorizer;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
 mod sccp;
@@ -4714,6 +4714,9 @@ pub struct Zk {
     /// Halo2 circuit/runtime configuration.
     pub halo2: Halo2,
     #[config(nested)]
+    /// Native PIPA-R verification policy.
+    pub pipa_r: PipaR,
+    #[config(nested)]
     /// FASTPQ prover configuration.
     pub fastpq: Fastpq,
     #[config(nested)]
@@ -4792,6 +4795,7 @@ impl Zk {
     fn parse(self) -> actual::Zk {
         actual::Zk {
             halo2: self.halo2.parse(),
+            pipa_r: self.pipa_r.parse(),
             fastpq: self.fastpq.parse(),
             stark: self.stark.parse(),
             sccp: self.sccp.parse(),
@@ -5946,6 +5950,28 @@ impl json::JsonDeserialize for ZkHalo2Backend {
             field: "zk_halo2_backend".into(),
             message: err.to_string(),
         })
+    }
+}
+/// File-only native PIPA-R verification policy.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct PipaR {
+    /// Enable verification of exact compiled native circuits.
+    #[config(default = "defaults::zk::pipa_r::ENABLED")]
+    pub enabled: bool,
+    /// Maximum canonical outer envelope length in bytes.
+    #[config(default = "defaults::zk::pipa_r::MAX_ENVELOPE_BYTES")]
+    pub max_envelope_bytes: usize,
+    /// Maximum canonical proof-payload length in bytes.
+    #[config(default = "defaults::zk::pipa_r::MAX_PROOF_BYTES")]
+    pub max_proof_bytes: usize,
+}
+impl PipaR {
+    fn parse(self) -> actual::PipaR {
+        actual::PipaR {
+            enabled: self.enabled,
+            max_envelope_bytes: self.max_envelope_bytes,
+            max_proof_bytes: self.max_proof_bytes,
+        }
     }
 }
 /// Halo2 transparent verification configuration (user view).
@@ -34840,6 +34866,36 @@ mod configuration_regression_tests {
         assert_eq!(parsed.approval_threshold_q_den, 3);
         assert_eq!(parsed.min_turnout, 123);
         assert_eq!(parsed.parliament_alternate_size, 13);
+    }
+
+    #[test]
+    fn pipa_r_file_policy_defaults_and_explicit_caps_parse_exactly() {
+        use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+        let defaults = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(toml::Table::new()))
+            .read_and_complete::<PipaR>()
+            .unwrap()
+            .parse();
+        assert!(defaults.enabled);
+        assert_eq!(
+            defaults.max_envelope_bytes,
+            defaults::zk::pipa_r::MAX_ENVELOPE_BYTES
+        );
+        assert_eq!(
+            defaults.max_proof_bytes,
+            defaults::zk::pipa_r::MAX_PROOF_BYTES
+        );
+        let table = "enabled = false\nmax_envelope_bytes = 999\nmax_proof_bytes = 777\n"
+            .parse::<toml::Table>()
+            .unwrap();
+        let configured = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<PipaR>()
+            .unwrap()
+            .parse();
+        assert!(!configured.enabled);
+        assert_eq!(configured.max_envelope_bytes, 999);
+        assert_eq!(configured.max_proof_bytes, 777);
     }
 
     #[test]

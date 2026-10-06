@@ -25,11 +25,11 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     v
 }
 fn small_proof_attachment() -> iroha_data_model::proof::ProofAttachment {
-    let proof = iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xAB; 32]);
+    let proof = iroha_data_model::proof::ProofBox::new("pipa-r/pasta".into(), vec![0xAB; 32]);
     iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
+        "pipa-r/pasta".into(),
         proof,
-        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "fixture"),
+        iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "fixture"),
     )
 }
 fn store_tlv(vm: &mut IVM, cursor: &mut u64, tlv: &[u8]) -> u64 {
@@ -50,15 +50,7 @@ fn submit_ballot_without_verify_is_rejected() {
     let authority: AccountId = ALICE_ID.clone();
     let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
-    host.set_halo2_config(&iroha_config::parameters::actual::Halo2 {
-        enabled: true,
-        curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-        backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-        max_k: 16,
-        verifier_budget_ms: 50,
-        verifier_max_batch: 4,
-        ..Default::default()
-    });
+    host.set_zk_config(&state.zk);
     vm.set_host(host);
     // Build SubmitBallot instruction
     let sb = iroha_data_model::isi::zk::SubmitBallot {
@@ -105,15 +97,7 @@ fn finalize_election_without_verify_is_rejected() {
     let authority: AccountId = ALICE_ID.clone();
     let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
-    host.set_halo2_config(&iroha_config::parameters::actual::Halo2 {
-        enabled: true,
-        curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-        backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-        max_k: 16,
-        verifier_budget_ms: 50,
-        verifier_max_batch: 4,
-        ..Default::default()
-    });
+    host.set_zk_config(&state.zk);
     vm.set_host(host);
     // Build FinalizeElection instruction
     let fin = iroha_data_model::isi::zk::FinalizeElection {

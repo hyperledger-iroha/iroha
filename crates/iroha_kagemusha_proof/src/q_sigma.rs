@@ -259,6 +259,26 @@ impl QSigmaCircuit {
             known: true,
         })
     }
+
+    /// Selects an explicit artifact profile with shared integer/foreign range
+    /// buses. The complete relation and fixed byte-prefix reservation are
+    /// unchanged; its descriptor and keys are distinct from this circuit's
+    /// default profile. There is no runtime profile fallback.
+    ///
+    /// # Errors
+    /// The fixed number of range buses is outside `1..=8`.
+    pub fn with_serialized_foreign(
+        self,
+        range_buses: usize,
+    ) -> Result<SerializedQSigmaCircuit, Error> {
+        if !(1..=8).contains(&range_buses) {
+            return Err(Error::Synthesis);
+        }
+        Ok(SerializedQSigmaCircuit {
+            circuit: self,
+            range_buses,
+        })
+    }
     fn check_structure(plan: &QSigmaPlan, witness: &QSigmaWitness) -> Result<(), Error> {
         if witness.own.proof.len() != plan.own.verifier.proof_length()
             || plan.incoming.is_some() != witness.incoming.is_some()
@@ -390,6 +410,61 @@ impl QSigmaCircuit {
             length,
             chunks,
         })
+    }
+}
+
+/// The exact `Q_sigma` relation with an explicitly selected serialized foreign
+/// arithmetic profile. Its range-bus count is immutable circuit metadata.
+///
+/// TODO: qualify the largest two-sigma/fold layout and composed A/Ω artifacts
+/// before selecting this profile for the released key catalog.
+#[derive(Clone, Debug)]
+pub struct SerializedQSigmaCircuit {
+    circuit: QSigmaCircuit,
+    range_buses: usize,
+}
+
+impl Circuit<Fq> for SerializedQSigmaCircuit {
+    type Config = QSigmaConfig;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = (<QSigmaCircuit as Circuit<Fq>>::Params, usize);
+
+    fn without_witnesses(&self) -> Self {
+        Self {
+            circuit: self.circuit.without_witnesses(),
+            range_buses: self.range_buses,
+        }
+    }
+
+    fn params(&self) -> Self::Params {
+        (self.circuit.params(), self.range_buses)
+    }
+
+    fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
+        Self::configure_with_params(meta, (([0; 5], 0), 1))
+    }
+
+    fn configure_with_params(
+        meta: &mut ConstraintSystem<Fq>,
+        ((lengths, byte_rows), range_buses): Self::Params,
+    ) -> Self::Config {
+        let (verifier, bytes) =
+            VerifierConfig::configure_serialized_with_byte_tape(meta, range_buses, byte_rows)
+                .expect("constructor checked the circuit-fixed range-bus count");
+        let output = lengths.map(|length| {
+            let column = meta.instance_column(length);
+            meta.enable_equality(column);
+            column
+        });
+        QSigmaConfig {
+            verifier,
+            bytes,
+            output,
+        }
+    }
+
+    fn synthesize(&self, config: Self::Config, layouter: impl Layouter<Fq>) -> Result<(), Error> {
+        self.circuit.synthesize(config, layouter)
     }
 }
 struct TapedProof {

@@ -577,9 +577,10 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
 fn operation_epoch_workspace_reuses_equal_contexts_across_distinct_canonical_imports() {
     let fixture = Fixture::new();
     let mut prefix = fixture.verifier();
-    prefix.verify(&fixture.first).unwrap();
+    let first_tip_id = prefix.verify(&fixture.first).unwrap().context_id();
     let first = prefix.export_checkpoint(&fixture.first).unwrap();
-    prefix.verify(&fixture.second).unwrap();
+    let second_tip_id = prefix.verify(&fixture.second).unwrap().context_id();
+    assert_ne!(first_tip_id, second_tip_id);
     let second = prefix.export_checkpoint(&fixture.second).unwrap();
     let first_wire = first.encode_canonical().unwrap();
     let second_wire = second.encode_canonical().unwrap();
@@ -592,10 +593,10 @@ fn operation_epoch_workspace_reuses_equal_contexts_across_distinct_canonical_imp
     let callbacks = Cell::new(0_u32);
     {
         let mut validation = EpochValidationScope::new();
-        for (index, (bytes, expected)) in [
-            (&first_wire, &first),
-            (&second_wire, &second),
-            (&first_wire, &first),
+        for (index, (bytes, expected, expected_tip_id)) in [
+            (&first_wire, &first, first_tip_id),
+            (&second_wire, &second, second_tip_id),
+            (&first_wire, &first, first_tip_id),
         ]
         .into_iter()
         .enumerate()
@@ -622,7 +623,11 @@ fn operation_epoch_workspace_reuses_equal_contexts_across_distinct_canonical_imp
                 .unwrap();
             assert_eq!(validation_counts::calls() - before, usize::from(index == 0));
             assert_eq!(tip.block().encode_wire().unwrap(), expected.tip.block_wire);
-            assert_eq!(tip.context_id().as_ref(), &expected_context);
+            assert_eq!(tip.context_id(), expected_tip_id);
+            assert_eq!(
+                tip.commitment().schedule.current.context_id().unwrap(),
+                expected_context
+            );
             assert_eq!(
                 imported.export_checkpoint(expected.tip()).unwrap(),
                 *expected

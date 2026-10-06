@@ -18,7 +18,7 @@ use iroha_kagemusha_proof::{
     SigmaProver, SigmaRelation,
     a_relation::{
         LineagePublicCells, SigmaBindingCells,
-        send::{SendInputs, SendObjects, SendStagePaths, SendStagePlan},
+        send::{SendInputs, SendObjects, SendStagePlan, SendStageWitness},
     },
     admin_sigma::StateWitness,
     operation_relation::{
@@ -50,13 +50,13 @@ use iroha_plonk_recursion::{
 };
 
 #[derive(Clone)]
-struct SendMaps {
-    witness: send_objects::SendFixture,
-    known: bool,
-    stage_plan: Option<SendStagePlan>,
+pub(crate) struct SendMaps {
+    pub(crate) witness: send_objects::SendFixture,
+    pub(crate) known: bool,
+    pub(crate) stage_plan: Option<SendStagePlan>,
 }
 #[derive(Clone, Debug)]
-struct Config {
+pub(crate) struct Config {
     verifier: VerifierConfig<Ep>,
     bytes: BytesConfig,
     public: Column<Instance>,
@@ -69,7 +69,7 @@ impl SendMaps {
             Value::unknown()
         }
     }
-    fn state(
+    pub(crate) fn state(
         &self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
@@ -97,7 +97,7 @@ impl SendMaps {
         let public = LineagePublicCells::constrain(&mut chip.uint(), region, &public)?;
         Ok((state, public))
     }
-    fn insertion(
+    pub(crate) fn insertion(
         &self,
         uint: &mut UintChip<'_, Fp>,
         region: &mut Region<'_, Fp>,
@@ -249,7 +249,9 @@ impl Circuit<Fp> for SendMaps {
                             stage,
                             &objects,
                             input,
-                            SendStagePaths {
+                            SendStageWitness {
+                                authorization: None,
+                                proof: None,
                                 pending: tasks
                                     .contains(&OperationTask::SendPending)
                                     .then_some(&pending),
@@ -404,6 +406,13 @@ pub(crate) struct SendQ {
 }
 #[allow(dead_code)] // Used by the complete Send-chain fixture after catalog rebinding.
 pub(crate) fn genuine_send_source(before: &StateWitness) -> SendQ {
+    genuine_send_source_with_q_layout(before, None)
+}
+#[allow(dead_code)] // Used by the complete Send-chain candidate profile.
+pub(crate) fn genuine_send_source_with_q_layout(
+    before: &StateWitness,
+    q_buses: Option<usize>,
+) -> SendQ {
     use iroha_kagemusha_proof::{
         a_relation::{QProofPlan, schedule::sigma_selector},
         q_sigma::{QSigmaPlan, SigmaClass, SigmaSlotWitness, native::QSigmaProver},
@@ -433,7 +442,12 @@ pub(crate) fn genuine_send_source(before: &StateWitness) -> SendQ {
         )
         .unwrap();
     let part = prepared.part().clone();
-    let q = QSigmaProver::keygen(&prepared, params.clone()).unwrap();
+    let q = q_buses
+        .map_or_else(
+            || QSigmaProver::keygen(&prepared, params.clone()),
+            |buses| QSigmaProver::keygen_serialized_foreign(&prepared, params.clone(), buses),
+        )
+        .unwrap();
     let qproof = q
         .prove(
             &prepared,
@@ -486,19 +500,41 @@ fn genuine_send_q_and_fixed_operation_stages_reject_drop_or_relabel() {
     // No predecessor proof is constructed or accepted in this component. The
     // complete recursive Send test must use the catalog-bound real Omega key.
     let predecessor = predecessor_frame_metadata(&params);
+    // Actual signature-circuit key; no placeholder predecessor or signature proof
+    // is accepted by this constructor-only schedule check.
+    let (state, cert, cred) = bootstrap_objects::enrollment();
+    let receipt = bootstrap_objects::receipt(&state, &source.sigma);
+    let (signature, _) = bootstrap_objects::signatures(&[cert, cred, receipt]);
+    let signature_key = iroha_plonk::keys::keygen_pk_v2(
+        &params,
+        &signature,
+        &iroha_plonk::keys::KeygenConfigV2::pipa_r(
+            iroha_kagemusha_proof::q_signature::QSignaturePlan::instance_types().to_vec(),
+        ),
+    )
+    .unwrap();
+    let signature_q = iroha_kagemusha_proof::a_relation::QProofPlan::new(
+        iroha_plonk_recursion::verifier::VerifierPlan::new(
+            signature_key.binding().clone(),
+            params.clone(),
+        )
+        .unwrap(),
+        signature_key.vk().clone(),
+    )
+    .unwrap();
     let operation = AProofPlan::new(
         Variant::Send,
         source.sigma_plan.clone(),
-        vec![source.q.clone()],
+        vec![source.q.clone(), signature_q],
         Some(predecessor),
         &params,
     )
     .unwrap();
     let context = ContextPlan::with_schedule(
         operation,
-        vec![vec![], vec![], vec![], vec![0]],
+        vec![vec![], vec![], vec![], vec![0], vec![1]],
         Some(0),
-        SendObjects::context_specs().unwrap().to_vec(),
+        SendStagePlan::context_specs().unwrap(),
     )
     .unwrap();
     assert!(
@@ -506,14 +542,15 @@ fn genuine_send_q_and_fixed_operation_stages_reject_drop_or_relabel() {
         "frame-only metadata has no operation qualification"
     );
     let tasks = vec![
-        vec![OperationTask::SendObjects],
+        vec![OperationTask::SendObjects, OperationTask::SendProof],
         vec![OperationTask::SendPending],
         vec![OperationTask::SendFeeAndCarry],
         vec![],
+        vec![OperationTask::SendAuthorization],
     ];
     let complete = context.clone().with_operation_tasks(tasks.clone()).unwrap();
     for mutation in 0..3 {
-        let mut specs = SendObjects::context_specs().unwrap().to_vec();
+        let mut specs = SendStagePlan::context_specs().unwrap();
         match mutation {
             0 => specs[0].tag = 77,
             1 => specs[1].capacity += 1,
@@ -523,7 +560,7 @@ fn genuine_send_q_and_fixed_operation_stages_reject_drop_or_relabel() {
         }
         let bad = ContextPlan::with_schedule(
             context.operation().clone(),
-            vec![vec![], vec![], vec![], vec![0]],
+            vec![vec![], vec![], vec![], vec![0], vec![1]],
             Some(0),
             specs,
         )
@@ -537,6 +574,13 @@ fn genuine_send_q_and_fixed_operation_stages_reject_drop_or_relabel() {
     }
 
     assert_ne!(complete.schema(), context.schema());
+    let mut moved = tasks.clone();
+    moved[0].pop();
+    moved[3].push(OperationTask::SendProof);
+    assert!(SendStagePlan::new(context.clone().with_operation_tasks(moved).unwrap()).is_err());
+    let mut omitted_proof = tasks.clone();
+    omitted_proof[0].pop();
+    assert!(context.clone().with_operation_tasks(omitted_proof).is_err());
     for omitted in 0..3 {
         let mut drop = tasks.clone();
         drop[omitted].clear();
@@ -559,11 +603,20 @@ fn genuine_send_q_and_fixed_operation_stages_reject_drop_or_relabel() {
         relabelled.schema(),
         "operation task stage belongs to D_ctx"
     );
+    let checked = SendStagePlan::new(complete).unwrap();
     let circuit = SendMaps {
         witness: source.witness,
         known: true,
-        stage_plan: Some(SendStagePlan::new(complete).unwrap()),
+        stage_plan: None,
     };
+    let missing_auth = SendMaps {
+        stage_plan: Some(checked),
+        ..circuit.clone()
+    };
+    assert!(
+        check_circuit(&missing_auth, 16, &missing_auth.public(), CheckMode::Strict).is_err(),
+        "the mandatory own signature task cannot be omitted"
+    );
     let report = check_circuit(&circuit, 16, &circuit.public(), CheckMode::Strict).unwrap();
     assert!(report.is_satisfied(), "{report:?}");
     let mut bad = circuit.clone();

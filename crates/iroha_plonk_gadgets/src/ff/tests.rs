@@ -567,7 +567,14 @@ fn attack_program<F: PastaField>(
         let u = carries(&a, &b, &c, &[0; LIMBS], &q, &m);
         fused_witness_fields::<F>(&c, &q, &u)
     });
-    ff.fused_block(region, gates, Mode::Mul, (slots_a, slots_b), witness)?;
+    ff.fused_block(
+        region,
+        gates,
+        Mode::Mul,
+        (slots_a, slots_b),
+        witness,
+        CarryLayout::Full,
+    )?;
     Ok(Vec::new())
 }
 

@@ -79,7 +79,12 @@ scripts. The generated plist uses `org.hyperledger.iroha.mochi`, executable
 Assembly is not code signing or notarization; those remain separate release
 qualification work.
 
-Installed runtime discovery accepts a direct `.app/Contents/MacOS` directory
+Installed runtime discovery admits the host-native executable format and live file custody
+of both Kagami and the daemon, retaining their original descriptors. Requests produced by that
+runtime share the selection across clones. Startup revalidates the original files and bound request paths
+before generation preparation, holding program owners through launch and readiness. These source
+fences neither authenticate build provenance nor make pathname execution atomic.
+Discovery accepts a direct `.app/Contents/MacOS` directory
 and loads profiles only from that application's `Contents/Resources`. Moving or
 renaming the application before first use preserves this relationship. Existing
 managed generations retain their original pinned executable paths; package

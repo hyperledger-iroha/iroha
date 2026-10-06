@@ -38,7 +38,7 @@ pub(crate) mod stream_token_custody;
 mod transport;
 mod workspace;
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use norito::json::{JsonDeserialize, JsonSerialize};
 
@@ -226,6 +226,9 @@ pub struct LocalnetRequest {
     pub daemon: PathBuf,
     /// Total readiness budget, including generation.
     pub startup_timeout: Duration,
+    // Discovery retains its original files through startup; callers cannot substitute paths
+    // beneath that selection. Manual constructors admit their explicit paths on startup.
+    installed_programs: Option<Arc<program::RuntimePrograms>>,
 }
 
 impl LocalnetRequest {
@@ -240,6 +243,7 @@ impl LocalnetRequest {
             launcher,
             daemon,
             startup_timeout: Duration::from_secs(30),
+            installed_programs: None,
         }
     }
 
@@ -251,6 +255,19 @@ impl LocalnetRequest {
         Self {
             service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             ..Self::new(launcher, daemon)
+        }
+    }
+
+    fn admit_programs(&self) -> Result<Arc<program::RuntimePrograms>> {
+        match &self.installed_programs {
+            Some(programs) => {
+                programs.require_paths(&self.launcher, &self.daemon)?;
+                Ok(Arc::clone(programs))
+            }
+            None => Ok(Arc::new(program::RuntimePrograms::capture(
+                &self.launcher,
+                &self.daemon,
+            )?)),
         }
     }
 }
@@ -318,9 +335,11 @@ pub struct ManagedStatus {
     pub failure: Option<String>,
 }
 
-#[derive(Clone, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct BinaryPin {
+    // Persistent generations bind path and contents across separately admitted process starts.
+    // Native object identity belongs only to live discovery/startup owners, not this record.
     path: PathBuf,
     blake3: String,
 }

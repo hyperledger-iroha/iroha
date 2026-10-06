@@ -676,6 +676,41 @@ impl<F: PoseidonField> Pow5Chip<F> {
         })
     }
 
+    /// Permute and expose the resulting word 1 while retaining continuation.
+    ///
+    /// Ordinary lanes can enable both the full final-round gate and its
+    /// squeeze projection on the same row. This binds the output without a
+    /// new column or witness-selected gate, allowing a fixed maximum-length
+    /// transcript to select its constrained final permutation output.
+    ///
+    /// # Errors
+    /// Compact phase lanes cannot enable both final-round codes; they are
+    /// rejected before assignment. Otherwise the errors of [`Self::permute`].
+    pub fn permute_with_output(
+        &mut self,
+        region: &mut Region<'_, F>,
+        state: Pow5State<F>,
+        absorb: Absorb<'_, F>,
+    ) -> Result<(Pow5State<F>, Word<F>), Error> {
+        if !matches!(self.config.q_full, Enable::Selector(_))
+            || !matches!(self.config.q_squeeze, Enable::Selector(_))
+        {
+            return Err(Error::Synthesis);
+        }
+        let row = Self::block_row(state.block)?
+            .checked_add(LAST_ROUND)
+            .ok_or(Error::BoundsFailure)?;
+        let next = self.permute(region, state, absorb)?;
+        self.config.q_squeeze.enable(region, row)?;
+        let output = assign_word(
+            region,
+            self.config.lane.aux,
+            row,
+            next.value.map(|state| state[1]),
+        )?;
+        Ok((next, output))
+    }
+
     /// Permutes `state` after absorbing `absorb` and returns word 1 of the
     /// result (the sponge output), computed by the squeeze gate in place of
     /// the last round's next-row state.

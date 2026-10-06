@@ -20,13 +20,19 @@ The item order is:
    operation-task count and ordered task codes. Every Q index occurs once.
    `ContextPlan::with_operation_tasks` requires the complete named task set
    exactly once: Bootstrap state/authentication (codes1/2), Load recovery/
-   authentication (3/4), or Send objects/pending/fee-and-carry (5/6/7).
+   authentication/current-credential (3/4/8), or Send objects/pending/fee-and-carry/
+   own-authorization/consuming-proof (5/6/7/9/10).
    `LoadStagePlan` and `SendStagePlan` execute the groups assigned to their fixed
-   stage. Load authentication must share the signature-Q stage. A generic frame
+   stage. Each authorization task must share its owning signature-Q stage.
+   Send's consuming-proof task must share the hard predecessor stage. A generic frame
    component has empty task lists and cannot qualify an operation artifact.
 2. For each Q in descriptor order: complete base-field VK digest, descriptor
    digest low/high128 limbs, instance-column count, and each column length.
    For each object: its nonzero unique category tag and fixed byte capacity.
+   A complete Receive task plan then appends the result namespace `kgwrslt1`,
+   count5 and the five ordered `(tag, zero-based owner stage)` pairs. Owner
+   ordinals are checked u32 constants; this group is absent for other variants
+   and generic frame-only components.
 3. Own statement26, followed by incoming statement26 exactly when that sigma
    slot exists.
 4. Predecessor core33/rest8/public18 and both transported Pallas/Vesta claims
@@ -50,6 +56,13 @@ The item order is:
    this context layer does not claim to authenticate an object. Hard fixed-size
    own objects can instead use `from_exact_run`: the same semantic parser tape
    is reblocked with a pinned LE32 length, without assigning another byte copy.
+   Total original-byte consumers use `from_active`: `ActiveBytes` proves the
+   exact u32 length and a zero inactive suffix. Its separate-domain commitment
+   is `P_Fp(kgwcact1, [tag, capacity, length,
+   P_bytes(kgwcact1, LE32(length) || active_original_bytes)])`. This cannot
+   substitute the padded descriptor-sized verifier view for the original
+   short or overlong string. The raw Omega/sigma consuming digest similarly
+   concatenates their active length-prefixed strings without intervening padding.
 8. Mode triples Accept/Trivial/Corrected in order: incoming Pallas, incoming
    Omega opening, incoming Vesta, incoming sigma, omitting absent groups.
    The continuation retains and copy-binds these original public fields,
@@ -58,6 +71,12 @@ The item order is:
    x/y coordinates for incoming Vesta. The sigma correction belongs to the hard
    Q relation and is not an unused A context field.
 9. A1's carried Pallas claim.
+
+For a complete Receive task plan, exactly five boolean proposed result values
+follow the object commitments and precede the modes. `ReceiveResultClaims`
+checks their Boolean representation and owner schema but exposes no acceptance
+verdict. Their typed owning stages must derive and bind all predicates; the
+context commitment alone is not evidence that any predicate was executed.
 
 A Pallas claim is `[source_k=16, Gx, Gy, u0_lo, u0_hi, ..., u15_lo, u15_hi]`.
 A Vesta claim is `[Gx_lo,Gx_hi,Gy_lo,Gy_hi,u0,...,u15]`, with source k16 fixed.
@@ -117,35 +136,52 @@ different P claim or incoming frame after the checked fold. Every original
 incoming field, decode bit, proof, mode, correction and carried key is rebound
 at terminal closure.
 
-The genuine Load schedule exercised by native proofs is A1 (hard predecessor and D32
-recovery transition), W1, A2 (hard Q_sigma), W2, A3 (hard signature Q and exact
-same-tape voucher/receipt authorization). It retains predecessor P/opening in
-A1, Q_sigma opening in A2 and signature-Q opening in A3. The state, statement,
-all Q identities/instances and object tapes are rebound in every stage. The
-combined two-stage continuation passed the full predicate at diagnostic k18
-but exceeded k16; that diagnostic is not a qualified production proof.
+The corrected Load schedule is A1 (hard predecessor and D32 recovery), W1,
+A2 (hard Q_sigma), W2, A3 (hard receipt/voucher/LoadAuthorization signature Q),
+W3, A4 (hard current-credential/Enrollment-certificate signature Q). It retains
+all three Q openings and all three W openings exactly once. The fixed operation
+tasks require C4 on every step; authenticating a predecessor does not replace it.
+Five original object tapes, all source keys/instances, state and statement enter
+the same context. The corrected four-stage component passes actual native
+proofs and decisions at k16: the canonical two-bus Q_sigma/four-bus A candidate
+has maxima 55,611/58,682/57,646/58,164 rows and 8,480-byte A proofs. The run includes
+hard-verifier forwarding, exact signature-Q context/index/shape bundles and
+full public-transcript byte binding with mutation checks. This is component
+evidence; final catalog, transport size, timing/RSS and artifact admission
+remain unqualified.
 
-`rooted_load_shared_range_three_stage_inventory` proves the complete Load
-A1→W1→A2→W2→A3 chain with five shared UInt/FF range buses. All three A keys have
-one descriptor and produce 8,960-byte native proofs. The measured lane peaks
-are:
+Earlier three-stage Load chains omitted the current credential/certificate
+re-verification. Their passing native proofs and four-bus occupancy are only
+partial-relation diagnostics and cannot authorize complete Load. Send likewise
+requires a separate own 2V/1F Q in addition to Q_sigma and its map/object tasks.
+Its mandatory `SendProof` task binds `P_bytes(kgwprf_1, LE32||Ω||LE32||σ)`
+to field9 of the exact receipt body retained by `D_ctx`. Ω includes the full
+320-byte public transcript before `πΩ||accP||accV`. This task executes beside
+the hard predecessor and links all original proof messages and both full-k16
+claims. The separate signature-Q stage authenticates that same complete receipt
+tape and enforces its operation/state/provider semantics. Neither task can be
+omitted, and moving `SendProof` away from the predecessor stage is rejected.
 
-| Stage | Arithmetic | Shared range | ECC | Sponge |
-| --- | ---: | ---: | ---: | ---: |
-| A1: predecessor/recovery | 26,861 | 26,791 | 30,883 | 51,985 |
-| A2: Q_sigma | 57,520 | 59,150 | 60,275 | 60,421 |
-| A3: signature/authorization | 47,796 | 47,980 | 54,690 | 54,205 |
+The canonical mask0 component now proves the five-stage Send schedule with
+genuine Bootstrap and Load predecessors. Under Q_sigma's two-bus profile and
+A's four-bus profile, stage maxima are 50,098/56,018/57,868/61,864/60,051 rows;
+all five source proofs are 8,480 bytes. The predecessor's two-terminal catalog
+is rebuilt under its actual Omega digest and both source terminal keys and
+descriptors remain equal. Every pending claim is independently decided.
+This covers complete mask0 operation composition, not a final catalog: the
+new Send terminal key still needs inclusion and root-digest rebuilding, all
+other control masks remain, and the generic Omega transport is oversized.
 
-The four-bus A2 instead requires 73,938 range rows and fails k16. The passing
-five-bus test uses a genuine root-bound generic Bootstrap predecessor as a
-component fixture. It does **not** establish a uniform Bootstrap/Load final
-Omega catalog: that catalog must use one common source descriptor, exclude all
-intermediate A/W keys, and rebind the normal Omega digest throughout the chain.
-The test independently decides the retained claims and rejects dropped or
-double-consumed P claims, missing/wrong deferred Q proofs, wrong W stage,
-relabelled prior P/V carries and intermediate A keys in the terminal catalog.
-Known and unknown witness assignment layouts agree. Proof-size, time/RSS,
-full-catalog admission and cryptographic qualification remain separate gates.
+Receive's task metadata defines eight mandatory groups, including five named
+soft results (proofs, objects, signatures, nonmembership and recorded blacklist).
+The private fixed five-owner plan rejects missing/doubled/relabelled groups;
+its schema and five original Boolean claims now enter `D_ctx`. Typed owning
+task producers and the terminal iff rule are still pending and must compose
+before admitting a Receive key.
+
+A uniform final Omega catalog must exclude intermediate A/W keys and rebind the
+normal Omega digest throughout the chain. Full-catalog admission, proof size,
+time/RSS and cryptographic qualification remain separate gates.
 
 The separate Bootstrap signature workload is a second Q leaf: its two variable
 keys and one fixed key are not silently included in `Q_sigma`. Unsplit Bootstrap

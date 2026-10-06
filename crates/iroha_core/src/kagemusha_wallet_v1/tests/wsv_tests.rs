@@ -324,7 +324,7 @@ fn real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal() {
         .iter()
         .map(|(key, value)| (*key, value.clone()))
         .collect();
-    let check = |rows: &BTreeMap<LedgerKey, Vec<u8>>| {
+    let check = |rows: &BTreeMap<KagemushaWalletLedgerKeyV1, Vec<u8>>| {
         storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice))
     };
     check(&rows).unwrap();
@@ -455,7 +455,9 @@ fn real_reserve_pays_unload_once_and_online_controls_defer_without_consuming_it(
     }
     let mut state = world_state(&memory, true);
     register(&mut state, &memory, 1).unwrap();
-    let key = ClaimKey::Unload(claim.verify(&memory.registration.scheme).unwrap().nullifier);
+    let key = KagemushaWalletPayoutKeyV1::Unload(
+        claim.verify(&memory.registration.scheme).unwrap().nullifier,
+    );
     let before = balance(&state, &memory, &memory.registration.reserve);
     transact(&mut state, 2, |tx| {
         SetAssetTransferAvailability::new(
@@ -642,7 +644,7 @@ fn snapshot_requires_exact_reserve_indexes_and_reference_counts() {
         .iter()
         .map(|(key, value)| (*key, value.clone()))
         .collect();
-    let check = |rows: &BTreeMap<LedgerKey, Vec<u8>>| {
+    let check = |rows: &BTreeMap<KagemushaWalletLedgerKeyV1, Vec<u8>>| {
         storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice))
     };
     check(&rows).unwrap();

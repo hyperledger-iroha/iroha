@@ -104,7 +104,7 @@ fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 # Enable benchmark-only helpers used by this crate's Criterion targets.
 bench = []
 # ZK verifier feature flags ship enabled by default.
-zk-halo2 = ["dep:kaigi_zk"]
+zk-halo2 = []
 zk-stark = ["iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark"]
 # Non-shipping native privacy release evidence. This is deliberately not a
 # default feature and is forwarded only by explicit release runners and
@@ -201,7 +201,7 @@ http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
 ff = "0.13.1"
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
-kaigi_zk = { path = "../kaigi_zk", optional = true }
+kaigi_zk = { path = "../kaigi_zk" }
 orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"], optional = true }
 incrementalmerkletree = { version = "=0.8.2", optional = true }
 
@@ -336,11 +336,11 @@ denylist = [
 ]
 skip_optional_dependencies = true
 
-# Real Kaigi IPA proofs remain an explicit focused target under the ZK test features.
+# Real native Kaigi proofs remain an explicit focused target under the ZK test feature.
 [[test]]
 name = "kaigi_privacy"
 path = "tests/kaigi_privacy.rs"
-required-features = ["zk-tests", "zk-halo2", "halo2-dev-tests"]
+required-features = ["zk-tests"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

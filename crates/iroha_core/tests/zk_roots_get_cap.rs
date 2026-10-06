@@ -1,6 +1,6 @@
 //! Tests for `ZK_ROOTS_GET` respecting request max and configured cap.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
+#![cfg(feature = "zk-tests")]
 use iroha_config::parameters::{actual as cfg, defaults};
 use iroha_core::{
     kura::Kura,
@@ -47,6 +47,7 @@ fn zk_roots_get_respects_cap_and_max() {
     let mut state = State::new_for_testing(World::new(), kura, query);
     state
         .set_zk(cfg::Zk {
+            pipa_r: iroha_config::parameters::actual::PipaR::default(),
             halo2: cfg::Halo2 {
                 enabled: defaults::zk::halo2::ENABLED,
                 curve: cfg::ZkCurve::Pallas,

@@ -4077,7 +4077,8 @@ pub struct WorldData {
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
     /// Canonical KAGEMUSHA reserve ledger, permanent replay indexes and historical objects.
-    pub(crate) kagemusha_wallet_ledger: Storage<crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
+    pub(crate) kagemusha_wallet_ledger:
+        Storage<iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1, Vec<u8>>,
     /// Public pool-governance projections keyed by opaque route and pool identity.
     /// Restricted asset identifiers and commitment salts are never persisted here.
     pub(crate) private_settlement_governance:
@@ -5025,7 +5026,7 @@ pub struct WorldBlockFields<'world> {
     >,
     /// Canonical KAGEMUSHA ledger overlay.
     pub(crate) kagemusha_wallet_ledger:
-        StorageField<'world, crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
+        StorageField<'world, iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1, Vec<u8>>,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageField<
         'world,
@@ -6664,8 +6665,11 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
     /// Canonical KAGEMUSHA ledger transaction.
-    pub(crate) kagemusha_wallet_ledger:
-        StorageTransaction<'block, crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
+    pub(crate) kagemusha_wallet_ledger: StorageTransaction<
+        'block,
+        iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
+        Vec<u8>,
+    >,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageTransaction<
         'block,
@@ -8887,7 +8891,7 @@ pub struct WorldView<'world> {
     /// Public private-settlement governance projection view.
     /// Canonical KAGEMUSHA ledger read view.
     pub(crate) kagemusha_wallet_ledger:
-        StorageView<'world, crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>>,
+        StorageView<'world, iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1, Vec<u8>>,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageView<
         'world,
@@ -20588,7 +20592,7 @@ macro_rules! world_ro_accessors {
     (runtime_and_proofs, $mode:ident) => {
         world_ro_accessors!(@items $mode;
             /// Canonical KAGEMUSHA reserve ledger and permanent replay indexes.
-            storage kagemusha_wallet_ledger: crate::kagemusha_wallet_v1::LedgerKey => Vec<u8>;
+            storage kagemusha_wallet_ledger: iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1 => Vec<u8>;
             /// Latest committed transaction sequence per authority (read-only).
             storage tx_sequences: AccountId => u64;
             /// Trigger set (read-only).
@@ -27380,6 +27384,7 @@ impl State {
             tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: iroha_config::parameters::actual::Zk {
+                pipa_r: iroha_config::parameters::actual::PipaR::default(),
                 halo2: iroha_config::parameters::actual::Halo2::default(),
                 fastpq: iroha_config::parameters::actual::Fastpq {
                     execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
@@ -35498,6 +35503,7 @@ pub fn compute_vk_set_hash_at_height(world: &impl WorldReadOnly, height: u64) ->
 #[must_use]
 pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
+        pipa_r: iroha_config::parameters::actual::PipaR::default(),
         halo2: iroha_config::parameters::actual::Halo2::default(),
         fastpq: iroha_config::parameters::actual::Fastpq {
             execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
@@ -35740,6 +35746,17 @@ pub fn compute_zk_consensus_policy_hash(
         &mut h,
         "halo2.enforce_transcript_label_ascii",
         zk_config.halo2.enforce_transcript_label_ascii,
+    );
+    zk_policy_put_bool(&mut h, "pipa_r.enabled", zk_config.pipa_r.enabled);
+    zk_policy_put_usize(
+        &mut h,
+        "pipa_r.max_envelope_bytes",
+        zk_config.pipa_r.max_envelope_bytes,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "pipa_r.max_proof_bytes",
+        zk_config.pipa_r.max_proof_bytes,
     );
     zk_policy_put_bool(&mut h, "stark.enabled", zk_config.stark.enabled);
     zk_policy_put_usize(
@@ -38000,40 +38017,6 @@ impl StateTransaction<'_, '_> {
         expected_vk_commitment: Option<[u8; 32]>,
         vk_active: bool,
     ) -> crate::zk::PreverifyResult {
-        // Backend tag acceptance against node policy (curve allow-list via config)
-        let backend = proof.backend.as_str();
-        // Only apply curve gating after verifier-registry admission; unsupported
-        // Halo2-looking labels must fail as UnsupportedBackend in the pre-verifier.
-        if matches!(
-            crate::zk::verifier_backend_registry_tag_v1(backend),
-            Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
-        ) {
-            // Extract curve segment (e.g., "pasta" or "bn254") if present
-            if let Some(curve_seg) = backend
-                .strip_prefix("halo2/")
-                .and_then(|rest| rest.split(['/', ':']).next())
-            {
-                let allowed = match (curve_seg, self.zk.halo2.curve) {
-                    ("pasta", iroha_config::parameters::actual::ZkCurve::Pasta)
-                    | ("pasta", iroha_config::parameters::actual::ZkCurve::Pallas) => true,
-                    ("pallas", iroha_config::parameters::actual::ZkCurve::Pallas)
-                    | ("pallas", iroha_config::parameters::actual::ZkCurve::Pasta) => true,
-                    ("ipa", iroha_config::parameters::actual::ZkCurve::Pallas)
-                    | ("ipa", iroha_config::parameters::actual::ZkCurve::Pasta) => true,
-                    ("goldilocks", iroha_config::parameters::actual::ZkCurve::Goldilocks) => true,
-                    // Toy curve used for transparent tests maps to any non-specific tag; allow all others here
-                    (
-                        "p61" | "toyp61" | "toy" | "additive",
-                        iroha_config::parameters::actual::ZkCurve::Pallas,
-                    ) => true,
-                    // Unknown segment (including bn254) falls back to pre-verifier decision
-                    (_, _) => false,
-                };
-                if !allowed {
-                    return crate::zk::PreverifyResult::CurveNotAllowed;
-                }
-            }
-        }
         // Stateless payload guards from configuration
         if proof.bytes.is_empty() {
             return crate::zk::PreverifyResult::MalformedProof;

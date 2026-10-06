@@ -167,7 +167,7 @@ pub(super) fn ranged<F: PastaField, const N: usize>(
         .map_err(|_| Error::Synthesis)
 }
 
-fn constrain_linear<F: PastaField, const N: usize>(
+pub(super) fn constrain_linear<F: PastaField, const N: usize>(
     glue: &mut GlueChip<F>,
     region: &mut Region<'_, F>,
     terms: [(F, &Word<F>); N],

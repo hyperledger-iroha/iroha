@@ -933,6 +933,7 @@ impl ContextCircuit {
             modes: &[],
             pallas_corrections: &[],
             vesta_corrections: &[],
+            receive_results: None,
         };
 
         match action {
@@ -1055,7 +1056,7 @@ impl ContextCircuit {
                             let ordered = source
                                 .signature_order
                                 .iter()
-                                .map(|i| slots.get(*i).cloned().ok_or(Error::Synthesis))
+                                .map(|i| slots.slots().get(*i).cloned().ok_or(Error::Synthesis))
                                 .collect::<Result<Vec<_>, _>>()?;
                             objects.authenticate(
                                 chip,
@@ -1070,6 +1071,7 @@ impl ContextCircuit {
                             )?;
                         }
                         for (slot, words) in slots
+                            .slots()
                             .iter()
                             .zip(input.q_instances[index][0].chunks_exact(10))
                         {
@@ -1286,7 +1288,12 @@ fn stage_sigma_binding(
         &raw.chunks(31).map(<[Value<u8>]>::len).collect::<Vec<_>>(),
         &[SegmentSpec::little(0, 4)],
     )?;
-    let key = chip.uint().glue().constant(region, Fp::from(5))?;
+    let selector = iroha_kagemusha_proof::a_relation::schedule::sigma_selector(1, 0)
+        .expect("canonical Bootstrap selector");
+    let key = chip
+        .uint()
+        .glue()
+        .constant(region, Fp::from(u64::from(selector)))?;
     Ok(vec![SigmaBindingCells::from_run(
         chip, region, statement, key, &tape,
     )?])
@@ -1407,6 +1414,16 @@ pub(crate) fn authenticated_bootstrap_with_layout(
     omega_digest: Fp,
     range_buses: usize,
 ) -> AuthenticatedBootstrap {
+    authenticated_bootstrap_with_q_layout(adversarial, omega_digest, range_buses, None)
+}
+
+/// Explicit Q/A profile experiment; existing helpers keep their original Q key.
+pub(crate) fn authenticated_bootstrap_with_q_layout(
+    adversarial: bool,
+    omega_digest: Fp,
+    range_buses: usize,
+    q_range_buses: Option<usize>,
+) -> AuthenticatedBootstrap {
     use iroha_kagemusha_proof::a_relation::{
         context::ContextPlan,
         split::{SplitPlan, WCircuit, WKey},
@@ -1435,11 +1452,14 @@ pub(crate) fn authenticated_bootstrap_with_layout(
     let sigma_bytes = sigma_proof.proof;
     let vparams = common::vesta_params(16);
     let params = PinnedParams::<Ep>::derive(16).unwrap();
+    let bootstrap_selector = iroha_kagemusha_proof::a_relation::schedule::sigma_selector(1, 0)
+        .expect("canonical Bootstrap selector");
+    assert_eq!(bootstrap_selector, 0);
     let sigma_plan = QSigmaPlan::new(
         SigmaClass::new(
             VerifierPlan::new(sigma_key.binding().clone(), sigma_params).unwrap(),
             vec![(
-                5,
+                bootstrap_selector,
                 sigma_key
                     .vk()
                     .kagemusha_digest(sigma_key.binding())
@@ -1465,8 +1485,17 @@ pub(crate) fn authenticated_bootstrap_with_layout(
             &FoldConfig::default(),
         )
         .unwrap();
+    assert_eq!(
+        prepared.instances()[2][0],
+        Fq::from(u64::from(bootstrap_selector))
+    );
     let part = prepared.part().clone();
-    let q = QSigmaProver::keygen(&prepared, params.clone()).unwrap();
+    let q = q_range_buses
+        .map_or_else(
+            || QSigmaProver::keygen(&prepared, params.clone()),
+            |buses| QSigmaProver::keygen_serialized_foreign(&prepared, params.clone(), buses),
+        )
+        .unwrap();
     let qproof = q
         .prove(&prepared, common::recovery(75), ProverConfig::default())
         .unwrap();

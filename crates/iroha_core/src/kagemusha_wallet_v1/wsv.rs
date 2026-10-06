@@ -25,7 +25,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             transaction: *transaction.as_ref(),
         })
     }
-    fn read<T>(&self, key: &LedgerKey) -> Result<Option<T>>
+    fn read<T>(&self, key: &KagemushaWalletLedgerKeyV1) -> Result<Option<T>>
     where
         T: norito::NoritoSerialize,
         for<'de> T: norito::NoritoDeserialize<'de>,
@@ -40,7 +40,10 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             })
             .transpose()
     }
-    fn row<T: norito::NoritoSerialize>(key: LedgerKey, value: &T) -> Result<(LedgerKey, Vec<u8>)> {
+    fn row<T: norito::NoritoSerialize>(
+        key: KagemushaWalletLedgerKeyV1,
+        value: &T,
+    ) -> Result<(KagemushaWalletLedgerKeyV1, Vec<u8>)> {
         let bytes = storage::encode(value)?;
         validate_row(&key, &bytes)?;
         Ok((key, bytes))
@@ -132,7 +135,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
         )?);
         self.insert_immutable(rows)
     }
-    fn insert_immutable(&mut self, rows: Vec<(LedgerKey, Vec<u8>)>) -> Result<()> {
+    fn insert_immutable(&mut self, rows: Vec<(KagemushaWalletLedgerKeyV1, Vec<u8>)>) -> Result<()> {
         // Prepare and compare every row before the first mutation. Permanent reference counts
         // are the sole incrementing records in this helper.
         for (key, bytes) in &rows {
@@ -403,10 +406,14 @@ impl Transaction for WsvLedger<'_, '_, '_> {
         }
         Ok(issuance)
     }
-    fn payout(&self, scheme: &Digest, key: ClaimKey) -> Result<Option<Payout>> {
+    fn payout(
+        &self,
+        scheme: &Digest,
+        key: KagemushaWalletPayoutKeyV1,
+    ) -> Result<Option<KagemushaWalletPayoutRecordV1>> {
         let (kind, id) = match key {
-            ClaimKey::Unload(id) => (storage::UNLOAD, id),
-            ClaimKey::Fee(id) => (storage::FEE, id),
+            KagemushaWalletPayoutKeyV1::Unload(id) => (storage::UNLOAD, id),
+            KagemushaWalletPayoutKeyV1::Fee(id) => (storage::FEE, id),
         };
         self.read(&storage::key(kind, *scheme, id))
     }
@@ -506,8 +513,8 @@ impl Transaction for WsvLedger<'_, '_, '_> {
                 return Err(Error::Conflict);
             }
             let (kind, id) = match payout.key {
-                ClaimKey::Unload(id) => (storage::UNLOAD, id),
-                ClaimKey::Fee(id) => (storage::FEE, id),
+                KagemushaWalletPayoutKeyV1::Unload(id) => (storage::UNLOAD, id),
+                KagemushaWalletPayoutKeyV1::Fee(id) => (storage::FEE, id),
             };
             rows.push(Self::row(storage::key(kind, batch.scheme, id), &payout)?);
         }

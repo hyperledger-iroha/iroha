@@ -72,8 +72,11 @@ default localnet when no context has been selected. Use `context list`,
 `kagami package publish .` explicitly publishes a Musubi package using the retained generated
 developer client and its `dev.universal` namespace intent. Begin may start the default localnet;
 `--resume OPERATION_ID` and `--recover OPERATION_ID` require its existing selected context.
-`--package dev.universal/NAME` selects a workspace member; `--detach` returns at the canonical
-durable seed-ingress boundary. Manifest namespaces are never rewritten. Original namespace
+An explicit member manifest or directory selects that member; `--package dev.universal/NAME`
+must match it. A workspace-root input keeps declared defaults and explicit package selection.
+Begin requires exactly one selected member and validates that selection before managed startup.
+`--detach` returns at the canonical durable seed-ingress boundary. Manifest namespaces are
+never rewritten. Original namespace
 custody, generation-bound publication/cache roots and the prepared native archive transport are
 shared with `mochi_core::developer::DeveloperWorkspace::publish_package`. Neither frontend accepts
 a replacement client TOML, copies a manager key into a daemon, or changes contract deployment.

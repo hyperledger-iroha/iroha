@@ -325,6 +325,7 @@ impl QSigmaPlan {
 pub struct QSigmaProver {
     params: PinnedParams<Ep>,
     key: ProvingKey<Ep>,
+    serialized_buses: Option<usize>,
 }
 /// A Q proof and its exact public frame, retaining the Vesta part obligation.
 #[must_use = "verify the Q proof in A and propagate the Vesta part to Omega"]
@@ -347,13 +348,50 @@ impl QSigmaProver {
         prepared: &PreparedQSigma,
         params: PinnedParams<Ep>,
     ) -> Result<Self, QSigmaError> {
+        Self::keygen_profile(prepared, params, None)
+    }
+    /// Generates the explicitly selected shared-range serialized Q profile.
+    /// The selected layout is retained by the prover and never inferred from
+    /// supplied proof bytes or used as a verification fallback.
+    ///
+    /// # Errors
+    /// Invalid fixed bus count, non-k16 parameters, or failed key generation.
+    pub fn keygen_serialized_foreign(
+        prepared: &PreparedQSigma,
+        params: PinnedParams<Ep>,
+        range_buses: usize,
+    ) -> Result<Self, QSigmaError> {
+        if !(1..=8).contains(&range_buses) {
+            return Err(QSigmaError::Layout(LayoutError::Synthesis));
+        }
+        Self::keygen_profile(prepared, params, Some(range_buses))
+    }
+    fn keygen_profile(
+        prepared: &PreparedQSigma,
+        params: PinnedParams<Ep>,
+        serialized_buses: Option<usize>,
+    ) -> Result<Self, QSigmaError> {
         if params.k() != 16 {
             return Err(QSigmaError::Parameters);
         }
         let mut config = KeygenConfigV2::pipa_r(QSigmaPlan::instance_types().to_vec());
         config.coset_cache = CosetCachePolicy::OnDemand;
-        let key = keygen_pk_v2(&params, &prepared.circuit, &config).map_err(QSigmaError::Key)?;
-        Ok(Self { params, key })
+        let key = if let Some(buses) = serialized_buses {
+            let circuit = prepared
+                .circuit
+                .clone()
+                .with_serialized_foreign(buses)
+                .map_err(QSigmaError::Layout)?;
+            keygen_pk_v2(&params, &circuit, &config)
+        } else {
+            keygen_pk_v2(&params, &prepared.circuit, &config)
+        }
+        .map_err(QSigmaError::Key)?;
+        Ok(Self {
+            params,
+            key,
+            serialized_buses,
+        })
     }
     /// Validated V2 descriptor, suitable for A's fixed verifier program.
     pub fn binding(&self) -> &DescriptorBinding {
@@ -378,8 +416,17 @@ impl QSigmaProver {
         randomness: ProverRandomness,
         config: ProverConfig,
     ) -> Result<QSigmaProof, QSigmaError> {
-        let witness = Witness::from_circuit(&self.key, &prepared.circuit, &prepared.instances)
-            .map_err(QSigmaError::Prover)?;
+        let witness = if let Some(buses) = self.serialized_buses {
+            let circuit = prepared
+                .circuit
+                .clone()
+                .with_serialized_foreign(buses)
+                .map_err(QSigmaError::Layout)?;
+            Witness::from_circuit(&self.key, &circuit, &prepared.instances)
+        } else {
+            Witness::from_circuit(&self.key, &prepared.circuit, &prepared.instances)
+        }
+        .map_err(QSigmaError::Prover)?;
         let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
             .map_err(QSigmaError::Prover)?;
         verify_full(

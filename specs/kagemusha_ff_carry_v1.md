@@ -451,6 +451,11 @@ plus ongoing changes; prior snapshot hashes above remain historical):
 The new standalone `UnsignedDot` predicate admits a fixed batch of one to eight
 pairs, each with proven Proper or Canonical 87/87/82-bit limbs and one common
 supported modulus. It rejects signed/lazy forms, mixed moduli and counts0/9.
+The common admission routine also explicitly rejects `m<=2^254`; the broader
+`ForeignModulus` constructor alone permits smaller odd custom moduli and
+does not establish this dot-specific quotient bound. Both lowerings reject
+`2^252+1` and `2^254-1` in known/unknown synthesis, and accept the maximum
+eight-term workload at `2^254+1`, in both native fields.
 Let `S=sum_t a_t b_t`, `B=2^87`, and `m` be the foreign modulus. Since each input
 is below `2^256`, `S<2^515`; every supported `m>2^254` therefore gives the honest
 quotient `q=floor(S/m)<2^261`. The result is Proper and congruent to the sum;
@@ -564,6 +569,19 @@ one or an unsigned constant at most128). A witness equal to one never
 acquires constant metadata. Both-field constant/witness output-limb mutations
 and known/unknown shape checks pin this distinction.
 
+The resulting genuine five-bus Bootstrap inventory is **70,488 shared rows
+and 124,750 range rows** with a pinned one-key catalog, still failing k16.
+Its descriptor remains4,768 transport bytes. The complete verifier's13-test
+slice passed, including both-field native differentials and total message
+corruption coverage. A genuine Load terminal proof previously passed the
+complete ordinary outer predicate/native proof path (10,944 transport bytes,
+over cap); its earlier compact snapshot used72,376 shared/130,406 range rows.
+Those Load counts precede the last guarded/constant changes and canonical
+selector/task-schema migration, so they are historical component evidence,
+not current final-catalog qualification. The later C4 scope review also
+identified omitted current credential/certificate authorization in that Load
+fixture; its proof results establish a partial operation relation only.
+
 The root reviewer independently read the guarded weight and its caller guard,
 including the nth-root implication, false-guard limb equalities and global
 verdict binding, and the structural constant dispatch with Proper conversion.
@@ -576,9 +594,9 @@ Staged/constant/guard source snapshot at shared HEAD
 
 | Source | SHA-256 |
 | --- | --- |
-| `iroha_plonk_gadgets/src/ff/mod.rs` | `6ba7cac96c404dfc04721e6c359e3c2e999a0fdbe242517e51993fe7d9022ce3` |
+| `iroha_plonk_gadgets/src/ff/mod.rs` | `35dbfd653b75660b590b78309941278cec8fb09d976c6f5bc3b5da09db3e83f4` |
 | `iroha_plonk_gadgets/src/ff/rotated.rs` | `3ba5992ebd3d2f4da94401e0bc97d37c52350d40fbe30ba4aa33bc12203e4f85` |
-| `iroha_plonk_gadgets/src/ff/dot.rs` | `d2b5fc970e91a3fe11ab378c2d04b8f91c367b80d3e716e5181a2c9704592422` |
+| `iroha_plonk_gadgets/src/ff/dot.rs` | `f3dfbc8c757d962252c96ed10953447d59b9b4f4eccb41923f8633e8c39d3344` |
 | `iroha_plonk_gadgets/src/arith.rs` | `8f8f9b4a48c817366236aafeedbdc009abaf911096051ed6bb9928b351cebf3e` |
 | `iroha_plonk_gadgets/src/ecc/gates.rs` | `8ed1743c9873b089f321d43245648c2a09ad4f06b413ede5d728cda5e8b9ff4a` |
 | `iroha_plonk_gadgets/src/ecc/mod.rs` | `d450f5c53f3e86bcfa4c63dc43cdd6bf757e427be57b0570c728efecfebe5476` |
@@ -587,3 +605,410 @@ Staged/constant/guard source snapshot at shared HEAD
 | `iroha_plonk_recursion/src/verifier/expressions.rs` | `9c728a189b5f3f83a2ba24674ffa6bda2596ca82d78d9cdf0bdbce2a47c03e65` |
 | `iroha_plonk_recursion/src/verifier/multiopen.rs` | `7c57d5608e706ec96ddd4483988b9fb1fa8574285af7eedb6ab73481d356837a` |
 | `iroha_plonk_recursion/src/verifier/compact.rs` | `fa161ae19ec1b466e0e0d5c4c105512fbe9b17146c3f81b2c47851c48bad9a14` |
+
+
+## 17. Checked GLV split reuse and fixed identity folds
+
+`VerifierChip` caches the opaque `GlvScalar` returned by an actual constrained
+multiplication, keyed by the complete exported S6 `(lo_cell,hi_cell)` pair.
+This frontend's `Cell` is a column plus an **absolute** row; named regions do
+not reset the retained chip cursor. Every constructor creates an empty cache,
+so no certificate crosses synthesis. Hits call the existing `mul_with`, whose
+copy constraints bind the same digit/sign/high cells to the new point's chain.
+Equal values assigned to distinct cells never share a split.
+
+The quotient and static point-set Horner folds additionally take their first
+commitment directly: their earlier accumulator was the circuit-fixed identity.
+Only fixed iteration order chooses this branch; no point or scalar witness is
+examined. Every subsequent multiplication/addition and every incoming decoded
+commitment constraint is unchanged.
+
+The root reviewer independently checked the constructor lifetimes, absolute
+cell-pair keys, opaque split/link constraints and static first-slot order, and
+found no local gap in this scope. Both-field tests cover reuse on opposite
+points, equal values in fresh cells across named regions, different scalar
+values, scalar and cached split-limb mutations and known/unknown shape. The
+complete compact interpreter matched native verdicts and strict recursion
+all-target lint passed. These checks do not qualify a final recursive artifact.
+
+The genuine four-bus Bootstrap source remains8,480 bytes. This snapshot's
+pinned compact predicate uses **66,933 shared and 117,937 range rows**, with
+**4,768 transport bytes** from the descriptor. Both k16 row gates still fail;
+Load and the complete uniform catalog have not qualified this profile.
+
+GLV/fold source snapshot at shared HEAD
+`793a13d8ee9271035a0ae91ee0c53ca99430a607` plus ongoing changes:
+
+| Source | SHA-256 |
+| --- | --- |
+| `iroha_plonk_recursion/src/verifier/mod.rs` | `e48fac54b919f4a155f4c8c5ed3306b2850cbe5d23a10e8f7dfca38a5af06a19` |
+| `iroha_plonk_recursion/src/verifier/compact.rs` | `7fec93f62b133e5c017471b069b49db8602ac9d829af6d304123f10caeef4367` |
+| `iroha_plonk_recursion/src/verifier/multiopen.rs` | `d14dfa1d69f99925b8f89d0cc3c7f444e5276fd1a3da87ec2fad5fba95137adc` |
+| `iroha_plonk_gadgets/src/ecc/glv.rs` | `c86ca1404e1de06cbe3bf8ffc64d5c79e40712a1fc00c99041b69c0d9523798c` |
+
+## 18. Three-carry unsigned Proper product
+
+This separate staged finish admits only a single unsigned product whose two
+operands already have Proper or Canonical form and limb bounds at most
+`(87,87,82)` bits, or pinned constants satisfying those same bounds. The fixed
+modulus must satisfy `2^254 < m < 2^256`. These tests use structural metadata,
+never witness values. Bounded/lazy inputs, widened limb bounds, smaller custom
+moduli, division and unsigned batches retain the earlier four-carry finish.
+
+Let `B=2^87`. Proper operands are below `2^256`, so the honest quotient
+`floor(ab/m)` is below `2^258`. The new finish range checks the quotient as
+`(87,87,84)`, the result as `(87,87,82)`, and three offset carries as90-bit
+integers with offset `2^89`. Write
+
+```
+D_j = sum_{i+l=j} a_i b_l - c_j - sum_{i+l=j} q_i m_l,
+D_0 - B u_0 = 0,
+D_1 + u_0 - B u_1 = 0,
+D_2 + u_1 - B u_2 = 0,
+ab - c - qm = 0 mod N.
+```
+
+For `j<=2`, each unsigned convolution and the result limb give
+`|D_j|<3B^2`: at column2 the product bound is `(1+1/16)B^2`, and the quotient
+convolution is below `(1+1/8+1/32)B^2`. Induction gives honest
+`|u_j|<4B=2^89`, fitting the stated offset. Malicious admitted carries are
+still in `[-2^89,2^89)`; each local residual is below `2^178`, below either
+native prime. Thus the three low equations hold over the integers and make
+`ab-c-qm` divisible by `B^3`. Its native equation adds the coprime factor `N`.
+For any admitted witnesses, `|ab-c-qm|<2^515`, while `B^3 N>2^515` strictly
+for both native fields. The integer equality follows. The output remains
+Proper; no canonicality claim is inferred from the product equation alone.
+
+The implementation reuses the existing constrained product prelude and its
+five sums. ECC payload5 adds finish code5; every other enable sharing that
+payload has the full0..5 indicator domain. Fifteen copied roots occupy the
+same four physical rows. Queries remain at rotations-1,0,1, and the full
+compact descriptor still has degree9, one lookup, 11 advice, 11 fixed,
+26 advice queries and five permutation columns: **4,768 transport bytes**.
+At15-bit lookup width, an eligible product uses60 range rows instead of70.
+This is a descriptor/component result, not an outer k16 gate pass.
+
+The root reviewer independently re-derived the quotient, local-carry and CRT
+bounds for this unsigned Proper scope before implementation. That review does
+not cover division, padding, signed/lazy operands or batched products and is
+not a qualification of the new layout. The targeted release test
+`staged_proper_product_bounds_aliases_and_all_cells_both_fields` passes all
+four protocol moduli in both native fields, maximum/zero operands, quotient
+and carry overflow, the two independent CRT equations, every assigned-cell
+mutation, known/unknown shape, and retention of the original route for lazy,
+widened and small-modulus inputs. Strict gadgets/recursion all-target lint
+passes. The staged boundary suite also passes both fields/all four moduli,
+including every copied root at the final usable row and the global-row-zero
+negative-rotation boundary. The root reviewer subsequently checked the actual
+structural admission, range roots, product/native staging and complete payload5
+indicator domain and found no gap in that scope. The genuine Bootstrap source
+A2 remains8,480 bytes. Its larger-domain compact predicate passes with
+**66,933 shared and 113,717 range rows**, saving4,220 range rows across422
+eligible products. Both k16 row gates still fail. This snapshot predates the
+hard-forward optimization below. The complete mixed-phase component suite now
+passes both fields, including Glue/ECC/Poseidon/CRT/dot coexistence and all-cell
+mutations in the mixed algebraic-15/running-sum range layout
+(`proper-product-mixed-components-v2.log`, two tests, 983.26 seconds). This
+functional runtime is not a performance-gate measurement.
+
+## 19. Hard verifier forwards its already checked claim
+
+After hard verification constrains the complete aggregate validity bit to one,
+the succinct verifier returns the exact decoded finite suffix and canonical
+round challenge cells already used by its transcript and IPA equation. The
+hard AS verifier does the same after checking salt/length/source metadata,
+every finite point, every nonzero round and its full group equation. It keeps
+the descriptor/source k and round order unchanged. Downstream zero-prefix
+normalization, source-k binding and obligation registration are unchanged.
+
+This removes only the subsequent conditional dummy selection and repeated S6
+export. The soft path still selects the same fixed deciding dummy on failure.
+Hard malformed inputs must still synthesize a fixed shape whose aggregate
+validity assertion is unsatisfied; this change creates no alternate acceptance
+path. It changes no foreign multiplication, carry bound, wire format or proof
+length. Layout changes still require regenerated keys and proofs.
+
+The root reviewer independently traced both aggregate validity constructions
+and the returned suffix/round cells, including typed instances, decoding,
+nonzero inverses, full equations and static round order, and found no gap in
+that scope. The expanded native-differential verifier corpus passes all 16 tests
+including hard-invalid classes and hard known/unknown shape. Before the bridge
+reuse below, the actual Bootstrap compact predicate uses 66,549 shared and
+113,061 range rows, with the same 4,768-byte descriptor transport. Both row
+gates still fail. The full AS malformed-input, forged-suffix, native-equation
+and burn regressions pass in the subsequent combined snapshot described below.
+This scoped source review is separate from the earlier M3b carry sign-off and
+does not qualify a final artifact or a current-source performance gate.
+
+## 20. Bidirectional exact S6/canonical-FF bridge reuse
+
+The existing per-synthesis cache now records both directions of an already
+constrained integer bridge. Import binds the original two S6 cells to a
+canonical three-limb FF value, so exporting those exact three cells can return
+the original S6 cells. Export first checks the modulus and canonicalizes the FF
+input, then records its returned S6 cells as an import of the canonical FF
+value. A lazy source is never stored as the inverse import result. An original
+lazy-source cache key may share the canonical export only after that exact
+reduction has been constrained.
+
+Keys contain every absolute cell identity: all three FF limbs or both S6 limbs.
+No witness-value comparison selects reuse; equal values assigned to fresh cells
+do not hit the cache. Cache lifetime is one `Arithmetic` instance in one
+synthesis. The canonical bridge retains the exact split/recomposition and
+foreign-modulus checks established in the earlier S6 section. No multiplication,
+carry or limb-admission bound changes.
+
+The root reviewer independently traced import/export against `ff/s6.rs`, including
+the canonicalization-before-inverse insertion and complete cell keys, and found
+no gap in that scope. This is an internal source review, not an external audit
+or extension of the original M3b sign-off. The release test
+`inverse_bridge_cache_keeps_exact_cells_and_only_canonical_integers` covers both
+curves, repeated hits without new assignments, distinct same-value cells across
+regions, a lazy value plus the modulus, all recorded FF/S6 limb mutations, and
+known/unknown layout. The full verifier corpus passes 17 tests; the full ignored
+AS circuit corpus passes three tests, including total malformed-accumulator
+burn, hard/soft native differential checks and forged suffixes.
+
+Current authenticated Bootstrap source A2 remains 8,480 bytes. Its pinned-key
+compact predicate uses **66,361 shared rows** (12,173 sponge, 26,102 arithmetic,
+28,086 curve) and **112,378 range rows**; the descriptor still yields **4,768
+transport bytes**. The predicate passes in the diagnostic larger domain, while
+both k16 row gates fail. No production compact proof or final catalog is claimed.
+Reproducible local logs are `target/qualification/inverse-bridge-cache.log`,
+`inverse-bridge-verifier.log`, `inverse-bridge-accumulation-v2.log`, and
+`inverse-bridge-four-bus-bootstrap-omega.log`; timings from these contended
+functional tests are not gate measurements.
+
+Source snapshot after these tests at shared HEAD
+`793a13d8ee9271035a0ae91ee0c53ca99430a607` plus working changes (the verifier
+configuration additionally contains the separately measured explicit Q byte-tape
+profile; the reviewed carry/bridge predicates are unchanged):
+
+| Source | SHA-256 |
+| --- | --- |
+| `iroha_plonk_gadgets/src/ff/mod.rs` | `4eab53bf06723e63754365ab44ee092286e45c71f053367de7fdeb0f8510430a` |
+| `iroha_plonk_gadgets/src/ff/rotated.rs` | `9e75dfe3b43965e78f3424a60eae400feb74027d5702a31a6ac4c9fb574f2772` |
+| `iroha_plonk_gadgets/src/ecc/gates.rs` | `4339e218e86883963d3d2484a78f4fe091208a682d8fb917064668655fcf59f0` |
+| `iroha_plonk_recursion/src/verifier/scalar.rs` | `dae08edf7130b907710d474696e22084e2f8a63f0c1ff1391d6a96a570822dd5` |
+| `iroha_plonk_recursion/src/verifier/mod.rs` | `2feacbd8ae512d24239db675cdbce6e026149417479a773bcb5ceb295ed2b2d3` |
+| `iroha_plonk_recursion/src/accumulation_circuit.rs` | `40a9171fdb712dd0fce91dde284492d344713022d528b22eb66ef58b35b0899a` |
+
+## 21. Exact tagged top-limb membership
+
+The compact range bus now uses one two-column tuple lookup against
+`T={(t,v): 3<=t<=15, 0<=v<2^t}`. Its 65,528 rows fit the compact k16 usable
+budget of 65,530. Width15 is loaded first, so the first/default tuple is
+`(15,0)`; both table columns have identical lengths and their padding preserves
+that tuple. This is one authenticated-width membership. A scalar union of
+shifted intervals would permit cross-tag aliases and is not used.
+
+Let circuit-fixed pattern `p` be zero for idle rows, one for a 15-bit step,
+two for a tagged top, three for a one-bit top, and four for a two-bit top.
+Write `I_j(p)` for its exact degree-four Lagrange indicator on `0..4`, and
+let circuit-fixed `t` be the top width on tagged-top rows. The lookup input is
+
+```
+(15 + I_2(p)*(t-15), I_1(p)*(z-2^15*z_next) + I_2(p)*z).
+```
+
+Additional equations are `I_3(p)*z*(z-1)=0` and
+`I_4(p)*z*(z-1)*(z-2)*(z-3)=0`. Idle and algebraic-top lookup rows use the
+existing tuple `(15,0)`. Thus every step is an exact 15-bit digit, and the last
+state has its exact top width. Telescoping gives the same integer bound below
+`2^bits<=2^252<N`; neither integer wrap nor a different tuple tag can weaken it.
+Checks now use `ceil(bits/15)` rows. The lookup input degree is five, its
+argument degree is eight, and the narrow-root gates have degree at most eight.
+The complete compact degree remains nine. Direct-public overlays multiply by
+all four active-pattern roots and therefore remain disabled on every range row.
+
+The root reviewer checked these equations and then independently read
+configuration, table loading, assignment and public-overlay code, finding no
+gap in that scope. The two-field targeted suite passes every width1..252,
+zero/upper-bound/wrapped values, cross-tag offset attacks, every assigned-cell
+mutations, known/unknown shape, first/last/default table tuples, and final usable
+row acceptance/overflow rejection. The complete compact interpreter differential
+suite passes on both curves. These functional tests do not replace current-source
+performance qualification. Native tuple-lookup proof regression also passes
+on both curves (`tagged-range-native-v2.log`, 9.75 seconds).
+
+The actual descriptor has 12 fixed queries and 25 advice queries: the added tag
+query and removed shifted-top previous-row query cancel, so transport remains
+**4,768 bytes**. Enabling equality on one existing spare advice port produces
+**4,800 bytes** in a query-count experiment; that experiment is not yet an
+implemented parallel range predicate.
+
+With the explicit Q2/A3 source profile, a genuine authenticated Bootstrap chain
+produces 7,872-byte A proofs; its busiest A2 range lane has 65,283 rows. The
+complete pinned compact predicate uses **63,889 shared and 97,993 range rows**.
+Shared rows fit, while the range gate exceeds 65,530 by 32,463. Both the complete
+Q2 relation (single k12/k14, two-sigma plus AS, Accept/Trivial and mutations) and
+its actual 7,008-byte native proof pass. This remains a Bootstrap component
+profile, not a frozen complete operation catalog. Evidence is in
+`tagged-range.log`, `tagged-range-descriptor-v2.log`,
+`tagged-compact-interpreter.log`, `serialized-q-two-bus.log`, and
+`tagged-reduced-q-three-bus-bootstrap-omega.log` under `target/qualification`.
+
+
+## 22. Three-carry dots with a structural strict 255-bit bound
+
+The compact staged dot kernel now has an additional unsigned envelope. The
+common admission still requires one to eight Proper/Canonical terms and
+`m>2^254`; the narrow route additionally requires `m<2^255` and every operand
+strictly below `2^255`. This last condition is structural: either Canonical form
+retains its proved integer comparison with this modulus, or Proper form carries
+limb bounds at most `(2^87-1,2^87-1,2^81-1)`. Honest witness values do not select
+the route. Lazy/Bounded values, wider Proper bounds and both P-256 moduli keep
+the wider predicate or fail the original admission.
+
+For `B=2^87` and at most eight products, `S<2^513` and
+`q=floor(S/m)<2^259`. The narrow output is checked at widths `87/87/81`, the
+quotient at `87/87/85`, and the three offset carries at width93 with offset
+`2^92`. The first three low-column equations and native residue are
+
+```
+D_j + u_(j-1) - B*u_j = 0       (j=0,1,2; u_-1=0)
+S - c - q*m = 0 mod N.
+```
+
+As in the unsigned wide-dot argument, `|D_j|<28 B^2`, and induction gives
+`|u_j|<29 B<2^92` for honest witnesses. Arbitrary checked offset carries give
+signed `u_j` in `[-2^92,2^92)`; each local residual is below `2^180<N`.
+The three exact low equalities make the integer residual divisible by `B^3`.
+The native equality adds the coprime prime `N`. With the explicit input,
+result and quotient bounds, the global residual is below `2^515`, whereas
+`B^3*N>2^515`, so the residual is exactly zero. The result remains Proper;
+this argument does not assert canonicality and does not cover signed sums.
+
+Every staged result under a modulus in `(2^254,2^255)` now explicitly ranges
+its top limb to81 bits and reports exactly that stronger Proper metadata.
+This includes products, division and wider admitted dot results; their input,
+quotient and carry admission remains unchanged unless the separate narrow-dot
+check succeeds. Other layouts and moduli retain87/87/82. Selection takes the
+maximum bounds and weaker form of both arms, so choosing an honest narrow
+value from a wide arm cannot manufacture a narrow certificate. Constants are
+canonical and pinned; constants at or above the modulus are rejected.
+
+The fixed phase encoding reuses the existing dot-finish and carry codes on the
+same row. The latter still copies all five accumulated sums to the already
+reserved final row. On finish rows, fixed `payload3/3` is exactly zero for the
+wide predicate or one for the narrow predicate. It selects the carry offset
+and disables only the fourth low residual; the native equation remains active.
+No phase domain, advice query, fixed query or row reservation is added, and
+the complete descriptor remains4,768 bytes at degree9 with one lookup.
+
+The root reviewer independently checked both the above CRT bounds and the
+implementation: exact range roots, copied dot sums, fixed flag, retained native
+residual, and matching result metadata on multiplication/division paths. No gap
+was found in that scoped review. This is a new layout review, not a blanket
+extension of the M3b sign-off and not current-source release qualification.
+
+`narrow-dot-tests-v2.log` passes3/3 (464.14 seconds), covering both native fields,
+both Pasta moduli, all batch sizes1..8, zero/max inputs, canonical and explicitly
+narrow Proper inputs, copied/select outputs, wide-arm selection, invalid
+constants, P-256 exclusion, forged result/quotient/carry/native residuals,
+every assigned-cell mutations, known/unknown shapes, and final usable-row
+acceptance/overflow rejection. `narrow-dot-compact-interpreter.log` passes the
+complete native differential verifier on both curves (94.01 seconds), and
+`narrow-dot-descriptor.log` confirms the unchanged byte gate. The retained four-carry staged regression also passes all four protocol moduli
+and both native fields, including every-cell and final-row tests
+(`narrow-dot-wide-regression.log`, 2/2, 280.75 seconds). The mixed
+ECC/Glue/Poseidon/kernel suite also passes on both fields with every-cell
+mutations (`narrow-dot-mixed-components.log`, 2/2, 952.28 seconds). No row-fit
+or performance pass follows from these component results.
+
+
+The fresh Q2/A4 Bootstrap candidate (`narrow-dot-reduced-q-four-bus-bootstrap-omega.log`)
+passes its native A proofs and full diagnostic outer predicate (188.19 seconds).
+A proofs are8,480 bytes. The pinned compact run uses66,347 shared rows
+(12,173 Poseidon +26,088 arithmetic +28,086 ECC) and100,203 range rows, with
+unchanged4,768-byte transport. **Both k16 row gates fail.** Its actual pure Glue
+rows are22,840;12,083 Poseidon rows have six unused advice cells. Even an
+optimistic87-bit secondary range placement would cover only4,868 checks,
+before scheduling overhead, saving29,208 main-bus rows versus the required
+34,673. This is capacity evidence for further implementation, not an installed
+secondary range stream. Separately, genuine corrected Load with Q2/A3 reached
+70,910 range rows and failed its source-A k16 budget, so the smaller Bootstrap
+A3 profile cannot be frozen as the uniform operation catalog.
+
+
+## 23. Reuse of exact fixed arithmetic constants
+
+The compact arithmetic lane now shares a synthesis-local cache of explicit
+field constants across its Glue, ECC and Poseidon constant sources. The first
+`constant(c)` still assigns and constrains `x-c=0` through the fixed standard
+gate. The first `enforce_constant(x,c)` retains its original fixed constraint.
+A later request for that exact explicit constant returns the already constrained
+root, or copy-binds its input to that root. Witness values never select cache
+keys. Only bounded, shared row owners may opt in; fresh chip construction starts
+a new cache, while its clones retain the same constraints and cursor. Cross-region
+reuse uses the complete cell identity and an explicit permutation equality.
+
+The root reviewer independently checked the first-use gates, hit paths, explicit
+constant keys and synthesis ownership, finding no gap in that scope. This is an
+internal source review and does not extend the original M3b sign-off. The
+`compact-constant-cache-v2.log` regression passes on both fields, covering fresh
+equal-valued witness cells, wrong first/hit constants, cross-region copies,
+fresh synthesis/cache ownership, every assigned-cell mutation and known/unknown
+shape. `compact-cache-interpreter.log` passes all three descriptor, query-trade
+and full native differential tests on both curves.
+
+The fresh authenticated Q2/A4 Bootstrap component
+(`compact-cache-reduced-q-four-bus-bootstrap-omega.log`, 128.01 seconds) produces
+8,480-byte source A proofs. Pinned one-key compact verification now uses
+**64,928 shared rows** (12,173 Poseidon + 24,669 arithmetic + 28,086 ECC),
+which fits 65,530, and **100,203 range rows**, which exceeds that limit by
+34,673. Its exact descriptor remains **4,768 transport bytes**, degree nine,
+11 advice columns, 12 fixed queries, 25 advice queries, five equality columns
+and one lookup. This is a complete predicate inventory under a diagnostic
+larger domain, not an actual k16 outer proof or a frozen release catalog.
+The constant reuse removes 1,419 shared rows and does not remove range checks.
+Contended functional runtimes are not performance-gate measurements.
+
+
+## 24. Small-quotient unsigned lazy reduction
+
+The serialized `FfChip::reduce` path now normalizes an admitted nonnegative
+three-limb integer directly. The fused seven-row layout is unchanged. The
+entry first verifies that the exact modulus is configured, then rechecks each
+tracked limb bound against `2^94-1` and the modulus interval
+`2^252<=m<2^256`. Public constructors retain opaque bounded cells: witnesses
+range their limbs; constants pin exact integers; add/subtract/negate and P-256
+linear combinations check their calculated envelope before emitting limb
+equalities; selection takes maximum bounds; S6/table imports retain their
+exact range certificates. Admission depends on that metadata, never values.
+
+For `B=2^87`, `x=x0+B*x1+B^2*x2<2^269`, so the honest quotient
+`q=floor(x/m)<2^17`. The output `c` has checked limbs `87/87/81` when
+`m<2^255`, otherwise `87/87/82`. One checked 17-bit quotient and one checked
+18-bit offset carry `w=u+2^17` enter the existing Glue equations:
+
+```
+x0 - c0 - q*m0 - B*w + B*2^17 = 0
+(x0+B*x1+B^2*x2) - (c0+B*c1+B^2*c2) - q*m = 0 mod N.
+```
+
+Honest `u=(x0-c0-q*m0)/B` lies in `(-2^17,128)`, inside the offset
+certificate. Every checked local residual is below `2^106<N`, so its native
+equality is an integer equality and gives divisibility of `x-c-q*m` by `B`.
+The second equation gives divisibility by the coprime native prime `N`.
+The complete residual is below `2^274`, while `B*N>2^341`, forcing exact
+integer equality. The returned form remains **Proper**: a congruent `c>=m`
+can satisfy reduction and must still fail the separate canonical comparison
+at semantic boundaries. There is no signed quotient or multiplication change.
+
+The root reviewer independently rederived the bounds and read the implemented
+low/native equations, admission, range widths, offset signs and Proper return,
+finding no gap in that narrow scope. The two-field adversarial suite passes
+for all four protocol moduli and the smallest admitted custom modulus, including
+zero/max/m±1 inputs, native-only/low-only forgeries, quotient/carry overflow,
+rejected wider metadata, a noncanonical Proper alias followed by a rejected
+canonical comparison, every-cell mutation, known/unknown shape and final-row
+boundaries (`unsigned-lazy-reduction-final.log`, 3/3, 0.54 seconds, additionally checking
+unconfigured moduli and numeric envelope inequalities). The full compact native
+differential and exact descriptor suite passes3/3 in78.32 seconds. Actual Q2/A4
+Bootstrap source proofs and outer predicate pass in123.70 seconds; the pinned
+inventory is64,928 shared /97,137 range rows with unchanged4,768-byte transport
+(`unsigned-lazy-reduction-four-bus-bootstrap-omega.log`). Thus73 specialized
+reductions remove3,066 range rows, but the range gate still fails by31,607.
+This scoped review is not release qualification. No advice/fixed query, lookup
+or gate degree is added.

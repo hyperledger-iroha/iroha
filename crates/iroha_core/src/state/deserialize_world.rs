@@ -8281,8 +8281,10 @@ fn decode_world_fields(
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     > = take_required(&mut map, "privacy_activations")?;
-    let kagemusha_wallet_ledger: Storage<crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>> =
-        take_required(&mut map, "kagemusha_wallet_ledger")?;
+    let kagemusha_wallet_ledger: Storage<
+        iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
+        Vec<u8>,
+    > = take_required(&mut map, "kagemusha_wallet_ledger")?;
     {
         let generation = kagemusha_wallet_ledger.view();
         crate::kagemusha_wallet_v1::validate_snapshot(generation.iter(), |key| {

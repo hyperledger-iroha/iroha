@@ -48,14 +48,15 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         &retained.prepared,
         &retained.root_kind,
     )?;
-    store::verify_binary(&retained.launcher)?;
-    store::verify_binary(&retained.daemon)?;
+    let launcher_program = super::program::NativeProgram::matching(&retained.launcher)?;
+    let daemon_program = super::program::NativeProgram::matching(&retained.daemon)?;
     let current = store::pin_binary(&std::env::current_exe()?)?;
     if current.blake3 != retained.launcher.blake3 {
         return Err(Error::Invalid(
             "worker executable does not match the retained launcher".into(),
         ));
     }
+    launcher_program.validate()?;
     startup_remaining(started, startup_timeout)?;
     let listener = transport::Listener::bind(&directory)?;
     let worker = WorkerRecord {
@@ -91,7 +92,7 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         }
     };
     if processes
-        .start(&directory, &retained, &ownership, launch)
+        .start(&directory, &retained, &ownership, &daemon_program, launch)
         .is_err()
     {
         return fail_worker(
@@ -243,7 +244,13 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                         processes.stop().map_err(|_| progress.unconfirmed())?;
                         budget.check()?;
                         processes
-                            .start(&directory, &retained, &ownership, Some(launch))
+                            .start(
+                                &directory,
+                                &retained,
+                                &ownership,
+                                &daemon_program,
+                                Some(launch),
+                            )
                             .map_err(|_| progress.unconfirmed())?;
                         budget.check()?;
                         let live = processes.gateways().map_err(|_| progress.unconfirmed())?;
@@ -478,7 +485,13 @@ fn spawn_with_launch_fence(
     directory: &PrivateDirectory,
     index: usize,
     command: &mut Command,
+    daemon: &super::program::NativeProgram,
 ) -> Result<Child> {
+    if command.get_program() != daemon.path().as_os_str() {
+        return Err(Error::Invalid(
+            "launch command differs from its selected native executable".into(),
+        ));
+    }
     let marker = format!("peer{index}.launch");
     let fresh = match directory.read(&marker, 1) {
         Ok(bytes) if bytes.as_slice() == b"1" => false,
@@ -498,13 +511,18 @@ fn spawn_with_launch_fence(
     if fresh {
         command.arg("--sumeragi-assert-fresh-key");
     }
-    match command.spawn() {
+    // Keep the selected object alive and revalidate after all native launch-marker I/O.
+    // Pathname execution still has an unavoidable race; this is not an atomic exec guarantee.
+    let spawned = daemon
+        .validate()
+        .and_then(|()| command.spawn().map_err(Error::from));
+    match spawned {
         Ok(child) => Ok(child),
         Err(error) => {
             if fresh {
                 directory.write_atomic(&marker, b"0", PublishMode::Replace)?;
             }
-            Err(error.into())
+            Err(error)
         }
     }
 }
@@ -1189,11 +1207,16 @@ mod tests {
 
     #[test]
     fn definite_spawn_failure_retains_a_retryable_fresh_key_fence() {
+        let _resources = super::super::native_test_guard();
         let temporary = tempfile::tempdir().unwrap();
         let directory = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let daemon =
+            super::super::program::NativeProgram::capture(&std::env::current_exe().unwrap())
+                .unwrap();
         for _ in 0..2 {
-            let mut command = Command::new(temporary.path().join("absent-daemon"));
-            assert!(spawn_with_launch_fence(&directory, 0, &mut command).is_err());
+            let mut command = Command::new(daemon.path());
+            command.current_dir(temporary.path().join("absent-cwd"));
+            assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
             assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
             assert_eq!(
                 command.get_args().collect::<Vec<_>>(),
@@ -1203,8 +1226,9 @@ mod tests {
         directory
             .write_atomic("peer0.launch", b"1", PublishMode::Replace)
             .unwrap();
-        let mut command = Command::new(temporary.path().join("absent-daemon"));
-        assert!(spawn_with_launch_fence(&directory, 0, &mut command).is_err());
+        let mut command = Command::new(daemon.path());
+        command.current_dir(temporary.path().join("absent-cwd"));
+        assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
         assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"1");
         assert_eq!(command.get_args().len(), 0);
     }
@@ -1263,6 +1287,51 @@ mod tests {
                 Duration::from_secs(120)
             ),
             Some(Err(progress.deadline()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_launch_refusal_restores_fresh_key_retry_before_dispatch() {
+        use std::io::Write;
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let path = temporary.path().join("daemon");
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        let daemon = super::super::program::NativeProgram::capture(&path).unwrap();
+        let pin = daemon.pin().unwrap();
+        let mut wrong = Command::new(std::env::current_exe().unwrap());
+        assert!(matches!(
+            spawn_with_launch_fence(&directory, 0, &mut wrong, &daemon),
+            Err(Error::Invalid(message)) if message == "launch command differs from its selected native executable"
+        ));
+        assert!(!directory.path().join("peer0.launch").exists());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"changed before native execution")
+            .unwrap();
+        let mut command = Command::new(daemon.path());
+        assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
+        assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["--sumeragi-assert-fresh-key"]
+        );
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        let restored = super::super::program::NativeProgram::matching(&pin).unwrap();
+        let mut retry = Command::new(restored.path());
+        retry.current_dir(temporary.path().join("absent-cwd"));
+        assert!(matches!(
+            spawn_with_launch_fence(&directory, 0, &mut retry, &restored),
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+        assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
+        assert_eq!(
+            retry.get_args().collect::<Vec<_>>(),
+            ["--sumeragi-assert-fresh-key"]
         );
     }
 }

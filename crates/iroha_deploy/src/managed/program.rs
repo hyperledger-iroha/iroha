@@ -1,13 +1,132 @@
 //! Native executable format admission shared by CLI packaging and runtime qualification.
 
-use iroha_fs::RetainedFile;
+use iroha_fs::{FileSnapshot, RetainedFile};
 use std::{
     env,
     io::{self, Read, Seek, SeekFrom},
+    path::Path,
 };
+
+use super::{BinaryPin, Result};
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+/// One live selected native program, without persisting an inode or executable bytes.
+#[derive(Debug)]
+pub(super) struct NativeProgram {
+    original: RetainedFile,
+    snapshot: FileSnapshot,
+    pin: BinaryPin,
+}
+
+impl NativeProgram {
+    pub(super) fn capture(path: &Path) -> Result<Self> {
+        // Resolve legitimate parent aliases/components, leaving the selected leaf unfollowed.
+        let name = path
+            .file_name()
+            .ok_or_else(|| invalid("managed executable has no filename"))?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let path = parent.canonicalize()?.join(name);
+        let mut original = RetainedFile::open_regular(&path)?;
+        let snapshot = original.snapshot()?;
+        let length = original.file().metadata()?.len();
+        admit_native_program(&mut original)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut offset = 0_u64;
+        // Every read has an absolute offset, so the header reader's cursor and Windows
+        // seek_read's physical cursor cannot alter this exact original extent.
+        while offset < length {
+            let count = usize::try_from((length - offset).min(buffer.len() as u64))
+                .expect("bounded native program chunk");
+            iroha_fs::read_exact_at(original.file(), &mut buffer[..count], offset)?;
+            hasher.update(&buffer[..count]);
+            offset += count as u64;
+        }
+        let mut extra = [0_u8; 1];
+        let beyond = loop {
+            match iroha_fs::read_at(original.file(), &mut extra, length) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                outcome => break outcome?,
+            }
+        };
+        if beyond != 0 || original.snapshot()? != snapshot {
+            return Err(invalid("managed executable changed during native admission").into());
+        }
+        Ok(Self {
+            original,
+            snapshot,
+            pin: BinaryPin {
+                path,
+                blake3: hasher.finalize().to_hex().to_string(),
+            },
+        })
+    }
+
+    pub(super) fn matching(pin: &BinaryPin) -> Result<Self> {
+        let program = Self::capture(&pin.path)?;
+        if program.pin.path != pin.path || program.pin.blake3 != pin.blake3 {
+            return Err(super::Error::Invalid(
+                "managed executable changed since this generation was prepared".into(),
+            ));
+        }
+        Ok(program)
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        if self.original.snapshot()? != self.snapshot {
+            return Err(invalid("selected managed executable changed").into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn pin(&self) -> Result<BinaryPin> {
+        self.validate()?;
+        Ok(self.pin.clone())
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.pin.path
+    }
+}
+
+/// Immutable live selection shared by discovery and its startup request clones.
+#[derive(Debug)]
+pub(super) struct RuntimePrograms {
+    launcher: NativeProgram,
+    daemon: NativeProgram,
+}
+
+impl RuntimePrograms {
+    pub(super) fn capture(launcher: &Path, daemon: &Path) -> Result<Self> {
+        let programs = Self {
+            launcher: NativeProgram::capture(launcher)?,
+            daemon: NativeProgram::capture(daemon)?,
+        };
+        programs.validate()?;
+        Ok(programs)
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        self.launcher.validate()?;
+        self.daemon.validate()
+    }
+
+    pub(super) fn pins(&self) -> Result<(BinaryPin, BinaryPin)> {
+        Ok((self.launcher.pin()?, self.daemon.pin()?))
+    }
+
+    pub(super) fn require_paths(&self, launcher: &Path, daemon: &Path) -> Result<()> {
+        if launcher != self.launcher.path() || daemon != self.daemon.path() {
+            return Err(invalid("startup paths differ from the selected installed runtime").into());
+        }
+        self.validate()
+    }
 }
 
 /// Admit one retained executable for this exact native operating system and architecture.
@@ -120,5 +239,276 @@ mod tests {
         std::fs::write(&path, b"ordinary text is not a native executable").unwrap();
         let mut text = RetainedFile::open_regular(&path).unwrap();
         assert!(admit_native_program(&mut text).is_err());
+    }
+
+    fn installed_pair() -> (tempfile::TempDir, super::super::InstalledRuntime) {
+        let temporary = tempfile::tempdir().unwrap();
+        for name in ["kagami", "iroha3d"] {
+            std::fs::copy(
+                std::env::current_exe().unwrap(),
+                temporary
+                    .path()
+                    .join(format!("{name}{}", env::consts::EXE_SUFFIX)),
+            )
+            .unwrap();
+        }
+        let runtime = super::super::InstalledRuntime::from_directory(temporary.path()).unwrap();
+        (temporary, runtime)
+    }
+
+    fn assert_unprepared(store: &super::super::ManagedStore) {
+        assert!(store.contexts().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(store.root().join("networks"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(matches!(
+            store.context(None),
+            Err(super::super::Error::NoSelection)
+        ));
+    }
+
+    #[test]
+    fn live_native_selection_and_request_clones_share_the_original_programs() {
+        let _resources = super::super::native_test_guard();
+        fn require_send_sync<T: Send + Sync>() {}
+        require_send_sync::<NativeProgram>();
+        require_send_sync::<super::super::InstalledRuntime>();
+        require_send_sync::<super::super::LocalnetRequest>();
+        let actual = std::env::current_exe().unwrap();
+        let program = NativeProgram::capture(&actual).unwrap();
+        let pin = program.pin().unwrap();
+        assert_eq!(program.path(), actual.canonicalize().unwrap());
+        assert_eq!(pin.blake3.len(), 64);
+        NativeProgram::matching(&pin).unwrap().validate().unwrap();
+        program.validate().unwrap();
+        let (temporary, runtime) = installed_pair();
+        let request = runtime.localnet_request("selected", std::time::Duration::from_secs(30));
+        let cloned = request.clone();
+        let original = request.admit_programs().unwrap();
+        let again = cloned.admit_programs().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&original, &again));
+        assert_eq!(original.pins().unwrap().0.blake3, pin.blake3);
+        let store = super::super::ManagedStore::open(&temporary.path().join("state")).unwrap();
+        for change_launcher in [false, true] {
+            let mut changed = cloned.clone();
+            if change_launcher {
+                changed.launcher = actual.clone();
+            } else {
+                changed.daemon = actual.clone();
+            }
+            assert!(
+                matches!(store.up(&changed), Err(super::super::Error::Io(error))
+                if error.kind() == io::ErrorKind::InvalidData)
+            );
+            assert_unprepared(&store);
+        }
+        request.admit_programs().unwrap().validate().unwrap();
+        assert_unprepared(&store);
+    }
+
+    #[test]
+    fn manual_native_admission_refuses_invalid_inputs_before_generation_and_preserves_install_help()
+    {
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let store = super::super::ManagedStore::open(&temporary.path().join("state")).unwrap();
+        let text = temporary.path().join("text");
+        std::fs::write(&text, b"ordinary executable text still is not a native program................................").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&text, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let actual = std::env::current_exe().unwrap();
+        for invalid in [text, temporary.path().join("missing")] {
+            let request = super::super::LocalnetRequest::new(actual.clone(), invalid);
+            assert!(store.up(&request).is_err());
+            assert_unprepared(&store);
+        }
+        for name in ["kagami", "iroha3d"] {
+            let installation = temporary.path().join(name);
+            std::fs::create_dir(&installation).unwrap();
+            std::fs::copy(
+                &actual,
+                installation.join(format!("{name}{}", env::consts::EXE_SUFFIX)),
+            )
+            .unwrap();
+            assert!(matches!(
+                super::super::InstalledRuntime::from_directory(&installation),
+                Err(super::super::Error::Invalid(message)) if message == "the matching Kagami and iroha3d programs must be installed together; install the complete native developer bundle"
+            ));
+        }
+        super::super::LocalnetRequest::new(actual.clone(), actual)
+            .admit_programs()
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert_unprepared(&store);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_and_manual_startup_refuse_a_replaced_link_before_preparation() {
+        let _resources = super::super::native_test_guard();
+        let (temporary, runtime) = installed_pair();
+        let request = runtime.localnet_request("selected", std::time::Duration::from_secs(30));
+        let original = temporary.path().join("original-daemon");
+        std::fs::rename(&request.daemon, &original).unwrap();
+        std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &request.daemon).unwrap();
+        let store = super::super::ManagedStore::open(&temporary.path().join("state")).unwrap();
+        assert!(store.up(&request).is_err());
+        assert!(super::super::InstalledRuntime::from_directory(temporary.path()).is_err());
+        let manual =
+            super::super::LocalnetRequest::new(request.launcher.clone(), request.daemon.clone());
+        assert!(store.up(&manual).is_err());
+        assert_unprepared(&store);
+        std::fs::remove_file(&request.daemon).unwrap();
+        std::fs::rename(&original, &request.daemon).unwrap();
+        // Rename changed native metadata: an old live cut is not revived by restoration.
+        assert!(request.admit_programs().is_err());
+        super::super::InstalledRuntime::from_directory(temporary.path())
+            .unwrap()
+            .localnet_request("selected", std::time::Duration::from_secs(30))
+            .admit_programs()
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert_unprepared(&store);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_fifo_selection_refuses_without_opening_a_blocking_data_reader() {
+        use std::{os::unix::fs::FileTypeExt, process::Command};
+        let _resources = super::super::native_test_guard();
+        let (temporary, runtime) = installed_pair();
+        let request = runtime.localnet_request("selected", std::time::Duration::from_secs(30));
+        let original = temporary.path().join("original-daemon");
+        std::fs::rename(&request.daemon, &original).unwrap();
+        let created = Command::new("/usr/bin/mkfifo")
+            .arg("-m")
+            .arg("600")
+            .arg(&request.daemon)
+            .status()
+            .unwrap();
+        assert!(created.success(), "native FIFO creation must succeed");
+        assert!(
+            std::fs::symlink_metadata(&request.daemon)
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+        let store = super::super::ManagedStore::open(&temporary.path().join("state")).unwrap();
+        assert!(super::super::InstalledRuntime::from_directory(temporary.path()).is_err());
+        let manual =
+            super::super::LocalnetRequest::new(request.launcher.clone(), request.daemon.clone());
+        assert!(store.up(&manual).is_err());
+        assert!(store.up(&request).is_err());
+        assert_unprepared(&store);
+        std::fs::remove_file(&request.daemon).unwrap();
+        std::fs::rename(&original, &request.daemon).unwrap();
+        super::super::InstalledRuntime::from_directory(temporary.path())
+            .unwrap()
+            .localnet_request("selected", std::time::Duration::from_secs(30))
+            .admit_programs()
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert_unprepared(&store);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn equal_contents_replacement_invalidates_live_selection_but_not_a_fresh_content_pin() {
+        let _resources = super::super::native_test_guard();
+        let (temporary, runtime) = installed_pair();
+        let request = runtime.localnet_request("selected", std::time::Duration::from_secs(30));
+        let pins = request.admit_programs().unwrap().pins().unwrap();
+        let original = temporary.path().join("original-daemon");
+        std::fs::rename(&request.daemon, &original).unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), &request.daemon).unwrap();
+        let store = super::super::ManagedStore::open(&temporary.path().join("state")).unwrap();
+        assert!(store.up(&request).is_err());
+        assert!(request.clone().admit_programs().is_err());
+        assert_unprepared(&store);
+        // A separately selected equal-content executable deliberately satisfies the persisted
+        // path/content pin; the original request still owns, and rejects changes to, its old cut.
+        NativeProgram::matching(&pins.1)
+            .unwrap()
+            .validate()
+            .unwrap();
+        let fresh = super::super::InstalledRuntime::from_directory(temporary.path()).unwrap();
+        fresh
+            .localnet_request("selected", std::time::Duration::from_secs(30))
+            .admit_programs()
+            .unwrap()
+            .validate()
+            .unwrap();
+        drop(fresh);
+        std::fs::remove_file(&request.daemon).unwrap();
+        std::fs::rename(&original, &request.daemon).unwrap();
+        assert!(request.admit_programs().is_err());
+        NativeProgram::matching(&pins.1)
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert_unprepared(&store);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn changed_native_contents_and_execute_permissions_require_fresh_admission() {
+        use std::{io::Write, os::unix::fs::PermissionsExt};
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("program");
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        let selected = NativeProgram::capture(&path).unwrap();
+        let pin = selected.pin().unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"changed native contents")
+            .unwrap();
+        assert!(selected.validate().is_err());
+        assert!(super::super::store::verify_binary(&pin).is_err());
+        assert_ne!(
+            super::super::store::pin_binary(&path).unwrap().blake3,
+            pin.blake3
+        );
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        assert!(selected.validate().is_err());
+        super::super::store::verify_binary(&pin).unwrap();
+        let permissions = std::fs::metadata(&path).unwrap().permissions();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            matches!(NativeProgram::capture(&path), Err(super::super::Error::Io(error))
+            if error.kind() == io::ErrorKind::InvalidData && error.to_string() == "CLI program is not executable")
+        );
+        std::fs::set_permissions(&path, permissions).unwrap();
+        NativeProgram::matching(&pin).unwrap().validate().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn held_native_selection_denies_writers_and_replacement_until_drop() {
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("program.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        let selected = NativeProgram::capture(&path).unwrap();
+        let pin = selected.pin().unwrap();
+        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(std::fs::rename(&path, temporary.path().join("moved.exe")).is_err());
+        selected.validate().unwrap();
+        drop(selected);
+        let moved = temporary.path().join("moved.exe");
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::rename(&moved, &path).unwrap();
+        NativeProgram::matching(&pin).unwrap().validate().unwrap();
     }
 }

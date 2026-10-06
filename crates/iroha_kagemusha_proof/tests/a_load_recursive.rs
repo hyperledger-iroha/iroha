@@ -14,6 +14,8 @@ mod bootstrap_objects;
 #[path = "bootstrap_omega.rs"]
 pub mod bootstrap_outer;
 mod common;
+#[path = "common/consuming_proof.rs"]
+mod consuming_proof;
 /// Shared genuine Load sigma, map and signed-object fixtures.
 #[path = "a_load.rs"]
 pub mod load_components;
@@ -80,12 +82,12 @@ struct Sources {
     q_instances: Vec<Vec<Vec<Fq>>>,
     q_proofs: Vec<Vec<u8>>,
     q_openings: Vec<FoldInput<Ep>>,
-    signature_schema: iroha_kagemusha_proof::q_signature::QSignaturePlan,
+    signature_schema: Vec<iroha_kagemusha_proof::q_signature::QSignaturePlan>,
     part: FoldInput<Eq>,
     predecessor: Predecessor,
     params: PinnedParams<Ep>,
 }
-fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
+fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega, q_buses: Option<usize>) -> Sources {
     let (maps, sigma) = load_components::fixture_from(&rooted.source.state);
     let leaf = LoadCircuit::new(&maps.witness);
     let leaf_params = common::vesta_params(12);
@@ -125,7 +127,12 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
         )
         .unwrap();
     let part = prepared.part().clone();
-    let q = QSigmaProver::keygen(&prepared, params.clone()).unwrap();
+    let q = q_buses
+        .map_or_else(
+            || QSigmaProver::keygen(&prepared, params.clone()),
+            |buses| QSigmaProver::keygen_serialized_foreign(&prepared, params.clone(), buses),
+        )
+        .unwrap();
     let qproof = q
         .prove(&prepared, common::recovery(193), ProverConfig::default())
         .unwrap();
@@ -145,7 +152,9 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
     )
     .unwrap();
     let (signature, signature_instances) =
-        load_components::bootstrap_objects::signatures(&maps.objects);
+        load_components::bootstrap_objects::signatures(&core::array::from_fn(|i| {
+            maps.objects[i].clone()
+        }));
     let signature_key = keygen_pk_v2(
         &params,
         &signature,
@@ -171,6 +180,33 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
         signature_key.vk().clone(),
     )
     .unwrap();
+    let (current, current_instances) =
+        load_objects::current_signatures(&[maps.objects[4].signature, maps.objects[3].signature]);
+    let current_key = keygen_pk_v2(
+        &params,
+        &current,
+        &KeygenConfigV2::pipa_r(
+            iroha_kagemusha_proof::q_signature::QSignaturePlan::instance_types().to_vec(),
+        ),
+    )
+    .unwrap();
+    let current_proof = create_proof_owned_with_claim(
+        &params,
+        &current_key,
+        Witness::from_circuit(&current_key, &current, &current_instances).unwrap(),
+        common::recovery(195),
+        ProverConfig::default(),
+    )
+    .unwrap();
+    current_proof
+        .opening
+        .decide(&params, MemoryBudget::DEFAULT)
+        .unwrap();
+    let current_q = QProofPlan::new(
+        VerifierPlan::new(current_key.binding().clone(), params.clone()).unwrap(),
+        current_key.vk().clone(),
+    )
+    .unwrap();
     let predecessor = Predecessor {
         key: rooted.key.clone(),
         program: VerifierPlan::new(rooted.binding.clone(), params.clone()).unwrap(),
@@ -182,7 +218,7 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
     let plan = AProofPlan::new(
         Variant::Load,
         sigma_plan,
-        vec![sigma_q, signature_q],
+        vec![sigma_q, signature_q, current_q],
         Some(predecessor.program.clone()),
         &params,
     )
@@ -220,8 +256,12 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
         maps,
         sigma,
         plan,
-        q_instances: vec![qproof.instances, signature_instances.to_vec()],
-        q_proofs: vec![qproof.bytes, signature_proof.proof],
+        q_instances: vec![
+            qproof.instances,
+            signature_instances.to_vec(),
+            current_instances.to_vec(),
+        ],
+        q_proofs: vec![qproof.bytes, signature_proof.proof, current_proof.proof],
         q_openings: vec![
             FoldInput::from_opening(*qclaim.g(), qclaim.challenges()).unwrap(),
             FoldInput::from_opening(
@@ -229,8 +269,13 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
                 signature_proof.opening.challenges(),
             )
             .unwrap(),
+            FoldInput::from_opening(
+                *current_proof.opening.g(),
+                current_proof.opening.challenges(),
+            )
+            .unwrap(),
         ],
-        signature_schema: signature.plan().clone(),
+        signature_schema: vec![signature.plan().clone(), current.plan().clone()],
         part,
         predecessor,
         params,
@@ -451,6 +496,7 @@ impl Circuit<Fp> for First {
                         signatures: &[],
                     },
                     Some(&insertion),
+                    None,
                 )?;
                 let q_instances = self
                     .source
@@ -492,6 +538,7 @@ impl Circuit<Fp> for First {
                     modes: &[],
                     pallas_corrections: &[],
                     vesta_corrections: &[],
+                    receive_results: None,
                 };
                 let vk = &self.source.predecessor.key;
                 let iroha_plonk::transcript::TranscriptRepr::Base(repr) = *vk.transcript_repr()
@@ -572,6 +619,8 @@ impl Circuit<Fp> for First {
 #[derive(Clone)]
 struct Authorization {
     first: First,
+    current: bool,
+    context_mutation: u8,
     order: [usize; 3],
     wrong_policy: bool,
 }
@@ -590,7 +639,7 @@ impl Circuit<Fp> for Authorization {
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
-        let public = meta.instance_column(3);
+        let public = meta.instance_column(5);
         meta.enable_equality(public);
         Config {
             verifier,
@@ -600,6 +649,7 @@ impl Circuit<Fp> for Authorization {
     }
     fn synthesize(&self, config: Config, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
         let first = &self.first;
+        let q_index = if self.current { 2 } else { 1 };
         let mut chip = VerifierChip::new(config.verifier);
         let mut bytes = BytesChip::new(config.bytes);
         chip.load_tables(&mut layouter)?;
@@ -634,7 +684,7 @@ impl Circuit<Fp> for Authorization {
                     &mut region,
                     source.each_ref().map(Vec::as_slice),
                 )?;
-                let instances = first.source.q_instances[1]
+                let instances = first.source.q_instances[q_index]
                     .iter()
                     .map(|column| {
                         column
@@ -647,13 +697,13 @@ impl Circuit<Fp> for Authorization {
                     &mut chip,
                     &mut bytes,
                     &mut region,
-                    &first.source.q_proofs[1],
+                    &first.source.q_proofs[q_index],
                 )?;
                 let q = iroha_kagemusha_proof::a_relation::verify_q(
                     &mut chip,
                     &mut region,
                     first.plan.operation(),
-                    1,
+                    q_index,
                     &instances,
                     &proof,
                 )?;
@@ -661,17 +711,38 @@ impl Circuit<Fp> for Authorization {
                     &mut chip,
                     &mut region,
                     first.plan.operation(),
-                    1,
-                    &first.source.signature_schema,
+                    q_index,
+                    &first.source.signature_schema[q_index - 1],
                     &q,
+                )?;
+                let mut exact_instances = instances.clone();
+                if self.context_mutation == 1 {
+                    exact_instances[0][0] = first.scalar(
+                        &mut chip,
+                        &mut region,
+                        first.source.q_instances[q_index][0][0] + Fq::ONE,
+                    )?;
+                } else if self.context_mutation == 3 {
+                    exact_instances[0].pop();
+                }
+                slots.bind_context(
+                    &mut region,
+                    first.plan.operation(),
+                    if self.context_mutation == 2 {
+                        3 - q_index
+                    } else {
+                        q_index
+                    },
+                    &exact_instances,
                 )?;
                 let slots = self
                     .order
                     .iter()
-                    .map(|i| slots[*i].clone())
+                    .take(if self.current { 2 } else { 3 })
+                    .map(|i| slots.slots()[*i].clone())
                     .collect::<Vec<_>>();
                 let policy = if self.wrong_policy {
-                    iroha_kagemusha_proof::a_relation::load::LoadPolicy::new(
+                    iroha_kagemusha_proof::a_relation::own::OwnPolicy::new(
                         [1, 2],
                         [31, 32],
                         iroha_plonk_gadgets::p256::native::Affine::GENERATOR,
@@ -679,23 +750,23 @@ impl Circuit<Fp> for Authorization {
                 } else {
                     load_objects::policy()
                 };
-                objects.authenticate(
-                    &mut chip,
-                    &mut region,
-                    policy,
-                    LoadInputs {
-                        predecessor: MapState {
-                            state: &old,
-                            lineage: &pred,
-                        },
-                        successor: MapState {
-                            state: &new,
-                            lineage: &next,
-                        },
-                        sigma: &sigma,
-                        signatures: &slots,
+                let input = LoadInputs {
+                    predecessor: MapState {
+                        state: &old,
+                        lineage: &pred,
                     },
-                )?;
+                    successor: MapState {
+                        state: &new,
+                        lineage: &next,
+                    },
+                    sigma: &sigma,
+                    signatures: &slots,
+                };
+                if self.current {
+                    objects.authenticate_current(&mut chip, &mut region, policy, input)?;
+                } else {
+                    objects.authenticate(&mut chip, &mut region, policy, input)?;
+                }
                 Ok(objects
                     .context()
                     .iter()
@@ -818,6 +889,7 @@ impl Circuit<Fp> for Continuation {
                     modes: &[],
                     pallas_corrections: &[],
                     vesta_corrections: &[],
+                    receive_results: None,
                 };
                 let cp = first.pallas(&mut chip, &mut region, &self.carried.as_input())?;
                 let history = self
@@ -885,7 +957,7 @@ impl Circuit<Fp> for Continuation {
                             &mut region,
                             first.plan.operation(),
                             index,
-                            &first.source.signature_schema,
+                            &first.source.signature_schema[index - 1],
                             &q,
                         )?;
                         LoadStagePlan::new(first.plan.clone())?.constrain_stage(
@@ -904,11 +976,15 @@ impl Circuit<Fp> for Continuation {
                                     lineage: &next_public,
                                 },
                                 sigma: &sigma,
-                                signatures: &slots,
+                                signatures: slots.slots(),
                             },
                             None,
+                            Some(iroha_kagemusha_proof::a_relation::SignatureQContext {
+                                bundle: &slots,
+                                instances: columns,
+                            }),
                         )?;
-                        q
+                        slots.verified().clone()
                     };
                     verified.push(q);
                 }
@@ -1449,15 +1525,31 @@ fn rooted_load_first_partition_preserves_real_predecessor_and_q() {
     let _ = rooted_load_profiles(&[0]);
 }
 #[test]
-#[ignore = "real rooted Bootstrap, Load Qs and shared-range three-stage chain; run optimized"]
-fn rooted_load_shared_range_three_stage_inventory() {
+#[ignore = "real rooted Bootstrap, Load Qs and shared-range four-stage chain; run optimized"]
+fn rooted_load_shared_range_four_stage_inventory() {
     assert!(rooted_load_profiles(&[4, 5]).is_some());
+}
+#[test]
+#[ignore = "canonical selector/task schema and genuine five-bus Load closure; run optimized"]
+fn canonical_five_bus_load_tasks_retain_all_openings() {
+    assert!(rooted_load_profiles(&[5]).is_some());
+}
+#[test]
+#[ignore = "canonical selector/task schema and genuine four-bus Load closure; run optimized"]
+fn canonical_four_bus_load_tasks_retain_all_openings() {
+    assert!(rooted_load_profiles(&[4]).is_some());
+}
+#[test]
+#[ignore = "genuine predecessor proof and both hard signature Q leaves; run optimized"]
+fn current_authorization_and_transport_reject_cross_tape_substitution() {
+    let rooted = bootstrap_outer::rooted_bootstrap_omega(false);
+    let _ = load_profiles(&rooted, &[4], true, true);
 }
 fn rooted_load_profiles(profiles: &[usize]) -> Option<AuthenticatedLoad> {
     let rooted = bootstrap_outer::rooted_bootstrap_omega(false);
-    load_profiles(&rooted, profiles, true)
+    load_profiles(&rooted, profiles, true, false)
 }
-/// Build actual sigma/Q/A1/W1/A2/W2/A3 proofs for the supplied genuine predecessor.
+/// Build actual sigma/Q/A1/W1/A2/W2/A3/W3/A4 proofs for the genuine predecessor.
 /// Catalog rebinding/admission is the outer caller's separate responsibility.
 #[allow(dead_code)] // Consumed by the outer integration test.
 pub(crate) fn authenticated_load(
@@ -1465,22 +1557,52 @@ pub(crate) fn authenticated_load(
     range_buses: usize,
     adversarial: bool,
 ) -> AuthenticatedLoad {
-    load_profiles(rooted, &[range_buses], adversarial).expect("Load stages must fit k16")
+    load_profiles(rooted, &[range_buses], adversarial, false).expect("Load stages must fit k16")
 }
+
+/// Candidate Q/source profile with the same hard operation and obligation schedule.
+#[allow(dead_code)] // Consumed by candidate outer/catalog integration tests.
+pub(crate) fn authenticated_load_with_q_layout(
+    rooted: &bootstrap_outer::RootedBootstrapOmega,
+    range_buses: usize,
+    q_buses: Option<usize>,
+    adversarial: bool,
+) -> AuthenticatedLoad {
+    load_profiles_with_q(rooted, &[range_buses], q_buses, adversarial, false)
+        .expect("candidate Load stages must fit k16")
+}
+
+#[test]
+#[ignore = "genuine candidate Q2/A3 Bootstrap predecessor and complete Load stages"]
+fn reduced_q_two_bus_three_bus_load_capacity() {
+    let rooted = bootstrap_outer::rooted_bootstrap_omega_with_q_layout(false, 3, Some(2));
+    assert!(load_profiles_with_q(&rooted, &[3], Some(2), false, false).is_some());
+}
+
 fn load_profiles(
     rooted: &bootstrap_outer::RootedBootstrapOmega,
     profiles: &[usize],
     adversarial: bool,
+    components_only: bool,
 ) -> Option<AuthenticatedLoad> {
-    let source = Arc::new(sources(rooted));
+    load_profiles_with_q(rooted, profiles, None, adversarial, components_only)
+}
+fn load_profiles_with_q(
+    rooted: &bootstrap_outer::RootedBootstrapOmega,
+    profiles: &[usize],
+    q_buses: Option<usize>,
+    adversarial: bool,
+    components_only: bool,
+) -> Option<AuthenticatedLoad> {
+    let source = Arc::new(sources(rooted, q_buses));
     for range_buses in profiles.iter().copied() {
-        let initial_counts: &[usize] = if range_buses == 0 { &[1, 0] } else { &[0] };
+        let initial_counts: &[usize] = &[0];
         for first_q in initial_counts.iter().copied() {
             let objects = LoadObjects::context_specs().unwrap().to_vec();
             let plan = if first_q == 0 {
                 ContextPlan::with_schedule(
                     source.plan.clone(),
-                    vec![vec![], vec![0], vec![1]],
+                    vec![vec![], vec![0], vec![1], vec![2]],
                     Some(0),
                     objects,
                 )
@@ -1490,8 +1612,15 @@ fn load_profiles(
             .unwrap();
             let mut tasks = vec![Vec::new(); plan.stage_count()];
             tasks[0].push(OperationTask::LoadRecovery);
-            let final_stage = tasks.len() - 1;
-            tasks[final_stage].push(OperationTask::LoadAuthorization);
+            for (stage, group) in tasks.iter_mut().enumerate() {
+                let qs = plan.q_partition(stage).unwrap();
+                if qs.contains(&1) {
+                    group.push(OperationTask::LoadAuthorization);
+                }
+                if qs.contains(&2) {
+                    group.push(OperationTask::LoadCurrentAuthorization);
+                }
+            }
             let plan = plan.with_operation_tasks(tasks).unwrap();
             LoadStagePlan::new(plan.clone()).unwrap();
             if adversarial {
@@ -1549,52 +1678,107 @@ fn load_profiles(
                 fold: fold.to_bytes().to_vec(),
                 known: true,
             };
-            if first_q == 1 && adversarial {
-                let authorization = Authorization {
-                    first: first.clone(),
-                    order: [0, 1, 2],
-                    wrong_policy: false,
-                };
-                let public = vec![
-                    source
-                        .maps
-                        .objects
-                        .iter()
-                        .map(load_components::bootstrap_objects::Signed::digest)
-                        .collect::<Vec<_>>(),
-                ];
-                assert!(
-                    iroha_plonk::check::check_circuit(
-                        &authorization,
-                        16,
-                        &public,
-                        CheckMode::Strict
-                    )
-                    .unwrap()
-                    .is_satisfied()
-                );
-                let mut bad = authorization.clone();
-                bad.order = [1, 0, 2];
-                assert!(
-                    !iroha_plonk::check::check_circuit(&bad, 16, &public, CheckMode::Strict)
-                        .is_ok_and(|r| r.is_satisfied())
-                );
-                let mut bad = authorization.clone();
-                bad.wrong_policy = true;
-                assert!(
-                    !iroha_plonk::check::check_circuit(&bad, 16, &public, CheckMode::Strict)
-                        .is_ok_and(|r| r.is_satisfied())
-                );
-                let known = synthesize(&authorization, 16, None).unwrap();
-                let unknown = synthesize(&authorization.without_witnesses(), 16, None).unwrap();
-                assert_eq!(known.tables.fixed(), unknown.tables.fixed());
-                assert_eq!(
-                    known.tables.advice_assigned(),
-                    unknown.tables.advice_assigned()
-                );
-                eprintln!(
-                    "actual Load signature Q/object/receipt authorization component PASS; retained opening closed by subsequent complete A relation only"
-                );
+            if adversarial {
+                consuming_proof::check(&first);
+                for current in [false, true] {
+                    let authorization = Authorization {
+                        first: first.clone(),
+                        current,
+                        context_mutation: 0,
+                        order: [0, 1, 2],
+                        wrong_policy: false,
+                    };
+                    let public = vec![
+                        source
+                            .maps
+                            .objects
+                            .iter()
+                            .map(load_components::bootstrap_objects::Signed::digest)
+                            .collect::<Vec<_>>(),
+                    ];
+                    assert!(
+                        iroha_plonk::check::check_circuit(
+                            &authorization,
+                            16,
+                            &public,
+                            CheckMode::Strict
+                        )
+                        .unwrap()
+                        .is_satisfied()
+                    );
+                    let mut bad = authorization.clone();
+                    bad.order = [1, 0, 2];
+                    assert!(
+                        !iroha_plonk::check::check_circuit(&bad, 16, &public, CheckMode::Strict)
+                            .is_ok_and(|r| r.is_satisfied())
+                    );
+                    let mut bad = authorization.clone();
+                    bad.wrong_policy = true;
+                    assert!(
+                        !iroha_plonk::check::check_circuit(&bad, 16, &public, CheckMode::Strict)
+                            .is_ok_and(|r| r.is_satisfied())
+                    );
+                    for context_mutation in 1..=3 {
+                        let bad = Authorization {
+                            context_mutation,
+                            ..authorization.clone()
+                        };
+                        assert!(
+                            !iroha_plonk::check::check_circuit(
+                                &bad,
+                                16,
+                                &public,
+                                CheckMode::Strict
+                            )
+                            .is_ok_and(|r| r.is_satisfied()),
+                            "signature bundle context/index/shape substitution{context_mutation}"
+                        );
+                    }
+                    if current {
+                        for (object, offset) in [
+                            (3, 35),
+                            (4, 226),
+                            (4, source.maps.objects[4].bytes.len() - 1),
+                        ] {
+                            let mut bad_source = (*source).clone();
+                            bad_source.maps.objects[object].bytes[offset] ^= 1;
+                            let mut bad = authorization.clone();
+                            bad.first.source = Arc::new(bad_source);
+                            let changed = vec![
+                                bad.first
+                                    .source
+                                    .maps
+                                    .objects
+                                    .iter()
+                                    .map(load_components::bootstrap_objects::Signed::digest)
+                                    .collect::<Vec<_>>(),
+                            ];
+                            assert!(
+                                !iroha_plonk::check::check_circuit(
+                                    &bad,
+                                    16,
+                                    &changed,
+                                    CheckMode::Strict
+                                )
+                                .is_ok_and(|r| r.is_satisfied()),
+                                "current authorization substitution object={object} byte={offset}"
+                            );
+                        }
+                    }
+                    let known = synthesize(&authorization, 16, None).unwrap();
+                    let unknown = synthesize(&authorization.without_witnesses(), 16, None).unwrap();
+                    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+                    assert_eq!(
+                        known.tables.advice_assigned(),
+                        unknown.tables.advice_assigned()
+                    );
+                    eprintln!(
+                        "actual Load signature Q/object/receipt authorization component PASS; retained opening closed by subsequent complete A relation only"
+                    );
+                }
+            }
+            if components_only {
+                return None;
             }
             let public = first_public(&first);
             let (assigned, k) = match synthesize(&first, 16, Some(&public)) {
@@ -1692,7 +1876,7 @@ fn load_profiles(
                 artifact_diagnostics(0, &key, &proof.proof, range_buses);
                 if let Some(result) = continue_schedule(&first, &key, proof, &public, adversarial) {
                     eprintln!(
-                        "genuine Load three-stage closure native proofs PASS source_range_buses={range_buses}; final full-catalog Omega still pending"
+                        "genuine Load four-stage C4 closure native proofs PASS source_range_buses={range_buses}; final full-catalog Omega still pending"
                     );
                     return Some(result);
                 }

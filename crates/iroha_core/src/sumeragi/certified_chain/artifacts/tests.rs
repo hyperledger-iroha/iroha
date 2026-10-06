@@ -384,16 +384,17 @@ fn assert_funded_boundary_keeps_original_certificate_without_application_seals_u
         ))
     ));
     assert_eq!(prefix.prefix.tip.height(), 9);
-    let (receipt, _) = prefix
-        .push_prepared(read(original, &budget))
-        .unwrap()
-        .into_parts();
+    let artifacts = read(original, &budget);
+    assert!(budget.reserved_bytes() > 0);
+    let (receipt, _) = prefix.push_prepared(artifacts).unwrap().into_parts();
     let qc = receipt.commit_qc().unwrap();
     assert_eq!(qc.signers.count_ones(), 3);
     assert!(!qc.attest);
     assert!(qc.attestations.is_empty());
     assert!(qc.attestation_witness.is_none());
-    assert!(budget.reserved_bytes() > 0);
+    // The unflagged receipt retains independently decoded QC metadata. Its transient
+    // original-funded table and proposal retire after full availability verification.
+    assert_eq!(budget.reserved_bytes(), 0);
     drop(receipt);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -500,7 +501,9 @@ fn assert_funded_original_boundary_result_graph_is_borrowed_without_redecoding(
     assert_eq!(qc.agg_sig, original_signature);
     assert!(qc.attestations.is_empty());
     assert!(qc.attestation_witness.is_none());
-    assert!(budget.reserved_bytes() > 0);
+    // The unflagged receipt retains independently decoded QC metadata. Its transient
+    // original-funded table and proposal retire after full availability verification.
+    assert_eq!(budget.reserved_bytes(), 0);
     assert!(budget.reserved_bytes() <= retained);
     drop(certified);
     assert_eq!(budget.reserved_bytes(), 0);

@@ -42,14 +42,9 @@ public static class VerifyingKeyBackendTags
             "pipa-r/pasta",
             "pipa-r/pasta/kaigi-authorization-v1",
             "pipa-r/pasta/kaigi-usage-v1",
-        };
-
-    private static readonly HashSet<string> ProductionNativeHalo2PastaBackends =
-        new(StringComparer.Ordinal)
-        {
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "pipa-r/pasta/confidential-transfer-v1",
+            "pipa-r/pasta/confidential-unshield-full-v1",
+            "pipa-r/pasta/confidential-unshield-change-v1",
         };
 
     private static readonly HashSet<string> TrustedSetupBackendSegments =
@@ -84,7 +79,7 @@ public static class VerifyingKeyBackendTags
     public static VerifyingKeyBackendTag? RegistryTag(string? label)
     {
         if (label is null) return null;
-        if (label == "halo2/ipa" || ProductionNativeHalo2PastaBackends.Contains(label))
+        if (label == "halo2/ipa")
             return VerifyingKeyBackendTag.Halo2IpaPasta;
         if (StarkFriProductionBackends.Contains(label)) return VerifyingKeyBackendTag.Stark;
         if (ProductionNativePipaRPastaBackends.Contains(label)) return VerifyingKeyBackendTag.NativePipaRPasta;
@@ -186,7 +181,6 @@ public static class VerifyingKeyBackendTags
         }
         return backend == "halo2/ipa"
             || StarkFriProductionBackends.Contains(backend)
-            || ProductionNativeHalo2PastaBackends.Contains(backend)
             || ProductionNativePipaRPastaBackends.Contains(backend);
     }
 

@@ -10,7 +10,11 @@ pub mod bootstrap;
 pub mod context;
 mod frame;
 mod incoming_lineage;
+pub mod incoming_transport;
 pub mod load;
+pub mod own;
+pub mod receive;
+pub mod results;
 pub mod schedule;
 pub mod send;
 pub mod split;
@@ -18,7 +22,7 @@ pub use incoming_lineage::IncomingLineageCells;
 mod proof;
 mod signature;
 
-pub use signature::{SignatureProofCells, bind_signature_q};
+pub use signature::{SignatureProofCells, SignatureQCells, SignatureQContext, bind_signature_q};
 
 pub use binding::{
     AOutputCells, BoundSigmaCells, IncomingVestaCells, SigmaBindingCells, VestaClaimCells,

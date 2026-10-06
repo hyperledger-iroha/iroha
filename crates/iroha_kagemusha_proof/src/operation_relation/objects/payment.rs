@@ -5,11 +5,11 @@
 //! recursive proof decisions and signature authorizations are separate,
 //! mandatory inputs to the owning Receive or Archive operation.
 
-use ff::Field;
+use ff::{Field, PrimeField};
 use iroha_pasta::Fp;
 use iroha_plonk::frontend::{Error, Region};
 use iroha_plonk_gadgets::{
-    Bit, UintChip, Word, WordHasher,
+    Bit, GlueChip, UintChip, Word, WordHasher,
     bytes::{
         PBytes, chunk_segments,
         tape::{ByteRun, SegmentSpec},
@@ -20,12 +20,15 @@ use super::{
     ObjectKind, SignedObjectCells,
     credential::CredentialCells,
     decode_atom,
-    predicates::{all, equal, is_constant},
+    predicates::{all, equal, is_constant, le64},
     receipt::{self, ReceiptContext},
     request::RequestCells,
     schema::Atom,
 };
-use crate::operation_relation::incoming_statement::StatementView;
+use crate::{
+    a_relation::{IncomingLineageCells, LineagePublicCells, schedule::constrain_sigma_selector},
+    operation_relation::incoming_statement::{IncomingStatementCells, StatementView},
+};
 
 const SCHEMA: [Atom; 5] = [
     Atom::Integer(2),
@@ -63,6 +66,161 @@ pub struct PaymentCells {
     digest: Word<Fp>,
     package: Word<Fp>,
     valid: Bit<Fp>,
+}
+
+/// Total Send consumer binding against the incoming predecessor and receiver.
+///
+/// This retains the original Payment/package digests and includes the decoded
+/// predecessor's original structural verdict. It does not authenticate proofs,
+/// signatures, the receiver's quoted credential, or recorded blacklist history;
+/// those remain mandatory predicates of the owning Receive relation.
+#[derive(Clone, Debug)]
+pub struct IncomingPaymentCells {
+    payment: PaymentCells,
+    selector: Word<Fp>,
+}
+
+impl IncomingPaymentCells {
+    /// Bind the exact Payment inputs to the Send predecessor and current receiver.
+    ///
+    /// The same `inputs` feed transcript/package hashing and every consumer
+    /// comparison, so another statement or credential cannot be spliced after
+    /// hashing. `predecessor` must come from the incoming proof's retained byte
+    /// tape, and `receiver` from the owning operation's authenticated state.
+    /// Invalid lifecycle, controls, widths, policy/time or identity yield false;
+    /// bounded arithmetic uses only the checked dummy view after a decode error.
+    ///
+    /// # Errors
+    /// Fixed tape/schema mismatch or synthesis failure. Invalid witnesses return
+    /// false without changing the original byte digest.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one factory binds the same tape and all consumer inputs"
+    )]
+    pub fn from_run(
+        uint: &mut UintChip<'_, Fp>,
+        hash: &mut impl WordHasher<Fp>,
+        region: &mut Region<'_, Fp>,
+        run: &ByteRun<Fp>,
+        inputs: &PaymentInputs<'_, IncomingStatementCells>,
+        predecessor: &IncomingLineageCells,
+        receiver: &LineagePublicCells,
+    ) -> Result<Self, Error> {
+        // A fabricated field-only encoding verdict cannot supply byte provenance.
+        predecessor.carrier()?;
+        let mut payment = PaymentCells::from_run(uint, hash, region, run, inputs)?;
+        let pred = predecessor.checked().fields();
+        let recv = receiver.fields();
+        let statement = inputs.statement.fields();
+        let mut checks = vec![payment.valid.clone(), predecessor.valid().clone()];
+        for (a, b) in [
+            (&statement[1..3], &pred[3..5]),
+            (&statement[3..5], &pred[1..3]),
+            (&pred[3..5], &recv[3..5]),
+            (&pred[1..3], &recv[1..3]),
+            (inputs.request.object().identifier(3)?, &pred[6..8]),
+            (inputs.request.object().identifier(5)?, &recv[6..8]),
+            (inputs.payer.payment_key()?.as_slice(), &pred[9..13]),
+        ] {
+            checks.push(equal(uint.glue(), region, a, b)?);
+        }
+        for (a, b) in [
+            (&statement[14], &pred[5]),
+            (&statement[7], &pred[8]),
+            (inputs.payer.object().digest(), &pred[8]),
+            (&statement[12], &pred[14]),
+            (&statement[13], &pred[15]),
+        ] {
+            checks.push(uint.glue().is_equal(region, a, b)?);
+        }
+        let same_key = equal(uint.glue(), region, &pred[9..13], &recv[9..13])?;
+        checks.push(uint.glue().not(region, &same_key)?);
+
+        // This native decomposition is injective: the checked packed field is
+        // below 2^104, and the three ranges bound the recomposition below 2^104.
+        let packed = pred[13].value().map(|v| v.to_repr());
+        let lifecycle = uint.assign::<8>(region, packed.map(|b| u128::from(b[0])))?;
+        let epoch = uint.assign::<64>(
+            region,
+            packed.map(|b| {
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&b[1..9]);
+                u128::from(u64::from_le_bytes(bytes))
+            }),
+        )?;
+        let controls = uint.assign::<32>(
+            region,
+            packed.map(|b| {
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&b[9..13]);
+                u128::from(u32::from_le_bytes(bytes))
+            }),
+        )?;
+        let joined = uint.glue().linear(
+            region,
+            &[
+                (Fp::ONE, lifecycle.word()),
+                (Fp::from(2).pow_vartime([8]), epoch.word()),
+                (Fp::from(2).pow_vartime([72]), controls.word()),
+            ],
+            Fp::ZERO,
+        )?;
+        GlueChip::assert_equal(region, &joined, &pred[13])?;
+        let active = is_constant(uint.glue(), region, lifecycle.word(), 1)?;
+        let retiring = is_constant(uint.glue(), region, lifecycle.word(), 2)?;
+        let live = uint.glue().add(region, active.word(), retiring.word())?;
+        checks.push(uint.glue().assert_bool(region, &live)?);
+        for (actual, expected) in [
+            (&statement[8], lifecycle.word()),
+            (&statement[11], controls.word()),
+        ] {
+            checks.push(uint.glue().is_equal(region, actual, expected)?);
+        }
+        // An unknown controls bit gives false; it must not make the total
+        // decoder's selector range check unsatisfiable before choosing burn.
+        let mask = uint.assign::<3>(region, controls.value().map(|v| v & 7))?;
+        let high = uint.assign::<29>(region, controls.value().map(|v| v >> 3))?;
+        let joined = uint.glue().linear(
+            region,
+            &[(Fp::ONE, mask.word()), (Fp::from(8), high.word())],
+            Fp::ZERO,
+        )?;
+        GlueChip::assert_equal(region, &joined, controls.word())?;
+        let mask_valid = uint.glue().is_zero(region, high.word())?;
+        let zero = uint.constant::<3>(region, 0)?;
+        let safe_mask = uint
+            .glue()
+            .select(region, &mask_valid, mask.word(), zero.word())?;
+        checks.push(mask_valid);
+        let selector = constrain_sigma_selector(uint, region, 3, &safe_mask)?;
+        let lower = inputs.statement.integer::<64>(uint, region, 24)?;
+        checks.push(le64(
+            uint,
+            region,
+            inputs.request.object().word(14)?,
+            lower.word(),
+        )?);
+        checks.push(le64(
+            uint,
+            region,
+            inputs.request.object().word(12)?,
+            epoch.word(),
+        )?);
+        payment.valid = all(uint.glue(), region, &checks)?;
+        Ok(Self { payment, selector })
+    }
+
+    /// Exact original Payment/package digests with the full consumer verdict.
+    pub const fn payment(&self) -> &PaymentCells {
+        &self.payment
+    }
+
+    /// Canonical Send sigma selector; undefined control bits select fixed Send0.
+    /// The owning relation hard-binds Q's exported selector to this value, even
+    /// when the original metadata/proof gives a false validity predicate.
+    pub const fn sigma_index(&self) -> &Word<Fp> {
+        &self.selector
+    }
 }
 impl PaymentCells {
     /// Fixed `LE16 version || request || SEC1 key || credential || package` size.

@@ -36,11 +36,12 @@ pub const CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT: [u8; 32] = [
 /// case folding, and surrounding whitespace are never accepted.
 pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/ipa",
-    "halo2/pasta/kaigi-authorization-v1",
-    "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    "pipa-r/pasta",
+    "pipa-r/pasta/kaigi-authorization-v1",
+    "pipa-r/pasta/kaigi-usage-v1",
+    "pipa-r/pasta/confidential-transfer-v1",
+    "pipa-r/pasta/confidential-unshield-full-v1",
+    "pipa-r/pasta/confidential-unshield-change-v1",
     "stark/fri/poseidon-x7-goldilocks-6x64-v1",
 ];
 /// Return true only for the admitted STARK/FRI verifier profile.
@@ -110,16 +111,19 @@ pub enum BackendTag {
     Halo2IpaPasta,
     /// Native transparent STARK/FRI.
     Stark,
+    /// Native PIPA-R transcript and IPA over the Pasta cycle.
+    NativePipaRPasta,
 }
 impl BackendTag {
     /// All generic `OpenVerify` engines, in canonical Norito order.
-    pub const ALL: [Self; 2] = [Self::Halo2IpaPasta, Self::Stark];
+    pub const ALL: [Self; 3] = [Self::Halo2IpaPasta, Self::Stark, Self::NativePipaRPasta];
     /// Return the canonical JSON label for this engine.
     #[must_use]
     pub const fn canonical_label(self) -> &'static str {
         match self {
             BackendTag::Halo2IpaPasta => "halo2-ipa-pasta",
             BackendTag::Stark => "stark",
+            BackendTag::NativePipaRPasta => "native-pipa-r-pasta",
         }
     }
     /// Parse an exact canonical JSON label.
@@ -131,6 +135,7 @@ impl BackendTag {
         match label.as_bytes() {
             b"halo2-ipa-pasta" => Some(Self::Halo2IpaPasta),
             b"stark" => Some(Self::Stark),
+            b"native-pipa-r-pasta" => Some(Self::NativePipaRPasta),
             _ => None,
         }
     }
@@ -144,15 +149,14 @@ impl BackendTag {
 #[must_use]
 pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
     match label {
-        "halo2/ipa"
-        | "halo2/pasta/kaigi-authorization-v1"
-        | "halo2/pasta/kaigi-usage-v1"
-        | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
-        | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
-        | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
-            Some(BackendTag::Halo2IpaPasta)
-        }
+        "halo2/ipa" => Some(BackendTag::Halo2IpaPasta),
         "stark/fri/poseidon-x7-goldilocks-6x64-v1" => Some(BackendTag::Stark),
+        "pipa-r/pasta"
+        | "pipa-r/pasta/kaigi-authorization-v1"
+        | "pipa-r/pasta/kaigi-usage-v1"
+        | "pipa-r/pasta/confidential-transfer-v1"
+        | "pipa-r/pasta/confidential-unshield-full-v1"
+        | "pipa-r/pasta/confidential-unshield-change-v1" => Some(BackendTag::NativePipaRPasta),
         _ => None,
     }
 }
@@ -186,6 +190,21 @@ impl norito::json::JsonDeserialize for BackendTag {
         })
     }
 }
+/// Canonical native PIPA-R proof payload with exactly one public-input column.
+///
+/// Each field element uses its canonical little-endian 32-byte representation.
+/// The exact compiled circuit identifier determines the column arity. The
+/// verifier checks field canonicality, arity and proof bytes; decoding this
+/// payload alone does not establish proof validity.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::NativePipaRProofV1")]
+pub struct NativePipaRProofV1 {
+    /// Ordered public inputs for the circuit's sole public column.
+    pub public_inputs: Vec<[u8; 32]>,
+    /// Exact native PIPA-R transcript bytes.
+    pub proof: Vec<u8>,
+}
+
 /// Size and policy bounds for validating an [`OpenVerifyEnvelope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenVerifyEnvelopeBounds {
@@ -934,8 +953,28 @@ mod tests {
         assert_eq!(&decoded, value);
     }
     #[test]
+    fn native_pipa_r_proof_has_canonical_single_column_roundtrip() {
+        let proof = NativePipaRProofV1 {
+            public_inputs: vec![[1; 32], [2; 32]],
+            proof: vec![3, 4, 5],
+        };
+        let bytes = norito::encode_canonical(&proof).expect("encode proof payload");
+        assert_eq!(
+            norito::decode_canonical::<NativePipaRProofV1>(&bytes).unwrap(),
+            proof
+        );
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<NativePipaRProofV1>(&trailing).is_err());
+        assert!(norito::decode_canonical::<NativePipaRProofV1>(&bytes[..bytes.len() - 1]).is_err());
+    }
+    #[test]
     fn backend_tag_norito_discriminants_are_exhaustive_and_canonical() {
-        for (backend, expected_tag) in [(BackendTag::Halo2IpaPasta, 0u32), (BackendTag::Stark, 1)] {
+        for (backend, expected_tag) in [
+            (BackendTag::Halo2IpaPasta, 0u32),
+            (BackendTag::Stark, 1),
+            (BackendTag::NativePipaRPasta, 2),
+        ] {
             let encoded = backend.encode();
             assert_eq!(
                 encoded.as_slice(),
@@ -953,7 +992,7 @@ mod tests {
     }
     #[test]
     fn backend_tag_norito_rejects_unknown_discriminants() {
-        for tag in [2_u32, 3, u32::MAX] {
+        for tag in [3_u32, 4, u32::MAX] {
             let encoded = tag.to_le_bytes();
             assert!(
                 BackendTag::decode(&mut encoded.as_slice()).is_err(),
@@ -966,6 +1005,7 @@ mod tests {
         for (label, expected) in [
             ("halo2-ipa-pasta", BackendTag::Halo2IpaPasta),
             ("stark", BackendTag::Stark),
+            ("native-pipa-r-pasta", BackendTag::NativePipaRPasta),
         ] {
             assert_eq!(
                 BackendTag::from_canonical_label(label),
@@ -976,7 +1016,7 @@ mod tests {
     }
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
-        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 7);
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 8);
         let mut unique = std::collections::BTreeSet::new();
         for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(unique.insert(label), "duplicate registry label: {label}");
@@ -985,6 +1025,8 @@ mod tests {
             assert!(is_verifier_backend_registry_label_v1(label));
             if label.starts_with("halo2/") {
                 assert_eq!(tag, BackendTag::Halo2IpaPasta, "{label}");
+            } else if label.starts_with("pipa-r/") {
+                assert_eq!(tag, BackendTag::NativePipaRPasta, "{label}");
             } else {
                 assert!(label.starts_with("stark/fri"), "{label}");
                 assert_eq!(tag, BackendTag::Stark, "{label}");
@@ -992,6 +1034,10 @@ mod tests {
         }
         for rejected in [
             "",
+            "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/ipa/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1/",
             "halo2/pasta/ivm-execution-v1",
             " halo2/ipa",
             "halo2/ipa ",

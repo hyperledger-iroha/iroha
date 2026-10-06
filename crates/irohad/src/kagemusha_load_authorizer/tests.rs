@@ -27,10 +27,18 @@ where
         .unwrap()
 }
 fn handles() -> (Arc<State>, Arc<Queue>) {
-    let state = Arc::new(State::new_for_testing(
+    let scheme: KagemushaWalletSchemeV1 = fixture("KagemushaWalletSchemeV1");
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            scheme.network_id,
+        )),
+    );
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
+        "kagemusha-load-authorizer-test".parse().unwrap(),
+        network,
     ));
     let (events, _) = tokio::sync::broadcast::channel(1);
     let queue = Arc::new(Queue::from_config(
@@ -72,7 +80,7 @@ fn config(state: &State) -> KagemushaLoadAuthorizer {
     KagemushaLoadAuthorizer {
         custody: Some(
             iroha_config::parameters::actual::KagemushaLoadAuthorizerCustody {
-                keyring: zeroize::Zeroizing::new(norito::to_bytes(&keyring).unwrap()),
+                keyring: zeroize::Zeroizing::new(norito::encode_canonical(&keyring).unwrap()),
                 submitter: KeyPair::from_seed(vec![0x65; 32], iroha_crypto::Algorithm::Ed25519),
             },
         ),

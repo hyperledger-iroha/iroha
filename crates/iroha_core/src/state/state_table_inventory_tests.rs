@@ -5515,15 +5515,15 @@ const DEFECTS: &[Defect] = &[
         title: "Root-valued canonical World cells have no writer",
         assigned: "G.3",
         related: &[],
-        required: "Either give world.merge_hint_roots and world.merge_global_state_root a committed writer and a defined relation to the keyed State root, or remove the cells. Their only writer has no caller, so they would enter the keyed schema as a permanently default root-named value.",
+        required: "Either give world.merge_hint_roots and world.merge_global_state_root a committed writer and a defined relation to the keyed State root, or remove the cells. Their unused writer was removed; without a committed writer they remain permanently default root-named values in the keyed schema.",
         evidence: &[
             (
                 "crates/iroha_core/src/state/authority_registry/world.rs",
                 "merge_global_state_root: Cell<Option<Hash>> => (\"world.merge_global_state_root\",",
             ),
             (
-                "crates/iroha_core/src/state.rs",
-                "stage_merge_metadata_values(",
+                "crates/iroha_core/src/state/authority_registry/world.rs",
+                "merge_hint_roots: Cell<Vec<Hash>> => (\"world.merge_hint_roots\",",
             ),
         ],
     },
@@ -5598,7 +5598,7 @@ const DEFECTS: &[Defect] = &[
             ),
             (
                 "crates/iroha_core/src/state/authority_registry/world.rs",
-                "Role::Derived { sources: &[\"world.space_directory_manifests\", \"world.axt_handle_counters\", \"runtime.lanes\", \"runtime.lane_incarnation_lineage\", \"state.nexus\", \"state.block_hashes\"], check: DerivationCheck::Rebuild(\"World::rebuild_axt_policies_from_space_directory; exact authenticated slot and lane policy\") });",
+                "Role::Derived { sources: &[\"world.space_directory_manifests\", \"world.axt_handle_counters\", \"runtime.lanes\", \"runtime.lane_incarnation_lineage\", \"state.nexus\", \"state.block_hashes\"], check: DerivationCheck::Rebuild(\"World::rebuild_axt_policies_from_space_directory; exact authenticated slot and lane policy\") }), release = axt_policies;",
             ),
         ],
     },

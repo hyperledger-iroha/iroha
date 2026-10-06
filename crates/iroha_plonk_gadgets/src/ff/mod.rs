@@ -102,9 +102,12 @@
 //! witness values). Witness arithmetic uses the constant-time [`Nat`]
 //! routines; moduli and bounds are public.
 
+#[cfg(test)]
+mod bounded_tests;
 pub mod dot;
 pub mod mont;
 pub mod nat;
+mod reduction;
 pub mod rotated;
 mod s6;
 pub mod serialized;
@@ -189,6 +192,8 @@ const fn mask(bits: usize) -> u128 {
 
 /// Limb bounds of a proper value.
 pub const PROPER_BOUNDS: [u128; LIMBS] = [mask(LIMB_BITS), mask(LIMB_BITS), mask(TOP_LIMB_BITS)];
+/// Stronger unsigned result envelope used only by the staged Pasta kernel.
+const NARROW_PROPER_BOUNDS: [u128; LIMBS] = [mask(LIMB_BITS), mask(LIMB_BITS), mask(81)];
 
 /// The largest operand limb.
 pub const OPERAND_LIMB_MAX: u128 = mask(OPERAND_LIMB_BITS);
@@ -542,6 +547,18 @@ impl<'v, F: PastaField> Operand<'v, F> {
         self.value.map_or(self.constant, |value| value.bounds)
     }
 
+    /// Structural admission for the unsigned three-carry product. Constants
+    /// are pinned; values must retain a proved Proper or Canonical form.
+    fn is_proper(&self) -> bool {
+        self.value
+            .is_none_or(|value| matches!(value.form, Form::Proper | Form::Canonical))
+            && self
+                .bounds()
+                .iter()
+                .zip(PROPER_BOUNDS)
+                .all(|(bound, maximum)| *bound <= maximum)
+    }
+
     fn limb_values(&self) -> Value<[Nat; LIMBS]> {
         self.value.map_or_else(
             || Value::known(self.constant.map(Nat::from_u128)),
@@ -600,6 +617,14 @@ enum Mode {
     Mul,
     /// `b c = a + q m - K`.
     Div,
+}
+
+/// A structural CRT envelope; all choices retain the same native residue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CarryLayout {
+    Full,
+    ProperProduct,
+    BoundedPasta,
 }
 
 /// Selectors of one configured modulus.
@@ -1395,6 +1420,7 @@ impl<F: PastaField> FfChip<F> {
         mode: Mode,
         operands: ([Slot<'_, F>; LIMBS], [Slot<'_, F>; LIMBS]),
         witness: Value<FusedWitness<F>>,
+        carry_layout: CarryLayout,
     ) -> Result<[Word<F>; LIMBS], Error> {
         if let Some(state) = &mut self.serialized {
             if gates.fused.is_some() {
@@ -1416,6 +1442,17 @@ impl<F: PastaField> FfChip<F> {
             let right = place(operands.1)?;
             self.blocks = self.blocks.checked_add(1).ok_or(Error::BoundsFailure)?;
             if let Some(kernel) = state.kernel {
+                if carry_layout != CarryLayout::Full && kernel.is_staged() {
+                    return kernel.constrain_short_product(
+                        &mut state.glue,
+                        &mut state.range,
+                        region,
+                        mode,
+                        (&left, &right),
+                        witness,
+                        carry_layout,
+                    );
+                }
                 return kernel.constrain(
                     &mut state.glue,
                     &mut state.range,
@@ -1529,6 +1566,41 @@ impl<F: PastaField> FfChip<F> {
                 == Ordering::Less
     }
 
+    /// Unsigned bounded Pasta products with a proved integer product below
+    /// 2^512 and each operand limb below2^88. These bounds, not Form or honest
+    /// values, admit q87/87/85 and three offset92/range93 carries.
+    fn bounded_product_admissible(
+        modulus: ForeignModulus,
+        a: &[u128; LIMBS],
+        b: &[u128; LIMBS],
+    ) -> bool {
+        modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt()
+            && modulus.nat().cmp_vartime(&Nat::pow2(255)).is_lt()
+            && a.iter().chain(b).all(|bound| *bound < 1 << 88)
+            && value_bound(a)
+                .wrapping_mul(&value_bound(b))
+                .cmp_vartime(&Nat::pow2(512))
+                .is_lt()
+    }
+
+    /// Padded division in the same three-carry envelope. The numerator keeps
+    /// the original94-bit admission; the nonnegative divisor has a tracked
+    /// value below2^257 and limbs below2^89, with fixed padding below2^95.
+    fn bounded_division_admissible(
+        modulus: ForeignModulus,
+        a: &[u128; LIMBS],
+        b: &[u128; LIMBS],
+    ) -> bool {
+        modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt()
+            && modulus.nat().cmp_vartime(&Nat::pow2(255)).is_lt()
+            && within_envelope(a)
+            && b.iter().all(|bound| *bound < 1 << 89)
+            && value_bound(b).cmp_vartime(&Nat::pow2(257)).is_lt()
+            && modulus
+                .division_padding()
+                .is_some_and(|(_, padding)| padding.iter().all(|limb| *limb < 1 << 95))
+    }
+
     fn fused_mul(
         &mut self,
         region: &mut Region<'_, F>,
@@ -1544,10 +1616,26 @@ impl<F: PastaField> FfChip<F> {
             .limb_values()
             .zip(b.limb_values())
             .map(|(a, b)| mul_witness::<F>(modulus, &a, &b));
-        let limbs = self.fused_block(region, gates, Mode::Mul, (a.slots(), b.slots()), witness)?;
+        let carry_layout =
+            if a.is_proper() && b.is_proper() && modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt()
+            {
+                CarryLayout::ProperProduct
+            } else if Self::bounded_product_admissible(modulus, &a.bounds(), &b.bounds()) {
+                CarryLayout::BoundedPasta
+            } else {
+                CarryLayout::Full
+            };
+        let limbs = self.fused_block(
+            region,
+            gates,
+            Mode::Mul,
+            (a.slots(), b.slots()),
+            witness,
+            carry_layout,
+        )?;
         Ok(FfValue {
             limbs,
-            bounds: PROPER_BOUNDS,
+            bounds: self.fused_result_bounds(),
             modulus,
             form: Form::Proper,
         })
@@ -1568,13 +1656,32 @@ impl<F: PastaField> FfChip<F> {
             .limb_values()
             .zip(b.limb_values())
             .map(|(a, b)| div_witness::<F>(modulus, &a, &b));
-        let limbs = self.fused_block(region, gates, Mode::Div, (a.slots(), b.slots()), witness)?;
+        let carry_layout = if Self::bounded_division_admissible(modulus, &a.bounds(), &b.bounds()) {
+            CarryLayout::BoundedPasta
+        } else {
+            CarryLayout::Full
+        };
+        let limbs = self.fused_block(
+            region,
+            gates,
+            Mode::Div,
+            (a.slots(), b.slots()),
+            witness,
+            carry_layout,
+        )?;
         Ok(FfValue {
             limbs,
-            bounds: PROPER_BOUNDS,
+            bounds: self.fused_result_bounds(),
             modulus,
             form: Form::Proper,
         })
+    }
+
+    fn fused_result_bounds(&self) -> [u128; LIMBS] {
+        self.serialized
+            .as_ref()
+            .and_then(|state| state.kernel)
+            .map_or(PROPER_BOUNDS, |kernel| kernel.result_bounds())
     }
 
     /// Evaluates a fixed unsigned Proper dot batch on the explicitly shared
@@ -1599,8 +1706,9 @@ impl<F: PastaField> FfChip<F> {
         dot::UnsignedDot::evaluate(&mut state.glue, &mut state.range, region, pairs)
     }
 
-    /// Reduces `x` to a proper value congruent to it: one multiplication by
-    /// the constant one. A proper or canonical `x` is returned unchanged.
+    /// Reduces `x` to a proper value congruent to it. The serialized layout
+    /// uses the bounded unsigned reduction predicate; the fused layout uses
+    /// multiplication by one. A proper or canonical `x` is returned unchanged.
     ///
     /// # Errors
     ///
@@ -1615,6 +1723,9 @@ impl<F: PastaField> FfChip<F> {
             return Ok(x.clone());
         }
         let gates = self.gates_of(x.modulus, &[])?;
+        if let Some(state) = &mut self.serialized {
+            return reduction::reduce(&mut state.glue, &mut state.range, region, x);
+        }
         self.fused_mul(
             region,
             gates,

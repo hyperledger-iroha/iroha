@@ -7,11 +7,21 @@
 //! spare columns, then checks the same residuals using only -1, 0, 1. Its
 //! streaming unsigned dot gate accumulates those same five quantities from a
 //! constrained zero state. Every result/quotient/carry root is copied from an independent exact range
-//! certificate; no integer bound or admission rule changes with this layout.
+//! certificate. Single unsigned Proper products with m>2^254 additionally
+//! admit a narrower finish: q<2^258 and three signed carries of magnitude
+//! below2^89. For a modulus in (2^254,2^255), dot inputs carrying a proved
+//! strict2^255 bound also admit three carries, with quotient87/87/85 and
+//! offset92/range93. Every staged result under those moduli explicitly checks
+//! its top81 bits and carries that stronger Proper bound. Separately admitted
+//! bounded Pasta products/divisions use that same offset92 finish: multiplication
+//! has limbs<2^88 and tracked product<2^512; division has divisor limbs<2^89,
+//! divisor value<2^257, numerator limbs<2^94 and exact padding limbs<2^95.
+//! Wider operations retain their four-carry admission. Results
+//! remain Proper; Canonical requires the separate integer comparison.
 
 use super::{
-    CARRIES, CARRY_OFFSET_BITS, ForeignModulus, FusedTerms, FusedWitness, LIMB_BITS, LIMBS, Mode,
-    TOP_LIMB_BITS, fused_constraints, serialized::ranged,
+    CARRIES, CARRY_OFFSET_BITS, CarryLayout, ForeignModulus, FusedTerms, FusedWitness, LIMB_BITS,
+    LIMBS, Mode, TOP_LIMB_BITS, fused_constraints, serialized::ranged,
 };
 use crate::{
     GlueChip, Word,
@@ -42,6 +52,9 @@ struct Staged {
     phases: PhaseColumns,
 }
 impl Staged {
+    fn proper_finish(self) -> Enable {
+        self.phases.enable(1, Some((5, 5, 5)))
+    }
     fn finish(self) -> Enable {
         self.phases.enable(1, Some((2, 4, 4)))
     }
@@ -57,6 +70,40 @@ impl Staged {
 }
 
 impl RotatedFfConfig {
+    /// This is a proved result bound only because every result assignment below
+    /// uses these same widths. Modulus identity alone never narrows an input.
+    pub(super) fn result_bounds(&self) -> [u128; LIMBS] {
+        if self.staged.is_some()
+            && self
+                .modulus
+                .nat()
+                .cmp_vartime(&super::Nat::pow2(254))
+                .is_gt()
+            && self
+                .modulus
+                .nat()
+                .cmp_vartime(&super::Nat::pow2(255))
+                .is_lt()
+        {
+            super::NARROW_PROPER_BOUNDS
+        } else {
+            super::PROPER_BOUNDS
+        }
+    }
+    fn result_widths(&self) -> [usize; LIMBS] {
+        [
+            LIMB_BITS,
+            LIMB_BITS,
+            if self.result_bounds() == super::NARROW_PROPER_BOUNDS {
+                81
+            } else {
+                TOP_LIMB_BITS
+            },
+        ]
+    }
+    pub(super) const fn is_staged(&self) -> bool {
+        self.staged.is_some()
+    }
     /// Uses two ordinary selectors for the fixed modulus. Kernel rows and
     /// ordinary Glue rows must share one reservation cursor.
     pub fn configure<F: PastaField>(
@@ -69,7 +116,7 @@ impl RotatedFfConfig {
         Self::configure_on(meta, columns, modulus, mul, div, None)
     }
     /// Reuses ECC phase payload five codes3/4. The shared ECC configuration
-    /// must use the same four-code domain for guard/split enables.
+    /// must use the same six-code domain0..5 for guard/split enables.
     pub fn configure_phased<F: PastaField>(
         meta: &mut ConstraintSystem<F>,
         columns: [Column<Advice>; 4],
@@ -80,8 +127,8 @@ impl RotatedFfConfig {
             meta,
             columns,
             modulus,
-            phases.enable(1, Some((5, 3, 4))),
-            phases.enable(1, Some((5, 4, 4))),
+            phases.enable(1, Some((5, 3, 5))),
+            phases.enable(1, Some((5, 4, 5))),
             None,
         )
     }
@@ -108,8 +155,8 @@ impl RotatedFfConfig {
             meta,
             columns,
             modulus,
-            phases.enable(1, Some((5, 3, 4))),
-            phases.enable(1, Some((5, 4, 4))),
+            phases.enable(1, Some((5, 3, 5))),
+            phases.enable(1, Some((5, 4, 5))),
             Some(Staged { sums, phases }),
         )
     }
@@ -199,12 +246,7 @@ impl RotatedFfConfig {
         if glue.config().advice() != self.columns {
             return Err(Error::Synthesis);
         }
-        let result = ranged(
-            range,
-            region,
-            witness.map(|w| w.c),
-            [LIMB_BITS, LIMB_BITS, TOP_LIMB_BITS],
-        )?;
+        let result = ranged(range, region, witness.map(|w| w.c), self.result_widths())?;
         let quotient = ranged(range, region, witness.map(|w| w.q), [LIMB_BITS; LIMBS])?;
         let carries = ranged(
             range,
@@ -260,6 +302,117 @@ impl RotatedFfConfig {
         Ok(result)
     }
 
+    /// The caller has checked unsigned Proper87/87/82 operands. For B=2^87,
+    /// m>2^254 implies q<2^258. The first three column residuals satisfy
+    /// `|D_j|<3B^2` and `|carry_j|<4B=2^89`. Arbitrary admitted90-bit offset
+    /// carries make local residuals smaller than2^178, below either native
+    /// prime N. Three exact low equalities imply B^3 divides ab-c-qm; its
+    /// native residue adds N. Finally |ab-c-qm|<2^515<B^3*N, so the integer
+    /// equality follows. A separate bounded Pasta admission uses offset92,
+    /// range93 and q87/87/85, including explicitly bounded padded division.
+    /// Its selected finish gate already checks the same staged products and
+    /// native residue. The caller proves the corresponding tracked admission.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn constrain_short_product<F: PastaField>(
+        &self,
+        glue: &mut GlueChip<F>,
+        range: &mut RunningSumChip<F>,
+        region: &mut Region<'_, F>,
+        mode: Mode,
+        operands: (&[Word<F>; LIMBS], &[Word<F>; LIMBS]),
+        witness: Value<FusedWitness<F>>,
+        layout: CarryLayout,
+    ) -> Result<[Word<F>; LIMBS], Error> {
+        let staged = self.staged.ok_or(Error::Synthesis)?;
+        if glue.config().advice() != self.columns
+            || layout == CarryLayout::Full
+            || (mode == Mode::Div && layout == CarryLayout::ProperProduct)
+            || !self
+                .modulus
+                .nat()
+                .cmp_vartime(&super::Nat::pow2(254))
+                .is_gt()
+        {
+            return Err(Error::Synthesis);
+        }
+        let bounded = layout == CarryLayout::BoundedPasta;
+        if bounded
+            && !self
+                .modulus
+                .nat()
+                .cmp_vartime(&super::Nat::pow2(255))
+                .is_lt()
+        {
+            return Err(Error::Synthesis);
+        }
+        let result = ranged(range, region, witness.map(|w| w.c), self.result_widths())?;
+        let quotient = ranged(
+            range,
+            region,
+            witness.map(|w| w.q),
+            [LIMB_BITS, LIMB_BITS, if bounded { 85 } else { 84 }],
+        )?;
+        let carries = ranged(
+            range,
+            region,
+            witness.map(|w| {
+                core::array::from_fn::<_, 3, _>(|i| {
+                    w.u[i] - F::from_u128(1 << CARRY_OFFSET_BITS)
+                        + F::from_u128(1 << if bounded { 92 } else { 89 })
+                })
+            }),
+            [if bounded { 93 } else { 90 }; 3],
+        )?;
+        let start = glue.reserve_shared_rows(4)?;
+        let (left, right, subtracted, padding) = match mode {
+            Mode::Mul => (operands.0, operands.1, &result, [0; LIMBS]),
+            Mode::Div => (
+                operands.1,
+                &result,
+                operands.0,
+                self.modulus.division_padding().ok_or(Error::Synthesis)?.1,
+            ),
+        };
+        match mode {
+            Mode::Mul => self.mul,
+            Mode::Div => self.div,
+        }
+        .enable(region, start + 1)?;
+        if bounded {
+            staged.finish().enable(region, start + 2)?;
+            staged.carry().enable(region, start + 2)?;
+        } else {
+            staged.proper_finish().enable(region, start + 2)?;
+        }
+        for (i, word) in left
+            .iter()
+            .chain(right)
+            .chain(subtracted)
+            .chain(&quotient)
+            .chain(&carries)
+            .enumerate()
+        {
+            copy_word(region, word, self.columns[i % 4], start + i / 4)?;
+        }
+        let values = left
+            .iter()
+            .chain(right)
+            .fold(Value::known(Vec::new()), |values, word| {
+                values.zip(word.value()).map(|(mut values, word)| {
+                    values.push(word);
+                    values
+                })
+            });
+        let values = values.map(|values| product_values(&values[..3], &values[3..], padding));
+        for (i, column) in staged.sums.into_iter().enumerate() {
+            region.assign_advice(column, start + 2, values.map(|v| v[i]))?;
+            if bounded {
+                region.assign_advice(column, start + 3, values.map(|v| v[i]))?;
+            }
+        }
+        Ok(result)
+    }
+
     pub(super) fn dot<F: PastaField>(
         &self,
         glue: &mut GlueChip<F>,
@@ -302,19 +455,35 @@ impl RotatedFfConfig {
         if glue.config().advice() != self.columns || super::dot::admitted(pairs)? != self.modulus {
             return Err(Error::Synthesis);
         }
-        let result = ranged(
+        let narrow = super::dot::narrow(pairs);
+        let result = ranged(range, region, witness.map(|w| w.c), self.result_widths())?;
+        let quotient = ranged(
             range,
             region,
-            witness.map(|w| w.c),
-            [LIMB_BITS, LIMB_BITS, TOP_LIMB_BITS],
+            witness.map(|w| w.q),
+            [LIMB_BITS, LIMB_BITS, if narrow { 85 } else { LIMB_BITS }],
         )?;
-        let quotient = ranged(range, region, witness.map(|w| w.q), [LIMB_BITS; LIMBS])?;
-        let carries = ranged(
-            range,
-            region,
-            witness.map(|w| w.u),
-            [CARRY_OFFSET_BITS + 1; CARRIES],
-        )?;
+        let carries = if narrow {
+            ranged(
+                range,
+                region,
+                witness.map(|w| {
+                    core::array::from_fn::<_, 3, _>(|i| {
+                        w.u[i] - F::from_u128(1 << CARRY_OFFSET_BITS) + F::from_u128(1 << 92)
+                    })
+                }),
+                [93; 3],
+            )?
+            .to_vec()
+        } else {
+            ranged(
+                range,
+                region,
+                witness.map(|w| w.u),
+                [CARRY_OFFSET_BITS + 1; CARRIES],
+            )?
+            .to_vec()
+        };
         let start = glue.reserve_shared_rows(2 * pairs.len() + 3)?;
         staged.zero().enable(region, start + 1)?;
         let mut sums = Value::known([F::ZERO; 5]);
@@ -350,6 +519,14 @@ impl RotatedFfConfig {
             region.assign_advice(*column, finish, sums.map(|s| s[j]))?;
         }
         staged.finish().enable(region, finish)?;
+        if narrow {
+            // Existing carry code doubles as a fixed narrow-finish flag. Its
+            // original equation remains active and binds every copied sum.
+            staged.carry().enable(region, finish)?;
+            for (i, column) in staged.sums.iter().enumerate() {
+                region.assign_advice(*column, finish + 1, sums.map(|s| s[i]))?;
+            }
+        }
         for (i, word) in result.iter().chain(&quotient).chain(&carries).enumerate() {
             let index = i + 6;
             copy_word(
@@ -361,7 +538,7 @@ impl RotatedFfConfig {
         }
         Ok(Some(super::FfValue::from_parts(
             result,
-            super::PROPER_BOUNDS,
+            self.result_bounds(),
             self.modulus,
             super::Form::Proper,
         )))
@@ -496,8 +673,14 @@ fn configure_staged<F: PastaField>(
         let products = staged
             .sums
             .map(|column| cells.query_advice(column, Rotation::cur()));
+        // On a finish row this fixed payload is zero (wide) or the existing
+        // carry code three (narrow). Every non-finish row is disabled below.
+        let narrow = cells.query_fixed(staged.phases.coefficients()[3], Rotation::cur())
+            * F::from(3).invert().expect("three is nonzero");
         let carry = core::array::from_fn::<_, CARRIES, _>(|i| {
-            roots[6 + i].clone() - super::constant::<F>(1 << CARRY_OFFSET_BITS)
+            let offset = super::constant::<F>(1 << CARRY_OFFSET_BITS)
+                + narrow.clone() * (F::from_u128(1 << 92) - F::from_u128(1 << CARRY_OFFSET_BITS));
+            roots[6 + i].clone() - offset
         });
         let radix = F::from_u128(1 << LIMB_BITS);
         let m = modulus.limbs();
@@ -516,12 +699,57 @@ fn configure_staged<F: PastaField>(
                     value = value - roots[3 + i].clone() * F::from_u128(m[j]);
                 }
             }
-            residuals.push(q.clone() * value);
+            residuals.push(
+                q.clone()
+                    * value
+                    * if column == 3 {
+                        super::constant::<F>(1) - narrow.clone()
+                    } else {
+                        super::constant::<F>(1)
+                    },
+            );
         }
         residuals.push(
             q * (products[4].clone()
                 - super::recompose(&roots[..3])
                 - super::recompose(&roots[3..6]) * modulus.nat().to_field::<F>()),
+        );
+        residuals
+    });
+    meta.create_gate("staged Proper product three-carry residuals", |cells| {
+        let roots: [_; 9] = core::array::from_fn(|i| {
+            let index = i + 6;
+            cells.query_advice(
+                ports[index % 4],
+                Rotation(i32::try_from(index / 4).expect("four rows") - 2),
+            )
+        });
+        let products = staged
+            .sums
+            .map(|column| cells.query_advice(column, Rotation::cur()));
+        let carries = core::array::from_fn::<_, 3, _>(|i| {
+            roots[6 + i].clone() - super::constant::<F>(1 << 89)
+        });
+        let radix = F::from_u128(1 << LIMB_BITS);
+        let modulus_limbs = modulus.limbs();
+        let enabled = staged.proper_finish().query(cells);
+        let mut residuals = Vec::new();
+        for column in 0..3 {
+            let mut value =
+                products[column].clone() - roots[column].clone() - carries[column].clone() * radix;
+            if column > 0 {
+                value = value + carries[column - 1].clone();
+            }
+            for i in 0..=column {
+                value = value - roots[3 + i].clone() * F::from_u128(modulus_limbs[column - i]);
+            }
+            residuals.push(enabled.clone() * value);
+        }
+        residuals.push(
+            enabled
+                * (products[4].clone()
+                    - super::recompose(&roots[..3])
+                    - super::recompose(&roots[3..6]) * modulus.nat().to_field::<F>()),
         );
         residuals
     });

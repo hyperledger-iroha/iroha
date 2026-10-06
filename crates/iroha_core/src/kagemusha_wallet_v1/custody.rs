@@ -43,7 +43,7 @@ pub(crate) fn is_reserve_definition(
 ) -> Result<bool> {
     has_reference(world, &storage::reserve_definition_key(definition)?)
 }
-fn has_reference(world: &impl WorldReadOnly, key: &LedgerKey) -> Result<bool> {
+fn has_reference(world: &impl WorldReadOnly, key: &KagemushaWalletLedgerKeyV1) -> Result<bool> {
     world
         .kagemusha_wallet_ledger()
         .get(key)

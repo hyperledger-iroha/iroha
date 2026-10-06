@@ -28,12 +28,11 @@ path = "tests/grouped.rs"
 required-features = ["zk-tests"]
 
 [features]
-# Every build includes genuine Halo2/Pasta IPA proving and verification. Defaults
-# additionally select STARK and advisory pre-verification; test fixtures remain
-# separately selected.
+# Every build includes native PIPA-R proving and verification. Defaults also
+# select STARK and advisory pre-verification; test fixtures remain separate.
 default = ["proofs-stark", "zk-preverify"]
 proofs-stark = ["zk-stark"]
-# Halo2, Pasta IPA and Native opening/proving are mandatory in every build.
+# Native PIPA-R opening/proving is mandatory in every build.
 # STARK remains a separately selected algorithm.
 zk-stark = ["dep:fastpq_prover"]
 # Enable stateless advisory pre-verification, deduplication, and trace diagnostics.
@@ -47,6 +46,9 @@ test-utils = []
 zk-tests = ["test-utils"]
 
 [dependencies]
+iroha_plonk_gadgets = { path = "../iroha_plonk_gadgets", default-features = false }
+iroha_plonk = { path = "../iroha_plonk", default-features = false }
+iroha_pasta = { path = "../iroha_pasta", default-features = false }
 iroha_fs = { workspace = true }
 iroha_primitives = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -59,13 +61,7 @@ tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 ff = "0.13.1"
-# The confidential note tree uses the Axiom Poseidon specification and native
-# sponge in production. These revisions are pinned by the workspace lockfile so
-# verification never depends on a test-only feature surface.
-halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 iroha_zkp_halo2 = { workspace = true }
-iroha_zkp_poseidon = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk" }
 base64 = { workspace = true }
 blake3 = "1.8.2"
@@ -81,4 +77,7 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
 
 [dev-dependencies]
+# Temporary independent Poseidon oracle; retired with the oracle milestone.
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
+iroha_zkp_poseidon = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures"] }

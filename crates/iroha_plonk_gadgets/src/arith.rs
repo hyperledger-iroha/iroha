@@ -23,6 +23,8 @@
 //! Constants are pinned either by the standard gate (`a + q_k = 0`) or
 //! through the constants column ([`GlueChip::assert_constant`]).
 
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+
 use iroha_pasta::PastaField;
 use iroha_plonk::{
     cs::{Advice, Column, ConstraintSystem, Expression, Fixed, Rotation, Selector},
@@ -247,12 +249,15 @@ pub(crate) enum Slot<'w, F: PastaField> {
     Value(Value<F>),
 }
 
+type ConstantCache<F> = Rc<RefCell<BTreeMap<F, Word<F>>>>;
+
 /// The glue chip: one operation per row, allocated from its own cursor.
 #[derive(Clone, Debug)]
 pub struct GlueChip<F: PastaField> {
     config: GlueConfig,
     rows: RowCursor,
     shared_rows: Option<SharedRows>,
+    constants: Option<ConstantCache<F>>,
     _marker: core::marker::PhantomData<F>,
 }
 
@@ -278,6 +283,7 @@ impl<F: PastaField> GlueChip<F> {
             config,
             rows,
             shared_rows: None,
+            constants: None,
             _marker: core::marker::PhantomData,
         }
     }
@@ -290,7 +296,41 @@ impl<F: PastaField> GlueChip<F> {
             config,
             rows: RowCursor::starting_at(0),
             shared_rows: Some(rows.clone()),
+            constants: None,
             _marker: core::marker::PhantomData,
+        }
+    }
+
+    /// Reuses cells already pinned to exact circuit-fixed constants across
+    /// clones of this bounded shared lane. Keys are explicit constants, never
+    /// witness values. Construct a fresh chip and cache for each synthesis.
+    ///
+    /// # Errors
+    /// The chip does not own a bounded shared row cursor.
+    pub fn with_shared_constant_cache(mut self) -> Result<Self, Error> {
+        if !self
+            .shared_rows
+            .as_ref()
+            .is_some_and(SharedRows::is_bounded)
+        {
+            return Err(Error::Synthesis);
+        }
+        self.constants = Some(Rc::new(RefCell::new(BTreeMap::new())));
+        Ok(self)
+    }
+
+    fn cached_constant(&self, constant: F) -> Option<Word<F>> {
+        self.constants
+            .as_ref()
+            .and_then(|values| values.borrow().get(&constant).cloned())
+    }
+
+    fn remember_constant(&self, constant: F, word: &Word<F>) {
+        if let Some(values) = &self.constants {
+            values
+                .borrow_mut()
+                .entry(constant)
+                .or_insert_with(|| word.clone());
         }
     }
 
@@ -426,6 +466,9 @@ impl<F: PastaField> GlueChip<F> {
     ///
     /// [`Error`] when the row is out of range.
     pub fn constant(&mut self, region: &mut Region<'_, F>, constant: F) -> Result<Word<F>, Error> {
+        if let Some(word) = self.cached_constant(constant) {
+            return Ok(word);
+        }
         let coefficients = Coefficients {
             a: F::ONE,
             k: -constant,
@@ -437,7 +480,9 @@ impl<F: PastaField> GlueChip<F> {
             Slot::Empty,
             Slot::Empty,
         ];
-        self.row_output(region, coefficients, slots, None, 0)
+        let word = self.row_output(region, coefficients, slots, None, 0)?;
+        self.remember_constant(constant, &word);
+        Ok(word)
     }
 
     /// `x + y`.
@@ -625,8 +670,11 @@ impl<F: PastaField> GlueChip<F> {
         x: &Word<F>,
         constant: F,
     ) -> Result<(), Error> {
+        if let Some(pinned) = self.cached_constant(constant) {
+            return Self::assert_equal(region, x, &pinned);
+        }
         if self.config.constant_column {
-            Self::assert_constant(region, x, constant)
+            Self::assert_constant(region, x, constant)?;
         } else {
             self.row(
                 region,
@@ -637,9 +685,10 @@ impl<F: PastaField> GlueChip<F> {
                 },
                 [Slot::Copy(x), Slot::Empty, Slot::Empty, Slot::Empty],
                 None,
-            )
-            .map(|_| ())
+            )?;
         }
+        self.remember_constant(constant, x);
+        Ok(())
     }
 
     /// Constrains `x != 0` with an inverse witness (`x inv - 1 = 0`).
@@ -918,3 +967,7 @@ mod tests {
         assert_eq!(zero.k, Fp::ZERO);
     }
 }
+
+#[cfg(test)]
+#[path = "arith_constant_cache_tests.rs"]
+mod constant_cache_tests;

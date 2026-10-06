@@ -1,11 +1,10 @@
 // ZK envelope and batch-verification regression tests for the CoreHost.
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_maps_errors_and_ok() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
     let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -41,15 +40,14 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
         Err(ivm::host::ERR_VK_MISMATCH)
     );
 }
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
-    host.halo2_config.max_envelope_bytes = usize::MAX;
-    host.halo2_config.max_proof_bytes = usize::MAX;
-    let backend = "halo2/ipa";
+    host.pipa_r_config.max_envelope_bytes = usize::MAX;
+    host.pipa_r_config.max_proof_bytes = usize::MAX;
+    let backend = "pipa-r/pasta";
     let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
     let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -142,25 +140,24 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
             "{label} should map to the shared validation error code"
         );
     }
-    host.halo2_config.max_proof_bytes = 8;
+    host.pipa_r_config.max_proof_bytes = 8;
     let too_large_proof = dummy_env(
         circuit_id,
         commitment,
         public_inputs,
-        vec![0xAA; host.halo2_config.max_proof_bytes + 1],
+        vec![0xAA; host.pipa_r_config.max_proof_bytes + 1],
     );
     assert_eq!(
         host.enforce_zk_envelope(&too_large_proof, "transfer"),
         Err(ivm::host::ERR_PROOF_LEN)
     );
 }
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
     let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -206,13 +203,12 @@ fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
         Err(ivm::host::ERR_NAMESPACE)
     );
 }
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
     let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -491,10 +487,9 @@ fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
         );
     }
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
-fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
-    let backend = "halo2/ipa";
+fn generic_verify_proof_revalidates_injected_native_material_at_dispatch() {
+    let backend = "pipa-r/pasta";
     let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
     let public_inputs = vec![1_u8, 2, 3, 4];
     let mut vk_bytes = b"ZK1\0H2VK".to_vec();
@@ -522,9 +517,11 @@ fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
         PreparedVerifyingKey {
             record,
             backend_label: Arc::from(backend),
-            material: Some(crate::zk::PreparedVerifyingKeyMaterialV1::Halo2IpaPasta {
-                ipa_k: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
-            }),
+            material: Some(
+                crate::zk::PreparedVerifyingKeyMaterialV1::NativePipaRPasta {
+                    ipa_k: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+                },
+            ),
         },
     );
     let payload = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
@@ -668,13 +665,12 @@ fn zk_verify_batch_reports_backend_verifier_failure_after_prechecks() {
     assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
     assert_eq!(vm.register(12), 1);
 }
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
     let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
