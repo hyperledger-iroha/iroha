@@ -20,6 +20,25 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+/// Optional online finalized-load publication service defaults.
+pub mod kagemusha_load_authorizer {
+    /// Maximum encoded private Norito keyring bytes admitted at startup.
+    pub const KEYRING_MAX_BYTES: usize = 65_536;
+    /// Retry cadence while the chain, worker or submitter is unavailable.
+    pub const POLL_INTERVAL_MS: u64 = 1_000;
+    /// Bounded pending identities per tick.
+    pub const PAGE_SIZE: usize = 16;
+    /// Maximum original block frame bytes.
+    pub const BLOCK_BYTES: usize = 2 * 1024 * 1024;
+    /// Maximum original history bytes per tick.
+    pub const JOURNAL_BYTES: usize = 16 * 1024 * 1024;
+    /// Maximum original block frames per tick.
+    pub const BLOCK_COUNT: usize = 64;
+    /// Maximum Norito decoded allocation per tick.
+    pub const ALLOCATED_BYTES: usize = 32 * 1024 * 1024;
+    /// Normal online publication transaction expiration; vouchers themselves never expire here.
+    pub const TRANSACTION_TTL_MS: u64 = 60_000;
+}
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
@@ -175,8 +194,6 @@ pub mod data_dir {
     pub const STREAMING_KEY: &str = "streaming.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
-    /// KAGEMUSHA mint-finality seed.
-    pub const MINT_FINALITY_SEED: &str = "mint_finality.seed";
     /// Global beacon partial-signer credential.
     pub const BEACON_CREDENTIAL: &str = "beacon.cred";
     /// Faucet authority private key (`torii.faucet.private_key_file`).
@@ -3475,8 +3492,6 @@ pub mod nexus {
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
-        /// Finite original allocation pool shared by fixed KAGEMUSHA indexes.
-        pub const KAGEMUSHA_OPERATION_INDEX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
         /// Exact backing for one maximum-size committed-evidence prune-key plan.

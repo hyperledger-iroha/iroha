@@ -47,9 +47,7 @@ pub(super) struct Permuted<F> {
     compressed_table: Vec<F>,
     input_values: Vec<F>,
     table_values: Vec<F>,
-    input_poly: Vec<F>,
     input_blind: F,
-    table_poly: Vec<F>,
     table_blind: F,
 }
 
@@ -244,18 +242,12 @@ where
             .to_affine();
         write_point(transcript, &input_commitment)?;
         write_point(transcript, &table_commitment)?;
-        let mut input_poly = permuted_input.clone();
-        pk.domain().ifft(&mut input_poly)?;
-        let mut table_poly = permuted_table.clone();
-        pk.domain().ifft(&mut table_poly)?;
         permuted.push(Permuted {
             compressed_input,
             compressed_table,
             input_values: permuted_input,
             table_values: permuted_table,
-            input_poly,
             input_blind,
-            table_poly,
             table_blind,
         });
     }
@@ -326,10 +318,17 @@ where
             .to_affine();
         write_point(transcript, &commitment)?;
         pk.domain().ifft(&mut product)?;
+        // The grand product is the last consumer of the evaluations. Move
+        // their allocations into coefficient form instead of retaining an
+        // extra pair of n-element vectors for every pending lookup.
+        let mut input_poly = lookup.input_values;
+        let mut table_poly = lookup.table_values;
+        pk.domain().ifft(&mut input_poly)?;
+        pk.domain().ifft(&mut table_poly)?;
         committed.push(Committed {
-            input_poly: lookup.input_poly,
+            input_poly,
             input_blind: lookup.input_blind,
-            table_poly: lookup.table_poly,
+            table_poly,
             table_blind: lookup.table_blind,
             product_poly: product,
             product_blind,
@@ -340,11 +339,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use iroha_pasta::Fp;
+    use iroha_pasta::{Ep, Eq, Fp};
     use rand_chacha::ChaCha20Rng;
     use rand_core_06::SeedableRng;
 
     use super::*;
+    use crate::{
+        protocol::Protocol,
+        test_circuits::{BUDGET, CHOICES, Lookups, setup},
+        transcript::{Blake2bHash, TranscriptWriter},
+    };
 
     fn values(raw: &[u64]) -> Vec<Fp> {
         raw.iter().map(|value| Fp::from(*value)).collect()
@@ -408,5 +412,98 @@ mod tests {
             permute(&input, &table, 5, 4, 0, &mut rng).err(),
             Some(ProverError::LookupInputMissing { lookup: 0 })
         );
+    }
+
+    /// The consuming transition preserves the old interpolation, random
+    /// stream and commitment while reusing both evaluation allocations.
+    fn check_product_consumes_evaluation_buffers<C: PastaCurve>() {
+        let circuit = Lookups {
+            rows: 9,
+            tamper: None,
+            out_of_range: false,
+            offset: 0,
+        };
+        let setup = setup::<C, _>(&circuit, CHOICES[0]);
+        let pk = &setup.pk;
+        let protocol = Protocol::new(pk.binding().descriptor()).expect("protocol");
+        let shape = protocol.shape();
+        let input_values: Vec<C::ScalarExt> = (0..shape.n)
+            .map(|row| C::ScalarExt::from((row % 5) as u64))
+            .collect();
+        let table_values: Vec<C::ScalarExt> = (0..shape.n)
+            .map(|row| C::ScalarExt::from((row % 7) as u64))
+            .collect();
+        let input_address = input_values.as_ptr();
+        let table_address = table_values.as_ptr();
+        let mut expected_input = input_values.clone();
+        let mut expected_table = table_values.clone();
+        pk.domain().ifft(&mut expected_input).expect("input ifft");
+        pk.domain().ifft(&mut expected_table).expect("table ifft");
+        let input_blind = C::ScalarExt::from(13);
+        let table_blind = C::ScalarExt::from(17);
+        let lookup = Permuted {
+            compressed_input: input_values.clone(),
+            compressed_table: table_values.clone(),
+            input_values,
+            table_values,
+            input_blind,
+            table_blind,
+        };
+        let mut rng = ChaCha20Rng::seed_from_u64(47);
+        let mut replay = rng.clone();
+        // A = A' and S = S', so every usable grand-product factor is one.
+        let mut expected_product = vec![C::ScalarExt::ONE; shape.usable_rows + 1];
+        expected_product.extend(random_values::<C::ScalarExt, _>(
+            &mut replay,
+            shape.blinding_factors,
+        ));
+        let expected_blind = C::ScalarExt::random(&mut replay);
+        let expected_commitment = pk
+            .commitment_tables()
+            .commit_lagrange(
+                setup.params.params(),
+                &expected_product,
+                &expected_blind,
+                Secrecy::Secret,
+                BUDGET,
+            )
+            .expect("commit")
+            .to_affine();
+        let mut expected_transcript = TranscriptWriter::<C, _>::new(Blake2bHash::new());
+        write_point(&mut expected_transcript, &expected_commitment).expect("write");
+        pk.domain()
+            .ifft(&mut expected_product)
+            .expect("product ifft");
+        let mut transcript = TranscriptWriter::<C, _>::new(Blake2bHash::new());
+        let committed = commit_products(
+            &setup.params,
+            pk,
+            shape,
+            vec![lookup],
+            C::ScalarExt::from(19),
+            C::ScalarExt::from(23),
+            &mut rng,
+            &mut transcript,
+            BUDGET,
+        )
+        .expect("product");
+        assert_eq!(committed.len(), 1);
+        let committed = &committed[0];
+        assert_eq!(committed.input_poly.as_ptr(), input_address);
+        assert_eq!(committed.table_poly.as_ptr(), table_address);
+        assert_eq!(committed.input_poly, expected_input);
+        assert_eq!(committed.table_poly, expected_table);
+        assert_eq!(committed.product_poly, expected_product);
+        assert_eq!(committed.input_blind, input_blind);
+        assert_eq!(committed.table_blind, table_blind);
+        assert_eq!(committed.product_blind, expected_blind);
+        assert_eq!(transcript.finish(), expected_transcript.finish());
+        assert_eq!(rng.next_u64(), replay.next_u64());
+    }
+
+    #[test]
+    fn product_consumes_evaluation_buffers_on_both_curves() {
+        check_product_consumes_evaluation_buffers::<Ep>();
+        check_product_consumes_evaluation_buffers::<Eq>();
     }
 }

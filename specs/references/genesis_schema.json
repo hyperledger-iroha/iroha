@@ -2222,46 +2222,6 @@
     ]
   },
   "Json": "String",
-  "KagemushaMintFinalityAuthorityGenerationTemplateV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "generation",
-        "type": "u64"
-      },
-      {
-        "name": "validators",
-        "type": "Vec<KagemushaMintFinalityValidatorKeysV1>"
-      }
-    ]
-  },
-  "KagemushaMintFinalityGenesisParametersV1": {
-    "Struct": [
-      {
-        "name": "authority_generation",
-        "type": "KagemushaMintFinalityAuthorityGenerationTemplateV1"
-      }
-    ]
-  },
-  "KagemushaMintFinalityValidatorKeysV1": {
-    "Struct": [
-      {
-        "name": "validator",
-        "type": "PeerId"
-      },
-      {
-        "name": "eq_proof_public_key",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "ep_proof_public_key",
-        "type": "Array<u8, 32>"
-      }
-    ]
-  },
   "KeyedHash": {
     "Struct": [
       {
@@ -3121,10 +3081,6 @@
       {
         "name": "sumeragi_context",
         "type": "SumeragiGenesisContextParameters"
-      },
-      {
-        "name": "kagemusha_mint_finality",
-        "type": "KagemushaMintFinalityGenesisParametersV1"
       },
       {
         "name": "crypto",
@@ -4178,9 +4134,6 @@
   },
   "Vec<InstructionBox>": {
     "Vec": "InstructionBox"
-  },
-  "Vec<KagemushaMintFinalityValidatorKeysV1>": {
-    "Vec": "KagemushaMintFinalityValidatorKeysV1"
   },
   "Vec<MultisigMember>": {
     "Vec": "MultisigMember"

@@ -5,7 +5,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::{SignedBlock, consensus::ValidatorPower},
+    block::{SignedBlock, consensus::SumeragiGenesisContextParameters},
     isi::{InstructionBox, RegisterPeerWithPop, SetParameter},
     parameter::{
         CustomParameter, Parameter,
@@ -29,21 +29,12 @@ pub(crate) fn genesis_fixture(
         .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
         .collect::<Vec<_>>();
     voters.sort_by(|a, b| a.public_key().cmp(b.public_key()));
-    let roster = voters
-        .iter()
-        .map(|pair| ValidatorPower {
-            validator: PeerId::new(pair.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
     let metadata = ConsensusHandshakeMetadata {
         mode,
         block_cadence_ms: NonZeroU64::new(1000).unwrap(),
         wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
-        kagemusha_mint_finality:
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
-        sumeragi_context: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
     };
     let mut instructions = voters
         .iter()
@@ -100,7 +91,7 @@ fn signed_genesis_fixes_complete_generation_epoch_seed_and_proofs() {
             context.network_id,
             NetworkId::from_genesis_hash(genesis.hash())
         );
-        assert_eq!(context.authority.generation, 0);
+        assert_eq!(context.authorization.authority_generation, 0);
         assert_eq!(context.authorization.epoch, 0);
         assert_eq!(context.committee.len(), 4);
         assert_eq!(context.authorization.first_height, 1);

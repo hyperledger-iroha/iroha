@@ -14,6 +14,7 @@ use crate::{
     },
     sumeragi::epoch::{
         ValidatorCommitteeMemberV1, ValidatorEpochAuthorizationV1, ValidatorEpochContextV1,
+        ValidatorGenerationV1,
     },
     transaction::{Executable, TransactionDomain},
 };
@@ -53,6 +54,15 @@ impl From<&str> for GenesisReadError {
 /// ambiguous authority or consensus metadata, malformed signed parameters, and an
 /// invalid reconstructed epoch or committee.
 pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, GenesisReadError> {
+    genesis_epoch_with_validation(genesis, None)
+}
+
+// Source authentication and signed reconstruction always precede pure context reuse.
+// Standalone readers retain their original independent validation-only path.
+pub(super) fn genesis_epoch_with_validation(
+    genesis: &SignedBlock,
+    validation: Option<&super::EpochValidationScope>,
+) -> Result<ValidatorEpochContextV1, GenesisReadError> {
     if !genesis.header().is_genesis() {
         return Err("native epoch root requires height-one signed genesis".into());
     }
@@ -129,14 +139,7 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, G
             (policy.epoch_length_blocks, parameters.epoch_seed)
         }
     };
-    let authority = metadata
-        .kagemusha_mint_finality
-        .authority_generation
-        .bind_network_id(network_id)
-        .map_err(|error| error.to_string())?;
-    let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, last_height)
-        .map_err(|error| error.to_string())?;
-    let committee = super::genesis_registrations(genesis)
+    let committee: Vec<ValidatorCommitteeMemberV1> = super::genesis_registrations(genesis)
         .map_err(|error| error.to_string())?
         .into_iter()
         .map(
@@ -146,17 +149,23 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, G
             },
         )
         .collect();
+    // Generation zero is the signed registered roster itself; no separate key template exists.
+    let generation = ValidatorGenerationV1::from_committee(network_id, 0, &committee);
+    let authorization = ValidatorEpochAuthorizationV1::genesis(&generation, last_height)
+        .map_err(|error| error.to_string())?;
     let epoch = ValidatorEpochContextV1 {
         da_layout: metadata.sumeragi_context.da_layout,
         version: 1,
         network_id,
         mode,
-        authority,
         authorization,
         committee,
         leader_seed,
     };
-    epoch.validate()?;
+    match validation {
+        Some(validation) => validation.validate_known_or_fresh(&epoch)?,
+        None => epoch.validate()?,
+    }
     Ok(epoch)
 }
 

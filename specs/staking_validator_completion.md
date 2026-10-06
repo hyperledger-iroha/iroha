@@ -18,7 +18,7 @@ decoders, aliases, shims and parallel implementations are prohibited.
 | Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | Earlier focused Core custody, rollback, fee and restoration controls passed; the current shared beacon custody API and typed restoration errors await fresh compilation and runtime checks, followed by unchanged-candidate network qualification |
 | Canonical XOR | Genesis-pinned network XOR funds bonds, rewards and withdrawals; no synthetic staking definition or implicit production minting | Immutable network XOR pin, global scale-nine genesis/operator validation and early staking/reward custody checks implemented; production implicit minting removed; current-candidate component and integration validation pending |
 | Authority and election | Separate key generations and scheduling epochs; freeze E+2 membership at E and prepare through E+1 | Generation/authorization, authenticated native epoch graph and pristine E+2 boundary capture are integrated; current Core, runtime and network qualification remains open |
-| Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Native prepare/activate/retain source capture, signed control/Pasta, atomic application barrier and current/predecessor restore join are integrated; snapshot chain/network identity is checked before typed restore, but positive-height startup and real restart/transition qualification remain open |
+| Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Native prepare/activate/retain source capture, BLS-authenticated control, atomic application barrier and current/predecessor restore join are integrated; snapshot chain/network identity is checked before typed restore, but positive-height startup and real restart/transition qualification remain open |
 | Monetary fees | Exact signed effects, bounded claims with retained dust, and principal distinct from assessed fees | Monetary plans and native effect checks are present. Required explicit fee-reward claim bindings and additive shared custody are implemented; canonical reward-currency admission, current-policy integration, multisig/proved execution and paid network coverage remain under validation |
 | Production progress | One funded original execution reaches durable Apply; native lane runner is the sole production owner | Native execution/context retention, deterministic history and Kura's fail-stop gate are integrated. Complete original-pool funding through World/DA/proof graphs, publication, replay and retained-generation reclamation remains open |
 | Operator/client delivery | Canonical signing, provisioning, status, SDK and fixture workflows | Candidate and credential commands and native evidence readers are present. Same-source native artifacts, regenerated fixtures, complete SDK consumers and operator network qualification remain open |
@@ -174,7 +174,7 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   Restored windows also validate retained entries and canonical signer order.
   The schedule retains the original authenticated proofs and roster after genesis;
   mutable candidate registrations and key expiry cannot change voting authority.
-  The native epoch graph, pristine election capture, signed control/Pasta paths
+  The native epoch graph, pristine election capture, BLS-authenticated control paths
   and boundary barrier require current-candidate component and real transition
   qualification.
 - Account-owned lifecycle and signed peer consent: `isi/staking.rs` in the data
@@ -186,7 +186,7 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   the authenticated roster and original proofs instead of promoting live
   Validator-role registrations; its candidate-pool and retention tests await Core
   validation. The integrated pristine boundary producer freezes the exact E+2
-  target for a complete E+1 preparation interval; its signed control/Pasta and
+  target for a complete E+1 preparation interval; its BLS-authenticated control and
   network gates remain open. Requested election exit and actual end of service are distinct fields;
   retention extends pending-unbond slashing and release heights.
 - CLI candidate registration, signed rebinding, bond/delegation, scheduled and
@@ -238,9 +238,9 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   an existing external submission command. Keep mandatory-slash simulator and
   component evidence separate from network qualification; do not add a manual
   authority or node fault switch to make that gate pass.
-- Candidate keys require BLS peer consent plus possession of both generation-bound
-  Pasta keys. Every prepared seat additionally proves custody of its exact beacon
-  share under the finalized DKG transcript and complete transition context. A
+- Candidate keys require BLS peer consent and the exact BLS proof of possession
+  bound into the validator generation. Every prepared seat additionally proves
+  custody of its exact beacon share under the finalized DKG transcript and complete transition context. A
   lifecycle certificate finalizes a pending beacon; only certified committee
   activation retires the old key and activates the new one. Genesis bootstrap
   requires the exact current genesis authority.
@@ -271,11 +271,12 @@ node's own certificates (certificates are per node, `specs/sumeragi.md` §12.7):
   epoch and must follow it (selection at the preceding epoch's end, contiguous
   start). Global-lane tenure uses these intervals; other lanes use the epochs
   alone.
-- The initial KAGEMUSHA authority is the signed generation-zero authority of
-  the genesis handshake metadata bound to the network. The native schedule
-  carries the complete authority-generation and epoch-authorization graph;
-  certified boundary application advances that graph atomically. The shared
-  proof reader and Pasta signing integration remain under qualification.
+- The initial validator generation is the ordered BLS committee and original
+  proofs of possession in the signed genesis, bound to the network. The native
+  schedule carries the complete validator-generation and epoch-authorization
+  graph; certified boundary application advances that graph atomically. The
+  shared proof reader and BLS-authenticated transition integration remain under
+  qualification.
 - A threshold-key lifecycle certificate at height `h` is signed by the committee
   World's lag-2 consensus schedule holds for `h` (committed in `R_{h−2}`), in the
   core's canonical order; Torii admission checks the next height against the
@@ -285,7 +286,7 @@ node's own certificates (certificates are per node, `specs/sumeragi.md` §12.7):
 
 | Outcome | Exact dependency and completion criterion | Owners |
 | --- | --- | --- |
-| Dynamic election and mint-finality keys | The native E+2 selector/producer, retained epoch graph, signed control/Pasta paths and immediate next-epoch application barrier are integrated. TODO: qualify complete preparation and certified retention without fresh incumbent keys on actual networks. Registration alone must never add voting authority. | Core/data model, KAGEMUSHA and deployment |
+| Dynamic validator election | The native E+2 selector/producer, retained epoch graph, BLS-authenticated control paths and immediate next-epoch application barrier are integrated. TODO: qualify complete preparation and certified retention with the exact authenticated BLS committee on actual networks. Registration alone must never add voting authority. | Core/data model, Sumeragi and deployment |
 | Prepared beacon transition | The signed encrypted all-edge DKG model and reducer bind the frozen exact roster and fail closed before finalization if an edge or acceptance is absent. The deterministic Core fixture still constructs secrets centrally; daemon per-seat custody, authenticated exchange, genesis orchestration, current/pending session restart and atomic activation need qualification. Parliament can require an early pulse independently of the next epoch-end election pulse. Do not bypass finalized pulse or certificate checks. | Beacon, Parliament, Sumeragi and daemon |
 | Staking under the enacted validation-fee policy | `RetailMonthlyAllowance` is the canonical policy: calendar maintenance, included retail payments and overage, with an institutional per-payment fee and separate immutable reward custody. Native assessment checks qualifying payments of the enacted fee asset. TODO: complete and qualify staking integration, distinct fee-asset accounting, bounded claims, multisig/proved overlays and signed payer bounds through original execution. Staking principal cannot satisfy a fee obligation. | Core/native execution and fees |
 | Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: qualify silent authors, saturation, final-transaction progress and retirement/restart cuts, with named deterministic regressions and mutation controls. | Core/Sumeragi, Queue, Kura and formal owners |
@@ -355,8 +356,8 @@ slashing remains executable; voluntary withdrawals and rebinding cannot release
 the boundary's retained obligations. The native selector ranks already eligible
 candidates uniformly using network, selection epoch, target epoch, authenticated
 seed and canonical peer identity, then freezes the largest allowed exact `3f+1`
-committee. Stake gates eligibility and does not multiply votes. Future Pasta
-keys and beacon shares are prepared during E+1.
+committee. Stake gates eligibility and does not multiply votes. Target BLS
+credentials and beacon shares are prepared during E+1.
 
 The unimplemented concentration, seat-band and entity-correlation settings have
 been removed from canonical parameters, profiles and genesis templates. Their
@@ -369,8 +370,8 @@ ordered roster and original PoPs, network, mode and fresh leader seed. Every
 signature must consume its epoch/context binding, and topology must consume the
 fresh seed even when membership is retained. Idle chains produce no blocks.
 Any protocol-authorized boundary block must retain its authenticated witness
-and mandatory Pasta seals. Replay, restart, formal and network qualification
-remains open.
+and certified BLS committee decision. Replay, restart, formal and network
+qualification remains open.
 
 ### Distributed beacon ceremony cutover
 

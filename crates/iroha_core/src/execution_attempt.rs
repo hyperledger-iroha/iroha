@@ -3,6 +3,16 @@
 use iroha_data_model::ValidationFail;
 use ivm::error::{ExecutionDeferral, VMError};
 
+/// Native Core boundary at which an unfinished execution returned to its caller.
+///
+/// This is non-wire diagnostic context. It grants no retry, execution or finality
+/// authority and does not replace the original refusal or its release source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPhase {
+    /// Lane preparation refused inside the native output finalizer, before sealing.
+    NativeLaneFinalizer,
+}
+
 /// An unfinished local execution, retaining the original capacity refusal owner.
 ///
 /// This type has no wire codec. A capacity release observation survives cache
@@ -12,9 +22,21 @@ use ivm::error::{ExecutionDeferral, VMError};
 pub struct ExecutionDeferred {
     reason: ExecutionDeferral,
     allocation: Option<iroha_allocation::AllocationRefusal>,
+    phase: Option<ExecutionPhase>,
 }
 
 impl ExecutionDeferred {
+    /// Native boundary provenance, independent of the original resource category.
+    pub const fn phase(&self) -> Option<ExecutionPhase> {
+        self.phase
+    }
+
+    /// Record the actual lane-finalizer boundary without replacing its refusal owner.
+    pub(crate) fn at_native_lane_finalizer(mut self) -> Self {
+        self.phase = Some(ExecutionPhase::NativeLaneFinalizer);
+        self
+    }
+
     /// The VM-facing local reason, without erasing this owner's retry evidence.
     pub const fn reason(&self) -> ExecutionDeferral {
         self.reason
@@ -29,7 +51,8 @@ impl ExecutionDeferred {
         self.allocation.as_ref()
     }
 
-    /// Preserve the complete local owner across a VM/host error boundary.
+    /// Preserve the original refusal across a VM/host error boundary.
+    /// Native finalizer provenance is Core context, not a VM error category.
     pub fn from_vm_error(error: &VMError) -> Option<Self> {
         match error.as_unmetered() {
             VMError::AllocationDeferred(refusal) => Some(refusal.clone().into()),
@@ -38,7 +61,8 @@ impl ExecutionDeferred {
         }
     }
 
-    /// Move this owner back through a VM host boundary without losing its release source.
+    /// Move this owner through a VM host boundary without losing its release source.
+    /// Native finalizer provenance stays outside the VM error surface.
     pub fn into_vm_error(self) -> VMError {
         match self.allocation {
             Some(refusal) => VMError::AllocationDeferred(refusal),
@@ -52,6 +76,7 @@ impl From<ExecutionDeferral> for ExecutionDeferred {
         Self {
             reason,
             allocation: None,
+            phase: None,
         }
     }
 }
@@ -61,6 +86,7 @@ impl From<iroha_allocation::AllocationRefusal> for ExecutionDeferred {
         Self {
             reason: ExecutionDeferral::ActiveMemoryCapacity,
             allocation: Some(refusal),
+            phase: None,
         }
     }
 }
@@ -83,6 +109,9 @@ impl From<iroha_data_model::block::SharedBlockAdmissionError> for ExecutionDefer
 
 impl core::fmt::Display for ExecutionDeferred {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.phase == Some(ExecutionPhase::NativeLaneFinalizer) {
+            formatter.write_str("native lane finalizer: ")?;
+        }
         match &self.allocation {
             Some(refusal) => refusal.fmt(formatter),
             None => self.reason.fmt(formatter),
@@ -1031,7 +1060,21 @@ mod tests {
         let owner = ExecutionDeferred::from(refusal.clone());
         assert_eq!(owner.reason(), ExecutionDeferral::ActiveMemoryCapacity);
         assert_eq!(owner.allocation_refusal(), Some(&refusal));
-        let cloned = owner.clone();
+        assert_eq!(owner.phase(), None);
+        let finalizer = owner.clone().at_native_lane_finalizer();
+        assert_eq!(
+            finalizer.phase(),
+            Some(super::ExecutionPhase::NativeLaneFinalizer)
+        );
+        assert_eq!(finalizer.reason(), owner.reason());
+        assert_eq!(finalizer.allocation_refusal(), Some(&refusal));
+        assert_eq!(
+            ExecutionDeferred::from_vm_error(&finalizer.clone().into_vm_error()),
+            Some(owner.clone()),
+            "Core phase is not a VM category; the original refusal still crosses intact"
+        );
+        let cloned = finalizer.clone();
+        drop(finalizer);
         drop(owner);
         drop(budget);
         let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
@@ -1054,13 +1097,23 @@ mod tests {
         let allocator = ExecutionDeferred::from(ExecutionDeferral::AllocationUnavailable);
         assert_eq!(allocator.reason(), ExecutionDeferral::AllocationUnavailable);
         assert!(allocator.allocation_refusal().is_none());
+        assert_eq!(allocator.phase(), None);
+        let finalizer = allocator.clone().at_native_lane_finalizer();
+        assert_eq!(
+            finalizer.phase(),
+            Some(super::ExecutionPhase::NativeLaneFinalizer)
+        );
+        assert_eq!(finalizer.reason(), allocator.reason());
+        assert!(finalizer.allocation_refusal().is_none());
         let overflow = ExecutionDeferred::from(iroha_allocation::AllocationRefusal::DemandOverflow);
+        assert_eq!(overflow.phase(), None);
         assert!(matches!(
             overflow.allocation_refusal(),
             Some(iroha_allocation::AllocationRefusal::DemandOverflow)
         ));
         let budget = iroha_allocation::AllocationBudget::new(0);
         let impossible = ExecutionDeferred::from(budget.try_reserve_bytes(1).unwrap_err());
+        assert_eq!(impossible.phase(), None);
         assert!(matches!(
             impossible.allocation_refusal(),
             Some(iroha_allocation::AllocationRefusal::ExceedsLimit { .. })

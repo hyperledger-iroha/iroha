@@ -810,10 +810,16 @@ mod tests {
                 .resume(Path::new("journal"), None, &mut |_| Ok(()), &mut |_| {})
                 .is_err()
         );
+        // A genuine selected source outside the project keeps this control about the missing
+        // managed context; source admission must not fail before that original owner gate.
+        let selected_source = temporary.path().join("unselected.ko");
+        std::fs::write(&selected_source, "seiyaku Unselected {}").unwrap();
+        let selected_source =
+            ContractInput::from_path(&selected_source, None, None, false).unwrap();
         assert!(
             desktop
                 .deploy(
-                    &ContractInput::Source(workspace.join("hello.ko")),
+                    &selected_source,
                     Some("missing"),
                     None,
                     &mut |_| Ok(()),
@@ -872,7 +878,7 @@ mod tests {
                     "missing-registry-context",
                     network.prepared().build_cache_root(),
                 )
-                .build(&ContractInput::Source(source))
+                .build(&ContractInput::from_path(&source, None, None, false).unwrap())
                 .unwrap()
                 .name(),
             "Offline"

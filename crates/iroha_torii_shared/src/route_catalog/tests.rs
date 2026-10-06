@@ -3,6 +3,22 @@
 mod tests {
     use super::*;
     #[test]
+    fn kagemusha_issuance_is_a_private_authenticated_read() {
+        let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET;
+        assert_eq!(
+            route.path(),
+            "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}"
+        );
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
     fn reserve_policy_proof_is_an_account_authenticated_private_read() {
         let route = contracts_and_verification_keys::SORAFS_RESERVE_POLICY_PROOF_GET;
         assert_eq!(route.path(), "/v1/sorafs/reserve/policy/{height}");

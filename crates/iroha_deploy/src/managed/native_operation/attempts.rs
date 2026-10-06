@@ -214,7 +214,7 @@ impl Attempt {
         Ok(())
     }
     fn verify_authorization(&self) -> Result<()> {
-        self.directory.revalidate()?;
+        // The canonical read begins native custody checks and rechecks optional absence.
         if read_record::<Authorization>(&self.directory, "authorization.nrt")?.as_ref()
             != Some(&self.authorization)
         {
@@ -490,7 +490,7 @@ impl History {
         retained: Option<&History>,
     ) -> Result<Self> {
         scope.validate(operation, purpose, semantic)?;
-        operation.revalidate()?;
+        // The inventory begins and ends with fresh native directory checks.
         operation_inventory(operation, purpose)?;
         require_semantic_original(operation, semantic)?;
         let retained_operation = match retained {
@@ -570,6 +570,22 @@ impl History {
         if dispatch.is_none() {
             return Err(invalid("attempt custody lost its dispatch high-water"));
         }
+        // These scratch hashes belong only to this parse. Each owned Authorization is
+        // immutable after its fresh decode; no source, scope or wallet verdict is retained.
+        fn row_digest(attempt: &Attempt, cached: &mut Option<[u8; 32]>) -> Result<[u8; 32]> {
+            #[cfg(test)]
+            tests::parse_digest_tests::digest_requested();
+            if let Some(value) = *cached {
+                return Ok(value);
+            }
+            let value = attempt.digest()?;
+            #[cfg(test)]
+            tests::parse_digest_tests::digest_computed(attempt.ordinal());
+            *cached = Some(value);
+            Ok(value)
+        }
+        let mut first_digest = None;
+        let mut last_digest = None;
         let mut attempts: Vec<Attempt> = Vec::with_capacity(names.len());
         let mut empty_tail = false;
         for (index, name) in names.iter().enumerate() {
@@ -608,7 +624,13 @@ impl History {
             authorization.terms.validate()?;
             scope.require_fees(&authorization.terms.fees)?;
             validate_origin(&authorization.origin)?;
-            let previous = attempts.last().map(Attempt::digest).transpose()?;
+            let previous = attempts
+                .last()
+                .map(|attempt| row_digest(attempt, &mut last_digest))
+                .transpose()?;
+            if attempts.len() == 1 {
+                first_digest = last_digest;
+            }
             if usize::from(authorization.ordinal) != index + 1
                 || authorization.purpose != purpose
                 || authorization.semantic != semantic
@@ -641,6 +663,7 @@ impl History {
                         && usize::from(value.highest.ordinal) == index + 1
                 }),
             )?;
+            let mut current_digest = None;
             if let Some(commit) = &attempt.commit {
                 let observed = attempt
                     .observation
@@ -655,7 +678,7 @@ impl History {
                     })
                     .transpose()?;
                 if !valid_sha256(&commit.request_sha256)
-                    || commit.authorization != attempt.digest()?
+                    || commit.authorization != row_digest(&attempt, &mut current_digest)?
                     || commit.observation != digest(&observed)?
                     || commit.previous_retirement != prior_retirement.map(digest).transpose()?
                 {
@@ -663,7 +686,7 @@ impl History {
                 }
             }
             if let Some(retirement) = &attempt.retirement {
-                if retirement.authorization != attempt.digest()?
+                if retirement.authorization != row_digest(&attempt, &mut current_digest)?
                     || retirement.successor == [0; 32]
                     || matches!(&retirement.kind, RetirementKind::Request { request_sha256 } if !valid_sha256(request_sha256))
                 {
@@ -674,7 +697,7 @@ impl History {
             }
             if let Some(prior) = attempts.last() {
                 if let Some(retirement) = &prior.retirement {
-                    if retirement.successor != attempt.digest()? {
+                    if retirement.successor != row_digest(&attempt, &mut current_digest)? {
                         return Err(invalid("unsigned retirement selected another successor"));
                     }
                 } else if index + 1 != names.len() || attempt.commit.is_some() {
@@ -683,13 +706,17 @@ impl History {
                     ));
                 }
             }
+            if attempts.is_empty() {
+                first_digest = current_digest;
+            }
+            last_digest = current_digest;
             attempts.push(attempt);
         }
         if let Some(last) = attempts.last() {
             if let Some(retirement) = &last.retirement {
                 if !dispatch.as_ref().is_some_and(|value| {
                     value.state == ReservationState::Reserved
-                        && value.highest.previous == last.digest().ok()
+                        && value.highest.previous == row_digest(last, &mut last_digest).ok()
                         && digest(&value.highest).ok() == Some(retirement.successor)
                 }) {
                     return Err(invalid("unsigned retirement lost its reserved successor"));
@@ -707,7 +734,13 @@ impl History {
             || attempts.len() > count
             || attempts
                 .first()
-                .map(Attempt::digest)
+                .map(|attempt| {
+                    if attempts.len() == 1 {
+                        row_digest(attempt, &mut last_digest)
+                    } else {
+                        row_digest(attempt, &mut first_digest)
+                    }
+                })
                 .transpose()?
                 .unwrap_or(digest(&retained.highest)?)
                 != retained.first
@@ -723,7 +756,11 @@ impl History {
         } else {
             if retained.state != ReservationState::Reserved
                 || attempts.len() + 1 != count
-                || retained.highest.previous != attempts.last().map(Attempt::digest).transpose()?
+                || retained.highest.previous
+                    != attempts
+                        .last()
+                        .map(|attempt| row_digest(attempt, &mut last_digest))
+                        .transpose()?
             {
                 return Err(invalid("published dispatch suffix was lost"));
             }
@@ -889,7 +926,7 @@ impl History {
         // records one at a time instead of retaining another complete directory graph.
         self.scope
             .validate_local(&self.operation, self.purpose, self.semantic)?;
-        self.operation.revalidate()?;
+        // The inventory begins and ends with fresh native directory checks.
         let operation_names = operation_inventory(&self.operation, self.purpose)?;
         require_semantic_original(&self.operation, self.semantic)?;
         self.require_metadata()?;
@@ -902,7 +939,7 @@ impl History {
                 }
             }
             Some(root) => {
-                root.revalidate()?;
+                // entries brackets its actual census with native custody checks.
                 let names = root.entries(MAX_ATTEMPTS)?;
                 if names.len() < self.attempts.len()
                     || names.len() > self.attempts.len() + usize::from(self.empty_tail)
@@ -916,7 +953,7 @@ impl History {
                     ));
                 }
                 for attempt in &self.attempts {
-                    attempt.directory.revalidate()?;
+                    // The inventory preserves both native directory fences.
                     let inventory = attempt_inventory(&attempt.directory)?;
                     attempt.validate_inventory(
                         &inventory,
@@ -1511,11 +1548,24 @@ pub(in crate::managed) fn read_record<
     directory: &PrivateDirectory,
     name: &str,
 ) -> Result<Option<T>> {
+    #[cfg(test)]
+    tests::parse_digest_tests::record_read();
     let Some(bytes) = read_optional(directory, name, MAX_RECORD_BYTES)? else {
         return Ok(None);
     };
+    let value = decode_record(&bytes)?;
+    #[cfg(test)]
+    tests::parse_digest_tests::record_decoded();
+    Ok(Some(value))
+}
+/// Decode one already bounded record image with the sole original dispatch codec limits.
+pub(in crate::managed) fn decode_record<
+    T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>,
+>(
+    bytes: &[u8],
+) -> Result<T> {
     norito::decode_canonical_with_limits(
-        &bytes,
+        bytes,
         norito::DecodeLimits::new(
             MAX_RECORD_BYTES,
             MAX_RECORD_BYTES,
@@ -1524,7 +1574,6 @@ pub(in crate::managed) fn read_record<
             32,
         ),
     )
-    .map(Some)
     .map_err(|_| invalid("invalid canonical dispatch custody record"))
 }
 pub(in crate::managed) fn write_record<T: norito::NoritoSerialize>(

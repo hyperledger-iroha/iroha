@@ -3029,7 +3029,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
 
 pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
     use iroha_data_model::{
-        block::consensus::{SumeragiRootScope, ValidatorPower},
+        block::consensus::SumeragiRootScope,
         parameter::{
             custom::CustomParameter,
             system::{
@@ -3038,14 +3038,8 @@ pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) 
             },
         },
     };
-    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
-        .into_iter()
-        .map(|(validator, _)| ValidatorPower {
-            validator,
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let mut context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    let mut context =
+        iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended();
     if private {
         context.root_scope = SumeragiRootScope::Dataspace {
             parent_network_id: NetworkId::from_genesis_hash(
@@ -3059,8 +3053,6 @@ pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) 
         block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
         wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         consensus_fingerprint: ConsensusFingerprint::new([0xB7; 32]),
-        kagemusha_mint_finality:
-            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
         sumeragi_context: context,
     };
     metadata.validate().unwrap();

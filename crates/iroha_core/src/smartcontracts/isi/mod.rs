@@ -16,6 +16,8 @@ pub mod game;
 /// Authorization, signature and error-mapping helpers shared by ISI modules.
 pub(crate) mod helpers;
 pub mod identifier;
+/// KAGEMUSHA wallet ledger execution.
+pub mod kagemusha_wallet;
 pub mod kaigi;
 /// Ministry agenda submission handlers.
 pub mod ministry;
@@ -184,6 +186,7 @@ macro_rules! define_instruction_handlers {
     };
 }
 define_instruction_handlers! {
+    dispatch_instruction::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<iroha_data_model::isi::nft_market::OfferNftV1>,
     dispatch_instruction::<iroha_data_model::isi::nft_market::BuyNftV1>,
     dispatch_instruction::<iroha_data_model::isi::nft_market::CancelNftOfferV1>,
@@ -819,6 +822,18 @@ mod registry_dispatch_tests {
         assert_eq!(
             ds_capable, expected_ds_capable,
             "authority does not imply balance neutrality"
+        );
+    }
+    #[test]
+    fn kagemusha_ledger_has_reviewed_authority_and_numeric_effects() {
+        let family = "iroha_data_model::isi::kagemusha_wallet::";
+        assert_reviewed_initial_family(family, BTreeSet::new());
+        assert_reviewed_asset_effect_family(
+            family,
+            1,
+            BTreeSet::from([core::any::type_name::<
+                iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
+            >()]),
         );
     }
     #[test]

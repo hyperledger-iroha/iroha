@@ -87,12 +87,12 @@ impl CapturedDirectory {
     }
 
     pub(super) fn revalidate(&self) -> crate::managed::Result<()> {
-        self.directory.revalidate()?;
-        if let Some(expected) = &self.inventory {
-            require_entries(&self.directory, expected.iter().cloned())?;
+        match &self.inventory {
+            // The canonical inventory owner checks custody before and after enumeration,
+            // then once more after comparing the complete expected names.
+            Some(expected) => require_entries(&self.directory, expected.iter().cloned()),
+            None => self.directory.revalidate().map_err(Into::into),
         }
-        self.directory.revalidate()?;
-        Ok(())
     }
 
     // The sole caller brackets the complete image with native custody and closed-name checks.

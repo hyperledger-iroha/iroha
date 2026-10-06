@@ -561,6 +561,13 @@ int32_t connect_norito_encode_envelope_sign_result_ok(
     const uint8_t* sig, unsigned long sig_len,
     uint8_t** out_ptr, unsigned long* out_len);
 
+// Encode the current signature algorithm and its exact signature bytes.
+int32_t connect_norito_encode_envelope_sign_result_ok_with_alg(
+    uint64_t seq,
+    const char* alg_ptr, unsigned long alg_len,
+    const uint8_t* sig_ptr, unsigned long sig_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+
 int32_t connect_norito_encode_envelope_sign_result_err(
     uint64_t seq,
     const uint8_t* code, unsigned long code_len,
@@ -1065,6 +1072,11 @@ int32_t connect_norito_decode_control_approve_account(
 int32_t connect_norito_decode_control_approve_sig(
     const uint8_t* inp, unsigned long inp_len,
     uint8_t* out_sig); // 64 bytes
+
+// Return the current wallet signature algorithm label from an Approve frame.
+int32_t connect_norito_decode_control_approve_sig_alg(
+    const uint8_t* inp_ptr, unsigned long inp_len,
+    char** out_alg_ptr, unsigned long* out_alg_len);
 
 int32_t connect_norito_decode_control_approve_account_json(
     const uint8_t* inp, unsigned long inp_len,
@@ -1788,6 +1800,59 @@ typedef struct {
 } connect_norito_acceleration_state;
 
 int32_t connect_norito_acceleration_state_get_v1(connect_norito_acceleration_state* out_state, size_t out_len);
+
+/* KAGEMUSHA wallet V1: opaque exclusive owner. No arbitrary-sign entry point.
+ * Open returns -4 (ArtifactsUnavailable) until the authenticated native loader is complete.
+ * Callback contexts must be thread-safe and remain valid from retain through release.
+ * Outputs own canonical Norito/exact retained bytes; free them with connect_norito_free.
+ * Failure: -1 input, -2 closed, -3 capacity, -4 artifacts, -5 unavailable, -6 uncertain,
+ * -7 custody lost, -8 fold required, -9 proof rejected, -10 cancelled, -11 conflict,
+ * -12 no space, -13 terminal/key lost, -100 internal (outcome must be reconciled).
+ */
+typedef struct {
+    uint32_t tag; /* 0 success, 1 absent, 2 unavailable/not performed, 3 exists,
+                     4 uncertain, 5 destination absent; interpreted per operation. */
+    uint32_t reason; /* 0 locked, 1 first unlock, 2 busy, 3 I/O, 4 platform,
+                       5 unusable key, 6 permanently invalidated. */
+    int32_t code;
+    size_t length;
+} connect_norito_kagemusha_platform_reply_v1;
+typedef struct {
+    uint32_t version; /* exactly 1 */
+    uint32_t anchor_policy; /* exactly 1: Apple Keychain; Android uses JNI */
+    void* context;
+    void (*retain)(void* context);
+    void (*release)(void* context);
+    /* op: 0 key probe, 1 generate (input32/aux profile1/2), 2 sign (input32),
+       3 key delete, 4 anchor read, 5 anchor create, 6 update, 7 storage state,
+       8 boot UUID UTF8, 9 prepare non-backup custody root UTF8.
+       slot32 is null for operations7..9. Never retain or exceed borrowed buffers. */
+    void (*invoke)(void* context, uint32_t operation, const uint8_t* slot32,
+                   const uint8_t* input, size_t input_len, uint32_t auxiliary,
+                   uint8_t* output, size_t output_capacity,
+                   connect_norito_kagemusha_platform_reply_v1* reply);
+} connect_norito_kagemusha_platform_v1;
+typedef struct {
+    int32_t status; /* 0 unknown,1 complete,2 pending,3 not performed,4 archived,
+                      5 delivery loss,6 idle,7 caught up,8 checkpoint,9 folded,
+                      10 CreditStatus; negative failure. */
+    int32_t reason; /* failure platform reason, -1 if inapplicable */
+    int32_t platform_code;
+    uint64_t sequence_low;
+    uint64_t sequence_high;
+    uint32_t detail; /* checkpoint ordinal or not-performed reason0/1/2 */
+    uint8_t* bytes;
+    size_t length;
+} connect_norito_kagemusha_wallet_result_v1;
+uint32_t connect_norito_kagemusha_wallet_revision_v1(void);
+int32_t connect_norito_kagemusha_wallet_open_v1(const connect_norito_kagemusha_platform_v1*, const uint8_t* slot32, const uint8_t* scheme32, const uint8_t* wallet32, const uint8_t* artifact32, uint64_t* out_handle);
+int32_t connect_norito_kagemusha_wallet_close_v1(uint64_t handle);
+int32_t connect_norito_kagemusha_wallet_activity_v1(uint64_t handle, uint8_t foreground, uint8_t charging);
+int32_t connect_norito_kagemusha_wallet_commit_v1(uint64_t handle, const uint8_t* canonical_frozen_transition, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_retry_v1(uint64_t handle, const uint8_t* operation32, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_resume_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_fold_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const uint8_t* credit32, const uint8_t* payment32, connect_norito_kagemusha_wallet_result_v1* out);
 
 #ifdef __cplusplus
 } // extern "C"

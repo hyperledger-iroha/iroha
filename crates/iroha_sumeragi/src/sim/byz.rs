@@ -127,8 +127,8 @@ pub enum Strategy {
     ForgeAttestations,
     /// Collect the genuinely attested Commit votes of flagged blocks it receives; once `q`
     /// other members' votes for one value are known, broadcast a `CommitQC` of them plus its
-    /// own genuine vote: `q + 1` genuine signatures and attestations, one more than a KAGEMUSHA
-    /// bundle holds (§3.7 A4, F37, MA11).
+    /// own genuine vote: `q + 1` genuine signatures and attestations, exceeding the exact
+    /// quorum required for a certificate (§3.7 A4, F37, MA11).
     OverAggregate,
 }
 

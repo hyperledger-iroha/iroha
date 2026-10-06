@@ -87,7 +87,7 @@ fn verify_manifest(
 ) -> Result<VerificationReport> {
     let defaults = profile_defaults(profile);
     ensure_chain_id(manifest, &defaults)?;
-    crate::genesis::ensure_kagemusha_mint_finality_schedule_matches_consensus(manifest)?;
+    crate::genesis::ensure_genesis_schedule_matches_consensus(manifest)?;
     let normalized = manifest.clone().with_consensus_meta()?;
     let params = normalized.effective_parameters()?;
     let sumeragi: SumeragiParameters = params.sumeragi().clone();
@@ -142,10 +142,6 @@ fn verify_manifest(
             unique_peers.len()
         ));
     }
-    crate::genesis::ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
-        manifest,
-        &peers_with_pops,
-    )?;
     let fingerprint = normalized
         .consensus_fingerprint()
         .ok_or_else(|| eyre!("consensus fingerprint missing after normalization"))?

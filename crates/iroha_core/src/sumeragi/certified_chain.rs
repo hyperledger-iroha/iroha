@@ -25,9 +25,9 @@
 //! - [`CertifiedChain::certified`]: the committed read **plus the local `CommitQC`**. The
 //!   certificate must certify exactly this header and result (kind, height, block hash, result,
 //!   attestation flag, instance) and verify under the committee of its height (see below). The
-//!   default verifier checks both the exact BLS quorum and source-complete native paired-Pasta
-//!   attestations. A caller may explicitly supply an application verifier; there is no
-//!   signature-only finality fallback. Off-chain consumers use this read.
+//!   default verifier checks the exact BLS quorum and rejects flagged certificates. A caller
+//!   may explicitly supply an application attestation verifier. Native finality also requires
+//!   the authenticated result, schedule and signed availability; signatures alone are insufficient.
 //! - [`CertifiedChain::certified_from_execution`]: the same full certificate checks
 //!   anchored through the captured original native execution tip. A bounded reverse
 //!   walk authenticates the target and its parent; the parent's executed schedule
@@ -39,7 +39,7 @@
 //! The reader verifies the prefix iteratively from the signed genesis context, checks both
 //! parent links and the parent result at every height, and carries a bounded schedule plus
 //! active authority. Chain parameters retain lag two; a successor authority is admitted only
-//! after the incumbent exact quorum certifies the mandatory attested boundary. Every signature
+//! after the incumbent exact quorum certifies the boundary. Every signature
 //! binds the scheduling epoch and complete context identity. The preceding certified pulse
 //! supplies fresh leader randomness, even when an authority generation is retained.
 //! Missing, reordered or invalid authority fails closed even after that committee has rotated
@@ -71,7 +71,6 @@ use iroha_data_model::{
             TrustedBlockProofAnchor, TrustedBlockProofAnchorError, TrustedExecutionOutputAnchor,
         },
     },
-    parameter::system::ConsensusMode,
     sumeragi::epoch::ValidatorEpochContextV1,
     sumeragi_finality::EpochValidationScope,
     transaction::TransactionEntrypoint,
@@ -517,7 +516,7 @@ fn validate_frame_result(
         let epoch = validation
             .core_epoch(&commitment.schedule.current)
             .map_err(|error| malformed(error.to_string()))?;
-        if header.epoch != epoch.id || (commitment.schedule.boundary.is_some() && !header.attest) {
+        if header.epoch != epoch.id {
             return Err(ChainReadError::HeaderMismatch { height }.into());
         }
     }
@@ -892,6 +891,26 @@ struct VerifiedPrefix {
     authority: Arc<VerifiedAuthority>,
     // Bounded exact-value structural reuse ends when this cursor is reset or dropped.
     validation: EpochValidationScope,
+    // An opt-in local byte fence, never a consensus digest or wire field.
+    proof_source: Option<Hash>,
+}
+
+// This constant-size, ordered, certificate-inclusive local source fence is never
+// serialized, persisted or accepted as finality authority. The sole native verifier
+// authenticates each appended receipt; fresh source bytes only govern cursor reuse.
+/// Initial value of the local, non-wire canonical-source fence.
+pub(crate) fn proof_source_start() -> Hash {
+    Hash::new(b"native canonical proof source prefix")
+}
+
+/// Extend the local source fence with one ordered, exact canonical native frame.
+pub(crate) fn proof_source_append(previous: Hash, height: u64, length: u64, wire: Hash) -> Hash {
+    let mut fields = [0_u8; 80];
+    fields[..32].copy_from_slice(previous.as_ref());
+    fields[32..40].copy_from_slice(&height.to_le_bytes());
+    fields[40..48].copy_from_slice(&length.to_le_bytes());
+    fields[48..].copy_from_slice(wire.as_ref());
+    Hash::new(fields)
 }
 
 /// One crypto context for both random pinned reads and one-pass externally streamed evidence.
@@ -939,9 +958,20 @@ impl PrefixVerifierContext<'_> {
             .schedule
             .advanced_with_validation(&certified.commitment.schedule, &mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
+        // Fold only the genuinely admitted original receipt, after all native
+        // certificate, availability, boundary and schedule checks succeeded.
+        // A failed pure projection disables reuse; it cannot reject or authorize a block.
+        let proof_source = prefix.proof_source.and_then(|previous| {
+            certified
+                .block()
+                .canonical_wire_identity()
+                .ok()
+                .map(|(length, wire)| proof_source_append(previous, height, length, wire))
+        });
         prefix.tip = certified.committed.clone();
         prefix.schedule = schedule;
         prefix.authority = authority;
+        prefix.proof_source = proof_source;
         Ok(certified)
     }
 
@@ -991,9 +1021,6 @@ impl PrefixVerifierContext<'_> {
             || commit_qc.epoch != authority.epoch
             || height < authority.material.authorization.first_height
             || height > authority.material.authorization.last_height
-            || (authority.material.mode == ConsensusMode::Npos
-                && height == authority.material.authorization.last_height
-                && !header.attest)
             || commit_qc.kind != VoteKind::Commit
             || commit_qc.height != height
             || commit_qc.block_hash != committed.core_hash
@@ -1007,11 +1034,11 @@ impl PrefixVerifierContext<'_> {
         if header.instance != self.instance || commit_qc.instance != self.instance {
             return Err(ChainReadError::WrongInstance { height });
         }
-        let native = OriginalResultVerifier {
-            source: committed,
-            native: super::attestation::NativePastaVerifier::new(self.instance, self.network),
-        };
-        let verifier = self.attestations.unwrap_or(&native);
+        // This application requests no commit attestation: without an explicit verifier, a
+        // flagged certificate is rejected rather than accepted under unchecked attestations.
+        let verifier = self
+            .attestations
+            .unwrap_or(&iroha_sumeragi::crypto::NoAttestation);
         #[cfg(test)]
         relation_counts::qc(height);
         let checked = iroha_sumeragi::crypto::Verifier::new(
@@ -1076,51 +1103,6 @@ impl PrefixVerifierContext<'_> {
             verification: QcVerification::Verified,
             certificate_len,
         })
-    }
-}
-
-/// A certificate-local borrow of the original structurally decoded frame. Only the reader
-/// constructs this capability; equality of caller-supplied bytes and graphs grants no authority.
-/// The exact quorum, independent parent authority and signed availability checks still run.
-struct OriginalResultVerifier<'a> {
-    source: &'a CommittedBlock,
-    native: super::attestation::NativePastaVerifier,
-}
-
-impl AttestationVerifier for OriginalResultVerifier<'_> {
-    fn verify(
-        &self,
-        height: u64,
-        signer: iroha_sumeragi::types::ValidatorIndex,
-        key: &iroha_sumeragi::types::PublicKey,
-        statement: &[u8],
-        witness: &iroha_sumeragi::message::ResultWitness,
-        signature: &[u8],
-    ) -> bool {
-        let Some(statement) = iroha_sumeragi::preimage::AttestationStatement::parse(statement)
-        else {
-            return false;
-        };
-        let Some(certificate) = self.source.block.commit_certificate() else {
-            return false;
-        };
-        if height != self.source.height || statement.result != self.source.result {
-            return false;
-        }
-        #[cfg(not(all(test, sumeragi_core_mutation = "HC14")))]
-        if witness.as_slice() != certificate.result_preimage() {
-            return false;
-        }
-        #[cfg(all(test, sumeragi_core_mutation = "HC14"))]
-        let _ = (witness, certificate);
-        self.native.verify_decoded_share(
-            height,
-            signer,
-            key,
-            statement,
-            &self.source.commitment,
-            signature,
-        )
     }
 }
 
@@ -1288,7 +1270,30 @@ fn make_genesis_prefix(
         schedule,
         authority,
         validation,
+        proof_source: None,
     })
+}
+
+// Keep the opt-in returned prefix owner outside the default genesis-read frame.
+#[inline(never)]
+fn make_genesis_prefix_with_source(
+    tip: CommittedBlock,
+    material: ValidatorEpochContextV1,
+    validation: EpochValidationScope,
+    expected: (u64, Hash),
+) -> Result<VerifiedPrefix, ExecutionAttemptError<ChainReadError>> {
+    let mut prefix = make_genesis_prefix(tip, material, validation)?;
+    // Join the fresh prefix to the exact constructor-authenticated signed source,
+    // including the full local result/certificate representation, before eligibility.
+    if prefix.tip.block().canonical_wire_identity().ok() == Some(expected) {
+        prefix.proof_source = Some(proof_source_append(
+            proof_source_start(),
+            GENESIS_HEIGHT,
+            expected.0,
+            expected.1,
+        ));
+    }
+    Ok(prefix)
 }
 
 /// Genesis execution authenticated by an actual verified height-two successor.
@@ -1423,7 +1428,7 @@ impl CertifiedPrefix {
         self.instance
     }
 
-    /// Verify the exact next canonical carrier with full BLS and native paired-Pasta checks.
+    /// Verify the exact next canonical carrier with BLS quorum and signed availability checks.
     ///
     /// # Errors
     /// Rejects changed/skipped parents, result/context substitutions, malformed certificates,
@@ -1778,6 +1783,8 @@ pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     instance: Hash32,
     attestations: Option<&'v dyn AttestationVerifier>,
     prefix: parking_lot::Mutex<Option<VerifiedPrefix>>,
+    // Only the scoped portable producer enables original canonical-byte capture.
+    proof_source_genesis: Option<(u64, Hash)>,
 }
 
 impl<V: StateReadOnly + ?Sized> core::fmt::Debug for CertifiedChain<'_, V> {
@@ -1789,7 +1796,7 @@ impl<V: StateReadOnly + ?Sized> core::fmt::Debug for CertifiedChain<'_, V> {
 }
 
 impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
-    /// A reader over `view` with exact BLS quorum and native paired-Pasta attestation checks.
+    /// A reader over `view` with exact BLS quorum checks and no application attestation.
     ///
     /// # Errors
     /// The view has no genesis, or Kura's genesis is not the view's network genesis.
@@ -1817,6 +1824,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             instance,
             attestations: None,
             prefix: parking_lot::Mutex::new(None),
+            proof_source_genesis: None,
         })
     }
 
@@ -1936,6 +1944,20 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         })
     }
 
+    /// Enable local original-wire capture without issuing any capability.
+    /// Full native/portable authentication and a fresh byte join still precede reuse.
+    pub(crate) fn enable_proof_source_cut(&mut self) {
+        self.proof_source_genesis = self.genesis.canonical_wire_identity().ok();
+    }
+
+    /// Borrow the constant-size source fence from the genuine native prefix.
+    /// This alone conveys no portable admission or continued source availability.
+    pub(crate) fn proof_source_cut(&self) -> Option<(u64, Hash)> {
+        let cursor = self.prefix.lock();
+        let prefix = cursor.as_ref()?;
+        Some((prefix.tip.height(), prefix.proof_source?))
+    }
+
     /// Derive authority exclusively from signed genesis, then check the result graph against it.
     /// The graph's execution/parameter data is not independently final until a successor signs Rg.
     fn genesis_prefix(&self) -> Result<VerifiedPrefix, ExecutionAttemptError<ChainReadError>> {
@@ -1945,7 +1967,15 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             GENESIS_HEIGHT,
             &mut validation,
         )?;
-        make_genesis_prefix(tip, self.genesis_epoch.clone(), validation)
+        match self.proof_source_genesis {
+            Some(expected) => make_genesis_prefix_with_source(
+                tip,
+                self.genesis_epoch.clone(),
+                validation,
+                expected,
+            ),
+            None => make_genesis_prefix(tip, self.genesis_epoch.clone(), validation),
+        }
     }
 
     /// Verify the complete prefix with a bounded working set. Sequential reads reuse its
@@ -2026,9 +2056,9 @@ impl<'v> CertifiedChain<'v, StateView<'v>> {
     /// another storage owner. `network` must be independently configured, never taken from the
     /// supplied journal. It pins signed genesis; `chain_id` pins every successor's instance.
     /// The supplied hash cut must be exactly coextensive with the frames. A hash alone does not
-    /// authenticate a result: consume `certified`/`walk`. Flagged certificates use the full
-    /// source-complete native paired-Pasta verifier by default. An explicitly supplied
-    /// application/test attestation verifier replaces that check for this reader only. H1 has
+    /// authenticate a result: consume `certified`/`walk`. The default verifier rejects flagged
+    /// certificates. An explicitly supplied application attestation verifier checks them for
+    /// this reader only. H1 has
     /// only signed-body authority until a genuine successor or independent local execution
     /// authenticates its result.
     ///

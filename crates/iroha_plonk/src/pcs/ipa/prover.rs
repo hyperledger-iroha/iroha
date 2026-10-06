@@ -65,6 +65,29 @@ where
     T: TranscriptWrite<C> + ?Sized,
     R: RngCore + CryptoRng,
 {
+    Ok(*create_proof_with_claim(params, rng, transcript, poly, blind, x, budget)?.g())
+}
+
+/// Creates the same opening and returns its generator obligation.
+///
+/// # Errors
+/// As [`create_proof`], including a degenerate folded generator.
+// The names follow the BGH19 equations, as in `create_proof`.
+#[allow(clippy::many_single_char_names)]
+pub fn create_proof_with_claim<C, T, R>(
+    params: &ParamsIpa<C>,
+    rng: &mut R,
+    transcript: &mut T,
+    poly: &[C::ScalarExt],
+    blind: &C::ScalarExt,
+    x: &C::ScalarExt,
+    budget: MemoryBudget,
+) -> Result<crate::pcs::ipa::GeneratorClaim<C>, IpaError>
+where
+    C: PastaCurve,
+    T: TranscriptWrite<C> + ?Sized,
+    R: RngCore + CryptoRng,
+{
     let n = params.n();
     if poly.len() != n {
         return Err(IpaError::LengthMismatch {
@@ -98,6 +121,7 @@ where
         power *= x;
     }
 
+    let mut challenges = Vec::with_capacity(params.k() as usize);
     let mut g_prime = params.g().to_vec();
     let u_base = params.u().to_curve();
     let w_base = params.w().to_curve();
@@ -119,6 +143,7 @@ where
         transcript.write_point(&r_j)?;
 
         let u_j = transcript.squeeze_challenge();
+        challenges.push(u_j);
         let u_j_inv =
             Option::<C::ScalarExt>::from(u_j.invert()).ok_or(IpaError::ZeroChallenge { round })?;
 
@@ -141,7 +166,7 @@ where
 
     transcript.write_scalar(&p_prime[0]);
     transcript.write_scalar(&f);
-    Ok(g_prime[0])
+    crate::pcs::ipa::GeneratorClaim::new(params.k(), g_prime[0], challenges)
 }
 
 #[cfg(test)]

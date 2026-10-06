@@ -196,7 +196,6 @@ fn operator_preparation_refuses_unpinned_genesis_key_and_network_before_signing(
         ".",
     )
     .with_sumeragi_context_parameters(metadata.sumeragi_context)
-    .with_kagemusha_mint_finality_genesis_parameters(metadata.kagemusha_mint_finality)
     .build_raw()
     .unwrap();
     let wire = fixture.genesis().encode_wire().unwrap();

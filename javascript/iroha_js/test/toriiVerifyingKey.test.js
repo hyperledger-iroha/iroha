@@ -144,7 +144,7 @@ function verifyingKeyInstructionForRequest(
           namespace: "core",
           backend: request.backend.startsWith("stark/")
             ? "stark"
-            : "halo2-ipa-pasta",
+            : request.backend.startsWith("pipa-r/") ? "native-pipa-r-pasta" : "halo2-ipa-pasta",
           curve: request.curve ?? "unknown",
           public_inputs_schema_hash: Array.from(
             Buffer.from(request.public_inputs_schema_hash_hex, "hex"),
@@ -409,6 +409,9 @@ test("verifying key read paths reject unsupported production backends before fet
     },
   });
   for (const backend of [
+    "halo2/pasta/kaigi-authorization-v1",
+    "halo2/pasta/kaigi-usage-v1",
+    "pipa-r/ipa/pasta/kaigi-usage-v1",
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
     " halo2/ipa",
@@ -1120,8 +1123,9 @@ test("registerVerifyingKey accepts current production backend labels", async () 
   });
   const backends = [
     "halo2/ipa",
-    "halo2/pasta/kaigi-authorization-v1",
-    "halo2/pasta/kaigi-usage-v1",
+    "pipa-r/pasta",
+    "pipa-r/pasta/kaigi-authorization-v1",
+    "pipa-r/pasta/kaigi-usage-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -1155,6 +1159,9 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   });
   const backends = [
     "halo2/ipa",
+    "pipa-r/pasta",
+    "pipa-r/pasta/kaigi-authorization-v1",
+    "pipa-r/pasta/kaigi-usage-v1",
     "stark/fri/poseidon-x7-goldilocks-6x64-v1",
   ];
   for (const [index, backend] of backends.entries()) {

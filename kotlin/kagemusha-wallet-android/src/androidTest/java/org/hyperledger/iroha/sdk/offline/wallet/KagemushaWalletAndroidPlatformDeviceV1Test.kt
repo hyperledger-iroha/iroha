@@ -82,7 +82,8 @@ class KagemushaWalletAndroidPlatformDeviceV1Test {
                     val chain = adapter.attestationChain(slot) as KagemushaWalletAndroidAttestationChainV1.Present
                     val leaf = CertificateFactory.getInstance("X.509")
                         .generateCertificate(ByteArrayInputStream(chain.certificatesDer().first()))
-                    val message = ByteArray(32) { 7 }
+                    // A 32-byte signing message; KeyMint hashes it with SHA-256 (DIGEST_SHA256).
+                    val message = nonzero32()
                     val der = (adapter.keySign(slot, message) as KagemushaWalletAndroidSignatureV1.Der).der()
                     assertTrue(Signature.getInstance("SHA256withECDSA").run {
                         initVerify(leaf.publicKey)

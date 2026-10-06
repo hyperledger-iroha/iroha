@@ -60,8 +60,8 @@ Chain parameters come from genesis and committed state only; every validator use
 ones. Build the genesis from the current tree:
 
 1. Generate or materialize the manifest:
-   - `kagami genesis generate --profile iroha3-taira --genesis-public-key <multihash> --ivm-dir <dir> --kagemusha-mint-finality-parameters <file> --vrf-seed-hex <hex> --consensus-mode npos [--lane-policy lanes.json] default > genesis.json`,
-     or `kagami genesis materialize --kagemusha-mint-finality-parameters <file> configs/soranexus/taira/genesis.template.json`
+   - `kagami genesis generate --profile iroha3-taira --genesis-public-key <multihash> --ivm-dir <dir> --vrf-seed-hex <hex> --consensus-mode npos [--lane-policy lanes.json] default > genesis.json`,
+     or `kagami genesis materialize configs/soranexus/taira/genesis.template.json`
      for the Taira source template.
    - `--lane-policy <PATH>` sets the JSON `SumeragiLanePolicy` (fixed lanes, routes,
      autoscale; `specs/sumeragi_lanes.md`); kagami validates the policy and every fixed

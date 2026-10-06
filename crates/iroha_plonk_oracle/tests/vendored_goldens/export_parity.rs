@@ -163,7 +163,12 @@ fn check_setup<B: CurveBridge>(setup: &Setup<B>) {
     let read = VerifyingKey::<B::Native>::read(&vendored_vk, &binding).expect("strict VK read");
     assert_eq!(read.to_bytes(), setup.pk.vk().to_bytes());
     assert_ne!(
-        *setup.pk.vk().transcript_repr(),
+        *setup
+            .pk
+            .vk()
+            .transcript_repr()
+            .scalar()
+            .expect("retained scalar profile"),
         setup.transcript_repr,
         "{label}: production transcript_repr is descriptor-bound, not the vendored Debug hash"
     );

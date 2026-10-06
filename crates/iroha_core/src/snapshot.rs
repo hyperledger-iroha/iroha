@@ -2824,7 +2824,6 @@ fn try_read_snapshot_bundle<F>(
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
-    operation_index_budget: &AllocationBudget,
 ) -> Result<SnapshotReadOutcome, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
@@ -2902,7 +2901,6 @@ where
             kura,
         )?;
         let seed = KuraSeed {
-            operation_index_budget: operation_index_budget.clone(),
             execution_budget: execution_budget.clone(),
             kura: Arc::clone(kura),
             lane_manifests: Arc::clone(lane_manifests),
@@ -2977,7 +2975,6 @@ where
         *expected_network_id,
     )?;
     let seed = KuraSeed {
-        operation_index_budget: operation_index_budget.clone(),
         execution_budget: execution_budget.clone(),
         kura: Arc::clone(kura),
         lane_manifests: Arc::clone(lane_manifests),
@@ -3072,7 +3069,6 @@ pub fn try_read_snapshot(
     zk: &iroha_config::parameters::actual::Zk,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
-    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     try_read_snapshot_with_limits(
         execution_budget,
@@ -3092,7 +3088,6 @@ pub fn try_read_snapshot(
         #[cfg(feature = "telemetry")]
         telemetry,
         read_buffer_budget,
-        operation_index_budget,
     )
 }
 /// Read and verify a signed snapshot with explicit resource limits.
@@ -3120,7 +3115,6 @@ pub fn try_read_snapshot_with_limits(
     zk: &iroha_config::parameters::actual::Zk,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
-    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     try_read_snapshot_with_initializer(
         execution_budget,
@@ -3144,7 +3138,6 @@ pub fn try_read_snapshot_with_limits(
         #[cfg(feature = "telemetry")]
         telemetry,
         read_buffer_budget,
-        operation_index_budget,
     )
 }
 #[allow(clippy::too_many_lines)]
@@ -3167,7 +3160,6 @@ fn try_read_snapshot_with_initializer<F>(
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
-    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
@@ -3214,7 +3206,6 @@ where
             #[cfg(feature = "telemetry")]
             telemetry,
             read_buffer_budget,
-            operation_index_budget,
         )?;
         if !emergency_fast {
             generation.verify_generation_unchanged()?;
@@ -4378,7 +4369,6 @@ fn validate_generated_snapshot_for_restart_with_policy(
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     verify_snapshot_root_identity(input, state.chain_id_ref(), *state.network_id_ref())?;
     let seed = KuraSeed {
-        operation_index_budget: state.world.operation_index_budget().clone(),
         execution_budget: state.ivm_execution_budget(),
         kura: state.kura_handle(),
         lane_manifests: state.lane_manifests.read().clone(),

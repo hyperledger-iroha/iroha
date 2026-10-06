@@ -8,6 +8,7 @@ import android.content.pm.ApplicationInfo
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -138,7 +139,9 @@ class KagemushaWalletAndroidPlatformV1Test {
             generated.publicKeySec1().toList(),
             assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(platform.keyProbe(slot)).publicKeySec1().toList(),
         )
-        assertIs<KagemushaWalletAndroidSignatureV1.Der>(platform.keySign(slot, ByteArray(32) { 7 }))
+        assertIs<KagemushaWalletAndroidSignatureV1.Der>(platform.keySign(slot, ByteArray(32) { (it + 1).toByte() }))
+        assertContentEquals(ByteArray(32) { (it + 1).toByte() }, keyStore.signedMessages.single())
+        assertFailsWith<IllegalArgumentException> { platform.keySign(slot, byteArrayOf(1, 2, 3)) }
         assertIs<KagemushaWalletAndroidAttestationChainV1.Present>(platform.attestationChain(slot))
         assertEquals(0, platform.anchorPolicyTag())
         assertNull(platform.storageState())
@@ -159,6 +162,7 @@ class KagemushaWalletAndroidPlatformV1Test {
             "keySign" to "([B[B)L$JVM_OWNER/KagemushaWalletAndroidSignatureV1;",
             "keyDelete" to "([B)L$JVM_OWNER/KagemushaWalletAndroidRemoveV1;",
             "attestationChain" to "([B)L$JVM_OWNER/KagemushaWalletAndroidAttestationChainV1;",
+            "nativeCall" to "(I[B[BI)L$JVM_OWNER/KagemushaWalletNativeReplyV1;",
             "anchorPolicyTag" to "()I",
             "storageState" to "()L$JVM_OWNER/KagemushaWalletAndroidUnavailableV1;",
             "custodyRoot" to "()L$JVM_OWNER/KagemushaWalletAndroidCustodyRootV1;",

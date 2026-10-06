@@ -74,7 +74,8 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
     for sdk in ("c-jni", "csharp"):
         required = MODULE.REQUIRED_SYMBOLS[sdk]
         assert RETIRED_KAGEMUSHA_C_SYMBOLS.isdisjoint(required)
-        assert not any("kagemusha" in symbol.lower() for symbol in required)
+        current = set(MODULE.KAGEMUSHA_WALLET_C_EXPORTS + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS)
+        assert not any("kagemusha" in symbol.lower() for symbol in required if symbol not in current)
 
 
 def test_native_privacy_inventory_requires_authoritative_capability_validator() -> None:
@@ -513,7 +514,8 @@ def test_current_inventory_is_exact_for_posix_and_windows() -> None:
             assert inventories[sdk] == MODULE.REQUIRED_SYMBOLS[sdk]
             assert len(inventories[sdk]) == len(set(inventories[sdk]))
             assert "connect_norito_domain_id_validate_v1" in inventories[sdk]
-            assert not any("kagemusha" in symbol.lower() for symbol in inventories[sdk])
+            current = set(MODULE.KAGEMUSHA_WALLET_C_EXPORTS + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS)
+            assert not any("kagemusha" in symbol.lower() for symbol in inventories[sdk] if symbol not in current)
 
 
 def test_private_settlement_rejects_each_missing_actual_endpoint() -> None:
@@ -614,3 +616,271 @@ def test_required_prover_jni_module_is_portable_and_retired_startup_is_absent() 
     for symbol in MODULE.CONFIDENTIAL_PROVER_JNI_EXPORTS:
         assert symbol in MODULE.REQUIRED_SYMBOLS["c-jni"]
         assert re.search(r'pub\s+extern\s+"system"\s+fn\s+' + re.escape(symbol) + r'\b', wrappers)
+
+
+def test_current_wallet_allowlist_does_not_admit_unknown_or_retired_names() -> None:
+    current = (*MODULE.KAGEMUSHA_WALLET_C_EXPORTS, *MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS)
+    assert len(current) == 14
+    MODULE.validate_retired_protocol_symbols(current, sdk="c-jni")
+    for symbol in ("connect_norito_kagemusha_wallet_sign_v1", "connect_norito_kagemusha_wallet_open_v2", "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_sign", *RETIRED_KAGEMUSHA_C_SYMBOLS):
+        try:
+            MODULE.validate_retired_protocol_symbols([symbol], sdk="c-jni")
+        except MODULE.ArtifactContractError:
+            continue
+        raise AssertionError("unexpected admitted retired/unknown symbol: " + symbol)
+def test_swift_retained_bridge_exports_have_one_canonical_header_owner() -> None:
+    """Retained bridge exports consume one canonical C declaration without substitutes."""
+    from collections import Counter
+
+    def c_tokens(source: str) -> list[str]:
+        """Tokenize the bounded C inventory after splicing, ignoring lexical decoys."""
+        source = re.sub(r"\\\r?\n", "", source)
+        identifier = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+")
+        tokens = []
+        cursor = 0
+        line_start = True
+        while cursor < len(source):
+            character = source[cursor]
+            if character.isspace():
+                if character in "\r\n":
+                    line_start = True
+                cursor += 1
+                continue
+            if source.startswith("//", cursor):
+                end = source.find("\n", cursor + 2)
+                cursor = len(source) if end == -1 else end
+                continue
+            if source.startswith("/*", cursor):
+                end = source.find("*/", cursor + 2)
+                assert end != -1, "unterminated C comment"
+                if "\n" in source[cursor:end + 2]:
+                    line_start = True
+                cursor = end + 2
+                continue
+            if line_start and character == "#":
+                end = source.find("\n", cursor + 1)
+                cursor = len(source) if end == -1 else end
+                continue
+            if character in "\"'":
+                start = cursor
+                cursor += 1
+                while cursor < len(source) and source[cursor] != character:
+                    cursor += 2 if source[cursor] == "\\" else 1
+                assert cursor < len(source), "unterminated C literal"
+                cursor += 1
+                if source[start:cursor] == '"C"':
+                    tokens.append("@C-linkage")
+                line_start = False
+                continue
+            match = identifier.match(source, cursor)
+            if match:
+                tokens.append(match.group())
+                cursor = match.end()
+            else:
+                tokens.append(character)
+                cursor += 1
+            line_start = False
+        return tokens
+
+    def prototype_counts(source: str) -> Counter:
+        """Count outer declarators at semicolons, excluding typedefs and bodies."""
+        counts = Counter()
+        statement = []
+        linkage_depth = skipped_depth = parentheses = brackets = 0
+        for token in c_tokens(source):
+            if skipped_depth:
+                skipped_depth += (token == "{") - (token == "}")
+                continue
+            if token == "{":
+                if statement == ["extern", "@C-linkage"]:
+                    linkage_depth += 1
+                else:
+                    skipped_depth = 1
+                statement = []
+                parentheses = brackets = 0
+                continue
+            if token == "}":
+                assert linkage_depth > 0, "unmatched C linkage brace"
+                linkage_depth -= 1
+                statement = []
+                continue
+            if token == ";" and parentheses == brackets == 0:
+                names = []
+                if "typedef" not in statement:
+                    declarators = []
+                    declarator = []
+                    paren_depth = bracket_depth = 0
+                    for item in statement:
+                        if item == "," and paren_depth == bracket_depth == 0:
+                            declarators.append(declarator)
+                            declarator = []
+                        else:
+                            declarator.append(item)
+                        paren_depth += (item == "(") - (item == ")")
+                        bracket_depth += (item == "[") - (item == "]")
+                    assert paren_depth == bracket_depth == 0
+                    declarators.append(declarator)
+                    for ordinal, declarator in enumerate(declarators):
+                        depths = []
+                        paren_depth = bracket_depth = 0
+                        initialized = False
+                        for item in declarator:
+                            depths.append((paren_depth, bracket_depth))
+                            if item == "=" and paren_depth == bracket_depth == 0:
+                                initialized = True
+                            paren_depth += (item == "(") - (item == ")")
+                            bracket_depth += (item == "[") - (item == "]")
+                        assert paren_depth == bracket_depth == 0
+                        if initialized:
+                            continue
+                        for index, item in enumerate(declarator):
+                            if not item.startswith("connect_norito_"):
+                                continue
+                            left = index
+                            while left > 0 and declarator[left - 1] == "(":
+                                left -= 1
+                            right = index + 1
+                            wrappers = index - left
+                            if declarator[right:right + wrappers] != [")"] * wrappers:
+                                continue
+                            right += wrappers
+                            if (
+                                (left > 0 or ordinal > 0)
+                                and depths[left] == (0, 0)
+                                and declarator[right:right + 1] == ["("]
+                            ):
+                                names.append(item)
+                counts.update(names)
+                statement = []
+                continue
+            statement.append(token)
+            parentheses += (token == "(") - (token == ")")
+            brackets += (token == "[") - (token == "]")
+            assert parentheses >= 0 and brackets >= 0
+        assert linkage_depth == skipped_depth == parentheses == brackets == 0
+        return counts
+
+    def retained_exports(source: str) -> set[str]:
+        """Read references only from the unique outer required_exports initializer."""
+        tokens = c_tokens(source)
+        initializers = []
+        braces = parentheses = brackets = 0
+        for index, token in enumerate(tokens):
+            if token == "required_exports" and braces == parentheses == brackets == 0:
+                cursor = index + 1
+                while cursor < len(tokens) and tokens[cursor] not in {";", "=", "{", "}"}:
+                    cursor += 1
+                if tokens[cursor:cursor + 2] == ["=", "{"]:
+                    start = cursor + 2
+                    cursor = start
+                    depth = 1
+                    while cursor < len(tokens) and depth:
+                        depth += (tokens[cursor] == "{") - (tokens[cursor] == "}")
+                        cursor += 1
+                    assert depth == 0 and tokens[cursor:cursor + 1] == [";"]
+                    initializers.append({
+                        item for item in tokens[start:cursor - 1]
+                        if item.startswith("connect_norito_")
+                    })
+            braces += (token == "{") - (token == "}")
+            parentheses += (token == "(") - (token == ")")
+            brackets += (token == "[") - (token == "]")
+            assert braces >= 0 and parentheses >= 0 and brackets >= 0
+        assert braces == parentheses == brackets == 0
+        assert len(initializers) == 1, "required_exports must have one outer initializer"
+        return initializers[0]
+
+    # Controls exercise lexical and declaration syntax independently of current files.
+    first, second = "connect_norito_first", "connect_norito_second"
+    assert prototype_counts(f"int32_t\n{first}\n(void);") == Counter({first: 1})
+    assert prototype_counts(f"int32_t/* separator */{first}(void);") == Counter({first: 1})
+    assert prototype_counts(
+        f"extern \"C\" {{ int32_t {first}(void); int32_t {second}(void); }}"
+    ) == Counter({first: 1, second: 1})
+    assert prototype_counts(
+        f"int32_t {first}(void);int32_t {first}(void);"
+    ) == Counter({first: 2})
+    assert prototype_counts(
+        f"int32_t {first}(void), {second}(void);"
+    ) == Counter({first: 1, second: 1})
+    assert prototype_counts(f"int32_t ({first})(void);") == Counter({first: 1})
+    assert prototype_counts(f"int32_t ((({first})))(void);") == Counter({first: 1})
+    assert prototype_counts(
+        f"int32_t {first}(void), ordinary = 42;"
+    ) == Counter({first: 1})
+    assert prototype_counts(
+        f"int32_t ordinary = 42, ({first})(void), (({second}))(void);"
+    ) == Counter({first: 1, second: 1})
+    assert prototype_counts(
+        f"int32_t (*({first}))(void), (*(({second})))(void);"
+    ) == Counter()
+    assert prototype_counts(f"/* int32_t {first}(void); */") == Counter()
+    assert prototype_counts(f"// int32_t {first}(void);\n") == Counter()
+    assert prototype_counts(
+        f'const char *text = "int32_t {first}(void);"; char quote = \'"\' ;'
+    ) == Counter()
+    assert prototype_counts(
+        f'const char *text = "escaped \\" int32_t {first}(void);";'
+    ) == Counter()
+    assert prototype_counts(
+        f"#define FAKE int32_t \\\n{first}(void);\n"
+    ) == Counter()
+    assert prototype_counts(
+        f"/* directive prefix */ #define FAKE int32_t {first}(void);\n"
+    ) == Counter()
+    assert prototype_counts(
+        f"// continued comment \\\nint32_t {first}(void);\n"
+    ) == Counter()
+    assert prototype_counts(
+        f"void function(void) {{ {first}(); }} int32_t value = {first}();"
+    ) == Counter()
+    assert prototype_counts(
+        f"typedef int32_t {first}(void); "
+        f"typedef struct {{ int32_t (*{first})(void); }} Record;"
+    ) == Counter()
+    assert prototype_counts(
+        f"void {first}(void (*{second})(void));"
+    ) == Counter({first: 1})
+    assert prototype_counts(
+        f"int32_t\n/* local substitute */\n{first}\n(\nvoid\n);\n"
+    ) == Counter({first: 1})
+    assert c_tokens("connect_norito_/**/first") == ["connect_norito_", "first"]
+
+    initializer = (
+        "static NoritoBridgeExportReference required_exports[] = { "
+        f"(NoritoBridgeExportReference){first}, "
+        f"(NoritoBridgeExportReference)&{second}, "
+        f"(NoritoBridgeExportReference)((&{first})), "
+        f"((NoritoBridgeExportReference)({second})), "
+        '/* connect_norito_comment */ "connect_norito_string", '
+        "'x' };"
+    )
+    assert retained_exports(initializer) == {first, second}
+    assert retained_exports(
+        f"int32_t connect_norito_outside(void); "
+        f"void function(void) {{ void *required_exports[] = {{connect_norito_local}}; }}"
+        f'const char *text = "required_exports[] = {{connect_norito_literal}};";'
+        f"// required_exports[] = {{connect_norito_comment}};\n"
+        + initializer
+    ) == {first, second}
+    assert retained_exports(
+        "#define FAKE required_exports[] = { \\\nconnect_norito_macro };\n"
+        + initializer
+    ) == {first, second}
+
+    header = (
+        REPO_ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+    ).read_text(encoding="utf-8")
+    retention = (
+        REPO_ROOT / "IrohaSwift/Sources/NoritoBridgeRetention/NoritoBridgeRetention.c"
+    ).read_text(encoding="utf-8")
+    retained = retained_exports(retention)
+    assert {
+        "connect_norito_decode_control_approve_sig_alg",
+        "connect_norito_encode_envelope_sign_result_ok_with_alg",
+        "connect_norito_kagemusha_wallet_revision_v1",
+    } <= retained
+    declarations = prototype_counts(header)
+    for symbol in retained:
+        assert declarations[symbol] == 1, symbol
+    assert not prototype_counts(retention), "local bridge declarations substitute for the owner"

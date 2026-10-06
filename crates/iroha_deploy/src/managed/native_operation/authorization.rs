@@ -13,6 +13,7 @@ use iroha_data_model::sorafs::capacity::ProviderId;
 use iroha_fs::PrivateDirectory;
 use iroha_wallet::operations::AccountService;
 use std::{
+    cell::Cell,
     ffi::OsString,
     sync::{
         Arc,
@@ -170,22 +171,27 @@ impl Lease {
         let terms = Terms::new(requested, &fees.options(deadline))?;
         require_active(&cancelled)?;
         let root = directory.ensure_child("epochs")?;
-        let retained = read_epochs(&root, original_digest, fees, scope)?;
+        let retained = read_epochs(&root, original_digest, fees, scope, Vec::new())?;
         if retained.len() >= MAX_EPOCHS {
             return Err(ManagedBootstrapFailure::EpochLimit.into());
         }
         let epoch = Epoch {
             ordinal: u8::try_from(retained.len() + 1)
                 .map_err(|_| invalid("generated epoch ordinal overflow"))?,
-            previous: retained.last().map(digest).transpose()?,
+            previous: retained
+                .last()
+                .map(|entry| entry.epoch.digest())
+                .transpose()?,
             parent_intent: original_digest,
             issued_at_unix_ms,
             terms,
         };
         require_active(&cancelled)?;
         attempts::write_record(&root, &format!("{:04}.nrt", epoch.ordinal), &epoch)?;
-        let after = read_epochs(&root, original_digest, fees, scope)?;
-        if after.last() != Some(&epoch) || after.len() != retained.len() + 1 {
+        let after = read_epochs(&root, original_digest, fees, scope, Vec::new())?;
+        if after.last().map(|entry| &entry.epoch.value) != Some(&epoch)
+            || after.len() != retained.len() + 1
+        {
             return Err(invalid("new generated epoch changed during publication"));
         }
         Ok(Self {
@@ -221,8 +227,9 @@ impl Lease {
             self.original_digest,
             &self.epoch.terms.fees,
             self.scope,
+            Vec::new(),
         )?;
-        if retained.last() != Some(&self.epoch) {
+        if retained.last().map(|entry| &entry.epoch.value) != Some(&self.epoch) {
             return Err(invalid(
                 "generated capability no longer selects its retained epoch",
             ));
@@ -338,81 +345,180 @@ pub(in crate::managed) trait DispatchAuthorization: sealed::Sealed {
     }
 }
 
+// Owned once by a lexical read. Bytes must be freshly observed at every use; these
+// immutable DTOs and lazy pure digests cannot issue a Lease or survive in BodyHistory.
+struct RecordImage<T> {
+    bytes: Vec<u8>,
+    value: T,
+    digest: Cell<Option<[u8; 32]>>,
+}
+impl<T: norito::NoritoSerialize> RecordImage<T> {
+    fn digest(&self) -> Result<[u8; 32]> {
+        if let Some(value) = self.digest.get() {
+            return Ok(value);
+        }
+        let value = digest(&self.value)?;
+        #[cfg(test)]
+        reader_tests::digest_computed();
+        self.digest.set(Some(value));
+        Ok(value)
+    }
+}
+struct RetainedEpoch {
+    epoch: RecordImage<Epoch>,
+    claim: Option<RecordImage<Replacement>>,
+}
+
+/// One body parser's bounded pure metadata reuse; no source or live authorization verdict.
+/// Each census still reads every record/absence and brackets the same exact native namespace.
+#[derive(Default)]
+pub(in crate::managed) struct EpochReader {
+    records: Vec<RetainedEpoch>,
+}
+impl EpochReader {
+    fn refresh(
+        &mut self,
+        directory: &PrivateDirectory,
+        original_digest: [u8; 32],
+        fees: &Fees,
+        scope: Scope,
+    ) -> Result<()> {
+        // Open the child anew at every original census point. No old native directory or
+        // file handle is used to replace the currently named custody observation.
+        self.records = match directory.open_child("epochs") {
+            Ok(root) => read_epochs(
+                &root,
+                original_digest,
+                fees,
+                scope,
+                std::mem::take(&mut self.records),
+            )?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(())
+    }
+    pub(in crate::managed) fn validate_retained(
+        &mut self,
+        directory: &PrivateDirectory,
+        original_digest: [u8; 32],
+        fees: &Fees,
+        scope: Scope,
+    ) -> Result<()> {
+        self.refresh(directory, original_digest, fees, scope)?;
+        directory.revalidate()?;
+        Ok(())
+    }
+    pub(in crate::managed) fn validate_references<'a>(
+        &mut self,
+        directory: &PrivateDirectory,
+        original_digest: [u8; 32],
+        fees: &Fees,
+        scope: Scope,
+        origins: impl Iterator<Item = &'a Origin>,
+    ) -> Result<()> {
+        self.refresh(directory, original_digest, fees, scope)?;
+        for origin in origins {
+            if let Origin::Generated {
+                ordinal,
+                epoch,
+                parent_intent,
+            } = origin
+            {
+                let selected = self
+                    .records
+                    .get(
+                        usize::from(*ordinal)
+                            .checked_sub(1)
+                            .ok_or_else(|| invalid("generated epoch ordinal is zero"))?,
+                    )
+                    .ok_or_else(|| {
+                        invalid("retained dispatch lost its original authorization epoch")
+                    })?;
+                if *parent_intent != original_digest || *epoch != selected.epoch.digest()? {
+                    return Err(invalid(
+                        "retained dispatch changed its original authorization epoch",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
 pub(in crate::managed) fn validate_retained(
     directory: &PrivateDirectory,
     original_digest: [u8; 32],
     fees: &Fees,
     scope: Scope,
 ) -> Result<()> {
-    match directory.open_child("epochs") {
-        Ok(root) => {
-            read_epochs(&root, original_digest, fees, scope)?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    directory.revalidate()?;
-    Ok(())
-}
-pub(in crate::managed) fn validate_references<'a>(
-    directory: &PrivateDirectory,
-    original_digest: [u8; 32],
-    fees: &Fees,
-    scope: Scope,
-    origins: impl Iterator<Item = &'a Origin>,
-) -> Result<()> {
-    let records = match directory.open_child("epochs") {
-        Ok(root) => read_epochs(&root, original_digest, fees, scope)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error.into()),
-    };
-    for origin in origins {
-        if let Origin::Generated {
-            ordinal,
-            epoch,
-            parent_intent,
-        } = origin
-        {
-            let selected = records
-                .get(
-                    usize::from(*ordinal)
-                        .checked_sub(1)
-                        .ok_or_else(|| invalid("generated epoch ordinal is zero"))?,
-                )
-                .ok_or_else(|| {
-                    invalid("retained dispatch lost its original authorization epoch")
-                })?;
-            if *parent_intent != original_digest || *epoch != digest(selected)? {
-                return Err(invalid(
-                    "retained dispatch changed its original authorization epoch",
-                ));
-            }
-        }
-    }
-    Ok(())
+    EpochReader::default().validate_retained(directory, original_digest, fees, scope)
 }
 
+fn read_image<T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>>(
+    root: &PrivateDirectory,
+    name: &str,
+    retained: Option<RecordImage<T>>,
+) -> Result<Option<RecordImage<T>>> {
+    #[cfg(test)]
+    reader_tests::record_read();
+    // This is exactly the read/absence owner used by attempts::read_record. Every cached
+    // image must pass all original fresh native identity, permission, size and path fences.
+    let Some(bytes) = super::read_optional(root, name, attempts::MAX_RECORD_BYTES)? else {
+        return Ok(None);
+    };
+    // An enclosing decoder owns its current admission, including field/sequence/depth
+    // ceilings. Such a caller must independently decode this image even when identical;
+    // pure metadata reuse cannot transfer a prior decoder's admission to another scope.
+    if let Some(retained) =
+        retained.filter(|retained| !norito::core::decode_limits_active() && retained.bytes == bytes)
+    {
+        return Ok(Some(retained));
+    }
+    let value = attempts::decode_record(&bytes)?;
+    #[cfg(test)]
+    reader_tests::record_decoded();
+    Ok(Some(RecordImage {
+        bytes,
+        value,
+        digest: Cell::new(None),
+    }))
+}
 fn read_epochs(
     root: &PrivateDirectory,
     parent_intent: [u8; 32],
     fees: &Fees,
     scope: Scope,
-) -> Result<Vec<Epoch>> {
+    retained: Vec<RetainedEpoch>,
+) -> Result<Vec<RetainedEpoch>> {
+    #[cfg(test)]
+    reader_tests::namespace_read();
     let names = root.entries(MAX_EPOCHS * 2)?;
     let mut expected = Vec::<OsString>::new();
-    let mut epochs: Vec<Epoch> = Vec::new();
+    let mut epochs: Vec<RetainedEpoch> = Vec::new();
+    // Move each already owned image after its fresh observation. Unchanged records keep
+    // their original allocation; changed records are dropped before canonical decode.
+    // Old unread tails and partial new results are dropped if this census refuses.
+    let mut retained = retained.into_iter();
     for index in 1..=MAX_EPOCHS {
         let name = format!("{index:04}.nrt");
-        let Some(epoch): Option<Epoch> = attempts::read_record(root, &name)? else {
+        let (old_epoch, old_claim) = retained
+            .next()
+            .map_or((None, None), |entry| (Some(entry.epoch), entry.claim));
+        let Some(epoch): Option<RecordImage<Epoch>> = read_image(root, &name, old_epoch)? else {
             break;
         };
-        epoch.terms.validate()?;
-        if usize::from(epoch.ordinal) != index
-            || epoch.parent_intent != parent_intent
-            || epoch.terms.fees != *fees
-            || epoch.issued_at_unix_ms == 0
-            || epoch.issued_at_unix_ms >= epoch.terms.signing_deadline_unix_ms
-            || epoch.previous != epochs.last().map(digest).transpose()?
+        let value = &epoch.value;
+        value.terms.validate()?;
+        if usize::from(value.ordinal) != index
+            || value.parent_intent != parent_intent
+            || value.terms.fees != *fees
+            || value.issued_at_unix_ms == 0
+            || value.issued_at_unix_ms >= value.terms.signing_deadline_unix_ms
+            || value.previous
+                != epochs
+                    .last()
+                    .map(|entry| entry.epoch.digest())
+                    .transpose()?
         {
             return Err(invalid(
                 "generated epoch changed original intent, fees or lineage",
@@ -420,18 +526,25 @@ fn read_epochs(
         }
         expected.push(name.into());
         let claim_name = format!("{index:04}-replacement.nrt");
-        if let Some(claim) = attempts::read_record::<Replacement>(root, &claim_name)? {
-            scope.check(claim.purpose)?;
-            claim.target.validate(claim.purpose)?;
-            if claim.epoch != digest(&epoch)? {
+        let claim = read_image(root, &claim_name, old_claim)?;
+        if let Some(claim) = &claim {
+            scope.check(claim.value.purpose)?;
+            claim.value.target.validate(claim.value.purpose)?;
+            if claim.value.epoch != epoch.digest()? {
                 return Err(invalid("generated unsigned replacement claim changed"));
             }
             expected.push(claim_name.into());
         }
-        epochs.push(epoch);
+        epochs.push(RetainedEpoch { epoch, claim });
     }
     expected.sort();
-    if names != expected || root.entries(MAX_EPOCHS * 2)? != names {
+    // Keep the short-circuit order: a mismatched original inventory refuses before the
+    // original final namespace observation is attempted.
+    if names != expected || {
+        #[cfg(test)]
+        reader_tests::namespace_read();
+        root.entries(MAX_EPOCHS * 2)? != names
+    } {
         return Err(invalid(
             "generated epoch inventory changed or contains gaps or unknown material",
         ));
@@ -448,3 +561,7 @@ pub(in crate::managed) fn require_active(cancelled: &AtomicBool) -> Result<()> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "authorization/reader_tests.rs"]
+mod reader_tests;

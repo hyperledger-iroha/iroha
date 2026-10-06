@@ -1979,7 +1979,6 @@ mod tests {
         let actual: iroha::data_model::smart_contract::manifest::ContractManifest =
             norito::json::from_slice(&std::fs::read(path).expect("signed manifest output"))
                 .expect("decode signed manifest output");
-        assert!(actual.same_signed_content(&expected));
         let provenance = actual.provenance.as_ref().expect("manifest provenance");
         assert_eq!(&provenance.signer, key.public_key());
         let frame = owner
@@ -1988,12 +1987,23 @@ mod tests {
         let payload = actual
             .signature_payload_bytes(owner.context(), frame.remaining_bytes())
             .expect("encode output verification payload");
+        let mut expected_owner = manifest_signing::ManifestSigningBudget::new()
+            .expect("fund independent source payload verification");
+        let expected_frame = expected_owner
+            .reserve_frame(&expected)
+            .expect("admit source verification frame");
+        let expected_payload = expected
+            .signature_payload_bytes(expected_owner.context(), expected_frame.remaining_bytes())
+            .expect("encode source verification payload");
+        assert_eq!(payload, expected_payload);
         provenance
             .signature
             .verify(&provenance.signer, &payload)
             .expect("valid emitted manifest signature");
         drop(payload);
         drop(frame);
+        drop(expected_payload);
+        drop(expected_frame);
     }
 
     #[test]

@@ -186,6 +186,7 @@ macro_rules! impl_direct_instruction_box {
 }
 // Allow direct boxing of standalone instructions that are not part of a grouped enum.
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
+impl_direct_instruction_box!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyExact12QualificationV1);
@@ -548,9 +549,6 @@ impl_musubi_instruction_box!(
     SetMusubiRegistryPolicyV1,
     AssertMusubiReleaseDigestV1,
 );
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaV1);
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1);
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::RedeemKagemushaV1);
 // Allow direct boxing of oracle feed instructions.
 impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);
 impl_direct_instruction_box!(crate::isi::oracle::SubmitOracleObservation);
@@ -1953,8 +1951,8 @@ pub mod defi;
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
-/// Clean-slate pooled-reserve KAGEMUSHA V1 instructions and operation records.
-pub mod kagemusha_v1;
+/// KAGEMUSHA wallet ledger boundary.
+pub mod kagemusha_wallet;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -2020,7 +2018,6 @@ pub use confidential::*;
 pub use contract_alias::*;
 pub use defi::*;
 pub use identifier::*;
-pub use kagemusha_v1::*;
 pub use kaigi::*;
 pub use ministry::*;
 pub use mint_burn::*;

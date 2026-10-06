@@ -21,6 +21,103 @@ use crate::{
     test_circuits::{Arithmetic, CHOICES, K, Lookups, Permutations, setup},
 };
 
+#[test]
+fn coset_evaluation_reuses_storage_and_matches_the_allocating_reference() {
+    fn check<F: PastaField>() {
+        let domain = FftDomain::<F>::new(4).expect("domain");
+        let quotient = crate::keys::QuotientDomain::<F>::new(4, 6).expect("quotient");
+        let coefficients: Vec<F> = (0..domain.n()).map(|i| F::from(i as u64 + 1)).collect();
+        let mut values = coefficients.clone();
+        let address = values.as_ptr();
+        for coset in 0..quotient.pieces() {
+            let expected = quotient
+                .evaluate(&domain, &coefficients, coset)
+                .expect("reference");
+            evaluate_into(
+                &domain,
+                &coefficients,
+                quotient.shift(coset).unwrap(),
+                &mut values,
+            )
+            .expect("reuse");
+            assert_eq!(values, expected);
+            assert_eq!(values.as_ptr(), address);
+        }
+        assert!(matches!(
+            evaluate_into(&domain, &coefficients[..3], F::ONE, &mut values),
+            Err(KeyError::Shape {
+                what: "coset coefficients",
+                ..
+            })
+        ));
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
+fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
+    fn check<C: PastaCurve>() {
+        let circuit = Arithmetic {
+            start: 3,
+            rows: 12,
+            tamper: None,
+        };
+        let setup = setup::<C, _>(&circuit, CHOICES[0]);
+        for policy in [
+            crate::keys::CosetCachePolicy::Eager,
+            crate::keys::CosetCachePolicy::OnDemand,
+        ] {
+            let mut config = crate::test_circuits::keygen_config(CHOICES[0]);
+            config.coset_cache = policy;
+            let pk = crate::keys::keygen_pk(&setup.params, &circuit, &config).expect("keygen");
+            let fixed: fn(usize) -> CosetPolynomial = CosetPolynomial::Fixed;
+            let permutation: fn(usize) -> CosetPolynomial = CosetPolynomial::Permutation;
+            for (coefficients, polynomial) in [
+                (pk.fixed_polys(), fixed),
+                (pk.permutation_polys(), permutation),
+            ] {
+                let mut values = (0..coefficients.len())
+                    .map(|index| pk.coset_values(polynomial(index), 0).unwrap())
+                    .collect::<Vec<_>>();
+                let addresses: Vec<_> = values.iter().map(|column| column.as_ptr()).collect();
+                for coset in 1..pk.quotient_domain().pieces() {
+                    refresh_key_cosets(&pk, coefficients, &mut values, polynomial, coset)
+                        .expect("refresh");
+                    for (index, column) in values.iter().enumerate() {
+                        let reference = pk
+                            .coset_values(polynomial(index), coset)
+                            .expect("reference");
+                        assert_eq!(column, &reference);
+                        match policy {
+                            crate::keys::CosetCachePolicy::Eager => {
+                                assert!(matches!(column, Cow::Borrowed(_)));
+                                assert_eq!(column.as_ptr(), reference.as_ptr());
+                            }
+                            crate::keys::CosetCachePolicy::OnDemand => {
+                                assert!(matches!(column, Cow::Owned(_)));
+                                assert_eq!(column.as_ptr(), addresses[index]);
+                            }
+                        }
+                    }
+                }
+                assert_eq!(
+                    refresh_key_cosets(
+                        &pk,
+                        coefficients,
+                        &mut values,
+                        polynomial,
+                        pk.quotient_domain().pieces()
+                    ),
+                    Err(KeyError::CosetIndex)
+                );
+            }
+        }
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
 /// Direct evaluation of a finalized expression on one row of evaluation-form
 /// columns, rotations wrapping modulo `n`.
 struct RowEvaluator<'a, F> {
@@ -332,6 +429,103 @@ fn malformed_expressions_do_not_compile() {
     assert_eq!(malformed(vec![]), expected);
     assert_eq!(rotation_offset(-1, 8), Ok(7));
     assert_eq!(rotation_offset(9, 8), Ok(1));
+}
+
+#[test]
+fn normalized_dag_preserves_field_identities_and_shares_commuted_terms() {
+    fn check<F: PastaField>(descriptor: &ProtocolDescriptor) {
+        let constant = |value: F| ExprNodeV1::Constant(value.to_repr());
+        let input = ExprNodeV1::Advice(0);
+        let mut builder = Builder::<F> {
+            nodes: Vec::new(),
+            index: BTreeMap::new(),
+            descriptor,
+        };
+        let expressions = vec![
+            vec![input, constant(F::ZERO), ExprNodeV1::Sum],
+            vec![constant(F::ZERO), input, ExprNodeV1::Sum],
+            vec![input, constant(F::ONE), ExprNodeV1::Product],
+            vec![constant(F::ZERO), input, ExprNodeV1::Product],
+            vec![input, ExprNodeV1::Negated, ExprNodeV1::Negated],
+            vec![input, ExprNodeV1::Scaled((-F::ONE).to_repr())],
+            vec![input, input, ExprNodeV1::Sum],
+            vec![input, ExprNodeV1::Scaled(F::from(2).to_repr())],
+            vec![input, input, ExprNodeV1::Product],
+            vec![
+                constant(F::from(3)),
+                constant(F::from(7)),
+                ExprNodeV1::Product,
+            ],
+            vec![input, constant(F::from(3)), ExprNodeV1::Sum],
+            vec![constant(F::from(3)), input, ExprNodeV1::Sum],
+            vec![input, input, ExprNodeV1::Negated, ExprNodeV1::Product],
+            vec![input, ExprNodeV1::Negated, input, ExprNodeV1::Product],
+        ];
+        let roots: Vec<_> = expressions
+            .iter()
+            .map(|expression| builder.expression(expression).unwrap())
+            .collect();
+        assert_eq!(roots[0], roots[1]);
+        assert_eq!(roots[0], roots[2]);
+        assert_eq!(roots[0], roots[4]);
+        assert_eq!(roots[6], roots[7]);
+        assert_eq!(roots[10], roots[11]);
+        assert_eq!(roots[12], roots[13]);
+        assert!(matches!(builder.nodes[roots[6] as usize], Node::Doubled(_)));
+        assert!(matches!(builder.nodes[roots[8] as usize], Node::Squared(_)));
+        let evaluator = CompiledExpressions {
+            nodes: builder.nodes,
+            gates: roots.clone(),
+            lookups: vec![],
+            fixed_queries: vec![],
+            advice_queries: vec![],
+            instance_queries: vec![],
+        };
+        let mut rng = ChaCha20Rng::seed_from_u64(98123);
+        let values: Vec<_> = [F::ZERO, F::ONE, -F::ONE]
+            .into_iter()
+            .chain((0..125).map(|_| F::random(&mut rng)))
+            .collect();
+        let bound = BoundColumns {
+            fixed: vec![],
+            advice: vec![(&values, 0)],
+            instance: vec![],
+            mask: 127,
+        };
+        let mut scratch = vec![F::ZERO; evaluator.nodes.len()];
+        for (row, value) in values.iter().enumerate() {
+            evaluator.evaluate_row(&bound, row, &mut scratch);
+            let expected = [
+                *value,
+                *value,
+                *value,
+                F::ZERO,
+                *value,
+                -*value,
+                *value + value,
+                *value + value,
+                *value * value,
+                F::from(21),
+                *value + F::from(3),
+                *value + F::from(3),
+                -(*value * value),
+                -(*value * value),
+            ];
+            for (&root, expected) in roots.iter().zip(expected) {
+                assert_eq!(scratch[root as usize], expected);
+            }
+        }
+    }
+    let fixture = setup::<Ep, _>(
+        &Arithmetic {
+            start: 1,
+            rows: 3,
+            tamper: None,
+        },
+        CHOICES[0],
+    );
+    check::<Fp>(fixture.pk.binding().descriptor());
+    check::<Fq>(fixture.pk.binding().descriptor());
 }
 
 #[test]

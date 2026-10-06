@@ -50,7 +50,7 @@ fn deadline() -> Instant {
 
 #[test]
 fn unsigned_public_reads_share_bounded_credential_free_blocking_and_async_transport() {
-    PublicHttpClient::new().expect("native SDK transport is constructible without ledger custody");
+    let _ = PublicHttpClient::new();
     let transport = Transport::new(StatusCode::OK, vec![1, 2, 3]);
     let client = PublicHttpClient::with_transport(transport.clone());
     let url: Url = "https://releases.example/checkpoint.nrt".parse().unwrap();

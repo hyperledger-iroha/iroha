@@ -523,11 +523,12 @@ transaction overlay. The key activation lead time and next unfrozen election
 boundary determine eligibility. Failed transactions leave no peer, key or stake
 behind. Existing registered peers can consent through the same instruction.
 Candidate consent cannot be reused at a different tenure. Fresh global peers
-outside the frozen topology are refused before peer, key or balance mutation:
-permissionless global eligibility would otherwise allow an election to outpace
-its mandatory mint-finality keys. Signed fresh candidate admission is available
-for independent nonzero stake-elected lanes; serving those lanes grants no global
-vote. See the explicit protocol dependency below.
+enter the future election pool only against an authenticated NPoS schedule,
+with the required BLS proof of possession, key activation lead time and funded
+stake. Registration does not alter the frozen voting roster: authority changes
+only through the certified epoch transition. Signed fresh candidate admission
+also serves independent nonzero stake-elected lanes; serving those lanes grants
+no global vote. See the explicit protocol dependency below.
 
 Activation, exit, bonding and withdrawals authorize the account that owns the
 respective state. Raw peer administration retains its separate permission gate.

@@ -15,7 +15,9 @@ use iroha_data_model::{
 use norito::codec::Encode as _;
 
 use super::{
-    certified_chain::{CertifiedChain, ChainReadError, QcVerification},
+    certified_chain::{
+        CertifiedChain, ChainReadError, QcVerification, proof_source_append, proof_source_start,
+    },
     node::NodeIdentity,
 };
 use crate::state::StateReadOnly;
@@ -61,6 +63,146 @@ pub fn build_proof(
 ) -> Result<SumeragiFinalityProof, ProofError> {
     let chain = CertifiedChain::new(view)?;
     proof_from_chain(&chain, height)
+}
+
+/// A bounded sequential proof producer borrowed only within [`with_proof_reader`].
+///
+/// Each emitted proof passes the original native and independent portable checks.
+/// Reuse additionally requires fresh complete native prefix bytes to match an ordered
+/// digest of genuinely verified canonical receipts, before and after the read. The
+/// source's original descriptor, index and namespace barriers still apply. A changed
+/// or unavailable source discards every retained graph before the original standalone
+/// producer retries; this local byte fence is never finality authority or a trust root.
+pub struct FinalityProofReader<'v, V: StateReadOnly> {
+    view: &'v V,
+    chain: Option<CertifiedChain<'v, V>>,
+    #[cfg(test)]
+    after_verified: Option<&'v dyn Fn()>,
+    #[cfg(test)]
+    before_verified: Option<&'v dyn Fn()>,
+}
+
+/// Produce sequential proofs within one borrowed immutable State cut.
+///
+/// The native cursor is acquired lazily and dropped before return or unwind. The
+/// immutable State view pins configured network, chain and original block hashes;
+/// it does not freeze Kura files. Fresh original native byte scans therefore join
+/// the cursor's authenticated source before reuse and before exposing a new proof.
+pub fn with_proof_reader<V: StateReadOnly, R>(
+    view: &V,
+    read: impl FnOnce(&mut FinalityProofReader<'_, V>) -> R,
+) -> R {
+    let mut reader = FinalityProofReader {
+        view,
+        chain: None,
+        #[cfg(test)]
+        after_verified: None,
+        #[cfg(test)]
+        before_verified: None,
+    };
+    read(&mut reader)
+}
+
+impl<V: StateReadOnly> FinalityProofReader<'_, V> {
+    /// Read an independently checked proof from the original certified source.
+    ///
+    /// An enclosing decode-limit scope always uses [`build_proof`] after dropping
+    /// any warm cursor. No source scan, byte capture or warm validation replaces
+    /// the original physical charges or typed refusal under that caller's budget.
+    /// Earlier/equal reads use the native genesis reset. Every refusal discards
+    /// the cursor; missing or changed byte custody selects the original producer.
+    ///
+    /// # Errors
+    /// The original source, certificate, resource and portable errors from [`build_proof`].
+    pub fn proof(&mut self, height: u64) -> Result<SumeragiFinalityProof, ProofError> {
+        if norito::core::decode_limits_active() {
+            drop(self.chain.take());
+            return build_proof(self.view, height);
+        }
+        if let Some(chain) = self.chain.as_ref() {
+            let unchanged = chain.proof_source_cut().is_some_and(|(at, original)| {
+                current_prefix_source(self.view, at) == Some(original)
+            });
+            if !unchanged {
+                drop(self.chain.take());
+                return build_proof(self.view, height);
+            }
+        }
+        #[cfg(test)]
+        if let Some(change_original) = self.before_verified.take() {
+            change_original();
+        }
+        let result = match self.chain.as_ref() {
+            Some(chain) => proof_from_chain(chain, height),
+            None => {
+                let mut chain = CertifiedChain::new(self.view)?;
+                chain.enable_proof_source_cut();
+                let result = proof_from_chain(&chain, height);
+                if result.is_ok() {
+                    self.chain = Some(chain);
+                }
+                result
+            }
+        };
+        match result {
+            Err(error) => {
+                // A warm verifier's source/physical failure cannot replace the
+                // fresh producer's exact diagnosis after all retained owners retire.
+                drop(error);
+                drop(self.chain.take());
+                build_proof(self.view, height)
+            }
+            Ok(proof) => {
+                #[cfg(test)]
+                if let Some(change_original) = self.after_verified.take() {
+                    change_original();
+                }
+                let unchanged = self
+                    .chain
+                    .as_ref()
+                    .and_then(CertifiedChain::proof_source_cut)
+                    .is_some_and(|(at, original)| {
+                        current_prefix_source(self.view, at) == Some(original)
+                    });
+                if unchanged {
+                    Ok(proof)
+                } else {
+                    // No cached graph or offered DTO remains while the original
+                    // producer independently diagnoses the current native source.
+                    drop(proof);
+                    drop(self.chain.take());
+                    build_proof(self.view, height)
+                }
+            }
+        }
+    }
+}
+
+// Read no codec graph, create no capacity, and retain no per-height table. Every
+// raw destination is owned by the original finite execution pool and released
+// before the next frame. A loss/refusal only disables reuse; the original producer
+// remains the sole error/authentication owner after all cached graphs are dropped.
+fn current_prefix_source(view: &impl StateReadOnly, height: u64) -> Option<Hash> {
+    let hashes = view.block_hashes();
+    let count = usize::try_from(height).ok()?;
+    if count == 0 || count > hashes.len() {
+        return None;
+    }
+    let budget = view.execution_budget();
+    let first = view.kura().native_frame_read(1, *hashes.first()?).ok()??;
+    let mut digest = proof_source_start();
+    for (index, expected) in hashes.iter().take(count).enumerate() {
+        let at = u64::try_from(index.checked_add(1)?).ok()?;
+        let source = view.kura().native_frame_read(at, *expected).ok()??;
+        if !first.same_journal_image(&source) {
+            return None;
+        }
+        let length = source.wire_len();
+        let bytes = source.read(length, &budget).ok()??;
+        digest = proof_source_append(digest, at, length, Hash::new(bytes.as_slice()));
+    }
+    let after = view.kura().native_frame_read(1, *hashes.first()?).ok()??;
+    first.same_journal_image(&after).then_some(digest)
 }
 
 fn proof_from_chain<V: StateReadOnly>(
@@ -254,11 +396,19 @@ pub fn build_attestation(
             committed,
         });
     }
-    let genesis_finality_proof = build_proof(view, 1).map_err(Error::GenesisFinalityProof)?;
-    let finality_proof = if height == 1 {
-        genesis_finality_proof.clone()
-    } else {
-        build_proof(view, height).map_err(Error::FinalityProof)?
+    // Both proof reads borrow this same immutable State cut. Retain the bounded native
+    // prefix only across genesis -> tip, while every original QC, availability relation and
+    // independent portable proof check remains mandatory. Drop it before the fresh fence.
+    let (genesis_finality_proof, finality_proof) = {
+        let proof_chain =
+            CertifiedChain::new(view).map_err(|error| Error::GenesisFinalityProof(error.into()))?;
+        let genesis = proof_from_chain(&proof_chain, 1).map_err(Error::GenesisFinalityProof)?;
+        let tip = if height == 1 {
+            genesis.clone()
+        } else {
+            proof_from_chain(&proof_chain, height).map_err(Error::FinalityProof)?
+        };
+        (genesis, tip)
     };
     let chain = CertifiedChain::new(view).map_err(|error| Error::FinalityProof(error.into()))?;
     if status.instance != chain.instance().0 {
@@ -335,13 +485,11 @@ mod tests {
             }
         );
         if require_native_boundary {
-            assert!(original.header().expect("native boundary header").attest);
-            assert!(
-                original
-                    .commit_qc()
-                    .expect("genuine boundary CommitQC")
-                    .attest
-            );
+            assert!(!original.header().expect("native boundary header").attest);
+            let qc = original.commit_qc().expect("genuine boundary CommitQC");
+            assert!(!qc.attest);
+            assert_eq!(qc.signers.count_ones(), 3);
+            assert!(qc.attestations.is_empty() && qc.attestation_witness.is_none());
             assert!(original.commitment().schedule.boundary.is_some());
         }
         Ok(SumeragiFinalityProof {
@@ -397,7 +545,7 @@ mod tests {
         );
         assert_eq!(
             served.qcs, once.qcs,
-            "the committee projection must not repeat the complete native quorum/Pasta verification"
+            "the committee projection must not repeat the complete native quorum verification"
         );
     }
 
@@ -418,14 +566,14 @@ mod tests {
     }
 
     #[test]
-    fn portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta() {
+    fn portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_quorum() {
         with_original_finality_boundary(
-            assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta,
+            assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_quorum,
         );
     }
 
     #[inline(never)]
-    fn assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta(
+    fn assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_quorum(
         chain: &CertifiedTestChain,
     ) {
         assert_single_certified_finality_source(
@@ -604,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_builder_verifies_original_pasta_boundary_witness() {
+    fn portable_builder_verifies_original_unflagged_boundary_quorum() {
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         chain.commit(Vec::new());
         let proof = build_proof(&chain.state().view(), 10).unwrap();
@@ -679,6 +827,10 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+#[path = "finality/attestation_tests.rs"]
+mod attestation_tests;
+
 impl From<iroha_data_model::sumeragi_finality::FinalityReadError> for ProofError {
     fn from(error: iroha_data_model::sumeragi_finality::FinalityReadError) -> Self {
         use iroha_data_model::sumeragi_finality::FinalityReadError;
@@ -712,3 +864,7 @@ impl From<iroha_data_model::sumeragi_finality::FinalityReadError> for ProofError
         }
     }
 }
+
+#[cfg(test)]
+#[path = "finality/proof_reader_tests.rs"]
+mod proof_reader_tests;

@@ -66,11 +66,42 @@ pub(super) enum ProviderFundingProgress {
         capacity: ManagedTransactionFinality,
     },
 }
+// Only genuine early Request/Approval reports can leave the first paired phase. Completion
+// proceeds through borrowed history slots, without the impossible later-stage report payload.
+enum RequestApprovalIncomplete {
+    Unprepared(FundingStep),
+    Request(ManagedReserveTopUpProgress),
+    Approval(ManagedReserveTopUpApprovalProgress),
+}
+impl RequestApprovalIncomplete {
+    #[inline(never)]
+    fn into_progress(self) -> ProviderFundingProgress {
+        match self {
+            Self::Unprepared(step) => ProviderFundingProgress::Unprepared {
+                step,
+                status: OperationStatus::Absent,
+            },
+            Self::Request(report) => ProviderFundingProgress::Request(report),
+            Self::Approval(report) => ProviderFundingProgress::Approval(report),
+        }
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Advance,
     Recover,
     Local,
+}
+// One phase borrows the same retained parent inputs. Every field is a reference or Copy scalar;
+// this view owns no selected proof, current state, child authority or history graph.
+#[derive(Clone, Copy)]
+struct FundingPhase<'a, 'authorization> {
+    directory: &'a iroha_fs::PrivateDirectory,
+    original: &'a Original,
+    provider: iroha_data_model::sorafs::capacity::ProviderId,
+    deadline: Instant,
+    mode: Mode,
+    authorization: Option<&'a FundingAuthorization<'authorization>>,
 }
 /// Fixed generated-profile composition. No caller-supplied movement, amount or credit projection.
 pub(super) struct ProviderFundingBootstrap {
@@ -231,6 +262,47 @@ impl ProviderFundingBootstrap {
                 return Err(invalid("zero top-up has retained approval selection"));
             }
         }
+        let phase = FundingPhase {
+            directory: &directory,
+            original: &original,
+            provider,
+            deadline,
+            mode,
+            authorization,
+        };
+        if let Some(incomplete) = self.run_request_approval(
+            phase,
+            &mut minimum_height,
+            &mut request_history,
+            &mut approval_history,
+        )? {
+            return Ok(incomplete.into_progress());
+        }
+        self.run_credit_capacity(
+            phase,
+            minimum_height,
+            &mut request_history,
+            &mut approval_history,
+        )
+    }
+    // Request custody remains held through approval. The caller retains the original funding
+    // owner and history slots; this phase cannot carry the later complete report on success.
+    #[inline(never)]
+    fn run_request_approval(
+        &mut self,
+        phase: FundingPhase<'_, '_>,
+        minimum_height: &mut u64,
+        request_history: &mut Option<ManagedHistoricalReserveTopUp>,
+        approval_history: &mut Option<ManagedHistoricalReserveTopUpApproval>,
+    ) -> Result<Option<RequestApprovalIncomplete>> {
+        let FundingPhase {
+            directory,
+            original,
+            provider,
+            deadline,
+            mode,
+            authorization,
+        } = phase;
         if let Some(intent) = original.top_up() {
             let mut request = match ManagedReserveTopUpRequest::open_existing(
                 &self.authority.prepared,
@@ -244,7 +316,11 @@ impl ProviderFundingBootstrap {
                         .validate(&self.authority, deadline)?;
                     ManagedReserveTopUpRequest::open(&self.authority.prepared, provider)?
                 }
-                None => return self.unprepared(FundingStep::Request),
+                None => {
+                    return self
+                        .unprepared_step(FundingStep::Request)
+                        .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
+                }
             };
             let mut result = recover_progress(if mode == Mode::Local {
                 request.recover_local_selected_if_present(&intent, &original.fees, deadline)
@@ -254,7 +330,7 @@ impl ProviderFundingBootstrap {
             if result
                 .as_ref()
                 .is_none_or(|report| report.historical().is_none())
-                && self.may_create(mode, authorization, &original, deadline)?
+                && self.may_create(mode, authorization, original, deadline)?
             {
                 self.require_no_later_material(FundingStep::Request)?;
                 let child = authorization
@@ -263,28 +339,34 @@ impl ProviderFundingBootstrap {
                 result = Some(request.advance_selected(&intent, &child, deadline)?);
             }
             let Some(result) = result else {
-                return self.unprepared(FundingStep::Request);
+                return self
+                    .unprepared_step(FundingStep::Request)
+                    .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
             };
             let Some(history) = result.historical().cloned() else {
                 self.require_no_later_material(FundingStep::Request)?;
-                return Ok(ProviderFundingProgress::Request(result));
+                return Ok(Some(RequestApprovalIncomplete::Request(result)));
             };
-            self.validate_request(&original, &history)?;
-            minimum_height = history.original().height;
-            request_history = Some(history.clone());
+            self.validate_request(original, &history)?;
+            *minimum_height = history.original().height;
+            *request_history = Some(history.clone());
             let approval_selection = match self.selected_stage(
-                &directory,
+                directory,
                 Stage::Approval,
-                &original,
-                minimum_height,
+                original,
+                *minimum_height,
                 mode,
                 authorization,
                 deadline,
             )? {
                 Some(value) => value,
-                None => return self.unprepared(FundingStep::Approval),
+                None => {
+                    return self
+                        .unprepared_step(FundingStep::Approval)
+                        .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
+                }
             };
-            let intent = approval_selection.approval(&original)?;
+            let intent = approval_selection.approval(original)?;
             let mut approval = match ManagedReserveTopUpApproval::open_existing(
                 &self.authority.prepared,
                 provider,
@@ -297,7 +379,11 @@ impl ProviderFundingBootstrap {
                         .validate(&self.authority, deadline)?;
                     ManagedReserveTopUpApproval::open(&self.authority.prepared, provider)?
                 }
-                None => return self.unprepared(FundingStep::Approval),
+                None => {
+                    return self
+                        .unprepared_step(FundingStep::Approval)
+                        .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
+                }
             };
             let mut result = recover_progress(if mode == Mode::Local {
                 approval.recover_local_selected_if_present(
@@ -312,7 +398,7 @@ impl ProviderFundingBootstrap {
             if result
                 .as_ref()
                 .is_none_or(|report| report.historical().is_none())
-                && self.may_create(mode, authorization, &original, deadline)?
+                && self.may_create(mode, authorization, original, deadline)?
             {
                 self.require_no_later_material(FundingStep::Approval)?;
                 let child = authorization
@@ -321,11 +407,13 @@ impl ProviderFundingBootstrap {
                 result = Some(approval.advance_selected(&history, &intent, &child, deadline)?);
             }
             let Some(result) = result else {
-                return self.unprepared(FundingStep::Approval);
+                return self
+                    .unprepared_step(FundingStep::Approval)
+                    .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
             };
             let Some(history) = result.historical().cloned() else {
                 self.require_no_later_material(FundingStep::Approval)?;
-                return Ok(ProviderFundingProgress::Approval(result));
+                return Ok(Some(RequestApprovalIncomplete::Approval(result)));
             };
             if history.requested_provider_revision() != approval_selection.partition.revision
                 || history.policy_digest()
@@ -339,13 +427,33 @@ impl ProviderFundingBootstrap {
                     "funding approval differs from its exact retained selection",
                 ));
             }
-            minimum_height = history.original().height;
-            approval_history = Some(history);
+            *minimum_height = history.original().height;
+            *approval_history = Some(history);
         }
+        Ok(None)
+    }
+    // Credit custody remains held through capacity. Original histories move only at the same
+    // final Complete construction, after all child and exact predecessor checks have succeeded.
+    #[inline(never)]
+    fn run_credit_capacity(
+        &mut self,
+        phase: FundingPhase<'_, '_>,
+        minimum_height: u64,
+        request_history: &mut Option<ManagedHistoricalReserveTopUp>,
+        approval_history: &mut Option<ManagedHistoricalReserveTopUpApproval>,
+    ) -> Result<ProviderFundingProgress> {
+        let FundingPhase {
+            directory,
+            original,
+            provider,
+            deadline,
+            mode,
+            authorization,
+        } = phase;
         let credit_selection = match self.selected_stage(
-            &directory,
+            directory,
             Stage::Credit,
-            &original,
+            original,
             minimum_height,
             mode,
             authorization,
@@ -354,7 +462,7 @@ impl ProviderFundingBootstrap {
             Some(value) => value,
             None => return self.unprepared(FundingStep::Credit),
         };
-        let intent = credit_selection.credit(&original)?;
+        let intent = credit_selection.credit(original)?;
         let mut credit = match ManagedInitialProviderCredit::open_existing(
             &self.authority.prepared,
             provider,
@@ -377,7 +485,7 @@ impl ProviderFundingBootstrap {
         if result
             .as_ref()
             .is_none_or(|report| report.finalized.is_none())
-            && self.may_create(mode, authorization, &original, deadline)?
+            && self.may_create(mode, authorization, original, deadline)?
         {
             self.require_no_later_material(FundingStep::Credit)?;
             let child = authorization
@@ -427,7 +535,7 @@ impl ProviderFundingBootstrap {
         if result
             .as_ref()
             .is_none_or(|report| report.finalized.is_none())
-            && self.may_create(mode, authorization, &original, deadline)?
+            && self.may_create(mode, authorization, original, deadline)?
         {
             // The child binds this exact parent intent at its own authenticated read before
             // publishing or signing; an earlier parent read cannot authorize a later replacement.
@@ -454,8 +562,8 @@ impl ProviderFundingBootstrap {
             return Err(invalid("funding capacity carrier predates original credit"));
         }
         Ok(ProviderFundingProgress::Complete {
-            request: request_history,
-            approval: approval_history,
+            request: request_history.take(),
+            approval: approval_history.take(),
             credit: credit_finality,
             capacity: capacity_finality,
         })
@@ -523,11 +631,15 @@ impl ProviderFundingBootstrap {
         Ok(true)
     }
     fn unprepared(&self, step: FundingStep) -> Result<ProviderFundingProgress> {
-        self.require_no_later_material(step)?;
+        let step = self.unprepared_step(step)?;
         Ok(ProviderFundingProgress::Unprepared {
             step,
             status: OperationStatus::Absent,
         })
+    }
+    fn unprepared_step(&self, step: FundingStep) -> Result<FundingStep> {
+        self.require_no_later_material(step)?;
+        Ok(step)
     }
     // Presence is only a refusal condition. This census does not decode a wallet or select
     // native state, and cannot turn retained files into transaction or finality authority.

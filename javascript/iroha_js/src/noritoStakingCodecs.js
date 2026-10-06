@@ -23,8 +23,7 @@ const schemas = Object.freeze({
   RewardClaimSource: fields("source_asset:AssetId destination_asset:AssetId expected_accrued:?quantity payout:quantity"),
   FeeRewardClaim: fields("lifecycle_seal:bytes32 beneficiary_id:account beneficiary_revision:u64 source_asset:AssetId destination_asset:AssetId amount:quantity expected_claim_sequence:u64"),
   RewardClaimPlan: fields("network_scope:MonetaryScope valid_until_height:u64 expected_state:?RewardClaimState records:RewardRecords sources:RewardSources fee_claim:?FeeRewardClaim"),
-  ValidatorKeys: fields("validator:PeerId eq_proof_public_key:bytes32 ep_proof_public_key:bytes32"),
-  AuthorityGeneration: fields("version:u16 network_id:network generation:u64 validators:Validators"),
+  ValidatorGeneration: fields("network_id:network generation:u64 validators:Validators"),
   InstalledBeacon: fields("session_id:bytes32 transcript_hash:bytes32"),
   EpochAuthorization: fields("version:u16 network_id:network epoch:u64 first_height:u64 last_height:u64 authority_generation:u64 authority_id:bytes32 beacon:BeaconBinding previous_authorization_id:bytes32 transition_id:bytes32 decision:EpochDecision"),
 });
@@ -37,7 +36,7 @@ const variants = Object.freeze({
   BeaconBinding: [["bootstrap", null], ["installed", "InstalledBeacon"]],
   EpochDecision: [["genesis", null], ["activate", null], ["retain", null], ["retain_and_cancel", null]],
 });
-const vectors = Object.freeze({ AccruedSources: ["AssetId", 64], PreparationBalances: ["PreparationBalance", 128], RewardRecords: ["RewardRecordRef", 64], RewardSources: ["RewardClaimSource", 64], Validators: ["ValidatorKeys", 31] });
+const vectors = Object.freeze({ AccruedSources: ["AssetId", 64], PreparationBalances: ["PreparationBalance", 128], RewardRecords: ["RewardRecordRef", 64], RewardSources: ["RewardClaimSource", 64], Validators: ["PeerId", 31] });
 function exact(value, names, label) {
   if (!value || typeof value !== "object" || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError(`${label} requires exact native fields`);
   const keys = Reflect.ownKeys(value);
@@ -115,7 +114,16 @@ export function createNoritoStakingCodecs(h) {
       }
       if (value.fee_claim && !encode("account", recipient).equals(encode("account", value.fee_claim.destination_asset.account))) throw new TypeError("fee reward changes recipient");
     }
-    if (name === "AuthorityGeneration" && (Number(value.version) !== 1 || value.validators.length < 4 || (value.validators.length - 1) % 3 !== 0)) throw new TypeError("invalid authority-generation geometry");
+    if (name === "ValidatorGeneration") {
+      if (value.validators.length < 4 || (value.validators.length - 1) % 3 !== 0) throw new TypeError("invalid validator-generation geometry");
+      let previous = null;
+      for (const validator of value.validators) {
+        const { curve, publicKey } = h.parsePublicKeyLiteral(validator.public_key, "validator generation key");
+        if (curve !== h.curveIdFromAlgorithm("bls_normal") || publicKey.length !== 48) throw new TypeError("validator generation requires BLS-normal public keys");
+        if (previous && Buffer.compare(previous, publicKey) >= 0) throw new TypeError("validator generation requires strictly ordered unique keys");
+        previous = publicKey;
+      }
+    }
     if (name === "EpochAuthorization" && (Number(value.version) !== 1 || BigInt(value.first_height) === 0n || BigInt(value.last_height) < BigInt(value.first_height))) throw new TypeError("invalid epoch authorization");
   }
   function encode(name, value, context = name) {

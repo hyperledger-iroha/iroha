@@ -34,7 +34,7 @@ use group::prime::PrimeCurveAffine;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
 
 use super::{
-    IpaError, PinnedParams,
+    GeneratorClaim, IpaError, PinnedParams,
     accumulator::PendingAccumulator,
     commit::{Msm, msm_complete},
     fold_evaluation, fold_scalars,
@@ -233,18 +233,46 @@ impl<C: PastaCurve> PendingOpening<C> {
         transcript_repr: &C::ScalarExt,
         budget: MemoryBudget,
     ) -> Result<PendingAccumulator<C>, IpaError> {
-        params.require_k(self.k)?;
-        if bool::from(folded.is_identity())
-            || !bool::from(self.left_hand_side(params, folded, budget).is_identity())
-        {
-            return Err(IpaError::OpeningFailed);
-        }
+        self.check_claim(params, folded, budget)?;
         Ok(PendingAccumulator::new(
             *transcript_repr,
             self.k,
             *folded,
             self.challenges,
         ))
+    }
+    /// Checks the succinct equation against a claimed generator, without
+    /// treating that claim as decided.
+    ///
+    /// # Errors
+    /// Insufficient parameters, an identity claim or a failed succinct equation.
+    pub fn check_claim(
+        &self,
+        params: &PinnedParams<C>,
+        folded: &C::AffineExt,
+        budget: MemoryBudget,
+    ) -> Result<(), IpaError> {
+        params.require_k(self.k)?;
+        if bool::from(folded.is_identity())
+            || !bool::from(self.left_hand_side(params, folded, budget).is_identity())
+        {
+            return Err(IpaError::OpeningFailed);
+        }
+        Ok(())
+    }
+
+    /// Checks the equation and returns its undecided generator obligation.
+    ///
+    /// # Errors
+    /// Insufficient parameters, an identity claim or a failed succinct equation.
+    pub fn into_generator_claim(
+        self,
+        params: &PinnedParams<C>,
+        folded: &C::AffineExt,
+        budget: MemoryBudget,
+    ) -> Result<GeneratorClaim<C>, IpaError> {
+        self.check_claim(params, folded, budget)?;
+        GeneratorClaim::new(self.k, *folded, self.challenges)
     }
 }
 

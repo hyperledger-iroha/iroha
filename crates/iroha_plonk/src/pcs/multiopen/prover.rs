@@ -15,7 +15,7 @@ use crate::{
     pcs::ipa::{
         commit::{Secrecy, commit},
         evaluate_polynomial,
-        prover::create_proof as ipa_create_proof,
+        prover::create_proof_with_claim as ipa_create_proof,
     },
     transcript::TranscriptWrite,
 };
@@ -95,6 +95,27 @@ pub fn create_proof<C, T, R>(
     transcript: &mut T,
     budget: MemoryBudget,
 ) -> Result<C::AffineExt, MultiopenError>
+where
+    C: PastaCurve,
+    T: TranscriptWrite<C> + ?Sized,
+    R: RngCore + CryptoRng,
+{
+    Ok(*create_proof_with_claim(params, plan, points, polys, rng, transcript, budget)?.g())
+}
+
+/// Creates the same opening and returns its generator obligation.
+///
+/// # Errors
+/// As [`create_proof`], including a degenerate folded generator.
+pub fn create_proof_with_claim<C, T, R>(
+    params: &ParamsIpa<C>,
+    plan: &OpeningPlan,
+    points: &[C::ScalarExt],
+    polys: &[SlotPolynomial<'_, C::ScalarExt>],
+    rng: &mut R,
+    transcript: &mut T,
+    budget: MemoryBudget,
+) -> Result<crate::pcs::ipa::GeneratorClaim<C>, MultiopenError>
 where
     C: PastaCurve,
     T: TranscriptWrite<C> + ?Sized,

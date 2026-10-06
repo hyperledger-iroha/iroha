@@ -76,6 +76,7 @@ iroha_zkp_poseidon = { path = "crates/iroha_zkp_poseidon" }
 iroha_pasta = { path = "crates/iroha_pasta" }
 iroha_plonk = { path = "crates/iroha_plonk" }
 iroha_plonk_gadgets = { path = "crates/iroha_plonk_gadgets" }
+iroha_plonk_recursion = { path = "crates/iroha_plonk_recursion" }
 iroha_kagemusha_proof = { path = "crates/iroha_kagemusha_proof" }
 iroha_plonk_oracle = { path = "crates/iroha_plonk_oracle" }
 iroha_i18n = { path = "crates/iroha_i18n" }
@@ -511,11 +512,8 @@ opt-level = 3
 [profile.test.package.halo2curves-axiom]
 opt-level = 3
 
-# Native signer finality also validates paired Pasta keys through halo2curves
-# 0.9, which owns its concrete Fp/Fq arithmetic. CPU samples of the native
-# signer workflow found its unoptimized square roots in repeated epoch checks.
-# Optimize that owner in both local profiles without changing expiry, proof
-# verification, debug assertions, or overflow checks.
+# Optimize the shared halo2curves arithmetic used by proof-system consumers
+# in local profiles, preserving debug assertions and overflow checks.
 [profile.dev.package.halo2curves]
 opt-level = 3
 
@@ -575,7 +573,7 @@ opt-level = 2
 opt-level = 2
 
 # `iroha_data_model` is a very broad derive-heavy crate. LLVM `-O3` for this
-# one package exceeds the reviewed mobile/KAGEMUSHA release-build memory
+# one package exceeds the reviewed mobile release-build memory
 # envelope even with a single job and hundreds of codegen units. Measured O2
 # also crossed the fixed 13 GiB soft ceiling before proof work began, so O1
 # avoids that optimizer-only peak. Halo2, core, and the bridge remain at O3.

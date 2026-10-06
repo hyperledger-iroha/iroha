@@ -1,6 +1,7 @@
 //! Original generated authority and signed-genesis identity; no response-selected trust roots.
 
 use super::*;
+use crate::managed::service_authority::CheckpointImports;
 use iroha_crypto::KeyPair;
 use iroha_data_model::account::address::ChainDiscriminantGuard;
 use sorafs_manifest::signer::protocol::{SignerPurposeBindingV1, SignerRoleV1};
@@ -46,15 +47,28 @@ impl ManagedStreamTokenCustody {
         original: &Original,
         purpose: CustodyPurpose,
     ) -> Result<()> {
+        self.validate_original_with_imports(
+            original,
+            purpose,
+            &mut CheckpointImports::new(&self.authority, None),
+        )
+    }
+
+    pub(super) fn validate_original_with_imports(
+        &self,
+        original: &Original,
+        purpose: CustodyPurpose,
+        imports: &mut CheckpointImports<'_, '_>,
+    ) -> Result<()> {
         purpose.directory_name()?;
         if matches!(original.action, Action::Configure(_)) != (purpose == CustodyPurpose::Configure)
         {
             return Err(invalid("retained custody purpose differs"));
         }
         original.validate()?;
-        let verifier = self.authority.decode_checkpoint(&original.checkpoint)?;
+        let verifier = imports.decode(&original.checkpoint)?;
         verifier
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original custody checkpoint"))?
             .verify_global_scope(
                 self.authority.config.network_id,
@@ -64,6 +78,17 @@ impl ManagedStreamTokenCustody {
         if original.selection.provider_id != self.authority.provider_id()? {
             return Err(invalid("original custody provider differs"));
         }
+        self.validate_original_action(original, purpose, &verifier)
+    }
+    // Action-owned decodes run only after the original checkpoint and Global root checks.
+    // This boundary keeps later enrollment scratch out of the cold native import caller.
+    #[inline(never)]
+    fn validate_original_action(
+        &self,
+        original: &Original,
+        purpose: CustodyPurpose,
+        verifier: &FinalityVerifier,
+    ) -> Result<()> {
         match &original.action {
             Action::Configure(policy) => {
                 self.validate_policy(policy)?;

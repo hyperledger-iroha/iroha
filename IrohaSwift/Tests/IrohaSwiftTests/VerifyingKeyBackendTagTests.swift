@@ -5,7 +5,8 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     func testNoritoDiscriminantsMatchRustExactly() {
         let expected: [(VerifyingKeyBackendTag, UInt32)] = [
             (.halo2IpaPasta, 0),
-            (.stark, 1)
+            (.stark, 1),
+            (.nativePipaRPasta, 2)
         ]
 
         XCTAssertEqual(VerifyingKeyBackendTag.allCases.count, expected.count)
@@ -13,14 +14,23 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             XCTAssertEqual(backend.noritoDiscriminant, discriminant)
             XCTAssertEqual(VerifyingKeyBackendTag(rawValue: discriminant), backend)
         }
-        XCTAssertNil(VerifyingKeyBackendTag(rawValue: 2))
+        XCTAssertNil(VerifyingKeyBackendTag(rawValue: 3))
         XCTAssertNil(VerifyingKeyBackendTag(rawValue: UInt32.max))
+    }
+
+    func testExactNativeRegistryEngineMapping() {
+        for label in ["pipa-r/pasta", "pipa-r/pasta/kaigi-authorization-v1", "pipa-r/pasta/kaigi-usage-v1"] {
+            XCTAssertEqual(VerifyingKeyBackendTag.registryTag(label), .nativePipaRPasta)
+        }
+        XCTAssertNil(VerifyingKeyBackendTag.registryTag("halo2/pasta/kaigi-usage-v1"))
+        XCTAssertNil(VerifyingKeyBackendTag.registryTag("pipa-r/ipa/pasta/kaigi-usage-v1"))
     }
 
     func testCanonicalLabelsRoundTripExactly() {
         let expected: [(VerifyingKeyBackendTag, String)] = [
             (.halo2IpaPasta, "halo2-ipa-pasta"),
-            (.stark, "stark")
+            (.stark, "stark"),
+            (.nativePipaRPasta, "native-pipa-r-pasta")
         ]
 
         for (backend, label) in expected {
@@ -71,8 +81,9 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     func testVerifierRegistryAcceptsOnlyPinnedRustProfiles() throws {
         let supported = [
             "halo2/ipa",
-            "halo2/pasta/kaigi-authorization-v1",
-            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/pasta",
+            "pipa-r/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -94,6 +105,10 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
         let rejected: [String?] = [
             nil,
             "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/ipa/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1/",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "",
@@ -206,6 +221,10 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     func testProductionVerifierBackendClassifierRejectsUnsafeLabels() {
         let rejected = [
             "",
+            "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/ipa/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1/",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "unknown/privacy/backend",

@@ -148,7 +148,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "halo2-dev-tests": (),
         "test-utils": (),
         "zk-tests": ("test-utils",),
-        "kagemusha-real-proof-harness": (),
     },
     "iroha_torii": {
         "default": ("node-api",),
@@ -469,7 +468,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "zk-tests"),
     "iroha_core_zk": (
         "halo2-dev-tests",
-        "kagemusha-real-proof-harness",
         "test-utils",
         "zk-tests",
     ),

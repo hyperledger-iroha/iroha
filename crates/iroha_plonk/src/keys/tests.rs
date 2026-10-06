@@ -41,6 +41,32 @@ struct TestCircuit {
 
 const ROWS: usize = 4;
 
+#[test]
+fn verifier_only_binding_matches_full_keys_on_both_curves() {
+    fn check<C: PastaCurve>() {
+        let params = PinnedParams::<C>::derive(6).expect("parameters");
+        let config = KeygenConfigV2::pipa_r(vec![crate::cs::InstanceType::Field]);
+        let circuit = TestCircuit { rows: ROWS };
+        let (binding, key) =
+            keygen_vk_with_binding_v2(&params, &circuit, &config).expect("verifier");
+        let pk = keygen_pk_v2(&params, &circuit, &config).expect("prover");
+        assert_eq!(&binding, pk.binding());
+        assert_eq!(key.to_bytes(), pk.vk().to_bytes());
+        assert_eq!(key.descriptor_digest(), binding.digest());
+        assert_eq!(
+            keygen_vk_v2(&params, &circuit, &config)
+                .expect("key only")
+                .to_bytes(),
+            key.to_bytes()
+        );
+        let mut wrong = config;
+        wrong.instance_types.clear();
+        assert!(keygen_vk_with_binding_v2(&params, &circuit, &wrong).is_err());
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
 impl<F: PastaField> Circuit<F> for TestCircuit {
     type Config = TestConfig;
     type FloorPlanner = SimpleFloorPlanner;
@@ -197,7 +223,10 @@ fn round_trip<C: PastaCurve>() {
         assert_eq!(read, vk);
         assert_eq!(
             *vk.transcript_repr(),
-            transcript_repr::<C::ScalarExt>(pk.binding().digest(), vk.to_bytes())
+            crate::transcript::TranscriptRepr::Scalar(transcript_repr::<C::ScalarExt>(
+                pk.binding().digest(),
+                vk.to_bytes()
+            ))
         );
         assert_eq!(vk.descriptor_digest(), pk.binding().digest());
         assert_eq!(pk.transcript_repr_bytes(), vk.transcript_repr_bytes());
@@ -758,6 +787,104 @@ fn oracle_builds_can_inject_the_vendored_transcript_repr() {
     )
     .expect("vk");
     let injected = vk.clone().with_transcript_repr_for_oracle(Fq::from(5));
-    assert_eq!(*injected.transcript_repr(), Fq::from(5));
+    assert_eq!(
+        *injected.transcript_repr(),
+        crate::transcript::TranscriptRepr::Scalar(Fq::from(5))
+    );
     assert_eq!(injected.to_bytes(), vk.to_bytes());
+}
+
+fn wallet_digest<C: PastaCurve>() {
+    use crate::{
+        cs::{CircuitDescriptorV2, CurveV1, InstanceType, TranscriptV2},
+        transcript::TranscriptRepr,
+    };
+    use ff::PrimeField;
+    use iroha_pasta::{PastaAffine, poseidon::hash_with_domain};
+
+    let params = params::<C>();
+    let config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
+    let pk = keygen_pk_v2(&params, &CIRCUIT, &config).expect("PIPA-R keys");
+    let vk = pk.vk();
+    let digest = vk.kagemusha_digest(pk.binding()).expect("wallet digest");
+    let TranscriptRepr::Base(repr) = *vk.transcript_repr() else {
+        panic!("base repr")
+    };
+    let descriptor = pk.binding().descriptor();
+    let curve = match descriptor.curve {
+        CurveV1::Pallas => 0,
+        CurveV1::Vesta => 1,
+    };
+    let mut fields = vec![
+        C::Base::ONE,
+        C::Base::from(curve),
+        C::Base::from(u64::from(K)),
+        C::Base::from(vk.fixed_commitments().len() as u64),
+        C::Base::from(vk.permutation_commitments().len() as u64),
+        repr,
+    ];
+    for chunk in pk.binding().digest().chunks_exact(16) {
+        fields.push(C::Base::from_u128(u128::from_le_bytes(
+            chunk.try_into().expect("16 bytes"),
+        )));
+    }
+    for point in vk
+        .fixed_commitments()
+        .iter()
+        .chain(vk.permutation_commitments())
+    {
+        let (x, y) = point.coordinates().expect("finite");
+        fields.extend([x, y]);
+    }
+    let domain = u64::from_le_bytes(*b"kgwvkey1");
+    assert_eq!(digest, hash_with_domain(domain, &fields));
+    assert_ne!(digest, hash_with_domain(domain ^ 1, &fields));
+    // Every header, digest limb, coordinate and exact arity is bound.
+    for index in 0..fields.len() {
+        let mut changed = fields.clone();
+        changed[index] += C::Base::ONE;
+        assert_ne!(digest, hash_with_domain(domain, &changed), "field {index}");
+    }
+    assert_ne!(
+        digest,
+        hash_with_domain(domain, &fields[..fields.len() - 1])
+    );
+    let mut swapped = fields.clone();
+    swapped.swap(8, 10);
+    swapped.swap(9, 11);
+    assert_ne!(digest, hash_with_domain(domain, &swapped));
+    let mut changed = CircuitDescriptorV2::decode(pk.binding().encoded()).expect("descriptor");
+    changed.instance_types = vec![InstanceType::Field];
+    let other = DescriptorBinding::new_v2(changed).expect("other binding");
+    assert_eq!(vk.kagemusha_digest(&other), Err(VkError::Binding));
+    let rebound = VerifyingKey::<C>::read(vk.to_bytes(), &other).expect("same arithmetic key");
+    assert_ne!(digest, rebound.kagemusha_digest(&other).expect("digest"));
+    let mut fixed = vk.fixed_commitments().to_vec();
+    fixed.swap(0, 1);
+    let foreign = VerifyingKey::<C>::from_parts(
+        pk.binding(),
+        fixed,
+        vk.permutation_commitments().to_vec(),
+        vk.selectors().to_vec(),
+    )
+    .expect("foreign key");
+    assert_ne!(
+        digest,
+        foreign.kagemusha_digest(pk.binding()).expect("digest")
+    );
+    let mut scalar = config;
+    scalar.transcript = TranscriptV2::KagemushaPoseidonRp57;
+    let legacy_profile = keygen_pk_v2(&params, &CIRCUIT, &scalar).expect("retained scalar profile");
+    assert_eq!(
+        legacy_profile
+            .vk()
+            .kagemusha_digest(legacy_profile.binding()),
+        Err(VkError::Binding)
+    );
+}
+
+#[test]
+fn wallet_digest_binds_native_fields_and_v2_keys_on_both_curves() {
+    wallet_digest::<Ep>();
+    wallet_digest::<Eq>();
 }

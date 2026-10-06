@@ -77,6 +77,14 @@ impl NativeFrameRead<'_> {
         self.wire_len
     }
 
+    /// Compare the original native journal images across one complete byte scan.
+    /// Metadata alone never authenticates bytes: the caller must also join full raw
+    /// bytes to genuinely verified canonical receipts before any cursor reuse.
+    pub(crate) fn same_journal_image(&self, other: &Self) -> bool {
+        core::ptr::eq(self.kura, other.kura)
+            && Kura::native_frame_journal_images_unchanged(&self.journals, &other.journals)
+    }
+
     /// Load only this admitted slot, rechecking all durable metadata under storage guards.
     /// The returned bytes are untrusted and cannot authorize outputs by themselves.
     pub(crate) fn read(

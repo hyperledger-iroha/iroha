@@ -6320,14 +6320,14 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(Arc::clone(&metrics), true);
         telemetry.observe_torii_http_request(
-            "kagemusha.operation",
-            "/v1/kagemusha/operations/{operation_id}",
+            "ledger.executed_block_wire",
+            "/v1/ledger/block/{height}",
             "public",
             "GET",
             StatusCode::NOT_FOUND,
             "application/json",
             "json",
-            "kagemusha_operation_not_found",
+            "block_not_found",
             Duration::from_millis(3),
             Some(0),
             Some(96),
@@ -6336,11 +6336,11 @@ mod tests {
             metrics
                 .torii_http_requests_total
                 .with_label_values(&[
-                    "kagemusha.operation",
-                    "/v1/kagemusha/operations/{operation_id}",
+                    "ledger.executed_block_wire",
+                    "/v1/ledger/block/{height}",
                     "public",
                     "json",
-                    "kagemusha_operation_not_found",
+                    "block_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -6352,8 +6352,8 @@ mod tests {
             metrics
                 .torii_http_request_bytes_total
                 .with_label_values(&[
-                    "kagemusha.operation",
-                    "/v1/kagemusha/operations/{operation_id}",
+                    "ledger.executed_block_wire",
+                    "/v1/ledger/block/{height}",
                     "public",
                     "json",
                     "application/json",
@@ -6366,11 +6366,11 @@ mod tests {
             metrics
                 .torii_http_response_bytes_total
                 .with_label_values(&[
-                    "kagemusha.operation",
-                    "/v1/kagemusha/operations/{operation_id}",
+                    "ledger.executed_block_wire",
+                    "/v1/ledger/block/{height}",
                     "public",
                     "json",
-                    "kagemusha_operation_not_found",
+                    "block_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -6379,8 +6379,8 @@ mod tests {
             96
         );
         let exposition = metrics.try_to_string().expect("encode metrics");
-        assert!(exposition.contains("route_id=\"kagemusha.operation\""));
-        assert!(exposition.contains("route_template=\"/v1/kagemusha/operations/{operation_id}\""));
+        assert!(exposition.contains("route_id=\"ledger.executed_block_wire\""));
+        assert!(exposition.contains("route_template=\"/v1/ledger/block/{height}\""));
         assert!(!exposition.contains("op_8f61d9a9"));
         assert!(!exposition.contains("cursor=eyJzbmFwc2hvdCI6"));
     }

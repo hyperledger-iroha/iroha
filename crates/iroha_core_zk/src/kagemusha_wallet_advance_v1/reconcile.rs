@@ -142,6 +142,11 @@ where
         // R0.
         self.require_storage()?;
         if let Some(status) = self.cached_status(slot)? {
+            if let Some(record) = status.marker() {
+                let result = self.require_archive_checkpoint(record);
+                self.require_storage()?;
+                self.guard(slot, result)?;
+            }
             return match (status, owner) {
                 (KagemushaWalletSlotStatusV1::Pending(record), Some(owner)) => {
                     let result = self.finish_cached_pending(slot, owner, record);
@@ -150,7 +155,12 @@ where
                 (status, _) => Ok(status),
             };
         }
-        let result = self.reconcile_full(slot, owner);
+        let result = self.reconcile_full(slot, owner).and_then(|status| {
+            if let Some(record) = status.marker() {
+                self.require_archive_checkpoint(record)?;
+            }
+            Ok(status)
+        });
         // Every answer of this reconcile counts only while storage stayed available.
         let result = self.require_storage().and(result);
         self.guard(slot, result)

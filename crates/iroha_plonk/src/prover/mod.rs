@@ -62,7 +62,7 @@ use rand_core_06::{CryptoRng, RngCore, SeedableRng};
 
 use crate::{
     cs::{
-        CircuitDescriptorV1, CsError, DescriptorConfig, DescriptorError,
+        CircuitDescriptorV1, CsError, DescriptorConfig, DescriptorError, ProtocolDescriptor,
         descriptor::{Blake2bPersonal, blake2b_personal},
     },
     frontend::{self, Circuit, synthesize},
@@ -70,8 +70,8 @@ use crate::{
     pcs::{ipa::PinnedParams, multiopen::MultiopenError},
     protocol::{AllTerms, ConstraintFilter, Protocol, ProtocolError},
     transcript::{
-        DescriptorHash, Transcript, TranscriptError, TranscriptWrite, TranscriptWriter,
-        absorb_prelude,
+        DescriptorHash, Transcript, TranscriptError, TranscriptRepr, TranscriptWrite,
+        TranscriptWriter, absorb_prelude, absorb_prelude_v2,
     },
 };
 
@@ -118,6 +118,14 @@ pub enum ProverError {
         found: usize,
     },
     /// The number of instance columns differs from the descriptor.
+    /// An instance value is outside its declared integer type.
+    InstanceType {
+        /// Instance column.
+        column: usize,
+        /// Row within the column.
+        row: usize,
+    },
+    /// Incorrect instance-column count.
     InstanceColumns {
         /// The descriptor's count.
         expected: usize,
@@ -168,6 +176,9 @@ pub enum ProverError {
 impl fmt::Display for ProverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InstanceType { column, row } => {
+                write!(f, "instance ({column}, {row}) is outside its declared type")
+            }
             Self::Synthesis(error) => write!(f, "synthesis: {error}"),
             Self::CircuitMismatch => f.write_str("the circuit does not match the proving key"),
             Self::ParamsMismatch => f.write_str("the parameters do not match the descriptor"),
@@ -530,9 +541,33 @@ impl<F: PastaField> Drop for Witness<F> {
     }
 }
 
+/// A reusable caller-owned witness or one whose advice buffers can be
+/// transferred to the prover after shape and randomness-binding checks.
+enum WitnessInput<'a, F: PastaField> {
+    Borrowed(&'a Witness<F>),
+    Owned(Witness<F>),
+}
+
+impl<F: PastaField> WitnessInput<'_, F> {
+    fn witness(&self) -> &Witness<F> {
+        match self {
+            Self::Borrowed(witness) => witness,
+            Self::Owned(witness) => witness,
+        }
+    }
+
+    /// The returned columns are immediately placed in zeroizing [`advice::Advice`].
+    fn take_advice(&mut self) -> Vec<Vec<F>> {
+        match self {
+            Self::Borrowed(witness) => witness.advice().to_vec(),
+            Self::Owned(witness) => core::mem::take(&mut witness.advice),
+        }
+    }
+}
+
 /// Checks the instance shape against the descriptor (S4).
-fn check_instances<F>(
-    descriptor: &CircuitDescriptorV1,
+fn check_instances<F: PastaField>(
+    descriptor: &ProtocolDescriptor,
     instances: &[Vec<F>],
 ) -> Result<(), ProverError> {
     if instances.len() != descriptor.instance_lengths.len() {
@@ -554,6 +589,9 @@ fn check_instances<F>(
                 found: values.len(),
             });
         }
+    }
+    if let Some((column, row)) = descriptor.invalid_instance(instances) {
+        return Err(ProverError::InstanceType { column, row });
     }
     Ok(())
 }
@@ -606,11 +644,16 @@ impl<F: PastaField> Witness<F> {
             DescriptorConfig {
                 curve: descriptor.curve,
                 k,
-                transcript: descriptor.transcript,
+                transcript: crate::cs::TranscriptV1::Blake2bChallenge255,
                 instance_mode: descriptor.instance_mode,
                 proof_suffix: descriptor.proof_suffix,
             },
         )?;
+        let mut rebuilt: ProtocolDescriptor = (&rebuilt).into();
+        rebuilt.transcript = descriptor.transcript;
+        rebuilt
+            .instance_types
+            .clone_from(&descriptor.instance_types);
         let fixed = pk.fixed_values();
         if rebuilt != *descriptor
             || fixed.get(..first_column) != Some(tables.fixed())
@@ -709,10 +752,18 @@ pub fn statement_digest<F: PastaField>(
     transcript_repr: &F,
     instances: &[Vec<F>],
 ) -> [u8; 32] {
+    statement_digest_bytes(descriptor_digest, &transcript_repr.to_repr(), instances)
+}
+
+fn statement_digest_bytes<F: PastaField>(
+    descriptor_digest: &[u8; 32],
+    transcript_repr: &[u8; 32],
+    instances: &[Vec<F>],
+) -> [u8; 32] {
     let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX).to_le_bytes();
     let mut hasher = Blake2bPersonal::<32>::new(STATEMENT_PERSONA);
     hasher.update(descriptor_digest);
-    hasher.update(transcript_repr.to_repr().as_ref());
+    hasher.update(transcript_repr.as_ref());
     hasher.update(&count(instances.len()));
     for column in instances {
         hasher.update(&count(column.len()));
@@ -741,9 +792,49 @@ impl Default for ProverConfig {
 /// How the transcript is primed: production, or oracle mode with the
 /// vendored `transcript_repr` (spec 6.4).
 #[derive(Clone, Copy, Debug)]
-struct Mode<F> {
+struct Mode<C: PastaCurve> {
     oracle: bool,
-    transcript_repr: F,
+    transcript_repr: TranscriptRepr<C>,
+}
+
+/// Proof bytes and the generator obligation produced by the same IPA run.
+#[derive(Clone, Debug)]
+pub struct ProverOutput<C: PastaCurve> {
+    /// Canonical proof bytes.
+    pub proof: Vec<u8>,
+    /// The opening obligation; recursive consumers must fold or decide it.
+    pub opening: crate::pcs::ipa::GeneratorClaim<C>,
+}
+
+/// Consumes the witness and returns proof bytes plus `(G, u)` without reparsing.
+///
+/// # Errors
+/// As [`create_proof_owned`].
+pub fn create_proof_owned_with_claim<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    pk: &ProvingKey<C>,
+    witness: Witness<C::ScalarExt>,
+    randomness: ProverRandomness<'_>,
+    config: ProverConfig,
+) -> Result<ProverOutput<C>, ProverError>
+where
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+{
+    let mode = Mode {
+        oracle: false,
+        transcript_repr: *pk.vk().transcript_repr(),
+    };
+    prove_output(
+        params,
+        pk,
+        WitnessInput::Owned(witness),
+        randomness,
+        config,
+        mode,
+        &mut lookup::VendoredPermutation,
+        &AllTerms,
+    )
 }
 
 /// Writes a PIPA-v1 proof of `witness` under `pk` (see the module
@@ -763,6 +854,7 @@ pub fn create_proof<C: PastaCurve>(
 ) -> Result<Vec<u8>, ProverError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let mode = Mode {
         oracle: false,
@@ -771,7 +863,45 @@ where
     prove(
         params,
         pk,
-        witness,
+        WitnessInput::Borrowed(witness),
+        randomness,
+        config,
+        mode,
+        &mut lookup::VendoredPermutation,
+        &AllTerms,
+    )
+}
+
+/// Creates a proof by consuming `witness` and reusing its advice buffers.
+///
+/// This produces the same bytes as [`create_proof`] for the same witness,
+/// key and randomness source. Advice evaluations remain live until the
+/// lookup and permutation products are built, then become coefficients in
+/// place. These advice buffers are zeroized on success and every error path.
+/// Prefer this entry point when the caller does not need to reuse a witness.
+///
+/// # Errors
+///
+/// As [`create_proof`].
+pub fn create_proof_owned<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    pk: &ProvingKey<C>,
+    witness: Witness<C::ScalarExt>,
+    randomness: ProverRandomness<'_>,
+    config: ProverConfig,
+) -> Result<Vec<u8>, ProverError>
+where
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+{
+    let mode = Mode {
+        oracle: false,
+        transcript_repr: *pk.vk().transcript_repr(),
+    };
+    prove(
+        params,
+        pk,
+        WitnessInput::Owned(witness),
         randomness,
         config,
         mode,
@@ -781,7 +911,7 @@ where
 }
 
 /// Synthesizes `circuit` with `instances` ([`Witness::from_circuit`]) and
-/// proves it ([`create_proof`]).
+/// consumes its witness to prove it ([`create_proof_owned`]).
 ///
 /// # Errors
 ///
@@ -796,9 +926,10 @@ pub fn prove_circuit<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
 ) -> Result<Vec<u8>, ProverError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let witness = Witness::from_circuit(pk, circuit, instances)?;
-    create_proof(params, pk, &witness, randomness, config)
+    create_proof_owned(params, pk, witness, randomness, config)
 }
 
 /// [`create_proof`] in oracle mode (spec 6.4): the vendored
@@ -821,15 +952,16 @@ pub fn create_proof_oracle<C: PastaCurve>(
 ) -> Result<Vec<u8>, ProverError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let mode = Mode {
         oracle: true,
-        transcript_repr: vendored_transcript_repr,
+        transcript_repr: TranscriptRepr::Scalar(vendored_transcript_repr),
     };
     prove(
         params,
         pk,
-        witness,
+        WitnessInput::Borrowed(witness),
         randomness,
         config,
         mode,
@@ -855,18 +987,50 @@ struct Challenges<F> {
 fn prove<C, P>(
     params: &PinnedParams<C>,
     pk: &ProvingKey<C>,
-    witness: &Witness<C::ScalarExt>,
+    input: WitnessInput<'_, C::ScalarExt>,
     randomness: ProverRandomness<'_>,
     config: ProverConfig,
-    mode: Mode<C::ScalarExt>,
+    mode: Mode<C>,
     permutation: &mut P,
     filter: &(impl ConstraintFilter + Sync),
 ) -> Result<Vec<u8>, ProverError>
 where
     C: PastaCurve,
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
     P: lookup::LookupPermutation<C::ScalarExt>,
 {
+    Ok(prove_output(
+        params,
+        pk,
+        input,
+        randomness,
+        config,
+        mode,
+        permutation,
+        filter,
+    )?
+    .proof)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prove_output<C, P>(
+    params: &PinnedParams<C>,
+    pk: &ProvingKey<C>,
+    mut input: WitnessInput<'_, C::ScalarExt>,
+    randomness: ProverRandomness<'_>,
+    config: ProverConfig,
+    mode: Mode<C>,
+    permutation: &mut P,
+    filter: &(impl ConstraintFilter + Sync),
+) -> Result<ProverOutput<C>, ProverError>
+where
+    C: PastaCurve,
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+    P: lookup::LookupPermutation<C::ScalarExt>,
+{
+    let witness = input.witness();
     let descriptor = pk.binding().descriptor();
     if params.k() != u32::from(descriptor.k) || params.curve() != descriptor.curve {
         return Err(ProverError::ParamsMismatch);
@@ -889,9 +1053,9 @@ where
     check_instances(descriptor, &witness.instances)?;
 
     let binding = randomness.needs_binding().then(|| Binding {
-        statement: statement_digest(
+        statement: statement_digest_bytes(
             pk.binding().digest(),
-            &mode.transcript_repr,
+            &mode.transcript_repr.to_repr(),
             &witness.instances,
         ),
         witness: witness.digest(shape.usable_rows),
@@ -900,29 +1064,43 @@ where
     let budget = config.msm_budget;
 
     let hash = if mode.oracle {
-        oracle_hash::<C>(descriptor)
+        oracle_hash::<C>(descriptor)?
     } else {
         DescriptorHash::<C>::production(descriptor.transcript)
     };
     let mut transcript = TranscriptWriter::<C, _>::new(hash);
     if mode.oracle {
-        oracle_prelude(&mut transcript, &mode.transcript_repr);
+        oracle_prelude(
+            &mut transcript,
+            mode.transcript_repr
+                .scalar()
+                .ok_or(TranscriptError::ProfileMismatch)?,
+        );
+    } else if let Some(types) = &descriptor.instance_types {
+        absorb_prelude_v2::<C, _>(
+            &mut transcript,
+            &mode.transcript_repr,
+            &descriptor.instance_lengths,
+            types,
+        )?;
     } else {
         absorb_prelude::<C, _>(
             &mut transcript,
-            &mode.transcript_repr,
+            mode.transcript_repr
+                .scalar()
+                .ok_or(TranscriptError::ProfileMismatch)?,
             &descriptor.instance_lengths,
         );
     }
 
     // The instances, then row 1.
-    let instance = advice::InstanceColumns::new(pk, witness.instances())?;
+    let mut instance = advice::InstanceColumns::new(pk, witness.instances())?;
     instance.absorb(params, &shape, &mut transcript, budget)?;
-    let advice = advice::commit(
+    let mut advice = advice::commit(
         params,
         pk,
         &shape,
-        witness,
+        input.take_advice(),
         &mut rng,
         &mut transcript,
         budget,
@@ -972,6 +1150,12 @@ where
         budget,
     )?;
 
+    // Products are the final consumers of evaluations. Reuse the advice
+    // allocation for its coefficient form instead of retaining both copies
+    // through the quotient and IPA, and release padded public instances.
+    advice.interpolate_in_place(pk)?;
+    instance.values.clear();
+
     // Row 5.
     let random = vanishing::commit_random(params, pk, &shape, &mut rng, &mut transcript, budget)?;
     let y = transcript.squeeze_challenge();
@@ -1004,7 +1188,7 @@ where
         filter,
     )?;
     let quotient =
-        vanishing::commit_quotient(params, pk, &shape, &h, &mut rng, &mut transcript, budget)?;
+        vanishing::commit_quotient(params, pk, &shape, h, &mut rng, &mut transcript, budget)?;
     let x = transcript.squeeze_challenge();
     let xn = x.pow_vartime([u64::try_from(shape.n).map_err(|_| ProtocolError::Overflow)?]);
     if bool::from(x.is_zero()) || xn == C::ScalarExt::ONE {
@@ -1023,28 +1207,42 @@ where
     opened.write_evaluations(pk, &protocol, x, &mut transcript)?;
     let folded = opened.open(params, pk, &protocol, x, &mut rng, &mut transcript, budget)?;
     if shape.folded_generator_suffix {
-        transcript.append_unabsorbed_point(&folded)?;
+        transcript.append_unabsorbed_point(folded.g())?;
     }
-    Ok(transcript.finish())
+    Ok(ProverOutput {
+        proof: transcript.finish(),
+        opening: folded,
+    })
 }
 
 /// The oracle-mode hash of the descriptor's transcript.
 #[cfg(any(test, iroha_plonk_oracle))]
-fn oracle_hash<C: PastaCurve>(descriptor: &CircuitDescriptorV1) -> DescriptorHash<C>
+fn oracle_hash<C: PastaCurve>(
+    descriptor: &ProtocolDescriptor,
+) -> Result<DescriptorHash<C>, TranscriptError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
-    DescriptorHash::<C>::oracle(descriptor.transcript)
+    Ok(DescriptorHash::<C>::oracle(
+        descriptor
+            .transcript
+            .retained()
+            .ok_or(TranscriptError::ProfileMismatch)?,
+    ))
 }
 
 /// Oracle mode does not exist in shipping builds; the production hash is
 /// returned so the code path stays total.
 #[cfg(not(any(test, iroha_plonk_oracle)))]
-fn oracle_hash<C: PastaCurve>(descriptor: &CircuitDescriptorV1) -> DescriptorHash<C>
+fn oracle_hash<C: PastaCurve>(
+    _descriptor: &ProtocolDescriptor,
+) -> Result<DescriptorHash<C>, TranscriptError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
-    DescriptorHash::<C>::production(descriptor.transcript)
+    Err(TranscriptError::ProfileMismatch)
 }
 
 /// The oracle-mode prelude (`transcript_repr` only).

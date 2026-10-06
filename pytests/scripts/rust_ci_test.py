@@ -86,6 +86,27 @@ def test_checked_in_manifest_exhaustively_maps_locked_workspace() -> None:
     assert len(packages) == sum(len(packages) for packages in manifest.lanes.values())
 
 
+@pytest.mark.parametrize("relative_path", ("src/lib.rs", "Cargo.toml"))
+def test_plonk_recursion_owner_selects_real_proof_consumers(relative_path: str) -> None:
+    """Recursion changes retain the actual proof consumers in execution checks."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    assert manifest.package_lane["iroha_plonk_recursion"] == "execution"
+    result = rust_ci.classify_paths(
+        [f"crates/iroha_plonk_recursion/{relative_path}"],
+        metadata=metadata, manifest=manifest, root=ROOT,
+    )
+    assert result.changed_packages == ("iroha_plonk_recursion",)
+    assert not result.foundation_only and not result.full
+    assert {"iroha_plonk_recursion", "iroha_kagemusha_proof"} <= set(
+        result.impacted_packages
+    )
+    assert {"iroha_plonk_recursion", "iroha_kagemusha_proof"} <= set(
+        result.lane_packages["execution"]
+    )
+
+
 @pytest.mark.parametrize("package", ("axum-core", "bytes", "http-body-util"))
 @pytest.mark.parametrize("relative_path", ("src/lib.rs", "Cargo.toml"))
 def test_vendored_foundation_owner_selects_real_http_consumers(

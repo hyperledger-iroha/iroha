@@ -6373,7 +6373,19 @@ pub(crate) mod valid {
                             BlockValidationError::from(error)
                         }
                     })?;
-                state.advance_requested_sumeragi_lanes();
+                let lane_outcome = state.advance_requested_sumeragi_lanes();
+                // A local lane refusal must return the original proposal from validation,
+                // before any successful seal transfers it to the executor's one-shot takes.
+                if !cfg!(all(test, sumeragi_core_mutation = "HC133")) {
+                    lane_outcome.map_err(|error| match error {
+                        crate::sumeragi::lanes::step::LaneStepError::Deferred(original) => {
+                            BlockValidationError::ExecutionDeferred(
+                                original.at_native_lane_finalizer(),
+                            )
+                        }
+                        completed => Self::execution_context_error(completed.to_string()),
+                    })?;
+                }
                 // AMX deadline decisions (`specs/sumeragi.md` §11.5) are World writes too.
                 state
                     .advance_sumeragi_amx()

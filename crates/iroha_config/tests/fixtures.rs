@@ -763,29 +763,14 @@ fn nexus_storage_weights_require_full_budget() {
 }
 
 #[test]
-fn kagemusha_operation_index_pool_is_finite_and_preserves_operator_limit() {
-    use iroha_config::parameters::user::{Nexus, NexusStorage};
-    use iroha_config_base::util::{Bytes, Emitter};
-    for bytes in [0, 128 * 1024 * 1024] {
-        let nexus = Nexus {
-            storage: NexusStorage {
-                kagemusha_operation_index_bytes: Bytes(bytes),
-                ..NexusStorage::default()
-            },
-            ..Nexus::default()
-        };
-        let mut emitter = Emitter::<ParseError>::new();
-        let actual = nexus.parse(&mut emitter);
-        if bytes == 0 {
-            assert!(actual.is_none());
-            let error = emitter.into_result().expect_err("zero is not unlimited");
-            assert_contains!(format!("{error:?}"), "kagemusha_operation_index_bytes");
-        } else {
-            let actual = actual.expect("finite configured pool");
-            emitter.into_result().expect("valid configured pool");
-            assert_eq!(actual.storage.kagemusha_operation_index_bytes.get(), bytes);
-        }
-    }
+fn retired_kagemusha_operation_index_pool_fails_during_config_parse() {
+    let report = load_config_from_fixtures("bad.retired_kagemusha_operation_index_bytes.toml")
+        .expect_err("the first release has no fixed KAGEMUSHA operation-index pool");
+    let message = strip_ansi_codes(&format!("{report:?}"));
+    assert_contains!(
+        message,
+        "unknown parameter: `nexus.storage.kagemusha_operation_index_bytes`"
+    );
 }
 #[test]
 fn nexus_storage_weights_require_positive_subsystem_shares() {
@@ -2510,35 +2495,33 @@ fn nexus_stake_index_pool_is_finite_and_admits_one_share_group_and_account_keys(
 }
 
 #[test]
-fn sumeragi_seed_custody_and_local_overrides_are_validated_together() {
+fn sumeragi_local_overrides_parse_and_the_retired_seed_descriptor_is_unknown() {
     use iroha_config::parameters::user::Root as User;
 
-    let parse = |role: &str, descriptor: u16| {
-        let overrides = format!(
-            "[sumeragi]\nrole = {role:?}\nmint_finality_seed_fd = {descriptor}\nview_timeout_base_ms = 250\n"
-        )
-        .parse::<Table>()
-        .expect("custody and timing overrides");
+    let read = |overrides: &str| {
         ConfigReader::new()
             .read_toml_with_extends(fixtures_dir().join("base.toml"))
             .expect("base fixture")
-            .with_toml_source(TomlSource::inline(overrides))
+            .with_toml_source(TomlSource::inline(
+                overrides.parse::<Table>().expect("sumeragi overrides"),
+            ))
             .read_and_complete::<User>()
-            .expect("user config")
-            .parse()
     };
-    let config = parse("validator", 199).expect("validator custody and override");
-    assert_eq!(config.sumeragi.mint_finality_seed_fd, Some(199));
+    let config = read("[sumeragi]\nrole = \"validator\"\nview_timeout_base_ms = 250\n")
+        .expect("user config")
+        .parse()
+        .expect("validator timing override");
     assert_eq!(
         config.sumeragi.local.t_base,
         Some(Duration::from_millis(250))
     );
 
-    let error = parse("validator", 198).expect_err("wrong private descriptor");
-    assert!(format!("{error:?}").contains("fixed private descriptor 199"));
-
-    let error = parse("observer", 199).expect_err("observer cannot hold a validator seed");
-    assert!(format!("{error:?}").contains("observer must not configure a mint-finality seed"));
+    let error = read("[sumeragi]\nrole = \"validator\"\nmint_finality_seed_fd = 199\n")
+        .expect_err("the retired seed descriptor is not a configuration parameter");
+    assert_contains!(
+        strip_ansi_codes(&format!("{error:?}")),
+        "unknown parameter: `sumeragi.mint_finality_seed_fd`"
+    );
 }
 
 #[test]

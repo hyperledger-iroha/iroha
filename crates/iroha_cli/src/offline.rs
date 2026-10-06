@@ -117,7 +117,8 @@ pub(crate) struct EncodeArgs {
     /// Output directory for the frames and `manifest.json`.
     #[arg(long, value_name = "DIR")]
     output: PathBuf,
-    /// Payload kind byte carried in the beacon (KAGEMUSHA: 1 request, 2 payment, 3 acknowledgement).
+    /// Payload kind byte carried in the beacon (KAGEMUSHA wallet V1 envelope tags: 1 Offer,
+    /// 2 Request, 3 Payment, 4 Credited, 5 SessionControl, 6 PolicyData, 7 Lineage).
     #[arg(long, default_value_t = 0)]
     kind: u8,
     /// Frames to render. Zero renders one systematic pass plus 25 % repair (at least four extra frames).

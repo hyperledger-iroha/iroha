@@ -488,8 +488,8 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
                     self.assertTrue(self.public_role_original(source))
 
     def test_public_required_roles_are_exact_without_suffix_widening(self) -> None:
-        self.assertEqual(len(self.public_role_inputs()), 80)
-        self.assertEqual(len(seal._REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS), 10)
+        self.assertEqual(len(self.public_role_inputs()), 76)
+        self.assertEqual(len(seal._REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS), 6)
         self.assertEqual(len(seal._REVIEWED_PUBLIC_FIXTURE_INPUTS), 23)
         self.assertEqual(len(seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS), 4)
         for relative in self.public_role_inputs():
@@ -547,7 +547,6 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
     def test_public_source_folder_roles_do_not_admit_operations_or_neighbors(self) -> None:
         for relative in (
             "crates/iroha_core/src/sumeragi/certified_chain/artifacts/other.rs",
-            "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/unowned.bin",
             "crates/iroha_p2p/src/peer/run/other.rs",
             "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/unowned.to",
             "crates/ivm/tests/fixtures/predecoder/mixed/private/artifacts/unowned.to",

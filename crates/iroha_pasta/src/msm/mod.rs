@@ -14,9 +14,10 @@
 //!
 //! Every entry point runs on the caller's Rayon pool
 //! (`rayon::current_num_threads()` of the pool the call is made from). There is
-//! no global lock or admission control, and no task blocks inside the pool, so
-//! nested pools cannot deadlock. Scratch memory is planned against an explicit
-//! [`MemoryBudget`].
+//! no task blocks on scratch admission. [`MemoryBudget`] limits each kernel,
+//! while [`SharedMemoryBudget`] bounds all concurrent MSM scratch in the process
+//! to 64 MiB. Contention lowers the plan or selects allocation-free serial
+//! multiplication, so nested Rayon work cannot deadlock on memory admission.
 //!
 //! Results are exact group elements and therefore identical across thread
 //! counts, budgets and architectures.
@@ -25,7 +26,9 @@ mod budget;
 pub mod fixed_base;
 pub mod pippenger;
 
-pub use budget::{BudgetExceeded, MemoryBudget};
+pub use budget::{
+    BudgetExceeded, MemoryBudget, PROCESS_MSM_SCRATCH_BYTES, ScratchReservation, SharedMemoryBudget,
+};
 pub use fixed_base::FixedBaseTable;
 
 use group::prime::PrimeCurveAffine;
@@ -82,7 +85,12 @@ pub fn msm_public<C: PastaCurve>(
     bases: &[C::AffineExt],
     budget: MemoryBudget,
 ) -> Result<C, MsmError> {
-    msm_impl::<C, false>(scalars, bases, budget)
+    msm_public_with_shared_budget(
+        scalars,
+        bases,
+        budget,
+        &SharedMemoryBudget::process_default(),
+    )
 }
 
 /// Computes `sum_i scalars[i] * bases[i]` for secret scalars.
@@ -99,13 +107,47 @@ pub fn msm_secret<C: PastaCurve>(
     bases: &[C::AffineExt],
     budget: MemoryBudget,
 ) -> Result<C, MsmError> {
-    msm_impl::<C, true>(scalars, bases, budget)
+    msm_secret_with_shared_budget(
+        scalars,
+        bases,
+        budget,
+        &SharedMemoryBudget::process_default(),
+    )
+}
+
+/// Public MSM with an explicitly shared caller scratch ceiling.
+///
+/// Contention may change the execution plan, never the result or input validity.
+///
+/// # Errors
+/// As [`msm_public`]; contention alone does not return an error.
+pub fn msm_public_with_shared_budget<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+) -> Result<C, MsmError> {
+    msm_impl::<C, false>(scalars, bases, budget, shared)
+}
+
+/// Secret MSM with an explicitly shared caller scratch ceiling.
+///
+/// # Errors
+/// As [`msm_secret`]; contention alone does not return an error.
+pub fn msm_secret_with_shared_budget<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+) -> Result<C, MsmError> {
+    msm_impl::<C, true>(scalars, bases, budget, shared)
 }
 
 fn msm_impl<C: PastaCurve, const SECRET: bool>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
     budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
 ) -> Result<C, MsmError> {
     if scalars.len() != bases.len() {
         return Err(MsmError::LengthMismatch(crate::LengthMismatch {
@@ -136,40 +178,60 @@ fn msm_impl<C: PastaCurve, const SECRET: bool>(
         return Ok(C::identity());
     }
     let threads = rayon::current_num_threads();
-    let plan = pippenger::plan(n, bits, threads, budget.bytes()).ok_or_else(|| {
+    let mut plan = pippenger::plan(n, bits, threads, budget.bytes()).ok_or_else(|| {
         MsmError::Budget(BudgetExceeded {
             required: pippenger::min_plan_bytes(n, bits),
             budget: budget.bytes(),
         })
     })?;
+    // Never wait with a Rayon worker occupied: another kernel may need this
+    // worker to finish and release its own permit. A lost admission race has
+    // the same allocation-free fallback as an exhausted shared ceiling.
+    if plan.bytes > shared.available_bytes() {
+        let Some(smaller) = pippenger::plan(
+            n,
+            bits,
+            threads,
+            budget.bytes().min(shared.available_bytes()),
+        ) else {
+            return Ok(small_msm::<C, SECRET>(scalars, bases));
+        };
+        plan = smaller;
+    }
+    let Some(_scratch) = shared.try_reserve(plan.bytes) else {
+        return Ok(small_msm::<C, SECRET>(scalars, bases));
+    };
     // Identity bases contribute nothing and would break the affine formulas.
     let skip: Vec<bool> = bases.iter().map(|b| bool::from(b.is_identity())).collect();
     let digits = pippenger::Digits::new(scalars, plan.c, plan.nw);
-    let tasks: Vec<(usize, usize)> = (0..plan.groups)
-        .flat_map(|g| (0..plan.chunks).map(move |p| (g, p)))
-        .collect();
+    let tasks = plan.groups * plan.chunks;
     // Waves of at most `plan.concurrency` tasks bound the live bucket memory.
-    let mut partial: Vec<(usize, Vec<C>)> = Vec::with_capacity(tasks.len());
-    for wave in tasks.chunks(plan.concurrency) {
-        let results: Vec<(usize, Vec<C>)> = wave
-            .par_iter()
-            .map(|&(g, p)| pippenger::run_task::<C, SECRET>(bases, &skip, &digits, &plan, g, p))
-            .collect();
-        partial.extend(results);
-    }
-    drop(digits);
     let mut windows = vec![C::identity(); plan.nw];
-    for (w0, sums) in &partial {
-        for (k, s) in sums.iter().enumerate() {
-            windows[w0 + k] += s;
+    for start in (0..tasks).step_by(plan.concurrency) {
+        let mut results: Vec<(usize, Vec<C>)> = (start..(start + plan.concurrency).min(tasks))
+            .into_par_iter()
+            .map(|task| {
+                pippenger::run_task::<C, SECRET>(
+                    bases,
+                    &skip,
+                    &digits,
+                    &plan,
+                    task / plan.chunks,
+                    task % plan.chunks,
+                )
+            })
+            .collect();
+        for (w0, sums) in &mut results {
+            for (k, s) in sums.iter().enumerate() {
+                windows[*w0 + k] += s;
+            }
+            if SECRET {
+                sums.zeroize();
+            }
         }
     }
     let result = pippenger::combine(&windows, plan.c);
     if SECRET {
-        // Partial window sums are functions of the secret digits.
-        for (_, sums) in &mut partial {
-            sums.zeroize();
-        }
         windows.zeroize();
     }
     Ok(result)
@@ -183,7 +245,10 @@ fn small_msm<C: PastaCurve, const SECRET: bool>(
     let mut acc = C::identity();
     for (s, b) in scalars.iter().zip(bases.iter()) {
         let p = b.to_curve();
-        acc += if SECRET { p * *s } else { p.mul_vartime(s) };
+        // The public GLV multiplier allocates wNAF digit vectors. Use the
+        // stack-only complete multiplier for both modes: this path also runs
+        // when the shared scratch ceiling has no free bytes.
+        acc += p * *s;
     }
     acc
 }
@@ -206,6 +271,89 @@ mod tests {
     use group::{Curve, Group};
     use rand_chacha::ChaCha20Rng;
     use rand_core_06::SeedableRng;
+
+    fn shared_msm_parity<C: PastaCurve>() {
+        let scalars = (0..48)
+            .map(|i| match i % 3 {
+                0 => C::ScalarExt::ZERO,
+                1 => -C::ScalarExt::ONE,
+                _ => C::ScalarExt::from(i + 1),
+            })
+            .collect::<Vec<_>>();
+        let bases = (0..48)
+            .map(|i| match i % 4 {
+                0 => C::AffineExt::identity(),
+                1 => C::generator().to_affine(),
+                2 => (-C::generator()).to_affine(),
+                _ => (C::generator() * C::ScalarExt::from(i + 1)).to_affine(),
+            })
+            .collect::<Vec<_>>();
+        let expected = msm_naive::<C>(&scalars, &bases).to_affine();
+        let shared = SharedMemoryBudget::new(128 << 10);
+        for threads in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            // Holding the complete caller budget while entering nested Rayon
+            // work must not wait for this same stack frame to release it.
+            let held = shared.try_reserve(shared.limit_bytes()).unwrap();
+            pool.install(|| {
+                rayon::join(
+                    || {
+                        assert_eq!(
+                            msm_public_with_shared_budget::<C>(
+                                &scalars,
+                                &bases,
+                                MemoryBudget::DEFAULT,
+                                &shared
+                            )
+                            .unwrap()
+                            .to_affine(),
+                            expected
+                        )
+                    },
+                    || {
+                        assert_eq!(
+                            msm_secret_with_shared_budget::<C>(
+                                &scalars,
+                                &bases,
+                                MemoryBudget::DEFAULT,
+                                &shared
+                            )
+                            .unwrap()
+                            .to_affine(),
+                            expected
+                        )
+                    },
+                );
+            });
+            drop(held);
+            pool.install(|| {
+                (0..8).into_par_iter().for_each(|_| {
+                    assert_eq!(
+                        msm_secret_with_shared_budget::<C>(
+                            &scalars,
+                            &bases,
+                            MemoryBudget::DEFAULT,
+                            &shared
+                        )
+                        .unwrap()
+                        .to_affine(),
+                        expected
+                    );
+                });
+            });
+            assert_eq!(shared.in_use_bytes(), 0);
+            assert!(shared.peak_bytes() <= shared.limit_bytes());
+        }
+    }
+
+    #[test]
+    fn shared_budget_preserves_both_curves_under_nested_contention() {
+        shared_msm_parity::<Ep>();
+        shared_msm_parity::<crate::Eq>();
+    }
 
     #[test]
     fn small_and_large_agree_with_naive() {

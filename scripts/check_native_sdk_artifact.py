@@ -114,8 +114,13 @@ CONFIDENTIAL_PROVER_JNI_EXPORTS = tuple(
     )
 )
 
+KAGEMUSHA_WALLET_C_EXPORTS = ('connect_norito_kagemusha_wallet_revision_v1', 'connect_norito_kagemusha_wallet_open_v1', 'connect_norito_kagemusha_wallet_close_v1', 'connect_norito_kagemusha_wallet_activity_v1', 'connect_norito_kagemusha_wallet_commit_v1', 'connect_norito_kagemusha_wallet_retry_v1', 'connect_norito_kagemusha_wallet_resume_v1', 'connect_norito_kagemusha_wallet_fold_v1', 'connect_norito_kagemusha_wallet_credit_status_v1')
+KAGEMUSHA_WALLET_JNI_EXPORTS = ('Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision', 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_open', 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close', 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity', 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call')
+
 REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
+        *KAGEMUSHA_WALLET_C_EXPORTS,
+        *KAGEMUSHA_WALLET_JNI_EXPORTS,
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
@@ -731,7 +736,8 @@ def validate_retired_protocol_symbols(symbols: Sequence[str], *, sdk: str) -> No
             for symbol in symbols
             if symbol in explicitly_retired
             or (sdk == "c-jni" and symbol.startswith("Java_org_hyperledger_iroha_android_"))
-            or symbol.startswith(RETIRED_KAGEMUSHA_EXPORT_PREFIXES)
+            or (symbol.startswith(RETIRED_KAGEMUSHA_EXPORT_PREFIXES)
+                and symbol not in (*KAGEMUSHA_WALLET_C_EXPORTS, *KAGEMUSHA_WALLET_JNI_EXPORTS))
         }
     )
     if retired:

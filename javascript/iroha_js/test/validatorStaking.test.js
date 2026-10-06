@@ -12,7 +12,7 @@ const rows = new Map(readFileSync(new URL("../../../fixtures/validator_staking/n
     const [name, hex] = line.split("\t"); return [name, Buffer.from(hex, "hex")];
   }));
 const names = {
-  authority_generation: "AuthorityGeneration", epoch_authorization: "EpochAuthorization",
+  validator_generation: "ValidatorGeneration", epoch_authorization: "EpochAuthorization",
   monetary_plan: "MonetaryPlan", monetary_bond_plan: "MonetaryPlan", monetary_unbond_plan: "MonetaryPlan", monetary_slash_plan: "MonetaryPlan",
   reward_claim_plan: "RewardClaimPlan", fee_reward_claim_plan: "RewardClaimPlan",
 };
@@ -25,7 +25,7 @@ test("staking canonical Rust fixtures retain all monetary bindings and generatio
     assert.ok(rows.has(name), `missing Rust fixture ${name}`);
     assert.deepEqual(encode(type, decode(type, rows.get(name))), rows.get(name));
   }
-  const generation = decode("AuthorityGeneration", rows.get("authority_generation"));
+  const generation = decode("ValidatorGeneration", rows.get("validator_generation"));
   const epoch = decode("EpochAuthorization", rows.get("epoch_authorization"));
   assert.equal(generation.generation, 0n); assert.equal(generation.validators.length, 4);
   assert.equal(epoch.authority_generation, generation.generation);
@@ -40,7 +40,7 @@ test("staking canonical Rust fixtures retain all monetary bindings and generatio
     assert.deepEqual(value.source_asset.scope, { kind: "global", value: null });
     assert.equal(value.amount, "1000"); assert.ok(value.network_scope.value.equals(generation.network_id));
   }
-  assert.deepEqual(plan("monetary_bond_plan").precondition.value.peer_id, generation.validators[0].validator);
+  assert.deepEqual(plan("monetary_bond_plan").precondition.value.peer_id, generation.validators[0]);
   assert.equal(plan("monetary_slash_plan").precondition.value.slashable_exposure, "1500");
   assert.deepEqual(plan("monetary_unbond_plan").source_asset, plan().destination_asset);
 });
@@ -96,11 +96,18 @@ test("staking exact layout rejects truncation, trailing data and superseded opti
   assert.throws(() => decode("MonetaryPlan", Buffer.concat([Buffer.of(0xa5, 0), bytes.subarray(1)])), /varint is not minimally encoded/);
 });
 
-test("staking authority geometry and epoch units are exact without certifying observations", () => {
-  const authority = decode("AuthorityGeneration", rows.get("authority_generation"));
-  assert.throws(() => encode("AuthorityGeneration", { ...authority, validators: authority.validators.slice(0, 3) }), /geometry/);
-  assert.throws(() => encode("AuthorityGeneration", { ...authority, validators: Array(32).fill(authority.validators[0]) }), /exceeds 31/);
-  assert.throws(() => encode("AuthorityGeneration", { ...authority, version: 2 }), /geometry/);
+test("staking validator geometry and epoch units are exact without certifying observations", () => {
+  const generation = decode("ValidatorGeneration", rows.get("validator_generation"));
+  assert.throws(() => encode("ValidatorGeneration", { ...generation, validators: generation.validators.slice(0, 3) }), /geometry/);
+  assert.throws(() => encode("ValidatorGeneration", { ...generation, validators: Array(32).fill(generation.validators[0]) }), /exceeds 31/);
+  assert.throws(() => encode("ValidatorGeneration", { ...generation, version: 1 }), /exact native fields/);
+  assert.throws(() => encode("ValidatorGeneration", { ...generation, validators: [...generation.validators].reverse() }), /strictly ordered/);
+  assert.throws(() => encode("ValidatorGeneration", { ...generation, validators: Array(4).fill(generation.validators[0]) }), /strictly ordered/);
+  const controller = AccountAddress.fromI105(plan().source_asset.account).controllerInfo();
+  const nonBlsPeer = { public_key: `ed0120${Buffer.from(controller.publicKey).toString("hex").toUpperCase()}` };
+  assert.throws(() => encode("ValidatorGeneration", { ...generation, validators: [nonBlsPeer, ...generation.validators.slice(1)] }), /BLS-normal/);
+  assert.throws(() => encode("AuthorityGeneration", generation), /unknown staking value type/);
+  assert.throws(() => decode("ValidatorGeneration", Buffer.concat([Buffer.of(2, 1, 0), rows.get("validator_generation")])), /network|NetworkId|trailing/i);
   const epoch = decode("EpochAuthorization", rows.get("epoch_authorization"));
   assert.throws(() => encode("EpochAuthorization", { ...epoch, first_height: 0 }), /authorization/);
   assert.throws(() => encode("EpochAuthorization", { ...epoch, decision: { kind: "retain", value: 0 } }), /explicit null/);

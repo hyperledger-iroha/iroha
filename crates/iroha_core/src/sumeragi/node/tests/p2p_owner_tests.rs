@@ -110,18 +110,6 @@ fn inputs(
         )),
         key_pair: chain.keys[0].clone(),
         beacon_signer: None,
-        mint_finality_authority: Some(Arc::new(
-            crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
-                Arc::new(
-                    super::super::super::epoch::genesis_epoch(&chain.genesis)
-                        .unwrap()
-                        .authority,
-                ),
-                zeroize::Zeroizing::new([0xA0; 32]),
-                0,
-            )
-            .unwrap(),
-        )),
         config: NodeConfig {
             records_dir: dir.join("records"),
             installation_log: dir.join("keys/installation.log"),

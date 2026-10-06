@@ -265,7 +265,7 @@ into the output directory.
 
 ## Iroha 3 Profiles
 
-- Run `cargo xtask kagami-profiles --kagemusha-mint-finality-parameters-dir <AUTHORITY_DIR>` to emit operator-owned bundles for
+- Run `cargo xtask kagami-profiles --xor-allocations-dir <ALLOCATIONS_DIR>` to emit operator-owned bundles for
   `iroha3-dev` and `iroha3-nexus` under
   `defaults/kagami/<profile>/`
 - Each generated bundle includes:
@@ -274,11 +274,10 @@ into the output directory.
   - `config.toml`
   - `docker-compose.yml`
   - `README.md`
-- Checked-in `genesis.template.json` files deliberately omit mint-finality
-  authority and cannot be validated, signed, or used by a node. Materialize one
-  explicitly with `kagami genesis materialize <SOURCE.template.json>
-  --kagemusha-mint-finality-parameters <PUBLIC_PARAMETERS.json>
-  --xor-asset-definition-id <CANONICAL_XOR_ID>` for NPoS, or generate a
+- Checked-in `genesis.template.json` files deliberately omit their consensus
+  fingerprint and NPoS XOR pin and cannot be validated, signed, or used by a
+  node. Materialize one explicitly with `kagami genesis materialize
+  <SOURCE.template.json> --xor-asset-definition-id <CANONICAL_XOR_ID>` for NPoS, or generate a
   complete profile bundle with the command above. The XOR identity is committed
   in NPoS parameters; Taira uses `6TEAJqbb8oEPmLncoNiMRbLEK6tw`, while Nexus requires
   its own operator-provisioned identity. Validator allocations must be explicitly
@@ -316,7 +315,6 @@ target/debug/kagami genesis generate \
   --profile iroha3-dev \
   --ivm-dir ./ivm_libs \
   --genesis-public-key ed25519:... \
-  --kagemusha-mint-finality-parameters ./kagemusha-mint-finality-public.json \
   --consensus-mode permissioned \
   default
 ```

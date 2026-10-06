@@ -1317,6 +1317,8 @@ mod tests {
             },
             soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
             musubi_publication: iroha_config::parameters::actual::MusubiPublication::default(),
+            kagemusha_load_authorizer:
+                iroha_config::parameters::actual::KagemushaLoadAuthorizer::default(),
             kura: Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,

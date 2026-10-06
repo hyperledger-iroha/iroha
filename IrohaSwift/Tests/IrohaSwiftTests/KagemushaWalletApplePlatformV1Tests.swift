@@ -337,6 +337,16 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
   private static let accessGroup = "ABCDE12345.org.hyperledger.iroha.wallet-tests"
   private let slot = KagemushaWalletAppleSlotV1(Data((1...32).map { UInt8($0) }))!
   private let challenge = Data(repeating: 0xc4, count: 32)
+  /// The 32-byte Poseidon signing message `m = P_bytes(kgwrcpt1, transcript)` of the vectored
+  /// Send receipt (`fixtures/kagemusha/wallet_v1_vectors.json`): what the Rust receipt signer
+  /// hands to `key_sign`.
+  private let message = Data(
+    [
+      0xa5, 0xe8, 0xb3, 0x24, 0x21, 0xe1, 0x75, 0x95,
+      0x04, 0x0c, 0xdc, 0xde, 0xea, 0xf4, 0x6f, 0x06,
+      0xda, 0x85, 0x29, 0x1d, 0x68, 0xcf, 0xf8, 0xe0,
+      0x5d, 0xab, 0x8b, 0xfc, 0x64, 0xa9, 0x6a, 0x2d,
+    ])
 
   private func makePlatform(
     keychain: FakeWalletKeychain = FakeWalletKeychain(),
@@ -391,6 +401,22 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
   ) -> KagemushaWalletAppleUnavailableV1? {
     if case .failure(let reason) = result { return reason }
     return nil
+  }
+
+  /// The low-S form `r || min(s, n − s)` of a fixed-width signature, as Rust freezes it.
+  private func lowSForm(_ raw: Data) -> Data {
+    if KagemushaWalletWireV1.isCanonicalLowSSignature(raw) { return raw }
+    let s = [UInt8](raw.suffix(32))
+    let order = KagemushaWalletWireV1.groupOrder
+    var twin = [UInt8](repeating: 0, count: 32)
+    var borrow = 0
+    for index in stride(from: 31, through: 0, by: -1) {
+      var difference = Int(order[index]) - Int(s[index]) - borrow
+      borrow = difference < 0 ? 1 : 0
+      if difference < 0 { difference += 256 }
+      twin[index] = UInt8(difference)
+    }
+    return Data(raw.prefix(32)) + Data(twin)
   }
 
   private func generatedKey(_ platform: KagemushaWalletApplePlatformV1) throws -> Data {
@@ -606,9 +632,9 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
 
     // Signing is not bracketed; a refused keychain is told apart the same way.
     keychain.copyStatus = errSecInteractionNotAllowed
-    XCTAssertEqual(failure(platform.keySign(slot, message: Data(repeating: 1, count: 32))), .beforeFirstUnlock)
+    XCTAssertEqual(failure(platform.keySign(slot, message: message)), .beforeFirstUnlock)
     probe.firstUnlock = 0
-    XCTAssertEqual(failure(platform.keySign(slot, message: Data(repeating: 1, count: 32))), .locked)
+    XCTAssertEqual(failure(platform.keySign(slot, message: message)), .locked)
   }
 
   func testProtectedDataBracketsSurroundEveryAbsence() throws {
@@ -802,11 +828,17 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     }
   }
 
-  func testKeySignReturnsDERThatVerifiesOverTheSHA256SigningMessage() throws {
+  func testKeySignSignsTheExact32ByteMessageWithECDSAMessageX962SHA256() throws {
+    // Owner answer A1: the payment key signs the 32-byte Poseidon message with standard
+    // ECDSA-P256-SHA256 (the message variant, which hashes once); never a digest variant.
+    XCTAssertEqual(
+      Platform.signingAlgorithm.rawValue, SecKeyAlgorithm.ecdsaSignatureMessageX962SHA256.rawValue)
+    XCTAssertNotEqual(
+      Platform.signingAlgorithm.rawValue, SecKeyAlgorithm.ecdsaSignatureDigestX962SHA256.rawValue)
+    XCTAssertEqual(Platform.signingMessageBytes, 32)
     let keychain = FakeWalletKeychain()
     let platform = try makePlatform(keychain: keychain)
     let publicKey = try generatedKey(platform)
-    let message = Data(repeating: 7, count: 32)
     let der: Data
     switch platform.keySign(slot, message: message) {
     case .success(let signature): der = signature
@@ -816,22 +848,58 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     let signature = try P256.Signing.ECDSASignature(derRepresentation: der)
     let verifier = try P256.Signing.PublicKey(x963Representation: publicKey)
     XCTAssertTrue(verifier.isValidSignature(signature, for: message))
+    XCTAssertTrue(verifier.isValidSignature(signature, for: SHA256.hash(data: message)))
     XCTAssertFalse(verifier.isValidSignature(signature, for: message + Data([0])))
+    // The ECDSA hash is SHA-256(m): as a digest signature the DER verifies over SHA-256(m), not
+    // over m itself, which a digest-variant signer would have signed.
+    var error: Unmanaged<CFError>?
+    let secPublicKey = try XCTUnwrap(
+      SecKeyCreateWithData(
+        publicKey as CFData,
+        [
+          kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+          kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+        ] as CFDictionary, &error))
+    XCTAssertTrue(
+      SecKeyVerifySignature(
+        secPublicKey, .ecdsaSignatureDigestX962SHA256, Data(SHA256.hash(data: message)) as CFData,
+        der as CFData, nil))
+    XCTAssertFalse(
+      SecKeyVerifySignature(
+        secPublicKey, .ecdsaSignatureDigestX962SHA256, message as CFData, der as CFData, nil))
+    // The wallet verifier accepts the frozen low-S form over the same message.
+    XCTAssertTrue(
+      KagemushaWalletWireV1.verifySignature(
+        publicKey: publicKey, message: message, signature: lowSForm(signature.rawRepresentation)))
 
     let other = KagemushaWalletAppleSlotV1(Data(repeating: 9, count: 32))!
-    XCTAssertEqual(failure(platform.keySign(other, message: message)), .platform(errSecItemNotFound))
+    XCTAssertEqual(
+      failure(platform.keySign(other, message: message)), .platform(errSecItemNotFound))
     keychain.copyStatus = errSecInteractionNotAllowed
     XCTAssertEqual(failure(platform.keySign(slot, message: message)), .locked)
   }
 
-  func testKeySignRejectsWrongMessageLengthsBeforeKeychainAccess() throws {
+  func testKeySignRefusesAnyOtherMessageLengthBeforeTheKeychain() throws {
     let keychain = FakeWalletKeychain()
     let platform = try makePlatform(keychain: keychain)
-    let queries = keychain.queries.count
-    for length in [0, 31, 33, 1024] {
-      XCTAssertEqual(failure(platform.keySign(slot, message: Data(repeating: 7, count: length))), .keyUnusable)
+    _ = try generatedKey(platform)
+    let before = keychain.operations.count
+    for length in [0, 1, 31, 33, 338, 1024] {
+      XCTAssertEqual(
+        failure(platform.keySign(slot, message: Data(repeating: 7, count: length))),
+        .platform(KagemushaWalletAppleStatusV1.invalidSigningMessage), "length \(length)")
     }
-    XCTAssertEqual(keychain.queries.count, queries, "malformed messages never reach the keychain")
+    XCTAssertEqual(keychain.operations.count, before, "nothing is queried for a refused message")
+  }
+
+  func testDirectSignerRefusesAnyOtherMessageLength() throws {
+    let platform = try makePlatform(keychain: FakeWalletKeychain())
+    let key = FakeWalletKeychain.softwareKey()
+    for length in [0, 1, 31, 33, 338, 1024] {
+      XCTAssertEqual(
+        failure(platform.sign(key, slot: slot, message: Data(repeating: 7, count: length))),
+        .platform(KagemushaWalletAppleStatusV1.invalidSigningMessage), "length \(length)")
+    }
   }
 
   func testKeySignReportsAKeyThatCannotSignAsUnusable() throws {
@@ -840,7 +908,7 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     let platform = try makePlatform(keychain: keychain, diagnostics: diagnostics)
     let publicOnly = try XCTUnwrap(SecKeyCopyPublicKey(FakeWalletKeychain.softwareKey()))
     keychain.storeKey(tag: slot.applicationTag, label: nil, key: publicOnly)
-    XCTAssertEqual(failure(platform.keySign(slot, message: Data(repeating: 1, count: 32))), .keyUnusable)
+    XCTAssertEqual(failure(platform.keySign(slot, message: message)), .keyUnusable)
     XCTAssertEqual(diagnostics.all.count, 1)
     XCTAssertEqual(diagnostics.all.first?.slot, slot.keychainName)
   }

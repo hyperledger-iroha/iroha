@@ -458,7 +458,7 @@ impl StateBlock<'_> {
             Ok(SealedExecutionOutputs {
                 witness_hash: None,
                 witness_surface: None,
-                sources,
+                _sources: sources,
                 world_delta,
                 proposal: block.hash(),
                 wire_hash,

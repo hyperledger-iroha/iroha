@@ -119,6 +119,8 @@ pub mod pipeline;
 pub(crate) use iroha_core_privacy::{
     execution_proofs, privacy_engines, privacy_profiles, privacy_state, privacy_verifier,
 };
+/// Reserve-backed KAGEMUSHA wallet ledger orchestration.
+pub mod kagemusha_wallet_v1;
 /// First-release privacy protocol governance and admission budgets.
 pub mod privacy;
 /// Native deterministic privacy release evidence, compiled only into explicit
@@ -581,8 +583,6 @@ mod isi_gas_fees_tests;
 #[cfg(test)]
 #[path = "../tests/ivm_corehost_axt.rs"]
 mod ivm_corehost_axt_tests;
-#[cfg(any(test, feature = "iroha-core-tests"))]
-pub(crate) use iroha_core_zk::kagemusha_v1_test_fixtures;
 #[cfg(test)]
 mod network_payload_tests;
 #[cfg(test)]

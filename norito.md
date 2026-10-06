@@ -1320,19 +1320,6 @@ time. The signed payload's schema identity is
 attestation's is
 `iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1`.
 
-### KAGEMUSHA release network binding
-
-`KagemushaReleaseManifestV1` encodes its exact genesis-derived `NetworkId`
-immediately after `version`, before `release_id`. Its private
-`KagemushaReleaseSubjectV1` uses the same placement. The domain-separated
-release ID therefore commits to the network, and threshold release approvals
-sign both that ID and the complete manifest digest. A node rejects a release
-whose signed network differs from its configured genesis identity before Kura
-replay; mobile enrollment, concrete mint/state/payment/terminal and Guard
-verification, hardware transaction admission, and testnet proof observation
-enforce the same release-to-operation network match. There is one first-release
-layout and no decoder for the networkless pre-release shape.
-
 ### Sumeragi execution-result schedule projection
 
 The sole `iroha_data_model::sumeragi_finality::ExecutionResultCommitment` frame

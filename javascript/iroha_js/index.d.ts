@@ -848,7 +848,7 @@ export type BinaryLike =
 export type VerifyingKeyIdLike = string | { backend: string; name: string };
 
 /** Exact JSON labels for the two generic OpenVerify engines in Norito order. */
-export type OpenVerifyBackendTag = "halo2-ipa-pasta" | "stark";
+export type OpenVerifyBackendTag = "halo2-ipa-pasta" | "stark" | "native-pipa-r-pasta";
 
 export interface OpenVerifyEnvelope {
   backend: OpenVerifyBackendTag;
@@ -1624,15 +1624,16 @@ export type ToriiVerifyingKeyStatus = "Proposed" | "Active" | "Withdrawn";
 /** Exact verifier-registry labels admitted by the native Rust dispatcher. */
 export type ToriiVerifierBackendLabelV1 =
   | "halo2/ipa"
-  | "halo2/pasta/kaigi-authorization-v1"
-  | "halo2/pasta/kaigi-usage-v1"
+  | "pipa-r/pasta"
+  | "pipa-r/pasta/kaigi-authorization-v1"
+  | "pipa-r/pasta/kaigi-usage-v1"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
   | "stark/fri/poseidon-x7-goldilocks-6x64-v1";
 
 /** Canonical low-level proof-engine label stored in a verifier record. */
-export type ToriiVerifierEngineLabelV1 = "halo2-ipa-pasta" | "stark";
+export type ToriiVerifierEngineLabelV1 = "halo2-ipa-pasta" | "stark" | "native-pipa-r-pasta";
 
 export interface ToriiVerifyingKeyInline {
   backend: ToriiVerifierBackendLabelV1;
@@ -13557,9 +13558,8 @@ export interface StakingRewardClaimPlanV1 {
   expected_state: StakingRewardClaimStateV1 | null; records: StakingRewardRecordRefV1[];
   sources: StakingRewardClaimSourceV1[]; fee_claim: StakingFeeRewardClaimV1 | null;
 }
-export interface StakingValidatorKeysV1 { validator: StakingPeerIdV1; eq_proof_public_key: Uint8Array; ep_proof_public_key: Uint8Array; }
-export interface StakingAuthorityGenerationV1 {
-  version: StakingUnsignedV1; network_id: NetworkId; generation: StakingUnsignedV1; validators: StakingValidatorKeysV1[];
+export interface StakingValidatorGenerationV1 {
+  network_id: NetworkId; generation: StakingUnsignedV1; validators: StakingPeerIdV1[];
 }
 export interface StakingEpochAuthorizationV1 {
   version: StakingUnsignedV1; network_id: NetworkId; epoch: StakingUnsignedV1;
@@ -13572,7 +13572,7 @@ export interface StakingEpochAuthorizationV1 {
 export interface ValidatorStakingValueMapV1 {
   PreparationRequest: StakingPreparationRequestV1; Preparation: StakingPreparationV1;
   MonetaryPlan: StakingMonetaryPlanV1; RewardClaimPlan: StakingRewardClaimPlanV1;
-  AuthorityGeneration: StakingAuthorityGenerationV1; EpochAuthorization: StakingEpochAuthorizationV1;
+  ValidatorGeneration: StakingValidatorGenerationV1; EpochAuthorization: StakingEpochAuthorizationV1;
 }
 /** u64 values decode as bigint; explicit optional fields never default to null. */
 export function encodeValidatorStakingValueV1<K extends keyof ValidatorStakingValueMapV1>(name: K, value: ValidatorStakingValueMapV1[K]): Buffer;

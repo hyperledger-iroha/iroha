@@ -1,6 +1,6 @@
 //! Explicit wire identifiers for the built-in instruction registry.
 use super::*;
-use crate::isi::{kagemusha_v1, retail_daily_limit};
+use crate::isi::retail_daily_limit;
 type TypeName = fn() -> &'static str;
 /// One built-in instruction's Rust type and path-independent wire identity.
 #[derive(Clone, Copy)]
@@ -57,6 +57,7 @@ macro_rules! governance_wire_id {
 /// Complete canonical wire-ID inventory for built-in instructions.
 pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(RegisterBox => "iroha.register"),
+    built_in_wire_id!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1 => "iroha.kagemusha.wallet.ledger.v1", register),
     built_in_wire_id!(UnregisterBox => "iroha.unregister"),
     built_in_wire_id!(MintBox => "iroha.mint"),
     built_in_wire_id!(BurnBox => "iroha.burn"),
@@ -93,9 +94,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(RemoveAssetKeyValue => "iroha.instruction.v1::transparent::RemoveAssetKeyValue"),
     built_in_wire_id!(GrantBox => "iroha.grant"),
     built_in_wire_id!(RevokeBox => "iroha.revoke"),
-    built_in_wire_id!(kagemusha_v1::TopUpKagemushaV1 => "iroha.kagemusha.v1.top_up", register),
-    built_in_wire_id!(kagemusha_v1::TopUpKagemushaOrdinaryV1 => "iroha.kagemusha.v1.ordinary_top_up", register),
-    built_in_wire_id!(kagemusha_v1::RedeemKagemushaV1 => "iroha.kagemusha.v1.redeem", register),
     built_in_wire_id!(crate::isi::staking::RegisterPublicLaneCandidate => "iroha.staking.register_public_lane_candidate"),
     built_in_wire_id!(crate::isi::staking::RegisterPublicLaneValidator => "iroha.instruction.v1::staking::RegisterPublicLaneValidator"),
     built_in_wire_id!(crate::isi::staking::RebindPublicLaneValidatorPeer => "iroha.staking.rebind_public_lane_validator_peer"),

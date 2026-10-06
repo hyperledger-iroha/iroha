@@ -974,6 +974,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         musubi_publication: A::MusubiPublication::default(),
+        kagemusha_load_authorizer: A::KagemushaLoadAuthorizer::default(),
         kura: A::Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),
@@ -1694,34 +1695,23 @@ pub(crate) fn bind_fixture_root(
     world: &mut iroha_core::state::World,
     scope: iroha_data_model::block::consensus::SumeragiRootScope,
 ) {
-    use iroha_data_model::{
-        block::consensus::ValidatorPower,
-        parameter::{
-            Parameter,
-            custom::CustomParameter,
-            system::{
-                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
-                consensus_metadata,
-            },
+    use iroha_data_model::parameter::{
+        Parameter,
+        custom::CustomParameter,
+        system::{
+            ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+            consensus_metadata,
         },
     };
     use std::num::NonZeroU64;
-    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
-        .into_iter()
-        .map(|(validator, _)| ValidatorPower {
-            validator,
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let mut context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    let mut context =
+        iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended();
     context.root_scope = scope;
     let metadata = ConsensusHandshakeMetadata {
         mode: SumeragiConsensusMode::Permissioned,
         block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
         wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         consensus_fingerprint: ConsensusFingerprint::new([0xC7; 32]),
-        kagemusha_mint_finality:
-            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
         sumeragi_context: context,
     };
     metadata.validate().unwrap();

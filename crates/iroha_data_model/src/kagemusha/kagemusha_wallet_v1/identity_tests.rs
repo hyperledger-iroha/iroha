@@ -11,15 +11,20 @@ use crate::kagemusha::kagemusha_wallet_v1::{
     KAGEMUSHA_WALLET_ARTIFACT_MANIFEST_MAX_BYTES_V1, KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
     KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1, KAGEMUSHA_WALLET_RENEWAL_REQUEST_MAX_BYTES_V1,
     KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1, KAGEMUSHA_WALLET_VERSION_V1,
-    KagemushaWalletValidationErrorV1,
+    KagemushaWalletObjectDigestDomainV1, KagemushaWalletValidationErrorV1,
     codec_tests::{assert_every_flip_rejected_or_rebound, norito_tag},
+    kagemusha_wallet_field_from_u128_v1, kagemusha_wallet_is_canonical_field_v1,
+    kagemusha_wallet_poseidon_v1,
+    verifying_keys::verifying_keys_tests::scheme_verifying_key_set_digest,
 };
 
-/// Relation stand-in bindings; the real values come from the G3 artifact set.
+/// Relation stand-in bindings; the real values come from the G3 artifact set. The
+/// verifying-key-set digest is the computed digest of the stand-in allowlist the vectors carry
+/// ([`scheme_verifying_key_set_digest`]), so that allowlist decodes against the vectored
+/// manifest (defect d1).
 const EQ: [u8; 32] = [0x21; 32];
 const EP: [u8; 32] = [0x22; 32];
 const NATIVE: [u8; 32] = [0x23; 32];
-const VK_SET: [u8; 32] = [0x24; 32];
 const INVENTORY: [u8; 32] = [0x25; 32];
 const ISSUED_AT_MS: u64 = 1_790_000_000_000;
 
@@ -57,7 +62,13 @@ pub(in crate::kagemusha::kagemusha_wallet_v1) fn test_scheme(
         version: KAGEMUSHA_WALLET_VERSION_V1,
         network_id: *Hash::prehashed([11; 32]).as_ref(),
         scheme_root_key: public_key(root),
-        relation_id: kagemusha_wallet_relation_id_v1(&EQ, &EP, &NATIVE, &VK_SET, &INVENTORY),
+        relation_id: kagemusha_wallet_relation_id_v1(
+            &EQ,
+            &EP,
+            &NATIVE,
+            &scheme_verifying_key_set_digest(),
+            &INVENTORY,
+        ),
         provider_contract: kagemusha_wallet_provider_contract_v1(),
     }
 }
@@ -276,7 +287,7 @@ fn artifact_body(
         eq_protocol_digest: EQ,
         ep_protocol_digest: EP,
         native_profile_digest: NATIVE,
-        verifying_key_set_digest: VK_SET,
+        verifying_key_set_digest: scheme_verifying_key_set_digest(),
         artifact_inventory_digest: INVENTORY,
         provider_contract: scheme.provider_contract,
         signer_certificate: certificate.certificate_digest(),
@@ -391,7 +402,13 @@ fn kagemusha_wallet_v1_identity_transcript_lengths_are_pinned() {
             KAGEMUSHA_WALLET_PROVIDER_CONTRACT_TRANSCRIPT_BYTES_V1,
         ),
         (
-            kagemusha_wallet_relation_transcript_v1(&EQ, &EP, &NATIVE, &VK_SET, &INVENTORY),
+            kagemusha_wallet_relation_transcript_v1(
+                &EQ,
+                &EP,
+                &NATIVE,
+                &scheme_verifying_key_set_digest(),
+                &INVENTORY,
+            ),
             KAGEMUSHA_WALLET_RELATION_TRANSCRIPT_BYTES_V1,
         ),
         (
@@ -458,21 +475,45 @@ fn kagemusha_wallet_v1_provider_contract_and_relation_layouts() {
         "52b501e3344547c36579684aafb2b15eb0caf3393e77aebdfbaa14ac57d0cc8d"
     );
 
-    let relation = kagemusha_wallet_relation_transcript_v1(&EQ, &EP, &NATIVE, &VK_SET, &INVENTORY);
+    let relation = kagemusha_wallet_relation_transcript_v1(
+        &EQ,
+        &EP,
+        &NATIVE,
+        &scheme_verifying_key_set_digest(),
+        &INVENTORY,
+    );
     let mut expected = vec![1, 0];
-    for digest in [EQ, EP, NATIVE, VK_SET, INVENTORY] {
+    for digest in [EQ, EP, NATIVE, scheme_verifying_key_set_digest(), INVENTORY] {
         expected.extend_from_slice(&digest);
     }
     assert_eq!(relation, expected);
-    let id = kagemusha_wallet_relation_id_v1(&EQ, &EP, &NATIVE, &VK_SET, &INVENTORY);
+    let id = kagemusha_wallet_relation_id_v1(
+        &EQ,
+        &EP,
+        &NATIVE,
+        &scheme_verifying_key_set_digest(),
+        &INVENTORY,
+    );
     assert_eq!(id, kagemusha_wallet_digest_v1(Role::Relation, &relation));
     assert_ne!(
         id,
-        kagemusha_wallet_relation_id_v1(&EP, &EQ, &NATIVE, &VK_SET, &INVENTORY)
+        kagemusha_wallet_relation_id_v1(
+            &EP,
+            &EQ,
+            &NATIVE,
+            &scheme_verifying_key_set_digest(),
+            &INVENTORY
+        )
     );
     assert_ne!(
         id,
-        kagemusha_wallet_relation_id_v1(&EQ, &EP, &NATIVE, &VK_SET, &[0x26; 32])
+        kagemusha_wallet_relation_id_v1(
+            &EQ,
+            &EP,
+            &NATIVE,
+            &scheme_verifying_key_set_digest(),
+            &[0x26; 32]
+        )
     );
 }
 
@@ -670,7 +711,7 @@ fn kagemusha_wallet_v1_signer_certificate_sign_verify_and_decode() {
     assert_eq!(
         certificate.certificate_digest(),
         kagemusha_wallet_signed_object_digest_v1(
-            Role::Certificate,
+            KagemushaWalletObjectDigestDomainV1::Certificate,
             &kagemusha_wallet_signing_message_v1(Domain::Certificate, &expected),
             &certificate.signature
         )
@@ -764,14 +805,16 @@ fn kagemusha_wallet_v1_certificate_set_order_digest_and_selection() {
     assert!(!set.is_empty());
     let digests = set.digests();
     assert!(digests.windows(2).all(|pair| pair[0] < pair[1]));
-    let mut transcript = 3_u32.to_le_bytes().to_vec();
-    for digest in &digests {
-        transcript.extend_from_slice(digest);
-    }
-    assert_eq!(set.transcript().expect("transcript"), transcript);
+    // `P(kgwcset1, [count, digests...])`: the count as one element, then each canonical
+    // certificate digest as one element (owner answer B1).
+    let mut items = vec![kagemusha_wallet_field_from_u128_v1(3)];
+    items.extend(digests.iter().copied());
+    assert!(digests.iter().all(kagemusha_wallet_is_canonical_field_v1));
+    assert_eq!(set.field_items(), items);
     assert_eq!(
         set.digest().expect("digest"),
-        kagemusha_wallet_digest_v1(Role::CertificateSet, &transcript)
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1, &items)
+            .expect("canonical")
     );
     set.verify(&f.scheme).expect("verify");
     assert_eq!(
@@ -822,8 +865,15 @@ fn kagemusha_wallet_v1_certificate_set_order_digest_and_selection() {
     assert_eq!(empty.len(), 0);
     assert_eq!(
         empty.digest().expect("digest"),
-        kagemusha_wallet_digest_v1(Role::CertificateSet, &[0, 0, 0, 0])
+        kagemusha_wallet_poseidon_v1(
+            KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1,
+            &[kagemusha_wallet_field_from_u128_v1(0)]
+        )
+        .expect("canonical")
     );
+    let mut oversized = set.clone();
+    oversized.certificates.push(f.enrollment_certificate);
+    assert!(oversized.digest().is_err());
     assert!(empty.validate().is_ok());
 }
 
@@ -1058,7 +1108,7 @@ fn kagemusha_wallet_v1_credential_sign_verify_decode_for_every_kind() {
         assert_eq!(
             credential.credential_digest(),
             kagemusha_wallet_signed_object_digest_v1(
-                Role::Credential,
+                KagemushaWalletObjectDigestDomainV1::Credential,
                 &credential.body.signing_message(),
                 &credential.signature
             )
@@ -1640,13 +1690,11 @@ fn kagemusha_wallet_v1_artifact_manifest_binds_the_scheme() {
         body.signing_message(),
         kagemusha_wallet_signing_message_v1(Domain::ArtifactManifest, &transcript)
     );
+    let mut sha_body = body.signing_message().to_vec();
+    sha_body.extend_from_slice(manifest.signature.as_raw_bytes());
     assert_eq!(
         manifest.manifest_digest(),
-        kagemusha_wallet_signed_object_digest_v1(
-            Role::ArtifactManifest,
-            &body.signing_message(),
-            &manifest.signature
-        )
+        kagemusha_wallet_digest_v1(Role::ArtifactManifest, &sha_body)
     );
 
     let mut bad = body;

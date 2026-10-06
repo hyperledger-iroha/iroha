@@ -31,20 +31,19 @@ pub enum PublicHttpError {
 
 /// Isolated native transport for unsigned public material such as release checkpoints.
 /// It has no ledger identity, credentials, default-header input, cookies or redirect policy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PublicHttpClient {
     transport: DefaultHttpTransport,
 }
 
 impl PublicHttpClient {
-    /// Construct isolated native SDK connection pools with no redirects or automatic retries.
-    ///
-    /// # Errors
-    /// The native transport could not be constructed.
-    pub fn new() -> Result<Self, PublicHttpError> {
-        Ok(Self {
-            transport: DefaultHttpTransport::new().map_err(|_| PublicHttpError::Transport)?,
-        })
+    /// Retain isolated lazy SDK pools with no redirects or automatic retries.
+    /// Native transport construction occurs on the first request and can fail there.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            transport: DefaultHttpTransport::new(),
+        }
     }
 
     /// Inject a trusted transport while retaining this owner's URL, deadline and byte policies.

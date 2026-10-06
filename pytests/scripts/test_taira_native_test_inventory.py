@@ -63,18 +63,16 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 340)
+        self.assertEqual(len(names), 363)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
-            'native proposal attestation policy': (
-                ('sumeragi/executor.rs', 'sumeragi/executor_attestation_policy_tests.rs', 'attestation_policy_tests', 'sumeragi::executor::attestation_policy_tests'),
-                (
-                    'native_top_up_proposal_requires_attestation_before_an_epoch_boundary',
-                    'ordinary_nonboundary_proposal_has_no_mint_attestation_requirement',
-                    'ordinary_boundary_proposal_requires_its_authenticated_scheduled_attestation',
-                    'executed_top_up_count_cannot_finalize_without_the_flag_even_if_static_work_is_ordinary',
-                )),
+            'native original Queue resident custody': (
+                ('queue.rs', 'queue/resident_owner_tests.rs', 'resident_owner_tests', 'queue::tests::resident_owner_tests'),
+                ('removed_pending_owner_retains_original_resident_credit_until_last_reader', 'original_queue_shell_refusal_preserves_graph_and_exact_release_then_retries', 'first_queue_resident_ledger_refusal_keeps_original_input_and_retry_pool', 'every_queue_retirement_defers_original_refund_until_its_mutation_fence_releases', 'equal_limit_foreign_state_cannot_replace_original_queue_resident_pool', 'queue_drop_keeps_original_shell_and_ledger_charges_until_detached_last_owner', 'cold_queue_retirement_holds_original_fence_until_first_admission_can_publish')),
+            'native borrowed paid AMX proof custody': (
+                ('sumeragi/amx/native/tests.rs', 'sumeragi/amx/native/tests/paid_borrowed_custody.rs', 'paid_borrowed_custody', 'sumeragi::amx::native::tests::paid_borrowed_custody'),
+                ('native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime',)),
             'native driver scheduling': (
                 ('sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/sched.rs', 'sched', 'sumeragi::driver::tests::sched'),
                 (
@@ -112,6 +110,17 @@ class NativeInventoryTests(unittest.TestCase):
                     'later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner',
                     'global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve',
                 )),
+            'native validator return custody': (
+                ('sumeragi/executor.rs', 'sumeragi/executor_validation_refusal_tests.rs', 'validation_refusal_tests', 'sumeragi::executor::validation_refusal_tests'),
+                (
+                    'original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_execution',
+                    'prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_history',
+                    'successor_context_uses_original_parent_and_bounded_signed_root_without_history_rewalk',
+                    'original_post_merge_validation_refusal_retains_worker_owner_and_exact_available_retry',
+                    'prepared_certificate_busy_retries_same_execution_after_original_reader_release',
+                    'original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry',
+                    'validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source',
+                )),
             'native local empty signature preparation': (
                 ('sumeragi/executor.rs', 'sumeragi/executor_local_signature_preparation_tests.rs', 'local_signature_preparation_tests', 'sumeragi::executor::local_signature_preparation_tests'),
                 (
@@ -135,6 +144,20 @@ class NativeInventoryTests(unittest.TestCase):
                 (
                     'replay_completion_state_read_refusal_retains_original_receipt_and_retries_after_release',
                     'replay_committee_hash_streams_exact_counted_key_preimage',
+                )),
+            'native lane signer custody': (
+                ('sumeragi/lanes/custody.rs', 'sumeragi/lanes/custody/tests.rs', 'tests', 'sumeragi::lanes::custody::tests'),
+                (
+                    'lane_pool_refusal_adapters_preserve_exact_original_release_and_nonwaiting_demands',
+                    'lane_admission_invariants_never_masquerade_as_allocator_or_semantic_failures',
+                    'original_lane_state_admission_refusal_keeps_sample_and_signer_cut',
+                    'original_signer_creation_refusal_preserves_exact_stake_cut_and_last_owner_charge',
+                )),
+            'native lane sample finalizer': (
+                ('sumeragi/lanes/step.rs', 'sumeragi/lanes/step/sample_owner_tests.rs', 'sample_owner_tests', 'sumeragi::lanes::step::sample_owner_tests'),
+                (
+                    'sample_finalizer_foreign_pool_requires_recovery_without_source_or_refund_changes',
+                    'sample_finalizer_exceeds_limit_retains_exact_requested_suffix_demand',
                 )),
             'native certified prefix authority': (
                 ('sumeragi/certified_chain/tests.rs', 'sumeragi/certified_chain/prefix_tests.rs', 'prefix_tests', 'sumeragi::certified_chain::tests::prefix_tests'),
@@ -252,7 +275,7 @@ class NativeInventoryTests(unittest.TestCase):
         self.assertEqual(owner[-1], (
             "streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor",
             "unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader",
-            "streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary",
+            "streamed_prefix_checks_exact_native_quorum_at_retained_empty_epoch_boundary",
             "warmed_epoch_shape_rejects_substituted_context_and_still_checks_each_qc",
             "warmed_reader_rechecks_durable_prefix_and_fresh_view_after_body_removal",
             "standalone_and_scoped_frame_reads_agree_without_skipping_shape_checks",

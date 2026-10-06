@@ -148,7 +148,10 @@ pub mod transcript;
 pub mod verifier;
 
 pub use check::{CheckFailure, CheckMode, CheckReport};
-pub use cs::{CircuitDescriptorV1, ConstraintSystem, CsError, DescriptorError, Expression};
+pub use cs::{
+    CircuitDescriptorV1, CircuitDescriptorV2, ConstraintSystem, CsError, DescriptorError,
+    Expression, InstanceType, TranscriptV2,
+};
 pub use frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value};
 pub use keys::{DescriptorBinding, KeyError, ProvingKey, VerifyingKey};
 pub use pcs::{
@@ -160,9 +163,14 @@ pub use pcs::{
 };
 pub use protocol::{Protocol, ProtocolError, Shape};
 pub use prover::{
-    ProverConfig, ProverError, ProverRandomness, Witness, create_proof, prove_circuit,
+    ProverConfig, ProverError, ProverOutput, ProverRandomness, Witness, create_proof,
+    create_proof_owned, create_proof_owned_with_claim, prove_circuit,
 };
 pub use transcript::{Transcript, TranscriptError, TranscriptRead, TranscriptWrite};
 pub use verifier::{
-    BatchItem, VerifyError, accumulate_succinct, batch_verify, verify_full, verify_full_from_bytes,
+    BatchItem, VerifyError, accumulate_generator, accumulate_succinct, batch_verify, verify_full,
+    verify_full_from_bytes, verify_full_from_bytes_v2,
 };
+
+#[cfg(test)]
+mod pipa_r_tests;

@@ -507,10 +507,7 @@ const ROOTS: &[Root] = &[
         owner: "A.1",
         disposition: "kept in its E51 role as per-block witness roots; ordinary_writes_root stays the new_root of ordinary effects",
         defect: None,
-        domains: &[
-            r"iroha:kagemusha:v1:post-state-root",
-            r"iroha:sumeragi:invalid-exec-witness",
-        ],
+        domains: &[r"iroha:sumeragi:invalid-exec-witness"],
         evidence: &[
             (
                 "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
@@ -739,17 +736,34 @@ const ROOTS: &[Root] = &[
         class: RootClass::ConsensusBinding,
         carrier: "EpochId.context in every Sumeragi core header, vote, QC, timeout vote and timeout certificate; ExecutionResultCommitment.schedule and ExecutionResultCommitment.beacon in the preimage of R; the epoch context identifiers inside the schedule and the beacon pulse",
         keyed: false,
-        scope: "three members. (1) The epoch context identity: the digest of one complete ValidatorEpochContextV1 (committee, authority generation, epoch bounds, leader seed). (2) The schedule of R: the current epoch context, the boundary and the two successor slots, embedded as records. (3) The finalized beacon pulse of R, embedded as a record. Canonical State sources: world.consensus_schedule for (1) and (2), world.global_beacon_pulses for (3)",
-        construction: "(1) flat domain-separated hash of the canonical context; (2) and (3) are not digests of their own: the records are part of the preimage that R hashes",
+        scope: "three members. (1) The epoch context and its exact validator-generation and scheduling-authorization identities: the complete ordered BLS roster, scalar generation, epoch bounds, beacon binding and predecessor. (2) The schedule of R: the current epoch context, the boundary with its immutable E+2 preparation and the two successor slots, embedded as records; the preparation identity binds every frozen election input. (3) The finalized beacon pulse of R, embedded as a record. Canonical State sources: world.consensus_schedule for (1) and (2), world.validator_committee_transitions for the frozen preparation, world.global_beacon_pulses for (3)",
+        construction: "(1) domain-separated identities of the canonical context, exact ordered BLS generation and scheduling authorization; (2) the complete frozen preparation has its own domain-separated identity, while the schedule and (3) pulse records are part of the preimage that R hashes",
         witnesses: "none over State: votes and certificates bind the epoch context, and R binds the schedule and the pulse. Authority follows signed genesis and authenticated predecessor transitions; it does not depend on a State opening authenticated by the certificate being verified",
         owner: "Sumeragi (specs/sumeragi.md §§3, 4.1, 10)",
         disposition: "kept in its specified role under §§3, 4.1 and 10: the binding authenticates no State read, and its canonical State source entries are also committed by the keyed State root",
         defect: None,
-        domains: &[r"iroha:native-validator-epoch:v1"],
+        domains: &[
+            r"iroha:native-validator-epoch:v1",
+            r"iroha:validator-committee-preparation:v1",
+            r"iroha:validator-epoch-authorization:v1",
+            r"iroha:validator-generation:v1",
+        ],
         evidence: &[
             (
                 "crates/iroha_data_model/src/sumeragi/epoch.rs",
                 "const EPOCH_DOMAIN: &[u8] = b\"iroha:native-validator-epoch:v1\";",
+            ),
+            (
+                "crates/iroha_data_model/src/sumeragi/epoch/generation.rs",
+                "const GENERATION_DOMAIN_V1: &[u8] = b\"iroha:validator-generation:v1\";",
+            ),
+            (
+                "crates/iroha_data_model/src/sumeragi/epoch/authorization.rs",
+                "const AUTHORIZATION_DOMAIN_V1: &[u8] = b\"iroha:validator-epoch-authorization:v1\";",
+            ),
+            (
+                "crates/iroha_data_model/src/nexus/committee.rs",
+                "let mut bytes = b\"iroha:validator-committee-preparation:v1\".to_vec();",
             ),
             ("crates/iroha_sumeragi/src/types.rs", "pub context: Hash32,"),
             (
@@ -763,6 +777,10 @@ const ROOTS: &[Root] = &[
             (
                 "crates/iroha_core/src/state/authority_registry/world.rs",
                 "consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule> => (\"world.consensus_schedule\",",
+            ),
+            (
+                "crates/iroha_core/src/state/authority_registry/world.rs",
+                "validator_committee_transitions: Storage<u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1> => (\"world.validator_committee_transitions\",",
             ),
         ],
     },
@@ -1613,7 +1631,7 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
     },
     ConstructionUse {
         path: "crates/iroha_core/src/receiver_snapshot.rs",
-        uses: &[("MerkleTree", 2), ("smt::", 6)],
+        uses: &[("MerkleTree", 2), ("smt::", 5)],
         owner: UseOwner::Roots(&["execution_witness_roots"]),
     },
     ConstructionUse {
@@ -1848,7 +1866,7 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         uses: &[("MerkleTree", 6)],
         owner: UseOwner::Other(
             Use::BlockContent,
-            "Merkle commitments of the block's events, network inputs and typed outputs carried in R, and the KAGEMUSHA top-up tree of one block",
+            "Merkle commitments of the block's events, network inputs and typed outputs carried in R",
         ),
     },
     ConstructionUse {
@@ -2918,35 +2936,6 @@ const WITNESS_FAMILIES: &[WitnessFamily] = &[
         )],
     },
     WitnessFamily {
-        id: "kagemusha_reserve_receipt",
-        tags: &["KagemushaReserveReceipt"],
-        key: "tag byte and the 32-byte operation identifier",
-        value: "canonical KagemushaReserveReceiptV1 of the operation",
-        reads: true,
-        fields: &["world.kagemusha_reserve_operations"],
-        source: "",
-        derivation: &[],
-        accessors: &[],
-        digests: &[],
-        value_types: &[],
-        hashes: &[],
-        opaque: &[],
-        evidence: &[
-            (
-                "crates/iroha_core/src/exec_witness.rs",
-                "pub(crate) fn record_write_kagemusha_reserve_receipt_v1(",
-            ),
-            (
-                "crates/iroha_core/src/exec_witness.rs",
-                "pub(crate) fn record_read_kagemusha_reserve_receipt_v1(",
-            ),
-            (
-                "crates/iroha_core/src/smartcontracts/isi/kagemusha.rs",
-                "crate::exec_witness::record_write_kagemusha_reserve_receipt_v1(&record.reserve_receipt)",
-            ),
-        ],
-    },
-    WitnessFamily {
         id: "fastpq_ordinary_source_statements",
         tags: &["FastpqOrdinarySourceStatements"],
         key: "fixed key of the tag",
@@ -3750,6 +3739,7 @@ const HANDSHAKE_CAPS: &str = "crates/iroha_p2p/src/lib.rs";
 const BLOCK_MODEL: &str = "crates/iroha_data_model/src/block/mod.rs";
 const PAYLOAD_MODEL: &str = "crates/iroha_data_model/src/block/payload.rs";
 const DA_COMMITMENT_MODEL: &str = "crates/iroha_data_model/src/da/commitment.rs";
+const DA_BUNDLE_MODEL: &str = "crates/iroha_data_model/src/da/commitment/commitment_bundle.rs";
 const DA_POLICY_MODEL: &str = "crates/iroha_data_model/src/da/commitment/proof_policy.rs";
 const DA_PIN_MODEL: &str = "crates/iroha_data_model/src/da/pin_intent.rs";
 const CONTEXT_MODEL: &str = "crates/iroha_data_model/src/block/execution_context.rs";
@@ -3867,8 +3857,6 @@ const CARRIERS: &[Carrier] = &[
             (BLOCK_MODEL, "pub struct SignedBlock {"),
             (PAYLOAD_MODEL, "pub(crate) struct BlockPayload {"),
             (PAYLOAD_MODEL, "pub struct BlockResult {"),
-            (DA_COMMITMENT_MODEL, "pub struct DaCommitmentBundle {"),
-            (DA_COMMITMENT_MODEL, "pub struct DaCommitmentRecord {"),
             (DA_POLICY_MODEL, "pub struct DaProofPolicyBundle {"),
             (DA_POLICY_MODEL, "enum Storage {"),
             (DA_POLICY_MODEL, "struct CanonicalParts {"),
@@ -3907,22 +3895,6 @@ const CARRIERS: &[Carrier] = &[
                 HashUse::Block(
                     "key of each transcript group: the execution-call hash of the call that emitted the transcripts",
                 ),
-            ),
-            (
-                "DaCommitmentRecord.client_blob_id",
-                HashUse::Block("client-declared identifier of the DA blob"),
-            ),
-            (
-                "DaCommitmentRecord.manifest_hash",
-                HashUse::Block("digest of the DA manifest of the blob"),
-            ),
-            (
-                "DaCommitmentRecord.chunk_root",
-                HashUse::Block("Merkle root over the chunk digests of the blob"),
-            ),
-            (
-                "DaCommitmentRecord.proof_digest",
-                HashUse::Block("digest of the proof scheduling metadata of the blob"),
             ),
             (
                 "CanonicalParts.policy_hash",
@@ -4079,6 +4051,10 @@ const CARRIERS: &[Carrier] = &[
                 "the block header: walked under the block_header carrier",
             ),
             (
+                "DaCommitmentBundle",
+                "the immutable DA commitment bundle: its exact custody wrapper, canonical contents and record hashes are walked under the da_commitment_bundle carrier",
+            ),
+            (
                 "BlockSignatures",
                 "validator signatures over the block header",
             ),
@@ -4106,14 +4082,9 @@ const CARRIERS: &[Carrier] = &[
             ("DataSpaceId", "dataspace identifier"),
             ("DaProofScheme", "enumeration without a hash payload"),
             (
-                "RetentionClass",
-                "retention class of the blob: no hash payload",
-            ),
-            (
                 "StorageTicketId",
                 "identifier of the storage ticket of the blob",
             ),
-            ("Signature", "signature"),
             (
                 "DaIngestAuthorizationV1",
                 "account authorization and quota charge identity of the DA ingest, signed by the account: proposal input",
@@ -4242,10 +4213,6 @@ const CARRIERS: &[Carrier] = &[
                 "SumeragiConsensusMode",
                 "enumeration without a hash payload",
             ),
-            (
-                "KagemushaMintFinalityGenesisParametersV1",
-                "signed KAGEMUSHA mint-finality authority template: validator keys fixed by genesis, no digest of State",
-            ),
         ],
     },
     Carrier {
@@ -4259,6 +4226,27 @@ const CARRIERS: &[Carrier] = &[
             (EPOCH_GRAPH_MODEL, "pub struct ScheduledConfig {"),
             (EPOCH_MODEL, "pub struct ValidatorEpochContextV1 {"),
             (EPOCH_MODEL, "pub struct ValidatorEpochBoundaryV1 {"),
+            (EPOCH_MODEL, "pub struct ValidatorCommitteeMemberV1 {"),
+            (
+                "crates/iroha_data_model/src/sumeragi/epoch/authorization.rs",
+                "pub struct ValidatorEpochAuthorizationV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/sumeragi/epoch/authorization.rs",
+                "pub enum BeaconEpochBindingV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/sumeragi/epoch/authorization.rs",
+                "pub struct InstalledBeaconEpochBindingV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/nexus/committee.rs",
+                "pub struct ValidatorCommitteePreparationV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/nexus/committee.rs",
+                "pub struct ValidatorElectionPolicyV1 {",
+            ),
             (
                 BEACON_MODEL,
                 "pub struct FinalizedGlobalThresholdBeaconPulseV1 {",
@@ -4294,10 +4282,6 @@ const CARRIERS: &[Carrier] = &[
                 HashUse::State("execution_witness_roots"),
             ),
             (
-                "ExecutionCommitment.kagemusha_top_up_root",
-                HashUse::Block("root of the KAGEMUSHA top-up tree of the block"),
-            ),
-            (
                 "ExecutionCommitment.parent_world_state_root",
                 HashUse::State("world_state_root"),
             ),
@@ -4324,6 +4308,40 @@ const CARRIERS: &[Carrier] = &[
             (
                 "ScheduledSlot.predecessor_context_id",
                 HashUse::State("consensus_authority_binding"),
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.authority_id",
+                HashUse::State("consensus_authority_binding"),
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.previous_authorization_id",
+                HashUse::State("consensus_authority_binding"),
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.transition_id",
+                HashUse::State("consensus_authority_binding"),
+            ),
+            (
+                "InstalledBeaconEpochBindingV1.session_id",
+                HashUse::Block("identifier of the exact installed threshold-beacon session"),
+            ),
+            (
+                "InstalledBeaconEpochBindingV1.transcript_hash",
+                HashUse::Block("commitment to the complete original target DKG transcript"),
+            ),
+            (
+                "ValidatorCommitteePreparationV1.selection_anchor",
+                HashUse::Block(
+                    "hash of the committed parent that supplied the frozen election inputs",
+                ),
+            ),
+            (
+                "ValidatorCommitteePreparationV1.preparing_authorization_id",
+                HashUse::State("consensus_authority_binding"),
+            ),
+            (
+                "ValidatorCommitteePreparationV1.election_seed",
+                HashUse::Block("election randomness derived from the authenticated boundary pulse"),
             ),
             (
                 "ValidatorEpochContextV1.leader_seed",
@@ -4412,38 +4430,160 @@ const CARRIERS: &[Carrier] = &[
                 "the execution commitment: walked as ExecutionCommitment",
             ),
             (
-                "ExecutionCommitment.kagemusha_top_up_count",
-                "number of leaves of the KAGEMUSHA top-up tree of the block",
-            ),
-            (
                 "ExecutionCommitment.executed_block_wire_len",
                 "byte length of the result-bearing block wire",
             ),
+            (
+                "ValidatorCommitteeMemberV1.validator",
+                "exact canonical BLS-normal peer identity",
+            ),
+            (
+                "ValidatorCommitteeMemberV1.proof_of_possession",
+                "original BLS proof of possession for this exact peer",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.version",
+                "sole first-release authorization layout version",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.network_id",
+                "genesis-derived network of the authorized generation",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.epoch",
+                "monotonic scheduling epoch",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.first_height",
+                "inclusive first height of this authorization",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.last_height",
+                "inclusive last height of this authorization",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.authority_generation",
+                "scalar generation of the exact ordered BLS committee",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.beacon",
+                "exact beacon authority, walked as BeaconEpochBindingV1",
+            ),
+            (
+                "ValidatorEpochAuthorizationV1.decision",
+                "incumbent-certified scheduling disposition",
+            ),
+            (
+                "BeaconEpochBindingV1.Bootstrap",
+                "explicit signed-genesis bootstrap state",
+            ),
+            (
+                "BeaconEpochBindingV1.Installed",
+                "exact installed beacon binding, walked as InstalledBeaconEpochBindingV1",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.version",
+                "sole first-release preparation layout version",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.network_id",
+                "genesis-derived network of the frozen election",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.selection_epoch",
+                "epoch whose final prestate supplied the election",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.selection_height",
+                "boundary height whose incumbent quorum froze the election",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.target_epoch",
+                "immutable target scheduling epoch",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.first_height",
+                "inclusive target activation height",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.last_height",
+                "inclusive end of the target scheduling interval",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.authority_generation",
+                "successor scalar generation for the exact frozen committee",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.eligibility",
+                "exact signed eligibility policy, walked as ValidatorElectionPolicyV1",
+            ),
+            (
+                "ValidatorCommitteePreparationV1.committee",
+                "complete ordered target BLS roster and original proofs of possession",
+            ),
+            (
+                "ValidatorElectionPolicyV1.xor_asset_definition_id",
+                "canonical XOR asset identity authenticated by the selecting network",
+            ),
+            (
+                "ValidatorElectionPolicyV1.asset_scope",
+                "frozen global custody bucket",
+            ),
+            (
+                "ValidatorElectionPolicyV1.asset_scale",
+                "frozen canonical XOR precision",
+            ),
+            (
+                "ValidatorElectionPolicyV1.min_self_bond",
+                "exact frozen minimum self-bond quantity",
+            ),
+            (
+                "ValidatorElectionPolicyV1.min_nomination_bond",
+                "exact frozen minimum nomination quantity",
+            ),
+            (
+                "ValidatorElectionPolicyV1.max_validators",
+                "bounded equal-vote committee selection ceiling",
+            ),
+            (
+                "ValidatorElectionPolicyV1.epoch_length_blocks",
+                "complete target scheduling interval length",
+            ),
         ],
-        exhaustive: &["ExecutionResultCommitment", "ExecutionCommitment"],
+        exhaustive: &[
+            "ExecutionResultCommitment",
+            "ExecutionCommitment",
+            "ValidatorCommitteeMemberV1",
+            "ValidatorEpochAuthorizationV1",
+            "BeaconEpochBindingV1",
+            "InstalledBeaconEpochBindingV1",
+            "ValidatorCommitteePreparationV1",
+            "ValidatorElectionPolicyV1",
+        ],
         opaque: &[
             ("ChainParamsRecord", "chain parameters: numbers"),
             ("NetworkId", "network identity fixed at genesis"),
             ("ConsensusMode", "enumeration without a hash payload"),
             (
+                "PeerId",
+                "exact BLS public-key identity of one ordered validator seat",
+            ),
+            (
+                "ValidatorEpochDecisionV1",
+                "closed scalar scheduling-disposition enumeration without a hash payload",
+            ),
+            (
+                "AssetDefinitionId",
+                "canonical identity of the frozen XOR definition, not a State digest",
+            ),
+            (
+                "AssetBalanceScope",
+                "global or dataspace custody identifier, not a State digest",
+            ),
+            ("Quantity", "canonical fixed-scale stake quantity"),
+            (
                 "DataAvailabilityLayout",
                 "payload availability geometry: numbers",
-            ),
-            (
-                "KagemushaMintFinalityAuthorityGenerationV1",
-                "authority generation of the epoch context: validator keys and the generation identifier, part of the embedded context",
-            ),
-            (
-                "KagemushaMintFinalityEpochAuthorizationV1",
-                "epoch authorization of the epoch context: bounds and the identifiers of the authority, the previous authorization and the transition, part of the embedded context",
-            ),
-            (
-                "ValidatorCommitteeMemberV1",
-                "committee member: peer identity and proof of possession",
-            ),
-            (
-                "ValidatorCommitteePreparationV1",
-                "preparation of the next committee: its selection anchor and election seed, part of the embedded boundary",
             ),
         ],
     },
@@ -4792,6 +4932,104 @@ const CARRIERS: &[Carrier] = &[
             ("ControlFrame", "Norito Streaming control-plane frame"),
         ],
     },
+    Carrier {
+        id: "da_commitment_bundle",
+        object: "the immutable DA commitment bundle in BlockPayload.da_commitments, committed by BlockHeader.da_commitments_hash. Only its version and ordered commitment records are serialized; its storage variants retain local allocation custody",
+        types: &[
+            (DA_BUNDLE_MODEL, "pub struct DaCommitmentBundle {"),
+            (DA_BUNDLE_MODEL, "enum Storage {"),
+            (DA_BUNDLE_MODEL, "struct CanonicalParts {"),
+            (DA_COMMITMENT_MODEL, "pub struct DaCommitmentRecord {"),
+        ],
+        hashes: &[
+            (
+                "DaCommitmentRecord.client_blob_id",
+                HashUse::Block("client-declared identifier of the DA blob"),
+            ),
+            (
+                "DaCommitmentRecord.manifest_hash",
+                HashUse::Block("digest of the DA manifest of the blob"),
+            ),
+            (
+                "DaCommitmentRecord.chunk_root",
+                HashUse::Block("Merkle root over the chunk digests of the blob"),
+            ),
+            (
+                "DaCommitmentRecord.proof_digest",
+                HashUse::Block("digest of the proof scheduling metadata of the blob"),
+            ),
+        ],
+        embeds: &[],
+        reviewed: &[],
+        content: &[
+            (
+                "DaCommitmentBundle.storage",
+                "the immutable canonical parts and their local custody: walked as Storage",
+            ),
+            (
+                "Storage.Untrusted",
+                "untrusted transport canonical parts: walked as CanonicalParts",
+            ),
+            (
+                "Storage.Admitted",
+                "the same original canonical parts retained with their allocation custody: walked as CanonicalParts",
+            ),
+            (
+                "CanonicalParts.version",
+                "sole first-release bundle version",
+            ),
+            (
+                "CanonicalParts.commitments",
+                "ordered original commitment records whose Merkle commitment the block header binds: walked as DaCommitmentRecord",
+            ),
+            ("DaCommitmentRecord.lane_id", "lane of the DA blob"),
+            (
+                "DaCommitmentRecord.epoch",
+                "scheduling epoch of the DA blob",
+            ),
+            (
+                "DaCommitmentRecord.sequence",
+                "monotonic sequence within the lane and epoch",
+            ),
+            (
+                "DaCommitmentRecord.proof_scheme",
+                "proof scheme required for the target lane",
+            ),
+            (
+                "DaCommitmentRecord.retention_class",
+                "retention policy of the DA blob",
+            ),
+            (
+                "DaCommitmentRecord.storage_ticket",
+                "storage ticket binding the DA blob to replication state",
+            ),
+            (
+                "DaCommitmentRecord.acknowledgement_sig",
+                "signature of the Torii DA service over its commitment acknowledgement",
+            ),
+        ],
+        exhaustive: &[
+            "DaCommitmentBundle",
+            "Storage",
+            "CanonicalParts",
+            "DaCommitmentRecord",
+        ],
+        opaque: &[
+            (
+                "ChargedShared",
+                "shared immutable allocation custody of the original canonical parts",
+            ),
+            (
+                "RetainedPayload",
+                "the original canonical parts and their allocation ledger",
+            ),
+            ("LaneId", "lane identifier"),
+            ("DaProofScheme", "enumeration without a hash payload"),
+            ("RetentionClass", "retention policy without a hash payload"),
+            ("StorageTicketId", "storage ticket identifier"),
+            ("Signature", "signature"),
+        ],
+    },
 ];
 
 /// The types of one carrier, read from their sources.
@@ -4896,6 +5134,15 @@ fn check_carriers() {
         assert!(ids.insert(carrier.id), "{} is listed twice", carrier.id);
         assert!(!carrier.object.is_empty(), "{}", carrier.id);
         let types = carrier_types(carrier);
+        let mut type_names = BTreeSet::new();
+        for (name, _) in &types {
+            assert!(
+                type_names.insert(*name),
+                "protocol carrier {} walks duplicate type name {name}: give identically named \
+                 declarations from different modules their own carriers",
+                carrier.id
+            );
+        }
         let unclassified = unclassified_value_fields(&types, carrier.hashes, carrier.opaque);
         assert!(
             unclassified.is_empty(),
@@ -6791,6 +7038,20 @@ fn source_scan_classifies_every_domain_literal_and_construction_use() {
             .contains(&"fastpq:v1:permission-table:blake2b-256")
     );
 
+    // The exact prospective-seat statement has a record digest, not a State-opening root.
+    // Its sole model producer remains visible to the ordinary occurrence/source inventory.
+    assert_eq!(
+        owners.get("iroha:validator-seat-readiness:v1"),
+        Some(&DomainOwner::Other(Use::Record))
+    );
+    assert_eq!(
+        scan.literal_uses["iroha:validator-seat-readiness:v1"],
+        BTreeMap::from([(
+            "crates/iroha_data_model/src/nexus/committee.rs".to_owned(),
+            1_usize
+        )])
+    );
+
     // Negative controls. Each probe is a source text at a path outside the State owner.
     let unlisted = |path: &str, text: &str| -> Vec<String> {
         scan_sources([(path, text)])
@@ -6811,7 +7072,8 @@ fn source_scan_classifies_every_domain_literal_and_construction_use() {
     for literal in [
         "iroha:world-state:shadow:v1\\0",
         "iroha:state:shadow-codec:v1",
-        "iroha:kagemusha:v1:shadow-record",
+        "iroha:kagemusha:wallet:v1:shadow-record",
+        "iroha:validator-seat-readiness:shadow:v1",
         "fastpq:v2:permission-table:blake2b-256",
     ] {
         assert_eq!(
@@ -8306,6 +8568,50 @@ fn protocol_carriers_classify_every_hash_bearing_field() {
             ),
         ]
     );
+    // The current authority graph is walked from its actual wire fields. A new hash,
+    // scalar or nested type in either original authorization or frozen preparation cannot
+    // hide behind an opaque authority-generation record.
+    let authority = carrier("execution_result");
+    let mut authority_types = carrier_types(authority);
+    for (name, field, kind) in [
+        (
+            "ValidatorEpochAuthorizationV1",
+            "shadow_generation",
+            "[u8; 32]",
+        ),
+        ("ValidatorCommitteePreparationV1", "shadow_selection", "u64"),
+        (
+            "ValidatorElectionPolicyV1",
+            "shadow_policy",
+            "UnknownPolicy",
+        ),
+    ] {
+        let at = authority_types
+            .iter()
+            .position(|(known, _)| *known == name)
+            .unwrap();
+        authority_types[at]
+            .1
+            .push((field.to_owned(), kind.to_owned()));
+        assert_eq!(
+            unlisted_carrier_fields(authority, &authority_types),
+            [format!("unclassified field {name}.{field}: {kind}")]
+        );
+        let unclassified =
+            unclassified_value_fields(&authority_types, authority.hashes, authority.opaque);
+        match kind {
+            "[u8; 32]" => assert_eq!(
+                unclassified,
+                [format!("unclassified hash field {name}.{field}: {kind}")]
+            ),
+            "UnknownPolicy" => assert_eq!(
+                unclassified,
+                [format!("unclassified nested type {kind} in {name}.{field}")]
+            ),
+            _ => assert!(unclassified.is_empty()),
+        }
+        authority_types[at].1.pop();
+    }
     // Sources outside the two scanned crates are read: the core messages and the
     // handshake capabilities.
     for (id, crate_path) in [
@@ -8501,15 +8807,43 @@ fn protocol_carriers_classify_every_hash_bearing_field() {
         ["unclassified field BlockPayload.shadow_epoch: u64"]
     );
     body_types[payload_at].1.pop();
-    let bundle = position(&body_types, "DaCommitmentBundle");
-    body_types[bundle]
+    // The commitment bundle has its own carrier so its private Storage/CanonicalParts
+    // declarations cannot alias the proof-policy wrapper's identically named types.
+    let da = carrier("da_commitment_bundle");
+    let mut da_types = carrier_types(da);
+    let bundle = position(&da_types, "DaCommitmentBundle");
+    da_types[bundle]
         .1
         .push(("shadow_root".to_owned(), "Option<Hash>".to_owned()));
     assert_eq!(
-        unclassified_value_fields(&body_types, body.hashes, body.opaque),
+        unclassified_value_fields(&da_types, da.hashes, da.opaque),
         ["unclassified hash field DaCommitmentBundle.shadow_root: Option<Hash>"]
     );
-    body_types[bundle].1.pop();
+    assert_eq!(
+        unlisted_carrier_fields(da, &da_types),
+        ["unclassified field DaCommitmentBundle.shadow_root: Option<Hash>"]
+    );
+    da_types[bundle].1.pop();
+    let parts = position(&da_types, "CanonicalParts");
+    da_types[parts]
+        .1
+        .push(("policy_hash".to_owned(), "Hash".to_owned()));
+    assert_eq!(
+        unclassified_value_fields(&da_types, da.hashes, da.opaque),
+        ["unclassified hash field CanonicalParts.policy_hash: Hash"]
+    );
+    assert_eq!(
+        unlisted_carrier_fields(da, &da_types),
+        ["unclassified field CanonicalParts.policy_hash: Hash"]
+    );
+    da_types[parts].1.pop();
+    da_types[parts]
+        .1
+        .push(("shadow_epoch".to_owned(), "u64".to_owned()));
+    assert_eq!(
+        unlisted_carrier_fields(da, &da_types),
+        ["unclassified field CanonicalParts.shadow_epoch: u64"]
+    );
     let effects = position(&body_types, "NposConsensusEffects");
     body_types[effects]
         .1

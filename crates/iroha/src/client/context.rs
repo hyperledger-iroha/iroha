@@ -213,7 +213,7 @@ impl ClientBuilder {
             wire_format_preference: self.wire_format_preference,
             http_transport: match self.http_transport {
                 Some(transport) => transport,
-                None => DefaultHttpTransport::new()?,
+                None => DefaultHttpTransport::new(),
             },
             stream_transport: self
                 .stream_transport

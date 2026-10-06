@@ -1,161 +1,194 @@
 # iroha_kagemusha_proof
 
-Native-only KAGEMUSHA step relations on the PIPA-v1 engine (`iroha_plonk`,
-`specs/plonk_ipa_v1.md`). This crate is the compilation boundary of KAGEMUSHA
-relations built on the native stack. It links `iroha_pasta`, `iroha_plonk` and
-`iroha_plonk_gadgets` only, never the vendored halo2 stack or `iroha_core_zk`.
+Native KAGEMUSHA step relations on PIPA-R (`iroha_plonk`). The crate depends
+on `iroha_pasta`, `iroha_plonk`, `iroha_plonk_gadgets` and
+`iroha_plonk_recursion`; it does not depend
+on the legacy proving stack or node execution.
 
-## Status
+The σ API fixes the base-field RP57 transcript, Direct instances, the folded
+IPA generator suffix, and one `Bounded` public-input column. Keys use the
+canonical V2 descriptor; the reader rejects V1 descriptors and other transcript
+or instance profiles. The `kgwvkey1` base-field Poseidon verifying-key digest
+binds the descriptor digest, transcript representation, counts and ordered
+commitment coordinates. The shared engine owns this digest definition.
 
-The split-lineage step relations `sigma_send` and `sigma_recv`
-(`specs/kagemusha_single_design_proposal.md` sections 3, 3.2, 5.1 and 7) in the
-G1 wallet layout of `iroha_data_model` (`specs/kagemusha_wallet_wire_v1.md`
-section 3.2). The domains, element lists, commitment, chains, `credit_id` and
-statement are the G1 ones, pinned by the shared vectors of
-`fixtures/kagemusha/wallet_v1_vectors.json`. No protocol path uses the
-relations yet. The artifact set (frozen verifying keys, their digest rule and
-the exact proof lengths of the allowlist) is G3 work.
+## Protocol layout
 
-Open (TODO(G3) in `src/witness.rs`): with the blacklist control, `sigma_send`
-enforces only the maximum list age; the recipient non-membership opening, the
-quota windows and usage update and the lease check are not implemented. A
-relation enabling a quota or lease bit is refused (`ParamsError::Relation`),
-and no relation with an enabled control may be frozen into an allowlist yet.
+The implementation follows G1 revision 4 and owner decisions B1, B5–B8 in
+`specs/kagemusha_wallet_wire_v1.md`. Shared vectors in
+`fixtures/kagemusha/wallet_v1_vectors.json` pin each field and digest.
 
-## Relations
+- The core has 33 fields and the rest has 8. The head is
+  `P(kgwcore1, core || P(kgwrest1, rest))`; σ carries the rest digest.
+- Poseidon digests are single canonical field elements. SHA-256 identifiers
+  and byte nonces remain two little-endian `u128` limbs. Noncanonical
+  Poseidon bytes are rejected before synthesis or native consumer acceptance.
+- `credit_id = P(kgwcrdt1, Request body)` binds all 26 Request fields,
+  including both account digests and the receiver's recorded blacklist
+  version and root. The public input is the 26-field statement digest under
+  `kgwstmt1`; its effect union has 9 fields.
+- Send chains have 8 fields: prior chain, credit, receiver wallet limbs,
+  ordinal, amount, fee, Request digest. Receive chains have 5 fields: prior
+  chain, credit, payer wallet limbs, amount.
 
-`sigma_send` and `sigma_recv` (`SigmaCircuit`) on Pow5 sponge lanes,
-running-sum range checks, checked `u128`/`u64` arithmetic and glue gates. A
-`SigmaRelation` is a step with the enabled-controls mask its verifying key is
-selected by: `(3, mask)` for `sigma_send` and the implemented `(4, 0)` for
-`sigma_recv`. G1 also defines `(4, 1)` for Receive with BLACKLIST; that proof
-relation remains open. The consumer rejects its selection until it exists and
-never substitutes the empty-mask key. Other defined receiver control bits do not
-change the Receive selector.
+Both steps open an Active or Retiring predecessor, require distinct payer
+and receiver wallets and a nonzero amount, advance sequence without
+overflow, append a chain and commit the successor. Send debits `amount +
+fee` from balance while preserving the lineage's burned-value restriction,
+advances its ordinal, checks policy epoch and monotonic accepted time, and
+raises the time floor. Receive credits without overflow and matches an
+issued Request by wallet identity, so credential renewal does not invalidate
+it. Pending, fee and consumed-credit transitions belong to native Advance
+and Λ; σ binds their carried successor roots.
 
-- **Hashes.** `P(d, items)` is the RP57 Poseidon `hash_with_domain` over Pasta
-  `Fp`, under the G1 domains `kgwcore1`, `kgwrest1`, `kgwcrdt1`, `kgwschn1`,
-  `kgwrchn1` and `kgwstmt1`. An integer is one element, a 32-byte digest two
-  `u128` limbs, a `P` value one element.
-- **State.** A 32-element core (lifecycle; scheme id, asset digest, `wallet_id`
-  and credential digest; balance, `burned_total`, sequence and the send, load
-  and redeem ordinals; both chains; the consumed-credit, pending-outgoing,
-  load/redeem-recovery, fee-claim and quota-usage roots; the enabled-controls
-  mask; the quota-windows root; the blacklist version, root, issue time and
-  maximum age; the lease expiry; the policy epoch; the accepted-time floor; the
-  state nonce) and a 13-element rest. The head commitment is one `Fp` value,
-  `P(kgwcore1, core || P(kgwrest1, rest))` (owner answer Q10): 17 folded
-  permutations per opening. The rest digest is carried; no step relation opens
-  the rest.
-- **Both steps.**
-  - Open the predecessor commitment and require the lifecycle to be Active or
-    Retiring, carried unchanged (a Retiring wallet keeps sending and
-    receiving, spec section 6.3).
-  - Require a nonzero `u128` amount and `sequence + 1 < 2^128`.
-  - Derive `credit_id = P(kgwcrdt1, 28-element Request body)` in circuit,
-    binding the payer and receiver account digests beside their wallets: one
-    element (owner answer Q1). The Request's scheme, asset and own wallet are
-    the opened core cells.
-  - Require distinct payer and receiver wallets.
-  - Commit the successor with a fresh state nonce. Roots the step updates are
-    carried witnesses; the others are copied. Spec section 3.2 assigns root
-    transitions to the native Advance check and to the lineage relation.
-- **`sigma_send`.**
-  - Takes `burned_total` and the pending-outgoing root of the predecessor's
-    lineage proof as public inputs (in the statement).
-  - Requires the core's enabled-controls mask to be its relation's.
-  - Checks `amount + fee < 2^128` and `amount + fee <= balance - burned_total`.
-    The successor balance is `balance - amount - fee`, and its `burned_total`
-    is the lineage input.
-  - Advances the send ordinal without overflow. Requires
-    `request_policy_epoch <= policy_epoch` and
-    `max(accepted_time_floor, request_time) <= lower <= upper` (all `u64`),
-    and raises the successor's floor to `lower`.
-  - With the blacklist control (owner answer Q5): while a list is held under
-    an age rule, `issued_at <= upper <= issued_at + max_age` (the native G1
-    `check_blacklist` age check), as two gated range checks.
-  - `send_chain' = P(kgwschn1, [send_chain, credit_id, receiver (2), ordinal,
-    amount, fee, Request digest (2)])`.
-- **`sigma_recv`.**
-  - Matches the Request's receiver by the core `wallet_id` inside
-    `credit_id`. The Request's receiver credential digest is a Request term,
-    never compared with the core's (owner answer Q8), so a Request quoted
-    before a renewal stays receivable after it. The `payment_key` match is
-    the native Payment check and `Λ_recv`'s.
-  - Credits the amount without overflow;
-    `recv_chain' = P(kgwrchn1, [recv_chain, credit_id, payer (2), amount])`.
-- **Public input.** The digest of the 28-element G1 statement under
-  `kgwstmt1` (`KagemushaWalletStatementV1::field_items`): version, the
-  scheme-level relation identity (two limbs, a witness bound by the digest; it
-  cannot be a circuit constant because it binds the verifying-key set),
-  scheme, asset, credential, successor lifecycle, sequence and `next_load`,
-  mask, the lineage inputs of a Send, both commitments, the effect tag and a
-  10-element effect union.
+## Recursive sigma leaf
 
-`StepWitness::evaluate` is the native reference. It returns every digest, the
-successor and the relation `Violation`s. The circuit compares every in-circuit
-digest with it while the witness is known.
+`q_sigma` checks own σ hard and optional incoming σ soft on one shared
+verifier lane. It binds the complete witness-key digest to a circuit-fixed
+allowlist and exports the same LE32-length-prefixed proof bytes in 31-byte
+chunks (107 for k12 and 112 for k14). The parent A relation recomputes the
+statement digest and checks the operation/mask selector and global mode rule.
+One σ forwards a checked source-k claim; two σ use a hard local PIPA-AS fold
+with the selected incoming claim and an explicit pinned k16 trivial input.
+Public columns have explicit homogeneous PIPA-R types. These component
+constraints remain separate from final recursive artifact qualification.
 
-`consumer::check_send` and `consumer::check_receive` are the native spec
-section 3.2 checks a package consumer runs before verifying the proof: the
-relation identity, the predecessor, credential, scheme, lifecycle, mask,
-`burned_total` and pending-outgoing root against the lineage proof
-(`LineageView`), and the scheme, asset, wallets, amounts and `credit_id`
-against the Request body. They return the relation whose verifying key the
-consumer selects and the public input.
+## Bootstrap composition
 
-## Shapes and proofs
+`admin_sigma::BootstrapCircuit` proves the exact zero-value initial G1 state,
+empty maps/counters and statement binding at k12 with five advice columns;
+its PIPA-R proof is 3,296 bytes. A authenticates the state credential and the
+same-byte certificate/credential/receipt transcripts through the separate
+2-variable/1-fixed signature Q. `a_relation::bootstrap` pins scheme, provider
+and root policy and requires the credential, state/key and receipt bindings.
 
-- `select_shape` chooses the smallest `k`, then the fewest lanes, at which a
-  key-generation synthesis fits. A proof byte budget is optional; the default
-  is the 3.5 KB gate. Proof lengths are exact, taken from the descriptor.
-- Shapes (folded prefixes; `sigma_send` 69 permutations with or without the
-  blacklist control, `sigma_recv` 67):
+The actual sigma → Q_sigma → A1 → W → A2 test fits k16 and independently
+decides every retained claim. Its context and every deferred opening are
+retained; signature-role/root substitutions and dropped obligations fail.
+See `specs/kagemusha_a_split_context_v1.md`. This is operation composition,
+not final Omega/artifact, hardware, time/RSS or wallet acceptance qualification.
 
-  | `k` | Lanes (fewest that fit) | Proof |
-  | --- | --- | --- |
-  | 12 | 1 (the selector's choice within 3.5 KB) | 3,296 B |
-  | 11 | 2 | 3,840 B |
-  | 10 | 4 (the smallest `k`) | 5,120 B |
+## Load components
 
-- The glue chip shares the columns of the least loaded lane, in the rows after
-  its last permutation block.
-- `SigmaProver` derives the parameters, generates keys and proves. It refuses
-  a witness that breaks the relation.
-- `KeyOptions` trades memory for speed and never changes a key or proof byte.
-  The default has no fixed-base commitment tables.
-- `SigmaVerifier` needs only the descriptor bytes, the verifying-key bytes and
-  the pinned parameters. `SigmaAllowlist` holds one verifier per selector,
-  selects by `(tag, mask)` and emits the G1 allowlist entries (selector,
-  verifying-key digest, exact proof length). The verifying-key digest is the
-  PIPA-v1 `transcript_repr` of the key (an interim choice; TODO(G3)).
-- The format is the KAGEMUSHA step format: RP57 Poseidon transcript, Direct
-  instances and the folded-generator suffix.
+`admin_sigma::LoadCircuit` proves both state openings, exact arithmetic,
+continuity and unchanged fields on the five-column k12 class (3,296 bytes).
+`a_relation::load` parses one certificate/voucher/receipt tape per object,
+requires the LoadAuthorization certificate role and fixed scheme-root policy,
+and binds the finalized voucher and receipt to the same state, statement and
+sigma proof digest. Its recovery method proves the exact depth32 insertion.
+The actual two-variable/one-fixed signature Q is 7,936 bytes. These components
+are being joined to the genuine rooted Bootstrap predecessor through the fixed
+predecessor-first A context. The fixed A1→W1→A2→W2→A3 chain separates
+predecessor/recovery, Q_sigma, and signature/authorization. All three stages
+fit k16 with five shared range buses and actual 8,960-byte A proofs, retaining
+the complete original context and every P/V carry. The four-bus Q_sigma stage
+exceeds k16. A common Bootstrap/Load descriptor, complete final Omega catalog,
+root-digest rebinding and final resource qualification remain open.
+The object/map component alone uses 19,092 sponge rows and 1,986 UInt rows on
+shared A lanes, before recursive verification and signature authorization.
 
-## Tests
+## Send composition
 
-| File | What it covers |
-| --- | --- |
-| `tests/digest_parity.rs` | The native reference against `fixtures/native_prover/kats_v1.json`; the G1 vectors of `fixtures/kagemusha/wallet_v1_vectors.json` (domains, core and rest elements, rest digest, commitment, `credit_id`, both chain appends, both statements, and the named, pairwise-distinct `controlled_state` that pins every commitment position) natively and in circuit; in-circuit digests equal native ones on both fields; pinned known answers. |
-| `tests/relation_checks.rs` | The 20 range-check cases in the strict constraint checker (three relations, two Poseidon prefix modes): each honest witness plus its mutations (including a debit that ignores the lineage `burned_total` and a stale or future blacklist). Every rejection is a range-check limb lookup. Every other rule, broken alone, and the integer and list-age boundaries, on all six shapes. In release, the per-cell tamper sweep on every honest case. |
-| `tests/forgeries.rs` | Consistent-forgery tests, one per soundness rule: identity, receiver binding by `wallet_id` (Q8), `credit_id`, `burned_total`, the blacklist age under the mask-selected relation (Q5), self-payment, accepted time, the opened commitments and the relation identity. |
-| `tests/real_proofs.rs` (release) | The 20 cases as real proofs. Honest proofs verify. The library and the engine refuse each mutated witness. A forger who zeroes the failing range checks gets a proof the verifier rejects. Every flipped proof byte is rejected. Proofs on Pallas also verify. A forged identity proves only its own head. A proof verifies only under its own allowlist selector. Keys and proofs are identical on 1, 2, 4 and 7 threads. |
-| `tests/shapes.rs` | Shape selection, the pinned shapes at `k = 12, 11, 10`, inventories, and verifiers rebuilt from bytes. |
-| `tests/measure.rs` (ignored, release only) | The M12 measurement harness and footprint workloads. |
+`a_relation::send` binds the exact payer credential, signed Request and held-fee
+slot to the same state/statement cells and depth32 pending and fee map paths.
+Zero held fees permit a total malformed dummy slot; enabled fees require the
+exact held schedule and arithmetic. The Request signature belongs to its
+receiver's obligation, so Send has no extra local signature Q.
 
-Validate:
+Actual mask0 sigma and object/map components pass, including missing or replaced
+map writes and cross-object substitution. The five-bus component uses35k sponge
+rows before recursive proofs. The fixed task schedule can place ownership,
+pending and fee/carry checks in separate stages and commits those assignments in
+`D_ctx`; metadata alone never proves an operation. Complete rooted Send remains
+pending the common canonical Bootstrap/Load Omega catalog and digest rebind.
+
+## Controls
+
+Send's verifying key is selected by the opened core mask. Receive's key is
+selected by the Request's recorded version: `(4, 0)` for zero, `(4, 1)` for
+nonzero. Its current core mask is still restricted to defined bits and is
+carried in the statement, but does not select Receive enforcement.
+
+- **Blacklist:** a depth-16 gap opening in limb order proves the
+  counterparty absent. Send uses the payer's current committed list and
+  enforces its maximum age. Receive uses the receiver's list recorded in
+  the Request, regardless of later list or mask changes. Version zero is
+  valid exactly with root zero.
+- **Quotas:** the depth-6 window tree and the aligned depth-6 usage array
+  have exactly 64 slots. A usage leaf is
+  `P(kgwquse1, [kind, start, end, used])`; usage nodes use `kgwqusn1`.
+  Each touched window is charged once at its own slot, within its limit,
+  against the running usage root. Four consecutive window openings per
+  kind establish that the two candidates include every touched window.
+  Padding slots retain zero usage. There is no quota indexed map or quota
+  insertion path.
+- **Quota time:** σ requires `upper < quota_share_expires_at_ms` and
+  `upper - lower <= time_anchor_max_response_ms`, authenticated core fields.
+  Native installation/Λ require windows longer than the span bound; hence
+  at most two windows of each kind can be touched.
+- **Lease:** Send requires `upper < lease_expires_at_ms` when enabled.
+
+`StepWitness::evaluate` reports native violations and every derived digest.
+The circuit compares its digests with that reference during synthesis with
+known witnesses. `check_send` and `check_receive` compare a statement with
+the Request and, for Send, Ω's public lineage view before returning the
+verifying-key selector and public digest.
+
+## Shapes and proof bytes
+
+Folded-prefix shapes, fewest lanes that fit:
+
+| Relation | Permutations | Smallest shape | One-lane budget shape |
+| --- | ---: | --- | --- |
+| Send, no controls or lease | 69 | k10 / 4 lanes, 5,120 B | k12, 3,296 B |
+| Receive, no recorded list | 67 | k10 / 4 lanes, 5,120 B | k12, 3,296 B |
+| Send, blacklist | 106 | k11 / 2 lanes, 3,840 B | k12, 3,296 B |
+| Receive, recorded list | 104 | k11 / 2 lanes, 3,840 B | k12, 3,296 B |
+| Send, quotas | 309 | k12 / 4 lanes, 5,280 B | k14, 3,456 B |
+| Send, all controls | 345 | k12 / 4 lanes, 5,280 B | k14, 3,456 B |
+
+The k14 one-lane quota shapes occupy 12,123 and 13,542 rows respectively.
+Their 3,456-byte proofs fit the current 3,541-byte σ share of the joint
+Payment budget. These are exact descriptor lengths; performance and memory
+qualification are separate gates. `select_shape` synthesizes candidates and
+can impose a byte budget. Keys, descriptors and proof bytes are independent
+of the Rayon pool size and optional commitment tables.
+
+`SigmaProver` generates keys and rejects invalid witnesses. `SigmaVerifier`
+rebuilds from descriptor/key bytes and pinned parameters. `SigmaAllowlist`
+selects by `(operation tag, mask)`. Freezing the production artifact set and
+integrating Λ/Ω with wallet and node paths remain separate G3–G5 work; this
+crate's σ implementation alone does not establish complete protocol readiness.
+
+## Validation
+
+`q_signature` implements ordered hard/soft P-256 signature leaves on the
+17-advice/10-lookup Q layout. One Bounded public column contains ten words
+per slot: digest, x/y/r/s as low128/high128, then verdict. Raw 256-bit
+integers remain unreduced until the total P-256 checks. The existing SHA
+codec binds the canonical Fp digest's LE bytes. Fixed keys and slot modes
+are part of the circuit; A still binds these public words to object bytes,
+certificate purpose and the global branch rule. The 5-variable/1-fixed
+component uses 64,238 rows at k16. Signature proofs, exact-input mutations,
+raw-width boundaries and every bridge cell are tested. This is not a
+composed operation or runtime qualification.
+
+- `digest_parity`: every G1 field encoding, named controlled-state positions,
+  hashes, packing domains, fixed64 usage roots/openings and in-circuit parity
+  on both fields; deterministic known answers.
+- `controls`: blacklist snapshot enforcement, zero version/root agreement,
+  exact expiry/span boundaries, repeated/misaligned/out-of-range slots,
+  forged usage roots and noncanonical Poseidon bytes.
+- `relation_checks` and `forgeries`: arithmetic boundaries, every step rule,
+  wrong-head and consistent-forgery attacks, and release per-cell tampering.
+- `shapes`: exact shapes, row counts, joint byte budget and verifier rebuilds.
+- `real_proofs`: real valid and rejected proofs, selector binding, byte
+  tampering and deterministic keys/proofs; quota shapes use k14.
+- `measure`: ignored diagnostic throughput/footprint workloads. They are not
+  the fresh-process qualification procedure in the design record.
 
 ```sh
 cargo test -p iroha_kagemusha_proof
-cargo test --release -p iroha_kagemusha_proof -- --include-ignored --skip m12_
+cargo test --release -p iroha_kagemusha_proof --test real_proofs -- --include-ignored
 cargo clippy -p iroha_kagemusha_proof --all-targets -- -D warnings
-```
-
-Measure one case per process, in release. The harness reads process CPU time
-from `clock_gettime(CLOCK_PROCESS_CPUTIME_ID)`, runs 20 proofs per series and
-prints min/median/p95/max with the load average of every run; a series with
-`load1 >= 4` is marked `gate_grade=false`:
-
-```sh
-/usr/bin/time -l <measure binary> m12_send_k12 --exact --ignored --nocapture --test-threads=1
 ```

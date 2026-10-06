@@ -7,11 +7,8 @@ import android.content.Context
 import java.io.File
 import java.io.IOException
 
-// TODO(G2-bridge): implement the Rust `KagemushaWalletPlatformV1` JNI adapter in
-// `crates/connect_norito_bridge/src/platform_jni/kagemusha_wallet_advance.rs` over the private
-// upcalls of [KagemushaWalletAndroidPlatformV1] (upcalls run on attached worker threads; a
-// thrown upcall exception maps to `Unavailable(Platform(0))`), and add the native provider open
-// call that takes this handle. `boot_id` and `monotonic_ms` keep their native Rust defaults.
+// Rust JNI retains this opaque object and calls nativeCall from attached worker threads.
+// TODO(G3/G4): authenticated operation/Λ/Ω artifact loading still gates native wallet open.
 // TODO(G2-android): declare `android:manageSpaceActivity` with a custody warning screen so
 // Settings > Storage offers "Manage space" instead of silently clearing custody (device test).
 
@@ -22,7 +19,8 @@ import java.io.IOException
  * The handle has no public operation. Its private methods are the JNI upcalls of the Rust
  * `KagemushaWalletPlatformV1` adapter (JNI ignores Kotlin visibility; `consumer-rules.pro` keeps
  * them): the tri-state payment-key probe, generation bound to the issuer challenge digest and the
- * enrollment's hardware profile, `SHA256withECDSA` signing that returns the platform DER, key
+ * enrollment's hardware profile, `SHA256withECDSA` signing of the exact 32-byte Poseidon signing
+ * message (KeyMint hashes it with SHA-256; never a no-digest mode) that returns the platform DER, key
  * deletion for custody deletion, attestation-chain export, the anchor policy (Android keeps no
  * rollback anchor), storage state and the custody root path. Only the Rust role-checked signers
  * reach the signing upcall, so app code holding the handle cannot sign arbitrary bytes with the
@@ -72,6 +70,38 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
 
     @Suppress("unused")
     private fun custodyRoot(): KagemushaWalletAndroidCustodyRootV1 = adapter.custodyRoot()
+
+    // One typed JNI handoff keeps result decoding independent of Kotlin sealed-class names.
+    // It is private: only Rust's role-checked signer can request operation2.
+    @Suppress("unused")
+    private fun nativeCall(operation: Int, slot: ByteArray, input: ByteArray, auxiliary: Int): KagemushaWalletNativeReplyV1 =
+        when (operation) {
+            0 -> when (val result = keyProbe(slot)) {
+                is KagemushaWalletAndroidKeyProbeV1.Present -> KagemushaWalletNativeReplyV1(0, bytes = result.publicKeySec1())
+                KagemushaWalletAndroidKeyProbeV1.Absent -> KagemushaWalletNativeReplyV1(1)
+                is KagemushaWalletAndroidKeyProbeV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+            }
+            1 -> when (val result = keyGenerate(slot, input, auxiliary)) {
+                is KagemushaWalletAndroidKeyGenerationV1.Generated -> KagemushaWalletNativeReplyV1(0, bytes = result.publicKeySec1())
+                KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent -> KagemushaWalletNativeReplyV1(3)
+                is KagemushaWalletAndroidKeyGenerationV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+            }
+            2 -> when (val result = keySign(slot, input)) {
+                is KagemushaWalletAndroidSignatureV1.Der -> KagemushaWalletNativeReplyV1(0, bytes = result.der())
+                is KagemushaWalletAndroidSignatureV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+            }
+            3 -> when (val result = keyDelete(slot)) {
+                KagemushaWalletAndroidRemoveV1.Removed -> KagemushaWalletNativeReplyV1(0)
+                is KagemushaWalletAndroidRemoveV1.NotRemoved -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+                is KagemushaWalletAndroidRemoveV1.Uncertain -> KagemushaWalletNativeReplyV1.unavailable(result.reason, 4)
+            }
+            7 -> storageState()?.let { KagemushaWalletNativeReplyV1.unavailable(it) } ?: KagemushaWalletNativeReplyV1(0)
+            9 -> when (val result = custodyRoot()) {
+                is KagemushaWalletAndroidCustodyRootV1.Present -> KagemushaWalletNativeReplyV1(0, bytes = result.path.toByteArray(Charsets.UTF_8))
+                is KagemushaWalletAndroidCustodyRootV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+            }
+            else -> KagemushaWalletNativeReplyV1(2)
+        }
 
     companion object {
         /**
@@ -126,7 +156,10 @@ internal class KagemushaWalletAndroidPlatformAdapterV1(
         return paymentKey.generate(slot, challengeDigest, profile)
     }
 
-    /** Sign the exact digest [message] with the payment key of [slot]. */
+    /**
+     * Sign the exact 32-byte signing [message] (the Rust `KagemushaWalletSignMessageV1` bytes)
+     * with the payment key of [slot] through `SHA256withECDSA`.
+     */
     fun keySign(slot: ByteArray, message: ByteArray): KagemushaWalletAndroidSignatureV1 = paymentKey.sign(slot, message)
 
     /** Delete the payment key of [slot]; the Rust provider calls this only at custody deletion. */

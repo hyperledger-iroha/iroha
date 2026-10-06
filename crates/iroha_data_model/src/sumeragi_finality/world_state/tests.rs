@@ -1,22 +1,19 @@
 //! Portable complete-snapshot checks over genuine certificates and synthetic World data.
 use super::*;
 use crate::sumeragi_finality::test_fixtures::NativeFinalityFixture;
-use crate::{
-    asset::AssetDefinitionId, kagemusha::KagemushaGovernedVerifierRegistryV1,
-    nexus::AxtAssetIncarnationV1,
-};
+use crate::{asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
 
 fn snapshot() -> (
     WorldStateSnapshotV1,
     AssetDefinitionId,
     AxtAssetIncarnationV1,
-    KagemushaGovernedVerifierRegistryV1,
+    u64,
 ) {
     let asset: AssetDefinitionId = "839FV3NJC8NfgWQvghXU2hEFQm9a".parse().unwrap();
     let incarnation =
         AxtAssetIncarnationV1::try_from_bytes(*Hash::new(b"synthetic asset registration").as_ref())
             .unwrap();
-    let registry = KagemushaGovernedVerifierRegistryV1::default();
+    let watermark = 7_u64;
     let snapshot = WorldStateSnapshotV1 {
         schema_hash: Hash::new(b"synthetic complete registry schema"),
         entries: vec![
@@ -27,14 +24,14 @@ fn snapshot() -> (
                 value_hash: world_state_value_hash_v1(&incarnation).unwrap(),
             },
             WorldStateSnapshotEntryV1 {
-                field_id: "world.kagemusha_verifier_registry".into(),
+                field_id: "world.soracloud_sequence_watermark".into(),
                 kind: WorldStateElementKindV1::Cell,
                 key_hash: None,
-                value_hash: world_state_value_hash_v1(&registry).unwrap(),
+                value_hash: world_state_value_hash_v1(&watermark).unwrap(),
             },
         ],
     };
-    (snapshot, asset, incarnation, registry)
+    (snapshot, asset, incarnation, watermark)
 }
 
 fn certify(snapshot: &WorldStateSnapshotV1) -> VerifiedSumeragiBlock {
@@ -125,7 +122,7 @@ fn world_path_hash_rejects_foreign_namespaces_and_empty_identity_components() {
 
 #[test]
 fn complete_snapshot_binds_real_typed_asset_and_registry_preimages_to_certified_root() {
-    let (snapshot, asset, incarnation, registry) = snapshot();
+    let (snapshot, asset, incarnation, watermark) = snapshot();
     let tip = certify(&snapshot);
     let verified = snapshot.authenticate(&tip).unwrap();
     assert_eq!(verified.height(), tip.height());
@@ -137,7 +134,7 @@ fn complete_snapshot_binds_real_typed_asset_and_registry_preimages_to_certified_
         .verify_table_value("world.axt_asset_incarnations", &asset, &incarnation)
         .unwrap();
     verified
-        .verify_cell_value("world.kagemusha_verifier_registry", &registry)
+        .verify_cell_value("world.soracloud_sequence_watermark", &watermark)
         .unwrap();
     let other =
         AxtAssetIncarnationV1::try_from_bytes(*Hash::new(b"reregistered asset").as_ref()).unwrap();

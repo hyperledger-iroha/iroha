@@ -5,6 +5,7 @@ use crate::{
         NetworkServiceAuthorityRole as NetworkRole, StreamTokenAuthorityRole as Role,
     },
     managed::{
+        ManagedHistoricalReserveTopUp, ManagedHistoricalReserveTopUpApproval,
         ManagedInitialGatewaySetup, ManagedInitialProviderIngestAuthority,
         ManagedInitialReputationPolicy, ManagedInitialReservePolicy,
         ManagedReserveAccountRegistration,
@@ -95,6 +96,216 @@ struct Genuine {
     options: BoundedTransactionOptions,
     catalog: GeneratedServiceRuntimeRevision,
 }
+// Each genuine native stage returns before the next owner's scratch is live. The setup
+// borrows the same fixture, original selection and carrier list; no proof, current-time or
+// transaction operation is replaced by fixture bookkeeping.
+struct GenuineNativeSetup<'a> {
+    prepared: &'a PreparedLocalnet,
+    native: &'a mut NativeFixture,
+    selection: &'a mut RuntimeSelection,
+    carriers: &'a mut Vec<ManagedTransactionFinality>,
+    utc: u64,
+    options: &'a BoundedTransactionOptions,
+}
+impl GenuineNativeSetup<'_> {
+    #[inline(never)]
+    fn run(&mut self, full_parent: bool, short_initial: bool) {
+        if full_parent {
+            self.reserve();
+        }
+        for index in 0..3 {
+            self.custody(index, short_initial);
+            if full_parent {
+                self.account(index);
+                // These original historical owners stay alive through the later children,
+                // just as in the sequential setup before its scratch was separated.
+                let (_request, _approval) = self.funding(index);
+                self.ingest(index);
+                self.gateway(index);
+            }
+        }
+        if full_parent {
+            self.reputation();
+            self.parent();
+        }
+    }
+    #[inline(never)]
+    fn reserve(&mut self) {
+        let mut reserve = ManagedInitialReservePolicy::open(self.prepared).unwrap();
+        self.carriers.push(
+            reserve
+                .bootstrap_native(
+                    self.native,
+                    &self.selection.policies.network.reserve,
+                    self.utc,
+                    self.options,
+                )
+                .finalized
+                .unwrap(),
+        );
+    }
+
+    #[inline(never)]
+    fn custody(&mut self, index: usize, short_initial: bool) {
+        let selected = &self.selection.policies.providers[index];
+        let provider = selected.provider_id;
+        let mut custody = ManagedStreamTokenCustody::open(self.prepared, provider).unwrap();
+        self.carriers.push(
+            custody
+                .bootstrap_native_configure(self.native, &selected.custody, self.utc, self.options)
+                .finalized
+                .unwrap(),
+        );
+        let initial = if short_initial {
+            // A genuine shorter native enrollment under the unchanged generated policy.
+            // This component-only fixture intentionally does not claim parent completion:
+            // its deliberately short interval differs from the generated day-long selection.
+            let now = now_ms().unwrap();
+            ManagedCustodyEnrollmentInterval {
+                issued_at_unix_ms: now,
+                expires_at_unix_ms: now + if index == 1 { 120_000 } else { 30_000 },
+                deadline_unix_ms: now + 20_000,
+            }
+        } else {
+            selected
+                .initial_enrollment(now_ms().unwrap(), self.utc)
+                .unwrap()
+        };
+        self.selection.initial[index] = Some(initial);
+        self.carriers.push(
+            custody
+                .bootstrap_native_enroll(
+                    self.native,
+                    &selected.custody,
+                    self.selection.initial(index).unwrap(),
+                    self.options,
+                )
+                .finalized
+                .unwrap(),
+        );
+        drop(custody);
+    }
+
+    #[inline(never)]
+    fn account(&mut self, index: usize) {
+        let selected = &self.selection.policies.providers[index];
+        let provider = selected.provider_id;
+        let mut account = ManagedReserveAccountRegistration::open(self.prepared, provider).unwrap();
+        self.carriers.push(
+            account
+                .bootstrap_native(
+                    self.native,
+                    &self.selection.policies.network.reserve,
+                    self.selection.plans[index].reserve_terms(),
+                    self.utc,
+                    self.options,
+                )
+                .finalized
+                .unwrap(),
+        );
+        drop(account);
+    }
+
+    #[inline(never)]
+    fn funding(
+        &mut self,
+        index: usize,
+    ) -> (
+        ManagedHistoricalReserveTopUp,
+        ManagedHistoricalReserveTopUpApproval,
+    ) {
+        let provider = self.selection.policies.providers[index].provider_id;
+        let mut funding = ProviderFundingBootstrap::open(self.prepared, provider).unwrap();
+        let ProviderFundingProgress::Complete {
+            request,
+            approval,
+            credit,
+            capacity,
+        } = funding.bootstrap_native(
+            self.native,
+            &self.selection.policies.network.reserve,
+            self.utc,
+            self.options,
+        )
+        else {
+            panic!("actual funding owners must retain complete history")
+        };
+        let request = request.unwrap();
+        let approval = approval.unwrap();
+        assert_eq!(request.movement_id(), approval.request().movement_id());
+        self.carriers
+            .extend([*request.original(), *approval.original(), credit, capacity]);
+        drop(funding);
+        (request, approval)
+    }
+
+    #[inline(never)]
+    fn ingest(&mut self, index: usize) {
+        let selected = &self.selection.policies.providers[index];
+        let provider = selected.provider_id;
+        let mut ingest =
+            ManagedInitialProviderIngestAuthority::open(self.prepared, provider).unwrap();
+        self.carriers.push(
+            ingest
+                .bootstrap_native(
+                    self.native,
+                    &selected.provider_ingest,
+                    self.utc,
+                    self.options,
+                )
+                .finalized
+                .unwrap(),
+        );
+        drop(ingest);
+    }
+
+    #[inline(never)]
+    fn gateway(&mut self, index: usize) {
+        let selected = &self.selection.policies.providers[index];
+        let provider = selected.provider_id;
+        let mut gateway = ManagedInitialGatewaySetup::open(self.prepared, provider).unwrap();
+        self.carriers.push(
+            gateway
+                .bootstrap_native(self.native, &selected.gateway, self.utc, self.options)
+                .finalized
+                .unwrap(),
+        );
+    }
+
+    #[inline(never)]
+    fn reputation(&mut self) {
+        let mut reputation = ManagedInitialReputationPolicy::open(self.prepared).unwrap();
+        self.carriers.push(
+            reputation
+                .bootstrap_native(
+                    self.native,
+                    &self.selection.policies.gateway_labels(),
+                    &self.selection.policies.network.reputation,
+                    self.utc,
+                    self.options,
+                )
+                .finalized
+                .unwrap(),
+        );
+        drop(reputation);
+    }
+
+    #[inline(never)]
+    fn parent(&mut self) {
+        let mut parent = ManagedServiceBootstrap::open(self.prepared).unwrap();
+        let ServiceBootstrapProgress::Complete(history) =
+            parent.recover(self.options.deadline).unwrap()
+        else {
+            panic!("all original native children must be recoverable")
+        };
+        assert_eq!(history.ordered_carriers().unwrap(), *self.carriers);
+        assert_eq!(self.carriers.len(), 29);
+        assert_eq!(
+            self.carriers.iter().map(|c| c.height).collect::<Vec<_>>(),
+            (3..=31).collect::<Vec<_>>()
+        );
+    }
+}
 impl Genuine {
     fn new(name: &str, full_parent: bool, short_initial: bool) -> Self {
         Self::with_material_preflight(name, full_parent, short_initial, false)
@@ -130,138 +341,15 @@ impl Genuine {
         );
         native.bootstrap_commit(&owner.authority, &log);
         let mut carriers = Vec::new();
-        if full_parent {
-            let mut reserve = ManagedInitialReservePolicy::open(&prepared).unwrap();
-            carriers.push(
-                reserve
-                    .bootstrap_native(
-                        &mut native,
-                        &selection.policies.network.reserve,
-                        utc,
-                        &options,
-                    )
-                    .finalized
-                    .unwrap(),
-            );
+        GenuineNativeSetup {
+            prepared: &prepared,
+            native: &mut native,
+            selection: &mut selection,
+            carriers: &mut carriers,
+            utc,
+            options: &options,
         }
-        for index in 0..3 {
-            let selected = &selection.policies.providers[index];
-            let provider = selected.provider_id;
-            let mut custody = ManagedStreamTokenCustody::open(&prepared, provider).unwrap();
-            carriers.push(
-                custody
-                    .bootstrap_native_configure(&mut native, &selected.custody, utc, &options)
-                    .finalized
-                    .unwrap(),
-            );
-            let initial = if short_initial {
-                // A genuine shorter native enrollment under the unchanged generated policy.
-                // This component-only fixture intentionally does not claim parent completion:
-                // its deliberately short interval differs from the generated day-long selection.
-                let now = now_ms().unwrap();
-                ManagedCustodyEnrollmentInterval {
-                    issued_at_unix_ms: now,
-                    expires_at_unix_ms: now + if index == 1 { 120_000 } else { 30_000 },
-                    deadline_unix_ms: now + 20_000,
-                }
-            } else {
-                selected.initial_enrollment(now_ms().unwrap(), utc).unwrap()
-            };
-            selection.initial[index] = Some(initial);
-            carriers.push(
-                custody
-                    .bootstrap_native_enroll(
-                        &mut native,
-                        &selected.custody,
-                        selection.initial(index).unwrap(),
-                        &options,
-                    )
-                    .finalized
-                    .unwrap(),
-            );
-            drop(custody);
-            if full_parent {
-                let mut account =
-                    ManagedReserveAccountRegistration::open(&prepared, provider).unwrap();
-                carriers.push(
-                    account
-                        .bootstrap_native(
-                            &mut native,
-                            &selection.policies.network.reserve,
-                            selection.plans[index].reserve_terms(),
-                            utc,
-                            &options,
-                        )
-                        .finalized
-                        .unwrap(),
-                );
-                drop(account);
-                let mut funding = ProviderFundingBootstrap::open(&prepared, provider).unwrap();
-                let ProviderFundingProgress::Complete {
-                    request,
-                    approval,
-                    credit,
-                    capacity,
-                } = funding.bootstrap_native(
-                    &mut native,
-                    &selection.policies.network.reserve,
-                    utc,
-                    &options,
-                )
-                else {
-                    panic!("actual funding owners must retain complete history")
-                };
-                let request = request.unwrap();
-                let approval = approval.unwrap();
-                assert_eq!(request.movement_id(), approval.request().movement_id());
-                carriers.extend([*request.original(), *approval.original(), credit, capacity]);
-                drop(funding);
-                let mut ingest =
-                    ManagedInitialProviderIngestAuthority::open(&prepared, provider).unwrap();
-                carriers.push(
-                    ingest
-                        .bootstrap_native(&mut native, &selected.provider_ingest, utc, &options)
-                        .finalized
-                        .unwrap(),
-                );
-                drop(ingest);
-                let mut gateway = ManagedInitialGatewaySetup::open(&prepared, provider).unwrap();
-                carriers.push(
-                    gateway
-                        .bootstrap_native(&mut native, &selected.gateway, utc, &options)
-                        .finalized
-                        .unwrap(),
-                );
-            }
-        }
-        if full_parent {
-            let mut reputation = ManagedInitialReputationPolicy::open(&prepared).unwrap();
-            carriers.push(
-                reputation
-                    .bootstrap_native(
-                        &mut native,
-                        &selection.policies.gateway_labels(),
-                        &selection.policies.network.reputation,
-                        utc,
-                        &options,
-                    )
-                    .finalized
-                    .unwrap(),
-            );
-            drop(reputation);
-            let mut parent = ManagedServiceBootstrap::open(&prepared).unwrap();
-            let ServiceBootstrapProgress::Complete(history) =
-                parent.recover(options.deadline).unwrap()
-            else {
-                panic!("all original native children must be recoverable")
-            };
-            assert_eq!(history.ordered_carriers().unwrap(), carriers);
-            assert_eq!(carriers.len(), 29);
-            assert_eq!(
-                carriers.iter().map(|c| c.height).collect::<Vec<_>>(),
-                (3..=31).collect::<Vec<_>>()
-            );
-        }
+        .run(full_parent, short_initial);
         let enrollments = std::array::from_fn(|index| {
             let provider = selection.plans[index].provider_id();
             let custody = ManagedStreamTokenCustody::open(&prepared, provider).unwrap();

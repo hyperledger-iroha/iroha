@@ -1,6 +1,6 @@
 //! Exact catalog linking declared canonical tables to actual State readers.
 //!
-//! The catalog contains 217 table outputs in 216 capture groups. Complete table
+//! The catalog contains 211 table outputs in 210 capture groups. Complete table
 //! coverage admits declared schema metadata and cannot authorize finality.
 //! Even complete coverage will need one State publication cut, derived-index
 //! checks, durable Kura node custody, predecessor binding and recovery before
@@ -87,11 +87,6 @@ capture_world_table_once!(
     capture_public_lane_stake_custody_once,
     public_lane_stake_custody,
     "world.public_lane_stake_custody"
-);
-capture_world_table_once!(
-    capture_validator_candidate_keys_once,
-    validator_candidate_keys,
-    "world.validator_candidate_keys"
 );
 capture_world_table_once!(
     capture_validator_committee_transitions_once,
@@ -463,6 +458,11 @@ capture_world_table_once!(
     capture_privacy_activations_once,
     privacy_activations,
     "world.privacy_activations"
+);
+capture_world_table_once!(
+    capture_kagemusha_wallet_ledger_once,
+    kagemusha_wallet_ledger,
+    "world.kagemusha_wallet_ledger"
 );
 capture_world_table_once!(
     capture_private_settlement_governance_once,
@@ -858,6 +858,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_poseidon_params_once::MATERIALIZER,
     capture_runtime_upgrades_once::MATERIALIZER,
     capture_privacy_activations_once::MATERIALIZER,
+    capture_kagemusha_wallet_ledger_once::MATERIALIZER,
     capture_private_settlement_governance_once::MATERIALIZER,
     capture_private_settlement_pools_once::MATERIALIZER,
     capture_private_settlement_roots_once::MATERIALIZER,
@@ -957,10 +958,6 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         capture: capture_repo_agreements_once,
     },
     native_world::capture_settlement_receipts_once::MATERIALIZER,
-    native_world::capture_kagemusha_mint_credit_operations_once::MATERIALIZER,
-    native_world::capture_kagemusha_issuance_operations_once::MATERIALIZER,
-    native_world::capture_kagemusha_redemption_id_operations_once::MATERIALIZER,
-    native_world::capture_kagemusha_terminal_nullifier_operations_once::MATERIALIZER,
     native_world::capture_public_lane_validators_once::MATERIALIZER,
     native_world::capture_public_lane_stake_shares_once::MATERIALIZER,
     native_world::capture_public_lane_rewards_once::MATERIALIZER,
@@ -984,7 +981,6 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     native_world::capture_tle_key_session_lifecycles_once::MATERIALIZER,
     native_world::capture_tle_active_key_session_once::MATERIALIZER,
     native_world::capture_timed_ovn_evidence_once::MATERIALIZER,
-    capture_validator_candidate_keys_once::MATERIALIZER,
     capture_validator_committee_transitions_once::MATERIALIZER,
     native_world::capture_global_beacon_dkg_once::MATERIALIZER,
     native_world::capture_global_beacon_key_sessions_once::MATERIALIZER,
@@ -1183,7 +1179,7 @@ mod tests {
     #[test]
     fn actual_table_catalog_admits_metadata_then_enforces_original_node_capacity() {
         let count = require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS).unwrap();
-        assert_eq!(count, 217);
+        assert_eq!(count, 211);
         assert_eq!(require_complete_inventory(STATE_FIELDS), Ok(()));
         let state = state();
         let budget = state.ivm_execution_budget();
@@ -1274,6 +1270,7 @@ mod tests {
             "world.poseidon_params",
             "world.runtime_upgrades",
             "world.privacy_activations",
+            "world.kagemusha_wallet_ledger",
             "world.private_settlement_governance",
             "world.private_settlement_pools",
             "world.private_settlement_roots",
@@ -1364,10 +1361,6 @@ mod tests {
             "world.soradns_release_signers",
             "world.repo_agreements",
             "world.settlement_receipts",
-            "world.kagemusha_mint_credit_operations",
-            "world.kagemusha_issuance_operations",
-            "world.kagemusha_redemption_id_operations",
-            "world.kagemusha_terminal_nullifier_operations",
             "world.public_lane_validators",
             "world.public_lane_stake_shares",
             "world.public_lane_rewards",
@@ -1388,7 +1381,6 @@ mod tests {
             "world.tle_key_session_lifecycles",
             "world.tle_active_key_session",
             "world.timed_ovn_evidence",
-            "world.validator_candidate_keys",
             "world.validator_committee_transitions",
             "world.global_beacon_dkg",
             "world.global_beacon_key_sessions",
@@ -1431,7 +1423,7 @@ mod tests {
         );
         // Every listed Single has one table; the one indivisible transaction
         // membership owner retains both current and rollback tables together.
-        assert_eq!(expected.len(), 217);
+        assert_eq!(expected.len(), 211);
         assert_eq!(
             TABLE_MATERIALIZERS
                 .iter()
@@ -1465,9 +1457,9 @@ mod tests {
         );
         assert_eq!(
             require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS),
-            Ok(217)
+            Ok(211)
         );
-        assert_eq!(TABLE_MATERIALIZERS.len(), 216);
+        assert_eq!(TABLE_MATERIALIZERS.len(), 210);
         assert_eq!(
             TABLE_MATERIALIZERS
                 .iter()

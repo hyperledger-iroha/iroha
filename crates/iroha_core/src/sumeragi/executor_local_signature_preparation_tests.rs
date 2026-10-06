@@ -46,7 +46,7 @@ fn original_source(
     assert!(block.is_resultless_proposal());
     assert_eq!(block.signatures().len(), 0);
     GlobalPayloadSource {
-        attest: proposal_requires_attestation(&block, scheduled.epoch.authorization.last_height),
+        attest: false,
         block,
         pending_inputs: None,
     }

@@ -326,10 +326,6 @@ fn invalid_asset_requests_do_not_create_partial_output_directories() {
             vec![asset(valid_id.clone(), None), asset(valid_id, None)],
         ),
         (
-            "built-in-collision",
-            vec![asset(localnet_kagemusha_asset_literal(), None)],
-        ),
-        (
             "duplicate-alias",
             vec![
                 asset(localnet_sample_asset_literal(), Some("sample#localnet")),
@@ -1881,7 +1877,6 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
     assert!(contents.contains(&format!("- Base seed BLAKE3 fingerprint: `{fingerprint}`")));
     assert!(!contents.contains("- Base seed: `Iroha`"));
     assert!(!contents.contains("`Iroha`"));
-    assert!(contents.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
     assert!(contents.contains("genesis.expected_hash"));
     assert!(contents.contains("`kagami docker` without `--seed`"));
     assert!(!contents.contains("IROHA_GENESIS_SIGNED_FILE"));
@@ -1891,11 +1886,6 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
     assert!(contents.contains("- Ledger/faucet signer sidecar: `"));
     assert!(contents.contains("- Dedicated HTTP operator signer sidecar: `"));
     assert!(contents.contains("- Ephemeral onboarding authority: `"));
-    assert!(
-        contents.contains(
-            "- KAGEMUSHA reserve account: deterministic account derived from the exact genesis network id and asset definition"
-        )
-    );
     assert!(!contents.contains("Localnet app authority / escrow account"));
 }
 #[test]
@@ -2680,66 +2670,66 @@ fn start_script_includes_sora_flag_when_enabled() {
         start_contents.contains("if env.get(\"IROHA_SORA_MODE\") == \"1\":")
             && start_contents.contains("cmd.append(\"--sora\")")
             && start_contents.contains("cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"),
-        "private descriptor launcher must include --sora when profile enabled"
+        "validator launcher must include --sora when profile enabled"
     );
 }
 // Keep the generated rANS table contract tests in a focused child under `localnet::tests`.
 include!("../rans_table_tests.rs");
 
 #[test]
-fn mint_finality_seed_uses_private_entropy_unless_development_seed_is_explicit() {
-    let first = generate_mint_finality_seed(None, 0).expect("OS entropy");
-    let second = generate_mint_finality_seed(None, 0).expect("independent OS entropy");
-    assert_ne!(first.as_ref(), second.as_ref());
-    let development = generate_mint_finality_seed(Some(b"explicit-development-only"), 0)
-        .expect("explicit development seed");
-    let repeat = generate_mint_finality_seed(Some(b"explicit-development-only"), 0)
-        .expect("repeat development seed");
-    assert_eq!(development.as_ref(), repeat.as_ref());
-    assert_ne!(
-        development.as_ref(),
-        generate_mint_finality_seed(Some(b"explicit-development-only"), 1)
-            .expect("different peer")
-            .as_ref()
-    );
-    assert_ne!(
-        development.as_ref(),
-        generate_mint_finality_seed(Some(b"another-development-seed"), 0)
-            .expect("different seed")
-            .as_ref()
-    );
+fn validator_bls_keys_use_private_entropy_unless_development_seed_is_explicit() {
+    let first = build_peers(4, None, 8080, 1337).expect("OS entropy");
+    let second = build_peers(4, None, 8080, 1337).expect("independent OS entropy");
+    assert_ne!(first[0].public_key, second[0].public_key);
+    let development = build_peers(4, Some(b"explicit-development-only"), 8080, 1337).unwrap();
+    let repeat = build_peers(4, Some(b"explicit-development-only"), 8080, 1337).unwrap();
+    for (peer, repeated) in development.iter().zip(&repeat) {
+        assert_eq!(peer.public_key, repeated.public_key);
+        assert_eq!(peer.private_key, repeated.private_key);
+        assert_eq!(peer.bls_pop, repeated.bls_pop);
+        iroha_crypto::bls_normal_pop_verify(&peer.public_key, &peer.bls_pop).unwrap();
+    }
+    assert_ne!(development[0].public_key, development[1].public_key);
+    let another = build_peers(4, Some(b"another-development-seed"), 8080, 1337).unwrap();
+    assert_ne!(development[0].public_key, another[0].public_key);
 }
 
 #[test]
-fn mint_finality_genesis_keys_match_private_peer_seeds_and_not_public_derivation() {
-    let peers = build_peers(4, Some(b"explicit-development-only"), 8080, 1337).expect("four peers");
-    let parameters =
-        localnet_kagemusha_mint_finality_genesis_parameters(&peers).expect("public genesis roster");
-    let mut ordered = peers.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|peer| PeerId::new(peer.public_key.clone()));
-    for (index, (peer, actual)) in ordered
+fn localnet_genesis_signing_rejects_incomplete_duplicate_and_invalid_pop_rosters() {
+    let seed = b"exact-genesis-validator-roster";
+    let mut peers = build_peers(4, Some(seed), 8080, 1337).unwrap();
+    let (public, private) = generate_genesis_key_pair(Some(seed), GENESIS_SEED).unwrap();
+    let key_pair = KeyPair::from_private_key(private.0).unwrap();
+    let raw = generate_raw_genesis(
+        &public,
+        SumeragiConsensusMode::Permissioned,
+        "roster-refusal",
+    )
+    .unwrap();
+    let incomplete = append_peer_pop(raw.clone(), &peers[..3]).unwrap();
+    assert!(incomplete.build_and_sign(&key_pair).is_err());
+    let mut duplicate = peers
         .iter()
-        .zip(parameters.authority_generation.validators.iter())
-        .enumerate()
-    {
-        let validator = PeerId::new(peer.public_key.clone());
-        let expected = iroha_core_zk::kagemusha_v1_recursion::
-            derive_kagemusha_mint_finality_validator_keys_v1(
-                &peer.mint_finality_seed, 0, validator.clone()).expect("private key derivation");
-        assert_eq!(*actual, expected);
-        // Reproduce the exposed old construction to prove it no longer controls any seat.
-        let public_seed: [u8; 32] = Hash::new(format!(
-            "iroha:kagami:localnet:kagemusha-mint-finality:v1:epoch-0:{index}:{validator}"
-        ))
-        .into();
-        let exposed = iroha_core_zk::kagemusha_v1_recursion::
-            derive_kagemusha_mint_finality_validator_keys_v1(
-                &public_seed, 0, validator).expect("old public derivation");
-        assert_ne!(*actual, exposed);
-    }
+        .map(|peer| {
+            GenesisTopologyEntry::new(PeerId::new(peer.public_key.clone()), peer.bls_pop.clone())
+        })
+        .collect::<Vec<_>>();
+    duplicate[1] = duplicate[0].clone();
+    let duplicate = raw
+        .clone()
+        .into_builder()
+        .next_transaction()
+        .set_topology(duplicate)
+        .build_raw()
+        .unwrap();
+    assert!(duplicate.build_and_sign(&key_pair).is_err());
+    peers[0].bls_pop[0] ^= 1;
+    let invalid_pop = append_peer_pop(raw, &peers).unwrap();
+    assert!(invalid_pop.build_and_sign(&key_pair).is_err());
 }
+
 #[test]
-fn mint_finality_private_output_rejects_git_directory_and_worktree_pointer() {
+fn taira_private_output_rejects_git_directory_and_worktree_pointer() {
     let root =
         crate::localnet::localnet_test_helpers::private_tempdir().expect("private output test");
     let output = root.path().join("future/runtime/output");

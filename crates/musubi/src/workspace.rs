@@ -379,6 +379,7 @@ impl Workspace {
             &no_workspace_dependencies,
             &local_packages,
             &resolved_packages,
+            None,
         )?;
         let dev_dependencies = resolve_dependencies(
             &self.root,
@@ -389,6 +390,7 @@ impl Workspace {
             &no_workspace_dependencies,
             &local_packages,
             &resolved_packages,
+            None,
         )?;
         let relative = package_root.strip_prefix(&self.root).map_err(|_| {
             WorkspaceError::new(
@@ -489,12 +491,20 @@ pub fn discover_manifest(start: &Path) -> Result<PathBuf, WorkspaceError> {
 /// Returns an error for discovery, strict manifest parsing, unsafe member
 /// paths, or an unlisted package nested beneath a workspace root.
 pub fn discover_workspace_manifest(start: &Path) -> Result<PathBuf, WorkspaceError> {
+    discover_workspace_manifest_selected(start, None)
+}
+
+fn discover_workspace_manifest_selected(
+    start: &Path,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
+) -> Result<PathBuf, WorkspaceError> {
     let nearest = discover_manifest(start)?;
+    require_selected_manifest_path(&nearest, selected)?;
     let nearest_root = nearest
         .parent()
         .expect("a manifest path has a parent")
         .to_path_buf();
-    let nearest_manifest = read_manifest(&nearest)?;
+    let nearest_manifest = read_manifest_selected(&nearest, selected)?;
     if nearest_manifest.workspace.is_some() {
         return Ok(nearest);
     }
@@ -512,7 +522,7 @@ pub fn discover_workspace_manifest(start: &Path) -> Result<PathBuf, WorkspaceErr
                             "ancestor manifest must be a regular non-symlink file",
                         ));
                     }
-                    let candidate_manifest = read_manifest(&candidate)?;
+                    let candidate_manifest = read_manifest_selected(&candidate, selected)?;
                     if let Some(workspace) = &candidate_manifest.workspace {
                         let relative = nearest_root.strip_prefix(&directory).map_err(|_| {
                             WorkspaceError::new(
@@ -563,13 +573,42 @@ pub fn discover_workspace_manifest(start: &Path) -> Result<PathBuf, WorkspaceErr
 /// Returns an error for discovery, strict parsing, missing/default membership, path escape,
 /// symlinks, package collisions, or mismatched path-dependency identity/ranges.
 pub fn load_workspace(start: &Path) -> Result<Workspace, WorkspaceError> {
+    load_workspace_selected(start, None)
+}
+
+/// Load the original selected manifest through its native descriptor, preserving every
+/// independent ancestor, member and dependency selection in the canonical workspace owner.
+/// # Errors
+/// Returns the same workspace diagnostics or a changed selected-file refusal.
+pub(crate) fn load_workspace_from_selected(
+    selected: &iroha_fs::SelectedRegularFile,
+) -> Result<Workspace, WorkspaceError> {
+    selected
+        .revalidate()
+        .map_err(|error| WorkspaceError::io("retain selected manifest", selected.path(), &error))?;
+    let workspace = load_workspace_selected(selected.path(), Some(selected))?;
+    selected.revalidate().map_err(|error| {
+        WorkspaceError::io(
+            "retain selected workspace manifest",
+            selected.path(),
+            &error,
+        )
+    })?;
+    Ok(workspace)
+}
+
+fn load_workspace_selected(
+    start: &Path,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
+) -> Result<Workspace, WorkspaceError> {
     let nearest_manifest_path = discover_manifest(start)?;
-    let root_manifest_path = discover_workspace_manifest(start)?;
+    require_selected_manifest_path(&nearest_manifest_path, selected)?;
+    let root_manifest_path = discover_workspace_manifest_selected(start, selected)?;
     let root = root_manifest_path
         .parent()
         .expect("manifest path has parent")
         .to_path_buf();
-    let root_manifest = read_manifest(&root_manifest_path)?;
+    let root_manifest = read_manifest_selected(&root_manifest_path, selected)?;
     let synthetic = root_manifest.workspace.is_none();
     let workspace_declaration = root_manifest.workspace.as_ref();
     let seeds = collect_member_seeds(
@@ -577,6 +616,7 @@ pub fn load_workspace(start: &Path) -> Result<Workspace, WorkspaceError> {
         &root_manifest_path,
         &root_manifest,
         workspace_declaration,
+        selected,
     )?;
     validate_nearest_member(&nearest_manifest_path, &root_manifest_path, &seeds)?;
     let package_defaults = workspace_declaration.map(|workspace| &workspace.package);
@@ -585,7 +625,13 @@ pub fn load_workspace(start: &Path) -> Result<Workspace, WorkspaceError> {
         .map(|workspace| &workspace.dependencies)
         .cloned()
         .unwrap_or_default();
-    let members = materialize_members(&root, seeds, &resolved_packages, &workspace_dependencies)?;
+    let members = materialize_members(
+        &root,
+        seeds,
+        &resolved_packages,
+        &workspace_dependencies,
+        selected,
+    )?;
     let default_members = default_member_set(workspace_declaration, &members, &root_manifest_path)?;
     Ok(Workspace {
         root,
@@ -601,6 +647,7 @@ fn collect_member_seeds(
     root_manifest_path: &Path,
     root_manifest: &Manifest,
     workspace: Option<&WorkspaceManifest>,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
 ) -> Result<BTreeMap<PortablePath, MemberSeed>, WorkspaceError> {
     let mut seeds = BTreeMap::new();
     if root_manifest.package.is_some() {
@@ -647,7 +694,7 @@ fn collect_member_seeds(
             }
             let member_root = confined_directory(root, root, &member_path.to_path_buf())?;
             let member_manifest_path = member_root.join(MANIFEST_FILE_NAME);
-            let member_manifest = read_manifest(&member_manifest_path)?;
+            let member_manifest = read_manifest_selected(&member_manifest_path, selected)?;
             if member_manifest.package.is_none() {
                 return Err(WorkspaceError::new(
                     WorkspaceErrorKind::Membership,
@@ -724,6 +771,7 @@ fn materialize_members(
     seeds: BTreeMap<PortablePath, MemberSeed>,
     resolved_packages: &BTreeMap<PortablePath, ResolvedPackageManifest>,
     workspace_dependencies: &BTreeMap<Name, ConcreteDependency>,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
 ) -> Result<BTreeMap<PortablePath, WorkspaceMember>, WorkspaceError> {
     let local_packages = seeds
         .iter()
@@ -744,6 +792,7 @@ fn materialize_members(
             workspace_dependencies,
             &local_packages,
             resolved_packages,
+            selected,
         )?;
         let dev_dependencies = resolve_dependencies(
             root,
@@ -754,6 +803,7 @@ fn materialize_members(
             workspace_dependencies,
             &local_packages,
             resolved_packages,
+            selected,
         )?;
         members.insert(
             path.clone(),
@@ -780,6 +830,7 @@ fn resolve_dependencies(
     workspace_dependencies: &BTreeMap<Name, ConcreteDependency>,
     local_packages: &BTreeMap<PathBuf, PortablePath>,
     resolved_packages: &BTreeMap<PortablePath, ResolvedPackageManifest>,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
 ) -> Result<BTreeMap<Name, EffectiveDependency>, WorkspaceError> {
     let mut result = BTreeMap::new();
     for (alias, dependency) in dependencies {
@@ -807,7 +858,8 @@ fn resolve_dependencies(
             } => {
                 let dependency_root = resolve_dependency_root(workspace_root, &defined_in, path)?;
                 let dependency_manifest_path = dependency_root.join(MANIFEST_FILE_NAME);
-                let dependency_manifest = read_manifest(&dependency_manifest_path)?;
+                let dependency_manifest =
+                    read_manifest_selected(&dependency_manifest_path, selected)?;
                 if dependency_manifest.package.is_none() {
                     return Err(WorkspaceError::new(
                         WorkspaceErrorKind::Dependency,
@@ -943,6 +995,41 @@ fn dependency_metadata(dependency: &EffectiveDependency) -> DependencyMetadata {
 }
 fn read_manifest(path: &Path) -> Result<Manifest, WorkspaceError> {
     read_manifest_with_reader(path, read_bounded_single_link_regular_file_v1)
+}
+fn require_selected_manifest_path(
+    path: &Path,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
+) -> Result<(), WorkspaceError> {
+    if let Some(selected) = selected {
+        selected.revalidate().map_err(|error| {
+            WorkspaceError::io("retain selected manifest path", selected.path(), &error)
+        })?;
+        if path != selected.path() {
+            return Err(unsafe_path(
+                path,
+                "discovery differs from the original selected manifest",
+            ));
+        }
+    }
+    Ok(())
+}
+fn read_manifest_selected(
+    path: &Path,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
+) -> Result<Manifest, WorkspaceError> {
+    if let Some(selected) = selected.filter(|selected| selected.path() == path) {
+        read_manifest_with_reader(path, |_, maximum| {
+            let maximum = usize::try_from(maximum).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "manifest byte limit exceeds this host",
+                )
+            })?;
+            selected.read(maximum)
+        })
+    } else {
+        read_manifest(path)
+    }
 }
 fn read_manifest_with_reader<F>(path: &Path, read_file: F) -> Result<Manifest, WorkspaceError>
 where
@@ -1243,6 +1330,60 @@ exports = []
             canonical_root.join(MANIFEST_FILE_NAME)
         );
     }
+    #[test]
+    fn selected_root_and_member_use_the_same_workspace_inheritance_and_selection() {
+        let temp = fixture();
+        let ordinary = load_workspace(temp.path()).expect("ordinary workspace");
+        for path in ["Musubi.toml", "packages/app/Musubi.toml"] {
+            let selected = iroha_fs::SelectedRegularFile::capture(temp.path().join(path))
+                .expect("native selected manifest");
+            for _ in 0..2 {
+                let workspace =
+                    load_workspace_from_selected(&selected).expect("selected workspace");
+                assert_eq!(
+                    workspace.root_manifest_path(),
+                    ordinary.root_manifest_path()
+                );
+                assert_eq!(workspace.metadata(), ordinary.metadata());
+                assert_eq!(workspace.default_members(), ordinary.default_members());
+                assert!(!workspace.is_synthetic());
+                selected
+                    .revalidate()
+                    .expect("original selected manifest retained");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_member_retains_its_original_and_reads_other_dependency_manifests_fresh() {
+        let temp = fixture();
+        let path = temp.path().join("packages/app/Musubi.toml");
+        let selected =
+            iroha_fs::SelectedRegularFile::capture(&path).expect("native selected member");
+        let original = load_workspace_from_selected(&selected).expect("original workspace");
+        let library = PortablePath::new("packages/lib").expect("library path");
+        assert_eq!(
+            original.members()[&library].package.version.to_string(),
+            "1.1.0"
+        );
+        write_file(
+            &temp.path().join("packages/lib/Musubi.toml"),
+            &LIB.replace("1.1.0", "1.2.0"),
+        );
+        let fresh = load_workspace_from_selected(&selected).expect("fresh independent dependency");
+        assert_eq!(
+            fresh.members()[&library].package.version.to_string(),
+            "1.2.0"
+        );
+        selected.revalidate().expect("original member unchanged");
+        write_file(&path, &APP.replace("name = \"app\"", "name = \"changed\""));
+        let error =
+            load_workspace_from_selected(&selected).expect_err("changed original member refuses");
+        assert_eq!(error.kind(), WorkspaceErrorKind::Io);
+        assert!(selected.revalidate().is_err());
+    }
+
     #[test]
     fn loads_inheritance_and_keeps_dev_dependencies_nontransitive() {
         let temp = fixture();

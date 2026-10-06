@@ -1559,9 +1559,9 @@ pub fn f36(seed: u64) -> Scenario {
     sc
 }
 
-/// F37: commit attestation (§3.7). Every eighth transaction needs mint finality, so a share of
-/// the blocks is flagged. Every authority attests only blocks its node executed (`Pending`
-/// before, as KAGEMUSHA needs `R`'s preimage). Up to `f` Byzantine members send forged or
+/// F37: commit attestation (§3.7). Every eighth transaction requires a test attestation,
+/// so a share of the blocks is flagged. Every authority attests only blocks its node
+/// executed (`Pending` before). Up to `f` Byzantine members send forged or
 /// stripped attestations — one of them, as proxy tail, also strips the attestations of the
 /// `CommitQC`s it forms and clears their flag every other time, and over-aggregates genuine
 /// attested votes into `q + 1`-signer `CommitQC`s — and one honest member may hold no

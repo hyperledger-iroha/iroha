@@ -228,6 +228,7 @@ impl From<ConsensusMode> for SumeragiConsensusMode {
 #[derive(
     Debug,
     Clone,
+    Copy,
     PartialEq,
     Eq,
     norito::derive::JsonSerialize,
@@ -246,11 +247,6 @@ pub struct ConsensusHandshakeMetadata {
     pub wire_protocol_version: u32,
     /// Canonical consensus fingerprint.
     pub consensus_fingerprint: ConsensusFingerprint,
-    /// Signed network-independent KAGEMUSHA mint-finality genesis authority.
-    ///
-    /// Core binds the final genesis-derived network identity to these
-    /// templates before constructing the first height context.
-    pub kagemusha_mint_finality: crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     /// Signed inputs for the first Sumeragi height context.
     pub sumeragi_context: crate::block::consensus::SumeragiGenesisContextParameters,
 }
@@ -260,8 +256,7 @@ impl ConsensusHandshakeMetadata {
     /// # Errors
     ///
     /// Returns an error when the wire version is not the first-release version
-    /// or the signed Sumeragi context/KAGEMUSHA genesis authority is
-    /// invalid.
+    /// or the signed Sumeragi context is invalid.
     pub fn validate(&self) -> Result<(), String> {
         let expected_version = u32::from(crate::sumeragi::PROTOCOL_VERSION);
         if self.wire_protocol_version != expected_version {
@@ -270,9 +265,6 @@ impl ConsensusHandshakeMetadata {
             );
         }
         self.sumeragi_context
-            .validate()
-            .map_err(|error| error.to_string())?;
-        self.kagemusha_mint_finality
             .validate()
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -3465,8 +3457,6 @@ mod tests {
             block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
             wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
-            kagemusha_mint_finality:
-                crate::block::consensus::test_kagemusha_mint_finality_genesis_parameters(),
             sumeragi_context:
                 crate::block::consensus::SumeragiGenesisContextParameters::recommended(),
         }
@@ -3485,15 +3475,23 @@ mod tests {
     }
 
     #[test]
-    fn handshake_metadata_requires_kagemusha_genesis_authority() {
-        let mut value = norito::json::to_value(&handshake_metadata_fixture())
-            .expect("serialize handshake metadata");
-        value
+    fn handshake_metadata_requires_signed_sumeragi_context_and_rejects_retired_authority() {
+        let fixture = handshake_metadata_fixture();
+        let value = norito::json::to_value(&fixture).expect("serialize handshake metadata");
+        let mut missing = value.clone();
+        missing
             .as_object_mut()
             .expect("metadata object")
-            .remove("kagemusha_mint_finality");
-        norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
-            .expect_err("signed KAGEMUSHA genesis authority must be mandatory");
+            .remove("sumeragi_context");
+        norito::json::value::from_value::<ConsensusHandshakeMetadata>(missing)
+            .expect_err("signed Sumeragi context must be mandatory");
+        let mut retired = value;
+        retired.as_object_mut().expect("metadata object").insert(
+            "kagemusha_mint_finality".to_owned(),
+            Value::Object(Default::default()),
+        );
+        norito::json::value::from_value::<ConsensusHandshakeMetadata>(retired)
+            .expect_err("the retired mint-finality authority is an unknown field");
     }
 
     #[test]
@@ -3511,13 +3509,6 @@ mod tests {
         let mut bad_context = baseline;
         bad_context.sumeragi_context.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
-
-        let mut bad_kagemusha = handshake_metadata_fixture();
-        bad_kagemusha
-            .kagemusha_mint_finality
-            .authority_generation
-            .generation = 1;
-        assert!(bad_kagemusha.validate().is_err());
     }
 
     #[test]

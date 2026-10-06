@@ -227,13 +227,13 @@ pub struct Workload {
     /// Bit mask of the machines that receive transactions (0 = all; F35 local-queue
     /// asymmetry).
     pub targets: u64,
-    /// Every `mint_every`-th transaction needs mint finality, so the block holding it is
+    /// Every `mint_every`-th transaction requires a test attestation, so the block holding it is
     /// flagged (§3.7, F37); 0 = none.
     pub mint_every: u64,
 }
 
 impl Workload {
-    /// Whether transaction `id` needs mint finality.
+    /// Whether transaction `id` requires a test attestation.
     pub fn mints(&self, id: u64) -> bool {
         self.mint_every > 0 && id.is_multiple_of(self.mint_every)
     }

@@ -5,6 +5,7 @@ use crate::managed::native_operation::{
     authorization::{self, DispatchAuthorization, Lease, Scope},
     require_retained_material,
 };
+use iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyRecordV1;
 use std::sync::{Arc, atomic::AtomicBool};
 
 /// Closed I/O boundary only; successful inputs still come from the sole native proof owners.
@@ -91,6 +92,19 @@ pub(in crate::managed) enum Reconciliation {
     Current(RetainedCustodyEnrollment),
     Pending(ManagedCustodyProgress),
 }
+// Sequential local phases borrow the same authenticated cut and move the same body graph.
+// This is control flow within one call, not a new authorization or retained observation.
+enum RenewalMaterial<'a> {
+    Current(RetainedCustodyEnrollment),
+    Pending(PendingRenewal<'a>),
+}
+struct PendingRenewal<'a> {
+    selected: &'a VerifiedStreamTokenCustodyRecordV1,
+    control: &'a SignerCustodyControlStateV1,
+    next: u64,
+    existing: Option<BodyHistory>,
+    _retained: RetainedCustodyEnrollment,
+}
 impl GeneratedRenewalTurn {
     pub(in crate::managed) fn begin(
         owner: &ManagedStreamTokenCustody,
@@ -100,10 +114,18 @@ impl GeneratedRenewalTurn {
         deadline: Instant,
         cancelled: Arc<AtomicBool>,
     ) -> Result<Self> {
+        #[cfg(test)]
+        crate::managed::native_operation::deadline_diagnostics::begin_phase(
+            crate::managed::native_operation::deadline_diagnostics::BeginPhase::Entry,
+        );
         authorization::require_active(&cancelled)?;
         require_deadline(deadline)?;
         owner.authority.validate_profile()?;
         owner.validate_policy(policy)?;
+        #[cfg(test)]
+        crate::managed::native_operation::deadline_diagnostics::begin_phase(
+            crate::managed::native_operation::deadline_diagnostics::BeginPhase::Configure,
+        );
         let (configured, _) = owner.retained_configuration(deadline)?;
         if configured != *policy || floor.height < 2 || *floor.block_hash.as_ref() == [0; 32] {
             return Err(invalid(
@@ -111,6 +133,10 @@ impl GeneratedRenewalTurn {
             ));
         }
         fees.validate()?;
+        #[cfg(test)]
+        crate::managed::native_operation::deadline_diagnostics::begin_phase(
+            crate::managed::native_operation::deadline_diagnostics::BeginPhase::Inventory,
+        );
         require_retained_material(owner.validate_renewal_selection_inventory(&fees, deadline))?;
         Ok(Self {
             prepared: owner.authority.prepared.clone(),
@@ -124,7 +150,11 @@ impl GeneratedRenewalTurn {
             issuance_consumed: false,
         })
     }
-    fn check(&self, owner: &ManagedStreamTokenCustody, deadline: Instant) -> Result<Instant> {
+    fn check<'a>(
+        &self,
+        owner: &'a ManagedStreamTokenCustody,
+        deadline: Instant,
+    ) -> Result<(Instant, enrollment::RetainedConfiguration<'a>)> {
         authorization::require_active(&self.cancelled)?;
         let deadline = deadline.min(self.deadline);
         require_deadline(deadline)?;
@@ -134,11 +164,11 @@ impl GeneratedRenewalTurn {
         {
             return Err(invalid("renewal turn changed original profile or provider"));
         }
-        let (policy, _) = owner.retained_configuration(deadline)?;
-        if policy != self.policy {
+        let configured = owner.read_configuration(deadline)?;
+        if configured.policy() != &self.policy {
             return Err(invalid("renewal turn changed original full custody policy"));
         }
-        Ok(deadline)
+        Ok((deadline, configured))
     }
     pub(in crate::managed::stream_token_custody) fn check_selection(
         &self,
@@ -164,14 +194,16 @@ impl GeneratedRenewalTurn {
         history: &BodyHistory,
         deadline: Instant,
     ) -> Result<&GeneratedRenewalAuthorization> {
-        let deadline = self.check(owner, deadline)?;
+        let (deadline, configured) = self.check(owner, deadline)?;
         let purpose = history.purpose();
         let Purpose::CustodyRenewal { provider, sequence } = purpose else {
             return Err(invalid("renewal issuer selected another purpose"));
         };
         self.check_selection(purpose, history.fees(), deadline)?;
         history.matches_policy(&self.policy)?;
-        history.validate_renewal_context(owner, deadline)?;
+        history.validate_renewal_context(owner, deadline, || {
+            configured.into_initial_prerequisite(deadline)
+        })?;
         if self.authorization.is_none() {
             if self.issuance_consumed {
                 return Err(ManagedBootstrapFailure::TransitionPending.into());
@@ -207,12 +239,29 @@ impl ManagedStreamTokenCustody {
     fn validate_renewal_selection_inventory(&self, fees: &Fees, deadline: Instant) -> Result<()> {
         // Bounded full reference census, never a native sequence selector.
         for sequence in 2..=64 {
+            #[cfg(test)]
+            crate::managed::native_operation::deadline_diagnostics::inventory(
+                sequence,
+                crate::managed::native_operation::deadline_diagnostics::InventoryPhase::Guard,
+            );
             require_deadline(deadline)?;
+            #[cfg(test)]
+            crate::managed::native_operation::deadline_diagnostics::inventory(
+                sequence,
+                crate::managed::native_operation::deadline_diagnostics::InventoryPhase::Open,
+            );
             if let Some(history) = BodyHistory::open(self, CustodyPurpose::Renewal(sequence))? {
                 if history.fees() != fees {
                     return Err(invalid("renewal original fees changed"));
                 }
-                history.validate_renewal_context(self, deadline)?;
+                #[cfg(test)]
+                crate::managed::native_operation::deadline_diagnostics::inventory(
+                    sequence,
+                    crate::managed::native_operation::deadline_diagnostics::InventoryPhase::Context,
+                );
+                history.validate_renewal_context(self, deadline, || {
+                    self.retained_initial_prerequisite(deadline)
+                })?;
             }
         }
         Ok(())
@@ -336,9 +385,33 @@ impl ManagedStreamTokenCustody {
         deadline: Instant,
         reads: &impl RenewalReads,
     ) -> Result<Reconciliation> {
-        let deadline = turn.check(self, deadline)?;
+        let (deadline, _) = turn.check(self, deadline)?;
         let initial_interval = self.inspect_local_initial_interval(&turn.policy)?;
         let (verifier, current) = reads.observe(self, &turn.policy, deadline)?;
+        match self.reconcile_generated_material(
+            turn,
+            initial_interval,
+            &current,
+            deadline,
+            reads,
+        )? {
+            RenewalMaterial::Current(retained) => Ok(Reconciliation::Current(retained)),
+            RenewalMaterial::Pending(pending) => {
+                self.reconcile_pending_renewal(turn, &verifier, &current, pending, deadline)
+            }
+        }
+    }
+
+    // Authenticate retained material before allocating the pending dispatch working values.
+    #[inline(never)]
+    fn reconcile_generated_material<'a>(
+        &self,
+        turn: &GeneratedRenewalTurn,
+        initial_interval: ManagedCustodyEnrollmentInterval,
+        current: &'a VerifiedStreamTokenCustodyStateV1,
+        deadline: Instant,
+        reads: &impl RenewalReads,
+    ) -> Result<RenewalMaterial<'a>> {
         let selected = current
             .current()
             .ok_or_else(|| invalid("generated native custody head absent"))?;
@@ -380,7 +453,7 @@ impl ManagedStreamTokenCustody {
             self.recover_native_renewal_carrier(
                 head.sequence,
                 &original,
-                &current,
+                current,
                 deadline,
                 reads,
             )?;
@@ -390,7 +463,7 @@ impl ManagedStreamTokenCustody {
             initial_interval,
             turn.floor.height,
             *turn.floor.block_hash.as_ref(),
-            &current,
+            current,
             deadline,
         )?;
         let now = now_ms()?;
@@ -410,7 +483,7 @@ impl ManagedStreamTokenCustody {
                 } else {
                     *turn.floor.block_hash.as_ref()
                 },
-                &current,
+                current,
                 now,
             )?;
         }
@@ -420,12 +493,12 @@ impl ManagedStreamTokenCustody {
                 if !usable {
                     return Err(ManagedBootstrapFailure::EnrollmentExpired.into());
                 }
-                return Ok(Reconciliation::Current(retained));
+                return Ok(RenewalMaterial::Current(retained));
             }
         }
         if head.sequence == 64 {
             return if usable {
-                Ok(Reconciliation::Current(retained))
+                Ok(RenewalMaterial::Current(retained))
             } else {
                 Err(ManagedBootstrapFailure::EpochLimit.into())
             };
@@ -438,8 +511,34 @@ impl ManagedStreamTokenCustody {
             .checked_add((statement.expires_at_unix_ms - statement.issued_at_unix_ms).div_ceil(2))
             .ok_or_else(|| invalid("custody midpoint overflow"))?;
         if usable && now < midpoint && existing.is_none() {
-            return Ok(Reconciliation::Current(retained));
+            return Ok(RenewalMaterial::Current(retained));
         }
+        Ok(RenewalMaterial::Pending(PendingRenewal {
+            selected,
+            control,
+            next,
+            existing,
+            _retained: retained,
+        }))
+    }
+
+    // Consume the same opened body only after material reconciliation has returned.
+    #[inline(never)]
+    fn reconcile_pending_renewal(
+        &mut self,
+        turn: &mut GeneratedRenewalTurn,
+        verifier: &FinalityVerifier,
+        current: &VerifiedStreamTokenCustodyStateV1,
+        pending: PendingRenewal<'_>,
+        deadline: Instant,
+    ) -> Result<Reconciliation> {
+        let PendingRenewal {
+            _retained,
+            selected,
+            control,
+            next,
+            existing,
+        } = pending;
         // Construct fresh attester selections only when a genuinely unsigned body needs one.
         // Paid originals retain their exact recovery path even after no later interval can exist.
         let select_fresh = |owner: &Self, fees: &Fees| -> Result<_> {
@@ -462,8 +561,8 @@ impl ManagedStreamTokenCustody {
             owner.select_renewal_unsigned(
                 next,
                 &control.policy,
-                &current,
-                &verifier,
+                current,
+                verifier,
                 &terms,
                 deadline,
             )
@@ -489,17 +588,17 @@ impl ManagedStreamTokenCustody {
         } else {
             let history = history.finish_pending(
                 self,
-                &current,
+                current,
                 &SigningTurn::Generated(authorization),
                 deadline,
             )?;
             let history = if history.body_expired()? {
                 let unsigned = select_fresh(self, authorization.fees())?;
                 history
-                    .reserve_successor(self, unsigned, &current, authorization, deadline)?
+                    .reserve_successor(self, unsigned, current, authorization, deadline)?
                     .finish_pending(
                         self,
-                        &current,
+                        current,
                         &SigningTurn::Generated(authorization),
                         deadline,
                     )?

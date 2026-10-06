@@ -20,7 +20,10 @@ use core::fmt;
 use iroha_pasta::{fft::FftError, msm::MsmError};
 
 use crate::{
-    cs::{CircuitDescriptorV1, CsError, DescriptorError, PermutationError, descriptor_digest},
+    cs::{
+        CircuitDescriptorV1, CircuitDescriptorV2, CsError, DescriptorError, PermutationError,
+        ProtocolDescriptor, descriptor_digest,
+    },
     frontend,
 };
 
@@ -30,7 +33,10 @@ pub mod pk;
 mod tests;
 pub mod vk;
 
-pub use keygen::{KeygenConfig, keygen_from_tables, keygen_pk, keygen_vk, permutation_values};
+pub use keygen::{
+    KeygenConfig, KeygenConfigV2, keygen_from_tables, keygen_from_tables_v2, keygen_pk,
+    keygen_pk_v2, keygen_vk, keygen_vk_v2, keygen_vk_with_binding_v2, permutation_values,
+};
 pub use pk::{
     CosetCachePolicy, CosetMasks, CosetPolynomial, KeyConstraintSystem, ProvingKey, QuotientDomain,
 };
@@ -40,7 +46,7 @@ pub use vk::{VK_VERSION, VerifyingKey, VkError};
 /// `descriptor_digest = BLAKE2b(32, "PIPA-v1-CircDesc", D)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DescriptorBinding {
-    descriptor: CircuitDescriptorV1,
+    descriptor: ProtocolDescriptor,
     encoded: Vec<u8>,
     digest: [u8; 32],
 }
@@ -56,7 +62,7 @@ impl DescriptorBinding {
         let encoded = descriptor.encode()?;
         let digest = descriptor_digest(&encoded);
         Ok(Self {
-            descriptor,
+            descriptor: descriptor.into(),
             encoded,
             digest,
         })
@@ -70,15 +76,44 @@ impl DescriptorBinding {
     pub fn decode(bytes: &[u8]) -> Result<Self, DescriptorError> {
         let descriptor = CircuitDescriptorV1::decode(bytes)?;
         Ok(Self {
-            descriptor,
+            descriptor: descriptor.into(),
             encoded: bytes.to_vec(),
             digest: descriptor_digest(bytes),
         })
     }
 
+    /// Validates and binds an explicit V2 descriptor.
+    ///
+    /// # Errors
+    /// An arithmetic, instance-type or transcript-profile rule fails.
+    pub fn new_v2(descriptor: CircuitDescriptorV2) -> Result<Self, DescriptorError> {
+        descriptor.validate()?;
+        let encoded = descriptor.encode()?;
+        let digest = crate::cs::descriptor_v2::descriptor_digest_v2(&encoded);
+        Ok(Self {
+            descriptor: descriptor.into(),
+            encoded,
+            digest,
+        })
+    }
+
+    /// Admits V2 only; it never attempts V1 decoding.
+    ///
+    /// # Errors
+    /// The bytes are not exactly one valid canonical V2 descriptor.
+    pub fn decode_v2(bytes: &[u8]) -> Result<Self, DescriptorError> {
+        Self::new_v2(CircuitDescriptorV2::decode(bytes)?)
+    }
+
+    /// Whether this binding is from the explicit V2 schema.
+    #[must_use]
+    pub fn is_v2(&self) -> bool {
+        self.descriptor.instance_types.is_some()
+    }
+
     /// The descriptor.
     #[must_use]
-    pub fn descriptor(&self) -> &CircuitDescriptorV1 {
+    pub fn descriptor(&self) -> &ProtocolDescriptor {
         &self.descriptor
     }
 

@@ -36,8 +36,9 @@ use super::{
 };
 use crate::{
     cs::{
-        CircuitDescriptorV1, ConstraintSystem, DescriptorConfig, InstanceModeV1,
-        PermutationAssembly, ProofSuffixV1, TranscriptV1,
+        CircuitDescriptorV1, CircuitDescriptorV2, ConstraintSystem, DescriptorConfig,
+        InstanceModeV1, InstanceType, PermutationAssembly, ProofSuffixV1, TranscriptV1,
+        TranscriptV2,
     },
     frontend::{Circuit, synthesize},
     pcs::{
@@ -83,6 +84,56 @@ impl KeygenConfig {
             coset_cache: CosetCachePolicy::Eager,
             table_budget: None,
             msm_budget: MemoryBudget::DEFAULT,
+        }
+    }
+}
+
+/// Explicit V2 protocol choices and key-generation resources.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeygenConfigV2 {
+    /// Transcript profile bound into the descriptor.
+    pub transcript: TranscriptV2,
+    /// Public-input mode (PIPA-R requires Direct).
+    pub instance_mode: InstanceModeV1,
+    /// Opening suffix (PIPA-R requires `FoldedGenerator`).
+    pub proof_suffix: ProofSuffixV1,
+    /// One integer type per instance column.
+    pub instance_types: Vec<InstanceType>,
+    /// Whether selector compression runs.
+    pub compress_selectors: bool,
+    /// Proving-key coset policy.
+    pub coset_cache: CosetCachePolicy,
+    /// Optional fixed-base commitment-table budget.
+    pub table_budget: Option<MemoryBudget>,
+    /// Key-generation MSM budget.
+    pub msm_budget: MemoryBudget,
+}
+impl KeygenConfigV2 {
+    /// The PIPA-R profile with Direct instances and a folded-generator suffix.
+    #[must_use]
+    pub fn pipa_r(instance_types: Vec<InstanceType>) -> Self {
+        Self {
+            transcript: TranscriptV2::KagemushaPoseidonRp57Base,
+            instance_mode: InstanceModeV1::Direct,
+            proof_suffix: ProofSuffixV1::FoldedGenerator,
+            instance_types,
+            compress_selectors: true,
+            coset_cache: CosetCachePolicy::Eager,
+            table_budget: None,
+            msm_budget: MemoryBudget::DEFAULT,
+        }
+    }
+    // Only the common layout builder consumes this intermediate. Binding
+    // below always uses the original V2 profile and the V2 domain.
+    fn layout_options(&self) -> KeygenConfig {
+        KeygenConfig {
+            transcript: TranscriptV1::Blake2bChallenge255,
+            instance_mode: self.instance_mode,
+            proof_suffix: self.proof_suffix,
+            compress_selectors: self.compress_selectors,
+            coset_cache: self.coset_cache,
+            table_budget: self.table_budget,
+            msm_budget: self.msm_budget,
         }
     }
 }
@@ -180,6 +231,7 @@ fn prepare<C: PastaCurve>(
     selectors: Vec<Vec<bool>>,
     permutation: &PermutationAssembly,
     config: &KeygenConfig,
+    v2: Option<&KeygenConfigV2>,
 ) -> Result<Prepared<C::ScalarExt>, KeyError> {
     let curve = curve_v1::<C>().ok_or(KeyError::UnknownCurve)?;
     let k = params.k();
@@ -215,7 +267,14 @@ fn prepare<C: PastaCurve>(
             proof_suffix: config.proof_suffix,
         },
     )?;
-    let binding = DescriptorBinding::new(descriptor)?;
+    let binding = match v2 {
+        Some(profile) => DescriptorBinding::new_v2(CircuitDescriptorV2::from_layout(
+            descriptor,
+            profile.transcript,
+            profile.instance_types.clone(),
+        )?)?,
+        None => DescriptorBinding::new(descriptor)?,
+    };
     // The selector columns move into the fixed columns: the key keeps one
     // copy, and keeps the constraint system without them.
     let (constraint_system, selector_columns) = KeyConstraintSystem::split(finalized);
@@ -267,6 +326,30 @@ fn verifying_key<C: PastaCurve>(
     .map_err(KeyError::from)
 }
 
+/// Builds the expensive key only after synthesis metadata has been released.
+fn finish_pk<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    prepared: Prepared<C::ScalarExt>,
+    coset_cache: CosetCachePolicy,
+    table_budget: Option<MemoryBudget>,
+    msm_budget: MemoryBudget,
+) -> Result<ProvingKey<C>, KeyError> {
+    let vk = verifying_key(params, &prepared, msm_budget)?;
+    let tables = table_budget.map_or_else(CommitmentTables::none, |budget| {
+        CommitmentTables::build(params.params(), budget)
+    });
+    ProvingKey::new(
+        vk,
+        prepared.binding,
+        prepared.constraint_system,
+        prepared.fixed,
+        prepared.sigma,
+        prepared.copy_digest,
+        coset_cache,
+        tables,
+    )
+}
+
 /// Generates the proving key (and its verifying key) from explicit tables:
 /// the pre-substitution constraint system, the `configure` fixed columns, the
 /// selector activations and the copy constraints, each over `n = 2^k` rows of
@@ -287,22 +370,13 @@ pub fn keygen_from_tables<C: PastaCurve>(
     permutation: &PermutationAssembly,
     config: &KeygenConfig,
 ) -> Result<ProvingKey<C>, KeyError> {
-    let prepared = prepare(params, cs, fixed, selectors, permutation, config)?;
-    let vk = verifying_key(params, &prepared, config.msm_budget)?;
-    let tables = config
-        .table_budget
-        .map_or_else(CommitmentTables::none, |budget| {
-            CommitmentTables::build(params.params(), budget)
-        });
-    ProvingKey::new(
-        vk,
-        prepared.binding,
-        prepared.constraint_system,
-        prepared.fixed,
-        prepared.sigma,
-        prepared.copy_digest,
+    let prepared = prepare(params, cs, fixed, selectors, permutation, config, None)?;
+    finish_pk(
+        params,
+        prepared,
         config.coset_cache,
-        tables,
+        config.table_budget,
+        config.msm_budget,
     )
 }
 
@@ -317,15 +391,17 @@ pub fn keygen_vk<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     config: &KeygenConfig,
 ) -> Result<VerifyingKey<C>, KeyError> {
     let synthesized = synthesize(circuit, params.k(), None)?;
-    let tables = synthesized.tables;
+    let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
     let prepared = prepare(
         params,
         synthesized.cs,
-        tables.fixed().to_vec(),
-        tables.selectors().to_vec(),
-        tables.permutation(),
+        fixed,
+        selectors,
+        &permutation,
         config,
+        None,
     )?;
+    drop(permutation);
     verifying_key(params, &prepared, config.msm_budget)
 }
 
@@ -340,13 +416,123 @@ pub fn keygen_pk<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     config: &KeygenConfig,
 ) -> Result<ProvingKey<C>, KeyError> {
     let synthesized = synthesize(circuit, params.k(), None)?;
-    let tables = synthesized.tables;
-    keygen_from_tables(
+    let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
+    let prepared = prepare(
         params,
         synthesized.cs,
-        tables.fixed().to_vec(),
-        tables.selectors().to_vec(),
-        tables.permutation(),
+        fixed,
+        selectors,
+        &permutation,
         config,
+        None,
+    )?;
+    drop(permutation);
+    finish_pk(
+        params,
+        prepared,
+        config.coset_cache,
+        config.table_budget,
+        config.msm_budget,
     )
+}
+
+/// Generates a V2 proving key from explicit assignment tables.
+///
+/// # Errors
+/// The ordinary key-generation errors and explicit V2 profile/type errors.
+pub fn keygen_from_tables_v2<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    cs: ConstraintSystem<C::ScalarExt>,
+    fixed: Vec<Vec<C::ScalarExt>>,
+    selectors: Vec<Vec<bool>>,
+    permutation: &PermutationAssembly,
+    config: &KeygenConfigV2,
+) -> Result<ProvingKey<C>, KeyError> {
+    let prepared = prepare(
+        params,
+        cs,
+        fixed,
+        selectors,
+        permutation,
+        &config.layout_options(),
+        Some(config),
+    )?;
+    finish_pk(
+        params,
+        prepared,
+        config.coset_cache,
+        config.table_budget,
+        config.msm_budget,
+    )
+}
+
+/// Generates a V2 proving key from a circuit, using the same arithmetic engine.
+///
+/// # Errors
+/// As [`keygen_from_tables_v2`], plus synthesis failures.
+pub fn keygen_pk_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    config: &KeygenConfigV2,
+) -> Result<ProvingKey<C>, KeyError> {
+    let synthesized = synthesize(circuit, params.k(), None)?;
+    let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
+    let prepared = prepare(
+        params,
+        synthesized.cs,
+        fixed,
+        selectors,
+        &permutation,
+        &config.layout_options(),
+        Some(config),
+    )?;
+    drop(permutation);
+    finish_pk(
+        params,
+        prepared,
+        config.coset_cache,
+        config.table_budget,
+        config.msm_budget,
+    )
+}
+
+/// Generates a V2 verifying key without retaining a proving key.
+///
+/// # Errors
+/// As [`keygen_pk_v2`].
+pub fn keygen_vk_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    config: &KeygenConfigV2,
+) -> Result<VerifyingKey<C>, KeyError> {
+    keygen_vk_with_binding_v2(params, circuit, config).map(|(_, key)| key)
+}
+
+/// Generates a V2 verifier's descriptor binding and verifying key together.
+///
+/// Verifier-only consumers need both values to call the native verifier. This
+/// path does not build a proving key, quotient cosets or commitment tables;
+/// its descriptor and key are identical to [`keygen_pk_v2`]'s outputs.
+///
+/// # Errors
+/// As [`keygen_pk_v2`].
+pub fn keygen_vk_with_binding_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    config: &KeygenConfigV2,
+) -> Result<(DescriptorBinding, VerifyingKey<C>), KeyError> {
+    let synthesized = synthesize(circuit, params.k(), None)?;
+    let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
+    let prepared = prepare(
+        params,
+        synthesized.cs,
+        fixed,
+        selectors,
+        &permutation,
+        &config.layout_options(),
+        Some(config),
+    )?;
+    drop(permutation);
+    let key = verifying_key(params, &prepared, config.msm_budget)?;
+    Ok((prepared.binding, key))
 }
