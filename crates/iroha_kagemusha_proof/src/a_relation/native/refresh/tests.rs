@@ -8,13 +8,30 @@ fn fixed_refresh_schedules_require_each_owner_exactly_once() {
         (Variant::RefreshCredential, 4),
         (Variant::RefreshSchemePolicy, 4),
         (Variant::RefreshBlacklist, 4),
-        (Variant::RefreshQuotaShare, 8),
+        (Variant::RefreshQuotaShare, 7),
         (Variant::RefreshTimeAnchor, 4),
     ] {
         let (partition, tasks) = schedule(v).unwrap();
         assert_eq!(partition.len(), n);
         assert_eq!(tasks.len(), n);
-        assert_eq!(partition[..4], [vec![], vec![0], vec![1], vec![2]]);
+        if v == Variant::RefreshQuotaShare {
+            assert_eq!(
+                partition,
+                [vec![], vec![], vec![], vec![0], vec![1], vec![2], vec![]]
+            );
+            assert_eq!(
+                tasks[0],
+                [
+                    OperationTask::RefreshEffects,
+                    OperationTask::RefreshQuotaPreviousRoot
+                ]
+            );
+            assert_eq!(tasks[1], [OperationTask::RefreshQuotaWindowRoot]);
+            assert_eq!(tasks[2], [OperationTask::RefreshQuotaUsageRoot]);
+            assert_eq!(tasks[6], [OperationTask::RefreshQuotaMerge]);
+        } else {
+            assert_eq!(partition[..4], [vec![], vec![0], vec![1], vec![2]]);
+        }
         OperationTask::validate(v, &tasks).unwrap();
         for i in 0..tasks.len() {
             if !tasks[i].is_empty() {

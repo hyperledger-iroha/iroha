@@ -2,17 +2,20 @@
 
 use super::*;
 
-fn original() -> Inputs {
+fn original(mask: u8) -> Inputs {
     let state = StateWitness {
         core: [Fp::ZERO; 33],
         rest: [Fp::ZERO; 8],
         lineage: [Fp::ZERO; 18],
     };
-    let state = SendWitness {
+    let mut state = SendState {
         before: state,
         after: state,
         statement: [Fp::ZERO; 26],
     };
+    state.statement[11] = Fp::from(u64::from(mask));
+    state.before.core[21] = Fp::from(u64::from(mask));
+    state.after.core[21] = Fp::from(u64::from(mask));
     let sigma = (0..64).collect::<Vec<u8>>();
     let mut raw = u32::try_from(sigma.len()).unwrap().to_le_bytes().to_vec();
     raw.extend(&sigma);
@@ -26,6 +29,7 @@ fn original() -> Inputs {
     Inputs {
         state,
         sigma,
+        omega: vec![],
         objects: core::array::from_fn(|_| vec![]),
         pending: IndexedInsert {
             leaf: crate::tree::IndexedLeaf::default(),
@@ -47,7 +51,7 @@ fn original() -> Inputs {
                 instances: vec![
                     bounded,
                     vec![],
-                    vec![send_selector().unwrap()],
+                    vec![send_selector(mask).unwrap()],
                     vec![Fq::ONE],
                     vec![Fq::from(12)],
                 ],
@@ -67,8 +71,8 @@ fn original() -> Inputs {
 
 #[test]
 fn exact_send_sigma_tape_statement_length_and_selector_are_bound() {
-    let source = original();
-    assert_eq!(check_sigma_tape(&source), Ok(()));
+    let source = original(0);
+    assert_eq!(check_sigma_tape(&source, 0), Ok(()));
     for mutation in 0..6 {
         let mut bad = source.clone();
         match mutation {
@@ -80,7 +84,7 @@ fn exact_send_sigma_tape_statement_length_and_selector_are_bound() {
             _ => bad.state.statement[20] += Fp::ONE,
         }
         assert_eq!(
-            check_sigma_tape(&bad),
+            check_sigma_tape(&bad, 0),
             Err(Error::Input),
             "mutation{mutation}"
         );
@@ -89,7 +93,7 @@ fn exact_send_sigma_tape_statement_length_and_selector_are_bound() {
 
 #[test]
 fn send_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
-    let mut input = original().q[0].clone();
+    let mut input = original(0).q[0].clone();
     let point = iroha_plonk::transcript::decode_point::<Eq>(
         &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
     )
@@ -98,7 +102,7 @@ fn send_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
     input.instances[1] = vec![x, y];
     let n = input.instances[0].len();
     input.instances[0][n - K..n - K + 4].fill(Fq::ZERO);
-    assert!(q_sigma_part(&input, 12).is_ok());
+    assert!(q_sigma_part(&input, 12, 0).is_ok());
     for mutation in 0..6 {
         let mut bad = input.clone();
         match mutation {
@@ -109,7 +113,7 @@ fn send_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
             4 => bad.instances[4][0] = Fq::from(16),
             _ => bad.instances[2][0] = Fq::ZERO,
         }
-        assert!(q_sigma_part(&bad, 12).is_err(), "mutation{mutation}");
+        assert!(q_sigma_part(&bad, 12, 0).is_err(), "mutation{mutation}");
     }
     let p = [
         0x992d_30ed_0000_0001_u64,
@@ -123,7 +127,7 @@ fn send_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
     }
     let mut alias = input;
     alias.instances[0][n - 1] = Fq::from_repr(repr).unwrap();
-    assert!(q_sigma_part(&alias, 12).is_err());
+    assert!(q_sigma_part(&alias, 12, 0).is_err());
 }
 
 #[test]
@@ -211,13 +215,13 @@ fn final_digest_has_exact52_fields_and_keeps_high_foreign_challenge_limbs() {
 #[test]
 fn fixed_controls_off_mask_rejects_each_foreign_control_source() {
     for index in 0..3 {
-        let mut input = original();
+        let mut input = original(0);
         match index {
             0 => input.state.before.core[21] = Fp::ONE,
             1 => input.state.after.core[21] = Fp::ONE,
             _ => input.state.statement[11] = Fp::ONE,
         }
-        assert_eq!(check_sigma_tape(&input), Err(Error::Input));
+        assert_eq!(check_sigma_tape(&input, 0), Err(Error::Input));
     }
 }
 
@@ -275,5 +279,49 @@ fn consuming_originals_use_exact_public320_proof_and_two544_claims() {
         changed = fields;
         changed[index] += Fp::ONE;
         assert_ne!(lineage_bytes(&changed, &proof, &p, &v).unwrap(), tape);
+    }
+}
+
+#[test]
+fn all_eight_send_selectors_bind_the_exact_original_sigma_and_statement() {
+    for mask in 0..8 {
+        let source = original(mask);
+        assert_eq!(check_sigma_tape(&source, mask), Ok(()));
+        for changed in 0..8 {
+            if changed != mask {
+                assert_eq!(check_sigma_tape(&source, changed), Err(Error::Input));
+            }
+        }
+        let mut bad = source.clone();
+        bad.sigma[40] ^= 1;
+        assert_eq!(check_sigma_tape(&bad, mask), Err(Error::Input));
+        let mut bad = source.clone();
+        bad.state.statement[20] += Fp::ONE;
+        assert_eq!(check_sigma_tape(&bad, mask), Err(Error::Input));
+    }
+}
+#[test]
+fn both_source_classes_require_exact_challenge_normalization_and_hard_verdict() {
+    let eq = iroha_plonk::transcript::decode_point::<Eq>(
+        &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let (x, y) = Option::<(Fq, Fq)>::from(eq.coordinates()).unwrap();
+    for k in [12_u32, 14] {
+        let mut q = original(0).q[0].clone();
+        q.instances[1] = vec![x, y];
+        q.instances[4] = vec![Fq::from(u64::from(k))];
+        let n = q.instances[0].len();
+        q.instances[0][n - K..n - k as usize].fill(Fq::ZERO);
+        assert!(q_sigma_part(&q, k, 0).is_ok());
+        let mut bad = q.clone();
+        bad.instances[0][n - k as usize] = Fq::ZERO;
+        assert!(q_sigma_part(&bad, k, 0).is_err());
+        let mut bad = q.clone();
+        bad.instances[0][n - K] = Fq::ONE;
+        assert!(q_sigma_part(&bad, k, 0).is_err());
+        let mut bad = q.clone();
+        bad.instances[3][0] = Fq::ZERO;
+        assert!(q_sigma_part(&bad, k, 0).is_err());
     }
 }

@@ -10,3 +10,6 @@ pub mod decode;
 pub mod epoch;
 pub mod graph;
 pub mod tape;
+
+#[cfg(test)]
+mod tests;

@@ -10,8 +10,10 @@
 //! IPA claims, and link the key/message to the authorized quorum and block.
 mod plan;
 mod state;
+mod witness;
 pub use plan::BlsLeafPlan;
 pub use state::BlsStateWitness;
+pub use witness::{BlsWitnessError, prepare_bls_witness};
 
 use super::continuity::{SourceCheckpoint, SourceEndpoints, leaf_frame_native};
 use ff::Field;

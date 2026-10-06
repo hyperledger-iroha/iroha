@@ -349,9 +349,11 @@ mismatch before proving, and releases the borrow on return. Restoration and
 next-circuit preparation use no PK. Component tooling likewise releases each
 generated PK and retains verifier metadata; later native parity reconstructs
 one stage key at a time. This removes implicit simultaneous residency of nineteen
-PKs without changing circuits or proof formats. The full borrowed-key regression
-and deterministic proof-byte parity remain pending; memory gate qualification
-still requires actual peak measurements under the agreed harness.
+PKs without changing circuits or proof formats. All ten native component checks
+pass, including same-descriptor foreign-key rejection, wrong descriptor/pair
+rejection and retained metadata after the PK is dropped. The full borrowed-key
+regression and deterministic proof-byte parity remain pending; memory gate
+qualification still requires actual peak measurements under the agreed harness.
 Its sigma classes are pinned to the admitted k12 or k14 source descriptors. The
 installed descriptor-sized Omega transport (excluding public320) plus incoming
 sigma must fit the actual 8,277-byte proof budget; the full raw capacities remain

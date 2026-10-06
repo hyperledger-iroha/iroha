@@ -21,8 +21,12 @@ The implementation follows G1 revision 4 and owner decisions B1, B5–B8 in
 Wallet framing now pins direct `u128` records/enums to 16-byte archived alignment,
 with enclosing fields and inline arrays inheriting it. Shipping assertions preserve
 all 26 existing frame padding values and retained-original layouts without changing
-Norito primitives, decoders or frozen vectors. Actual host checks are running; no result is established;
-ARMv7 runtime and physical-device byte parity remain separate qualification gates.
+Norito primitives, decoders or frozen vectors as part of that alignment change.
+Nine selected host codec cases passed in three runs, each with the same 3,435
+recorded inputs and 33 local packages unchanged. Those recorded source cuts
+cover frozen/retained frames, generated vectors and existing codec checks;
+subsequent source changes require fresh validation. ARMv7 compilation, runtime
+and physical-device byte parity remain separate qualification gates.
 
 - The core has 33 fields and the rest has 8. The head is
   `P(kgwcore1, core || P(kgwrest1, rest))`; σ carries the rest digest.
@@ -145,8 +149,10 @@ under the 10,000-byte envelope cap. This checks encoding, not proof admission.
 These are three-terminal component results. The other seven control masks, full
 uniform catalog and loaded-host/physical-device qualification remain open.
 
-`a_relation::native::send` assembles the controls-off five-stage chain with
-fixed Tagged3 columns and installed A/W keys. It checks the original predecessor,
+`a_relation::native::send` assembles each fixed-mask five-stage chain with
+fixed Tagged3 columns and installed A/W keys. Its immutable catalog requires one
+source for every mask0..7 and an authorized sigma selector for each; repeated
+mask0 keys never establish catalog completeness. It checks the original predecessor,
 both Q proofs and all carried claims, frames the complete consuming tape, and
 retains source-bound proof/claim checkpoints for exact restoration. Its signature
 stage uses the installed root policy and the original Credential, Enrollment
@@ -202,8 +208,9 @@ the common catalog, and connect the installed wallet provider.
 three W continuations using installed artifacts. It checks original Q and
 predecessor proofs, decides every claim, and restores checkpoints only against
 the retained source context. Its terminal retains predecessor Vesta, current
-Vesta and terminal-A opening obligations separately. Six exact-source and
-encoding tests plus strict lint pass; genuine installed-key differential
+Vesta and terminal-A opening obligations separately. The reader also requires the exact original public320/proof/claims tape and
+rejects Omega transports above the common Payment bound before proof admission.
+Six previously recorded exact-source and encoding tests plus strict lint pass; genuine installed-key differential
 proving and replay remain unqualified.
 
 
@@ -448,3 +455,16 @@ cargo test -p iroha_kagemusha_proof
 cargo test --release -p iroha_kagemusha_proof --test real_proofs -- --include-ignored
 cargo clippy -p iroha_kagemusha_proof --all-targets -- -D warnings
 ```
+
+
+`admin_sigma::native` provides typed `BootstrapProver`, `LoadProver`,
+`UnloadProver` and `RetiringProver` original-key importers over the existing
+administrative circuits. Each fixes Vesta/k12, the PIPA-R direct bounded statement
+profile and its compiled operation, checks original source tables and commitments,
+and requires exact agreement with the independently installed VK. Selector
+compression remains the authenticated descriptor's choice, checked by the same
+source importer; no profile fallback or runtime key generation occurs. Proving
+derives the public statement digest from the typed witness and completes native
+verification before returning bytes. The shared descriptor does not authorize
+substitution of another operation's original key. These are proving components;
+A still authenticates objects, maps, signatures and predecessor obligations.

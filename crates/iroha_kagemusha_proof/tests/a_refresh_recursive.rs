@@ -672,16 +672,22 @@ fn prepare_refresh(rooted: &bootstrap_outer::RootedBootstrapOmega, variant: Vari
         tasks[0].push(OperationTask::RefreshBlacklist);
     }
     if variant == Variant::RefreshQuotaShare {
-        tasks.extend(
-            [
+        // Root hashing must precede long continuation histories. The first
+        // stage has room for Effects and the old usage root alongside the hard
+        // predecessor; the other roots then retain only exact object proposals.
+        tasks = vec![
+            vec![
+                OperationTask::RefreshEffects,
                 OperationTask::RefreshQuotaPreviousRoot,
-                OperationTask::RefreshQuotaWindowRoot,
-                OperationTask::RefreshQuotaUsageRoot,
-                OperationTask::RefreshQuotaMerge,
-            ]
-            .map(|task| vec![task]),
-        );
-        partition.resize_with(tasks.len(), Vec::new);
+            ],
+            vec![OperationTask::RefreshQuotaWindowRoot],
+            vec![OperationTask::RefreshQuotaUsageRoot],
+            vec![],
+            vec![OperationTask::RefreshUpdateAuthorization],
+            vec![OperationTask::RefreshCurrentAuthorization],
+            vec![OperationTask::RefreshQuotaMerge],
+        ];
+        partition = vec![vec![], vec![], vec![], vec![0], vec![1], vec![2], vec![]];
     }
     let context = ContextPlan::with_schedule(
         source.plan.context().operation().clone(),
@@ -851,6 +857,16 @@ fn build_refresh(
     let mut part = source.part.clone();
     let mut history = Vec::new();
     if adversarial {
+        if variant == Variant::RefreshQuotaShare {
+            for mutation in [8, 9] {
+                let mut bad = first.clone();
+                bad.owner.mutation = mutation;
+                assert!(
+                    rejected(&bad, &public),
+                    "changed initial quota root witness {mutation}"
+                );
+            }
+        }
         let mut bad = first.clone();
         let mut pred = (*bad.predecessor).clone();
         pred.proof[0] ^= 1;
@@ -1122,7 +1138,7 @@ fn compact_bootstrap_measures_blacklist_and_quota_refresh_capacity() {
 }
 
 #[test]
-#[ignore = "genuine compact Bootstrap plus eight fixed Quota Q/A/W stages and all64 slots; optimized only"]
+#[ignore = "genuine compact Bootstrap plus seven fixed Quota Q/A/W stages and all64 slots; optimized only"]
 fn compact_bootstrap_completes_split_quota_refresh() {
     let rooted = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
     refresh_from_bootstrap(&rooted, Variant::RefreshQuotaShare, true);
@@ -1302,14 +1318,14 @@ fn installed_native_credential_refresh_matches_genuine_relation_and_checkpoints(
 }
 
 #[test]
-#[ignore = "genuine eight-stage Quota source and installed native exact-proof/checkpoint parity; optimized only"]
+#[ignore = "genuine seven-stage Quota source and installed native exact-proof/checkpoint parity; optimized only"]
 fn installed_native_quota_refresh_matches_genuine_relation_and_checkpoints() {
     let rooted = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
-    build_refresh(&rooted, Variant::RefreshQuotaShare, false, true);
+    build_refresh(&rooted, Variant::RefreshQuotaShare, true, true);
 }
 
 #[test]
-#[ignore = "actual Bootstrap and Q sources followed by all eight unknown-witness source layouts; no Refresh proofs"]
+#[ignore = "actual Bootstrap and Q sources followed by all seven unknown-witness source layouts; no Refresh proofs"]
 fn compact_bootstrap_preflights_split_quota_refresh() {
     let rooted = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
     preflight_stage_layouts(&prepare_refresh(&rooted, Variant::RefreshQuotaShare));

@@ -757,7 +757,9 @@ CORE_MUTATIONS = [
     m("HC145", "Queue payload lease: wrap the original ownership generation instead of latching refusal",
       ["queue::payload_leases::tests::pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap"]),
 
-
+    m("HC146", "State preverify: omit exact compiled native descriptor/key admission before dedup publication",
+      ["state::state_preverify_backend_admission_tests::unsupported_retired_and_claimed_backends_fail_state_admission",
+       "state::state_preverify_backend_admission_tests::native_compiled_descriptor_refusal_preserves_key_admission_and_original_retry"]),
 
 ]
 

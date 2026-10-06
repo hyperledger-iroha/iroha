@@ -463,6 +463,50 @@ impl ContextPlan {
             .collect()
     }
 
+    /// Retain proposed Archive source commitments under its complete owner plan.
+    ///
+    /// This is only a context assignment, never evidence of byte provenance.
+    /// The fixed Archive dispatcher requires the current authorization,
+    /// retained Payment, original proof, evidence and signature owners to
+    /// recompute each category before terminal mode and map closure. Every
+    /// continuation binds these same proposed triples through `D_ctx`.
+    /// # Errors
+    /// Wrong variant, incomplete task ownership, noncanonical source schema,
+    /// wrong value count, or layout failure. Lengths must fit `UInt32`.
+    pub fn assign_archive_object_claims(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        values: &[[Value<Fp>; 3]],
+    ) -> Result<Vec<ContextObjectCells>, Error> {
+        use iroha_plonk_recursion::obligation::ledger::Variant;
+        use super::archive::{results::ArchiveResultPlan, stage::ArchiveStagePlan};
+        let variant = self.operation.frame().variant();
+        let expected_count = match variant {
+            Variant::ArchiveReceive => 17,
+            Variant::ArchiveStatus => 19,
+            _ => return Err(Error::Synthesis),
+        };
+        if self.objects.len() != expected_count
+            || values.len() != expected_count
+            || self.objects != ArchiveStagePlan::context_specs(
+                variant,
+                self.objects[9].capacity as usize,
+                self.objects[10].capacity as usize,
+                self.objects[13].capacity as usize,
+            )?
+        {
+            return Err(Error::Synthesis);
+        }
+        ArchiveResultPlan::new(self, expected_count - 1)?;
+        self.objects.iter().zip(values).map(|(spec, values)| {
+            let [authenticated_digest, length, tape_digest] = chip.uint().glue()
+                .witnesses(region, values)?.try_into().map_err(|_| Error::Synthesis)?;
+            let length = chip.uint().range_check::<32>(region, &length)?;
+            Ok(ContextObjectCells { spec: *spec, authenticated_digest, length, tape_digest })
+        }).collect()
+    }
+
     /// Pin a nonempty initial Q partition and every source Q key identity.
     /// W's key is pinned only in A2: placing it in A1 would create a VK cycle.
     ///

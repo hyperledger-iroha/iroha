@@ -477,6 +477,7 @@ pub(super) fn run<C: RunContext>(
         Command::Status(args) => (args, false, true),
         Command::ExportProfile(_) => eyre::bail!("profile export has no deployment definition"),
     };
+    let verification_origins = command.verification_origins(&trust)?;
     let deadline = operation_deadline(args.timeout_ms)?;
     let binding = DefinitionBinding::new(
         definition,
@@ -604,6 +605,7 @@ pub(super) fn run<C: RunContext>(
         preflight_proofs.as_mut(),
         apply,
         deadline,
+        &verification_origins,
     )?;
     print_saved_report(&report, apply, |report| context.print_data(report))
 }

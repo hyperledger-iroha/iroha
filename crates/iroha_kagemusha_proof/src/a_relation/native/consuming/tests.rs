@@ -26,6 +26,7 @@ fn original() -> Inputs {
     Inputs {
         state,
         sigma,
+        omega: vec![],
         objects: core::array::from_fn(|_| vec![]),
         recovery: None,
         q: [
@@ -250,4 +251,17 @@ fn original_lineage_bytes_bind_every_byte_without_truncating_limbs() {
     }
     fields[0] = Fp::from(2);
     assert_eq!(lineage_bytes(&fields, &proof, &p, &v), Err(Error::Input));
+}
+
+#[test]
+fn uniform_omega_transport_cap_rejects_generic_profiles_without_a_fallback() {
+    assert_eq!(OMEGA_TRANSPORT_CAP, 4_821);
+    assert_eq!(check_omega_transport_length(3_712), Ok(()));
+    for size in [0, 1, 3_733, 3_744, 11_360 - 1_088, usize::MAX] {
+        assert_eq!(
+            check_omega_transport_length(size),
+            Err(Error::Input),
+            "size {size}"
+        );
+    }
 }

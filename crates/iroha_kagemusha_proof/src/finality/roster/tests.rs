@@ -3,7 +3,7 @@ use super::*;
 use iroha_plonk::{
     check::{CheckMode, check_circuit},
     cs::{Column, ConstraintSystem, Instance},
-    frontend::{Circuit, Layouter, SimpleFloorPlanner, Value},
+    frontend::{Circuit, Layouter, SimpleFloorPlanner, Value, synthesize},
 };
 use iroha_plonk_recursion::verifier::VerifierConfig;
 
@@ -104,6 +104,13 @@ fn ordered_roster_paths_bind_full_keys_seats_siblings_and_zero_padding() {
             root,
             known: true,
         };
+        let known = synthesize(&circuit, 16, None).unwrap();
+        let unknown = synthesize(&circuit.without_witnesses(), 16, None).unwrap();
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(
+            known.tables.advice_assigned(),
+            unknown.tables.advice_assigned()
+        );
         let mut changed = circuit.clone();
         changed.seat = 1;
         assert!(!accepts(&changed));

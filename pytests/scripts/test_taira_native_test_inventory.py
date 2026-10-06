@@ -63,13 +63,13 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 371)
+        self.assertEqual(len(names), 374)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
             'native State preverify backend and key admission': (
                 ('state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests'),
-                ('retired_and_unknown_backends_refuse_before_key_or_dedup_admission', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'retired_ipa_profile_labels_refuse_even_native_envelope', 'native_and_stark_key_refusals_preserve_original_dedup_for_retry')),
+                ('unsupported_retired_and_claimed_backends_fail_state_admission', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'native_compiled_descriptor_refusal_preserves_key_admission_and_original_retry', 'native_state_payload_caps_commitments_and_metadata_precede_dedup_publication', 'genuine_stark_originals_preserve_independent_admission_and_key_activity', 'retired_ipa_profile_labels_refuse_even_native_envelope', 'native_and_stark_key_refusals_preserve_original_dedup_for_retry')),
             'native original Queue payload lease custody': (
                 ('queue.rs', 'queue/payload_leases.rs', 'payload_leases', 'queue::payload_leases::tests'),
                 ('pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue', 'pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection', 'pending_payload_lease_retires_on_actual_certified_state_publication', 'pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap')),

@@ -69,6 +69,9 @@ mod tests;
 pub const SOURCE_RANGE_BUSES: usize = 3;
 /// Exact source schedule has four A stages and three W continuations.
 pub const A_STAGE_COUNT: usize = 4;
+/// Uniform Omega proof plus both claims, after the largest accepted Send sigma.
+/// The canonical public320 lineage prefix is outside this transport bound.
+pub const OMEGA_TRANSPORT_CAP: usize = 10_000 - 1_723 - 3_456;
 
 /// Native preparation/proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +121,8 @@ pub struct Inputs {
     pub state: ConsumingWitness,
     /// Exact original unframed sigma bytes also exported by Q0.
     pub sigma: Vec<u8>,
+    /// Exact canonical public320 plus original predecessor proof and both full claims.
+    pub omega: Vec<u8>,
     /// Current credential, direct Enrollment certificate and own Advance Receipt.
     pub objects: [Vec<u8>; 3],
     /// Exact depth32 recovery insertion for Unload; must be absent for Retiring.
@@ -190,6 +195,13 @@ impl Plan {
         predecessor_key
             .kagemusha_digest(predecessor.binding())
             .map_err(|_| Error::Artifact)?;
+        operation
+            .sigma
+            .class(0)
+            .ok_or(Error::Artifact)?
+            .selector_key_digest(selector_index(operation.frame().variant())?)
+            .ok_or(Error::Artifact)?;
+        check_omega_transport_length(predecessor.proof_length()).map_err(|_| Error::Artifact)?;
         let slots = signatures.slots();
         if slots.len() != 3
             || slots.iter().any(|slot| slot.mode != VerifyMode::Hard)
@@ -274,6 +286,19 @@ impl Plan {
             return Err(Error::Input);
         }
         check_sigma_tape(&input, variant)?;
+        let predecessor_length = self
+            .context
+            .operation()
+            .omega()
+            .ok_or(Error::Artifact)?
+            .proof_length();
+        if input.predecessor.proof.len() != predecessor_length
+            || input.omega.len()
+                != 320 + predecessor_length + 2 * iroha_plonk_recursion::ACCUMULATOR_BYTES
+        {
+            return Err(Error::Input);
+        }
+        check_omega_transport_length(predecessor_length)?;
         let pallas =
             AccumulatorT::<Ep>::from_bytes(&input.predecessor.pallas).map_err(|_| Error::Input)?;
         let vesta =
@@ -345,6 +370,9 @@ impl Plan {
             &pallas,
             &vesta,
         )?;
+        if input.omega != omega {
+            return Err(Error::Input);
+        }
         let objects = core::array::from_fn(|i| SignedTape {
             kind: object_kinds()[i],
             bytes: input.objects[i].clone(),
@@ -2045,15 +2073,16 @@ fn prove_a(
     Ok((output.proof, opening))
 }
 
-fn sigma_selector(variant: Variant) -> Result<Fq, Error> {
+fn selector_index(variant: Variant) -> Result<u8, Error> {
     let tag = match variant {
         Variant::Unload => 6,
         Variant::Retiring => 8,
         _ => return Err(Error::Artifact),
     };
-    super::super::schedule::sigma_selector(tag, 0)
-        .map(|index| Fq::from(u64::from(index)))
-        .ok_or(Error::Artifact)
+    super::super::schedule::sigma_selector(tag, 0).ok_or(Error::Artifact)
+}
+fn sigma_selector(variant: Variant) -> Result<Fq, Error> {
+    selector_index(variant).map(|index| Fq::from(u64::from(index)))
 }
 
 fn frame(bytes: &[u8]) -> Result<Vec<u8>, Error> {
@@ -2105,4 +2134,16 @@ fn lineage_bytes(
     out.extend(pallas.to_bytes());
     out.extend(vesta.to_bytes());
     Ok(out)
+}
+
+fn check_omega_transport_length(proof: usize) -> Result<(), Error> {
+    if proof == 0
+        || !proof.is_multiple_of(32)
+        || proof
+            .checked_add(2 * iroha_plonk_recursion::ACCUMULATOR_BYTES)
+            .is_none_or(|transport| transport > OMEGA_TRANSPORT_CAP)
+    {
+        return Err(Error::Input);
+    }
+    Ok(())
 }

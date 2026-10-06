@@ -551,7 +551,8 @@ Lane observations do not confer finality.
 ### KAGEMUSHA wallet peer transports
 
 `KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, domain-separated
-18 SHA-256 digest roles, 17 signing domains, envelope header validation and strict `kgm1:` text,
+20 SHA-256 digest roles, including the NEW unsigned app/enrollment policy identities,
+17 signing domains, envelope header validation and strict `kgm1:` text,
 matching the Rust owner `iroha_data_model::kagemusha::kagemusha_wallet_v1`. Every
 signature is ECDSA-P256-SHA256 over the 32-byte Poseidon message of its body, which
 the native core computes; the SDK checks it only as a canonical σ-field value.

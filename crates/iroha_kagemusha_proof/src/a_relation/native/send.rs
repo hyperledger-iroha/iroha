@@ -1,4 +1,4 @@
-//! Native controls-off Send A1/W0/A2/W1/A3/W2/A4/W3/A5 composition.
+//! Native fixed-mask Send A1/W0/A2/W1/A3/W2/A4/W3/A5 composition.
 //!
 //! A1 binds the actual predecessor Omega, original own sigma and exact signed tapes.
 //! A2 inserts Pending; A3 inserts the fee claim and preserves the remaining state.
@@ -6,7 +6,8 @@
 //! Enrollment certificate and own Advance Receipt. The fixed Tagged3 source profile
 //! consumes installed keys, verifies every produced/restored proof and decides every
 //! carried opening. The terminal A5 is only an input to the final Omega producer.
-//! TODO: add the remaining seven Send control masks before full catalog admission.
+//! Every mask has an independently installed pipeline and authorized sigma selector.
+//! TODO: qualify the remaining seven masks and complete final Omega catalog.
 
 use core::fmt;
 use std::sync::Arc;
@@ -118,7 +119,7 @@ pub struct PredecessorInput {
 
 /// Exact before/after states and own Send statement from the irreversible Advance.
 #[derive(Clone, Debug)]
-pub struct SendWitness {
+pub struct SendState {
     /// Original committed predecessor state.
     pub before: StateWitness,
     /// Exact successor state retained by Advance.
@@ -133,9 +134,11 @@ pub struct SendWitness {
 #[derive(Clone, Debug)]
 pub struct Inputs {
     /// Exact predecessor/successor core33/rest8/public18 and own statement26.
-    pub state: SendWitness,
+    pub state: SendState,
     /// Exact original unframed sigma bytes also exported by Q0.
     pub sigma: Vec<u8>,
+    /// Exact public320 transcript followed by original predecessor proof and both claims.
+    pub omega: Vec<u8>,
     /// Current Credential, Request, `FeeSchedule`, Enrollment certificate, own Advance Receipt.
     pub objects: [Vec<u8>; 5],
     /// Exact depth32 pending-map insertion checked by A2.
@@ -152,6 +155,7 @@ pub struct Inputs {
 #[derive(Clone, Debug)]
 pub struct Plan {
     context: ContextPlan,
+    mask: u8,
     policy: OwnPolicy,
     signatures: QSignaturePlan,
     predecessor_key: VerifyingKey<Ep>,
@@ -161,19 +165,21 @@ pub struct Plan {
 impl Plan {
     /// Pin predecessor and the fixed [[],[],[],[Q0],[Q1]] schedule with every Send task.
     /// The hard signature slots are [own Receipt,current Credential,Enrollment certificate],
-    /// with the certificate under the installed root. Only controls mask0 is implemented.
+    /// with the certificate under the installed root. The mask is fixed by installed keys.
     /// # Errors
     /// Wrong variant/k/schema, absent predecessor or substituted fixed signature/key policy.
     pub fn new(
         operation: AProofPlan,
+        mask: u8,
         policy: OwnPolicy,
         signatures: QSignaturePlan,
         predecessor_key: VerifyingKey<Ep>,
         pallas: PinnedParams<Ep>,
         vesta: PinnedParams<Eq>,
     ) -> Result<Self, Error> {
-        if operation.frame().variant() != Variant::Send
-            || operation.frame().part_source_k() != 12
+        if mask > 7
+            || operation.frame().variant() != Variant::Send
+            || !matches!(operation.frame().part_source_k(), 12 | 14)
             || operation.q_count() != 2
             || !operation.frame().has_predecessor()
             || operation.sigma.slot_count() != 1
@@ -185,10 +191,16 @@ impl Plan {
                 .binding()
                 .descriptor()
                 .k
-                != 12
+                != operation.frame().part_source_k() as u8
         {
             return Err(Error::Artifact);
         }
+        operation
+            .sigma
+            .class(0)
+            .ok_or(Error::Artifact)?
+            .selector_key_digest(2 + mask)
+            .ok_or(Error::Artifact)?;
         pallas.require_k(16).map_err(|_| Error::Artifact)?;
         vesta.require_k(16).map_err(|_| Error::Artifact)?;
         let predecessor = operation.omega().ok_or(Error::Artifact)?;
@@ -263,6 +275,7 @@ impl Plan {
         SendStagePlan::new(context.clone()).map_err(|_| Error::Artifact)?;
         Ok(Self {
             context,
+            mask,
             policy,
             signatures,
             predecessor_key,
@@ -295,7 +308,7 @@ impl Plan {
         if input.sigma.len() != class.verifier().proof_length() {
             return Err(Error::Input);
         }
-        check_sigma_tape(&input)?;
+        check_sigma_tape(&input, self.mask)?;
         let pallas =
             AccumulatorT::<Ep>::from_bytes(&input.predecessor.pallas).map_err(|_| Error::Input)?;
         let vesta =
@@ -359,7 +372,11 @@ impl Plan {
                 budget,
             )?);
         }
-        let part = q_sigma_part(&input.q[0], 12)?;
+        let part = q_sigma_part(
+            &input.q[0],
+            self.context.operation().frame().part_source_k(),
+            self.mask,
+        )?;
         part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
         let omega = lineage_bytes(
             &input.state.before.lineage,
@@ -367,6 +384,9 @@ impl Plan {
             &pallas,
             &vesta,
         )?;
+        if input.omega != omega {
+            return Err(Error::Input);
+        }
         let maps = Maps {
             witness: input.state,
             pending: input.pending,
@@ -438,7 +458,7 @@ impl SignedTape {
 }
 #[derive(Clone)]
 struct Maps {
-    witness: SendWitness,
+    witness: SendState,
     pending: IndexedInsert<Fp>,
     fee: IndexedInsert<Fp>,
     objects: [SignedTape; 5],
@@ -1264,6 +1284,7 @@ impl Prepared {
 
 /// Already installed A1/A2/A3/A4/A5 and W0/W1/W2/W3 proving artifacts for this fixed profile.
 /// Authentication and genuine PK import remain the native package owner's responsibility.
+#[derive(Clone)]
 pub struct Prover {
     plan: Plan,
     a: [Arc<ProvingKey<Eq>>; A_STAGE_COUNT],
@@ -1826,14 +1847,16 @@ fn object_kinds() -> [ObjectKind; 5] {
     ]
 }
 
-fn check_sigma_tape(input: &Inputs) -> Result<(), Error> {
-    if input.state.before.core[21] != Fp::ZERO
-        || input.state.after.core[21] != Fp::ZERO
-        || input.state.statement[11] != Fp::ZERO
+fn check_sigma_tape(input: &Inputs, mask: u8) -> Result<(), Error> {
+    let expected = Fp::from(u64::from(mask));
+    if mask > 7
+        || input.state.before.core[21] != expected
+        || input.state.after.core[21] != expected
+        || input.state.statement[11] != expected
     {
         return Err(Error::Input);
     }
-    let selector = send_selector()?;
+    let selector = send_selector(mask)?;
     let bounded = input.q[0].instances.first().ok_or(Error::Input)?;
     let mut raw = u32::try_from(input.sigma.len())
         .map_err(|_| Error::Input)?
@@ -1859,13 +1882,13 @@ fn check_sigma_tape(input: &Inputs) -> Result<(), Error> {
     Ok(())
 }
 
-fn q_sigma_part(input: &QInput, source_k: u32) -> Result<FoldInput<Eq>, Error> {
+fn q_sigma_part(input: &QInput, source_k: u32, mask: u8) -> Result<FoldInput<Eq>, Error> {
     let [bounded, point, indices, verdicts, source] = input.instances.as_slice() else {
         return Err(Error::Input);
     };
     if point.len() != 2
         || indices.len() != 1
-        || indices.as_slice() != [send_selector()?]
+        || indices.as_slice() != [send_selector(mask)?]
         || verdicts.as_slice() != [Fq::ONE]
         || source.as_slice() != [Fq::from(u64::from(source_k))]
         || bounded.len() < K
@@ -2134,8 +2157,8 @@ fn prove_a(
     Ok((output.proof, opening))
 }
 
-fn send_selector() -> Result<Fq, Error> {
-    super::super::schedule::sigma_selector(3, 0)
+fn send_selector(mask: u8) -> Result<Fq, Error> {
+    super::super::schedule::sigma_selector(3, mask)
         .map(|v| Fq::from(u64::from(v)))
         .ok_or(Error::Artifact)
 }
@@ -2189,4 +2212,37 @@ fn lineage_bytes(
     out.extend(pallas.to_bytes());
     out.extend(vesta.to_bytes());
     Ok(out)
+}
+
+/// Complete immutable eight-mask Send source catalog. Construction is not release qualification.
+pub struct Catalog {
+    masks: [Prover; 8],
+}
+impl Catalog {
+    /// Require exactly one installed source pipeline for each global Send selector2..9.
+    /// # Errors
+    /// A missing/reordered mask or another scheme/provider/root policy.
+    pub fn new(masks: [Prover; 8]) -> Result<Self, Error> {
+        let first = masks[0].plan.policy;
+        for (mask, prover) in masks.iter().enumerate() {
+            if usize::from(prover.plan.mask) != mask
+                || prover.plan.policy.scheme != first.scheme
+                || prover.plan.policy.provider != first.provider
+                || prover.plan.policy.root != first.root
+            {
+                return Err(Error::Artifact);
+            }
+        }
+        Ok(Self { masks })
+    }
+    /// Select from the exact original statement mask, then verify its predecessor/core and proofs.
+    /// # Errors
+    /// Noncanonical mask, differing opened core, source/tape or native proof/decide failure.
+    pub fn prepare(&self, input: Inputs, budget: MemoryBudget) -> Result<Session<'_>, Error> {
+        let repr = input.state.statement[11].to_repr();
+        if repr[0] > 7 || repr[1..] != [0; 31] {
+            return Err(Error::Input);
+        }
+        self.masks[usize::from(repr[0])].prepare(input, budget)
+    }
 }

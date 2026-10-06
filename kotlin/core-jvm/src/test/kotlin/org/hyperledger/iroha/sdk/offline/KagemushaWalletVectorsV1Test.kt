@@ -254,7 +254,7 @@ class KagemushaWalletVectorsV1Test {
             assertNull(KagemushaWalletDigestRoleV1.fromLabel(label), label)
             assertTrue(vectors.array("digests").none { it.jsonObject.text("role") == label }, label)
         }
-        assertEquals(18, KagemushaWalletDigestRoleV1.entries.size)
+        assertEquals(20, KagemushaWalletDigestRoleV1.entries.size)
         assertEquals(
             KagemushaWalletDigestRoleV1.entries.size,
             KagemushaWalletDigestRoleV1.entries.map { it.label }.toSet().size,

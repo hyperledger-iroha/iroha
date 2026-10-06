@@ -44,6 +44,10 @@ pub enum KagemushaWalletDigestRoleV1 {
     Account,
     /// `enrollment-challenge`: issuer enrollment challenge (§2.2).
     EnrollmentChallenge,
+    /// NEW first-release `app-policy`: explicit app identity selection.
+    AppPolicy,
+    /// NEW first-release `enrollment-policy`: exact verifier/regulatory selection.
+    EnrollmentPolicy,
     /// `enrollment-id`: enrollment incarnation identity (§2.2).
     EnrollmentId,
     /// `enrollment-key-binding`: App Attest enrollment assertion client data (§2.2).
@@ -73,13 +77,15 @@ pub enum KagemushaWalletDigestRoleV1 {
 
 impl KagemushaWalletDigestRoleV1 {
     /// Every role, in declaration order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Scheme,
         Self::Relation,
         Self::ProviderContract,
         Self::AssetScope,
         Self::Account,
         Self::EnrollmentChallenge,
+        Self::AppPolicy,
+        Self::EnrollmentPolicy,
         Self::EnrollmentId,
         Self::EnrollmentKeyBinding,
         Self::WalletId,
@@ -104,6 +110,8 @@ impl KagemushaWalletDigestRoleV1 {
             Self::AssetScope => "asset-scope",
             Self::Account => "account",
             Self::EnrollmentChallenge => "enrollment-challenge",
+            Self::AppPolicy => "app-policy",
+            Self::EnrollmentPolicy => "enrollment-policy",
             Self::EnrollmentId => "enrollment-id",
             Self::EnrollmentKeyBinding => "enrollment-key-binding",
             Self::WalletId => "wallet-id",

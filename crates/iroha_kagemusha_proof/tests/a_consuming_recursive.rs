@@ -1688,6 +1688,7 @@ fn native_installed_consuming_differential(
     let input = native::Inputs {
         state: source.maps.witness,
         sigma: source.sigma.clone(),
+        omega: source.omega.clone(),
         objects: core::array::from_fn(|i| source.objects[i].bytes.clone()),
         recovery: source.maps.recovery,
         q: core::array::from_fn(|i| native::QInput {

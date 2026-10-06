@@ -4,7 +4,7 @@
 //! Checkpoints retain original proof bytes and full accumulator claims. No operation
 //! is monetarily complete before its admitted final Omega and durable wallet commit.
 //! TODO: qualify native parity and final wrappers under the full terminal catalog;
-//! the eight-stage Quota layout additionally requires actual recursive qualification.
+//! the seven-stage Quota layout additionally requires actual recursive qualification.
 
 use core::fmt;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ pub const SOURCE_RANGE_BUSES: usize = 3;
 /// Ordinary Refresh kinds have four source A stages and three W continuations.
 pub const BASIC_A_STAGE_COUNT: usize = 4;
 /// Quota adds three authenticated root owners and one exact matching owner.
-pub const QUOTA_A_STAGE_COUNT: usize = 8;
+pub const QUOTA_A_STAGE_COUNT: usize = 7;
 
 /// Native preparation/proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,7 +170,7 @@ pub struct Plan {
     vesta: PinnedParams<Eq>,
 }
 impl Plan {
-    /// Pin the exact four- or eight-stage schedule and both hard signature schemas.
+    /// Pin the exact four- or seven-stage schedule and both hard signature schemas.
     /// The variant is an installed key property, never chosen by private data.
     /// # Errors
     /// Wrong variant/k/schema, absent predecessor or foreign fixed artifact shape.
@@ -1689,16 +1689,22 @@ fn schedule(variant: Variant) -> Result<Schedule, Error> {
         tasks[0].push(OperationTask::RefreshBlacklist);
     }
     if variant == Variant::RefreshQuotaShare {
-        tasks.extend(
-            [
+        // Root hashing must precede long continuation histories. The first
+        // stage has room for Effects and the old usage root alongside the hard
+        // predecessor; the other roots then retain only exact object proposals.
+        tasks = vec![
+            vec![
+                OperationTask::RefreshEffects,
                 OperationTask::RefreshQuotaPreviousRoot,
-                OperationTask::RefreshQuotaWindowRoot,
-                OperationTask::RefreshQuotaUsageRoot,
-                OperationTask::RefreshQuotaMerge,
-            ]
-            .map(|t| vec![t]),
-        );
-        partition.resize_with(tasks.len(), Vec::new);
+            ],
+            vec![OperationTask::RefreshQuotaWindowRoot],
+            vec![OperationTask::RefreshQuotaUsageRoot],
+            vec![],
+            vec![OperationTask::RefreshUpdateAuthorization],
+            vec![OperationTask::RefreshCurrentAuthorization],
+            vec![OperationTask::RefreshQuotaMerge],
+        ];
+        partition = vec![vec![], vec![], vec![], vec![0], vec![1], vec![2], vec![]];
     }
     Ok((partition, tasks))
 }

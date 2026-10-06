@@ -4,7 +4,8 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
-- KAGEMUSHA wallet V1 follows the single-design G1 layout: 18 SHA-256 roles,
+- KAGEMUSHA wallet V1 follows the single-design G1 layout: 20 SHA-256 roles,
+  including the NEW unsigned app/enrollment policy identities,
   60 Poseidon domains and 17 signing domains. Every signature signs its exact
   32-byte Poseidon message. The artifact manifest alone has a SHA signed-object
   digest (`artifactManifestDigest(message:signature:)`); circuit-visible object,

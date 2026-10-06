@@ -410,3 +410,108 @@ fn native_archive_leaf_verifies_complete_opening_and_rejects_mutations() {
     );
     prove(&circuit, &circuit.instances(), 199);
 }
+
+macro_rules! installed_consuming_case {
+    ($test:ident, $owner:ident, $circuit:ident, $retiring:literal, $seed:literal) => {
+        #[test]
+        fn $test() {
+            use iroha_kagemusha_proof::admin_sigma::native::$owner;
+            use iroha_plonk::keys::{CosetCachePolicy, pk::artifact::ReadConfig};
+            let witness = witness($retiring);
+            let circuit = $circuit::new(&witness);
+            let params = common::vesta_params(K);
+            let key = keygen_pk_v2(
+                &params,
+                &circuit,
+                &KeygenConfigV2::pipa_r($circuit::instance_types().to_vec()),
+            )
+            .unwrap();
+            let original = key.artifact_bytes_v2().unwrap();
+            let installed = $owner::from_original_artifact(
+                params,
+                key.binding().encoded(),
+                key.vk().to_bytes(),
+                &original,
+                ReadConfig {
+                    maximum_bytes: original.len(),
+                    maximum_rows: 1 << K,
+                    coset_cache: CosetCachePolicy::OnDemand,
+                    msm_budget: MemoryBudget::DEFAULT,
+                },
+            )
+            .unwrap();
+            assert_eq!(installed.binding(), key.binding());
+            assert_eq!(installed.verifying_key().to_bytes(), key.vk().to_bytes());
+            assert_eq!(
+                installed.proving_key().artifact_bytes_v2().unwrap(),
+                original
+            );
+            let proof = installed
+                .prove(&witness, common::recovery($seed), ProverConfig::default())
+                .unwrap();
+            assert_eq!(proof.instances, circuit.instances());
+            let opening = accumulate_generator(
+                installed.params(),
+                installed.binding(),
+                installed.verifying_key(),
+                &proof.instances,
+                &proof.bytes,
+                MemoryBudget::DEFAULT,
+            )
+            .unwrap();
+            opening
+                .decide(installed.params(), MemoryBudget::DEFAULT)
+                .unwrap();
+            let mut wrong = proof.instances.clone();
+            wrong[0][0] += Fp::ONE;
+            assert!(
+                accumulate_generator(
+                    installed.params(),
+                    installed.binding(),
+                    installed.verifying_key(),
+                    &wrong,
+                    &proof.bytes,
+                    MemoryBudget::DEFAULT,
+                )
+                .is_err()
+            );
+            let mut corrupted = proof.bytes;
+            let last = corrupted.len() - 1;
+            corrupted[last] ^= 1;
+            assert!(
+                accumulate_generator(
+                    installed.params(),
+                    installed.binding(),
+                    installed.verifying_key(),
+                    &proof.instances,
+                    &corrupted,
+                    MemoryBudget::DEFAULT,
+                )
+                .is_err()
+            );
+            let mut wrong = witness;
+            wrong.successor.core[core::BALANCE] += Fp::ONE;
+            rebind(&mut wrong);
+            assert!(
+                installed
+                    .prove(&wrong, common::recovery($seed + 1), ProverConfig::default())
+                    .is_err()
+            );
+        }
+    };
+}
+
+installed_consuming_case!(
+    installed_admin_sigma_originals_prove_unload_and_reject_rehashed_value,
+    UnloadProver,
+    UnloadCircuit,
+    false,
+    205
+);
+installed_consuming_case!(
+    installed_admin_sigma_originals_prove_retiring_and_reject_rehashed_value,
+    RetiringProver,
+    RetiringCircuit,
+    true,
+    207
+);

@@ -19,6 +19,8 @@ pub mod consensus;
 
 pub mod roster;
 
+pub mod aggregate;
+
 pub mod continuity;
 
 pub mod schedule;

@@ -819,11 +819,9 @@ pub struct KagemushaWalletEnrollmentChallengeV1 {
     pub asset_digest: [u8; 32],
     /// Digest of the canonical domainless `AccountId`.
     pub account_digest: [u8; 32],
-    /// Issuer-defined app identity policy digest.
-    // TODO(G5): define the app-policy preimage with the Torii enrollment family.
+    /// NEW typed app-policy digest; issuer selection requires approved retained originals.
     pub app_policy: [u8; 32],
-    /// Issuer-defined enrollment policy digest.
-    // TODO(G5): define the enrollment-policy preimage with the Torii enrollment family.
+    /// NEW typed enrollment-policy digest; structural matching grants no admission.
     pub enrollment_policy: [u8; 32],
     /// Fresh issuer nonce.
     pub issuer_nonce: [u8; 32],

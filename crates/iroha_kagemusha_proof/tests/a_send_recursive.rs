@@ -1665,12 +1665,13 @@ fn native_installed_send_differential(
     );
     let source = &first.source;
     let input = native::Inputs {
-        state: native::SendWitness {
+        state: native::SendState {
             before: source.maps.witness.before,
             after: source.maps.witness.after,
             statement: source.maps.witness.statement,
         },
         sigma: source.sigma.clone(),
+        omega: source.omega.clone(),
         objects: core::array::from_fn(|i| {
             if i < 3 {
                 source.maps.witness.objects[i].clone()
@@ -1692,6 +1693,7 @@ fn native_installed_send_differential(
     };
     let plan = native::Plan::new(
         source.plan.clone(),
+        0,
         load_objects::policy(),
         source.signature_schema.clone(),
         source.predecessor.key.clone(),
@@ -1709,6 +1711,10 @@ fn native_installed_send_differential(
     )
     .unwrap();
     assert_eq!(installed.descriptors().len(), 9);
+    assert!(
+        native::Catalog::new(core::array::from_fn(|_| installed.clone())).is_err(),
+        "eight copies of mask0 do not constitute the complete source catalog"
+    );
     let budget = MemoryBudget::DEFAULT;
     let session = installed.prepare(input.clone(), budget).unwrap();
     let unrelated_session = installed.prepare(input.clone(), budget).unwrap();
