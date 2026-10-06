@@ -88,13 +88,13 @@ const SECRET_FILES: &[SecretFile] = &[
         key: &["kagemusha_load_authorizer", "keyring_file"],
         name: layout::KAGEMUSHA_LOAD_AUTHORIZER_KEYRING,
         alternatives: &[],
-        needs_parent: false,
+        needs_parent: true,
     },
     SecretFile {
         key: &["kagemusha_load_authorizer", "submitter_key_file"],
         name: layout::KAGEMUSHA_LOAD_SUBMITTER_KEY,
         alternatives: &[],
-        needs_parent: false,
+        needs_parent: true,
     },
     SecretFile {
         key: &["torii", "faucet", "private_key_file"],

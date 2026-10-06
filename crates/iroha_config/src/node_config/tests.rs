@@ -291,15 +291,26 @@ fn profile_node_file_layers_the_profile_and_completes_data_dir() {
 #[test]
 fn native_publisher_parser_fixtures_require_both_private_original_files() {
     let dir = NodeDir::new("publisher_private_originals");
-    let path = dir.write("config.toml", &profile_node(&dir, "observer", ""));
+    let path = dir.write(
+        "config.toml",
+        &profile_node(&dir, "observer", "[kagemusha_load_authorizer]\n"),
+    );
     let (config, _) = parse(&path);
     assert_eq!(
-        config.kagemusha_load_authorizer.custody.keyring.as_slice(),
+        config
+            .kagemusha_load_authorizer
+            .as_ref()
+            .unwrap()
+            .custody
+            .keyring
+            .as_slice(),
         format!("{UNADMITTED_PUBLISHER_KEYRING}\n").as_bytes()
     );
     assert_eq!(
         config
             .kagemusha_load_authorizer
+            .as_ref()
+            .unwrap()
             .custody
             .submitter
             .public_key()
@@ -944,7 +955,7 @@ fn publisher_profile_reader(id: ProfileId, role: ProfileRole, custody: &str) -> 
 fn publisher_custody_paths_are_completed_for_every_profile_and_role() {
     for id in ProfileId::ALL {
         for role in ProfileRole::ALL {
-            let reader = publisher_profile_reader(id, role, "");
+            let reader = publisher_profile_reader(id, role, "[kagemusha_load_authorizer]\n");
             let data_dir = actual::DataDir::new(reader.data_dir().unwrap().to_owned());
             for (key, file) in [
                 (
@@ -1185,4 +1196,43 @@ fn resolve_data_dir_uses_the_last_source_that_sets_it() {
     let reader = ConfigReader::new().without_env();
     assert!(resolve_data_dir(&reader).is_none());
     let _ = reader.into_result();
+}
+
+#[test]
+fn data_dir_does_not_select_an_absent_publisher_role() {
+    for id in ProfileId::ALL {
+        for role in ProfileRole::ALL {
+            let reader = publisher_profile_reader(id, role, "");
+            assert!(
+                !reader
+                    .reader()
+                    .contains_toml_parameter(["kagemusha_load_authorizer"])
+            );
+            for key in ["keyring_file", "submitter_key_file"] {
+                assert!(
+                    !reader
+                        .reader()
+                        .contains_toml_parameter(["kagemusha_load_authorizer", key])
+                );
+            }
+            discard(reader);
+        }
+    }
+    let dir = NodeDir::new("no_publisher_role");
+    for file in [
+        NodeSecretFile::KagemushaLoadAuthorizerKeyring,
+        NodeSecretFile::KagemushaLoadSubmitter,
+    ] {
+        fs::remove_file(actual::DataDir::new(dir.data_dir()).secret(file)).unwrap();
+    }
+    let path = dir.write("config.toml", &profile_node(&dir, "observer", ""));
+    assert!(parse(&path).0.kagemusha_load_authorizer.is_none());
+    dir.write(
+        "config.toml",
+        &profile_node(&dir, "observer", "[kagemusha_load_authorizer]\n"),
+    );
+    let (user, _) = open(&path).unwrap().read().unwrap();
+    assert!(format!("{:?}", user.parse().unwrap_err()).contains("kagemusha_load_authorizer"));
+    dir.write("config.toml", &profile_node(&dir, "observer", ""));
+    assert!(parse(&path).0.kagemusha_load_authorizer.is_none());
 }

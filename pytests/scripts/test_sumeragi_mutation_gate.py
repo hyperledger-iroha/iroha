@@ -2317,23 +2317,3 @@ def test_mutation_cli_valid_counts_and_unique_selection_keep_exact_report(monkey
     assert [m["id"] for m in report["mutations"]]==["MS1","MS2"]
     assert report["seeds"]==seeds
     assert report["fast"] is False
-
-
-def test_state_halo2_curve_mutation_binds_exact_admitted_engine_and_original_retry():
-    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC146"]
-    assert rule.tests == (
-        "state::state_preverify_backend_admission_tests::unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy",
-        "state::state_preverify_backend_admission_tests::canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry",
-    )
-    assert not rule.scenarios
-    assert gate.has_switch("HC146", core=True)
-    assert not gate.has_switch("HC146")
-    assert not gate.has_switch("HC146", daemon=True)
-    source = (gate.REPO / "crates/iroha_core/src/state.rs").read_text()
-    assert 'all(test, sumeragi_core_mutation = "HC146")' in source
-    assert 'production_verify_backend_tag(proof.backend.as_str())' in source
-    assert 'Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)' in source
-    owners = {path.relative_to(gate.REPO / "crates/iroha_core/src").as_posix()
-              for path in (gate.REPO / "crates/iroha_core/src").rglob("*.rs")
-              if 'sumeragi_core_mutation = "HC146"' in path.read_text()}
-    assert owners == {"state.rs"}

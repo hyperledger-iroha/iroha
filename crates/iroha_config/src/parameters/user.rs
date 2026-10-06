@@ -68,6 +68,7 @@ mod app_routed_read_config;
 mod kagemusha_load_authorizer;
 mod musubi_publication_installation;
 pub use kagemusha_load_authorizer::KagemushaLoadAuthorizer;
+use kagemusha_load_authorizer::KagemushaLoadAuthorizerRole;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
 mod sccp;
 pub use sccp::{
@@ -958,7 +959,7 @@ pub struct Root {
     #[config(nested)]
     musubi_publication: MusubiPublication,
     #[config(nested)]
-    kagemusha_load_authorizer: KagemushaLoadAuthorizer,
+    kagemusha_load_authorizer: KagemushaLoadAuthorizerRole,
     #[config(nested)]
     sorafs: Sorafs,
     #[config(nested)]
@@ -1532,8 +1533,7 @@ impl Root {
             torii,
             soracloud_runtime,
             musubi_publication,
-            kagemusha_load_authorizer: kagemusha_load_authorizer
-                .expect("load authorizer configuration validated by emitter"),
+            kagemusha_load_authorizer,
             kura,
             sumeragi,
             block_sync,

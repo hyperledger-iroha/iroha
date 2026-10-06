@@ -18,7 +18,7 @@ use crate::a_relation::{
 /// Exact trusted key and own sigma source needed by the Receive Proofs owner.
 #[derive(Clone, Copy)]
 pub struct ReceiveProofInputs<'a> {
-    /// Same original active Omega and sigma tapes, without unrelated objects.
+    /// Original active Omega and the exact incoming sigma Q projection.
     pub sources: &'a ReceiveProofSources,
     /// Witness key whose digest is hard-bound to the carried normal Omega key.
     pub omega_key: &'a VerifierKeyCells<Ep>,
@@ -26,9 +26,12 @@ pub struct ReceiveProofInputs<'a> {
     pub own_sigma: &'a SigmaBindingCells,
 }
 
-/// Same-source total Omega view and incoming sigma binding. This projection
-/// avoids rehashing unrelated Payment/object tapes in the recursive Proofs owner.
-/// The fixed Objects owner separately derives the combined consuming digest.
+/// Same-source total Omega view and incoming sigma Q binding. The fixed Objects
+/// owner authenticates the original sigma tape, including its original LE32
+/// length and every descriptor-sized chunk, against the same Q0 instances.
+/// This owner reuses that hard context binding instead of allocating and hashing
+/// a second maximum-capacity sigma tape. `ProofDigest` separately derives the
+/// combined consuming digest; all fixed owners remain mandatory on false results.
 #[derive(Clone, Debug)]
 pub struct ReceiveProofSources {
     transport: IncomingTransportCells,
@@ -36,15 +39,19 @@ pub struct ReceiveProofSources {
 }
 
 impl ReceiveProofSources {
-    /// Retain only views derived from original active carriers.
+    /// Retain an original active Omega and the incoming sigma's Q-bound view.
+    ///
+    /// Sigma may be a field/chunk projection: `bind_context` hard-binds its
+    /// statement, selector and every original-length-prefixed chunk to Q0.
+    /// The required Objects owner independently binds those same Q0 cells to
+    /// its original active sigma bytes, even when Objects derives false.
     /// # Errors
-    /// A fixed padded component view or non-incoming sigma is rejected.
-    pub fn from_active(
+    /// A fixed padded Omega view or non-incoming sigma is rejected.
+    pub fn from_active_omega(
         transport: &IncomingTransportCells,
         sigma: &SigmaBindingCells,
     ) -> Result<Self, Error> {
         transport.active_carrier()?;
-        sigma.active_carrier()?;
         sigma.incoming_statement()?;
         Ok(Self {
             transport: transport.clone(),
@@ -87,30 +94,22 @@ impl ReceiveProofSources {
             self.transport.public().valid().word(),
             incoming.public.valid().word(),
         )?;
-        for (index, raw, digest) in [
-            // The Objects owner recomputes this combined digest; this owner
-            // authenticates the original Omega tape and its exact active length.
-            (
-                4,
-                self.transport.active_carrier()?,
-                input.objects[4].authenticated_digest(),
-            ),
-            (5, self.sigma.active_carrier()?, self.sigma.step_digest()?),
-        ] {
-            let actual = ContextObjectCells::from_active(
-                chip,
-                region,
-                plan.object_specs()[index],
-                digest,
-                raw,
-            )?;
-            for (a, b) in actual
-                .commitment_words()
-                .iter()
-                .zip(input.objects[index].commitment_words())
-            {
-                GlueChip::assert_equal(region, a, &b)?;
-            }
+        // ProofDigest derives the combined consuming digest. This owner
+        // authenticates the original Omega tape and exact active length; the
+        // sigma's raw source is hard-bound by Objects to the identical Q0 below.
+        let actual = ContextObjectCells::from_active(
+            chip,
+            region,
+            plan.object_specs()[4],
+            input.objects[4].authenticated_digest(),
+            self.transport.active_carrier()?,
+        )?;
+        for (a, b) in actual
+            .commitment_words()
+            .iter()
+            .zip(input.objects[4].commitment_words())
+        {
+            GlueChip::assert_equal(region, a, &b)?;
         }
         let columns = input.q_instances.first().ok_or(Error::Synthesis)?;
         let sigma_plan = &plan.operation().sigma;

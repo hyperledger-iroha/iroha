@@ -257,7 +257,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .parse()
             .expect("delayed user parse reads original publisher DATA");
         assert_eq!(
-            actual.kagemusha_load_authorizer.custody.keyring.as_slice(),
+            actual
+                .kagemusha_load_authorizer
+                .as_ref()
+                .unwrap()
+                .custody
+                .keyring
+                .as_slice(),
             b"unadmitted-shared-parser-only-keyring"
         );
         let publisher = table["kagemusha_load_authorizer"].as_table().unwrap();

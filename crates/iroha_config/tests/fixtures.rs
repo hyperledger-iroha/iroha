@@ -893,19 +893,10 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .join("defaults/nexus/config.toml");
     let source = fs::read_to_string(&config_path).expect("read Nexus signing profile");
     let mut table: toml::Table = toml::from_str(&source).expect("parse Nexus signing profile");
-    let publisher = table
-        .get("kagemusha_load_authorizer")
-        .and_then(TomlValue::as_table)
-        .expect("Nexus profile declares required publisher custody references");
-    for name in ["keyring_file", "submitter_key_file"] {
-        assert!(
-            publisher
-                .get(name)
-                .and_then(TomlValue::as_str)
-                .is_some_and(|path| !path.is_empty()),
-            "Nexus profile declares a nonempty publisher {name} before test substitution"
-        );
-    }
+    assert!(
+        !table.contains_key("kagemusha_load_authorizer"),
+        "ordinary Nexus profile must not select an issuer publication role"
+    );
 
     let validator_private_key_file = table
         .remove("private_key_file")
@@ -981,16 +972,16 @@ fn nexus_profile_template_enables_multilane_defaults() {
                 .to_ascii_uppercase(),
         )),
     );
-    let config = with_fixture_refs(
-        ConfigReader::new().with_toml_source(iroha_config_base::toml::TomlSource::inline(table)),
-    )
-    .read_and_complete::<UserConfig>()
-    .change_context(FixtureConfigLoadError)
-    .and_then(|user| {
-        user.parse_with_file_source(&ParserOnlyPublisherFiles)
-            .change_context(FixtureConfigLoadError)
-    })
-    .expect("Nexus profile config should parse");
+    let config = ConfigReader::new()
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
+        .change_context(FixtureConfigLoadError)
+        .and_then(|user| {
+            user.parse_with_file_source(&ParserOnlyPublisherFiles)
+                .change_context(FixtureConfigLoadError)
+        })
+        .expect("Nexus profile config should parse");
+    assert!(config.kagemusha_load_authorizer.is_none());
     assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
     assert_eq!(
         config.nexus.configured_dataspace_catalog, config.nexus.dataspace_catalog,

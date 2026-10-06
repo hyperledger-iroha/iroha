@@ -1,7 +1,7 @@
-//! File-only required publisher settings. Secret contents are never embedded in diagnostics.
+//! Explicit publisher-role selection and file-only custody. Secrets never enter diagnostics.
 use super::*;
 
-/// Required online finalized-load publisher. No field accepts environment overrides.
+/// Selected online finalized-load publisher. No field accepts environment overrides.
 #[derive(Debug, ReadConfig)]
 pub struct KagemushaLoadAuthorizer {
     keyring_file: Option<WithOrigin<PathBuf>>,
@@ -22,6 +22,26 @@ pub struct KagemushaLoadAuthorizer {
     transaction_ttl_ms: u64,
     #[config(default)]
     charge_limits: Vec<iroha_data_model::transaction::FeeChargeLimit>,
+}
+/// An explicit table selects the issuer service, including a table without fields.
+/// Reading all known fields retains strict unknown-field and namespace diagnostics.
+#[derive(Debug)]
+pub(super) struct KagemushaLoadAuthorizerRole(Option<KagemushaLoadAuthorizer>);
+impl ReadConfigTrait for KagemushaLoadAuthorizerRole {
+    fn read(reader: &mut ConfigReader) -> FinalWrap<Self> {
+        let selected = reader.contains_toml_parameter([] as [&str; 0]);
+        let settings = KagemushaLoadAuthorizer::read(reader);
+        FinalWrap::value_fn(move || Self(selected.then(|| settings.unwrap())))
+    }
+}
+impl KagemushaLoadAuthorizerRole {
+    pub(super) fn parse(
+        self,
+        files: &ConfigFiles<'_>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::KagemushaLoadAuthorizer> {
+        self.0.and_then(|settings| settings.parse(files, emitter))
+    }
 }
 impl KagemushaLoadAuthorizer {
     pub(super) fn parse(
@@ -323,5 +343,93 @@ mod tests {
                 assert_eq!(result.charge_limits, limits);
             }
         }
+    }
+    #[derive(Debug, ReadConfig)]
+    struct RoleConfig {
+        #[config(nested)]
+        kagemusha_load_authorizer: KagemushaLoadAuthorizerRole,
+    }
+    fn role_config(sources: &[&str]) -> RoleConfig {
+        sources
+            .iter()
+            .fold(ConfigReader::new().without_env(), |reader, source| {
+                reader.with_toml_source(TomlSource::inline(source.parse().unwrap()))
+            })
+            .read_and_complete::<RoleConfig>()
+            .unwrap()
+    }
+    #[test]
+    fn explicit_table_selects_strict_custody_while_absence_reads_no_issuer_files() {
+        let files = files();
+        let mut emitter = Emitter::new();
+        assert!(
+            role_config(&[""])
+                .kagemusha_load_authorizer
+                .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(files.calls.get(), 0);
+        for source in [
+            "[kagemusha_load_authorizer]\n",
+            "[kagemusha_load_authorizer]\npage_size = 1\n",
+            "[kagemusha_load_authorizer]\nkeyring_file = \"keyring\"\n",
+        ] {
+            let mut emitter = Emitter::new();
+            assert!(
+                role_config(&[source])
+                    .kagemusha_load_authorizer
+                    .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+                    .is_none()
+            );
+            assert!(emitter.into_result().is_err());
+            assert_eq!(files.calls.get(), 0);
+        }
+        let selected = "[kagemusha_load_authorizer]\nkeyring_file = \"keyring\"\nsubmitter_key_file = \"submitter\"\n";
+        let mut emitter = Emitter::new();
+        let parsed = role_config(&[selected, "[kagemusha_load_authorizer]\n"])
+            .kagemusha_load_authorizer
+            .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+            .unwrap();
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(files.calls.get(), 2);
+        assert_eq!(parsed.custody.keyring.as_slice(), files.keyring);
+        assert_eq!(
+            parsed.page_size,
+            defaults::kagemusha_load_authorizer::PAGE_SIZE
+        );
+        for bad in [
+            "kagemusha_load_authorizer = false\n",
+            "kagemusha_load_authorizer = []\n",
+            "[kagemusha_load_authorizer]\nenabled = false\n",
+            "[kagemusha_load_authorizer]\nenabled = true\n",
+        ] {
+            assert!(
+                ConfigReader::new()
+                    .without_env()
+                    .with_toml_source(TomlSource::inline(bad.parse().unwrap()))
+                    .read_and_complete::<RoleConfig>()
+                    .is_err()
+            );
+        }
+        assert_eq!(files.calls.get(), 2);
+        let mut emitter = Emitter::new();
+        assert!(
+            role_config(&[&format!("{selected}page_size = 0\n")])
+                .kagemusha_load_authorizer
+                .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
+        assert_eq!(files.calls.get(), 2);
+        let mut emitter = Emitter::new();
+        assert!(
+            role_config(&[selected])
+                .kagemusha_load_authorizer
+                .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+                .is_some()
+        );
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(files.calls.get(), 4);
     }
 }

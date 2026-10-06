@@ -303,10 +303,10 @@ mod tests {
     fn groups() -> Vec<Vec<OperationTask>> {
         use OperationTask::{
             ReceiveAuthorization, ReceiveBlacklist, ReceiveEffects, ReceiveNonmembership,
-            ReceiveObjects, ReceiveOwnProof, ReceiveProofs, ReceiveSignatures,
+            ReceiveObjects, ReceiveOwnProof, ReceiveProofDigest, ReceiveProofs, ReceiveSignatures,
         };
         vec![
-            vec![ReceiveOwnProof],
+            vec![ReceiveOwnProof, ReceiveProofDigest],
             vec![ReceiveProofs],
             vec![ReceiveObjects, ReceiveNonmembership],
             vec![ReceiveBlacklist],

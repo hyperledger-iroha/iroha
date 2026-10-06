@@ -326,11 +326,11 @@ pub(crate) struct SharedKeyWallets {
     pub(crate) receiver: RootedBootstrapOmega,
 }
 
-/// Rebuilds both wallets' exact signed objects and all recursive source proofs
-/// under the same immutable compact Bootstrap/Load catalog key. No statement or
-/// state word is changed after proving; both retained accumulators are decided.
-#[allow(dead_code)] // Consumed by the accepted Receive integration fixture.
-pub(crate) fn compact_payer_load_and_receiver() -> SharedKeyWallets {
+fn compact_load_program() -> (
+    Program,
+    bootstrap_chain::AuthenticatedBootstrap,
+    load_chain::AuthenticatedLoad,
+) {
     let initial_root = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
     let initial_load =
         load_chain::authenticated_load_with_profile(&initial_root, PROFILE, Some(2), false);
@@ -346,7 +346,25 @@ pub(crate) fn compact_payer_load_and_receiver() -> SharedKeyWallets {
         vec![initial_bootstrap.key.clone(), initial_load.key.clone()],
         &initial_root.binding,
     );
-    let payer = rebuild_bootstrap_load(&program, initial_bootstrap, &initial_load);
+    (program, initial_root.source, initial_load)
+}
+
+/// Rebuilds the payer's exact signed Bootstrap/Load chain under the immutable
+/// two-terminal compact key. No receiver is constructed and no additional
+/// operation terminal is admitted by this component catalog.
+#[allow(dead_code)] // Consumed by real Unload/Retiring integration fixtures.
+pub(crate) fn compact_payer_load() -> DiagnosticLoadOmega {
+    let (program, initial_bootstrap, initial_load) = compact_load_program();
+    rebuild_bootstrap_load(&program, &initial_bootstrap, &initial_load)
+}
+
+/// Rebuilds both wallets' exact signed objects and all recursive source proofs
+/// under the same immutable compact Bootstrap/Load catalog key. No statement or
+/// state word is changed after proving; both retained accumulators are decided.
+#[allow(dead_code)] // Consumed by the accepted Receive integration fixture.
+pub(crate) fn compact_payer_load_and_receiver() -> SharedKeyWallets {
+    let (program, initial_bootstrap, initial_load) = compact_load_program();
+    let payer = rebuild_bootstrap_load(&program, &initial_bootstrap, &initial_load);
     let source = bootstrap_chain::authenticated_bootstrap_with_identity(
         false,
         program.digest(),
@@ -358,6 +376,11 @@ pub(crate) fn compact_payer_load_and_receiver() -> SharedKeyWallets {
     assert_eq!(source.key.to_bytes(), initial_bootstrap.key.to_bytes());
     assert_eq!(source.state.lineage[17], program.digest());
     assert_ne!(source.state.core[5..7], payer.source.state.core[5..7]);
+    let trivial = AccumulatorT::trivial(
+        &PinnedParams::<Eq>::derive(16).unwrap(),
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
     let outer = program.prove(bootstrap_terminal(&source, &trivial), "Receiver-Bootstrap");
     source
         .pallas
@@ -415,7 +438,7 @@ fn catalog_roundtrip(include_send: bool) {
         return;
     }
 
-    let initial_send = send_chain::run_send_from_load(&load, PROFILE, Some(2));
+    let initial_send = send_chain::run_send_from_load(&load, PROFILE, Some(2), false);
     assert_eq!(
         initial_send.binding, bootstrap.binding,
         "Send must share the exact admitted A descriptor"
@@ -428,7 +451,7 @@ fn catalog_roundtrip(include_send: bool) {
         &initial_root.binding,
     );
     let load = rebuild_bootstrap_load(&program, bootstrap, &initial_load);
-    let send = send_chain::run_send_from_load(&load, PROFILE, Some(2));
+    let send = send_chain::run_send_from_load(&load, PROFILE, Some(2), false);
     assert_eq!(send.binding, initial_send.binding);
     assert_eq!(send.key.to_bytes(), initial_send.key.to_bytes());
     assert_eq!(send.state.lineage[17], program.digest());
@@ -470,5 +493,27 @@ fn compact_distinct_wallets_share_the_exact_predecessor_catalog() {
     assert_ne!(
         wallets.payer.source.state.core[5..7],
         wallets.receiver.source.state.core[5..7]
+    );
+}
+
+#[test]
+#[ignore = "genuine payer Load rebuilt under one immutable compact Bootstrap/Load key"]
+fn compact_payer_load_retains_the_exact_predecessor_catalog() {
+    let payer = compact_payer_load();
+    assert_eq!(payer.proof.len(), 3712);
+    assert_eq!(
+        payer.source.state.lineage[17],
+        payer.key.kagemusha_digest(&payer.binding).unwrap()
+    );
+}
+
+#[test]
+#[ignore = "actual compact predecessor and every fixed installed native Send A/W stage"]
+fn compact_predecessor_native_send_preserves_every_installed_stage_and_original() {
+    let payer = compact_payer_load();
+    let terminal = send_chain::run_send_from_load(&payer, PROFILE, Some(2), true);
+    assert_eq!(terminal.state.lineage[17], payer.source.state.lineage[17]);
+    eprintln!(
+        "NATIVE_SEND_INSTALLED_DIFFERENTIAL all_five_a_four_w=true original_replay=true compact_predecessor=true mask=0 full_catalog=false"
     );
 }

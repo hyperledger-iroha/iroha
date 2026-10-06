@@ -121,7 +121,9 @@ impl fmt::Display for SigmaError {
             }
             Self::Key(error) => write!(f, "key generation: {error}"),
             Self::Artifact(error) => write!(f, "proving-key original: {error}"),
-            Self::ArtifactKeyMismatch => f.write_str("proving-key original differs from installed key"),
+            Self::ArtifactKeyMismatch => {
+                f.write_str("proving-key original differs from installed key")
+            }
             Self::VerifyingKey(error) => write!(f, "verifying key: {error}"),
             Self::WrongRelation { expected, found } => {
                 write!(f, "a {found:?} witness for a {expected:?} circuit")
@@ -247,7 +249,7 @@ where
     /// VK and proving-key originals in its signed inventory and select their scheme,
     /// operation and resource policy independently of wallet/witness input. This
     /// constructor checks key/source continuity; its result is a proving component,
-    /// not a signed scheme admission, a NativeProofs owner or a wallet-open grant.
+    /// not a signed scheme admission, a `NativeProofs` owner or a wallet-open grant.
     /// Allocation bounds cover original/domain intake, not all synthesis/prover heap.
     ///
     /// # Errors
@@ -261,14 +263,15 @@ where
         original: &[u8],
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
     ) -> Result<Self, SigmaError> {
+        use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
         if params.k() != shape.k {
             return Err(SigmaError::ParamsK {
                 expected: shape.k,
                 found: params.k(),
             });
         }
-        use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
-        let rows = 1_usize.checked_shl(shape.k)
+        let rows = 1_usize
+            .checked_shl(shape.k)
             .ok_or(SigmaError::Artifact(ArtifactError::Length))?;
         if original.len() > config.maximum_bytes || rows > config.maximum_rows {
             return Err(SigmaError::Artifact(ArtifactError::Length));

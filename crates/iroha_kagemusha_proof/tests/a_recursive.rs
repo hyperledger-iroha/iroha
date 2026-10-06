@@ -1941,8 +1941,10 @@ pub(crate) fn authenticated_bootstrap_with_identity(
         let native_wrapper = prepared
             .prove_wrapper(
                 &native_first,
-                &mounted_first,
-                &mounted_wrapper,
+                native::WrapperKeys {
+                    first: &mounted_first,
+                    wrapper: &mounted_wrapper,
+                },
                 Fq::from(191),
                 &FoldConfig::default(),
                 common::recovery(190),
@@ -2017,8 +2019,10 @@ pub(crate) fn authenticated_bootstrap_with_identity(
         let terminal = prepared
             .prove_terminal(
                 &native_wrapper,
-                &imported,
-                &mounted_terminal,
+                native::TerminalKeys {
+                    wrapper: &imported,
+                    terminal: &mounted_terminal,
+                },
                 Fp::from(192),
                 &FoldConfig::default(),
                 common::recovery(193),

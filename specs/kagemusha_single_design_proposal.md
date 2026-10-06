@@ -940,6 +940,11 @@ resumes delivery of the existing Payment; it does not create another payment.
 
 ### 6.1 Load and unload
 
+The online load-authorizer is an explicitly selected issuer service, not a prerequisite
+for an unrelated validator or private dataspace node. Selecting it requires its genuine
+network-bound role custody and ordinary submission permissions and fees. An absent service
+never disables ledger or VM verification, authorizes issuance, or removes pending liabilities.
+
 After completed Bootstrap activation (§3.2), a finalized online transaction
 debits the payer's ledger account into the scheme reserve and creates a unique
 load voucher bound to `(wallet_id, next_load, asset, amount)`. The ledger assigns

@@ -113,6 +113,8 @@ pub enum OperationTask {
     UnloadAuthorization = 21,
     /// Unload/Retiring exact predecessor Omega and own sigma receipt binding.
     UnloadProof = 22,
+    /// Exact original Omega-plus-sigma consuming digest and both raw commitments.
+    ReceiveProofDigest = 23,
 }
 impl OperationTask {
     /// Stable context-schema code, not an operation's wire tag.
@@ -146,6 +148,7 @@ impl OperationTask {
                 Self::ReceiveAuthorization,
                 Self::ReceiveOwnProof,
                 Self::ReceiveEffects,
+                Self::ReceiveProofDigest,
             ]),
             Variant::Unload => Some(&[
                 Self::UnloadRecovery,

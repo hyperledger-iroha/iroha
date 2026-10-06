@@ -15,7 +15,7 @@ use iroha_sumeragi::{
     message::{Vote, VoteKind, WireMessage},
     types::Signature,
 };
-use std::collections::HashSet;
+use std::{collections::HashSet, io::Write as _};
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -28,11 +28,43 @@ fn runtime() -> tokio::runtime::Runtime {
 fn network_config(replay_root: &std::path::Path) -> iroha_config::parameters::actual::Network {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../iroha_config/iroha_test_config.toml");
-    let user = ConfigReader::new()
+    let mut reader = ConfigReader::new()
+        .without_env()
         .read_toml_with_extends(&path)
-        .unwrap()
-        .read_and_complete::<user::Root>()
         .unwrap();
+    // This fixture starts only the P2P actor. Explicit parser inputs satisfy the
+    // Root custody requirement but the unadmitted keyring cannot run a publisher.
+    let submitter = iroha_crypto::ExposedPrivateKey(
+        KeyPair::from_seed(b"p2p-parser-submitter".to_vec(), Algorithm::Ed25519)
+            .private_key()
+            .clone(),
+    )
+    .to_string();
+    for (field, name, bytes) in [
+        (
+            "keyring_file",
+            "parser.keyring",
+            b"unadmitted-p2p-parser-keyring".as_slice(),
+        ),
+        (
+            "submitter_key_file",
+            "parser.submitter",
+            submitter.as_bytes(),
+        ),
+    ] {
+        let path = replay_root.join(name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        options.open(&path).unwrap().write_all(bytes).unwrap();
+        iroha_config::base::toml::Writer::new(reader.toml_sources_mut()[0].table_mut())
+            .write(["kagemusha_load_authorizer", field], path.to_str().unwrap());
+    }
+    let user = reader.read_and_complete::<user::Root>().unwrap();
     let mut config = user.parse().unwrap().network;
     // Bind a fresh loopback address; the production parser supplies all protocol and
     // byte-bound defaults. This test changes only local listening/dial timing settings.

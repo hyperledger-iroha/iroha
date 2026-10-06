@@ -48,9 +48,13 @@ cursors provide fair scheduling across historical certificates. Restart or an un
 result rereads finalized issuance and reconstructs the same deterministic voucher bytes; a
 completed first publication is obtained only from finalized state.
 
-The required daemon section `[kagemusha_load_authorizer]` contains owner-admitted
-`keyring_file` and `submitter_key_file` references. There is no enable or disable setting;
-missing, unsafe or malformed custody prevents startup, including emergency recovery mode.
+An explicit `[kagemusha_load_authorizer]` table selects the issuer publication service,
+including an empty table. A selected service requires both owner-admitted `keyring_file`
+and `submitter_key_file` references; missing, unsafe or malformed custody prevents startup,
+including emergency recovery mode. Absent tables select no publisher and `data_dir` never
+selects this role. There is no enable or disable setting. Core/IVM verification, ledger
+permissions, reserve accounting and pending-publication liabilities remain mandatory on every
+node. Service selection grants no issuer authority or offline hardware guarantee.
 The former file is the
 canonical Norito `LoadAuthorizerKeyringV1` (version 1, at most 32 role-certified keys, at most
 65,536 bytes); the latter is a canonical ordinary ledger private key. The submitter needs the

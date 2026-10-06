@@ -142,6 +142,7 @@ impl Transition<'_> {
         let (label, hash_rows) = match self.variant {
             Variant::Load => ("Load administrative sigma", BASE_HASH_ROWS),
             Variant::Retiring => ("Retiring administrative sigma", BASE_HASH_ROWS),
+            Variant::ArchiveReceive => ("ArchiveSent administrative sigma", BASE_HASH_ROWS),
             Variant::Unload => (
                 "Unload administrative sigma",
                 // Bootstrap's configuration does not fold the nullifier prefix.
@@ -192,22 +193,22 @@ impl Transition<'_> {
                     self.variant,
                     &core::array::from_fn(|i| words[2 * STATE_WORDS + i].clone()),
                 )?;
-                administrative::monetary(
-                    &mut uint,
-                    &mut sponge,
-                    &mut region,
-                    &MapTransition {
-                        statement: &statement,
-                        predecessor: MapState {
-                            state: &before,
-                            lineage: &previous,
-                        },
-                        successor: MapState {
-                            state: &after,
-                            lineage: &successor,
-                        },
+                let transition = MapTransition {
+                    statement: &statement,
+                    predecessor: MapState {
+                        state: &before,
+                        lineage: &previous,
                     },
-                )?;
+                    successor: MapState {
+                        state: &after,
+                        lineage: &successor,
+                    },
+                };
+                if self.variant == Variant::ArchiveReceive {
+                    administrative::archive(&mut uint, &mut region, &transition)?;
+                } else {
+                    administrative::monetary(&mut uint, &mut sponge, &mut region, &transition)?;
+                }
                 if sponge.lane().rows_used() != hash_rows {
                     return Err(Error::Synthesis);
                 }

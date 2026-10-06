@@ -786,17 +786,17 @@ fn archive_clears_core_and_only_valid_evidence_clears_lineage() {
         for valid in [true, false] {
             let c = archive_depth::<D>(variant, valid);
             c.assert_accept();
-            for index in [
-                core::BALANCE,
-                core::BURNED_TOTAL,
-                core::CONSUMED_CREDIT_ROOT,
-                core::PENDING_OUTGOING_ROOT,
-                core::LOAD_REDEEM_ROOT,
-                core::FEE_CLAIM_ROOT,
-                core::QUOTA_USAGE_ROOT,
-            ] {
+            for index in 0..CORE_FIELDS {
+                if index == core::STATE_NONCE {
+                    continue;
+                }
                 let mut wrong = c.clone();
                 wrong.after.core[index] += Fp::ONE;
+                wrong.reject_rebound();
+            }
+            for index in 0..REST_FIELDS {
+                let mut wrong = c.clone();
+                wrong.after.rest[index] += Fp::ONE;
                 wrong.reject_rebound();
             }
             for index in [14, 15, 16] {
@@ -813,6 +813,28 @@ fn archive_clears_core_and_only_valid_evidence_clears_lineage() {
                 wrong.inputs[i] += Fp::ONE;
                 assert!(!wrong.accepts(), "{variant:?} {valid} input{i}");
             }
+        }
+    }
+}
+
+#[test]
+fn archive_cannot_change_credential_counters_or_held_policy() {
+    for variant in [Variant::ArchiveReceive, Variant::ArchiveStatus] {
+        for valid in [true, false] {
+            let c = archive_depth::<D>(variant, valid);
+            for index in [
+                core::CREDENTIAL,
+                core::NEXT_SEND,
+                core::NEXT_LOAD,
+                core::NEXT_REDEEM,
+            ] {
+                let mut wrong = c.clone();
+                wrong.after.core[index] += Fp::ONE;
+                wrong.reject_rebound();
+            }
+            let mut wrong = c.clone();
+            wrong.after.rest[rest::PERMITTED] = Fp::from(7);
+            wrong.reject_rebound();
         }
     }
 }

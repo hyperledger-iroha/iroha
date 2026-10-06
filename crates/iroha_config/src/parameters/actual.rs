@@ -135,8 +135,8 @@ pub struct Root {
     pub soracloud_runtime: SoracloudRuntime,
     /// Non-secret local custody root for the injected private Musubi publisher.
     pub musubi_publication: MusubiPublication,
-    /// Required source-verified online load voucher publisher.
-    pub kagemusha_load_authorizer: KagemushaLoadAuthorizer,
+    /// Explicitly selected source-verified issuer service; absence selects no publisher.
+    pub kagemusha_load_authorizer: Option<KagemushaLoadAuthorizer>,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
     /// Consensus (Sumeragi) configuration.

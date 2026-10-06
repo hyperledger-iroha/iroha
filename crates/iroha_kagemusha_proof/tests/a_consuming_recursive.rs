@@ -1,4 +1,4 @@
-//! Genuine Send with mandatory own authorization after a common-key Bootstrap→Load chain.
+//! Genuine Unload/Retiring with exact mandatory own authorization and consuming proof bytes.
 //! The two-terminal predecessor catalog is a component scope, not the complete
 //! release catalog. Every source proof, pending claim and operation task is real.
 #![allow(clippy::duplicate_mod)]
@@ -7,32 +7,33 @@ mod bootstrap;
 #[path = "common/bootstrap_objects.rs"]
 #[allow(dead_code)]
 mod bootstrap_objects;
+/// Genuine immutable Bootstrap/Load catalog and its recursive fixtures.
+#[path = "compact_catalog.rs"]
+pub mod catalog;
 mod common;
 #[path = "common/load_objects.rs"]
 #[allow(dead_code)]
 mod load_objects;
-/// Genuine common-key Bootstrap/Load predecessor builder.
-#[path = "load_omega.rs"]
-pub mod load_outer;
+use catalog::send_chain::load_outer;
 use load_outer::load_chain::bootstrap_outer::bootstrap_chain::SourceProfile;
-/// Genuine Send sigma/Q and same-cell state/map components.
-#[path = "a_send.rs"]
-pub mod send_components;
+#[path = "common/unload_objects.rs"]
+mod unload_objects;
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
     a_relation::{
-        AProofPlan, ProofMessageCells, QProofPlan, SigmaBindingCells, VestaClaimCells,
+        AProofPlan, LineagePublicCells, ProofMessageCells, QProofPlan, SigmaBindingCells,
+        VestaClaimCells,
         context::{ContextInputs, ContextPlan, ContextPredecessor, ContextState},
         own::ConsumingProofCells,
         schedule::OperationTask,
-        send::{
-            SendAuthorization, SendAuthorizationObjects, SendInputs, SendObjects, SendProofBinding,
-            SendStagePlan, SendStageWitness,
-        },
         split::close_first,
+        unload::{UnloadObjects, UnloadProofInputs, UnloadStagePlan, UnloadStageWitness},
         verify_predecessor, verify_sigma,
     },
-    operation_relation::{map_effects::MapState, statement::StatementCells},
+    admin_sigma::{ConsumingWitness, RetiringCircuit, StateWitness, UnloadCircuit},
+    operation_relation::{map_effects::InsertCells, state::StateCells, statement::StatementCells},
+    q_sigma::{QSigmaPlan, SigmaClass, SigmaSlotWitness, native::QSigmaProver},
+    tree::IndexedInsert,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain};
 use iroha_plonk::{
@@ -46,10 +47,12 @@ use iroha_plonk::{
     verifier::accumulate_generator,
 };
 use iroha_plonk_gadgets::{
+    UintChip,
     bytes::{
         element::le_message_segments,
         tape::{BytesChip, BytesConfig, SegmentSpec},
     },
+    imt::{LeafCells, OpeningCells, PathCells},
     statement::foreign_limbs,
 };
 use iroha_plonk_recursion::{
@@ -73,8 +76,9 @@ struct Predecessor {
 }
 #[derive(Clone)]
 struct Sources {
-    maps: send_components::SendMaps,
-    own_objects: [bootstrap_objects::Signed; 2],
+    maps: Maps,
+    objects: [bootstrap_objects::Signed; 3],
+    variant: Variant,
     sigma: Vec<u8>,
     omega: Vec<u8>,
     plan: AProofPlan,
@@ -120,52 +124,194 @@ fn frame(bytes: &[u8]) -> Vec<u8> {
     out.extend(bytes);
     out
 }
-fn sources(artifact: &load_outer::DiagnosticLoadOmega, q_buses: Option<usize>) -> Sources {
-    use iroha_kagemusha_proof::operation_relation::objects::ObjectKind;
-    use iroha_plonk_gadgets::bytes::p_bytes_native;
+#[derive(Clone)]
+struct Maps {
+    witness: ConsumingWitness,
+    recovery: Option<IndexedInsert<Fp>>,
+    known: bool,
+}
+impl Maps {
+    fn value<T: Copy>(&self, value: T) -> Value<T> {
+        if self.known {
+            Value::known(value)
+        } else {
+            Value::unknown()
+        }
+    }
+    pub(crate) fn state(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        witness: &StateWitness,
+    ) -> Result<(StateCells, LineagePublicCells), Error> {
+        let core = chip
+            .uint()
+            .glue()
+            .witnesses(region, &witness.core.map(|v| self.value(v)))?
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        let rest = chip
+            .uint()
+            .glue()
+            .witnesses(region, &witness.rest.map(|v| self.value(v)))?
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        let state = StateCells::constrain_with_verifier(chip, region, &core, &rest)?;
+        let public = chip
+            .uint()
+            .glue()
+            .witnesses(region, &witness.lineage.map(|v| self.value(v)))?
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        let public = LineagePublicCells::constrain(&mut chip.uint(), region, &public)?;
+        Ok((state, public))
+    }
+    pub(crate) fn insertion(
+        &self,
+        uint: &mut UintChip<'_, Fp>,
+        region: &mut Region<'_, Fp>,
+    ) -> Result<InsertCells, Error> {
+        let insertion = self.recovery.as_ref().ok_or(Error::Synthesis)?;
+        let leaf = insertion.leaf;
+        let words = uint
+            .glue()
+            .witnesses(
+                region,
+                &[leaf.key, leaf.value, leaf.next_key].map(|v| self.value(v)),
+            )?
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        let leaf = LeafCells::from_words(words);
+        let mut paths = Vec::new();
+        for (index, siblings) in [
+            (insertion.leaf_slot, insertion.leaf_siblings),
+            (insertion.slot, insertion.slot_siblings),
+        ] {
+            let index = uint
+                .glue()
+                .witness(region, self.value(Fp::from(u64::from(index))))?;
+            let siblings = uint
+                .glue()
+                .witnesses(region, &siblings.map(|v| self.value(v)))?
+                .try_into()
+                .map_err(|_| Error::Synthesis)?;
+            paths.push(PathCells::from_words(uint, region, &index, siblings)?);
+        }
+        let [low, slot] = paths.try_into().map_err(|_| Error::Synthesis)?;
+        Ok(InsertCells {
+            low: OpeningCells { leaf, path: low },
+            slot,
+        })
+    }
+}
+fn leaf<C: Circuit<Fp>>(circuit: &C, public: &[Vec<Fp>]) -> (Vec<u8>, iroha_plonk::ProvingKey<Eq>) {
+    let params = common::vesta_params(12);
+    let key = keygen_pk_v2(
+        &params,
+        circuit,
+        &KeygenConfigV2::pipa_r(UnloadCircuit::instance_types().to_vec()),
+    )
+    .unwrap();
+    let proof = create_proof_owned_with_claim(
+        &params,
+        &key,
+        Witness::from_circuit(&key, circuit, public).unwrap(),
+        common::recovery(230),
+        ProverConfig::default(),
+    )
+    .unwrap();
+    let opening = accumulate_generator(
+        &params,
+        key.binding(),
+        key.vk(),
+        public,
+        &proof.proof,
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
+    opening.decide(&params, MemoryBudget::DEFAULT).unwrap();
+    (proof.proof, key)
+}
+fn sources(artifact: &load_outer::DiagnosticLoadOmega, retiring: bool) -> Sources {
+    let variant = if retiring {
+        Variant::Retiring
+    } else {
+        Variant::Unload
+    };
     assert_eq!(
         artifact.source.state.lineage[17],
         artifact.key.kagemusha_digest(&artifact.binding).unwrap()
     );
-    let send = send_components::genuine_send_source_with_q_layout(&artifact.source.state, q_buses);
+    let (witness, recovery) = unload_objects::transition(&artifact.source.state, retiring);
+    let public = [vec![hash_with_domain(
+        iroha_plonk_gadgets::statement::STATEMENT_DOMAIN,
+        &witness.statement,
+    )]];
+    let (sigma, leaf_key) = if retiring {
+        leaf(&RetiringCircuit::new(&witness), &public)
+    } else {
+        leaf(&UnloadCircuit::new(&witness), &public)
+    };
+    let params = PinnedParams::<Ep>::derive(16).unwrap();
+    let vparams = common::vesta_params(16);
+    let sigma_plan = QSigmaPlan::new(
+        SigmaClass::new(
+            VerifierPlan::new(leaf_key.binding().clone(), common::vesta_params(12)).unwrap(),
+            vec![(
+                if retiring { 15 } else { 13 },
+                leaf_key.vk().kagemusha_digest(leaf_key.binding()).unwrap(),
+            )],
+        )
+        .unwrap(),
+        None,
+        &vparams,
+    )
+    .unwrap();
+    let prepared = sigma_plan
+        .prepare(
+            SigmaSlotWitness {
+                key: leaf_key.vk().clone(),
+                statement: public[0][0],
+                length: sigma.len().try_into().unwrap(),
+                proof: sigma.clone(),
+            },
+            None,
+            &vparams,
+            Fq::from(71),
+            &FoldConfig::default(),
+        )
+        .unwrap();
+    let part = prepared.part().clone();
+    let q = QSigmaProver::keygen_serialized_foreign(&prepared, params.clone(), 2).unwrap();
+    let qproof = q
+        .prove(&prepared, common::recovery(231), ProverConfig::default())
+        .unwrap();
+    let qclaim = accumulate_generator(
+        &params,
+        q.binding(),
+        q.verifying_key(),
+        &qproof.instances,
+        &qproof.bytes,
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
+    qclaim.decide(&params, MemoryBudget::DEFAULT).unwrap();
+    let sigma_q = QProofPlan::new(
+        VerifierPlan::new(q.binding().clone(), params.clone()).unwrap(),
+        q.verifying_key().clone(),
+    )
+    .unwrap();
     let omega = lineage_bytes(
-        &send.witness.before.lineage,
+        &witness.predecessor.lineage,
         &artifact.proof,
         &artifact.source.pallas,
         &artifact.vesta,
     );
-    let proof_digest = p_bytes_native(
-        u64::from_le_bytes(*b"kgwprf_1"),
-        &[frame(&omega), frame(&send.sigma)].concat(),
-    );
     let (_, certificate, credential) = bootstrap_objects::enrollment();
-    assert_eq!(credential.bytes, send.witness.objects[0]);
-    let f = &send.witness.statement;
-    let wallet = &send.witness.before.lineage[6..8];
-    let operation = hash_with_domain(
-        u64::from_le_bytes(*b"kgwopid1"),
-        &[wallet[0], wallet[1], Fp::from(3), f[17]],
-    );
-    let mut body = 1u16.to_le_bytes().to_vec();
-    body.extend(bootstrap_objects::id(f[3], f[4]));
-    body.extend(bootstrap_objects::id(wallet[0], wallet[1]));
-    body.extend(bootstrap_objects::small_id(31, 32));
-    body.extend(&f[9].to_repr()[..16]);
-    for word in [
-        operation,
-        f[14],
-        f[15],
-        hash_with_domain(iroha_plonk_gadgets::statement::STATEMENT_DOMAIN, f),
-        proof_digest,
-    ] {
-        body.extend(word.to_repr());
-    }
-    body.extend(bootstrap_objects::small_id(301, 302));
-    body.extend(Fp::ZERO.to_repr());
-    let receipt = bootstrap_objects::sign(ObjectKind::Receipt, body, 29, 67);
+    assert_eq!(witness.predecessor.core[7], credential.digest());
+    let receipt = unload_objects::receipt(&witness, &omega, &sigma);
     let (signature, instances) =
-        bootstrap_objects::signatures(&[certificate.clone(), credential, receipt.clone()]);
-    let params = PinnedParams::<Ep>::derive(16).unwrap();
+        bootstrap_objects::signatures(&[certificate.clone(), credential.clone(), receipt.clone()]);
     let key = keygen_pk_v2(
         &params,
         &signature,
@@ -178,7 +324,7 @@ fn sources(artifact: &load_outer::DiagnosticLoadOmega, q_buses: Option<usize>) -
         &params,
         &key,
         Witness::from_circuit(&key, &signature, &instances).unwrap(),
-        common::recovery(225),
+        common::recovery(232),
         ProverConfig::default(),
     )
     .unwrap();
@@ -200,31 +346,32 @@ fn sources(artifact: &load_outer::DiagnosticLoadOmega, q_buses: Option<usize>) -
         vesta: artifact.vesta.clone(),
     };
     let plan = AProofPlan::new(
-        Variant::Send,
-        send.sigma_plan,
-        vec![send.q, signature_q],
+        variant,
+        sigma_plan,
+        vec![sigma_q, signature_q],
         Some(predecessor.program.clone()),
         &params,
     )
     .unwrap();
     Sources {
-        maps: send_components::SendMaps {
-            witness: send.witness,
+        maps: Maps {
+            witness,
+            recovery,
             known: true,
-            stage_plan: None,
         },
-        own_objects: [certificate, receipt],
-        sigma: send.sigma,
+        objects: [credential, certificate, receipt],
+        variant,
+        sigma,
         omega,
         plan,
-        q_instances: vec![send.instances, instances.to_vec()],
-        q_proofs: vec![send.proof, proof.proof],
+        q_instances: vec![qproof.instances, instances.to_vec()],
+        q_proofs: vec![qproof.bytes, proof.proof],
         q_openings: vec![
-            send.opening,
+            FoldInput::from_opening(*qclaim.g(), qclaim.challenges()).unwrap(),
             FoldInput::from_opening(*proof.opening.g(), proof.opening.challenges()).unwrap(),
         ],
         signature_schema: signature.plan().clone(),
-        part: send.part,
+        part,
         predecessor,
         params,
     }
@@ -345,11 +492,13 @@ impl First {
                 .collect::<Vec<_>>(),
             &[SegmentSpec::little(0, 4)],
         )?;
-        let index = iroha_kagemusha_proof::a_relation::schedule::constrain_sigma_selector(
-            &mut chip.uint(),
+        let index = chip.uint().glue().constant(
             region,
-            3,
-            &statement.fields()[11],
+            Fp::from(if self.source.variant == Variant::Unload {
+                13
+            } else {
+                15
+            }),
         )?;
         SigmaBindingCells::from_run(chip, region, statement, index, &run)
     }
@@ -360,37 +509,13 @@ impl First {
         chip: &mut VerifierChip<Ep>,
         bytes: &mut BytesChip<Fp>,
         region: &mut Region<'_, Fp>,
-    ) -> Result<
-        (
-            SendObjects,
-            SendAuthorizationObjects,
-            Vec<iroha_kagemusha_proof::a_relation::context::ContextObjectCells>,
-        ),
-        Error,
-    > {
+    ) -> Result<UnloadObjects, Error> {
         let sources = self
             .source
-            .maps
-            .witness
             .objects
             .each_ref()
-            .map(|o| o.iter().map(|v| self.value(*v)).collect::<Vec<_>>());
-        let objects =
-            SendObjects::decode(chip, bytes, region, sources.each_ref().map(Vec::as_slice))?;
-        let sources = self
-            .source
-            .own_objects
-            .each_ref()
             .map(|o| o.bytes.iter().map(|v| self.value(*v)).collect::<Vec<_>>());
-        let own = SendAuthorizationObjects::decode(
-            chip,
-            bytes,
-            region,
-            sources.each_ref().map(Vec::as_slice),
-        )?;
-        let mut context = objects.context().to_vec();
-        context.extend_from_slice(own.context());
-        Ok((objects, own, context))
+        UnloadObjects::decode(chip, bytes, region, sources.each_ref().map(Vec::as_slice))
     }
 }
 
@@ -429,13 +554,14 @@ impl Circuit<Fp> for First {
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
         let out = layouter.assign_region(
-            || "genuine Send predecessor-first relation",
+            || "genuine consuming predecessor-first relation",
             |mut region| {
                 let mut maps = self.source.maps.clone();
                 maps.known = self.known;
                 let (old, pred_public) =
-                    maps.state(&mut chip, &mut region, &maps.witness.before)?;
-                let (new, next_public) = maps.state(&mut chip, &mut region, &maps.witness.after)?;
+                    maps.state(&mut chip, &mut region, &maps.witness.predecessor)?;
+                let (new, next_public) =
+                    maps.state(&mut chip, &mut region, &maps.witness.successor)?;
                 let fields = chip
                     .uint()
                     .glue()
@@ -445,12 +571,12 @@ impl Circuit<Fp> for First {
                 let statement = StatementCells::constrain_with_verifier(
                     &mut chip,
                     &mut region,
-                    Variant::Send,
+                    self.source.variant,
                     &fields,
                 )?;
                 let sigma = self.sigma(&mut chip, &mut bytes, &mut region, &statement)?;
-                let (objects, auth_objects, context_objects) =
-                    self.objects(&mut chip, &mut bytes, &mut region)?;
+                let objects = self.objects(&mut chip, &mut bytes, &mut region)?;
+                let context_objects = objects.context();
                 let q_instances = self
                     .source
                     .q_instances
@@ -487,7 +613,7 @@ impl Circuit<Fp> for First {
                     },
                     incoming: None,
                     q_instances: &q_instances,
-                    objects: &context_objects,
+                    objects: context_objects,
                     modes: &[],
                     pallas_corrections: &[],
                     vesta_corrections: &[],
@@ -551,28 +677,18 @@ impl Circuit<Fp> for First {
                     &omega_run,
                     &sigma_run,
                 )?;
-                SendStagePlan::new(self.plan.clone())?.constrain_stage(
+                UnloadStagePlan::new(self.plan.clone(), load_objects::policy())?.constrain_stage(
                     &mut chip,
                     &mut region,
                     0,
                     &objects,
-                    SendInputs {
-                        predecessor: MapState {
-                            state: &old,
-                            lineage: &pred_public,
-                        },
-                        successor: MapState {
-                            state: &new,
-                            lineage: &next_public,
-                        },
-                        sigma: &sigma,
-                    },
-                    SendStageWitness {
-                        proof: Some(SendProofBinding {
-                            objects: &auth_objects,
+                    &input,
+                    UnloadStageWitness {
+                        proof: Some(UnloadProofInputs {
                             proof: &consuming,
+                            sigma: &sigma,
                         }),
-                        ..SendStageWitness::default()
+                        ..UnloadStageWitness::default()
                     },
                 )?;
                 let mut verified = Vec::new();
@@ -656,13 +772,14 @@ impl Circuit<Fp> for Continuation {
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
         let out = layouter.assign_region(
-            || "Send deferred Q continuation",
+            || "Consuming deferred Q continuation",
             |mut region| {
                 let mut maps = first.source.maps.clone();
                 maps.known = first.known;
                 let (old, pred_public) =
-                    maps.state(&mut chip, &mut region, &maps.witness.before)?;
-                let (new, next_public) = maps.state(&mut chip, &mut region, &maps.witness.after)?;
+                    maps.state(&mut chip, &mut region, &maps.witness.predecessor)?;
+                let (new, next_public) =
+                    maps.state(&mut chip, &mut region, &maps.witness.successor)?;
                 let fields = chip
                     .uint()
                     .glue()
@@ -672,12 +789,12 @@ impl Circuit<Fp> for Continuation {
                 let statement = StatementCells::constrain_with_verifier(
                     &mut chip,
                     &mut region,
-                    Variant::Send,
+                    first.source.variant,
                     &fields,
                 )?;
                 let sigma = first.sigma(&mut chip, &mut bytes, &mut region, &statement)?;
-                let (objects, auth_objects, context_objects) =
-                    first.objects(&mut chip, &mut bytes, &mut region)?;
+                let objects = first.objects(&mut chip, &mut bytes, &mut region)?;
+                let context_objects = objects.context();
                 let q_instances = first
                     .source
                     .q_instances
@@ -714,7 +831,7 @@ impl Circuit<Fp> for Continuation {
                     },
                     incoming: None,
                     q_instances: &q_instances,
-                    objects: &context_objects,
+                    objects: context_objects,
                     modes: &[],
                     pallas_corrections: &[],
                     vesta_corrections: &[],
@@ -789,35 +906,18 @@ impl Circuit<Fp> for Continuation {
                             &first.source.signature_schema,
                             &q,
                         )?;
-                        SendStagePlan::new(first.plan.clone())?.constrain_stage(
-                            &mut chip,
-                            &mut region,
-                            self.plan.stage(),
-                            &objects,
-                            SendInputs {
-                                predecessor: MapState {
-                                    state: &old,
-                                    lineage: &pred_public,
+                        UnloadStagePlan::new(first.plan.clone(), load_objects::policy())?
+                            .constrain_stage(
+                                &mut chip,
+                                &mut region,
+                                self.plan.stage(),
+                                &objects,
+                                &input,
+                                UnloadStageWitness {
+                                    signatures: Some(&slots),
+                                    ..UnloadStageWitness::default()
                                 },
-                                successor: MapState {
-                                    state: &new,
-                                    lineage: &next_public,
-                                },
-                                sigma: &sigma,
-                            },
-                            SendStageWitness {
-                                authorization: Some(SendAuthorization {
-                                    objects: &auth_objects,
-                                    policy: load_objects::policy(),
-                                    signature:
-                                        iroha_kagemusha_proof::a_relation::SignatureQContext {
-                                            bundle: &slots,
-                                            instances: columns,
-                                        },
-                                }),
-                                ..SendStageWitness::default()
-                            },
-                        )?;
+                            )?;
                         slots.verified().clone()
                     };
                     verified.push(q);
@@ -832,42 +932,23 @@ impl Circuit<Fp> for Continuation {
                         .plan
                         .operation_tasks(self.plan.stage())
                         .ok_or(Error::Synthesis)?;
-                    let pending = if tasks.contains(&OperationTask::SendPending) {
-                        Some(maps.insertion(
-                            &mut chip.uint(),
+                    let recovery = if tasks.contains(&OperationTask::UnloadRecovery) {
+                        Some(maps.insertion(&mut chip.uint(), &mut region)?)
+                    } else {
+                        None
+                    };
+                    UnloadStagePlan::new(first.plan.clone(), load_objects::policy())?
+                        .constrain_stage(
+                            &mut chip,
                             &mut region,
-                            &maps.witness.pending,
-                        )?)
-                    } else {
-                        None
-                    };
-                    let fee = if tasks.contains(&OperationTask::SendFeeAndCarry) {
-                        Some(maps.insertion(&mut chip.uint(), &mut region, &maps.witness.fee)?)
-                    } else {
-                        None
-                    };
-                    SendStagePlan::new(first.plan.clone())?.constrain_stage(
-                        &mut chip,
-                        &mut region,
-                        self.plan.stage(),
-                        &objects,
-                        SendInputs {
-                            predecessor: MapState {
-                                state: &old,
-                                lineage: &pred_public,
+                            self.plan.stage(),
+                            &objects,
+                            &input,
+                            UnloadStageWitness {
+                                recovery: recovery.as_ref(),
+                                ..UnloadStageWitness::default()
                             },
-                            successor: MapState {
-                                state: &new,
-                                lineage: &next_public,
-                            },
-                            sigma: &sigma,
-                        },
-                        SendStageWitness {
-                            pending: pending.as_ref(),
-                            fee: fee.as_ref(),
-                            ..SendStageWitness::default()
-                        },
-                    )?;
+                        )?;
                 }
                 let fold = first.carrier(&mut chip, &mut bytes, &mut region, &self.fold)?;
                 let closed = iroha_kagemusha_proof::a_relation::split::close_stage(
@@ -915,7 +996,7 @@ impl Continuation {
             );
             return internal_public(digest, &self.vesta.as_input());
         }
-        let mut lineage = self.first.source.maps.witness.after.lineage.to_vec();
+        let mut lineage = self.first.source.maps.witness.successor.lineage.to_vec();
         let (x, y) = self.pallas.g().coordinates().unwrap();
         lineage.extend([x, y]);
         for u in self.pallas.challenges() {
@@ -967,12 +1048,12 @@ fn internal_public(digest: Fp, part: &FoldInput<Eq>) -> Vec<Vec<Fp>> {
     assert_eq!(words.len(), 69);
     vec![words]
 }
-/// Genuine authenticated Send terminal artifacts for outer/next-operation tests.
+/// Genuine authenticated Unload/Retiring terminal artifacts for outer/next-operation tests.
 /// The supplied predecessor's catalog/profile provenance is retained unchanged;
 /// this fixture does not declare the resulting lineage admitted by a final catalog.
 #[derive(Clone)]
 #[allow(dead_code)] // Outer and next-operation tests consume all carried artifacts.
-pub(crate) struct AuthenticatedSend {
+pub(crate) struct AuthenticatedConsuming {
     pub(crate) key: VerifyingKey<Eq>,
     pub(crate) binding: iroha_plonk::DescriptorBinding,
     pub(crate) proof: Vec<u8>,
@@ -1011,7 +1092,7 @@ fn artifact_diagnostics(
     range_buses: usize,
 ) {
     eprintln!(
-        "SEND_A_ARTIFACT stage={} range_buses={} shape={:?} descriptor_personalized_blake2b={} vk_kgwvkey1={} proof_pbytes_kgwtstp1={} proof_bytes={} diagnostic_only=true",
+        "CONSUMING_A_ARTIFACT stage={} range_buses={} shape={:?} descriptor_personalized_blake2b={} vk_kgwvkey1={} proof_pbytes_kgwtstp1={} proof_bytes={} diagnostic_only=true",
         stage + 1,
         range_buses,
         iroha_plonk::protocol::Protocol::new(key.binding().descriptor())
@@ -1029,8 +1110,7 @@ fn continue_schedule(
     first_proof: iroha_plonk::ProverOutput<Eq>,
     first_public: &[Vec<Fp>],
     adversarial: bool,
-    native_differential: bool,
-) -> Option<AuthenticatedSend> {
+) -> Option<AuthenticatedConsuming> {
     use iroha_kagemusha_proof::a_relation::split::{SplitPlan, WCircuit, WKey};
     let params = &first.source.params;
     let vparams = common::vesta_params(16);
@@ -1041,18 +1121,6 @@ fn continue_schedule(
     let mut part = first.source.part.clone();
     let mut history = Vec::new();
     let mut intermediate_keys = vec![first_key.vk().clone()];
-    let mut installed_a = if native_differential {
-        vec![Arc::new(first_key.clone())]
-    } else {
-        vec![]
-    };
-    let mut installed_w = Vec::new();
-    let mut originals_a = if native_differential {
-        vec![(source_proof.proof.clone(), carried.to_bytes())]
-    } else {
-        vec![]
-    };
-    let mut originals_w = Vec::new();
     for stage in 1..first.plan.stage_count() {
         let own =
             FoldInput::from_opening(*source_proof.opening.g(), source_proof.opening.challenges())
@@ -1107,9 +1175,6 @@ fn continue_schedule(
         )
         .unwrap();
         let (wkey, wprover) = WKey::keygen(&circuit, params).unwrap();
-        if native_differential {
-            installed_w.push(Arc::new(wprover.clone()));
-        }
         for wrong_stage in 0..=first.plan.stage_count() {
             if wrong_stage != stage {
                 assert!(
@@ -1136,9 +1201,6 @@ fn continue_schedule(
             ProverConfig::default(),
         )
         .unwrap();
-        if native_differential {
-            originals_w.push((wrapper.proof.clone(), vesta.to_bytes()));
-        }
         let wopening = accumulate_generator(
             params,
             wprover.binding(),
@@ -1174,7 +1236,7 @@ fn continue_schedule(
             Ok(a) => (a, 16),
             Err(error) => {
                 eprintln!(
-                    "actual Send A{} fails k16 {error:?}; diagnostic k18 only",
+                    "actual consuming A{} fails k16 {error:?}; diagnostic k18 only",
                     stage + 1
                 );
                 (synthesize(&continuation, 18, Some(&public)).unwrap(), 18)
@@ -1196,7 +1258,7 @@ fn continue_schedule(
             .map(|c| c.iter().rposition(|v| *v).map_or(0, |i| i + 1))
             .collect();
         eprintln!(
-            "genuine Send A{} hard W+Q{indices:?}+context+fold range_buses={} lanes={lanes:?}, production_k16_fit={}",
+            "genuine consuming A{} hard W+Q{indices:?}+context+fold range_buses={} lanes={lanes:?}, production_k16_fit={}",
             stage + 1,
             first.profile.range_buses(),
             k == 16
@@ -1204,8 +1266,8 @@ fn continue_schedule(
         if adversarial {
             if indices.contains(&1) {
                 let mut changed = (*first.source).clone();
-                let last = changed.own_objects[1].bytes.len() - 1;
-                changed.own_objects[1].bytes[last] ^= 1;
+                let last = changed.objects[2].bytes.len() - 1;
+                changed.objects[2].bytes[last] ^= 1;
                 let mut cross_receipt = continuation.clone();
                 cross_receipt.first.source = Arc::new(changed);
                 assert!(
@@ -1293,9 +1355,6 @@ fn continue_schedule(
         let mut cfg = KeygenConfigV2::pipa_r(vec![iroha_plonk::cs::InstanceType::Bounded]);
         cfg.compress_selectors = false;
         let key = keygen_pk_v2(&vparams, &continuation, &cfg).unwrap();
-        if native_differential {
-            installed_a.push(Arc::new(key.clone()));
-        }
         assert_eq!(key.binding().descriptor(), first_key.binding().descriptor());
         let proof = create_proof_owned_with_claim(
             &vparams,
@@ -1310,25 +1369,13 @@ fn continue_schedule(
             .decide(&vparams, MemoryBudget::DEFAULT)
             .unwrap();
         eprintln!(
-            "actual Send A{} proof={}B; terminal={}; final Omega/full catalog still pending",
+            "actual consuming A{} proof={}B; terminal={}; final Omega/full catalog still pending",
             stage + 1,
             proof.proof.len(),
             continuation.plan.is_terminal()
         );
         artifact_diagnostics(stage, &key, &proof.proof, first.profile.range_buses());
-        if native_differential {
-            originals_a.push((proof.proof.clone(), pallas.to_bytes()));
-        }
         if continuation.plan.is_terminal() {
-            if native_differential {
-                native_installed_send_differential(
-                    first,
-                    installed_a,
-                    installed_w,
-                    &originals_a,
-                    &originals_w,
-                );
-            }
             let final_digest = key.vk().kagemusha_digest(key.binding()).unwrap();
             let final_catalog = iroha_kagemusha_proof::omega::OmegaPlan::new(
                 key.binding().clone(),
@@ -1355,7 +1402,7 @@ fn continue_schedule(
                     "terminal-only catalog rejects every intermediate A key"
                 );
             }
-            return Some(AuthenticatedSend {
+            return Some(AuthenticatedConsuming {
                 key: key.vk().clone(),
                 binding: key.binding().clone(),
                 opening: FoldInput::from_opening(*proof.opening.g(), proof.opening.challenges())
@@ -1365,7 +1412,7 @@ fn continue_schedule(
                 pallas,
                 vesta_part: vesta,
                 predecessor_vesta: first.source.predecessor.vesta.clone(),
-                state: first.source.maps.witness.after,
+                state: first.source.maps.witness.successor,
             });
         }
         intermediate_keys.push(key.vk().clone());
@@ -1399,8 +1446,8 @@ fn context_digest(first: &First) -> Fp {
     let s = &first.source;
     let mut words = first.plan.schema().to_vec();
     words.extend(s.maps.witness.statement);
-    let before = &s.maps.witness.before;
-    let after = &s.maps.witness.after;
+    let before = &s.maps.witness.predecessor;
+    let after = &s.maps.witness.successor;
     words.extend(before.core);
     words.extend(before.rest);
     words.extend(before.lineage);
@@ -1413,23 +1460,18 @@ fn context_digest(first: &First) -> Fp {
         words.extend(foreign_limbs(v).map(Fp::from_u128));
     }
     let all = s
-        .maps
-        .witness
         .objects
         .iter()
-        .cloned()
-        .chain(s.own_objects.iter().map(|o| o.bytes.clone()))
+        .map(|o| o.bytes.clone())
         .collect::<Vec<_>>();
     let kinds = [
         iroha_kagemusha_proof::operation_relation::objects::ObjectKind::Credential,
-        iroha_kagemusha_proof::operation_relation::objects::ObjectKind::Request,
-        iroha_kagemusha_proof::operation_relation::objects::ObjectKind::FeeSchedule,
         iroha_kagemusha_proof::operation_relation::objects::ObjectKind::Certificate,
         iroha_kagemusha_proof::operation_relation::objects::ObjectKind::Receipt,
     ];
     for ((object, spec), kind) in all
         .iter()
-        .zip(SendStagePlan::context_specs().unwrap())
+        .zip(UnloadObjects::context_specs().unwrap())
         .zip(kinds)
     {
         let mut tape = vec![
@@ -1476,66 +1518,39 @@ fn first_public(first: &First) -> Vec<Vec<Fp>> {
 }
 
 #[test]
-#[ignore = "genuine common-key Bootstrap/Load, own Send sigma and 2V1F Q, fixed complete A stages"]
-fn common_key_send_executes_all_authorization_and_map_tasks() {
-    let rooted = load_outer::two_terminal_load_omega(false);
-    run_send_schedule(&rooted, 4, None);
+#[ignore = "genuine compact common-key Bootstrap/Load followed by complete Unload and Retiring A chains"]
+fn compact_loaded_wallet_proves_unload_and_retiring_with_all_owners() {
+    let rooted = catalog::compact_payer_load();
+    for retiring in [false, true] {
+        run_consuming_from_load(&rooted, retiring);
+    }
 }
 
-#[test]
-#[ignore = "reduced-Q candidate with genuine uniform-profile common-key Bootstrap/Load/Send"]
-fn reduced_q_common_key_send_executes_all_authorization_and_map_tasks() {
-    let rooted = load_outer::two_terminal_load_omega_with_q_layout(false, 4, Some(2));
-    run_send_schedule(&rooted, 4, Some(2));
-}
-
-/// Build the complete mask0 Send source using this exact common-key predecessor.
-/// The caller must add/rebind its terminal key before claiming catalog admission.
-pub(crate) fn run_send_schedule(
-    rooted: &load_outer::TwoTerminalLoadOmega,
-    range_buses: usize,
-    q_buses: Option<usize>,
-) -> AuthenticatedSend {
-    run_send_schedule_with_profile(rooted, SourceProfile::ordinary(range_buses), q_buses)
-}
-
-/// Complete controls-off Send with a fixed named profile at all A stages.
-/// Catalog construction must rebind the resulting terminal before admission.
-#[allow(dead_code)] // Consumed by compact catalog construction.
-pub(crate) fn run_send_schedule_with_profile(
-    rooted: &load_outer::TwoTerminalLoadOmega,
-    profile: SourceProfile,
-    q_buses: Option<usize>,
-) -> AuthenticatedSend {
-    run_send_from_load(&rooted.artifact, profile, q_buses, false)
-}
-
-/// Complete controls-off Send from a Load artifact with its actual carried key.
-/// The caller retains the exact catalog; no two-terminal metadata is inferred.
-#[allow(dead_code)] // Consumed by compact catalog construction.
-pub(crate) fn run_send_from_load(
+fn run_consuming_from_load(
     rooted: &load_outer::DiagnosticLoadOmega,
-    profile: SourceProfile,
-    q_buses: Option<usize>,
-    native_differential: bool,
-) -> AuthenticatedSend {
-    let source = Arc::new(sources(rooted, q_buses));
+    retiring: bool,
+) -> AuthenticatedConsuming {
+    let source = Arc::new(sources(rooted, retiring));
     let context = ContextPlan::with_schedule(
         source.plan.clone(),
-        vec![vec![], vec![], vec![], vec![0], vec![1]],
+        vec![vec![], vec![], vec![0], vec![1]],
         Some(0),
-        SendStagePlan::context_specs().unwrap(),
+        UnloadObjects::context_specs().unwrap().to_vec(),
     )
     .unwrap()
     .with_operation_tasks(vec![
-        vec![OperationTask::SendObjects, OperationTask::SendProof],
-        vec![OperationTask::SendPending],
-        vec![OperationTask::SendFeeAndCarry],
+        vec![OperationTask::UnloadProof],
+        vec![if retiring {
+            OperationTask::RetiringState
+        } else {
+            OperationTask::UnloadRecovery
+        }],
         vec![],
-        vec![OperationTask::SendAuthorization],
+        vec![OperationTask::UnloadAuthorization],
     ])
     .unwrap();
-    SendStagePlan::new(context.clone()).unwrap();
+    UnloadStagePlan::new(context.clone(), load_objects::policy()).unwrap();
+    let profile = SourceProfile::Tagged { buses: 3 };
     let claims = [
         source.predecessor.pallas.as_input(),
         source.predecessor.opening.clone(),
@@ -1562,7 +1577,7 @@ pub(crate) fn run_send_from_load(
     let (assigned, k) = match synthesize(&first, 16, Some(&public)) {
         Ok(a) => (a, 16),
         Err(error) => {
-            eprintln!("Send A1 k16 capacity failure {error:?}");
+            eprintln!("Consuming A1 k16 capacity failure {error:?}");
             (synthesize(&first, 18, Some(&public)).unwrap(), 18)
         }
     };
@@ -1575,12 +1590,12 @@ pub(crate) fn run_send_from_load(
         .map(|c| c.iter().rposition(|v| *v).map_or(0, |i| i + 1))
         .collect::<Vec<_>>();
     eprintln!(
-        "GENUINE_SEND_A1 lanes={lanes:?} production_k16_fit={}",
+        "GENUINE_CONSUMING_A1 lanes={lanes:?} production_k16_fit={}",
         k == 16
     );
     assert_eq!(k, 16, "hard capacity cannot be relaxed");
     let mut changed = (*source).clone();
-    changed.own_objects[1].bytes[242] ^= 1; // Receipt field9, original proof digest.
+    changed.objects[2].bytes[242] ^= 1; // Receipt field9, original proof digest.
     let mut rebound_receipt = first.clone();
     rebound_receipt.source = Arc::new(changed);
     assert!(
@@ -1591,7 +1606,7 @@ pub(crate) fn run_send_from_load(
             CheckMode::Strict,
         )
         .is_ok_and(|r| r.is_satisfied()),
-        "SendProof must reject a wrong digest even with a consistently rebound context"
+        "UnloadProof must reject a wrong digest even with a consistently rebound context"
     );
     let unknown = synthesize(&first.without_witnesses(), 16, None).unwrap();
     assert_eq!(assigned.tables.fixed(), unknown.tables.fixed());
@@ -1616,208 +1631,13 @@ pub(crate) fn run_send_from_load(
         .opening
         .decide(&params, MemoryBudget::DEFAULT)
         .unwrap();
-    let output = continue_schedule(&first, &key, proof, &public, true, native_differential)
-        .expect("complete Send schedule must meet k16");
-    assert_eq!(output.state.core, source.maps.witness.after.core);
-    assert_eq!(output.state.rest, source.maps.witness.after.rest);
-    assert_eq!(output.state.lineage, source.maps.witness.after.lineage);
+    let output = continue_schedule(&first, &key, proof, &public, true)
+        .expect("complete consuming schedule must meet k16");
+    assert_eq!(output.state.core, source.maps.witness.successor.core);
+    assert_eq!(output.state.rest, source.maps.witness.successor.rest);
+    assert_eq!(output.state.lineage, source.maps.witness.successor.lineage);
     eprintln!(
-        "SEND_COMPLETE_TASK_COMPONENT hard_predecessor=true mandatory_own2V1F=true same_tape_full320=true all_maps=true all_openings=true full_catalog=false release_qualified=false"
+        "CONSUMING_COMPLETE_TASK_COMPONENT hard_predecessor=true mandatory_own2V1F=true same_tape_full320=true all_maps=true all_openings=true full_catalog=false release_qualified=false"
     );
     output
-}
-
-fn native_installed_send_differential(
-    first: &First,
-    a: Vec<Arc<iroha_plonk::ProvingKey<Eq>>>,
-    w: Vec<Arc<iroha_plonk::ProvingKey<Ep>>>,
-    originals_a: &[(Vec<u8>, [u8; 544])],
-    originals_w: &[(Vec<u8>, [u8; 544])],
-) {
-    use iroha_kagemusha_proof::a_relation::native::send as native;
-    assert_eq!(
-        first.profile,
-        SourceProfile::Tagged {
-            buses: native::SOURCE_RANGE_BUSES,
-        }
-    );
-    let source = &first.source;
-    let input = native::Inputs {
-        state: native::SendWitness {
-            before: source.maps.witness.before,
-            after: source.maps.witness.after,
-            statement: source.maps.witness.statement,
-        },
-        sigma: source.sigma.clone(),
-        objects: core::array::from_fn(|i| {
-            if i < 3 {
-                source.maps.witness.objects[i].clone()
-            } else {
-                source.own_objects[i - 3].bytes.clone()
-            }
-        }),
-        pending: source.maps.witness.pending,
-        fee: source.maps.witness.fee,
-        q: core::array::from_fn(|i| native::QInput {
-            proof: source.q_proofs[i].clone(),
-            instances: source.q_instances[i].clone(),
-        }),
-        predecessor: native::PredecessorInput {
-            proof: source.predecessor.proof.clone(),
-            pallas: source.predecessor.pallas.to_bytes(),
-            vesta: source.predecessor.vesta.to_bytes(),
-        },
-    };
-    let plan = native::Plan::new(
-        source.plan.clone(),
-        load_objects::policy(),
-        source.signature_schema.clone(),
-        source.predecessor.key.clone(),
-        source.params.clone(),
-        common::vesta_params(16),
-    )
-    .unwrap();
-    assert_eq!(plan.context().schema(), first.plan.schema());
-    let installed = native::Prover::from_artifacts(
-        plan,
-        a.try_into()
-            .unwrap_or_else(|_| panic!("exact five installed A keys")),
-        w.try_into()
-            .unwrap_or_else(|_| panic!("exact four installed W keys")),
-    )
-    .unwrap();
-    assert_eq!(installed.descriptors().len(), 9);
-    let budget = MemoryBudget::DEFAULT;
-    let session = installed.prepare(input.clone(), budget).unwrap();
-    let unrelated_session = installed.prepare(input.clone(), budget).unwrap();
-    let fold = FoldConfig::default();
-    let generated = session
-        .first(
-            Fp::from(122),
-            &fold,
-            common::recovery(211),
-            ProverConfig::default(),
-        )
-        .unwrap();
-    let mut current = session
-        .restore_first(originals_a[0].0.clone(), &originals_a[0].1, budget)
-        .unwrap();
-    assert_eq!(current.stage(), 0);
-    assert_eq!(generated.instances(), current.instances());
-    assert_eq!(generated.pallas_bytes(), current.pallas_bytes());
-    assert_eq!(current.instances(), first_public(first)[0]);
-    assert!(session.terminal(&current, budget).is_err());
-    assert!(unrelated_session.terminal(&current, budget).is_err());
-    let mut changed = originals_a[0].0.clone();
-    changed[0] ^= 1;
-    assert!(
-        session
-            .restore_first(changed, &originals_a[0].1, budget)
-            .is_err()
-    );
-    assert!(
-        session
-            .restore_first(originals_a[0].0.clone(), &originals_a[0].1[..543], budget)
-            .is_err()
-    );
-    for stage in 0..4 {
-        let generated_w = session
-            .wrapper(
-                &current,
-                Fq::from(124 + stage as u64),
-                &fold,
-                common::recovery(212 + u8::try_from(stage).unwrap()),
-                ProverConfig::default(),
-            )
-            .unwrap();
-        let restored_w = session
-            .restore_wrapper(
-                &current,
-                originals_w[stage].0.clone(),
-                &originals_w[stage].1,
-                budget,
-            )
-            .unwrap();
-        assert_eq!(generated_w.vesta_bytes(), restored_w.vesta_bytes());
-        assert_eq!(generated_w.stage(), stage);
-        // A's Pallas fold uses the original W opening. Replaying that W preserves every
-        // exact downstream context even when the generated W's proof randomness differs.
-        let generated_a = session
-            .advance(
-                &restored_w,
-                Fp::from(125 + stage as u64),
-                &fold,
-                common::recovery(220 + u8::try_from(stage).unwrap()),
-                ProverConfig::default(),
-            )
-            .unwrap();
-        let restored_a = session
-            .restore_a(
-                &restored_w,
-                originals_a[stage + 1].0.clone(),
-                &originals_a[stage + 1].1,
-                budget,
-            )
-            .unwrap();
-        assert_eq!(generated_a.instances(), restored_a.instances());
-        assert_eq!(generated_a.pallas_bytes(), restored_a.pallas_bytes());
-        assert_eq!(restored_a.stage(), stage + 1);
-        assert!(
-            unrelated_session
-                .restore_a(
-                    &restored_w,
-                    originals_a[stage + 1].0.clone(),
-                    &originals_a[stage + 1].1,
-                    budget
-                )
-                .is_err()
-        );
-        let mut wrong = originals_w[stage].0.clone();
-        wrong[0] ^= 1;
-        assert!(
-            session
-                .restore_wrapper(&current, wrong, &originals_w[stage].1, budget)
-                .is_err()
-        );
-        let mut wrong = originals_a[stage + 1].0.clone();
-        wrong[0] ^= 1;
-        assert!(
-            session
-                .restore_a(&restored_w, wrong, &originals_a[stage + 1].1, budget)
-                .is_err()
-        );
-        current = restored_a;
-    }
-    let terminal = session.terminal(&current, budget).unwrap();
-    assert_eq!(terminal.instances, current.instances());
-    assert_eq!(terminal.pallas.to_bytes(), current.pallas_bytes());
-    terminal.pallas.decide(&source.params, budget).unwrap();
-    let vparams = common::vesta_params(16);
-    terminal.vesta_part.decide(&vparams, budget).unwrap();
-    terminal.predecessor_vesta.decide(&vparams, budget).unwrap();
-    terminal.opening.decide(&vparams, budget).unwrap();
-    assert!(
-        session
-            .wrapper(
-                &current,
-                Fq::from(130),
-                &fold,
-                common::recovery(225),
-                ProverConfig::default()
-            )
-            .is_err()
-    );
-    for mutation in 0..4 {
-        let mut bad = input.clone();
-        match mutation {
-            0 => bad.sigma[0] ^= 1,
-            1 => bad.predecessor.proof[0] ^= 1,
-            2 => bad.q[1].proof[0] ^= 1,
-            _ => bad.state.before.lineage[17] += Fp::ONE,
-        }
-        assert!(
-            installed.prepare(bad, budget).is_err(),
-            "original mutation{mutation}"
-        );
-    }
 }

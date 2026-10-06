@@ -67,9 +67,9 @@ class NativeInventoryTests(unittest.TestCase):
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
-            'native State preverify backend and curve admission': (
+            'native State preverify backend and key admission': (
                 ('state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests'),
-                ('unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'halo2_ipa_profile_labels_require_the_canonical_backend', 'canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry')),
+                ('retired_and_unknown_backends_refuse_before_key_or_dedup_admission', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'retired_ipa_profile_labels_refuse_even_native_envelope', 'native_and_stark_key_refusals_preserve_original_dedup_for_retry')),
             'native original Queue payload lease custody': (
                 ('queue.rs', 'queue/payload_leases.rs', 'payload_leases', 'queue::payload_leases::tests'),
                 ('pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue', 'pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection', 'pending_payload_lease_retires_on_actual_certified_state_publication', 'pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap')),
@@ -173,7 +173,8 @@ class NativeInventoryTests(unittest.TestCase):
                     'scoped_reverse_walk_reads_all_original_frames_and_rechecks_corrupt_ancestors',
                     'checked_prefix_finish_matches_original_complete_step_and_authority',
                     'checked_prefix_finish_preserves_refusal_rejection_and_same_source_retry',
-                    'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
+                    'admitted_prefix_initializes_every_field_like_the_owned_constructor',
+            'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
                     'admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_order',
                 )),
         }
@@ -290,6 +291,7 @@ class NativeInventoryTests(unittest.TestCase):
             'scoped_reverse_walk_reads_all_original_frames_and_rechecks_corrupt_ancestors',
             'checked_prefix_finish_matches_original_complete_step_and_authority',
             'checked_prefix_finish_preserves_refusal_rejection_and_same_source_retry',
+            'admitted_prefix_initializes_every_field_like_the_owned_constructor',
             'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
             'admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_order',
         ))

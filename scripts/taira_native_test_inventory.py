@@ -9,7 +9,7 @@ import re
 
 # (coverage, parent source, test source, registered module, full module path, exact test leaves)
 NATIVE_CORE_TEST_OWNERS = (
-    ('native State preverify backend and curve admission', 'state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests', ('unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'halo2_ipa_profile_labels_require_the_canonical_backend', 'canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry')),
+    ('native State preverify backend and key admission', 'state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests', ('retired_and_unknown_backends_refuse_before_key_or_dedup_admission', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'retired_ipa_profile_labels_refuse_even_native_envelope', 'native_and_stark_key_refusals_preserve_original_dedup_for_retry')),
     ('native original Queue payload lease custody', 'queue.rs', 'queue/payload_leases.rs', 'payload_leases', 'queue::payload_leases::tests', ('pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue', 'pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection', 'pending_payload_lease_retires_on_actual_certified_state_publication', 'pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap')),
     ('native original Queue resident custody', 'queue.rs', 'queue/resident_owner_tests.rs', 'resident_owner_tests', 'queue::tests::resident_owner_tests', ('removed_pending_owner_retains_original_resident_credit_until_last_reader', 'original_queue_shell_refusal_preserves_graph_and_exact_release_then_retries', 'first_queue_resident_ledger_refusal_keeps_original_input_and_retry_pool', 'every_queue_retirement_defers_original_refund_until_its_mutation_fence_releases', 'equal_limit_foreign_state_cannot_replace_original_queue_resident_pool', 'queue_drop_keeps_original_shell_and_ledger_charges_until_detached_last_owner', 'cold_queue_retirement_holds_original_fence_until_first_admission_can_publish')),
     ('native borrowed paid AMX proof custody', 'sumeragi/amx/native/tests.rs', 'sumeragi/amx/native/tests/paid_borrowed_custody.rs', 'paid_borrowed_custody', 'sumeragi::amx::native::tests::paid_borrowed_custody', (
@@ -259,6 +259,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'scoped_reverse_walk_reads_all_original_frames_and_rechecks_corrupt_ancestors',
         'checked_prefix_finish_matches_original_complete_step_and_authority',
         'checked_prefix_finish_preserves_refusal_rejection_and_same_source_retry',
+        'admitted_prefix_initializes_every_field_like_the_owned_constructor',
         'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
         'admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_order',
     )),

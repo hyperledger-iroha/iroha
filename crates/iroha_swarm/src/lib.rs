@@ -183,10 +183,10 @@ pub struct PreparedValidator {
     pub runtime_files: Vec<PreparedRuntimeFile>,
     /// File-backed private runtime inputs that must not appear in Compose YAML.
     pub secret_files: Vec<PreparedSecretFile>,
-    /// Required byte-exact private publisher inputs from this node's admitted original config.
+    /// Byte-exact private inputs when this node explicitly selects the issuer service.
     /// Their host ownership must also match the container daemon UID; no Compose ownership
     /// override or world-readable projection substitutes for that custody requirement.
-    pub publisher_custody: PreparedPublisherCustody,
+    pub publisher_custody: Option<PreparedPublisherCustody>,
 }
 /// Existing private publisher files captured before projected configuration validation.
 /// This descriptor carries paths only; canonical role/network admission remains mandatory
@@ -267,7 +267,7 @@ struct PreparedRuntimeConfig {
     blake3: [u8; 32],
     files: Vec<PreparedRuntimeSource>,
     secrets: Vec<PreparedSecretSource>,
-    publisher: PreparedPublisherSource,
+    publisher: Option<PreparedPublisherSource>,
     requires_sora_profile: bool,
 }
 #[derive(Debug)]
@@ -566,16 +566,17 @@ impl PeerSettings {
                 blake3: validator.runtime_config_blake3,
                 files: runtime_files,
                 secrets: secret_files,
-                publisher: PreparedPublisherSource {
-                    keyring: path::AbsolutePath::new(
-                        &validator.publisher_custody.keyring_source_path,
-                    )?
-                    .relative_to(target_dir)?,
-                    submitter: path::AbsolutePath::new(
-                        &validator.publisher_custody.submitter_source_path,
-                    )?
-                    .relative_to(target_dir)?,
-                },
+                publisher: validator
+                    .publisher_custody
+                    .map(|custody| {
+                        Ok::<_, Error>(PreparedPublisherSource {
+                            keyring: path::AbsolutePath::new(&custody.keyring_source_path)?
+                                .relative_to(target_dir)?,
+                            submitter: path::AbsolutePath::new(&custody.submitter_source_path)?
+                                .relative_to(target_dir)?,
+                        })
+                    })
+                    .transpose()?,
                 requires_sora_profile: validator.requires_sora_profile,
             };
             let (public_key, private_key) = validator.key_pair.into_parts();
@@ -644,7 +645,7 @@ impl<'a> Swarm<'a> {
     /// and both existing owner-only publisher files. These variables select mount sources,
     /// never runtime publisher settings or secret bytes. The mounted TOML must name
     /// [`KAGEMUSHA_LOAD_KEYRING_TARGET`] and [`KAGEMUSHA_LOAD_SUBMITTER_TARGET`]. Its explicit
-    /// publisher limits are retained; the daemon always admits and supervises that publisher.
+    /// publisher limits are retained; the daemon admits and supervises the selected publisher.
     /// Host private-file ownership must match the container daemon UID. Production callers use
     /// [`Self::from_prepared`] so the validator roster and signed artifacts come from one
     /// authoritative prepared bundle.
@@ -980,10 +981,10 @@ mod tests {
             secret_files: Vec::new(),
             // Manifest-shape TEST references only: this helper does not construct an admitted
             // publisher keyring or a successful daemon Service.
-            publisher_custody: PreparedPublisherCustody {
+            publisher_custody: Some(PreparedPublisherCustody {
                 keyring_source_path: format!("peer{index}.UNADMITTED-keyring.nrt").into(),
                 submitter_source_path: format!("peer{index}.TEST-submitter.key").into(),
-            },
+            }),
         }
     }
     #[test]
@@ -1915,5 +1916,64 @@ mod tests {
             1,
             "equal public runtime bytes must be interned once"
         );
+    }
+    #[test]
+    fn prepared_validators_without_issuer_role_keep_private_config_and_genesis_custody() {
+        for selected in [false, true] {
+            let validators = (0_u16..4)
+                .map(|index| {
+                    let mut validator = prepared_validator(index);
+                    if !selected {
+                        validator.publisher_custody = None;
+                    }
+                    validator
+                })
+                .collect();
+            let swarm = Swarm::from_prepared(
+                peer::chain(),
+                validators,
+                PreparedGenesisArtifacts {
+                    signed_block: std::path::Path::new("genesis.signed.nrt"),
+                    public_key: std::path::Path::new("genesis.public_key"),
+                    expected_hash: std::path::Path::new("genesis.expected_hash"),
+                },
+                false,
+                IMAGE,
+                None,
+                false,
+                std::path::Path::new(TARGET_PATH),
+            )
+            .unwrap();
+            let mut output = Vec::new();
+            swarm.build().write(&mut output, None).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
+            assert_eq!(output.matches("--config-blake3 ").count(), 4);
+            assert_eq!(
+                output
+                    .matches("require_publisher_file /config/peer.toml 8388608")
+                    .count(),
+                4
+            );
+            assert_eq!(
+                output.matches("require_publisher_file").count(),
+                if selected { 16 } else { 8 }
+            );
+            for target in [
+                crate::KAGEMUSHA_LOAD_KEYRING_TARGET,
+                crate::KAGEMUSHA_LOAD_SUBMITTER_TARGET,
+            ] {
+                assert_eq!(
+                    output.matches(&format!("target: {target}")).count(),
+                    if selected { 4 } else { 0 }
+                );
+            }
+            assert_eq!(
+                output.matches("create_host_path: false").count(),
+                if selected { 8 } else { 0 }
+            );
+            assert!(!output.contains("${IROHA_PEER"));
+            assert!(!output.contains("environment:"));
+        }
     }
 }

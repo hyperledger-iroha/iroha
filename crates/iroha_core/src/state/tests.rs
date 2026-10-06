@@ -794,6 +794,18 @@ state_test! { sync musubi_resolver_checkpoints_are_sparse_block_final_and_reorg_
 }
 state_test! { sync test_state_constructor_installs_default_lane_manifest
     let state = blank_state();
+    // The shared fixture intentionally has no publisher custody configuration.
+    // Constructing an in-process State still uses its exact chain/network IDs.
+    assert_eq!(
+        state.chain_id_ref().to_string(),
+        "00000000-0000-0000-0000-000000000000",
+    );
+    assert_eq!(
+        state.network_id_ref(),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse::<NetworkId>()
+            .expect("canonical fixture network identity"),
+    );
     state
         .lane_manifests
         .read()

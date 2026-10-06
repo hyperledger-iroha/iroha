@@ -1,4 +1,4 @@
-//! Required online finalized-load publication service settings.
+//! Settings for an explicitly selected online finalized-load publication service.
 use super::*;
 
 /// Owner-admitted private custody material. Debug output never reveals keys or encoded bytes.

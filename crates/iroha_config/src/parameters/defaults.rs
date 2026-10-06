@@ -20,7 +20,7 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-/// Required online finalized-load publication service defaults.
+/// Defaults for an explicitly selected online finalized-load publication service.
 pub mod kagemusha_load_authorizer {
     /// Maximum encoded private Norito keyring bytes admitted at startup.
     pub const KEYRING_MAX_BYTES: usize = 65_536;
@@ -192,9 +192,9 @@ pub mod data_dir {
     pub const TRANSPORT_KEY: &str = "transport.key";
     /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
     pub const STREAMING_KEY: &str = "streaming.key";
-    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
+    /// Selected online KAGEMUSHA publisher's private Norito signer keyring.
     pub const KAGEMUSHA_LOAD_AUTHORIZER_KEYRING: &str = "kagemusha_load_authorizer.keyring.norito";
-    /// Required online KAGEMUSHA publisher's private transaction submitter key.
+    /// Selected online KAGEMUSHA publisher's private transaction submitter key.
     pub const KAGEMUSHA_LOAD_SUBMITTER_KEY: &str = "kagemusha_load_submitter.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";

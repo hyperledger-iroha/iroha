@@ -83,7 +83,7 @@ impl QSignatureProver {
     /// The complete originals, scheme/catalog scope and resource policy must
     /// already be authenticated by the native installation owner. This method
     /// checks fixed source/key continuity; it grants no catalog admission,
-    /// NativeProofs implementation, wallet-open capability or enrollment identity.
+    /// `NativeProofs` implementation, wallet-open capability or enrollment identity.
     /// Original/domain bounds do not qualify total synthesis/prover memory.
     ///
     /// # Errors

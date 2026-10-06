@@ -298,7 +298,13 @@ fn complete_node_parser_reads_every_reference_from_supplied_bytes_and_preserves_
     );
     assert_eq!(files.values.len(), 9);
     assert_eq!(
-        parsed.kagemusha_load_authorizer.custody.keyring.as_slice(),
+        parsed
+            .kagemusha_load_authorizer
+            .as_ref()
+            .unwrap()
+            .custody
+            .keyring
+            .as_slice(),
         b"unadmitted-parser-only-publisher-keyring"
     );
     assert!(parsed.torii.account_onboarding.is_some());
@@ -340,16 +346,34 @@ fn supplied_node_files_match_native_inputs_and_never_fall_back_to_existing_files
     assert!(native.common.soranet_transport_key_pair == supplied.common.soranet_transport_key_pair);
     assert_eq!(native.genesis.expected_hash, supplied.genesis.expected_hash);
     assert_eq!(
-        native.kagemusha_load_authorizer.custody.keyring.as_slice(),
+        native
+            .kagemusha_load_authorizer
+            .as_ref()
+            .unwrap()
+            .custody
+            .keyring
+            .as_slice(),
         supplied
             .kagemusha_load_authorizer
+            .as_ref()
+            .unwrap()
             .custody
             .keyring
             .as_slice()
     );
     assert!(
-        native.kagemusha_load_authorizer.custody.submitter
-            == supplied.kagemusha_load_authorizer.custody.submitter
+        native
+            .kagemusha_load_authorizer
+            .as_ref()
+            .unwrap()
+            .custody
+            .submitter
+            == supplied
+                .kagemusha_load_authorizer
+                .as_ref()
+                .unwrap()
+                .custody
+                .submitter
     );
     assert_eq!(
         native.streaming.codec.rans_tables_path,
@@ -643,4 +667,27 @@ fn vpn_operator_key_reference_uses_supplied_bytes_and_native_defaults_without_fa
     assert!(diagnostic.contains("network.soranet_vpn.operator_private_key_file"));
     assert!(diagnostic.contains("vpn-operator.key"));
     assert!(files.reads.borrow().contains(&operator_path));
+}
+
+#[test]
+fn absent_publisher_role_preserves_other_original_inputs_without_issuer_file_reads() {
+    let path = Path::new("ABSENT-role-test/peer.toml");
+    let (mut table, mut files) = fixture(path);
+    table.remove("kagemusha_load_authorizer").unwrap();
+    for name in ["publisher.keyring", "publisher.submitter"] {
+        files.values.remove(&path.with_file_name(name)).unwrap();
+    }
+    let parsed = user(table, path).parse_with_file_source(&files).unwrap();
+    assert!(parsed.kagemusha_load_authorizer.is_none());
+    assert_eq!(files.values.len(), 7);
+    assert_eq!(
+        files
+            .reads
+            .borrow()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        files.values.keys().cloned().collect::<BTreeSet<_>>()
+    );
+    assert!(!path.parent().unwrap().exists());
 }

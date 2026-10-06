@@ -177,3 +177,68 @@ bad history-path, invalid-burn and middle-proof mutations, and the depth-16
 cycle test. The carry argument is separately recorded in
 [the reviewed M3b memo](kagemusha_ff_carry_v1.md). The final soundness review
 must bind the actual descriptor/VK hashes and generated proof behavior.
+
+## Receive raw ownership and sigma projection
+
+The Receive context commits the complete Q public inputs, all eleven original
+object triples, all five predicate claims, all incoming modes and the original
+Omega verifier opening. `ReceiveStagePlan` requires every named operation task
+exactly once. Each continuation verifies its exact preceding W key and the same
+context; a component result is not an admission certificate for a stage key.
+
+The separately scheduled hard ProofDigest owner derives the combined consuming
+hash from both original active tapes and their LE32 lengths. It binds that result
+to slot 4 and both original raw lengths/tape commitments to slots 4 and 5. This
+owner has no soft result bit and is mandatory exactly once (task code 23). Objects
+uses only the same context's claimed combined digest; it cannot admit a different
+preimage because the hard producer and every W continuation authenticate it.
+
+The Objects owner assigns the original active incoming sigma tape, including
+zero-length, short and over-descriptor inputs within its fixed capacity. Its
+safe Q view is `LE32(original length)` followed by the descriptor-sized original
+prefix, padded with zero only when the original is short. The remaining active
+tail remains in the exact step and combined consuming digests. The Objects
+owner hard-binds the incoming statement digest, selected key and every Q-view
+chunk to Q0. It also hard-binds the original tape's length, content address and
+raw commitment to context slot 5. These equalities are unconditional: a false
+Objects predicate does not release the sigma source or permit different Q
+inputs.
+
+The Proofs owner therefore consumes the same incoming sigma Q projection without
+allocating a second maximum-capacity raw sigma tape. `from_active_omega` requires
+original active provenance for Omega and an incoming sigma projection;
+`bind_context` equates the projection's statement, selector and every chunk to
+the identical committed Q0. Q0 is hard-verified at its unique scheduled owner.
+The sigma proof validity bit and mode still come from `bind_sigma`; neither is
+provided by the caller. This removes duplicate raw hashing without changing
+which original sigma bytes enter the soft verdict or consuming digest. A fixed
+schedule missing Objects, Q0 verification, a W/context equality or terminal
+mode accounting does not satisfy this argument and must not be admitted.
+
+Omega keeps its original active tape in the Proofs owner. That owner authenticates
+its exact raw length and byte commitment, constrains its total public/point
+projections, checks the carried Omega key, derives the recursive verifier verdict
+and binds every exported opening cell. ProofDigest independently derives the
+combined Omega-plus-sigma digest from both original active tapes. A safe decoder dummy is
+not permission to omit an original deferred obligation; terminal mode selection
+still follows the branch uniqueness argument above.
+
+Component tests construct a sigma projection with neither an active carrier nor
+a step digest and require the complete fixed owners to reject all proposed raw
+object triples, Q digest/index/chunk substitutions and original-length changes.
+They additionally reject raw sigma and Q substitutions when Objects is false.
+The recursive fixture separately distinguishes its authenticated receiver head
+from the incoming payer head; an accepted-credit fixture uses actual payer Load
+and receiver Bootstrap proofs rebuilt under one common compact Omega key.
+TODO: complete that maximum-capacity owner chain, its corrected-claim branches
+and final catalog admission before treating these component checks as a Receive
+qualification result.
+
+The pre-split canonical-capacity Receive run produced real A1–A3 proofs, including
+all retained-object/result/context mutation checks. Objects A4 then failed the
+unchanged k16 capacity gate: its diagnostic layout used 73,112 sponge rows,
+62,148 main rows and 44,118 range rows. The diagnostic k18 layout was rejected,
+not accepted as qualification. The new fixed ProofDigest stage separates the
+combined hash from semantic decoding; every stage still checks known/unknown
+layout equality and must produce and decide its actual k16 proof. The full
+nine-stage result and current catalog remain unqualified until that run finishes.

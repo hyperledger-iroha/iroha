@@ -6682,9 +6682,6 @@ impl Executor {
                             "unsupported proof backend".to_owned(),
                         ));
                     }
-                    PreverifyResult::CurveNotAllowed => {
-                        return Err(ValidationFail::NotPermitted("curve not allowed".to_owned()));
-                    }
                     PreverifyResult::ProofTooBig => {
                         return Err(ValidationFail::NotPermitted("proof too big".to_owned()));
                     }

@@ -133,7 +133,13 @@ fn publisher_fixture_parses_through_inline_and_named_toml_origins() {
             .parse_with_file_source(&ParserOnlyPublisherFiles)
             .unwrap();
         assert_eq!(
-            actual.kagemusha_load_authorizer.custody.keyring.as_slice(),
+            actual
+                .kagemusha_load_authorizer
+                .as_ref()
+                .unwrap()
+                .custody
+                .keyring
+                .as_slice(),
             UNADMITTED_KEYRING_DATA
         );
     }
@@ -165,6 +171,9 @@ fn missing_publisher_refs_still_refuse_root_configuration() {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml"),
         )
         .unwrap()
+        .with_toml_source(TomlSource::inline(
+            "[kagemusha_load_authorizer]\n".parse().unwrap(),
+        ))
         .read_and_complete::<iroha_config::parameters::user::Root>()
         .unwrap();
     let error = user

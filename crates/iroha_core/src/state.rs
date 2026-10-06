@@ -34696,7 +34696,8 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
     use iroha_config::{base::read::ConfigReader, parameters::user};
     let config_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
-    let reader = ConfigReader::new()
+    let mut reader = ConfigReader::new()
+        .without_env()
         .read_toml_with_extends(&config_path)
         .unwrap_or_else(|err| {
             panic!(
@@ -34704,7 +34705,18 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
                 config_path.display()
             )
         });
-    let user_config = reader
+    // These constructors need the fixture's canonical identities, not a running
+    // node's custody or services. Validate its syntax without opening publisher
+    // custody files or applying unrelated production configuration requirements.
+    let chain = reader
+        .read_parameter::<iroha_model_base::chain::ChainId>(["chain"])
+        .value_required()
+        .finish();
+    let network = reader
+        .read_parameter::<iroha_data_model::NetworkId>(["genesis", "expected_hash"])
+        .value_required()
+        .finish();
+    let _user_config = reader
         .read_and_complete::<user::Root>()
         .unwrap_or_else(|err| {
             panic!(
@@ -34712,17 +34724,7 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
                 config_path.display()
             )
         });
-    let config: iroha_config::parameters::actual::Root =
-        user_config.parse().unwrap_or_else(|err| {
-            panic!(
-                "failed to parse default testing config `{}`: {err}",
-                config_path.display()
-            )
-        });
-    (
-        config.common.chain,
-        iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
-    )
+    (chain.unwrap(), network.unwrap())
 });
 static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_model_base::chain::ChainId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());
@@ -37987,20 +37989,6 @@ impl StateTransaction<'_, '_> {
             && (self.zk.preverify_budget_bytes as usize) < proof.bytes.len()
         {
             return crate::zk::PreverifyResult::PreverifyBudgetExceeded;
-        }
-        // Apply the original State curve policy only to the exact admitted Halo2
-        // engine, before verifier-key admission or per-block deduplication. Native
-        // PIPA-R and STARK retain their independently pinned curve policies.
-        if !cfg!(all(test, sumeragi_core_mutation = "HC146"))
-            && crate::zk::production_verify_backend_tag(proof.backend.as_str())
-                == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
-            && !matches!(
-                self.zk.halo2.curve,
-                iroha_config::parameters::actual::ZkCurve::Pallas
-                    | iroha_config::parameters::actual::ZkCurve::Pasta
-            )
-        {
-            return crate::zk::PreverifyResult::CurveNotAllowed;
         }
         crate::zk::preverify_with_budget(
             proof,

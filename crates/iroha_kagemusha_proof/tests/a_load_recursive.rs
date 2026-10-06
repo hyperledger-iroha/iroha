@@ -1424,8 +1424,8 @@ fn continue_schedule(
                     first,
                     installed_a,
                     installed_w,
-                    originals_a,
-                    originals_w,
+                    &originals_a,
+                    &originals_w,
                 );
             }
             let final_digest = key.vk().kagemusha_digest(key.binding()).unwrap();
@@ -1984,8 +1984,8 @@ fn native_installed_load_differential(
     first: &First,
     a: Vec<Arc<iroha_plonk::ProvingKey<Eq>>>,
     w: Vec<Arc<iroha_plonk::ProvingKey<Ep>>>,
-    originals_a: Vec<(Vec<u8>, [u8; 544])>,
-    originals_w: Vec<(Vec<u8>, [u8; 544])>,
+    originals_a: &[(Vec<u8>, [u8; 544])],
+    originals_w: &[(Vec<u8>, [u8; 544])],
 ) {
     use iroha_kagemusha_proof::a_relation::native::load as native;
     assert_eq!(
@@ -2073,7 +2073,7 @@ fn native_installed_load_differential(
                 &current,
                 Fq::from(124 + stage as u64),
                 &fold,
-                common::recovery(212 + stage as u8),
+                common::recovery(212 + u8::try_from(stage).unwrap()),
                 ProverConfig::default(),
             )
             .unwrap();
@@ -2094,7 +2094,7 @@ fn native_installed_load_differential(
                 &restored_w,
                 Fp::from(125 + stage as u64),
                 &fold,
-                common::recovery(220 + stage as u8),
+                common::recovery(220 + u8::try_from(stage).unwrap()),
                 ProverConfig::default(),
             )
             .unwrap();

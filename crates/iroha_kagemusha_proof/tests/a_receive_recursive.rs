@@ -35,8 +35,9 @@ use iroha_kagemusha_proof::{
         own::OwnPolicy,
         receive::{
             MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES, PAYMENT_PROOF_BUDGET, ReceiveObjectInputs,
-            ReceiveObjectSources, ReceiveObjects, ReceiveProofInputs, ReceiveProofSources,
-            ReceiveSignedObjects, ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness,
+            ReceiveObjectSources, ReceiveObjects, ReceiveProofDigest, ReceiveProofInputs,
+            ReceiveProofSources, ReceiveSignedObjects, ReceiveStageInputs, ReceiveStagePlan,
+            ReceiveStageWitness,
             authorization::{ReceiveAuthorizationObjects, ReceiveAuthorizationSources},
         },
         results::ReceiveResultClaims,
@@ -420,6 +421,7 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
             vec![0],
             vec![],
             vec![],
+            vec![],
             vec![1],
             vec![2],
             vec![],
@@ -433,6 +435,7 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
         vec![],
         vec![],
         vec![ReceiveProofs],
+        vec![ReceiveProofDigest],
         vec![ReceiveObjects],
         vec![ReceiveAuthorization, ReceiveOwnProof],
         vec![ReceiveSignatures],
@@ -996,45 +999,76 @@ impl Circuit<Fp> for Stage {
                         &run,
                     )?;
                 }
-                let needs_active = tasks.iter().any(|t| {
+                let needs_transport = tasks.iter().any(|t| {
                     matches!(
                         t,
                         OperationTask::ReceiveObjects | OperationTask::ReceiveProofs
                     )
                 });
-                let transport = if needs_active {
-                    let transport_plan = IncomingTransportPlan::new(plan.operation())?;
-                    let raw = cells.active(
+                let needs_digest = tasks.contains(&OperationTask::ReceiveProofDigest);
+                let transport_plan = IncomingTransportPlan::new(plan.operation())?;
+                let omega_raw = if needs_transport || needs_digest {
+                    let segments = if needs_transport {
+                        transport_plan.active_segments()?
+                    } else {
+                        vec![]
+                    };
+                    Some(cells.active(
                         &mut chip,
                         &mut bytes,
                         &mut region,
                         &source.incoming,
                         plan.object_specs()[4].capacity as usize,
-                        &transport_plan.active_segments()?,
-                    )?;
-                    let transport = transport_plan.decode_active(
-                        &mut chip,
-                        &mut region,
-                        &raw,
-                        next_public.omega_key_digest(),
-                    )?;
-                    let sigma = cells.active(
+                        &segments,
+                    )?)
+                } else {
+                    None
+                };
+                let sigma_raw = if tasks.contains(&OperationTask::ReceiveObjects) || needs_digest {
+                    let segments = if tasks.contains(&OperationTask::ReceiveObjects) {
+                        SigmaBindingCells::incoming_segments(source.own.incoming_sigma.len())?
+                    } else {
+                        vec![]
+                    };
+                    Some(cells.active(
                         &mut chip,
                         &mut bytes,
                         &mut region,
                         &source.own.incoming_sigma,
                         plan.object_specs()[5].capacity as usize,
-                        &SigmaBindingCells::incoming_segments(source.own.incoming_sigma.len())?,
-                    )?;
+                        &segments,
+                    )?)
+                } else {
+                    None
+                };
+                let transport = if needs_transport {
+                    Some(transport_plan.decode_active(
+                        &mut chip,
+                        &mut region,
+                        omega_raw.as_ref().ok_or(Error::Synthesis)?,
+                        next_public.omega_key_digest(),
+                    )?)
+                } else {
+                    None
+                };
+                if tasks.contains(&OperationTask::ReceiveObjects) {
                     incoming_sigma = SigmaBindingCells::from_incoming_active(
                         &mut chip,
                         &mut region,
                         &incoming_statement,
                         incoming_index,
-                        &sigma,
+                        sigma_raw.as_ref().ok_or(Error::Synthesis)?,
                         source.own.incoming_sigma.len(),
                     )?;
-                    Some(transport)
+                }
+                let proof_digest = if needs_digest {
+                    Some(ReceiveProofDigest::from_active(
+                        &mut chip,
+                        &mut region,
+                        omega_raw.as_ref().ok_or(Error::Synthesis)?,
+                        sigma_raw.as_ref().ok_or(Error::Synthesis)?,
+                        context[5].authenticated_digest(),
+                    )?)
                 } else {
                     None
                 };
@@ -1056,6 +1090,7 @@ impl Circuit<Fp> for Stage {
                             receiver: &pred_public,
                             incoming: transport.as_ref().ok_or(Error::Synthesis)?,
                             sigma: &incoming_sigma,
+                            consuming_digest: context[4].authenticated_digest(),
                         },
                     )?)
                 } else {
@@ -1178,7 +1213,9 @@ impl Circuit<Fp> for Stage {
                 }
                 let proof_sources = transport
                     .as_ref()
-                    .map(|transport| ReceiveProofSources::from_active(transport, &incoming_sigma))
+                    .map(|transport| {
+                        ReceiveProofSources::from_active_omega(transport, &incoming_sigma)
+                    })
                     .transpose()?;
                 let proof_key = if tasks.contains(&OperationTask::ReceiveProofs) {
                     Some(cells.key(&mut chip, &mut region, &source.incoming_head.key)?)
@@ -1245,6 +1282,7 @@ impl Circuit<Fp> for Stage {
                     u32::try_from(stage).map_err(|_| Error::BoundsFailure)?,
                     ReceiveStageInputs {
                         context: &input,
+                        proof_digest: proof_digest.as_ref(),
                         objects: objects.as_ref(),
                         signed: signed.as_ref(),
                         authorization: auth.as_ref(),
@@ -1593,7 +1631,7 @@ fn assert_foreign_wrapper_rejects(circuit: &Stage, previous_wrapper: &[u8]) {
     }
 }
 #[test]
-#[ignore = "real receiver Bootstrap, both sigmas, three Qs and eight fixed A/W stages; run optimized"]
+#[ignore = "real receiver Bootstrap, both sigmas, three Qs and nine fixed A/W stages; run optimized"]
 fn genuine_receive_burn_owner_chain_preserves_all_proofs_and_result_claims() {
     receive_owner_chain(IngestionCapacity::Descriptor);
 }
@@ -1692,6 +1730,7 @@ fn prove_receive_owner_chain(source: Source) {
             &FoldConfig::default(),
         )
         .unwrap();
+        vesta.decide(&vparams, MemoryBudget::DEFAULT).unwrap();
         let witness = iroha_kagemusha_proof::omega::OmegaWitness {
             key: key.vk().clone(),
             instances: public[0].clone(),

@@ -156,6 +156,22 @@ TODO: execute and qualify the complete genuine Q → A → Ω chains, rebind the
 terminal keys into the common catalog, and connect the installed wallet provider.
 The leaf and task checks alone do not authorize an unload or retirement.
 
+
+## Archive state leaf
+
+`admin_sigma::ArchiveCircuit` shares one k12 class across Receive-package and
+`CreditStatus` evidence. The native proof is 3,296 bytes with at most 2,367
+assigned rows. It binds both state openings and the statement, preserving every
+core field except sequence, nonce and the removed core pending root, and every
+rest field. Adjusted burned value and credit roots are unchanged. The map owner
+separately authenticates both removals and selects the adjusted pending root from
+the actual evidence verdict. Exhaustive rehashed core/rest mutations reject in
+both evidence variants and both verdict branches.
+
+TODO: compose the full authenticated evidence, corrected-claim/no-op, current
+credential and own receipt obligations into the recursive Archive relation. This
+state leaf does not accept delivery evidence or release retained Payment bytes.
+
 ## Controls
 
 Send's verifying key is selected by the opened core mask. Receive's key is

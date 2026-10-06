@@ -540,7 +540,7 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
     ///
     /// Both path pairs and the descriptor are hard-authenticated even on
     /// no-op. Invalid evidence preserves the adjusted pending leaf and all
-    /// other value. A later lineage-consuming step resynchronizes the core,
+    /// other state and held policy. A later lineage-consuming step resynchronizes the core,
     /// permitting a new Archive with fresh evidence. This method never
     /// authorizes deletion of the retained Payment before durable folding.
     ///
@@ -554,13 +554,11 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
         witness: &ArchiveMapWitness<D>,
         valid_evidence: &Bit<Fp>,
     ) -> Result<(), Error> {
-        if !matches!(
-            transition.statement.variant(),
-            Variant::ArchiveReceive | Variant::ArchiveStatus
-        ) {
-            return Err(Error::Synthesis);
-        }
-        self.bind(region, transition)?;
+        super::administrative::archive(
+            &mut UintChip::new(self.glue, self.range),
+            region,
+            transition,
+        )?;
         let credit = &transition.statement.fields()[17];
         GlueChip::assert_equal(region, &witness.descriptor[0], credit)?;
         let value = self
@@ -598,30 +596,7 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
             &core_root,
             &transition.successor.state.core()[core::PENDING_OUTGOING_ROOT],
         )?;
-        for index in [
-            core::BALANCE,
-            core::BURNED_TOTAL,
-            core::CONSUMED_CREDIT_ROOT,
-            core::LOAD_REDEEM_ROOT,
-            core::FEE_CLAIM_ROOT,
-            core::QUOTA_USAGE_ROOT,
-        ] {
-            GlueChip::assert_equal(
-                region,
-                &transition.predecessor.state.core()[index],
-                &transition.successor.state.core()[index],
-            )?;
-        }
-        GlueChip::assert_equal(
-            region,
-            transition.predecessor.lineage.burned_total(),
-            transition.successor.lineage.burned_total(),
-        )?;
-        GlueChip::assert_equal(
-            region,
-            transition.predecessor.lineage.credit_root(),
-            transition.successor.lineage.credit_root(),
-        )
+        Ok(())
     }
 }
 

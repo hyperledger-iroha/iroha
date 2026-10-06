@@ -1,13 +1,12 @@
-//! Production Load A1/W0/A2/W1/A3/W2/A4 composition from exact signed tapes.
+//! Native controls-off Send A1/W0/A2/W1/A3/W2/A4/W3/A5 composition.
 //!
-//! A1 binds the hard original predecessor Omega and depth32 recovery insertion;
-//! A2 verifies `Q_sigma`; A3 authenticates the finalized voucher, its Load certificate
-//! and own Advance Receipt; A4 reauthenticates the current Credential and Enrollment
-//! certificate. All stages bind the same original state/object/sigma/Q tapes. Every
-//! predecessor, Q, wrapper and generated proof is checked in full, and every carried
-//! Pasta opening is decided. The terminal A4 is an input to the final Omega producer,
-//! never monetary completion by itself. Runtime sessions use fixed installed artifacts;
-//! no method generates keys, selects a witness profile or imports test implementations.
+//! A1 binds the actual predecessor Omega, original own sigma and exact signed tapes.
+//! A2 inserts Pending; A3 inserts the fee claim and preserves the remaining state.
+//! A4 hard-verifies `Q_sigma`; A5 authenticates the current Credential, direct
+//! Enrollment certificate and own Advance Receipt. The fixed Tagged3 source profile
+//! consumes installed keys, verifies every produced/restored proof and decides every
+//! carried opening. The terminal A5 is only an input to the final Omega producer.
+//! TODO: add the remaining seven Send control masks before full catalog admission.
 
 use core::fmt;
 use std::sync::Arc;
@@ -47,14 +46,17 @@ use iroha_plonk_recursion::{
 use super::super::{
     AProofPlan, LineagePublicCells, ProofMessageCells, SigmaBindingCells, VestaClaimCells,
     context::{ContextInputs, ContextPlan, ContextPredecessor, ContextState},
-    load::{LoadInputs, LoadObjects, LoadStagePlan},
-    own::OwnPolicy,
+    own::{ConsumingProofCells, OwnPolicy},
     schedule::OperationTask,
+    send::{
+        SendAuthorization, SendAuthorizationObjects, SendInputs, SendObjects, SendProofBinding,
+        SendStagePlan, SendStageWitness,
+    },
     split::{SplitPlan, WCircuit, WKey, close_first},
     verify_predecessor, verify_sigma,
 };
 use crate::{
-    admin_sigma::{LoadWitness, StateWitness},
+    admin_sigma::StateWitness,
     omega::OmegaWitness,
     operation_relation::{
         map_effects::{InsertCells, MapState},
@@ -67,13 +69,13 @@ use crate::{
 };
 
 #[cfg(test)]
-#[path = "load/tests.rs"]
+#[path = "send/tests.rs"]
 mod tests;
 
 /// Fixed native source profile; private inputs cannot choose another range-bus count.
-pub const SOURCE_RANGE_BUSES: usize = 4;
-/// Exact source schedule has four A stages and three W continuations.
-pub const A_STAGE_COUNT: usize = 4;
+pub const SOURCE_RANGE_BUSES: usize = 3;
+/// Exact source schedule has five A stages and four W continuations.
+pub const A_STAGE_COUNT: usize = 5;
 
 /// Native preparation/proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +91,7 @@ pub enum Error {
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "native Load: {self:?}")
+        write!(f, "native Send: {self:?}")
     }
 }
 impl std::error::Error for Error {}
@@ -114,52 +116,65 @@ pub struct PredecessorInput {
     pub vesta: [u8; 544],
 }
 
-/// Post-Advance originals for complete native Load lineage composition.
+/// Exact before/after states and own Send statement from the irreversible Advance.
+#[derive(Clone, Debug)]
+pub struct SendWitness {
+    /// Original committed predecessor state.
+    pub before: StateWitness,
+    /// Exact successor state retained by Advance.
+    pub after: StateWitness,
+    /// Exact26-field own Send statement.
+    pub statement: [Fp; 26],
+}
+
+/// Post-Advance originals for complete native Send lineage composition.
 /// The G1 owner authenticates canonical custody objects before producing these typed
 /// field transcripts and exact signed-body transcript||signature tapes.
 #[derive(Clone, Debug)]
 pub struct Inputs {
     /// Exact predecessor/successor core33/rest8/public18 and own statement26.
-    pub state: LoadWitness,
+    pub state: SendWitness,
     /// Exact original unframed sigma bytes also exported by Q0.
     pub sigma: Vec<u8>,
-    /// Load certificate, voucher, own receipt, Enrollment certificate, current Credential.
+    /// Current Credential, Request, `FeeSchedule`, Enrollment certificate, own Advance Receipt.
     pub objects: [Vec<u8>; 5],
-    /// Exact depth32 recovery-map insertion witness, checked by the actual A1 relation.
-    pub insertion: IndexedInsert<Fp>,
-    /// `Q_sigma`, receipt/voucher/Load-certificate Q, and current-credential/Enrollment Q.
-    pub q: [QInput; 3],
+    /// Exact depth32 pending-map insertion checked by A2.
+    pub pending: IndexedInsert<Fp>,
+    /// Exact depth32 fee-map insertion checked by A3.
+    pub fee: IndexedInsert<Fp>,
+    /// Hard `Q_sigma` followed by own Receipt/current Credential/Enrollment signature Q.
+    pub q: [QInput; 2],
     /// Actual predecessor proof; its key/profile comes from the installed Plan.
     pub predecessor: PredecessorInput,
 }
 
-/// Immutable complete Load circuit metadata from the authenticated native artifact owner.
+/// Immutable complete Send circuit metadata from the authenticated native artifact owner.
 #[derive(Clone, Debug)]
 pub struct Plan {
     context: ContextPlan,
     policy: OwnPolicy,
-    signatures: [QSignaturePlan; 2],
+    signatures: QSignaturePlan,
     predecessor_key: VerifyingKey<Ep>,
     pallas: PinnedParams<Ep>,
     vesta: PinnedParams<Eq>,
 }
 impl Plan {
-    /// Pin predecessor and the fixed [[],[Q0],[Q1],[Q2]] schedule with every Load task.
-    /// Signature slots are hard: [receipt,voucher,Load certificate] and
-    /// [current Credential,Enrollment certificate], with certificates under the fixed root.
+    /// Pin predecessor and the fixed [[],[],[],[Q0],[Q1]] schedule with every Send task.
+    /// The hard signature slots are [own Receipt,current Credential,Enrollment certificate],
+    /// with the certificate under the installed root. Only controls mask0 is implemented.
     /// # Errors
     /// Wrong variant/k/schema, absent predecessor or substituted fixed signature/key policy.
     pub fn new(
         operation: AProofPlan,
         policy: OwnPolicy,
-        signatures: [QSignaturePlan; 2],
+        signatures: QSignaturePlan,
         predecessor_key: VerifyingKey<Ep>,
         pallas: PinnedParams<Ep>,
         vesta: PinnedParams<Eq>,
     ) -> Result<Self, Error> {
-        if operation.frame().variant() != Variant::Load
+        if operation.frame().variant() != Variant::Send
             || operation.frame().part_source_k() != 12
-            || operation.q_count() != 3
+            || operation.q_count() != 2
             || !operation.frame().has_predecessor()
             || operation.sigma.slot_count() != 1
             || operation
@@ -193,49 +208,59 @@ impl Plan {
         predecessor_key
             .kagemusha_digest(predecessor.binding())
             .map_err(|_| Error::Artifact)?;
-        for (index, schema) in signatures.iter().enumerate() {
-            let slots = schema.slots();
-            let variable = if index == 0 { 2 } else { 1 };
-            if slots.len() != variable + 1
-                || slots.iter().any(|slot| slot.mode != VerifyMode::Hard)
-                || slots[..variable]
-                    .iter()
-                    .any(|slot| slot.key != SignatureKey::Variable)
-                || slots[variable].key != SignatureKey::Fixed(policy.root)
-            {
-                return Err(Error::Artifact);
-            }
-            let d = operation
-                .q(index + 1)
-                .ok_or(Error::Artifact)?
-                .verifier()
-                .binding()
-                .descriptor();
-            if d.instance_lengths
-                != [u32::try_from(schema.instance_length()).map_err(|_| Error::Artifact)?]
-                || d.instance_types.as_deref() != Some(&QSignaturePlan::instance_types())
-            {
-                return Err(Error::Artifact);
-            }
+        let slots = signatures.slots();
+        if slots.len() != 3
+            || slots.iter().any(|slot| slot.mode != VerifyMode::Hard)
+            || slots[..2]
+                .iter()
+                .any(|slot| slot.key != SignatureKey::Variable)
+            || slots[2].key != SignatureKey::Fixed(policy.root)
+        {
+            return Err(Error::Artifact);
+        }
+        let d = operation
+            .q(1)
+            .ok_or(Error::Artifact)?
+            .verifier()
+            .binding()
+            .descriptor();
+        if d.instance_lengths
+            != [u32::try_from(signatures.instance_length()).map_err(|_| Error::Artifact)?]
+            || d.instance_types.as_deref() != Some(&QSignaturePlan::instance_types())
+        {
+            return Err(Error::Artifact);
+        }
+        let sigma_bytes = operation
+            .sigma
+            .class(0)
+            .ok_or(Error::Artifact)?
+            .verifier()
+            .proof_length();
+        if predecessor
+            .proof_length()
+            .checked_add(1088)
+            .and_then(|n| n.checked_add(sigma_bytes))
+            .is_none_or(|n| n > super::super::receive::PAYMENT_PROOF_BUDGET)
+        {
+            return Err(Error::Artifact);
         }
         let context = ContextPlan::with_schedule(
             operation,
-            vec![vec![], vec![0], vec![1], vec![2]],
+            vec![vec![], vec![], vec![], vec![0], vec![1]],
             Some(0),
-            LoadObjects::context_specs()
-                .map_err(|_| Error::Artifact)?
-                .to_vec(),
+            SendStagePlan::context_specs().map_err(|_| Error::Artifact)?,
         )
         .and_then(|p| {
             p.with_operation_tasks(vec![
-                vec![OperationTask::LoadRecovery],
+                vec![OperationTask::SendObjects, OperationTask::SendProof],
+                vec![OperationTask::SendPending],
+                vec![OperationTask::SendFeeAndCarry],
                 vec![],
-                vec![OperationTask::LoadAuthorization],
-                vec![OperationTask::LoadCurrentAuthorization],
+                vec![OperationTask::SendAuthorization],
             ])
         })
         .map_err(|_| Error::Artifact)?;
-        LoadStagePlan::new(context.clone()).map_err(|_| Error::Artifact)?;
+        SendStagePlan::new(context.clone()).map_err(|_| Error::Artifact)?;
         Ok(Self {
             context,
             policy,
@@ -291,10 +316,10 @@ impl Plan {
             .predecessor_key
             .kagemusha_digest(program.binding())
             .map_err(|_| Error::Artifact)?;
-        if input.state.predecessor.lineage[17] != digest {
+        if input.state.before.lineage[17] != digest {
             return Err(Error::Input);
         }
-        let own = terminal_digest(&input.state.predecessor.lineage, &pallas.as_input())?;
+        let own = terminal_digest(&input.state.before.lineage, &pallas.as_input())?;
         let public = omega_instances(own, &vesta)?;
         verify_full(
             &self.pallas,
@@ -336,9 +361,16 @@ impl Plan {
         }
         let part = q_sigma_part(&input.q[0], 12)?;
         part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
+        let omega = lineage_bytes(
+            &input.state.before.lineage,
+            &input.predecessor.proof,
+            &pallas,
+            &vesta,
+        )?;
         let maps = Maps {
             witness: input.state,
-            insertion: input.insertion,
+            pending: input.pending,
+            fee: input.fee,
             objects: core::array::from_fn(|i| SignedTape {
                 kind: object_kinds()[i],
                 bytes: input.objects[i].clone(),
@@ -355,10 +387,11 @@ impl Plan {
         let source = Arc::new(Sources {
             maps,
             sigma: input.sigma,
+            omega,
             q_instances: input.q.each_ref().map(|q| q.instances.clone()).to_vec(),
             q_proofs: input.q.each_ref().map(|q| q.proof.clone()).to_vec(),
             q_openings: openings,
-            signature_schema: self.signatures.to_vec(),
+            signature_schema: self.signatures.clone(),
             part,
             predecessor,
             params: self.pallas.clone(),
@@ -383,10 +416,11 @@ struct Predecessor {
 struct Sources {
     maps: Maps,
     sigma: Vec<u8>,
+    omega: Vec<u8>,
     q_instances: Vec<Vec<Vec<Fq>>>,
     q_proofs: Vec<Vec<u8>>,
     q_openings: Vec<FoldInput<Ep>>,
-    signature_schema: Vec<QSignaturePlan>,
+    signature_schema: QSignaturePlan,
     part: FoldInput<Eq>,
     predecessor: Predecessor,
     params: PinnedParams<Ep>,
@@ -404,8 +438,9 @@ impl SignedTape {
 }
 #[derive(Clone)]
 struct Maps {
-    witness: LoadWitness,
-    insertion: IndexedInsert<Fp>,
+    witness: SendWitness,
+    pending: IndexedInsert<Fp>,
+    fee: IndexedInsert<Fp>,
     objects: [SignedTape; 5],
     known: bool,
 }
@@ -449,8 +484,9 @@ impl Maps {
         &self,
         uint: &mut UintChip<'_, Fp>,
         region: &mut Region<'_, Fp>,
+        insertion: &IndexedInsert<Fp>,
     ) -> Result<InsertCells, LayoutError> {
-        let leaf = self.insertion.leaf;
+        let leaf = insertion.leaf;
         let words = uint
             .glue()
             .witnesses(
@@ -462,8 +498,8 @@ impl Maps {
         let leaf = LeafCells::from_words(words);
         let mut paths = Vec::new();
         for (index, siblings) in [
-            (self.insertion.leaf_slot, self.insertion.leaf_siblings),
-            (self.insertion.slot, self.insertion.slot_siblings),
+            (insertion.leaf_slot, insertion.leaf_siblings),
+            (insertion.slot, insertion.slot_siblings),
         ] {
             let index = uint
                 .glue()
@@ -491,7 +527,7 @@ struct First {
     known: bool,
 }
 #[derive(Clone, Debug)]
-/// Fixed source-stage columns and range buses; all fields are native metadata.
+/// Fixed Tagged3 source columns and exact homogeneous public schema.
 pub struct StageConfig {
     verifier: VerifierConfig<Ep>,
     bytes: BytesConfig,
@@ -599,15 +635,57 @@ impl First {
                 .collect::<Vec<_>>(),
             &[SegmentSpec::little(0, 4)],
         )?;
-        let index = chip.uint().glue().constant(
+        let index = crate::a_relation::schedule::constrain_sigma_selector(
+            &mut chip.uint(),
             region,
-            Fp::from(u64::from(
-                crate::a_relation::schedule::sigma_selector(2, 0).unwrap(),
-            )),
+            3,
+            &statement.fields()[11],
         )?;
         SigmaBindingCells::from_run(chip, region, statement, index, &run)
     }
 }
+impl First {
+    fn objects(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+    ) -> Result<
+        (
+            SendObjects,
+            SendAuthorizationObjects,
+            Vec<crate::a_relation::context::ContextObjectCells>,
+        ),
+        LayoutError,
+    > {
+        let sources: [Vec<_>; 3] = core::array::from_fn(|i| {
+            self.source.maps.objects[i]
+                .bytes
+                .iter()
+                .map(|v| self.value(*v))
+                .collect()
+        });
+        let objects =
+            SendObjects::decode(chip, bytes, region, sources.each_ref().map(Vec::as_slice))?;
+        let sources: [Vec<_>; 2] = core::array::from_fn(|i| {
+            self.source.maps.objects[i + 3]
+                .bytes
+                .iter()
+                .map(|v| self.value(*v))
+                .collect()
+        });
+        let own = SendAuthorizationObjects::decode(
+            chip,
+            bytes,
+            region,
+            sources.each_ref().map(Vec::as_slice),
+        )?;
+        let mut context = objects.context().to_vec();
+        context.extend_from_slice(own.context());
+        Ok((objects, own, context))
+    }
+}
+
 impl Circuit<Fp> for First {
     type Config = StageConfig;
     type FloorPlanner = SimpleFloorPlanner;
@@ -619,8 +697,9 @@ impl Circuit<Fp> for First {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        let verifier = VerifierConfig::configure_serialized_foreign(meta, SOURCE_RANGE_BUSES)
-            .expect("fixed four-bus native Load profile");
+        let verifier =
+            VerifierConfig::configure_serialized_foreign_tagged(meta, SOURCE_RANGE_BUSES)
+                .expect("fixed native Send Tagged3 profile");
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -642,14 +721,13 @@ impl Circuit<Fp> for First {
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
         let out = layouter.assign_region(
-            || "genuine Load predecessor-first relation",
+            || "genuine Send predecessor-first relation",
             |mut region| {
                 let mut maps = self.source.maps.clone();
                 maps.known = self.known;
                 let (old, pred_public) =
-                    maps.state(&mut chip, &mut region, &maps.witness.predecessor)?;
-                let (new, next_public) =
-                    maps.state(&mut chip, &mut region, &maps.witness.successor)?;
+                    maps.state(&mut chip, &mut region, &maps.witness.before)?;
+                let (new, next_public) = maps.state(&mut chip, &mut region, &maps.witness.after)?;
                 let fields = chip
                     .uint()
                     .glue()
@@ -659,42 +737,12 @@ impl Circuit<Fp> for First {
                 let statement = StatementCells::constrain_with_verifier(
                     &mut chip,
                     &mut region,
-                    Variant::Load,
+                    Variant::Send,
                     &fields,
                 )?;
                 let sigma = self.sigma(&mut chip, &mut bytes, &mut region, &statement)?;
-                let objects = maps
-                    .objects
-                    .each_ref()
-                    .map(|o| o.bytes.iter().map(|v| self.value(*v)).collect::<Vec<_>>());
-                let objects = LoadObjects::decode(
-                    &mut chip,
-                    &mut bytes,
-                    &mut region,
-                    objects.each_ref().map(Vec::as_slice),
-                )?;
-                let insertion = maps.insertion(&mut chip.uint(), &mut region)?;
-                LoadStagePlan::new(self.plan.clone())?.constrain_stage(
-                    &mut chip,
-                    &mut region,
-                    0,
-                    &objects,
-                    self.source.policy,
-                    LoadInputs {
-                        predecessor: MapState {
-                            state: &old,
-                            lineage: &pred_public,
-                        },
-                        successor: MapState {
-                            state: &new,
-                            lineage: &next_public,
-                        },
-                        sigma: &sigma,
-                        signatures: &[],
-                    },
-                    Some(&insertion),
-                    None,
-                )?;
+                let (objects, auth_objects, context_objects) =
+                    self.objects(&mut chip, &mut bytes, &mut region)?;
                 let q_instances = self
                     .source
                     .q_instances
@@ -731,7 +779,7 @@ impl Circuit<Fp> for First {
                     },
                     incoming: None,
                     q_instances: &q_instances,
-                    objects: objects.context(),
+                    objects: &context_objects,
                     modes: &[],
                     pallas_corrections: &[],
                     vesta_corrections: &[],
@@ -769,6 +817,56 @@ impl Circuit<Fp> for First {
                     &pp,
                     &pv,
                     &proof,
+                )?;
+                let omega = frame(&self.source.omega).map_err(|_| LayoutError::BoundsFailure)?;
+                let omega_run = bytes.run(
+                    &mut region,
+                    &omega.iter().map(|v| self.value(*v)).collect::<Vec<_>>(),
+                    &iroha_plonk_gadgets::bytes::chunk_segments(0, omega.len()),
+                    &ConsumingProofCells::omega_segments(self.source.predecessor.proof.len())?,
+                )?;
+                let sigma_tape =
+                    frame(&self.source.sigma).map_err(|_| LayoutError::BoundsFailure)?;
+                let sigma_run = bytes.run(
+                    &mut region,
+                    &sigma_tape
+                        .iter()
+                        .map(|v| self.value(*v))
+                        .collect::<Vec<_>>(),
+                    &iroha_plonk_gadgets::bytes::chunk_segments(0, sigma_tape.len()),
+                    &[SegmentSpec::little(0, 4)],
+                )?;
+                let consuming = ConsumingProofCells::from_runs(
+                    &mut chip,
+                    &mut region,
+                    &pred,
+                    &sigma,
+                    &omega_run,
+                    &sigma_run,
+                )?;
+                SendStagePlan::new(self.plan.clone())?.constrain_stage(
+                    &mut chip,
+                    &mut region,
+                    0,
+                    &objects,
+                    SendInputs {
+                        predecessor: MapState {
+                            state: &old,
+                            lineage: &pred_public,
+                        },
+                        successor: MapState {
+                            state: &new,
+                            lineage: &next_public,
+                        },
+                        sigma: &sigma,
+                    },
+                    SendStageWitness {
+                        proof: Some(SendProofBinding {
+                            objects: &auth_objects,
+                            proof: &consuming,
+                        }),
+                        ..SendStageWitness::default()
+                    },
                 )?;
                 let mut verified = Vec::new();
                 for (index, columns) in q_instances
@@ -848,14 +946,13 @@ impl Circuit<Fp> for Continuation {
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
         let out = layouter.assign_region(
-            || "Load deferred Q continuation",
+            || "Send deferred Q continuation",
             |mut region| {
                 let mut maps = first.source.maps.clone();
                 maps.known = first.known;
                 let (old, pred_public) =
-                    maps.state(&mut chip, &mut region, &maps.witness.predecessor)?;
-                let (new, next_public) =
-                    maps.state(&mut chip, &mut region, &maps.witness.successor)?;
+                    maps.state(&mut chip, &mut region, &maps.witness.before)?;
+                let (new, next_public) = maps.state(&mut chip, &mut region, &maps.witness.after)?;
                 let fields = chip
                     .uint()
                     .glue()
@@ -865,20 +962,12 @@ impl Circuit<Fp> for Continuation {
                 let statement = StatementCells::constrain_with_verifier(
                     &mut chip,
                     &mut region,
-                    Variant::Load,
+                    Variant::Send,
                     &fields,
                 )?;
                 let sigma = first.sigma(&mut chip, &mut bytes, &mut region, &statement)?;
-                let sources = maps
-                    .objects
-                    .each_ref()
-                    .map(|o| o.bytes.iter().map(|v| first.value(*v)).collect::<Vec<_>>());
-                let objects = LoadObjects::decode(
-                    &mut chip,
-                    &mut bytes,
-                    &mut region,
-                    sources.each_ref().map(Vec::as_slice),
-                )?;
+                let (objects, auth_objects, context_objects) =
+                    first.objects(&mut chip, &mut bytes, &mut region)?;
                 let q_instances = first
                     .source
                     .q_instances
@@ -915,7 +1004,7 @@ impl Circuit<Fp> for Continuation {
                     },
                     incoming: None,
                     q_instances: &q_instances,
-                    objects: objects.context(),
+                    objects: &context_objects,
                     modes: &[],
                     pallas_corrections: &[],
                     vesta_corrections: &[],
@@ -984,16 +1073,15 @@ impl Circuit<Fp> for Continuation {
                             &mut region,
                             first.plan.operation(),
                             index,
-                            &first.source.signature_schema[index - 1],
+                            &first.source.signature_schema,
                             &q,
                         )?;
-                        LoadStagePlan::new(first.plan.clone())?.constrain_stage(
+                        SendStagePlan::new(first.plan.clone())?.constrain_stage(
                             &mut chip,
                             &mut region,
                             self.plan.stage(),
                             &objects,
-                            first.source.policy,
-                            LoadInputs {
+                            SendInputs {
                                 predecessor: MapState {
                                     state: &old,
                                     lineage: &pred_public,
@@ -1003,17 +1091,65 @@ impl Circuit<Fp> for Continuation {
                                     lineage: &next_public,
                                 },
                                 sigma: &sigma,
-                                signatures: slots.slots(),
                             },
-                            None,
-                            Some(crate::a_relation::SignatureQContext {
-                                bundle: &slots,
-                                instances: columns,
-                            }),
+                            SendStageWitness {
+                                authorization: Some(SendAuthorization {
+                                    objects: &auth_objects,
+                                    policy: first.source.policy,
+                                    signature: crate::a_relation::SignatureQContext {
+                                        bundle: &slots,
+                                        instances: columns,
+                                    },
+                                }),
+                                ..SendStageWitness::default()
+                            },
                         )?;
                         slots.verified().clone()
                     };
                     verified.push(q);
+                }
+                if !first
+                    .plan
+                    .q_partition(self.plan.stage())
+                    .ok_or(LayoutError::Synthesis)?
+                    .contains(&1)
+                {
+                    let tasks = first
+                        .plan
+                        .operation_tasks(self.plan.stage())
+                        .ok_or(LayoutError::Synthesis)?;
+                    let pending = if tasks.contains(&OperationTask::SendPending) {
+                        Some(maps.insertion(&mut chip.uint(), &mut region, &maps.pending)?)
+                    } else {
+                        None
+                    };
+                    let fee = if tasks.contains(&OperationTask::SendFeeAndCarry) {
+                        Some(maps.insertion(&mut chip.uint(), &mut region, &maps.fee)?)
+                    } else {
+                        None
+                    };
+                    SendStagePlan::new(first.plan.clone())?.constrain_stage(
+                        &mut chip,
+                        &mut region,
+                        self.plan.stage(),
+                        &objects,
+                        SendInputs {
+                            predecessor: MapState {
+                                state: &old,
+                                lineage: &pred_public,
+                            },
+                            successor: MapState {
+                                state: &new,
+                                lineage: &next_public,
+                            },
+                            sigma: &sigma,
+                        },
+                        SendStageWitness {
+                            pending: pending.as_ref(),
+                            fee: fee.as_ref(),
+                            ..SendStageWitness::default()
+                        },
+                    )?;
                 }
                 let fold = first.carrier(&mut chip, &mut bytes, &mut region, &self.fold)?;
                 let closed = crate::a_relation::split::close_stage(
@@ -1040,7 +1176,6 @@ impl Circuit<Fp> for Continuation {
         Ok(())
     }
 }
-
 #[derive(Clone)]
 enum StageData {
     First(Box<First>),
@@ -1078,7 +1213,7 @@ impl Circuit<Fp> for StageCircuit {
     }
 }
 
-/// Checked original source coupled to the fixed complete Load plan.
+/// Checked original source coupled to the fixed complete Send plan.
 #[derive(Clone)]
 pub struct Prepared {
     plan: Plan,
@@ -1127,13 +1262,13 @@ impl Prepared {
     }
 }
 
-/// Already installed A1/A2/A3/A4 and W0/W1/W2 proving artifacts for this fixed profile.
+/// Already installed A1/A2/A3/A4/A5 and W0/W1/W2/W3 proving artifacts for this fixed profile.
 /// Authentication and genuine PK import remain the native package owner's responsibility.
 pub struct Prover {
     plan: Plan,
-    a: [Arc<ProvingKey<Eq>>; 4],
-    w: [Arc<ProvingKey<Ep>>; 3],
-    wrappers: [WKey; 3],
+    a: [Arc<ProvingKey<Eq>>; A_STAGE_COUNT],
+    w: [Arc<ProvingKey<Ep>>; A_STAGE_COUNT - 1],
+    wrappers: [WKey; A_STAGE_COUNT - 1],
 }
 impl Prover {
     /// Import the complete fixed typed artifact set, never generating keys from a witness.
@@ -1141,8 +1276,8 @@ impl Prover {
     /// Nonuniform A descriptors, wrong k/public schema, or wrong W stage/context identity.
     pub fn from_artifacts(
         plan: Plan,
-        a: [Arc<ProvingKey<Eq>>; 4],
-        w: [Arc<ProvingKey<Ep>>; 3],
+        a: [Arc<ProvingKey<Eq>>; A_STAGE_COUNT],
+        w: [Arc<ProvingKey<Ep>>; A_STAGE_COUNT - 1],
     ) -> Result<Self, Error> {
         for key in &a {
             let d = key.binding().descriptor();
@@ -1156,7 +1291,7 @@ impl Prover {
             VerifierPlan::new(key.binding().clone(), plan.vesta.clone())
                 .map_err(|_| Error::Artifact)?;
         }
-        let wrappers = (0..3)
+        let wrappers = (0..A_STAGE_COUNT - 1)
             .map(|stage| {
                 WKey::from_artifact(
                     &plan.context,
@@ -1186,29 +1321,29 @@ impl Prover {
             prepared: self.plan.prepare(input, budget)?,
         })
     }
-    /// Exact installed descriptors in actual A1/W0/A2/W1/A3/W2/A4 checkpoint order.
+    /// Exact installed descriptors in actual A1/W0/A2/W1/A3/W2/A4/W3/A5 checkpoint order.
     #[must_use]
-    pub fn descriptors(&self) -> [&DescriptorBinding; 7] {
-        [
-            self.a[0].binding(),
-            self.w[0].binding(),
-            self.a[1].binding(),
-            self.w[1].binding(),
-            self.a[2].binding(),
-            self.w[2].binding(),
-            self.a[3].binding(),
-        ]
+    pub fn descriptors(&self) -> [&DescriptorBinding; A_STAGE_COUNT * 2 - 1] {
+        core::array::from_fn(|index| {
+            if index % 2 == 0 {
+                self.a[index / 2].binding()
+            } else {
+                self.w[index / 2].binding()
+            }
+        })
     }
 }
 
-/// Source-bound session over the fixed installed Load artifacts.
+/// Source-bound session over the fixed installed Send artifacts.
 pub struct Session<'a> {
     prover: &'a Prover,
     prepared: Prepared,
 }
 impl Session<'_> {
     fn require_source(&self, source: &ACheckpoint) -> Result<(), Error> {
-        if source.stage >= 4 || !Arc::ptr_eq(&source.first.source, &self.prepared.source) {
+        if source.stage >= A_STAGE_COUNT
+            || !Arc::ptr_eq(&source.first.source, &self.prepared.source)
+        {
             return Err(Error::Input);
         }
         Ok(())
@@ -1337,7 +1472,7 @@ impl Session<'_> {
         config: ProverConfig,
     ) -> Result<WCheckpoint, Error> {
         self.verify_a(source, fold.kernel_budget)?;
-        if source.stage >= 3 {
+        if source.stage >= A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
         let trivial = AccumulatorT::trivial(&self.prepared.plan.vesta, fold.kernel_budget)
@@ -1401,7 +1536,7 @@ impl Session<'_> {
         budget: MemoryBudget,
     ) -> Result<WCheckpoint, Error> {
         self.verify_a(source, budget)?;
-        if source.stage >= 3 {
+        if source.stage >= A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
         let vesta = AccumulatorT::<Eq>::from_bytes(vesta).map_err(|_| Error::Input)?;
@@ -1442,7 +1577,7 @@ impl Session<'_> {
     ) -> Result<Continuation, Error> {
         self.require_source(&wrapper.source)?;
         let previous = wrapper.source.stage;
-        if previous >= 3 {
+        if previous >= A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
         let split = SplitPlan::new(
@@ -1528,7 +1663,7 @@ impl Session<'_> {
             opening,
         })
     }
-    /// Restore A2/A3/A4 from its verified source W and canonical new Pallas claim.
+    /// Restore A2/A3/A4/A5 from its verified source W and canonical new Pallas claim.
     /// Every history/context/public field is derived from the retained source chain.
     /// # Errors
     /// Canonical claim, source/history, installed key, proof or complete decide mismatch.
@@ -1583,13 +1718,13 @@ impl Session<'_> {
             opening,
         })
     }
-    /// Export A4 and all distinct final Omega obligations after another full native check.
+    /// Export A5 and all distinct final Omega obligations after another full native check.
     /// This grants neither monetary completion nor a final transported Omega.
     /// # Errors
     /// A nonterminal/wrong source checkpoint or any failed native proof/decide.
     pub fn terminal(&self, source: &ACheckpoint, budget: MemoryBudget) -> Result<Terminal, Error> {
         self.verify_a(source, budget)?;
-        if source.stage != 3 {
+        if source.stage != A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
         if source.part.source_k() != 16 {
@@ -1667,34 +1802,41 @@ impl WCheckpoint {
         self.vesta.to_bytes()
     }
 }
-/// Actual A4 proof and every distinct obligation consumed by the final Omega producer.
+/// Actual A5 proof and every distinct obligation consumed by the final Omega producer.
 #[derive(Clone, Debug)]
 pub struct Terminal {
-    /// Original terminal A4 proof under its installed key.
+    /// Original terminal A5 proof under its installed key.
     pub proof: Vec<u8>,
     /// Exact homogeneous69-word public frame.
     pub instances: Vec<Fp>,
     /// Full accumulated Pallas claim.
     pub pallas: AccumulatorT<Ep>,
-    /// Full Vesta part forwarded by W2.
+    /// Full Vesta part forwarded by W3.
     pub vesta_part: AccumulatorT<Eq>,
     /// Full predecessor Vesta obligation, distinct from the current part and A opening.
     pub predecessor_vesta: AccumulatorT<Eq>,
-    /// Actual terminal A4 own opening, a separate final Omega slot.
+    /// Actual terminal A5 own opening, a separate final Omega slot.
     pub opening: FoldInput<Eq>,
 }
 
 fn object_kinds() -> [ObjectKind; 5] {
     [
-        ObjectKind::Certificate,
-        ObjectKind::Voucher,
-        ObjectKind::Receipt,
-        ObjectKind::Certificate,
         ObjectKind::Credential,
+        ObjectKind::Request,
+        ObjectKind::FeeSchedule,
+        ObjectKind::Certificate,
+        ObjectKind::Receipt,
     ]
 }
 
 fn check_sigma_tape(input: &Inputs) -> Result<(), Error> {
+    if input.state.before.core[21] != Fp::ZERO
+        || input.state.after.core[21] != Fp::ZERO
+        || input.state.statement[11] != Fp::ZERO
+    {
+        return Err(Error::Input);
+    }
+    let selector = send_selector()?;
     let bounded = input.q[0].instances.first().ok_or(Error::Input)?;
     let mut raw = u32::try_from(input.sigma.len())
         .map_err(|_| Error::Input)?
@@ -1713,7 +1855,7 @@ fn check_sigma_tape(input: &Inputs) -> Result<(), Error> {
     if bounded.len() != 1 + chunks.len() + K
         || bounded[0] != statement
         || bounded[1..=chunks.len()] != chunks
-        || input.q[0].instances.get(2).map(Vec::as_slice) != Some(&[Fq::ONE])
+        || input.q[0].instances.get(2).map(Vec::as_slice) != Some(&[selector])
     {
         return Err(Error::Input);
     }
@@ -1726,7 +1868,7 @@ fn q_sigma_part(input: &QInput, source_k: u32) -> Result<FoldInput<Eq>, Error> {
     };
     if point.len() != 2
         || indices.len() != 1
-        || indices.as_slice() != [Fq::ONE]
+        || indices.as_slice() != [send_selector()?]
         || verdicts.as_slice() != [Fq::ONE]
         || source.as_slice() != [Fq::from(u64::from(source_k))]
         || bounded.len() < K
@@ -1787,8 +1929,8 @@ fn context_digest(first: &First) -> Result<Fp, Error> {
     let source = &first.source;
     let mut words = first.plan.schema().to_vec();
     words.extend(source.maps.witness.statement);
-    let old = &source.maps.witness.predecessor;
-    let new = &source.maps.witness.successor;
+    let old = &source.maps.witness.before;
+    let new = &source.maps.witness.after;
     words.extend(old.core);
     words.extend(old.rest);
     words.extend(old.lineage);
@@ -1804,7 +1946,7 @@ fn context_digest(first: &First) -> Result<Fp, Error> {
         .maps
         .objects
         .iter()
-        .zip(LoadObjects::context_specs().map_err(|_| Error::Artifact)?)
+        .zip(SendStagePlan::context_specs().map_err(|_| Error::Artifact)?)
     {
         if object.bytes.len() != usize::try_from(spec.capacity).map_err(|_| Error::Input)? {
             return Err(Error::Input);
@@ -1894,7 +2036,7 @@ fn continuation_public(c: &Continuation) -> Result<Vec<Fp>, Error> {
     }
     let mut words = vec![
         terminal_digest(
-            &c.first.source.maps.witness.successor.lineage,
+            &c.first.source.maps.witness.after.lineage,
             &c.pallas.as_input(),
         )?,
         Fp::from(16),
@@ -1993,4 +2135,61 @@ fn prove_a(
         budget,
     )?;
     Ok((output.proof, opening))
+}
+
+fn send_selector() -> Result<Fq, Error> {
+    super::super::schedule::sigma_selector(3, 0)
+        .map(|v| Fq::from(u64::from(v)))
+        .ok_or(Error::Artifact)
+}
+
+fn frame(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut out = u32::try_from(bytes.len())
+        .map_err(|_| Error::Input)?
+        .to_le_bytes()
+        .to_vec();
+    out.extend(bytes);
+    Ok(out)
+}
+
+fn lineage_bytes(
+    fields: &[Fp; 18],
+    proof: &[u8],
+    pallas: &AccumulatorT<Ep>,
+    vesta: &AccumulatorT<Eq>,
+) -> Result<Vec<u8>, Error> {
+    if fields[0] != Fp::ONE {
+        return Err(Error::Input);
+    }
+    let bounded = |index: usize, length: usize| -> Result<Vec<u8>, Error> {
+        let bytes = fields[index].to_repr();
+        if bytes[length..].iter().any(|v| *v != 0) {
+            return Err(Error::Input);
+        }
+        Ok(bytes[..length].to_vec())
+    };
+    let mut out = 1u16.to_le_bytes().to_vec();
+    for i in [1, 2, 3, 4] {
+        out.extend(bounded(i, 16)?);
+    }
+    out.extend(fields[5].to_repr());
+    for i in [6, 7] {
+        out.extend(bounded(i, 16)?);
+    }
+    out.extend(fields[8].to_repr());
+    out.push(4);
+    for i in [10, 9, 12, 11] {
+        out.extend(bounded(i, 16)?.into_iter().rev());
+    }
+    out.extend(bounded(13, 13)?);
+    out.extend(bounded(14, 16)?);
+    out.extend(fields[15].to_repr());
+    out.extend(fields[16].to_repr());
+    if out.len() != 320 {
+        return Err(Error::Input);
+    }
+    out.extend(proof);
+    out.extend(pallas.to_bytes());
+    out.extend(vesta.to_bytes());
+    Ok(out)
 }

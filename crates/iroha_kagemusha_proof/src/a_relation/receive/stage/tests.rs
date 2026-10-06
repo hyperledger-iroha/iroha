@@ -16,7 +16,7 @@ use iroha_plonk_recursion::verifier::VerifierPlan;
 fn tasks() -> Vec<Vec<OperationTask>> {
     use OperationTask::*;
     vec![
-        vec![ReceiveProofs, ReceiveOwnProof],
+        vec![ReceiveProofs, ReceiveOwnProof, ReceiveProofDigest],
         vec![ReceiveAuthorization],
         vec![
             ReceiveObjects,
@@ -78,6 +78,26 @@ fn stage_plan_pins_all_tapes_signature_slots_and_q_owners() {
         };
         let partition = vec![vec![0], vec![1], vec![2], vec![]];
         let honest = context(operation.clone(), partition.clone(), specs.clone());
+        for duplicate in [false, true] {
+            let mut incomplete = tasks();
+            if duplicate {
+                incomplete[1].push(OperationTask::ReceiveProofDigest);
+            } else {
+                incomplete[0].retain(|task| *task != OperationTask::ReceiveProofDigest);
+            }
+            assert!(
+                ContextPlan::with_schedule(
+                    operation.clone(),
+                    partition.clone(),
+                    Some(0),
+                    specs.clone()
+                )
+                .unwrap()
+                .with_operation_tasks(incomplete)
+                .is_err(),
+                "the hard digest owner must occur exactly once before terminal admission",
+            );
+        }
         let plan = ReceiveStagePlan::new(honest, policy).unwrap();
         assert_eq!(plan.context().stage_count(), 4);
         assert!(plan.signature_schema(0).is_none());

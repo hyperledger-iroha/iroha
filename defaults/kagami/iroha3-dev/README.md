@@ -20,11 +20,11 @@ Signed genesis, expected NetworkId, verifier output, and public-key artifacts ar
 not checked in. The operator generating a disposable dev bundle must generate
 a complete signed genesis and matching validator configuration.
 
-Every validator also requires the two owner-only publisher custody files named by
-`kagemusha_load_authorizer`: a genuine network-bound, role-certified Load keyring
-and an ordinary ledger submitter key with the required permissions and fee caps.
-These files are supplied by the operator, never derived from demo seeds. Missing
-or unadmitted custody prevents startup in every mode.
+Ordinary validator configs omit `kagemusha_load_authorizer`. An operator selects
+the issuer publication service explicitly by adding that table with owner-only
+`keyring_file` and `submitter_key_file` bindings. Selected roles require genuine
+network-bound Load-role custody, ledger permissions and finite fee caps; profile
+generation does not create monetary authority.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-dev --out <PRIVATE_OUTPUT_DIR>

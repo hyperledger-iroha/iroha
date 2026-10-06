@@ -110,3 +110,84 @@ async fn unavailable_source_survives_restart_without_queueing_and_shutdown_joins
     shutdown.send();
     assert!(supervisor.start().await.is_ok());
 }
+
+#[tokio::test]
+async fn absent_role_starts_no_worker_and_selected_role_keeps_native_preflight() {
+    let (state, queue) = handles();
+    assert!(
+        Service::selected(None, state.clone(), queue.clone())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(queue.queued_len(), 0);
+    let mut invalid = config(&state);
+    invalid.custody.keyring.fill(0);
+    assert!(matches!(
+        Service::selected(Some(invalid), state.clone(), queue.clone()),
+        Err("invalid KAGEMUSHA publisher custody binding")
+    ));
+    let foreign = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        "kagemusha-load-authorizer-test".parse().unwrap(),
+        iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"foreign-issuer-role-network",
+            )),
+        ),
+    ));
+    assert!(matches!(
+        Service::selected(Some(config(&state)), foreign, queue.clone()),
+        Err("KAGEMUSHA publisher keys belong to another network")
+    ));
+    let mut worker = Service::selected(Some(config(&state)), state, queue.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(worker.tick(), Err(TickError::SourceUnavailable));
+    assert_eq!(queue.queued_len(), 0);
+}
+
+#[tokio::test]
+async fn signed_private_root_refuses_selected_publisher_without_queueing() {
+    use iroha_core::state::StateReadOnly as _;
+    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+    use iroha_model_base::topology::DataSpaceId;
+    let (global_unfinalized, queue) = handles();
+    let scope = SumeragiRootScope::Dataspace {
+        parent_network_id: *global_unfinalized.network_id_ref(),
+        dataspace_id: DataSpaceId::new((1_u64 << 40) + 7),
+    };
+    let mut original = TestChainConfig::new(World::new(), 1_700_000_000_000);
+    original.root_scope = scope;
+    let private =
+        CertifiedTestChain::start(original).expect("execute original signed private genesis");
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(private.state().view().world()),
+        Some(scope)
+    );
+    assert!(matches!(
+        Service::selected(
+            Some(config(private.state())),
+            private.state().clone(),
+            queue.clone()
+        ),
+        Err("KAGEMUSHA publisher requires a global root")
+    ));
+    assert!(
+        Service::selected(None, private.state().clone(), queue.clone())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(queue.queued_len(), 0);
+    let mut original_global = Service::selected(
+        Some(config(&global_unfinalized)),
+        global_unfinalized,
+        queue.clone(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(original_global.tick(), Err(TickError::SourceUnavailable));
+    assert_eq!(queue.queued_len(), 0);
+}

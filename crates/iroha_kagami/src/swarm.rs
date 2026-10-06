@@ -67,7 +67,8 @@ pub struct Args {
     ///
     /// Normal mode requires `genesis.json`, `peer0.toml` through `peerN.toml`,
     /// `genesis.signed.nrt`, `genesis.public_key`, and `genesis.expected_hash`. Each node config
-    /// must name both existing private publisher originals. Kagami validates
+    /// that explicitly selects an issuer publisher must name both existing private originals.
+    /// Kagami validates
     /// their canonical wire, signer, semantic manifest binding, exact hash, validator roster, and
     /// PoPs together. With `--seed`, only `genesis.json` is read and runtime artifact paths are
     /// supplied explicitly through the generated manifest's `IROHA_GENESIS_*_FILE` variables.
@@ -1037,16 +1038,24 @@ fn validate_runtime_projection_policy(
                 == projected.common.soranet_transport_key_pair.public_key(),
         "container runtime projection changed validator chain, signing identity, or SoraNet transport identity"
     );
-    let before = &source.kagemusha_load_authorizer;
-    let after = &projected.kagemusha_load_authorizer;
+    let publisher_matches = match (
+        &source.kagemusha_load_authorizer,
+        &projected.kagemusha_load_authorizer,
+    ) {
+        (None, None) => true,
+        (Some(before), Some(after)) => {
+            before.custody.keyring.as_slice() == after.custody.keyring.as_slice()
+                && before.custody.submitter == after.custody.submitter
+                && before.poll_interval == after.poll_interval
+                && before.page_size == after.page_size
+                && before.finality_limits == after.finality_limits
+                && before.transaction_ttl == after.transaction_ttl
+                && before.charge_limits == after.charge_limits
+        }
+        _ => false,
+    };
     ensure!(
-        before.custody.keyring.as_slice() == after.custody.keyring.as_slice()
-            && before.custody.submitter == after.custody.submitter
-            && before.poll_interval == after.poll_interval
-            && before.page_size == after.page_size
-            && before.finality_limits == after.finality_limits
-            && before.transaction_ttl == after.transaction_ttl
-            && before.charge_limits == after.charge_limits,
+        publisher_matches,
         "container runtime projection changed required publisher custody or limits"
     );
     let trusted_keys = |config: &actual::Root| {
@@ -1814,7 +1823,7 @@ type PreparedRuntimeProjection = (
     [u8; 32],
     Vec<PreparedRuntimeFile>,
     Vec<PreparedSecretFile>,
-    PreparedPublisherCustody,
+    Option<PreparedPublisherCustody>,
     bool,
     actual::Root,
 );
@@ -1868,25 +1877,30 @@ fn project_prepared_runtime_config(
         content: rans_content,
     }];
     let mut secret_files = Vec::new();
-    let publisher_custody = capture_publisher_custody(
-        config_dir,
-        projection_root,
-        index,
-        &source_table,
-        &source.kagemusha_load_authorizer.custody,
-    )?;
-    set_toml_string(
-        &mut table,
-        &["kagemusha_load_authorizer"],
-        "keyring_file",
-        KAGEMUSHA_LOAD_KEYRING_TARGET,
-    )?;
-    set_toml_string(
-        &mut table,
-        &["kagemusha_load_authorizer"],
-        "submitter_key_file",
-        KAGEMUSHA_LOAD_SUBMITTER_TARGET,
-    )?;
+    let publisher_custody = if let Some(publisher) = &source.kagemusha_load_authorizer {
+        let publisher_custody = capture_publisher_custody(
+            config_dir,
+            projection_root,
+            index,
+            &source_table,
+            &publisher.custody,
+        )?;
+        set_toml_string(
+            &mut table,
+            &["kagemusha_load_authorizer"],
+            "keyring_file",
+            KAGEMUSHA_LOAD_KEYRING_TARGET,
+        )?;
+        set_toml_string(
+            &mut table,
+            &["kagemusha_load_authorizer"],
+            "submitter_key_file",
+            KAGEMUSHA_LOAD_SUBMITTER_TARGET,
+        )?;
+        Some(publisher_custody)
+    } else {
+        None
+    };
     let mut captured_validation_paths = Vec::new();
     set_toml_string(
         &mut table,
@@ -2409,18 +2423,20 @@ fn project_prepared_runtime_config(
         )?;
     }
     let mut validation_table = crate::secret_toml::Table::new((*table).clone());
-    set_toml_string(
-        &mut validation_table,
-        &["kagemusha_load_authorizer"],
-        "keyring_file",
-        publisher_custody.keyring_source_path.to_string_lossy(),
-    )?;
-    set_toml_string(
-        &mut validation_table,
-        &["kagemusha_load_authorizer"],
-        "submitter_key_file",
-        publisher_custody.submitter_source_path.to_string_lossy(),
-    )?;
+    if let Some(publisher_custody) = &publisher_custody {
+        set_toml_string(
+            &mut validation_table,
+            &["kagemusha_load_authorizer"],
+            "keyring_file",
+            publisher_custody.keyring_source_path.to_string_lossy(),
+        )?;
+        set_toml_string(
+            &mut validation_table,
+            &["kagemusha_load_authorizer"],
+            "submitter_key_file",
+            publisher_custody.submitter_source_path.to_string_lossy(),
+        )?;
+    }
     set_toml_string(
         &mut validation_table,
         &["genesis"],
@@ -3324,7 +3340,7 @@ mod tests {
             "existing stage cannot rescue unavailable original submitter"
         );
     }
-    fn generate_prepared_bundle(root: &Path) -> PathBuf {
+    fn generate_prepared_localnet(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
             service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
@@ -3344,6 +3360,10 @@ mod tests {
         };
         iroha_deploy::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
             .expect("generate authoritative prepared localnet bundle");
+        bundle
+    }
+    fn generate_prepared_bundle(root: &Path) -> PathBuf {
+        let bundle = generate_prepared_localnet(root);
         let fixture = include_str!("../../iroha_config/tests/fixtures/base.toml")
             .parse::<toml::Table>()
             .expect("existing TEST submitter fixture");
@@ -3353,19 +3373,18 @@ mod tests {
                 .unwrap()
                 .parse::<toml::Table>()
                 .unwrap();
+            assert!(
+                !table.contains_key("kagemusha_load_authorizer"),
+                "generic localnet generation must not select monetary issuer custody"
+            );
+            table.insert(
+                "kagemusha_load_authorizer".into(),
+                toml::Table::new().into(),
+            );
             let publisher = table
                 .get_mut("kagemusha_load_authorizer")
                 .and_then(toml::Value::as_table_mut)
-                .expect("localnet production generator must declare mandatory publisher refs");
-            for field in ["keyring_file", "submitter_key_file"] {
-                assert!(
-                    publisher
-                        .get(field)
-                        .and_then(toml::Value::as_str)
-                        .is_some_and(|path| !path.is_empty()),
-                    "production generator must provide {field} before TEST substitution"
-                );
-            }
+                .unwrap();
             assert!(!publisher.contains_key("enabled"));
             // These private originals permit parser/projection tests only. They are explicitly
             // UNADMITTED and can never establish canonical publisher Service admission.
@@ -3401,6 +3420,52 @@ mod tests {
             iroha_genesis::RawGenesisTransaction::from_path(config_dir.join("genesis.json"))?;
         load_prepared_bundle(config_dir, projection_root, count, &manifest)
     }
+    #[test]
+    fn generated_validator_bundle_prepares_without_selecting_monetary_issuer_custody() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_dir = generate_prepared_localnet(temp_dir.path());
+        for index in 0..4 {
+            let table = fs::read_to_string(config_dir.join(format!("peer{index}.toml")))
+                .unwrap()
+                .parse::<toml::Table>()
+                .unwrap();
+            assert!(!table.contains_key("kagemusha_load_authorizer"));
+        }
+        let deployment_dir = temp_dir.path().join("absent-issuer-deployment");
+        fs::create_dir_all(&deployment_dir).unwrap();
+        let args = Args {
+            peers: NonZeroU16::new(4).unwrap(),
+            seed: None,
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: deployment_dir.join("docker-compose.yml"),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+        let mut output = Vec::new();
+        let mut writer = BufWriter::new(&mut output);
+        args.run(&mut writer)
+            .expect("genuine generated bundle needs no issuer-role secrets");
+        writer.flush().unwrap();
+        drop(writer);
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("--config-blake3 ").count(), 4);
+        assert_eq!(
+            output
+                .matches("require_publisher_file /config/peer.toml 8388608")
+                .count(),
+            4
+        );
+        assert!(!output.contains(iroha_swarm::KAGEMUSHA_LOAD_KEYRING_TARGET));
+        assert!(!output.contains(iroha_swarm::KAGEMUSHA_LOAD_SUBMITTER_TARGET));
+        assert!(!output.contains("UNADMITTED"));
+    }
+
     #[test]
     fn banner_is_optional_and_never_discloses_the_development_seed() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -3940,9 +4005,24 @@ mod tests {
             .expect("parse prepared peer0 fixture");
         validate_runtime_projection_policy(&parsed.actual, &parsed.actual, &metadata)
             .expect("unchanged parser TEST custody and limits preserve projection policy");
+        let mut absent = parsed.actual.clone();
+        absent.kagemusha_load_authorizer = None;
+        validate_runtime_projection_policy(&absent, &absent, &metadata)
+            .expect("unchanged absent issuer role preserves projection policy");
+        for (source, projected) in [(&parsed.actual, &absent), (&absent, &parsed.actual)] {
+            let error = validate_runtime_projection_policy(source, projected, &metadata)
+                .expect_err("projection cannot add or remove the issuer service");
+            assert!(
+                error
+                    .to_string()
+                    .contains("required publisher custody or limits")
+            );
+        }
+        validate_runtime_projection_policy(&parsed.actual, &parsed.actual, &metadata)
+            .expect("same original selected role remains valid after refusal");
         for case in 0..5 {
             let mut changed = parsed.actual.clone();
-            let publisher = &mut changed.kagemusha_load_authorizer;
+            let publisher = changed.kagemusha_load_authorizer.as_mut().unwrap();
             match case {
                 0 => publisher.page_size += 1,
                 1 => publisher.poll_interval += std::time::Duration::from_millis(1),

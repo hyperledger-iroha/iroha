@@ -420,6 +420,43 @@ fn routing_uses_permanent_scope_and_refuses_missing_wallet_records() {
 }
 
 #[test]
+fn verifier_install_routing_requires_the_registered_authorizing_asset_and_scheme() {
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
+    };
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let scheme = memory.registration.scheme.scheme_id();
+    let asset = memory.registration.asset.asset_digest();
+    let instruction = |scheme, asset| {
+        KagemushaWalletLedgerV1::new(
+            scheme,
+            KagemushaWalletLedgerActionV1::InstallVerifierPack {
+                asset,
+                manifest_digest: [0x47; 32],
+                // Routing uses permanent scope, not untrusted artifact contents. The
+                // execution owner separately rejects this unadmitted empty pack.
+                pack: Vec::new(),
+            },
+        )
+    };
+    assert_eq!(
+        routing::dataspace(&state.view().world, &instruction(scheme, asset)).unwrap(),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL
+    );
+    for (selected_scheme, selected_asset) in [(scheme, [0x91; 32]), ([0x92; 32], asset)] {
+        assert!(matches!(
+            routing::dataspace(
+                &state.view().world,
+                &instruction(selected_scheme, selected_asset),
+            ),
+            Err(Error::Unavailable)
+        ));
+    }
+}
+
+#[test]
 fn unavailable_production_artifacts_retain_local_deferral_and_no_activation() {
     use iroha_data_model::isi::kagemusha_wallet::{
         KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,

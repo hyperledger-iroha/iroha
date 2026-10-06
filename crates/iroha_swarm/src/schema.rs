@@ -671,15 +671,21 @@ fn private_file_mount(source: String, target: &str) -> Value {
     Value::Object(mount)
 }
 fn publisher_file_mounts(runtime: Option<&PreparedRuntimeConfig>, peer_index: u16) -> Vec<Value> {
+    if runtime.is_some_and(|runtime| runtime.publisher.is_none()) {
+        return Vec::new();
+    }
     let (keyring, submitter) = runtime.map_or_else(
         || (
             format!("${{IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_KEYRING_FILE:?set IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_KEYRING_FILE to this nodes existing owner-0600 publisher keyring}}"),
             format!("${{IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_SUBMITTER_FILE:?set IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_SUBMITTER_FILE to this nodes existing owner-0600 publisher submitter key}}"),
         ),
-        |runtime| (
-            compose_path_literal(&runtime.publisher.keyring.as_ref().display().to_string()),
-            compose_path_literal(&runtime.publisher.submitter.as_ref().display().to_string()),
-        ),
+        |runtime| {
+            let publisher = runtime.publisher.as_ref().expect("selected publisher mounts");
+            (
+                compose_path_literal(&publisher.keyring.as_ref().display().to_string()),
+                compose_path_literal(&publisher.submitter.as_ref().display().to_string()),
+            )
+        },
     );
     let mut mounts = vec![
         private_file_mount(keyring, KAGEMUSHA_LOAD_KEYRING_TARGET),
@@ -837,10 +843,15 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
             printf '%s\n' 'required publisher/config original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
         }};
     }} &&
-    require_publisher_file /config/peer.toml 8388608 &&
-    require_publisher_file {KAGEMUSHA_LOAD_KEYRING_TARGET} 65536 &&
-    require_publisher_file {KAGEMUSHA_LOAD_SUBMITTER_TARGET} 4096 &&"#
+    require_publisher_file /config/peer.toml 8388608 &&"#
     );
+    let custody_checks = if runtime.is_none_or(|runtime| runtime.publisher.is_some()) {
+        format!(
+            "{custody_checks}\n    require_publisher_file {KAGEMUSHA_LOAD_KEYRING_TARGET} 65536 &&\n    require_publisher_file {KAGEMUSHA_LOAD_SUBMITTER_TARGET} 4096 &&"
+        )
+    } else {
+        custody_checks
+    };
     format!(
         r#"/bin/sh -eu -c "
     GENESIS_PUBLIC_KEY_FILE=/run/secrets/iroha_genesis_public_key && \\

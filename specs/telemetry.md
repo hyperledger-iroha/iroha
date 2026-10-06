@@ -793,21 +793,6 @@ the eviction counters advanced after a maintenance window. The calibration doc
 (`specs/confidential_assets_calibration.md`) records the signed baselines
 and links to the corresponding governance acknowledgement.
 
-The same dashboard surfaces the verifier cache counters exposed via
-`iroha_zk_verifier_cache_events_total{cache,event}` (cache = `vk` |
-`builtin`, event = `hit` | `miss`). Use these counters to compute the 5-minute
-miss ratio:
-
-```bash
-curl -s http://127.0.0.1:8180/metrics \\
-  | rg 'iroha_zk_verifier_cache_events_total{cache="vk",event="(hit|miss)"}'
-```
-
-`dashboards/alerts/confidential_assets_rules.yml` ships the
-`ConfidentialVerifierCacheMissSpike` warning whenever misses exceed 40%
-of lookups for ten minutes, ensuring cache regressions are caught alongside the
-tree-depth guard.
-
 #### Norito RPC degraded runbook
 
 Use this checklist when the Norito transport fails SLOs or generates alerts:

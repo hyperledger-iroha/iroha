@@ -1,4 +1,4 @@
-//! Pure exact-original and homogeneous-frame rejection tests, never an admitted Load.
+//! Pure exact-original and homogeneous-frame rejection tests, never an admitted Send.
 
 use super::*;
 
@@ -8,9 +8,9 @@ fn original() -> Inputs {
         rest: [Fp::ZERO; 8],
         lineage: [Fp::ZERO; 18],
     };
-    let state = LoadWitness {
-        predecessor: state,
-        successor: state,
+    let state = SendWitness {
+        before: state,
+        after: state,
         statement: [Fp::ZERO; 26],
     };
     let sigma = (0..64).collect::<Vec<u8>>();
@@ -27,7 +27,14 @@ fn original() -> Inputs {
         state,
         sigma,
         objects: core::array::from_fn(|_| vec![]),
-        insertion: IndexedInsert {
+        pending: IndexedInsert {
+            leaf: crate::tree::IndexedLeaf::default(),
+            leaf_slot: 0,
+            leaf_siblings: [Fp::ZERO; 32],
+            slot: 1,
+            slot_siblings: [Fp::ZERO; 32],
+        },
+        fee: IndexedInsert {
             leaf: crate::tree::IndexedLeaf::default(),
             leaf_slot: 0,
             leaf_siblings: [Fp::ZERO; 32],
@@ -40,14 +47,10 @@ fn original() -> Inputs {
                 instances: vec![
                     bounded,
                     vec![],
-                    vec![Fq::ONE],
+                    vec![send_selector().unwrap()],
                     vec![Fq::ONE],
                     vec![Fq::from(12)],
                 ],
-            },
-            QInput {
-                proof: vec![],
-                instances: vec![],
             },
             QInput {
                 proof: vec![],
@@ -63,7 +66,7 @@ fn original() -> Inputs {
 }
 
 #[test]
-fn exact_load_sigma_tape_statement_length_and_selector_are_bound() {
+fn exact_send_sigma_tape_statement_length_and_selector_are_bound() {
     let source = original();
     assert_eq!(check_sigma_tape(&source), Ok(()));
     for mutation in 0..6 {
@@ -73,7 +76,7 @@ fn exact_load_sigma_tape_statement_length_and_selector_are_bound() {
             1 => bad.sigma.push(7),
             2 => bad.q[0].instances[0][1] += Fq::ONE,
             3 => bad.q[0].instances[2][0] = Fq::ZERO,
-            4 => bad.q[0].instances[2][0] = Fq::from(2),
+            4 => bad.q[0].instances[2][0] = Fq::from(3),
             _ => bad.state.statement[20] += Fp::ONE,
         }
         assert_eq!(
@@ -85,7 +88,7 @@ fn exact_load_sigma_tape_statement_length_and_selector_are_bound() {
 }
 
 #[test]
-fn load_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
+fn send_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
     let mut input = original().q[0].clone();
     let point = iroha_plonk::transcript::decode_point::<Eq>(
         &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
@@ -128,11 +131,11 @@ fn all_five_signed_originals_bind_body_and_each_raw_signature_limb() {
     assert_eq!(
         object_kinds(),
         [
+            ObjectKind::Credential,
+            ObjectKind::Request,
+            ObjectKind::FeeSchedule,
             ObjectKind::Certificate,
-            ObjectKind::Voucher,
-            ObjectKind::Receipt,
-            ObjectKind::Certificate,
-            ObjectKind::Credential
+            ObjectKind::Receipt
         ]
     );
     for kind in object_kinds() {
@@ -203,4 +206,74 @@ fn final_digest_has_exact52_fields_and_keeps_high_foreign_challenge_limbs() {
     assert_eq!(&public[62..65], &[Fp::ZERO, Fp::ONE, Fp::ZERO]);
     assert_eq!(&public[22..42], &public[42..62]);
     assert_eq!(&public[65..69], &public[22..26]);
+}
+
+#[test]
+fn fixed_controls_off_mask_rejects_each_foreign_control_source() {
+    for index in 0..3 {
+        let mut input = original();
+        match index {
+            0 => input.state.before.core[21] = Fp::ONE,
+            1 => input.state.after.core[21] = Fp::ONE,
+            _ => input.state.statement[11] = Fp::ONE,
+        }
+        assert_eq!(check_sigma_tape(&input), Err(Error::Input));
+    }
+}
+
+#[test]
+fn consuming_originals_use_exact_public320_proof_and_two544_claims() {
+    let p = iroha_plonk::transcript::decode_point::<Ep>(
+        &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let v = iroha_plonk::transcript::decode_point::<Eq>(
+        &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let p = AccumulatorT::new(p, [Fq::ONE; K]).unwrap();
+    let v = AccumulatorT::new(v, [Fp::ONE; K]).unwrap();
+    let fields = core::array::from_fn(|i| Fp::from(u64::try_from(i + 1).unwrap()));
+    let proof = vec![41; 3712];
+    let tape = lineage_bytes(&fields, &proof, &p, &v).unwrap();
+    assert_eq!(tape.len(), 320 + 3712 + 1088);
+    assert_eq!(tape[0..2], 1_u16.to_le_bytes());
+    assert_eq!(tape[162], 4);
+    assert_eq!(
+        tape[163..179],
+        fields[10].to_repr()[..16]
+            .iter()
+            .copied()
+            .rev()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(tape[320..4032], proof);
+    assert_eq!(tape[4032..4576], p.to_bytes());
+    assert_eq!(tape[4576..], v.to_bytes());
+    let framed = frame(&tape).unwrap();
+    assert_eq!(
+        framed[..4],
+        u32::try_from(tape.len()).unwrap().to_le_bytes()
+    );
+    assert_eq!(framed[4..], tape);
+    for index in [1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 14] {
+        let mut changed = fields;
+        changed[index] += Fp::from(2).pow_vartime([128]);
+        assert_eq!(lineage_bytes(&changed, &proof, &p, &v), Err(Error::Input));
+    }
+    let mut changed = fields;
+    changed[13] += Fp::from(2).pow_vartime([104]);
+    assert_eq!(lineage_bytes(&changed, &proof, &p, &v), Err(Error::Input));
+    changed = fields;
+    changed[0] = Fp::from(2);
+    assert_eq!(lineage_bytes(&changed, &proof, &p, &v), Err(Error::Input));
+    // Omega's key identity is checked separately against the exact predecessor VK.
+    changed = fields;
+    changed[17] += Fp::ONE;
+    assert_eq!(lineage_bytes(&changed, &proof, &p, &v).unwrap(), tape);
+    for index in [5, 8, 15, 16] {
+        changed = fields;
+        changed[index] += Fp::ONE;
+        assert_ne!(lineage_bytes(&changed, &proof, &p, &v).unwrap(), tape);
+    }
 }

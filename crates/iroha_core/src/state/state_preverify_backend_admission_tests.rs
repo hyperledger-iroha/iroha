@@ -8,7 +8,7 @@ use iroha_data_model::{
 };
 use std::{num::NonZeroU64, sync::Arc};
 #[test]
-fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy() {
+fn retired_and_unknown_backends_refuse_before_key_or_dedup_admission() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
@@ -17,6 +17,7 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
     let mut transaction = block.transaction();
 
     for backend in [
+        "halo2/ipa",
         "halo2/bn254",
         "halo2/bn254/vote",
         "halo2/kzg",
@@ -32,13 +33,14 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
             PreverifyResult::UnsupportedBackend,
             "case {backend}"
         );
+        assert_eq!(
+            transaction.preverify_proof(&proof, None, 0, None, None, false),
+            PreverifyResult::UnsupportedBackend,
+            "backend refusal precedes inactive-key admission for {backend}",
+        );
+        let mut observed = transaction.zk_dedup.clone();
+        assert!(observed.check_and_insert_with_commitment(&proof, None));
     }
-    let retired = ProofBox::new("halo2/ipa".to_owned(), vec![1, 2, 3, 4]);
-    assert_eq!(
-        transaction.preverify_proof(&retired, None, 0, None, None, true),
-        PreverifyResult::UnsupportedBackend,
-        "retired generic Halo2 never enters native curve admission"
-    );
 }
 #[test]
 fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
@@ -48,7 +50,6 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Bn254;
     for backend in [crate::zk::ZK_BACKEND_STARK_FRI_V1] {
         let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
         let vk_commitment = crate::zk::hash_vk(&vk);
@@ -92,7 +93,7 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     }
 }
 #[test]
-fn halo2_ipa_profile_labels_require_the_canonical_backend() {
+fn retired_ipa_profile_labels_refuse_even_native_envelope() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
@@ -130,42 +131,23 @@ fn halo2_ipa_profile_labels_require_the_canonical_backend() {
 }
 
 #[test]
-fn canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry() {
-    use iroha_config::parameters::actual::ZkCurve;
-
+fn native_and_stark_key_refusals_preserve_original_dedup_for_retry() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    let proof = ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]);
-    let vk = VerifyingKeyBox::new(proof.backend.clone(), vec![0xA5, 0x5A, 0xC3]);
-    let commitment = crate::zk::hash_vk(&vk);
-
-    for curve in [ZkCurve::Bn254, ZkCurve::Goldilocks] {
-        transaction.zk.halo2.curve = curve;
-        assert_eq!(
-            transaction.preverify_proof(
-                &proof,
-                Some(&vk),
-                0,
-                Some(commitment),
-                Some(commitment),
-                false,
-            ),
-            PreverifyResult::CurveNotAllowed,
-            "{curve:?} must refuse before key activity or dedup admission"
-        );
-        let mut observed = transaction.zk_dedup.clone();
-        assert!(observed.check_and_insert_with_commitment(&proof, Some(commitment)));
-    }
-    for curve in [ZkCurve::Pallas, ZkCurve::Pasta] {
-        transaction.zk.halo2.curve = curve;
+    for backend in [
+        crate::zk::ZK_BACKEND_NATIVE_PIPA_R,
+        crate::zk::ZK_BACKEND_STARK_FRI_V1,
+    ] {
+        let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+        let commitment = crate::zk::hash_vk(&vk);
         assert_eq!(
             transaction.preverify_proof(&proof, None, 0, None, None, true),
             PreverifyResult::VerifyingKeyMissing,
-            "{curve:?} must reach the original key admission"
         );
         assert_eq!(
             transaction.preverify_proof(
@@ -177,45 +159,35 @@ fn canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry() {
                 false,
             ),
             PreverifyResult::VerifyingKeyInactive,
-            "{curve:?} must retain the original inactive-key refusal"
         );
+        let mut foreign_commitment = commitment;
+        foreign_commitment[0] ^= 1;
         assert_eq!(
             transaction.preverify_proof(
                 &proof,
                 Some(&vk),
                 0,
                 Some(commitment),
-                Some(commitment),
+                Some(foreign_commitment),
                 true,
             ),
-            PreverifyResult::MalformedProof,
-            "allowed policy must retain canonical envelope validation"
+            PreverifyResult::VerifyingKeyMismatch,
         );
-        let mut observed = transaction.zk_dedup.clone();
-        assert!(observed.check_and_insert_with_commitment(&proof, Some(commitment)));
-    }
-    transaction.zk.halo2.curve = ZkCurve::Bn254;
-    assert_eq!(
-        transaction.preverify_proof(
-            &proof,
-            Some(&vk),
-            0,
-            Some(commitment),
-            Some(commitment),
-            true,
-        ),
-        PreverifyResult::CurveNotAllowed,
-        "retry must recheck the original State policy without poisoning dedup"
-    );
-    for backend in [
-        crate::zk::ZK_BACKEND_NATIVE_PIPA_R,
-        crate::zk::ZK_BACKEND_STARK_FRI_V1,
-    ] {
-        let independent = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
-        assert_eq!(
-            transaction.preverify_proof(&independent, None, 0, None, None, true),
-            PreverifyResult::VerifyingKeyMissing,
-            "{backend} must retain its independent curve policy"
-        );
+        for _ in 0..2 {
+            assert_eq!(
+                transaction.preverify_proof(
+                    &proof,
+                    Some(&vk),
+                    0,
+                    Some(commitment),
+                    Some(commitment),
+                    true,
+                ),
+                PreverifyResult::MalformedProof,
+                "{backend} must recheck the unchanged original envelope on retry",
+            );
+            let mut observed = transaction.zk_dedup.clone();
+            assert!(observed.check_and_insert_with_commitment(&proof, Some(commitment)));
+        }
     }
 }

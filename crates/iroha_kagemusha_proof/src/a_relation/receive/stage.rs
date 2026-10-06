@@ -6,7 +6,7 @@ use iroha_plonk_gadgets::{imt::OpeningCells, p256::VerifyMode};
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
 
 use super::{
-    ReceiveObjects, ReceiveProofInputs, ReceiveSignedObjects,
+    ReceiveObjects, ReceiveProofDigest, ReceiveProofInputs, ReceiveSignedObjects,
     authorization::{ReceiveAuthorizationObjects, ReceiveSignatureInputs},
     maps::{self, ReceiveEffectsCells},
 };
@@ -43,6 +43,8 @@ pub struct ReceiveStagePlan {
 pub struct ReceiveStageInputs<'a> {
     /// Original context rebound by the split continuation proof.
     pub context: &'a ContextInputs<'a>,
+    /// Exact combined consuming digest producer, only in `ProofDigest`.
+    pub proof_digest: Option<&'a ReceiveProofDigest>,
     /// Complete incoming Payment views, only when this stage owns Objects.
     pub objects: Option<&'a ReceiveObjects>,
     /// Original signed sources, only for Signatures or Blacklist.
@@ -218,6 +220,10 @@ impl ReceiveStagePlan {
             .ok_or(Error::Synthesis)?;
         for (needed, present) in [
             (
+                tasks.contains(&OperationTask::ReceiveProofDigest),
+                input.proof_digest.is_some(),
+            ),
+            (
                 tasks.contains(&OperationTask::ReceiveObjects),
                 input.objects.is_some(),
             ),
@@ -282,6 +288,10 @@ impl ReceiveStagePlan {
         let mut effects = None;
         for task in tasks {
             match task {
+                OperationTask::ReceiveProofDigest => input
+                    .proof_digest
+                    .ok_or(Error::Synthesis)?
+                    .bind_context(region, &self.context, stage, input.context)?,
                 OperationTask::ReceiveProofs => witness
                     .proofs
                     .ok_or(Error::Synthesis)?

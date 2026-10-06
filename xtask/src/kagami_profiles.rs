@@ -339,7 +339,9 @@ struct PrivateProfileStaging {
 }
 impl PrivateProfileStaging {
     fn directory(&self) -> &iroha_fs::PrivateDirectory {
-        self.directory.as_ref().expect("unpublished profile staging")
+        self.directory
+            .as_ref()
+            .expect("unpublished profile staging")
     }
     fn path(&self) -> &Path {
         self.directory().path()
@@ -1040,17 +1042,6 @@ fn render_peer_config_with_private_keys(
                 )
             }
         };
-    // Publisher custody is always provisioned by the operator. Profile generation never
-    // derives a Load-role key, role certificate or ledger submitter from its demo seed.
-    let publisher_file_prefix = match private_key_rendering {
-        PrivateKeyRendering::Inline => format!("kagemusha-load-authorizer-peer-{peer_index}"),
-        PrivateKeyRendering::RuntimeFiles => {
-            format!(
-                "/run/secrets/iroha/{}-peer-{peer_index}-kagemusha-load-authorizer",
-                spec.slug
-            )
-        }
-    };
     let trusted_peers = peers
         .iter()
         .map(|peer| format!("  \"{}@{}\"", peer.public_key, peer.address))
@@ -1153,12 +1144,6 @@ trusted_peers_pop = [
 {trusted_peers_pop}
 ]
 
-# Required operator-owned Load-role keyring and ordinary ledger submitter.
-# Missing or unadmitted custody prevents validator startup; no enable switch exists.
-[kagemusha_load_authorizer]
-keyring_file = "{publisher_file_prefix}-keyring.nrt"
-submitter_key_file = "{publisher_file_prefix}-submitter-private-key"
-
 [sumeragi]
 role = "validator"
 
@@ -1253,22 +1238,6 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
         .map(|(peer_index, peer)| {
             let service = format!("iroha-{}-{peer_index}", spec.slug);
             let config_file = peer_config_file_name(peer_index);
-            let publisher_custody_volumes =
-                if published_private_key_rendering(spec) == PrivateKeyRendering::Inline {
-                    ["keyring.nrt", "submitter-private-key"]
-                        .into_iter()
-                        .map(|suffix| {
-                            let file = format!(
-                                "kagemusha-load-authorizer-peer-{peer_index}-{suffix}"
-                            );
-                            format!(
-                                "\n      - type: bind\n        source: ./{file}\n        target: /config/{file}\n        read_only: true\n        bind:\n          create_host_path: false"
-                            )
-                        })
-                        .collect::<String>()
-                } else {
-                    String::new()
-                };
             let command = r#"["iroha3d", "--sora", "--config", "/config/config.toml"]"#;
             let p2p_port = peer
                 .address
@@ -1292,7 +1261,7 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
     volumes:
       - ./{config_file}:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
-      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{genesis_identity_volume}{runtime_secrets_volume}{publisher_custody_volumes}
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{genesis_identity_volume}{runtime_secrets_volume}
     ports:
       - "{torii_port}:{torii_port}"
       - "{p2p_port}:{p2p_port}"
@@ -1392,11 +1361,11 @@ Files:
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
-{runtime_key_note}Kagemusha publisher custody:
-- Before startup, provision each config's required `kagemusha_load_authorizer.keyring_file` and `submitter_key_file` as owner-only private files. The keyring must contain genuine network-bound, role-certified Load keys; the submitter needs ordinary ledger permissions and finite fee caps. These files and their authority are never generated from demo seeds. Missing or unadmitted custody prevents startup in every mode.
-
-Regenerate:
+{runtime_key_note}Regenerate:
 - cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
+
+Kagemusha issuer role:
+- Ordinary validator configs omit `kagemusha_load_authorizer`. An operator explicitly selects the issuer publication service by adding that table with owner-only `keyring_file` and `submitter_key_file` bindings. Selected roles require genuine network-bound Load-role custody, ledger permissions and finite fee caps; profile generation does not create monetary authority.
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
@@ -2201,36 +2170,22 @@ mod tests {
         };
         use iroha_config::parameters::user::Root as UserConfig;
 
-        // These exact parser-only files never constitute daemon publisher custody.
-        // The noncanonical keyring must fail the daemon's role/network preflight.
-        struct PublisherParserFiles {
-            keyring: PathBuf,
-            submitter: PathBuf,
-            submitter_bytes: Vec<u8>,
+        // An ordinary validator must not read any issuer custody file. Explicit role
+        // selection below still reaches the production missing-custody refusal.
+        struct UnavailablePublisherFiles {
+            calls: std::cell::Cell<usize>,
         }
-        impl ConfigFileSource for PublisherParserFiles {
+        impl ConfigFileSource for UnavailablePublisherFiles {
             fn read(
                 &self,
-                path: &Path,
+                _path: &Path,
                 request: ConfigFileRequest,
             ) -> std::io::Result<Zeroizing<Vec<u8>>> {
-                if request.access != ConfigFileAccess::Private {
-                    return Err(std::io::ErrorKind::PermissionDenied.into());
-                }
-                let bytes = if path == self.keyring {
-                    b"profile-parser-only; not an authenticated keyring".to_vec()
-                } else if path == self.submitter {
-                    self.submitter_bytes.clone()
-                } else {
-                    return Err(std::io::ErrorKind::NotFound.into());
-                };
-                if bytes.len() > request.maximum {
-                    return Err(std::io::ErrorKind::InvalidData.into());
-                }
-                Ok(Zeroizing::new(bytes))
+                self.calls.set(self.calls.get() + 1);
+                assert_eq!(request.access, ConfigFileAccess::Private);
+                Err(std::io::ErrorKind::PermissionDenied.into())
             }
         }
-
         let expected_hash =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"xtask profile config admission",
@@ -2256,22 +2211,13 @@ mod tests {
                 .expect("rendered profile config is valid TOML");
             let bundle = tempdir().expect("profile config admission directory");
             let path = bundle.path().join("peer0.toml");
-            let publisher = table["kagemusha_load_authorizer"]
-                .as_table()
-                .expect("every rendered profile declares required publisher custody");
-            assert!(!publisher.contains_key("enabled"));
-            let parser_files = PublisherParserFiles {
-                keyring: bundle.path().join(
-                    publisher["keyring_file"]
-                        .as_str()
-                        .expect("required keyring file"),
-                ),
-                submitter: bundle.path().join(
-                    publisher["submitter_key_file"]
-                        .as_str()
-                        .expect("required submitter file"),
-                ),
-                submitter_bytes: peers[0].private_key.as_bytes().to_vec(),
+            assert!(
+                !table.contains_key("kagemusha_load_authorizer"),
+                "ordinary profile {} must not select an issuer role",
+                profile.slug
+            );
+            let parser_files = UnavailablePublisherFiles {
+                calls: std::cell::Cell::new(0),
             };
             let parse = |table: toml::Table| {
                 ConfigReader::new()
@@ -2285,12 +2231,14 @@ mod tests {
             let _chain_discriminant = profile
                 .chain_discriminant
                 .map(ChainDiscriminantGuard::enter);
-            parse(table.clone()).unwrap_or_else(|error| {
+            let parsed = parse(table.clone()).unwrap_or_else(|error| {
                 panic!(
                     "rendered profile {} must pass bounded config parsing: {error:?}",
                     profile.slug
                 )
             });
+            assert!(parsed.kagemusha_load_authorizer.is_none());
+            assert_eq!(parser_files.calls.get(), 0);
             for retired in ["block", "queues"] {
                 let mut retired_config = table.clone();
                 retired_config
@@ -2304,6 +2252,25 @@ mod tests {
                     profile.slug
                 );
             }
+            assert_eq!(parser_files.calls.get(), 0);
+            let mut selected = table.clone();
+            let publisher: toml::Table = r#"
+keyring_file = "unavailable-keyring.nrt"
+submitter_key_file = "unavailable-submitter-private-key"
+"#
+            .parse()
+            .expect("explicit operator role references");
+            selected.insert(
+                "kagemusha_load_authorizer".to_owned(),
+                toml::Value::Table(publisher),
+            );
+            assert!(
+                parse(selected).is_err(),
+                "an explicitly selected issuer role must refuse unavailable private custody"
+            );
+            assert!(parser_files.calls.get() > 0);
+            let retried = parse(table).expect("same ordinary config must remain admissible");
+            assert!(retried.kagemusha_load_authorizer.is_none());
         }
     }
     #[test]
@@ -2489,7 +2456,8 @@ mod tests {
             )
             .expect("write native publication DATA");
         let old_staging = staging.path().to_path_buf();
-        publish_profile_bundle(staging, &destination).expect("publish after native handles release");
+        publish_profile_bundle(staging, &destination)
+            .expect("publish after native handles release");
         assert!(!old_staging.exists());
         assert_eq!(
             fs::read(destination.join("published-data")).unwrap(),
@@ -2596,6 +2564,8 @@ mod tests {
         assert!(readme.contains("peer0.toml through peerN.toml"));
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
+        assert!(readme.contains("Ordinary validator configs omit `kagemusha_load_authorizer`"));
+        assert!(readme.contains("An operator explicitly selects the issuer publication service"));
     }
     #[test]
     fn rendered_dev_text_preserves_canonical_spacing() {
@@ -2906,19 +2876,11 @@ mod tests {
         );
         assert!(!rendered.contains("/run/iroha/genesis.expected_hash"));
         assert!(!rendered.contains("--genesis"));
-        for peer_index in 0..peers.len() {
-            for suffix in ["keyring.nrt", "submitter-private-key"] {
-                let file = format!("kagemusha-load-authorizer-peer-{peer_index}-{suffix}");
-                assert!(rendered.contains(&format!(
-                    "source: ./{file}\n        target: /config/{file}\n        read_only: true\n        bind:\n          create_host_path: false"
-                )));
-            }
-        }
-        assert_eq!(
-            rendered.matches("create_host_path: false").count(),
-            2 * peers.len(),
-            "every dev peer requires both existing publisher custody files"
+        assert!(
+            !rendered.contains("kagemusha-load-authorizer"),
+            "ordinary dev validators must not require issuer custody mounts"
         );
+        assert_eq!(rendered.matches("create_host_path: false").count(), 0);
         for peer_index in 1..peers.len() {
             assert!(rendered.contains(&format!("./peer{peer_index}.toml:/config/config.toml:ro")));
         }
@@ -2940,7 +2902,7 @@ mod tests {
                 .matches("/run/secrets/iroha:/run/secrets/iroha:ro")
                 .count(),
             runtime_peers.len(),
-            "runtime peers receive their required publisher files in the secret directory"
+            "runtime peers receive their required validator signing files in the secret directory"
         );
         assert!(!runtime_rendered.contains("source: ./kagemusha-load-authorizer-peer-"));
     }
@@ -2999,6 +2961,53 @@ mod tests {
                     assert!(!rendered.contains(&other.streaming_private_key));
                 }
             }
+        }
+    }
+    #[test]
+    fn ordinary_profile_renderings_and_checked_in_templates_omit_issuer_custody() {
+        for profile in PROFILES {
+            let peers = build_peers(profile).expect("build deterministic profile peers");
+            let genesis_key = deterministic_keypair("ordinary-profile-genesis", Algorithm::Ed25519)
+                .expect("derive deterministic genesis verifier");
+            for peer_index in 0..peers.len() {
+                for private_keys in [
+                    PrivateKeyRendering::Inline,
+                    PrivateKeyRendering::RuntimeFiles,
+                ] {
+                    for genesis_identity in [
+                        GenesisIdentityRendering::InlineBootstrap(
+                            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+                        ),
+                        published_genesis_identity_rendering(profile),
+                    ] {
+                        let rendered = render_peer_config_with_private_keys(
+                            profile,
+                            &peers,
+                            peer_index,
+                            genesis_key.public_key(),
+                            genesis_identity,
+                            private_keys,
+                        );
+                        let config: toml::Table = rendered.parse().expect("profile TOML");
+                        assert!(!config.contains_key("kagemusha_load_authorizer"));
+                        assert!(!rendered.contains("kagemusha-load-authorizer"));
+                    }
+                }
+            }
+        }
+        for path in [
+            "defaults/kagami/iroha3-dev/peer0.toml",
+            "defaults/kagami/iroha3-dev/peer1.toml",
+            "defaults/kagami/iroha3-dev/peer2.toml",
+            "defaults/kagami/iroha3-dev/peer3.toml",
+            "defaults/kagami/iroha3-nexus/config.toml",
+            "defaults/nexus/config.toml",
+        ] {
+            let source =
+                fs::read_to_string(workspace_root().join(path)).expect("ordinary template");
+            let config: toml::Table = source.parse().expect("ordinary template TOML");
+            assert!(!config.contains_key("kagemusha_load_authorizer"), "{path}");
+            assert!(!source.contains("kagemusha-load-authorizer"), "{path}");
         }
     }
     #[test]

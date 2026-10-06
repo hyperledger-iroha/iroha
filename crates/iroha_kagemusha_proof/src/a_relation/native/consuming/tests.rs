@@ -1,4 +1,4 @@
-//! Pure exact-original and homogeneous-frame rejection tests, never an admitted Load.
+//! Pure exact-original and homogeneous-frame rejection tests, never an admitted consuming transition.
 
 use super::*;
 
@@ -8,7 +8,7 @@ fn original() -> Inputs {
         rest: [Fp::ZERO; 8],
         lineage: [Fp::ZERO; 18],
     };
-    let state = LoadWitness {
+    let state = ConsumingWitness {
         predecessor: state,
         successor: state,
         statement: [Fp::ZERO; 26],
@@ -27,27 +27,17 @@ fn original() -> Inputs {
         state,
         sigma,
         objects: core::array::from_fn(|_| vec![]),
-        insertion: IndexedInsert {
-            leaf: crate::tree::IndexedLeaf::default(),
-            leaf_slot: 0,
-            leaf_siblings: [Fp::ZERO; 32],
-            slot: 1,
-            slot_siblings: [Fp::ZERO; 32],
-        },
+        recovery: None,
         q: [
             QInput {
                 proof: vec![],
                 instances: vec![
                     bounded,
                     vec![],
-                    vec![Fq::ONE],
+                    vec![Fq::from(13)],
                     vec![Fq::ONE],
                     vec![Fq::from(12)],
                 ],
-            },
-            QInput {
-                proof: vec![],
-                instances: vec![],
             },
             QInput {
                 proof: vec![],
@@ -63,9 +53,9 @@ fn original() -> Inputs {
 }
 
 #[test]
-fn exact_load_sigma_tape_statement_length_and_selector_are_bound() {
+fn exact_consuming_sigma_tape_statement_length_and_selector_are_bound() {
     let source = original();
-    assert_eq!(check_sigma_tape(&source), Ok(()));
+    assert_eq!(check_sigma_tape(&source, Variant::Unload), Ok(()));
     for mutation in 0..6 {
         let mut bad = source.clone();
         match mutation {
@@ -77,7 +67,7 @@ fn exact_load_sigma_tape_statement_length_and_selector_are_bound() {
             _ => bad.state.statement[20] += Fp::ONE,
         }
         assert_eq!(
-            check_sigma_tape(&bad),
+            check_sigma_tape(&bad, Variant::Unload),
             Err(Error::Input),
             "mutation{mutation}"
         );
@@ -85,7 +75,7 @@ fn exact_load_sigma_tape_statement_length_and_selector_are_bound() {
 }
 
 #[test]
-fn load_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
+fn consuming_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
     let mut input = original().q[0].clone();
     let point = iroha_plonk::transcript::decode_point::<Eq>(
         &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
@@ -95,7 +85,7 @@ fn load_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
     input.instances[1] = vec![x, y];
     let n = input.instances[0].len();
     input.instances[0][n - K..n - K + 4].fill(Fq::ZERO);
-    assert!(q_sigma_part(&input, 12).is_ok());
+    assert!(q_sigma_part(&input, 12, Variant::Unload).is_ok());
     for mutation in 0..6 {
         let mut bad = input.clone();
         match mutation {
@@ -106,7 +96,7 @@ fn load_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
             4 => bad.instances[4][0] = Fq::from(16),
             _ => bad.instances[2][0] = Fq::ZERO,
         }
-        assert!(q_sigma_part(&bad, 12).is_err(), "mutation{mutation}");
+        assert!(q_sigma_part(&bad, 12, Variant::Unload).is_err(), "mutation{mutation}");
     }
     let p = [
         0x992d_30ed_0000_0001_u64,
@@ -120,19 +110,17 @@ fn load_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
     }
     let mut alias = input;
     alias.instances[0][n - 1] = Fq::from_repr(repr).unwrap();
-    assert!(q_sigma_part(&alias, 12).is_err());
+    assert!(q_sigma_part(&alias, 12, Variant::Unload).is_err());
 }
 
 #[test]
-fn all_five_signed_originals_bind_body_and_each_raw_signature_limb() {
+fn all_three_signed_originals_bind_body_and_each_raw_signature_limb() {
     assert_eq!(
         object_kinds(),
         [
+            ObjectKind::Credential,
             ObjectKind::Certificate,
-            ObjectKind::Voucher,
-            ObjectKind::Receipt,
-            ObjectKind::Certificate,
-            ObjectKind::Credential
+            ObjectKind::Receipt
         ]
     );
     for kind in object_kinds() {
@@ -203,4 +191,43 @@ fn final_digest_has_exact52_fields_and_keeps_high_foreign_challenge_limbs() {
     assert_eq!(&public[62..65], &[Fp::ZERO, Fp::ONE, Fp::ZERO]);
     assert_eq!(&public[22..42], &public[42..62]);
     assert_eq!(&public[65..69], &public[22..26]);
+}
+
+#[test]
+fn retiring_has_its_own_sigma_selector_and_unrelated_variants_reject() {
+    let mut source = original();
+    assert_eq!(check_sigma_tape(&source, Variant::Retiring), Err(Error::Input));
+    source.q[0].instances[2][0] = Fq::from(15);
+    assert_eq!(check_sigma_tape(&source, Variant::Retiring), Ok(()));
+    assert_eq!(check_sigma_tape(&source, Variant::Unload), Err(Error::Input));
+    assert_eq!(check_sigma_tape(&source, Variant::Load), Err(Error::Artifact));
+}
+
+#[test]
+fn original_lineage_bytes_bind_every_byte_without_truncating_limbs() {
+    let ep = iroha_plonk::transcript::decode_point::<Ep>(
+        &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
+    ).unwrap();
+    let eq = iroha_plonk::transcript::decode_point::<Eq>(
+        &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+    ).unwrap();
+    let p = AccumulatorT::new(ep, [Fq::ONE; K]).unwrap();
+    let v = AccumulatorT::new(eq, [Fp::ONE; K]).unwrap();
+    let mut fields = [Fp::ONE; 18];
+    let proof = vec![0x37; 3_712];
+    let raw = lineage_bytes(&fields, &proof, &p, &v).unwrap();
+    assert_eq!(raw.len(), 320 + proof.len() + 544 + 544);
+    assert_eq!(&raw[320..320 + proof.len()], &proof);
+    assert_eq!(&raw[320 + proof.len()..320 + proof.len() + 544], p.to_bytes());
+    assert_eq!(&raw[320 + proof.len() + 544..], v.to_bytes());
+    let framed = frame(&raw).unwrap();
+    assert_eq!(&framed[4..], raw);
+    assert_eq!(&framed[..4], u32::try_from(raw.len()).unwrap().to_le_bytes());
+    for (index, width) in [(1,128), (6,128), (9,128), (13,104), (14,128)] {
+        fields[index] = Fp::from(2).pow_vartime([width]);
+        assert_eq!(lineage_bytes(&fields, &proof, &p, &v), Err(Error::Input));
+        fields[index] = Fp::ONE;
+    }
+    fields[0] = Fp::from(2);
+    assert_eq!(lineage_bytes(&fields, &proof, &p, &v), Err(Error::Input));
 }

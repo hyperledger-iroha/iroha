@@ -111,6 +111,27 @@ pub struct Inputs {
     pub q: [QInput; 2],
 }
 
+/// Installed A1 and W0 keys for the first recursive transition.
+#[derive(Clone, Copy)]
+pub struct WrapperKeys<'a> {
+    /// Exact first-stage proving key whose proof W0 consumes.
+    pub first: &'a ProvingKey<Eq>,
+    /// Exact installed W0 proving key.
+    pub wrapper: &'a ProvingKey<Ep>,
+}
+
+/// Installed W0 and terminal A2 keys for the final Bootstrap transition.
+#[derive(Clone, Copy)]
+pub struct TerminalKeys<'a> {
+    /// Verified wrapper metadata pinned by the terminal relation.
+    pub wrapper: &'a WKey,
+    /// Exact installed terminal A2 proving key.
+    pub terminal: &'a ProvingKey<Eq>,
+}
+
+/// The fixed W0 circuit, its exact public columns and its Vesta obligation.
+pub type WrapperPreparation = (WCircuit, Vec<Vec<Fq>>, AccumulatorT<Eq>);
+
 /// Fixed Bootstrap circuit metadata from the authenticated native artifact owner.
 /// No field is populated from an operation's witness or wire proof profile.
 #[derive(Clone, Debug)]
@@ -160,7 +181,8 @@ impl Plan {
             .verifier()
             .binding()
             .descriptor();
-        if q1.instance_lengths != [signatures.instance_length() as u32]
+        if q1.instance_lengths
+            != [u32::try_from(signatures.instance_length()).map_err(|_| Error::Artifact)?]
             || q1.instance_types.as_deref() != Some(&QSignaturePlan::instance_types())
         {
             return Err(Error::Artifact);
@@ -285,7 +307,7 @@ fn check_sigma_tape(input: &Inputs) -> Result<(), Error> {
     let statement = Option::<Fq>::from(Fq::from_repr(statement.to_repr())).ok_or(Error::Input)?;
     if bounded.len() != 1 + chunks.len() + K
         || bounded[0] != statement
-        || bounded[1..1 + chunks.len()] != chunks
+        || bounded[1..=chunks.len()] != chunks
         || input.q[0].instances.get(2).map(Vec::as_slice) != Some(&[Fq::ZERO])
     {
         return Err(Error::Input);
@@ -423,8 +445,10 @@ impl Session<'_> {
     ) -> Result<WrapperCheckpoint, Error> {
         self.prepared.prove_wrapper(
             first,
-            &self.prover.first,
-            &self.prover.wrapper,
+            WrapperKeys {
+                first: &self.prover.first,
+                wrapper: &self.prover.wrapper,
+            },
             salt,
             fold,
             randomness,
@@ -462,8 +486,10 @@ impl Session<'_> {
     ) -> Result<Terminal, Error> {
         self.prepared.prove_terminal(
             wrapper,
-            &self.prover.w,
-            &self.prover.terminal,
+            TerminalKeys {
+                wrapper: &self.prover.w,
+                terminal: &self.prover.terminal,
+            },
             salt,
             fold,
             randomness,
@@ -581,13 +607,13 @@ impl Prepared {
         a1: &ProvingKey<Eq>,
         salt: Fq,
         config: &FoldConfig,
-    ) -> Result<(WCircuit, Vec<Vec<Fq>>, AccumulatorT<Eq>), Error> {
+    ) -> Result<WrapperPreparation, Error> {
         self.resume_first(a1.vk(), a1.binding(), first.clone(), config.kernel_budget)?;
         let opening = accumulate_generator(
             &self.plan.vesta,
             a1.binding(),
             a1.vk(),
-            &[first.public.clone()],
+            std::slice::from_ref(&first.public),
             &first.proof,
             config.kernel_budget,
         )
@@ -642,13 +668,16 @@ impl Prepared {
     pub fn prove_wrapper(
         &self,
         first: &FirstCheckpoint,
-        a1: &ProvingKey<Eq>,
-        w: &ProvingKey<Ep>,
+        keys: WrapperKeys<'_>,
         salt: Fq,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<WrapperCheckpoint, Error> {
+        let WrapperKeys {
+            first: a1,
+            wrapper: w,
+        } = keys;
         let (circuit, instances, vesta) = self.wrapper_circuit(first, a1, salt, fold)?;
         let witness = Witness::from_circuit(w, &circuit, &instances).map_err(|_| Error::Prover)?;
         let output =
@@ -742,11 +771,11 @@ impl Prepared {
         let circuit = StageCircuit {
             prepared: self.clone(),
             known: true,
-            stage: Stage::Last {
+            stage: Stage::Last(Box::new(LastStage {
                 split,
                 wrapper: wrapper.clone(),
                 fold: fold.to_bytes(),
-            },
+            })),
         };
         let public = frame(
             &self.original.state.lineage,
@@ -764,20 +793,23 @@ impl Prepared {
     pub fn prove_terminal(
         &self,
         wrapper: &WrapperCheckpoint,
-        w: &WKey,
-        a2: &ProvingKey<Eq>,
+        keys: TerminalKeys<'_>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<Terminal, Error> {
+        let TerminalKeys {
+            wrapper: w,
+            terminal: a2,
+        } = keys;
         let (circuit, public, pallas) = self.terminal_circuit(wrapper, w, salt, fold)?;
         let proof = prove_vesta(&self.plan, a2, &circuit, &public, randomness, config)?;
         let opening = accumulate_generator(
             &self.plan.vesta,
             a2.binding(),
             a2.vk(),
-            &[public.clone()],
+            std::slice::from_ref(&public),
             &proof,
             fold.kernel_budget,
         )
@@ -868,7 +900,6 @@ impl WrapperCheckpoint {
         &self.proof
     }
     /// Canonical deciding Vesta accumulator authenticated by W.
-    #[must_use]
     pub const fn vesta(&self) -> &AccumulatorT<Eq> {
         &self.vesta
     }
@@ -885,7 +916,7 @@ pub struct Terminal {
     pub proof: Vec<u8>,
     /// Canonical homogeneous 69-word A frame.
     pub instances: Vec<Fp>,
-    /// Full Pallas output bound through D_A.
+    /// Full Pallas output bound through `D_A`.
     pub pallas: AccumulatorT<Ep>,
     /// Full Vesta part forwarded from W.
     pub vesta: AccumulatorT<Eq>,
@@ -1006,11 +1037,13 @@ pub struct StageConfig {
 #[derive(Clone)]
 enum Stage {
     First,
-    Last {
-        split: SplitPlan,
-        wrapper: WrapperCheckpoint,
-        fold: [u8; 1120],
-    },
+    Last(Box<LastStage>),
+}
+#[derive(Clone)]
+struct LastStage {
+    split: SplitPlan,
+    wrapper: WrapperCheckpoint,
+    fold: [u8; 1120],
 }
 /// Complete first or terminal Bootstrap circuit. Stage and keys are fixed by
 /// native assembly; source evidence and original tapes remain private witnesses.
@@ -1145,11 +1178,12 @@ impl StageCircuit {
                 )?;
                 output.words(chip, region)
             }
-            Stage::Last {
-                split,
-                wrapper,
-                fold,
-            } => {
+            Stage::Last(last) => {
+                let LastStage {
+                    split,
+                    wrapper,
+                    fold,
+                } = last.as_ref();
                 let proof = carrier(chip, bytes, region, &wrapper.proof, self.known)?;
                 let sigma =
                     sigma_binding(chip, bytes, region, &statement, &source.sigma, self.known)?;

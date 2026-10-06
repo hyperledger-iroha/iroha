@@ -9,7 +9,7 @@ fn original() -> Inputs {
         statement: [Fp::ZERO; 26],
     };
     let sigma = (0..64).collect::<Vec<u8>>();
-    let mut raw = (sigma.len() as u32).to_le_bytes().to_vec();
+    let mut raw = u32::try_from(sigma.len()).unwrap().to_le_bytes().to_vec();
     raw.extend(&sigma);
     let statement = hash_with_domain(
         iroha_plonk_gadgets::statement::STATEMENT_DOMAIN,
@@ -84,10 +84,10 @@ fn malformed_q_exports_never_select_a_scalar_alias_or_short_padding() {
     }
     // p is a valid Fq integer, but it is not a canonical Fp scalar.
     let p = [
-        0x992d30ed00000001_u64,
-        0x224698fc094cf91b,
+        0x992d_30ed_0000_0001_u64,
+        0x2246_98fc_094c_f91b,
         0,
-        0x4000000000000000,
+        0x4000_0000_0000_0000,
     ];
     let mut repr = [0; 32];
     for (to, word) in repr.chunks_exact_mut(8).zip(p) {
@@ -102,7 +102,7 @@ fn malformed_q_exports_never_select_a_scalar_alias_or_short_padding() {
 fn exact_signed_original_digest_binds_body_and_both_raw_signature_halves() {
     for kind in object_kinds() {
         let bytes = (0..kind.body_len() + 64)
-            .map(|i| i as u8)
+            .map(|i| u8::try_from(i % 256).unwrap())
             .collect::<Vec<_>>();
         let digest = object_digest(kind, &bytes).unwrap();
         for index in [

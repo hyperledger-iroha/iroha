@@ -30,6 +30,8 @@ use crate::operation_relation::{
 };
 
 pub mod authorization;
+mod digest;
+pub use digest::ReceiveProofDigest;
 pub mod maps;
 mod proofs;
 pub use proofs::{ReceiveProofInputs, ReceiveProofSources};
@@ -76,6 +78,9 @@ pub struct ReceiveObjectInputs<'a> {
     pub incoming: &'a IncomingTransportCells,
     /// Original active Send sigma and exact original statement.
     pub sigma: &'a SigmaBindingCells,
+    /// Combined consuming digest claimed by the same context. The mandatory
+    /// `ProofDigest` owner derives it from both exact original active tapes.
+    pub consuming_digest: &'a Word<Fp>,
 }
 
 /// Opaque Objects predicate derived from exact tapes and their consumer bindings.
@@ -129,7 +134,7 @@ impl ReceiveObjects {
             .map_err(|_| Error::Synthesis)
     }
 
-    /// Decode all objects and derive the exact consuming proof digest internally.
+    /// Decode objects against the context's separately hard-derived proof digest.
     ///
     /// Both proofs must have active original provenance: safe fixed buffers are
     /// rejected by construction. Original malformed fields return false; the
@@ -158,7 +163,7 @@ impl ReceiveObjects {
         let omega = input.incoming.active_carrier()?;
         let sigma = input.sigma.active_carrier()?;
         let specs = Self::context_specs(omega.run().len(), sigma.run().len())?;
-        let proof_digest = input.incoming.proof_digest(chip, region, input.sigma)?;
+        let proof_digest = input.consuming_digest.clone();
         let signed = ReceiveSignedObjects::decode(
             chip,
             bytes,

@@ -610,21 +610,10 @@ pub fn is_coloring_supported() -> bool {
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
 }
-/// Feed zk verifier-key cache events into `zk_verifier_cache_events_total`.
-#[cfg(feature = "telemetry")]
-fn record_zk_vk_cache_event(cache: &'static str, event: &'static str) {
-    if let Some(metrics) = iroha_telemetry::metrics::global() {
-        metrics
-            .zk_verifier_cache_events_total
-            .with_label_values(&[cache, event])
-            .inc();
-    }
-}
 #[cfg(feature = "telemetry")]
 fn init_global_metrics_handle(
     panic_on_duplicate_metrics: bool,
 ) -> Arc<iroha_telemetry::metrics::Metrics> {
-    let _ = iroha_core_zk::install_vk_cache_event_observer(record_zk_vk_cache_event);
     set_duplicate_metrics_panic(panic_on_duplicate_metrics);
     iroha_telemetry::metrics::global().map_or_else(
         || {
@@ -4868,7 +4857,7 @@ impl Iroha {
             }
         }
         let online_peers_provider = include!("main/online_peers_provider.rs");
-        let kagemusha_publisher = kagemusha_load_authorizer::Service::new(
+        let kagemusha_publisher = kagemusha_load_authorizer::Service::selected(
             config.kagemusha_load_authorizer,
             state.clone(),
             queue.clone(),
@@ -4971,7 +4960,9 @@ impl Iroha {
                 supervisor.monitor(child);
             }
         }
-        supervisor.monitor(kagemusha_publisher.start(supervisor.shutdown_signal()));
+        if let Some(publisher) = kagemusha_publisher {
+            supervisor.monitor(publisher.start(supervisor.shutdown_signal()));
+        }
         // Finalize NTS ownership only after every fallible startup preflight has
         // succeeded. Otherwise an early return would detach a task and retain
         // its process-singleton ownership across an in-process retry. Fast is a
@@ -6953,7 +6944,7 @@ metadata = {}
         .expect("multilane config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "2c2a75cb5d97b1c50dcdc6c5e5d900cde7f4011cf7761ebf5c3cbd9d5404c9e5";
+        "37af6d032c455549e0e10568d910720bc0ec6b5b67f03ffe47fc62469a90f65d";
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
@@ -10878,13 +10869,6 @@ mod tests {
             let first = super::init_global_metrics_handle(false);
             let second = super::init_global_metrics_handle(false);
             assert!(Arc::ptr_eq(&first, &second));
-        }
-        #[test]
-        #[serial]
-        fn init_global_metrics_handle_installs_zk_vk_cache_observer() {
-            fn noop(_: &'static str, _: &'static str) {}
-            let _ = super::init_global_metrics_handle(false);
-            assert!(!iroha_core_zk::install_vk_cache_event_observer(noop));
         }
     }
     mod cli_args {

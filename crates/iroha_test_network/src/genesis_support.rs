@@ -424,7 +424,7 @@ mod tests {
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_model_base::peer::PeerId;
-    use std::fs;
+    use std::{fs, io::Write as _};
     const CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
     const FIXTURE_GENESIS_PUBLIC_KEY: &str =
@@ -560,6 +560,37 @@ mod tests {
         .expect("write signed rANS tables fixture");
         let rans_tables_literal = rans_tables_path.to_string_lossy().replace('\\', "\\\\");
         let mut config = include_str!("../../iroha_config/iroha_test_config.toml").to_owned();
+        // Genesis parser fixtures never start a publisher. Keep their explicit
+        // custody originals owner-only and deliberately unadmitted at runtime.
+        let submitter = iroha_crypto::ExposedPrivateKey(
+            KeyPair::from_seed(b"genesis-parser-submitter".to_vec(), Algorithm::Ed25519)
+                .private_key()
+                .clone(),
+        )
+        .to_string();
+        for (name, bytes) in [
+            (
+                "parser.keyring",
+                b"unadmitted-genesis-parser-keyring".as_slice(),
+            ),
+            ("parser.submitter", submitter.as_bytes()),
+        ] {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.mode(0o600);
+            }
+            options
+                .open(directory.join(name))
+                .unwrap()
+                .write_all(bytes)
+                .unwrap();
+        }
+        config.push_str(
+            "\n[kagemusha_load_authorizer]\nkeyring_file = \"parser.keyring\"\nsubmitter_key_file = \"parser.submitter\"\n",
+        );
         config = config.replacen(
             "chain = \"00000000-0000-0000-0000-000000000000\"",
             &format!("chain = \"{chain_id}\"\nchain_discriminant = {chain_discriminant}"),

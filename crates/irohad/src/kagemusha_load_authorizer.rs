@@ -1,4 +1,4 @@
-//! Required supervised online publisher. Original finalized issuance authorizes signing;
+//! Explicitly selected supervised online publisher. Finalized issuance authorizes signing;
 //! normal queue admission authorizes submission. Neither queue success nor timeout is finality.
 use std::sync::Arc;
 
@@ -6,7 +6,7 @@ use iroha_config::parameters::actual::KagemushaLoadAuthorizer;
 use iroha_core::{
     kagemusha_wallet_v1::{FinalizedLedger, PublicationWorker},
     queue::Queue,
-    state::State,
+    state::{State, StateReadOnly as _},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
@@ -32,6 +32,17 @@ enum TickError {
     SubmissionUnavailable,
 }
 impl Service {
+    /// Select an issuer worker only from an explicit, fully parsed role configuration.
+    pub(crate) fn selected(
+        config: Option<KagemushaLoadAuthorizer>,
+        state: Arc<State>,
+        queue: Arc<Queue>,
+    ) -> Result<Option<Self>, &'static str> {
+        config
+            .map(|config| Self::new(config, state, queue))
+            .transpose()
+    }
+
     /// Preflight required custody before supervision. No secret contents reach the error.
     pub(crate) fn new(
         config: KagemushaLoadAuthorizer,
@@ -53,6 +64,12 @@ impl Service {
         worker
             .require_network(*state.network_id_ref().as_bytes())
             .map_err(|_| "KAGEMUSHA publisher keys belong to another network")?;
+        if matches!(
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(state.view().world()),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace { .. })
+        ) {
+            return Err("KAGEMUSHA publisher requires a global root");
+        }
         Ok(Self {
             worker,
             submitter: config.custody.submitter.clone(),

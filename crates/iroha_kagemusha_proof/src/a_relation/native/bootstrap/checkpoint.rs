@@ -36,7 +36,7 @@ impl CheckpointKind {
 /// Construction is private and derives from this Prover's installed keys. The
 /// native installation owner must still authenticate the whole PK/source catalog;
 /// this metadata is not a signed artifact admission or a complete fold schedule.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckpointLayout {
     kind: CheckpointKind,
     descriptor_digest: [u8; 32],
