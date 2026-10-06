@@ -47,7 +47,7 @@ fn rejected_native_pipa_r_proof(
         circuit_id,
         iroha_core_zk::hash_vk(vk_box),
         public_inputs,
-        vec![seed],
+        vec![seed.saturating_add(1)],
     );
     iroha_data_model::proof::ProofBox::new(
         "pipa-r/pasta".into(),

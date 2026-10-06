@@ -675,6 +675,7 @@ pub(super) fn pin_binary(path: &Path) -> Result<BinaryPin> {
     super::program::NativeProgram::capture(path)?.pin()
 }
 
+#[cfg(test)]
 pub(super) fn verify_binary(pin: &BinaryPin) -> Result<()> {
     super::program::NativeProgram::matching(pin)?.validate()?;
     Ok(())

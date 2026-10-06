@@ -74,6 +74,16 @@ pub enum KagemushaWalletLedgerActionV1 {
         /// Canonical LoadAuthorization-role certificate frame.
         load_authorizer: Vec<u8>,
     },
+    /// Install one immutable complete verifier pack under the registered reserve
+    /// account and its exact asset governance permission. No producer/open readiness.
+    InstallVerifierPack {
+        /// Registered asset whose consenting reserve authorizes this scheme install.
+        asset: [u8; 32],
+        /// Exact independently selected signed ArtifactManifest identity.
+        manifest_digest: [u8; 32],
+        /// Canonical complete native VerifierPackV1 original bytes.
+        pack: Vec<u8>,
+    },
     /// Complete canonical activation frame; native Bootstrap verification is mandatory.
     Activate(Vec<u8>),
     /// Canonical signed unused-enrollment abandonment frame.
@@ -154,6 +164,25 @@ impl KagemushaWalletLedgerV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn verifier_install_instruction_preserves_pin_asset_and_original_frame() {
+        let action = KagemushaWalletLedgerActionV1::InstallVerifierPack {
+            asset: [2; 32],
+            manifest_digest: [3; 32],
+            pack: vec![4, 5, 6, 0, 255],
+        };
+        let original = KagemushaWalletLedgerV1::new([1; 32], action);
+        let bytes = norito::to_bytes(&original).unwrap();
+        let recovered: KagemushaWalletLedgerV1 = norito::decode_canonical_with_limits(
+            &bytes,
+            norito::canonical_decode_limits(bytes.len()),
+        )
+        .unwrap();
+        assert_eq!(recovered, original);
+        let json = norito::json::to_json(&original).unwrap();
+        let from_json: KagemushaWalletLedgerV1 = norito::json::from_str(&json).unwrap();
+        assert_eq!(from_json, original);
+    }
     #[test]
     fn issuance_query_codec_preserves_pending_and_published_forms() {
         let fixtures: norito::json::Value = norito::json::from_str(include_str!(

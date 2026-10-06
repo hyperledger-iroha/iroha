@@ -80,7 +80,6 @@ pub(super) struct CompletedPayload {
     pub(super) scope: OriginalPayloadScope,
     pending_inputs: crate::queue::PendingPayloadLease,
     payload: PayloadBytes,
-    attest: bool,
 }
 
 /// Preserve the real original pool/allocator refusal before the payload source is constructed.
@@ -234,7 +233,7 @@ impl Worker<'_> {
         scope: OriginalPayloadScope,
         physical_parent: &SignedBlock,
         current_view: &crate::state::StateView<'_>,
-    ) -> Result<Option<(Option<PayloadBytes>, bool)>, PublicationError> {
+    ) -> Result<Option<Option<PayloadBytes>>, PublicationError> {
         let reusable = match self.completed_payload.as_ref() {
             None => return Ok(None),
             Some(original) => {
@@ -277,7 +276,7 @@ impl Worker<'_> {
             .completed_payload
             .as_ref()
             .expect("exact owner checked above");
-        Ok(Some((Some(original.payload.clone()), original.attest)))
+        Ok(Some(Some(original.payload.clone())))
     }
 
     /// Keep the original nonempty funded output only while its captured queue inputs remain live.
@@ -286,7 +285,6 @@ impl Worker<'_> {
         scope: OriginalPayloadScope,
         pending_inputs: Option<crate::queue::PendingPayloadLease>,
         payload: &PayloadBytes,
-        attest: bool,
     ) {
         let current = pending_inputs.as_ref().is_some_and(|lease| {
             if payload.as_slice().len() > scope.max_bytes as usize
@@ -319,7 +317,6 @@ impl Worker<'_> {
                 scope,
                 pending_inputs: pending_inputs.expect("exact original lease checked above"),
                 payload: payload.clone(),
-                attest,
             })
         } else {
             None
@@ -440,14 +437,14 @@ mod tests {
             &merges,
         )
         .unwrap();
-        let attest = height == scheduled.epoch.authorization.last_height;
+
         let wire_len = block.resultless_proposal_wire_len().unwrap();
         worker.payload_build = Some(GlobalPayloadBuild {
             scope,
             job: super::super::super::driver::payload_build::PayloadBuild::new(
                 GlobalPayloadSource {
                     block,
-                    attest,
+
                     pending_inputs: Some(lease),
                 },
                 budget.clone(),
@@ -557,7 +554,7 @@ mod tests {
                 assert!(queue.contains_entrypoint_hash(hash));
             }
             drop(missing);
-            let (Some(output), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(output) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("the restored actual original source must release its same first output");
             };
             assert_eq!(output.as_slice().as_ptr(), pointer);
@@ -610,7 +607,7 @@ mod tests {
             assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
             assert!(queue.contains_pending_hash(hash, worker.state));
             drop(replacement);
-            let (Some(output), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(output) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("only the original journal object restores first-output custody");
             };
             assert_eq!(output.as_slice().as_ptr(), pointer);
@@ -693,7 +690,7 @@ mod tests {
                 Poll::Ready(())
             );
             drop(pending);
-            let (Some(output), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(output) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("both actual physical releases permit the same paid original wire");
             };
             assert_eq!(output.as_slice().as_ptr(), pointer);
@@ -784,7 +781,7 @@ mod tests {
                 let (_pointer, original_hash) = stage_original_partial(worker, &queue);
                 if expire {
                     clock.advance(queue.tx_time_to_live + Duration::from_secs(1));
-                    assert_eq!(worker.build(2, 0, 1 << 20, 100).unwrap(), (None, false));
+                    assert_eq!(worker.build(2, 0, 1 << 20, 100).unwrap(), None);
                     assert!(worker.payload_build.is_none());
                     assert!(worker.completed_payload.is_none());
                     assert_eq!(budget.reserved_bytes(), baseline);
@@ -793,7 +790,7 @@ mod tests {
                     clock.advance(Duration::from_millis(1));
                     queue_work(chain, 2_001, &queue, &time);
                     assert!(!queue.contains_entrypoint_hash(original_hash));
-                    let (Some(output), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+                    let Some(output) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                         panic!("the current actual admission must replace the withdrawn selection");
                     };
                     let block = payload::decode(output.as_slice()).unwrap();
@@ -888,7 +885,7 @@ mod tests {
                 ),
                 "byte-identical signed inputs belong to a different actual admission boundary"
             );
-            let (Some(output), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(output) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("the fresh actual admission must create its own selected-input owner");
             };
             let fresh = worker.completed_payload.as_ref().expect(
@@ -939,8 +936,7 @@ mod tests {
                                 .is_none()
                         );
                         let first_hash = certify(1, parent_height, vec![first]);
-                        let (Some(output), _) = worker.build(height, 0, 1 << 20, 100).unwrap()
-                        else {
+                        let Some(output) = worker.build(height, 0, 1 << 20, 100).unwrap() else {
                             panic!(
                                 "newly certified mandatory lane work must rebuild the old Queue-only plan"
                             );
@@ -974,8 +970,7 @@ mod tests {
                             height,
                         )
                         .unwrap();
-                        let (Some(output), _) = worker.build(height, 0, 1 << 20, 100).unwrap()
-                        else {
+                        let Some(output) = worker.build(height, 0, 1 << 20, 100).unwrap() else {
                             panic!(
                                 "growth of the real certified journal must rebuild the old mixed range"
                             );
@@ -996,8 +991,7 @@ mod tests {
                         clock.advance(Duration::from_millis(1));
                         queue_work(chain, 2_001, &queue, &time);
                         assert!(!queue.contains_entrypoint_hash(original_hash));
-                        let (Some(output), _) = worker.build(height, 0, 1 << 20, 100).unwrap()
-                        else {
+                        let Some(output) = worker.build(height, 0, 1 << 20, 100).unwrap() else {
                             panic!(
                                 "current mixed work must preserve the mandatory lane plan and new actual admission"
                             );
@@ -1031,10 +1025,10 @@ mod tests {
             let (queue, _clock, _time) = attach_queue(chain, worker);
             let budget = worker.state.ivm_execution_budget();
             let baseline = budget.reserved_bytes();
-            let (Some(original), attest) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original real signed work must produce nonempty funded custody");
             };
-            assert!(!attest);
+
             let pointer = original.as_slice().as_ptr();
             let retained = budget.reserved_bytes();
             assert!(retained > baseline);
@@ -1043,7 +1037,7 @@ mod tests {
             chain.kura().reset_canonical_query_reads_for_test();
             // A second request for the same actual applied source lends its completed owner.
             // Keeping the first output live also makes a replacement allocation observable.
-            let (Some(retried), false) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(retried) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("the new request must lend the actual completed original");
             };
             assert_eq!(
@@ -1083,7 +1077,7 @@ mod tests {
     fn completed_original_payload_retires_on_actual_queue_mutation_expiry_or_rejection() {
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (queue, clock, time) = attach_queue(chain, worker);
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original")
             };
             let original_hash = {
@@ -1094,7 +1088,7 @@ mod tests {
             };
             let added_hash = queue_work(chain, 2_001, &queue, &time);
             assert_ne!(added_hash, original_hash);
-            let (Some(next), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(next) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("next input")
             };
             assert_ne!(next.as_slice().as_ptr(), original.as_slice().as_ptr());
@@ -1122,11 +1116,11 @@ mod tests {
                 "actual proposal rejection withdraws reuse authority"
             );
             drop(next);
-            let (Some(expiring), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(expiring) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("expiring original")
             };
             clock.advance(queue.tx_time_to_live + Duration::from_secs(1));
-            assert_eq!(worker.build(2, 0, 1 << 20, 100).unwrap(), (None, false));
+            assert_eq!(worker.build(2, 0, 1 << 20, 100).unwrap(), None);
             assert!(
                 worker.completed_payload.is_none(),
                 "no completed image can survive real input expiry"
@@ -1140,21 +1134,21 @@ mod tests {
     fn completed_original_payload_never_crosses_view_limit_budget_or_queue_attachment() {
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (_queue, _clock, _time) = attach_queue(chain, worker);
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original")
             };
-            let (Some(other_view), _) = worker.build(2, 1, 1 << 20, 100).unwrap() else {
+            let Some(other_view) = worker.build(2, 1, 1 << 20, 100).unwrap() else {
                 panic!("view")
             };
             assert_ne!(other_view.as_slice().as_ptr(), original.as_slice().as_ptr());
-            let (Some(other_limit), _) = worker.build(2, 1, (1 << 20) - 1, 100).unwrap() else {
+            let Some(other_limit) = worker.build(2, 1, (1 << 20) - 1, 100).unwrap() else {
                 panic!("limit")
             };
             assert_ne!(
                 other_limit.as_slice().as_ptr(),
                 other_view.as_slice().as_ptr()
             );
-            let (Some(other_budget), _) = worker.build(2, 1, (1 << 20) - 1, 101).unwrap() else {
+            let Some(other_budget) = worker.build(2, 1, (1 << 20) - 1, 101).unwrap() else {
                 panic!("budget")
             };
             assert_ne!(
@@ -1168,7 +1162,7 @@ mod tests {
                 worker.completed_payload.is_none(),
                 "even same-object explicit queue attachment retires original custody"
             );
-            let (Some(reattached), _) = worker.build(2, 1, (1 << 20) - 1, 101).unwrap() else {
+            let Some(reattached) = worker.build(2, 1, (1 << 20) - 1, 101).unwrap() else {
                 panic!("reattached")
             };
             assert_ne!(
@@ -1223,13 +1217,13 @@ mod tests {
                 &selected,
             )
             .unwrap();
-            let attest = 2 == scheduled.epoch.authorization.last_height;
+
             worker.payload_build = Some(GlobalPayloadBuild {
                 scope,
                 job: super::super::super::driver::payload_build::PayloadBuild::new(
                     GlobalPayloadSource {
                         block,
-                        attest,
+
                         pending_inputs: Some(lease),
                     },
                     worker.state.ivm_execution_budget(),
@@ -1243,7 +1237,7 @@ mod tests {
             assert_eq!(queue.queued_len(), 1);
             assert!(queue.contains_entrypoint_hash(hash));
             assert!(queue.contains_pending_hash(hash, worker.state));
-            let (Some(payload), _) = worker.finish_payload_build().unwrap() else {
+            let Some(payload) = worker.finish_payload_build().unwrap() else {
                 panic!("original funded completion");
             };
             assert!(
@@ -1267,7 +1261,7 @@ mod tests {
         super::super::publication_tests::with_worker(|chain, worker, blocks, _events| {
             let (_queue, _clock, _time) = attach_queue(chain, worker);
             let generation = worker.state.state_view_generation();
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original")
             };
             let original_scope = worker.completed_payload.as_ref().unwrap().scope;
@@ -1282,7 +1276,7 @@ mod tests {
             assert_eq!(worker.state.view().height(), 2);
             assert_ne!(worker.state.state_view_generation(), generation);
             assert!(!original_scope.is_current(worker.state, &worker.state.view(), worker.applied));
-            assert_eq!(worker.build(2, 0, 1 << 20, 100).unwrap(), (None, false));
+            assert_eq!(worker.build(2, 0, 1 << 20, 100).unwrap(), None);
             assert!(
                 worker.completed_payload.is_none(),
                 "old parent never returns its retained output"
@@ -1297,7 +1291,7 @@ mod tests {
             let (queue, clock, _time) = attach_queue(chain, worker);
             let budget = worker.state.ivm_execution_budget();
             let baseline = budget.reserved_bytes();
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original")
             };
             drop(original);
@@ -1365,13 +1359,13 @@ mod tests {
                     &selected,
                 )
                 .unwrap();
-                let attest = 2 == scheduled.epoch.authorization.last_height;
+
                 worker.payload_build = Some(GlobalPayloadBuild {
                     scope,
                     job: super::super::super::driver::payload_build::PayloadBuild::new(
                         GlobalPayloadSource {
                             block,
-                            attest,
+
                             pending_inputs: Some(lease),
                         },
                         budget.clone(),
@@ -1387,7 +1381,7 @@ mod tests {
                     let mut pending =
                         std::pin::pin!(release.clone().wait_for_release(&mut registration));
                     assert_eq!(pending.as_mut().poll(context), Poll::Pending);
-                    let (Some(original), _) = worker.finish_payload_build().unwrap() else {
+                    let Some(original) = worker.finish_payload_build().unwrap() else {
                         panic!(
                             "the real original funded builder completes while publication is busy"
                         );
@@ -1500,7 +1494,7 @@ mod tests {
             let budget = state.ivm_execution_budget();
             let mut registration = crate::unit_test_support::release_registration(&budget);
             let baseline = budget.reserved_bytes();
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original")
             };
             let pointer = original.as_slice().as_ptr();
@@ -1539,7 +1533,7 @@ mod tests {
                 Poll::Ready(())
             );
             drop(released);
-            let (Some(retried), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(retried) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("retry")
             };
             assert_eq!(retried.as_slice().as_ptr(), pointer);
@@ -1588,7 +1582,7 @@ mod tests {
             let (queue, _clock, time) = attach_queue(chain, worker);
             let budget = worker.state.ivm_execution_budget();
             let mut registration = crate::unit_test_support::release_registration(&budget);
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original signed input");
             };
             let original_hash = {
@@ -1633,7 +1627,7 @@ mod tests {
             assert_eq!(queue.queued_len(), 1);
             // The execution-budget change withdraws the actual old completed owner.
             // Its original source/view and all Queue guards live inside the refund scope.
-            let (Some(next), _) = worker.build(2, 0, 1 << 20, 101).unwrap() else {
+            let Some(next) = worker.build(2, 0, 1 << 20, 101).unwrap() else {
                 panic!("original source must build under the changed request");
             };
             {
@@ -1653,7 +1647,7 @@ mod tests {
             assert_eq!(pending.as_mut().poll(context), Poll::Ready(()));
             assert_eq!(queue.queued_len(), 2);
             assert!(queue.contains_entrypoint_hash(new_hash));
-            let (Some(after_wake), _) = worker.build(2, 0, 1 << 20, 101).unwrap() else {
+            let Some(after_wake) = worker.build(2, 0, 1 << 20, 101).unwrap() else {
                 panic!("the next request must see actual newly admitted signed work");
             };
             {
@@ -1699,7 +1693,7 @@ mod tests {
         }
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (_queue, _clock, _time) = attach_queue(chain, worker);
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original");
             };
             let path = crate::kura::Kura::canonical_storage_path(&chain.kura().store_root())
@@ -1715,7 +1709,7 @@ mod tests {
             );
             assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
             drop(missing);
-            let (Some(restored), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(restored) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("restored");
             };
             assert_ne!(restored.as_slice().as_ptr(), original.as_slice().as_ptr());
@@ -1729,7 +1723,7 @@ mod tests {
     fn completed_original_payload_refuses_changed_real_parent_frame_without_substitution() {
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (_queue, _clock, _time) = attach_queue(chain, worker);
-            let (Some(original), _) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
+            let Some(original) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("original")
             };
             chain

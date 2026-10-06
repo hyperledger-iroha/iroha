@@ -1408,9 +1408,6 @@ fn build_vk_record(
         ensure_verifier_backend_registry_label_v1(&payload.backend, "verifying key backend")?;
     let backend_tag = vk_backend_tag_from_label(backend)?;
     let max_vk_bytes = match backend_tag {
-        iroha::data_model::zk::BackendTag::Halo2IpaPasta => {
-            iroha_core_zk::HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
-        }
         iroha::data_model::zk::BackendTag::NativePipaRPasta => {
             iroha_core_zk::NATIVE_PIPA_R_VERIFYING_KEY_V1_MAX_BYTES
         }

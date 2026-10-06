@@ -6,7 +6,7 @@ use super::{
     bind_sigma,
     context::{ContextInputs, ContextPlan},
     lineage_digest,
-    proof::omega_instances,
+    proof::{IncomingProofBinding, omega_instances},
 };
 use crate::{
     omega::{OmegaCircuit, OmegaConfig, OmegaPlan, OmegaWitness},
@@ -79,7 +79,7 @@ impl Circuit<Fq> for WCircuit {
         self.inner.synthesize(config, layouter)
     }
 }
-/// A W identity obtained only from W-specific key generation. The continuation
+/// A W identity from W-specific key generation or authenticated artifact import. The continuation
 /// uses this circuit-fixed complete key, never a supplied proof's witness key.
 #[derive(Clone, Debug)]
 pub struct WKey {
@@ -117,6 +117,41 @@ impl WKey {
             key,
         ))
     }
+    /// Import a W key already authenticated by the native artifact owner.
+    ///
+    /// The context, stage and descriptor are installation metadata. They must
+    /// never be selected from a foreign proof. Import does not generate a key,
+    /// infer another profile or admit an internal W as the final Omega key.
+    ///
+    /// # Errors
+    /// Terminal/out-of-order stage, another descriptor, wrong public schema,
+    /// non-k16 parameters or an unsupported PIPA-R verifier profile.
+    pub fn from_artifact(
+        context: &ContextPlan,
+        stage: usize,
+        binding: DescriptorBinding,
+        params: PinnedParams<Ep>,
+        key: VerifyingKey<Ep>,
+    ) -> Result<Self, Error> {
+        let descriptor = binding.descriptor();
+        if stage >= context.stage_count().saturating_sub(1)
+            || descriptor.k != 16
+            || descriptor.instance_lengths != [1, 2, 16]
+            || descriptor.instance_types.as_deref() != Some(&OmegaPlan::instance_types())
+            || key.descriptor_digest() != binding.digest()
+        {
+            return Err(Error::Synthesis);
+        }
+        params.require_k(16).map_err(|_| Error::Synthesis)?;
+        let verifier = VerifierPlan::new(binding, params).map_err(|_| Error::Synthesis)?;
+        Ok(Self {
+            key,
+            verifier,
+            schema: context.schema().to_vec(),
+            stage,
+        })
+    }
+
     /// The fixed internal program, with Omega's three typed public columns.
     pub const fn verifier(&self) -> &VerifierPlan<Ep> {
         &self.verifier
@@ -311,7 +346,7 @@ impl ContinuationCells {
         Ok(words)
     }
 }
-fn bind_statements(
+pub(super) fn bind_statements(
     region: &mut Region<'_, Fp>,
     inputs: &ContextInputs<'_>,
     bindings: &[SigmaBindingCells],
@@ -412,7 +447,7 @@ struct BoundLineage {
 struct BoundIncoming {
     lineage_valid: iroha_plonk_gadgets::Bit<Fp>,
     lineage: BoundLineage,
-    proof: ProofMessageCells,
+    proof: IncomingProofBinding,
     modes: [ModeCells<Fp>; 3],
     pallas_corrections: [NonIdentityPoint<Fp>; 2],
     vesta_correction: [ScalarCells<Ep>; 2],
@@ -431,10 +466,68 @@ pub struct ResumedContextCells {
     successor: [Word<Fp>; 18],
     predecessor: Option<BoundLineage>,
     incoming: Option<BoundIncoming>,
+    receive_results: Option<super::results::ReceiveResultClaims>,
     /// Incoming sigma verdict/modes rebound to the exact authenticated Q data.
     pub sigma: BoundSigmaCells,
 }
 impl ResumedContextCells {
+    /// Select Receive's original incoming claims from the authenticated stage context.
+    ///
+    /// The fixed Proofs owner must precede this terminal stage. The admitted
+    /// prior A keys establish that owner equated this exact opening to the
+    /// actual total verifier output; W authenticates its unchanged context.
+    /// No opening or verdict argument can replace the retained export here.
+    /// Corrected points and modes are the original committed cells, and the
+    /// selected P/opening and V remain separate final fold obligations.
+    /// # Errors
+    /// Wrong stage/schema, absent complete Receive result/export, or layout failure.
+    pub fn select_receive_incoming(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &SplitPlan,
+    ) -> Result<(SelectedPallasCells, IncomingVestaCells), Error> {
+        use super::{IncomingOmegaCells, results::ReceiveResultTag};
+        if !plan.is_terminal() || self.stage != plan.stage || self.schema != plan.context.schema() {
+            return Err(Error::Synthesis);
+        }
+        let result_plan = plan.context.receive_results().ok_or(Error::Synthesis)?;
+        if usize::try_from(result_plan.owner(ReceiveResultTag::Proofs))
+            .map_err(|_| Error::BoundsFailure)?
+            >= self.stage
+        {
+            return Err(Error::Synthesis);
+        }
+        let results = self.receive_results.as_ref().ok_or(Error::Synthesis)?;
+        let expected = self.incoming.as_ref().ok_or(Error::Synthesis)?;
+        GlueChip::assert_equal(region, &expected.lineage.public[17], &self.successor[17])?;
+        let origin = IncomingOmegaCells {
+            carried_key: self.successor[17].clone(),
+            lineage_valid: expected.lineage_valid.clone(),
+            public: expected.lineage.public.clone(),
+            vesta: expected.lineage.vesta.clone(),
+            proof: expected.proof.clone(),
+            valid: results.values(result_plan)?[ReceiveResultTag::Proofs as usize - 1].clone(),
+            pallas: expected.lineage.pallas.clone(),
+            opening: results.opening()?.clone(),
+        };
+        let selected = super::select_incoming(
+            chip,
+            region,
+            &origin,
+            &[expected.modes[0].clone(), expected.modes[1].clone()],
+            &expected.pallas_corrections,
+        )?;
+        Ok((
+            selected,
+            IncomingVestaCells {
+                claim: expected.lineage.vesta.clone(),
+                mode: expected.modes[2].clone(),
+                corrected: expected.vesta_correction.clone(),
+            },
+        ))
+    }
+
     /// W's V accumulator becomes the next A stage's full-k16 part.
     pub const fn vesta_part(&self) -> &VestaClaimCells {
         &self.vesta
@@ -539,19 +632,27 @@ pub fn resume_context(
             pallas: p.pallas.clone(),
             vesta: p.vesta.clone(),
         }),
-        incoming: inputs.incoming.map(|p| BoundIncoming {
-            lineage_valid: p.public.valid().clone(),
-            lineage: BoundLineage {
-                public: p.public.fields().clone(),
-                pallas: p.pallas.clone(),
-                vesta: p.vesta.clone(),
-            },
-            proof: p.proof.clone(),
-            modes: core::array::from_fn(|i| inputs.modes[i].clone()),
-            pallas_corrections: core::array::from_fn(|i| inputs.pallas_corrections[i].clone()),
-            vesta_correction: inputs.vesta_corrections[0].clone(),
-        }),
+        incoming: inputs
+            .incoming
+            .map(|p| {
+                Ok::<_, Error>(BoundIncoming {
+                    lineage_valid: p.public.valid().clone(),
+                    lineage: BoundLineage {
+                        public: p.public.fields().clone(),
+                        pallas: p.pallas.clone(),
+                        vesta: p.vesta.clone(),
+                    },
+                    proof: plan.context.incoming_proof_binding(inputs)?,
+                    modes: core::array::from_fn(|i| inputs.modes[i].clone()),
+                    pallas_corrections: core::array::from_fn(|i| {
+                        inputs.pallas_corrections[i].clone()
+                    }),
+                    vesta_correction: inputs.vesta_corrections[0].clone(),
+                })
+            })
+            .transpose()?,
         sigma,
+        receive_results: inputs.receive_results.cloned(),
     })
 }
 /// Opaque stage result selected only by the immutable schedule.
@@ -685,7 +786,23 @@ pub fn close_stage(
                     GlueChip::assert_equal(region, a, &b)?;
                 }
             }
-            bind_proof(region, &expected.proof, &selected.origin.proof)?;
+            match (&expected.proof, &selected.origin.proof) {
+                (IncomingProofBinding::Messages(a), IncomingProofBinding::Messages(b)) => {
+                    bind_proof(region, a, b)?;
+                }
+                (
+                    IncomingProofBinding::ReceiveActive(a),
+                    IncomingProofBinding::ReceiveActive(b),
+                ) => {
+                    for (a, b) in a.iter().zip(b) {
+                        GlueChip::assert_equal(region, a, b)?;
+                    }
+                }
+                _ => return Err(Error::Synthesis),
+            }
+            if let Some(results) = &resumed.receive_results {
+                bind_claim(region, results.opening()?, &selected.origin.opening)?;
+            }
             for i in 0..2 {
                 bind_mode(region, &expected.modes[i], &selected.modes[i])?;
                 GlueChip::assert_equal(
@@ -779,7 +896,7 @@ fn bind_predecessor(
     Ok(())
 }
 
-fn bind_claim(
+pub(super) fn bind_claim(
     region: &mut Region<'_, Fp>,
     a: &FoldInputCells<Ep>,
     b: &FoldInputCells<Ep>,
@@ -794,7 +911,7 @@ fn bind_claim(
     Ok(())
 }
 
-fn bind_mode(
+pub(super) fn bind_mode(
     region: &mut Region<'_, Fp>,
     a: &ModeCells<Fp>,
     b: &ModeCells<Fp>,
@@ -808,7 +925,7 @@ fn bind_mode(
     }
     Ok(())
 }
-fn bind_proof(
+pub(super) fn bind_proof(
     region: &mut Region<'_, Fp>,
     a: &ProofMessageCells,
     b: &ProofMessageCells,

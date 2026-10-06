@@ -6,6 +6,7 @@
 
 use super::*;
 use iroha_plonk::cs::{Advice, Column, Expression, Fixed, Instance, Rotation};
+use iroha_plonk_gadgets::range::secondary::{SecondaryPlan, SecondaryRangeConfig};
 use iroha_plonk_gadgets::{RowCursor, cells::SharedRows, phase::PhaseColumns};
 
 /// Fixed half-open phase intervals: Poseidon `[0,sponge)`, arithmetic
@@ -106,9 +107,40 @@ impl<C: PastaCurve> VerifierConfig<C> {
         meta: &mut ConstraintSystem<C::Base>,
         spans: CompactSpans,
     ) -> (Self, CompactPublicConfig) {
+        Self::configure_compact_on(meta, spans, false, None)
+    }
+
+    /// Configures the guarded secondary stream on the same shared ports.
+    /// The fixed plan must originate from a complete structural synthesis;
+    /// runtime reservations and exact event replay independently reject stale
+    /// or conflicting metadata. This is an explicit candidate profile.
+    ///
+    /// # Errors
+    /// Shared spans exceed the plan domain or lack the public-prefix gap.
+    pub fn configure_compact_secondary(
+        meta: &mut ConstraintSystem<C::Base>,
+        spans: CompactSpans,
+        plan: SecondaryPlan,
+    ) -> Result<(Self, CompactPublicConfig), Error> {
+        if spans.curve > plan.capacity() || spans.sponge <= 37 {
+            return Err(Error::Synthesis);
+        }
+        Ok(Self::configure_compact_on(meta, spans, true, Some(plan)))
+    }
+
+    fn configure_compact_on(
+        meta: &mut ConstraintSystem<C::Base>,
+        spans: CompactSpans,
+        secondary_component: bool,
+        plan: Option<SecondaryPlan>,
+    ) -> (Self, CompactPublicConfig) {
         meta.set_minimum_degree(9);
         let advice: [Column<Advice>; 11] = core::array::from_fn(|_| meta.advice_column());
-        let phases = PhaseColumns::allocate(meta);
+        let phases = if secondary_component {
+            PhaseColumns::allocate_with_idle_ecc(meta)
+        } else {
+            PhaseColumns::allocate(meta)
+        };
         let glue = GlueConfig::configure_phased_without_constants(
             meta,
             [advice[0], advice[1], advice[2], advice[3]],
@@ -122,6 +154,18 @@ impl<C: PastaCurve> VerifierConfig<C> {
             phases,
         );
         let range = RunningSumConfig::configure_tagged(meta, advice[10]);
+        let secondary = if secondary_component {
+            let config = SecondaryRangeConfig::configure(
+                meta,
+                advice[..10].try_into().expect("ten shared ports"),
+                phases,
+                range,
+            )
+            .expect("matching compact tagged range and phase ports");
+            plan.map(|plan| Box::new((config, plan)))
+        } else {
+            None
+        };
         let ecc = EccConfig::configure_phased(meta, core::array::from_fn(|i| advice[i]), phases);
         let duplex = DuplexConfig::configure_phased(
             meta,
@@ -160,7 +204,11 @@ impl<C: PastaCurve> VerifierConfig<C> {
             Self {
                 glue,
                 range,
-                ff: ArithmeticLayout::Serialized { spans, kernel },
+                ff: ArithmeticLayout::Serialized {
+                    spans,
+                    kernel,
+                    secondary,
+                },
                 ecc,
                 ecc_start_row: spans.arithmetic,
                 duplex,
@@ -181,22 +229,32 @@ impl<C: PastaCurve> VerifierChip<C> {
         duplex: DuplexConfig<C::Base>,
         spans: CompactSpans,
         kernel: &RotatedFfConfig,
+        secondary: Option<(SecondaryRangeConfig, SecondaryPlan)>,
     ) -> Self {
         let arithmetic_rows = SharedRows::new(RowCursor::bounded(spans.sponge, spans.arithmetic));
         let range_rows = SharedRows::new(RowCursor::starting_at(16));
         let glue = GlueChip::with_shared_cursor(glue, &arithmetic_rows)
             .with_shared_constant_cache()
             .expect("bounded compact arithmetic lane");
-        let range = RunningSumChip::with_shared_cursor(range, &range_rows);
+        let mut range = RunningSumChip::with_shared_cursor(range, &range_rows);
+        let has_secondary = secondary.is_some();
+        if let Some((config, plan)) = secondary {
+            range = range
+                .with_secondary_plan(config, plan)
+                .expect("matching fixed range plan");
+        }
         let ff = FfChip::serialized(glue.clone(), range.clone(), &[Arithmetic::<C>::modulus()])
             .with_rotated_kernel(kernel)
             .expect("matching fixed modulus and ports");
         let ecc = EccChip::with_cursor(ecc, RowCursor::bounded(spans.arithmetic, spans.curve))
             .with_constant_source(glue.clone())
             .expect("same compact ports and bounded cursor");
-        let duplex = DuplexChip::bounded(duplex, spans.sponge)
+        let mut duplex = DuplexChip::bounded(duplex, spans.sponge)
             .with_constant_source(glue.clone())
             .expect("same compact copy port and bounded cursor");
+        if has_secondary {
+            duplex.start_at(37).expect("fixed public prefix");
+        }
         Self {
             glue,
             range,
@@ -206,6 +264,14 @@ impl<C: PastaCurve> VerifierChip<C> {
             scalar_splits: std::collections::BTreeMap::new(),
         }
     }
+    /// Finishes the shared secondary range program, if selected.
+    ///
+    /// # Errors
+    /// Stale event metadata, cell collisions, missing requests or duplicate finish.
+    pub fn finish_compact(&self, region: &mut Region<'_, C::Base>) -> Result<(), Error> {
+        self.range.finish_secondary(region)
+    }
+
     /// Reports actual structural row use after a complete transcript.
     ///
     /// # Errors
@@ -243,21 +309,24 @@ mod tests {
         Base,
         ExistingPort,
         ExistingPortDegreeTen,
+        SecondaryComponent,
         NewAdvice,
         NewState,
     }
     fn protocol<C: PastaCurve>(curve: CurveV1, trade: Trade) -> Result<Protocol, DescriptorError> {
         let mut meta = ConstraintSystem::<C::Base>::default();
-        let (config, _) = VerifierConfig::<C>::configure_compact(
+        let (config, _) = VerifierConfig::<C>::configure_compact_on(
             &mut meta,
             CompactSpans {
                 sponge: 16384,
                 arithmetic: 32768,
                 curve: 65530,
             },
+            matches!(trade, Trade::SecondaryComponent),
+            None,
         );
         match trade {
-            Trade::Base => {}
+            Trade::Base | Trade::SecondaryComponent => {}
             Trade::ExistingPort | Trade::ExistingPortDegreeTen => {
                 meta.enable_equality(config.ecc.advice()[5]);
                 if matches!(trade, Trade::ExistingPortDegreeTen) {
@@ -326,6 +395,7 @@ mod tests {
     fn compact_range_column_and_degree_trade_inventory() {
         for (trade, expected) in [
             (Trade::ExistingPort, 4800),
+            (Trade::SecondaryComponent, 4800),
             (Trade::NewAdvice, 4832),
             (Trade::NewState, 4896),
         ] {

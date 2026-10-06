@@ -105,6 +105,14 @@ pub enum OperationTask {
     ReceiveOwnProof = 17,
     /// OQ-3 consumed map, immutable credit record and adjusted burn accounting.
     ReceiveEffects = 18,
+    /// Unload's exact redeem-map insertion and value conservation.
+    UnloadRecovery = 19,
+    /// Retiring's lifecycle transition and adjusted-field synchronization.
+    RetiringState = 20,
+    /// Unload/Retiring own receipt, current credential and Enrollment certificate.
+    UnloadAuthorization = 21,
+    /// Unload/Retiring exact predecessor Omega and own sigma receipt binding.
+    UnloadProof = 22,
 }
 impl OperationTask {
     /// Stable context-schema code, not an operation's wire tag.
@@ -138,6 +146,16 @@ impl OperationTask {
                 Self::ReceiveAuthorization,
                 Self::ReceiveOwnProof,
                 Self::ReceiveEffects,
+            ]),
+            Variant::Unload => Some(&[
+                Self::UnloadRecovery,
+                Self::UnloadAuthorization,
+                Self::UnloadProof,
+            ]),
+            Variant::Retiring => Some(&[
+                Self::RetiringState,
+                Self::UnloadAuthorization,
+                Self::UnloadProof,
             ]),
             _ => None,
         }

@@ -4304,10 +4304,10 @@ test("buildCancelTwitterEscrowInstruction wraps keyed hash", () => {
 test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   const instruction = buildRegisterZkAssetInstruction({
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
+    unshieldVerifyingKey: { backend: "pipa-r/pasta", name: "vk_unshield" },
   });
   const payload = encodeAndDecode(instruction).zk.RegisterZkAsset;
-  assert.deepEqual(payload.vk_unshield, { backend: "halo2/ipa", name: "vk_unshield" });
+  assert.deepEqual(payload.vk_unshield, { backend: "pipa-r/pasta", name: "vk_unshield" });
   assert.equal(Object.hasOwn(payload, "vk_shield"), false);
 });
 
@@ -4317,8 +4317,8 @@ test("buildRegisterZkAssetInstruction rejects unknown retired fields", () => {
     assert.throws(
       () => buildRegisterZkAssetInstruction({
         ...base,
-        unshieldVerifyingKey: "halo2/ipa:vk_unshield",
-        [field]: "halo2/ipa:vk_shield",
+        unshieldVerifyingKey: "pipa-r/pasta:vk_unshield",
+        [field]: "pipa-r/pasta:vk_shield",
       }),
       /is not supported/,
       `${field} must be rejected even when an unshield key is provided`,
@@ -4400,8 +4400,8 @@ test("buildCreateElectionInstruction normalizes verifying keys", () => {
     eligibleRoot: Buffer.alloc(32, 0x09),
     startTs: 100,
     endTs: 200,
-    ballotVerifyingKey: "halo2/ipa:vk_ballot",
-    tallyVerifyingKey: { backend: "halo2/ipa", name: "vk_tally" },
+    ballotVerifyingKey: "pipa-r/pasta:vk_ballot",
+    tallyVerifyingKey: { backend: "pipa-r/pasta", name: "vk_tally" },
     domainTag: "zk",
   });
   const payload = encodeAndDecode(instruction).zk.CreateElection;
@@ -4417,8 +4417,8 @@ test("buildCreateElectionInstruction enforces the 2–64 option boundary", () =>
     eligibleRoot: Buffer.alloc(32, 0x09),
     startTs: 100,
     endTs: 200,
-    ballotVerifyingKey: "halo2/ipa:vk_ballot",
-    tallyVerifyingKey: "halo2/ipa:vk_tally",
+    ballotVerifyingKey: "pipa-r/pasta:vk_ballot",
+    tallyVerifyingKey: "pipa-r/pasta:vk_tally",
     domainTag: "zk",
   });
   for (const options of [2, 64]) {
@@ -4441,8 +4441,8 @@ test("buildCreateElectionInstruction accepts byte-array eligibleRoot", () => {
     eligibleRoot: Array.from(Buffer.alloc(32, 0x44)),
     startTs: 100,
     endTs: 200,
-    ballotVerifyingKey: "halo2/ipa:vk_ballot",
-    tallyVerifyingKey: "halo2/ipa:vk_tally",
+    ballotVerifyingKey: "pipa-r/pasta:vk_ballot",
+    tallyVerifyingKey: "pipa-r/pasta:vk_tally",
     domainTag: "zk",
   });
   const payload = encodeAndDecode(instruction).zk.CreateElection;
@@ -4461,8 +4461,8 @@ test("buildCreateElectionInstruction rejects coercible non-byte eligibleRoot ent
           eligibleRoot,
           startTs: 100,
           endTs: 200,
-          ballotVerifyingKey: "halo2/ipa:vk_ballot",
-          tallyVerifyingKey: "halo2/ipa:vk_tally",
+          ballotVerifyingKey: "pipa-r/pasta:vk_ballot",
+          tallyVerifyingKey: "pipa-r/pasta:vk_tally",
           domainTag: "zk",
         }),
       (error) => {
@@ -4484,8 +4484,8 @@ test("buildCreateElectionInstruction rejects unsafe timestamps", () => {
         eligibleRoot: Buffer.alloc(32, 0x09),
         startTs: tooLarge,
         endTs: 100,
-        ballotVerifyingKey: "halo2/ipa:vk_ballot",
-        tallyVerifyingKey: "halo2/ipa:vk_tally",
+        ballotVerifyingKey: "pipa-r/pasta:vk_ballot",
+        tallyVerifyingKey: "pipa-r/pasta:vk_tally",
         domainTag: "zk",
       }),
     (error) => {
@@ -4501,9 +4501,9 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
     electionId: "ref-1",
     ciphertext: Buffer.from("encrypted"),
     ballotProof: {
-      backend: "halo2/ipa",
+      backend: "pipa-r/pasta",
       proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
+      verifyingKeyRef: { backend: "pipa-r/pasta", name: "vk_ballot" },
       verifyingKeyCommitment: Buffer.alloc(32, 0x44),
     },
     nullifier: Buffer.alloc(32, 0x33),
@@ -4511,7 +4511,7 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
   const payload = encodeAndDecode(instruction).zk.SubmitBallot;
   const ciphertext = Buffer.from(payload.ciphertext);
   assert.equal(ciphertext.toString("base64"), Buffer.from("encrypted").toString("base64"));
-  assert.equal(payload.ballot_proof.backend, "halo2/ipa");
+  assert.equal(payload.ballot_proof.backend, "pipa-r/pasta");
 });
 
 test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
@@ -4522,9 +4522,9 @@ test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
         electionId: "ref-1",
         ciphertext: Buffer.from("encrypted"),
         ballotProof: {
-          backend: "halo2/ipa",
+          backend: "pipa-r/pasta",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
+          verifyingKeyRef: { backend: "pipa-r/pasta", name: "vk_ballot" },
         },
         nullifier: invalidNullifier,
       }),
@@ -4544,9 +4544,9 @@ test("buildSubmitBallotInstruction rejects coercible non-byte ciphertext entries
           electionId: "ref-1",
           ciphertext: [entry],
           ballotProof: {
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             proof: Buffer.from("proof"),
-            verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
+            verifyingKeyRef: { backend: "pipa-r/pasta", name: "vk_ballot" },
           },
           nullifier: Buffer.alloc(32, 0x33),
         }),
@@ -4566,9 +4566,9 @@ test("buildSubmitBallotInstruction rejects empty ciphertext", () => {
         electionId: "ref-1",
         ciphertext: Buffer.alloc(0),
         ballotProof: {
-          backend: "halo2/ipa",
+          backend: "pipa-r/pasta",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
+          verifyingKeyRef: { backend: "pipa-r/pasta", name: "vk_ballot" },
         },
         nullifier: Buffer.alloc(32, 0x33),
       }),
@@ -4585,9 +4585,9 @@ test("buildFinalizeElectionInstruction enforces the 2–64 tally boundary", () =
     electionId: "election-boundary",
     tally,
     tallyProof: {
-      backend: "halo2/ipa",
+      backend: "pipa-r/pasta",
       proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_tally" },
+      verifyingKeyRef: { backend: "pipa-r/pasta", name: "vk_tally" },
     },
   });
   for (const tally of [[1, 2], new Array(64).fill(0)]) {
@@ -4607,9 +4607,9 @@ test("buildFinalizeElectionInstruction serializes tally entries", () => {
     electionId: "ref-1",
     tally: [1, "2"],
     tallyProof: {
-      backend: "halo2/ipa",
+      backend: "pipa-r/pasta",
       proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_tally" },
+      verifyingKeyRef: { backend: "pipa-r/pasta", name: "vk_tally" },
       verifyingKeyCommitment: Buffer.alloc(32, 0x55),
     },
   });

@@ -33,8 +33,7 @@ Purpose
     These independent invocations retain the configured per-step deadlines, and any
     step error prevents the aggregate result from qualifying.
 
-    The table MUTATIONS mirrors §13.4 (MS*/ML* rows, the MA* rows of the commit-attestation
-    extension, §3.7, and the MX* rows of the simulator's toy AMX application, §11) plus ME*
+    The table MUTATIONS mirrors §13.4 (MS*/ML* rows and the MX* rows of the simulator's toy AMX application, §11) plus ME*
     (the as-built rules E1-E7 of Appendix E, with their regression tests) and MR-* (revision-4
     rules with det_r4 tests).
 
@@ -123,7 +122,7 @@ SCENARIOS = {
     "f34": "sim::tests::f34_late_entrants",
     "f35": "sim::tests::f35_local_queue_asymmetry",
     "f36": "sim::tests::f36_late_leaders",
-    "f37": "sim::tests::f37_commit_attestation",
+    "exact-quorum": "sim::tests::exact_quorum_under_genuine_superset_attack",
     # F9 variant for ML5a: a vote blackout ending at GST (sim/mutation_group_2.rs).
     "f09r": "sim::mutation_group_2::f09r_vote_blackout_until_gst",
     # F32 with up to f proposers of the needed blocks kept down after the restart (ML10).
@@ -253,7 +252,7 @@ MUTATIONS = [
       ["det_s37_conflicting_commitqc_halts"], []),
     m("MS38", "on_vote: pooled without the signature check",
       ["det_s38_forged_votes_never_pooled"], ["f18"]),
-    m("MS39", "verify_qc_signatures accepts more than q genuine signers",
+    m("MS39", "verify_qc accepts more than q genuine signers",
       ["det_s39_qc_exact_signer_count"], []),
     m("MS40", "verify_tc accepts more than q genuine timeout entries",
       ["det_s40_tc_exact_signer_count"], []),
@@ -322,37 +321,11 @@ MUTATIONS = [
       ["det_s42_original_publication_recovery_halts"], []),
     m("MS43", "signing domains omit epoch identity and complete context", ["det_s43_every_signature_binds_epoch_and_complete_context"], []),
     m("MS44", "ordinary lag-two scheduling installs a future epoch", ["det_s44_lag_two_cannot_install_next_epoch_early"], []),
-    m("MS45", "request_authoring imposes a mandatory epoch-boundary attestation flag",
-      ["det_s45_unflagged_boundary_commits_without_attestation",
-       "det_s45_boundary_proposal_carries_only_the_builders_flag"], []),
     m("MS46", "header signatures omit application control", ["det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature"], []),
-    m("MS47", "real work invents an absent authenticated control response", ["det_s47_nonempty_work_waits_for_independent_control_and_preserves_attestation"], []),
+    m("MS47", "real work invents an absent authenticated control response", ["det_s47_nonempty_work_waits_for_independent_control_and_preserves_original_payload"], []),
     m("MS48", "control response accepts another exact source", ["det_s48_control_response_requires_exact_request_epoch_view_and_parent_source"], []),
-    # ---- commit-attestation rules (§3.7, SR39-SR42)
-    m("MA1", "on_vote (attested): a flagged Commit vote is pooled without a verifying attestation",
-      ["det_a2_unattested_commit_votes_not_counted"], ["f37"]),
-    m("MA2", "verify_qc: the attestation check of a flagged CommitQC skipped",
-      ["det_a4_commitqc_attestations_checked"], ["f37"]),
-    m("MA3", "att_preimage omits R", ["det_a3_attestation_binds_result"], []),
-    m("MA4", "att_preimage omits h", ["golden_attestation_preimage"], []),
-    m("MA5", "try_commit: a node without authority Commit-votes without an attestation",
-      ["det_a5_no_authority_abstains_from_commit_only"], ["f37"]),
-    m("MA6", "vote_preimage omits the flag", ["det_a6_flag_is_signed"], ["f37"]),
-    m("MA7", "propose_fresh: the builder's flag is dropped",
-      ["det_a1_flagged_block_commits_with_attestations"], ["f37"]),
-    m("MA8", "on_proposal: zero-payload signed-defect rejection omitted",
-      ["det_a7_empty_proposals_are_rejected_at_every_view"], []),
-    m("MA9", "restore_round: the recorded Prepare is rebuilt unflagged",
-      ["det_a8_restart_resends_identical_attested_votes"], []),
-    m("MA10", "try_commit: an attestation the node's own verifier rejects is used anyway",
-      ["det_a5_no_authority_abstains_from_commit_only"], ["f37"]),
-    m("MA11", "verify_attestations: a flagged CommitQC with more than q signers accepted",
-      ["det_a4_flagged_commitqc_has_exactly_q_signers", "det_a4_commitqc_attestations_checked"],
-      ["f37"]),
-    m("MA12", "on_outcome: no try_commit after the lock's block executes (Pending attestor)",
-      ["det_a9_pending_attestor_commits_after_execution"], []),
-    m("MA13", "form_qc accepts distinct shared result witnesses",
-      ["form_qc_carries_attestations"], []),
+    m("MS51", "on_proposal: zero-payload signed-defect rejection omitted",
+      ["empty_proposals_are_rejected_at_every_view"], []),
     # ---- as-built rules of Appendix E (E1-E7) and their regression tests
     m("ME1", "on_status: rate-limited Status drops its fresh CommitQC (E1)",
       ["rate_limited_status_still_delivers_a_fresh_commit_qc"], ["f03"]),
@@ -455,8 +428,6 @@ CORE_MUTATIONS = [
        "sumeragi::evidence::codec_tests::persisted_root_decode_refusal_retains_original_validation_cut_for_retry"]),
     m("HC8", "executor: classify local payload decode refusal as cached invalid data",
       ["sumeragi::executor::publication_tests::payload_decode_refusal_retains_available_owner_without_negative_cache"]),
-    m("HC9", "evidence: retain native result witnesses without original-pool admission",
-      ["sumeragi::evidence::admission::witness_tests::retained_native_evidence_witnesses_belong_to_original_preparation_pool"]),
     m("HC10", "history: skip original query scratch admission before signed RS16 reconstruction",
       ["sumeragi::certified_chain::tests::state_certificate::state_certificate_signed_availability_scratch_uses_original_query_allowance"]),
     m("HC11", "history: use a warm decoded body instead of rereading the pinned durable certificate",

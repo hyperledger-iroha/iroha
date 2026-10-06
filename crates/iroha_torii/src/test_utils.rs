@@ -974,7 +974,14 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         musubi_publication: A::MusubiPublication::default(),
-        kagemusha_load_authorizer: A::KagemushaLoadAuthorizer::default(),
+        // Torii configuration DATA never starts the mandatory daemon publisher. Empty
+        // original custody here is unadmitted and cannot pass its startup validation.
+        kagemusha_load_authorizer: A::KagemushaLoadAuthorizer::new(
+            A::KagemushaLoadAuthorizerCustody {
+                keyring: Vec::new().into(),
+                submitter: checked_random_keypair("unadmitted publisher configuration fixture"),
+            },
+        ),
         kura: A::Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),
@@ -1205,15 +1212,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         ),
         zk: A::Zk {
             pipa_r: iroha_config::parameters::actual::PipaR::default(),
-            halo2: A::Halo2 {
-                enabled: false,
-                curve: A::ZkCurve::Pallas,
-                backend: A::Halo2Backend::Ipa,
-                max_k: 16,
-                verifier_budget_ms: 1000,
-                verifier_max_batch: 8,
-                ..A::Halo2::default()
-            },
+            trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+        ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+            max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
             fastpq: A::Fastpq {
                 execution_mode: A::FastpqExecutionMode::Cpu,
                 poseidon_mode: A::FastpqPoseidonMode::Cpu,

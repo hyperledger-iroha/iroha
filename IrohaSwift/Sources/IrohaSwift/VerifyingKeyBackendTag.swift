@@ -6,16 +6,13 @@ import Foundation
 /// Privacy protocols and verifier profiles are deliberately represented by
 /// separate catalog labels and never become wire-enum variants.
 public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
-    case halo2IpaPasta = 0
+    case nativePipaRPasta = 0
     case stark = 1
-    case nativePipaRPasta = 2
 
     public var noritoDiscriminant: UInt32 { rawValue }
 
     public var canonicalLabel: String {
         switch self {
-        case .halo2IpaPasta:
-            return "halo2-ipa-pasta"
         case .stark:
             return "stark"
         case .nativePipaRPasta:
@@ -28,8 +25,6 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
     /// No whitespace, case, punctuation, or historical aliases are accepted.
     public init?(canonicalLabel: String) {
         switch canonicalLabel {
-        case "halo2-ipa-pasta":
-            self = .halo2IpaPasta
         case "stark":
             self = .stark
         case "native-pipa-r-pasta":
@@ -54,16 +49,12 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         {
             return false
         }
-        return backend == "halo2/ipa"
-            || starkFriProductionBackends.contains(backend)
+        return starkFriProductionBackends.contains(backend)
             || productionNativePipaRPastaBackends.contains(backend)
     }
 
     /// Resolve an exact registry profile to its canonical wire engine.
     public static func registryTag(_ label: String) -> Self? {
-        if label == "halo2/ipa" {
-            return .halo2IpaPasta
-        }
         if starkFriProductionBackends.contains(label) { return .stark }
         if productionNativePipaRPastaBackends.contains(label) { return .nativePipaRPasta }
         return nil
@@ -239,7 +230,6 @@ public enum VerifierBackendCatalogTag: Sendable, Equatable {
     }
 
     private static let productionLabels: Set<String> = [
-        "halo2/ipa",
         "pipa-r/pasta",
         "pipa-r/pasta/kaigi-authorization-v1",
         "pipa-r/pasta/kaigi-usage-v1",

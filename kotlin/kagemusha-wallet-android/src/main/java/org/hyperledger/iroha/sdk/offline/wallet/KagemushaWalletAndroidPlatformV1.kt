@@ -27,7 +27,7 @@ import java.io.IOException
  * payment key through this module. Every custody file, marker and decision stays in Rust.
  *
  * [create] refuses (`IllegalStateException`) unless all of these hold:
- * - API level 31 or higher: only keystore2 `getKey` tells "no key" apart from an error;
+ * - API level 26 or higher; API 26–30 initial generation requires Native's one-shot fresh grant;
  * - `android:allowBackup="false"` and no `android:backupAgent` in the merged host manifest;
  * - both backup-rule resources of this library, as resolved in the host app, exclude every
  *   domain for cloud backup, device transfer and legacy full backup (a host resource of the same
@@ -72,7 +72,7 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
     private fun custodyRoot(): KagemushaWalletAndroidCustodyRootV1 = adapter.custodyRoot()
 
     // One typed JNI handoff keeps result decoding independent of Kotlin sealed-class names.
-    // It is private: only Rust's role-checked signer can request operation2.
+    // It is private: Rust owns signing (2) and consumes its fresh-enrollment grant before (11).
     @Suppress("unused")
     private fun nativeCall(operation: Int, slot: ByteArray, input: ByteArray, auxiliary: Int): KagemushaWalletNativeReplyV1 =
         when (operation) {
@@ -100,6 +100,13 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
                 is KagemushaWalletAndroidCustodyRootV1.Present -> KagemushaWalletNativeReplyV1(0, bytes = result.path.toByteArray(Charsets.UTF_8))
                 is KagemushaWalletAndroidCustodyRootV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
             }
+            10 -> storageState()?.let { KagemushaWalletNativeReplyV1.unavailable(it) }
+                ?: KagemushaWalletNativeReplyV1(0, reason = 0, code = adapter.keyGenerationMode())
+            11 -> when (val result = adapter.keyGenerateFreshFromNative(slot, input, auxiliary)) {
+                is KagemushaWalletAndroidKeyGenerationV1.Generated -> KagemushaWalletNativeReplyV1(0, bytes = result.publicKeySec1())
+                KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent -> KagemushaWalletNativeReplyV1(3)
+                is KagemushaWalletAndroidKeyGenerationV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+            }
             else -> KagemushaWalletNativeReplyV1(2)
         }
 
@@ -108,7 +115,7 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
          * Create the handle over the application's credential-encrypted context and
          * AndroidKeyStore.
          *
-         * @throws IllegalStateException when the device is below API 31, the application allows
+         * @throws IllegalStateException when the device is below API 26, the application allows
          * backup, declares a backup agent or carries backup rules that are not exclude-only, or
          * [context] is a device-protected storage context.
          */
@@ -135,7 +142,7 @@ internal class KagemushaWalletAndroidPlatformAdapterV1(
 
     init {
         check(environment.apiLevel >= KAGEMUSHA_WALLET_ANDROID_MIN_API_V1) {
-            "KAGEMUSHA wallet custody requires API 31 (keystore2); keystore1 masks errors as absent keys"
+            "KAGEMUSHA wallet custody requires API 26 or later"
         }
         kagemushaWalletAndroidCustodyRefusalV1(environment)?.let { throw IllegalStateException(it) }
         check(!environment.isDeviceProtectedStorage()) {
@@ -154,6 +161,16 @@ internal class KagemushaWalletAndroidPlatformAdapterV1(
     fun keyGenerate(slot: ByteArray, challengeDigest: ByteArray, profileTag: Int): KagemushaWalletAndroidKeyGenerationV1 {
         val profile = requireNotNull(KagemushaWalletAndroidKeyProfileV1.fromTag(profileTag)) { "unknown key profile tag" }
         return paymentKey.generate(slot, challengeDigest, profile)
+    }
+
+    /** Actual JNI generation mode: 1 needs Native fresh provenance; 0 has definitive absence. */
+    fun keyGenerationMode(): Int = if (environment.apiLevel < KAGEMUSHA_WALLET_ANDROID_KEYSTORE2_API_V1) 1 else 0
+
+    /** Only nativeCall operation 11 reaches this after consuming Native's bound fresh grant. */
+    fun keyGenerateFreshFromNative(slot: ByteArray, challengeDigest: ByteArray, profileTag: Int): KagemushaWalletAndroidKeyGenerationV1 {
+        val profile = requireNotNull(KagemushaWalletAndroidKeyProfileV1.fromTag(profileTag)) { "unknown key profile tag" }
+        storageState()?.let { return KagemushaWalletAndroidKeyGenerationV1.Unavailable(it) }
+        return paymentKey.generateFreshFromNative(slot, challengeDigest, profile)
     }
 
     /**

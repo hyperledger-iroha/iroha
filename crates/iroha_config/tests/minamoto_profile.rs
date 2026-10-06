@@ -1,9 +1,16 @@
 //! End-to-end validation for the checked-in Minamoto validator profile.
 
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use std::{path::Path, str::FromStr};
 
-use iroha_config::parameters::actual::{self, ToriiMcpProfile};
-use iroha_config_base::toml::TomlSource;
+use iroha_config::parameters::{
+    actual::{self, ToriiMcpProfile},
+    user::Root as UserConfig,
+};
+use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use toml::Value;
 
 fn load_minamoto_profile() -> actual::Root {
@@ -14,6 +21,20 @@ fn load_minamoto_profile() -> actual::Root {
         .join("configs/soranexus/nexus/config.toml");
     let source = std::fs::read_to_string(&path).expect("read Minamoto validator profile");
     let mut table = toml::Table::from_str(&source).expect("parse Minamoto validator profile");
+
+    let publisher = table
+        .get("kagemusha_load_authorizer")
+        .and_then(Value::as_table)
+        .expect("Minamoto profile must declare required publisher custody references");
+    for reference in ["keyring_file", "submitter_key_file"] {
+        assert!(
+            publisher
+                .get(reference)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty()),
+            "Minamoto profile must declare nonempty kagemusha_load_authorizer.{reference}"
+        );
+    }
 
     table
         .remove("private_key_file")
@@ -74,8 +95,15 @@ fn load_minamoto_profile() -> actual::Root {
         ),
     );
 
-    actual::Root::from_toml_source(TomlSource::inline(table))
-        .unwrap_or_else(|error| panic!("Minamoto validator profile must fully parse: {error:?}"))
+    with_fixture_refs(
+        ConfigReader::new()
+            .without_env()
+            .with_toml_source(TomlSource::inline(table)),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("Minamoto validator profile must decode")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .unwrap_or_else(|error| panic!("Minamoto validator profile must fully parse: {error:?}"))
 }
 
 #[test]

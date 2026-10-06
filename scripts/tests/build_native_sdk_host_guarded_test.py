@@ -76,3 +76,88 @@ def test_non_macos_is_refused_before_creating_output(monkeypatch, tmp_path):
     with pytest.raises(emitter.unit.Refused, match="macOS"):
         emitter.host_build(tmp_path, output, tmp_path / "target", 2)
     assert not output.exists()
+
+
+def test_warm_lane_reuse_retains_existing_artifacts_and_is_exclusive(tmp_path):
+    lane = tmp_path / "stable-lane"
+    lane.mkdir()
+    artifact = lane / "retained-original"
+    artifact.write_bytes(b"warm compiler output")
+    identity = emitter.file_identity(artifact)
+    with emitter.warm_target_custody(lane):
+        with pytest.raises(emitter.unit.Refused, match="already in use"):
+            with emitter.warm_target_custody(lane):
+                raise AssertionError("concurrent owner admitted")
+    with emitter.warm_target_custody(lane):
+        assert emitter.file_identity(artifact) == identity
+        assert artifact.read_bytes() == b"warm compiler output"
+
+
+def test_warm_lane_lock_alias_and_replacement_are_refused(tmp_path):
+    lane = tmp_path / "stable-lane"
+    lane.mkdir()
+    original = tmp_path / "original"
+    original.write_bytes(b"original")
+    lock = lane / ".guarded-host-sdk.lock"
+    lock.symlink_to(original)
+    with pytest.raises(emitter.unit.Refused, match="cannot open original"):
+        with emitter.warm_target_custody(lane):
+            raise AssertionError("alias admitted")
+    lock.unlink()
+    with pytest.raises(emitter.unit.Refused, match="changed during"):
+        with emitter.warm_target_custody(lane):
+            lock.unlink()
+            lock.write_bytes(b"substitute")
+    assert original.read_bytes() == b"original"
+
+
+def test_default_build_environment_uses_native_jobserver(monkeypatch, tmp_path):
+    for key in list(emitter.os.environ):
+        if key.startswith(("CARGO_", "RUST", "CC", "CXX", "CPP", "LD", "AR", "RANLIB", "HOST_CC", "HOST_CXX", "TARGET_CC", "TARGET_CXX")):
+            monkeypatch.delenv(key)
+    environment = emitter.build_environment(tmp_path / "rustc", tmp_path / "target", None)
+    assert "CARGO_BUILD_JOBS" not in environment
+    assert emitter.build_environment(tmp_path / "rustc", tmp_path / "target", 6)["CARGO_BUILD_JOBS"] == "6"
+    monkeypatch.setenv("CARGO_BUILD_JOBS", "1")
+    with pytest.raises(emitter.unit.Refused, match="unreviewed inherited"):
+        emitter.build_environment(tmp_path / "rustc", tmp_path / "target", None)
+
+
+def test_lock_replacement_before_admission_never_reaches_admit(monkeypatch, tmp_path):
+    lane = tmp_path / "stable-lane"
+    calls = []
+    monkeypatch.setattr(emitter.unit, "admit", lambda *args: calls.append(args))
+    with pytest.raises(emitter.unit.Refused, match="changed during"):
+        with emitter.warm_target_custody(lane) as check:
+            lock = lane / ".guarded-host-sdk.lock"
+            lock.unlink()
+            lock.write_bytes(b"replacement")
+            emitter.admit_under_custody(tmp_path, {}, check)
+    assert calls == []
+    assert not (tmp_path / "pins.json").exists()
+
+
+def test_lock_replacement_during_admission_prevents_pins_publication(monkeypatch, tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "target").mkdir()
+    lane = root / "target" / "stable-lane"
+    output = tmp_path / "evidence"
+    monkeypatch.setattr(emitter.sys, "platform", "darwin")
+    monkeypatch.setattr(emitter.platform, "machine", lambda: "arm64")
+    calls = []
+    def admit(*args):
+        calls.append("admit")
+        lock = lane / ".guarded-host-sdk.lock"
+        lock.unlink()
+        lock.write_bytes(b"replacement")
+    def last_boundary(root, output, target, jobs, check):
+        # Inert local parser data, never a native artifact or qualification claim.
+        output.mkdir()
+        return emitter.admit_under_custody(root, {}, check)
+    monkeypatch.setattr(emitter.unit, "admit", admit)
+    monkeypatch.setattr(emitter, "_host_build_locked", last_boundary)
+    with pytest.raises(emitter.unit.Refused, match="changed during"):
+        emitter.host_build(root, output, lane, None)
+    assert calls == ["admit"]
+    assert not (output / "pins.json").exists()

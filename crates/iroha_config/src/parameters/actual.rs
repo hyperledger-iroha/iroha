@@ -135,7 +135,7 @@ pub struct Root {
     pub soracloud_runtime: SoracloudRuntime,
     /// Non-secret local custody root for the injected private Musubi publisher.
     pub musubi_publication: MusubiPublication,
-    /// Optional source-verified online load voucher publisher.
+    /// Required source-verified online load voucher publisher.
     pub kagemusha_load_authorizer: KagemushaLoadAuthorizer,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
@@ -316,6 +316,10 @@ pub enum NodeSecretFile {
     Transport,
     /// Streaming identity Ed25519 private key.
     Streaming,
+    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
+    KagemushaLoadAuthorizerKeyring,
+    /// Required online KAGEMUSHA publisher's private transaction submitter key.
+    KagemushaLoadSubmitter,
     /// Soracloud runtime mutation-signer private key.
     RuntimeSigner,
     /// Global beacon partial-signer credential.
@@ -332,10 +336,12 @@ pub enum NodeSecretFile {
 }
 impl NodeSecretFile {
     /// Every fixed secret file, in a stable order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Validator,
         Self::Transport,
         Self::Streaming,
+        Self::KagemushaLoadAuthorizerKeyring,
+        Self::KagemushaLoadSubmitter,
         Self::RuntimeSigner,
         Self::BeaconCredential,
         Self::FaucetAuthority,
@@ -350,6 +356,8 @@ impl NodeSecretFile {
             Self::Validator => names::VALIDATOR_KEY,
             Self::Transport => names::TRANSPORT_KEY,
             Self::Streaming => names::STREAMING_KEY,
+            Self::KagemushaLoadAuthorizerKeyring => names::KAGEMUSHA_LOAD_AUTHORIZER_KEYRING,
+            Self::KagemushaLoadSubmitter => names::KAGEMUSHA_LOAD_SUBMITTER_KEY,
             Self::RuntimeSigner => names::RUNTIME_SIGNER_KEY,
             Self::BeaconCredential => names::BEACON_CREDENTIAL,
             Self::FaucetAuthority => names::FAUCET_AUTHORITY_KEY,
@@ -496,6 +504,8 @@ mod data_dir_tests {
                 "validator.key",
                 "transport.key",
                 "streaming.key",
+                "kagemusha_load_authorizer.keyring.norito",
+                "kagemusha_load_submitter.key",
                 "runtime_signer.key",
                 "beacon.cred",
                 "authority/faucet.key",
@@ -503,6 +513,18 @@ mod data_dir_tests {
                 "authority/sorafs_council.key",
             ]
         );
+        for (file, name) in [
+            (
+                NodeSecretFile::KagemushaLoadAuthorizerKeyring,
+                "kagemusha_load_authorizer.keyring.norito",
+            ),
+            (
+                NodeSecretFile::KagemushaLoadSubmitter,
+                "kagemusha_load_submitter.key",
+            ),
+        ] {
+            assert_eq!(data_dir.secret(file), data_dir.secrets_dir().join(name));
+        }
         assert_eq!(
             data_dir.secret(NodeSecretFile::OnboardingAuthority),
             PathBuf::from("/var/lib/iroha/taira/v1/secrets/authority/onboarding.key")
@@ -2300,7 +2322,7 @@ pub struct Fastpq {
 pub struct VerifyingKeyRef {
     /// Backend identifier of the verifying key backend.
     ///
-    /// Examples: "halo2/ipa", "groth16/bn254". This string selects the
+    /// Examples: "pipa-r/pasta", "stark/fri/poseidon-x7-goldilocks-6x64-v1". This string selects the
     /// verification scheme and the curve/domain parameters to use when
     /// validating proofs.
     pub backend: String,
@@ -10469,8 +10491,12 @@ impl_default!(IsoReferenceData => {
 /// Zero-knowledge proof configuration namespace.
 #[derive(Debug, Clone)]
 pub struct Zk {
-    /// Halo2 (transparent) verification settings.
-    pub halo2: Halo2,
+    /// Optional local diagnostic trace checking; never proof authority.
+    pub trace: DiagnosticTrace,
+    /// Bounds for the diagnostic native polynomial-opening endpoint.
+    pub ipa_commitment: IpaCommitment,
+    /// Maximum proofs accepted by one host batch-verification syscall.
+    pub max_verify_batch: u32,
     /// Native PIPA-R verification policy.
     pub pipa_r: PipaR,
     /// FASTPQ prover settings.
@@ -10757,24 +10783,6 @@ impl_default!(Router => {
             buffer_horizon_hours: defaults::settlement::router::BUFFER_HORIZON_HOURS,
         }
 });
-/// Supported curves for Halo2 verification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZkCurve {
-    /// Pallas curve from the Pasta cycle.
-    Pallas,
-    /// Pasta (Pallas/Vesta) — reserved for future backends.
-    Pasta,
-    /// Goldilocks multiplicative backend.
-    Goldilocks,
-    /// BN254 — reserved for future backends.
-    Bn254,
-}
-/// Halo2 transparent backend kind.
-#[derive(Debug, Clone, Copy)]
-pub enum Halo2Backend {
-    /// Inner-Product Argument (transparent PCS).
-    Ipa,
-}
 /// Native PIPA-R verification policy for the exact compiled circuit registry.
 #[derive(Debug, Clone, Copy)]
 pub struct PipaR {
@@ -10792,67 +10800,55 @@ impl_default!(PipaR => {
         max_proof_bytes: defaults::zk::pipa_r::MAX_PROOF_BYTES,
     }
 });
-/// Halo2 transparent verification settings.
+/// Local diagnostic polynomial-opening bounds; these confer no ledger authority.
 #[derive(Debug, Clone, Copy)]
-pub struct Halo2 {
-    /// Enable Halo2 verification in hosts.
-    pub enabled: bool,
-    /// Selected curve backend.
-    pub curve: ZkCurve,
-    /// Transparent PCS backend.
-    pub backend: Halo2Backend,
-    /// Maximum circuit size exponent (N = 2^k) accepted for verification.
+pub struct IpaCommitment {
+    /// Maximum domain exponent for diagnostic polynomial openings.
     pub max_k: u32,
-    /// Soft time budget for a single verification (ms).
-    pub verifier_budget_ms: u64,
-    /// Maximum number of proofs allowed in a batch verification.
-    pub verifier_max_batch: u32,
-    /// Number of worker threads serving ZK lane verification (0 = auto).
-    pub verifier_worker_threads: usize,
-    /// Capacity of the ZK lane verification queue (0 = auto).
-    pub verifier_queue_cap: usize,
-    /// Maximum enqueue wait for ZK lane admission under saturation (ms).
-    pub verifier_enqueue_wait_ms: u64,
-    /// Capacity of the in-memory retry ring used for important ZK lane tasks.
-    pub verifier_retry_ring_cap: usize,
-    /// Maximum retry rounds for a queued task in the ZK lane retry ring.
-    pub verifier_retry_max_attempts: u32,
-    /// Retry scheduler tick interval for the ZK lane (ms).
-    pub verifier_retry_tick_ms: u64,
-    /// Maximum accepted Norito envelope payload length (bytes).
-    pub max_envelope_bytes: usize,
-    /// Maximum accepted proof payload length (bytes).
-    pub max_proof_bytes: usize,
-    /// Maximum allowed transcript label length (bytes).
+    /// Maximum diagnostic transcript-label length in bytes.
     pub max_transcript_label_len: usize,
-    /// Require transcript labels to be ASCII.
+    /// Maximum encoded diagnostic polynomial-opening envelope size.
+    pub max_envelope_bytes: usize,
+    /// Require ASCII diagnostic transcript labels.
     pub enforce_transcript_label_ascii: bool,
 }
-impl_default!(Halo2 => {
-        Self {
-            enabled: crate::parameters::defaults::zk::halo2::ENABLED,
-            curve: ZkCurve::Pallas,
-            backend: Halo2Backend::Ipa,
-            max_k: crate::parameters::defaults::zk::halo2::MAX_K,
-            verifier_budget_ms: crate::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-            verifier_max_batch: crate::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-            verifier_worker_threads:
-                crate::parameters::defaults::zk::halo2::VERIFIER_WORKER_THREADS,
-            verifier_queue_cap: crate::parameters::defaults::zk::halo2::VERIFIER_QUEUE_CAP,
-            verifier_enqueue_wait_ms:
-                crate::parameters::defaults::zk::halo2::VERIFIER_ENQUEUE_WAIT_MS,
-            verifier_retry_ring_cap:
-                crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_RING_CAP,
-            verifier_retry_max_attempts:
-                crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_MAX_ATTEMPTS,
-            verifier_retry_tick_ms: crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_TICK_MS,
-            max_envelope_bytes: crate::parameters::defaults::zk::halo2::MAX_ENVELOPE_BYTES,
-            max_proof_bytes: crate::parameters::defaults::zk::halo2::MAX_PROOF_BYTES,
-            max_transcript_label_len:
-                crate::parameters::defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,
-            enforce_transcript_label_ascii:
-                crate::parameters::defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
-        }
+impl_default!(IpaCommitment => { Self {
+    max_k: defaults::zk::ipa_commitment::MAX_K,
+    max_transcript_label_len: defaults::zk::ipa_commitment::MAX_TRANSCRIPT_LABEL_LEN,
+    max_envelope_bytes: defaults::zk::ipa_commitment::MAX_ENVELOPE_BYTES,
+    enforce_transcript_label_ascii: defaults::zk::ipa_commitment::ENFORCE_TRANSCRIPT_LABEL_ASCII,
+} });
+/// Optional local trace-checking policy, independent of monetary proof verification.
+#[derive(Debug, Clone, Copy)]
+pub struct DiagnosticTrace {
+    /// Enable optional local diagnostic trace checking.
+    pub enabled: bool,
+    /// Maximum diagnostic tasks dispatched in one worker batch.
+    pub max_batch: u32,
+    /// Diagnostic worker threads (0 selects the bounded automatic count).
+    pub worker_threads: usize,
+    /// Diagnostic ingress capacity (0 derives a bounded capacity).
+    pub queue_cap: usize,
+    /// Maximum diagnostic enqueue wait in milliseconds.
+    pub enqueue_wait_ms: u64,
+    /// Capacity of the important diagnostic-task retry ring.
+    pub retry_ring_cap: usize,
+    /// Maximum retry rounds for an important diagnostic task.
+    pub retry_max_attempts: u32,
+    /// Diagnostic retry scheduler interval in milliseconds.
+    pub retry_tick_ms: u64,
+}
+impl_default!(DiagnosticTrace => {
+    Self {
+        enabled: defaults::zk::trace::ENABLED,
+        max_batch: defaults::zk::trace::MAX_BATCH,
+        worker_threads: defaults::zk::trace::WORKER_THREADS,
+        queue_cap: defaults::zk::trace::QUEUE_CAP,
+        enqueue_wait_ms: defaults::zk::trace::ENQUEUE_WAIT_MS,
+        retry_ring_cap: defaults::zk::trace::RETRY_RING_CAP,
+        retry_max_attempts: defaults::zk::trace::RETRY_MAX_ATTEMPTS,
+        retry_tick_ms: defaults::zk::trace::RETRY_TICK_MS,
+    }
 });
 /// Native STARK/FRI verification settings.
 #[derive(Debug, Clone, Copy)]

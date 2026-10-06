@@ -921,8 +921,9 @@ pub mod isi {
         }
         fn sample_proof_verifier() -> RamLfeProofVerifierMetadata {
             RamLfeProofVerifierMetadata {
-                proof_backend: crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-                circuit_id: "halo2/pasta/ipa/tiny-add".to_owned(),
+                proof_backend: crate::zk::ZK_BACKEND_NATIVE_PIPA_R.to_owned(),
+                circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
+                    .to_owned(),
                 public_inputs_schema_hash: Hash::new(b"identifier-ram-lfe-proof-schema"),
                 verifying_key_bytes: b"identifier-ram-lfe-proof-vk".to_vec(),
             }
@@ -967,9 +968,7 @@ pub mod isi {
                 pipa_r_enabled: true,
                 pipa_r_max_envelope_bytes: usize::MAX,
                 pipa_r_max_proof_bytes: usize::MAX,
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: usize::MAX,
-                halo2_max_proof_bytes: usize::MAX,
+
                 stark_enabled: true,
                 stark_max_envelope_bytes: usize::MAX,
                 stark_max_proof_bytes: usize::MAX,
@@ -984,7 +983,7 @@ pub mod isi {
                 verifier.verifying_key_bytes.clone(),
             );
             let mut envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
+                backend: BackendTag::NativePipaRPasta,
                 circuit_id: verifier.circuit_id.clone(),
                 vk_hash: crate::zk::hash_vk(&vk),
                 public_inputs: b"identifier-ram-lfe-proof-schema".to_vec(),
@@ -1112,9 +1111,9 @@ pub mod isi {
             let execution = sample_proof_payload();
             let proof = sample_proof_box(&verifier, |_| {});
             let mut guardrails = test_guardrails();
-            guardrails.halo2_enabled = false;
+            guardrails.pipa_r_enabled = false;
             let err = verify_execution_proof(&proof, &execution, &verifier, guardrails)
-                .expect_err("identifier claim verification must honor disabled Halo2");
+                .expect_err("identifier claim verification must honor disabled native PIPA-R");
             assert!(
                 err.to_string()
                     .contains("no compiled program-execution proof relation"),

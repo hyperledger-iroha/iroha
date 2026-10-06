@@ -1,4 +1,8 @@
 //! Validate `trusted_peers_pop` validator-subset and parsing rules.
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use iroha_config::parameters::user::Root as UserConfig;
 use iroha_config_base::read::ConfigReader;
 use iroha_config_base::toml::TomlSource;
@@ -9,9 +13,11 @@ const BASE_PRIVATE_KEY: &str =
     "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 fn base_keypair() -> KeyPair {
     let public_key = PublicKey::from_str(BASE_PUBLIC_KEY).expect("base public key");
@@ -54,7 +60,7 @@ pop_hex = "{other_pop_hex}"
     );
     let user_cfg = build_user_config(&inline);
     let actual = user_cfg
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("complete PoPs should admit both peers");
     assert_eq!(
         actual.common.trusted_peers.value().validator_roster_len(),
@@ -84,7 +90,7 @@ pop_hex = "{base_pop_hex}"
     );
     let user_cfg = build_user_config(&inline);
     let actual = user_cfg
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("missing PoP should leave peer network-trusted but non-validator");
     let trusted = actual.common.trusted_peers.value();
     assert_eq!(trusted.validator_roster_len(), 1);
@@ -108,7 +114,7 @@ trusted_peers_pop = []
     );
     let user_cfg = build_user_config(&inline);
     let actual = user_cfg
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("empty PoP map is valid configuration with no validator credentials");
     assert!(actual.common.trusted_peers.value().pops.is_empty());
 }
@@ -128,7 +134,11 @@ pop_hex = "not-hex"
         base_pk = base.public_key(),
     );
     let user_cfg = build_user_config(&inline);
-    assert!(user_cfg.parse().is_err());
+    assert!(
+        user_cfg
+            .parse_with_file_source(&ParserOnlyPublisherFiles)
+            .is_err()
+    );
 }
 #[test]
 fn trusted_peers_pop_rejects_extraneous_keys() {
@@ -157,5 +167,9 @@ pop_hex = "{extra_pop_hex}"
         extra_pop_hex = extra_pop_hex,
     );
     let user_cfg = build_user_config(&inline);
-    assert!(user_cfg.parse().is_err());
+    assert!(
+        user_cfg
+            .parse_with_file_source(&ParserOnlyPublisherFiles)
+            .is_err()
+    );
 }

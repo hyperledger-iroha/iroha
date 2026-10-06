@@ -44,6 +44,12 @@ pub enum QSigmaError {
     OwnLength,
     /// Outer parameters must cover exactly k16.
     Parameters,
+    /// The installed descriptor is not the exact V2 Q profile for this source.
+    Profile,
+    /// The installed descriptor failed strict V2 decoding.
+    Descriptor(iroha_plonk::cs::DescriptorError),
+    /// Original proving-key source, allocation or commitment admission failed.
+    Artifact(iroha_plonk::keys::pk::artifact::Error),
     /// Key-generation failure.
     Key(KeyError),
     /// Proof synthesis or creation failure.
@@ -393,6 +399,122 @@ impl QSigmaProver {
             serialized_buses,
         })
     }
+    /// Import original Q material for the default fixed source profile. The
+    /// installed native owner authenticates descriptor/VK/PK originals, scheme
+    /// scope and complete inventory before this call; witness input cannot select
+    /// that authority or resource policy. Import generates no key and grants no
+    /// NativeProofs owner, wallet-open capability or completed A/Omega relation.
+    /// Original/domain bounds do not qualify total synthesis/prover memory.
+    ///
+    /// # Errors
+    /// Non-k16 parameters, wrong V2 profile/schema, substituted installed VK, or
+    /// a bounded source/commitment import failure. There is no profile fallback.
+    pub fn from_original_artifact(
+        prepared: &PreparedQSigma,
+        params: PinnedParams<Ep>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: iroha_plonk::keys::pk::artifact::ReadConfig,
+    ) -> Result<Self, QSigmaError> {
+        Self::from_original_profile(
+            prepared, params, descriptor, installed_vk, original, config, None,
+        )
+    }
+
+    /// Import the independently installed shared-range serialized Q profile.
+    /// The fixed bus count is selected by native installation metadata, never
+    /// inferred from original/proof bytes or tried as a fallback. Descriptor,
+    /// VK and complete original PK authentication remain the installation owner's
+    /// duty, as in [`Self::from_original_artifact`]; no monetary authority is granted.
+    ///
+    /// # Errors
+    /// Invalid fixed bus count or any default-profile import refusal above.
+    pub fn from_original_artifact_serialized_foreign(
+        prepared: &PreparedQSigma,
+        params: PinnedParams<Ep>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: iroha_plonk::keys::pk::artifact::ReadConfig,
+        range_buses: usize,
+    ) -> Result<Self, QSigmaError> {
+        if !(1..=8).contains(&range_buses) {
+            return Err(QSigmaError::Layout(LayoutError::Synthesis));
+        }
+        Self::from_original_profile(
+            prepared,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            Some(range_buses),
+        )
+    }
+
+    fn from_original_profile(
+        prepared: &PreparedQSigma,
+        params: PinnedParams<Ep>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: iroha_plonk::keys::pk::artifact::ReadConfig,
+        serialized_buses: Option<usize>,
+    ) -> Result<Self, QSigmaError> {
+        use iroha_plonk::cs::{InstanceModeV1, ProofSuffixV1, TranscriptV2};
+        use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
+        if params.k() != 16 {
+            return Err(QSigmaError::Parameters);
+        }
+        let binding = DescriptorBinding::decode_v2(descriptor).map_err(QSigmaError::Descriptor)?;
+        let d = binding.descriptor();
+        let lengths = prepared.circuit.plan.instance_lengths();
+        if d.k != 16
+            || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+            || d.instance_mode != InstanceModeV1::Direct
+            || d.proof_suffix != ProofSuffixV1::FoldedGenerator
+            || d.instance_types.as_deref() != Some(&QSigmaPlan::instance_types())
+            || d.instance_lengths.len() != lengths.len()
+            || !d.instance_lengths.iter().zip(lengths).all(|(found, expected)| {
+                usize::try_from(*found).ok() == Some(expected)
+            })
+        {
+            return Err(QSigmaError::Profile);
+        }
+        // Reject the installed allocation bounds before cloning a serialized source.
+        if original.len() > config.maximum_bytes || binding.n() > config.maximum_rows {
+            return Err(QSigmaError::Artifact(ArtifactError::Length));
+        }
+        VerifyingKey::<Ep>::read(installed_vk, &binding)
+            .map_err(|error| QSigmaError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error))))?;
+        let key = if let Some(buses) = serialized_buses {
+            let circuit = prepared
+                .circuit
+                .clone()
+                .with_serialized_foreign(buses)
+                .map_err(QSigmaError::Layout)?;
+            ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
+        } else {
+            ProvingKey::from_artifact_v2(original, &binding, &params, &prepared.circuit, config)
+        }
+        .map_err(QSigmaError::Artifact)?;
+        if key.vk().to_bytes() != installed_vk {
+            return Err(QSigmaError::UnauthorizedKey);
+        }
+        Ok(Self {
+            params,
+            key,
+            serialized_buses,
+        })
+    }
+
+    /// Original proving material for the native package producer. Export alone
+    /// confers no signed inventory or scheme authority.
+    pub const fn proving_key(&self) -> &ProvingKey<Ep> {
+        &self.key
+    }
+
     /// Validated V2 descriptor, suitable for A's fixed verifier program.
     pub fn binding(&self) -> &DescriptorBinding {
         self.key.binding()

@@ -237,7 +237,7 @@ fn proof_from_chain<V: StateReadOnly>(
             })
             .collect(),
     };
-    // The native reader verifies complete application attestations before serving.
+    // The native reader verifies exact BLS quorums and source-bound execution before serving.
     // Portable checks additionally enforce the independent client framing contract.
     proof.decode_checked()?;
     Ok(proof)
@@ -485,11 +485,10 @@ mod tests {
             }
         );
         if require_native_boundary {
-            assert!(!original.header().expect("native boundary header").attest);
             let qc = original.commit_qc().expect("genuine boundary CommitQC");
-            assert!(!qc.attest);
+
             assert_eq!(qc.signers.count_ones(), 3);
-            assert!(qc.attestations.is_empty() && qc.attestation_witness.is_none());
+
             assert!(original.commitment().schedule.boundary.is_some());
         }
         Ok(SumeragiFinalityProof {

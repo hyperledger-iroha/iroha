@@ -896,6 +896,7 @@ impl<'a> norito_core::DecodeFromSlice<'a> for ConfidentialMemoEnvelopeV1 {
 /// `Active` at the scheduled height and transition to `Withdrawn` once retired, at which point they
 /// must not be used by validators or wallets. The lifecycle applies uniformly to verifier keys and
 /// parameter sets.
+/// Norito encodes the enum discriminant as a four-byte little-endian integer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[repr(u8)]
 #[norito(reuse_archived)]
@@ -915,7 +916,7 @@ impl ConfidentialStatus {
     pub const fn is_active(self) -> bool {
         matches!(self, ConfidentialStatus::Active)
     }
-    fn from_u8(value: u8) -> Result<Self, NoritoError> {
+    fn from_discriminant(value: u32) -> Result<Self, NoritoError> {
         match value {
             0 => Ok(Self::Proposed),
             1 => Ok(Self::Active),
@@ -937,8 +938,8 @@ impl From<ConfidentialStatus> for u8 {
 }
 impl<'a> DecodeFromSlice<'a> for ConfidentialStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
-        let (raw, used) = u8::decode_from_slice(bytes)?;
-        ConfidentialStatus::from_u8(raw).map(|status| (status, used))
+        let (raw, used) = u32::decode_from_slice(bytes)?;
+        ConfidentialStatus::from_discriminant(raw).map(|status| (status, used))
     }
 }
 
@@ -1193,6 +1194,34 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn confidential_status_slice_matches_canonical_enum_discriminant() {
+        for (tag, status) in [
+            (0_u32, ConfidentialStatus::Proposed),
+            (1, ConfidentialStatus::Active),
+            (2, ConfidentialStatus::Withdrawn),
+        ] {
+            let bytes = tag.to_le_bytes();
+            let frame = norito::to_bytes(&status).expect("canonical status frame");
+            assert_eq!(&frame[norito::core::Header::SIZE..], &bytes);
+            assert_eq!(
+                ConfidentialStatus::decode_from_slice(&bytes).expect("status slice"),
+                (status, bytes.len())
+            );
+            assert_eq!(
+                norito::decode_from_bytes::<ConfidentialStatus>(&frame)
+                    .expect("canonical status roundtrip"),
+                status
+            );
+            for end in 0..bytes.len() {
+                assert!(ConfidentialStatus::decode_from_slice(&bytes[..end]).is_err());
+            }
+        }
+        for tag in [3_u32, 255, 256, u32::MAX] {
+            assert!(ConfidentialStatus::decode_from_slice(&tag.to_le_bytes()).is_err());
+        }
+    }
+
     #[test]
     fn canonical_registry_schema_identity_roundtrips() {
         let value = ConfidentialParamsId::new(17);

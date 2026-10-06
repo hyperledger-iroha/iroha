@@ -334,11 +334,11 @@ enum Request {
         u64,
         u32,
         u32,
-        mpsc::SyncSender<Result<(Option<PayloadBytes>, bool), PublicationError>>,
+        mpsc::SyncSender<Result<Option<PayloadBytes>, PublicationError>>,
     ),
     BuildControl(
         ControlWitnessContext,
-        mpsc::SyncSender<Result<(ControlWitness, bool), PublicationError>>,
+        mpsc::SyncSender<Result<ControlWitness, PublicationError>>,
     ),
     DriveControl(
         ApplicationControlContext,
@@ -360,24 +360,6 @@ enum Request {
     Reject(u64, u64, Hash32),
     AttachQueue(Arc<Queue>),
     AttachFinalizedArchives(FinalizedArchives, mpsc::SyncSender<Result<(), String>>),
-}
-
-/// Pure owner check before a certificate enters a queued request or retained publication.
-/// Cryptographic validity cannot authorize allocation from another or uncharged pool.
-fn require_qc_witness_admission(
-    qc: &Qc,
-    budget: &iroha_allocation::AllocationBudget,
-) -> Result<(), PublicationError> {
-    if qc
-        .attestation_witness
-        .as_ref()
-        .is_some_and(|witness| !witness.admitted_to(budget))
-    {
-        return Err(PublicationError::Retryable(
-            "commit witness requires admission to the original State pool".into(),
-        ));
-    }
-    Ok(())
 }
 
 /// Only the exact verified frame and payload from this State pool may enter execution.
@@ -551,7 +533,7 @@ impl StateExecutor {
         commit_qc: &Qc,
     ) -> Result<(), PublicationError> {
         require_body_admission(block, &self.execution_budget)?;
-        require_qc_witness_admission(commit_qc, &self.execution_budget)?;
+
         self.call(|reply| Request::Replay(block.clone(), commit_qc.clone(), reply))
             .unwrap_or_else(|| Err(control::stopped()))
     }
@@ -563,7 +545,7 @@ impl StateExecutor {
         origin: CommitTelemetryOrigin,
     ) -> Result<Option<Hash32>, PublicationError> {
         require_body_admission(block, &self.execution_budget)?;
-        require_qc_witness_admission(commit_qc, &self.execution_budget)?;
+
         self.call(|reply| Request::Prepare(block.clone(), commit_qc.clone(), origin, reply))
             .unwrap_or_else(|| {
                 Err(PublicationError::RecoveryRequired(
@@ -621,7 +603,7 @@ impl Executor for StateExecutor {
         commit_qc: &Qc,
     ) -> Result<AppliedConfig, PublicationError> {
         require_body_admission(block, &self.execution_budget)?;
-        require_qc_witness_admission(commit_qc, &self.execution_budget)?;
+
         self.call(|reply| Request::Commit(block.clone(), commit_qc.clone(), reply))
             .unwrap_or_else(|| {
                 Err(PublicationError::RecoveryRequired(
@@ -636,7 +618,7 @@ impl Executor for StateExecutor {
         view: u64,
         max_bytes: u32,
         exec_budget_ms: u32,
-    ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+    ) -> Result<Option<PayloadBytes>, PublicationError> {
         self.call(|reply| Request::Build(height, view, max_bytes, exec_budget_ms, reply))
             .unwrap_or_else(|| {
                 Err(PublicationError::RecoveryRequired(
@@ -648,7 +630,7 @@ impl Executor for StateExecutor {
     fn build_control_witness(
         &mut self,
         context: &ControlWitnessContext,
-    ) -> Result<(ControlWitness, bool), PublicationError> {
+    ) -> Result<ControlWitness, PublicationError> {
         self.call(|reply| Request::BuildControl(*context, reply))
             .unwrap_or_else(|| Err(control::stopped()))
     }
@@ -810,7 +792,6 @@ use payload_owner::{CompletedPayload, OriginalPayloadScope};
 
 struct GlobalPayloadSource {
     block: SignedBlock,
-    attest: bool,
     pending_inputs: Option<crate::queue::PendingPayloadLease>,
 }
 
@@ -1547,14 +1528,6 @@ impl<'s> Worker<'s> {
                 &"the payload's height or view differs from the header",
             );
         }
-        // This application requests no commit attestation (`specs/sumeragi.md` §3.7 A1):
-        // every height, epoch boundaries included, commits on its exact-quorum CommitQC.
-        if block.header().attest {
-            return invalid_attempt(
-                height,
-                &"the attestation flag differs from the payload's rule",
-            );
-        }
         // Merged lane blocks execute after the block's own transactions (§4.3 of
         // `specs/sumeragi_lanes.md`); the node waits for its lane stores within `E_max`.
         let expansion = match lanes::merge::expand(
@@ -1978,8 +1951,7 @@ impl<'s> Worker<'s> {
     }
 
     /// Reconstruct authority from the independently authenticated committed source even
-    /// during startup replay. This application requests no commit attestation, so the exact
-    /// quorum certificate is verified with [`iroha_sumeragi::crypto::NoAttestation`].
+    /// during startup replay, using the exact authenticated BLS quorum.
     fn verify_prepared_certificate(
         &self,
         block: &AvailableBody,
@@ -2038,7 +2010,7 @@ impl<'s> Worker<'s> {
             &config.epoch.id,
             &config.committee,
         )
-        .verify_qc(&iroha_sumeragi::crypto::NoAttestation, qc)
+        .verify_qc(qc)
         .map_err(|error| {
             PublicationError::Retryable(format!("native quorum verification failed: {error:?}"))
         })
@@ -2153,7 +2125,7 @@ impl<'s> Worker<'s> {
         if let Some(reason) = &self.recovery {
             return Err(PublicationError::RecoveryRequired(reason.clone()));
         }
-        require_qc_witness_admission(qc, &self.state.ivm_execution_budget())?;
+
         match catch_unwind(AssertUnwindSafe(|| {
             self.prepare_inner(block, qc, origin, &mut encode, execute)
         })) {
@@ -2201,7 +2173,6 @@ impl<'s> Worker<'s> {
             || qc.height != block.header().height
             || qc.instance != block.header().instance
             || qc.epoch != block.header().epoch
-            || qc.attest != block.header().attest
             || super::commitment::chain_hash(&iroha_sumeragi::preimage::block_hash_preimage(
                 block.header(),
             )) != block_hash
@@ -2484,7 +2455,7 @@ impl<'s> Worker<'s> {
         if let Some(reason) = &self.recovery {
             return Err(PublicationError::RecoveryRequired(reason.clone()));
         }
-        require_qc_witness_admission(qc, &self.state.ivm_execution_budget())?;
+
         match catch_unwind(AssertUnwindSafe(|| self.commit_inner(block, qc, publish))) {
             Ok(Err(error)) if self.recovery.is_some() => {
                 let reason = format!("publication requires recovery: {error}");
@@ -2736,7 +2707,7 @@ impl<'s> Worker<'s> {
         view: u64,
         max_bytes: u32,
         exec_budget_ms: u32,
-    ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+    ) -> Result<Option<PayloadBytes>, PublicationError> {
         // The inner body acquires and retires its original State view and Queue
         // guards before same-pool refund callbacks can reenter either owner.
         let budget = self.state.ivm_execution_budget();
@@ -2752,7 +2723,7 @@ impl<'s> Worker<'s> {
         view: u64,
         max_bytes: u32,
         exec_budget_ms: u32,
-    ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+    ) -> Result<Option<PayloadBytes>, PublicationError> {
         if let Some(reason) = &self.recovery {
             self.completed_payload = None;
             return Err(PublicationError::RecoveryRequired(reason.clone()));
@@ -2770,7 +2741,7 @@ impl<'s> Worker<'s> {
                 publication_pending = self.publication_pending(),
                 "sumeragi: payload selection awaits its original applied parent"
             );
-            return Ok((None, false));
+            return Ok(None);
         }
         if self.payload_build.as_ref().is_some_and(|build| {
             !build
@@ -2848,7 +2819,7 @@ impl<'s> Worker<'s> {
                 view,
                 "sumeragi: payload selection has no published parent"
             );
-            return Ok((None, false));
+            return Ok(None);
         };
         let schedule = current_view.world().consensus_schedule();
         if schedule.ready(height).is_err() {
@@ -2858,7 +2829,7 @@ impl<'s> Worker<'s> {
                 view,
                 "sumeragi: payload selection has no authenticated scheduled authority"
             );
-            return Ok((None, false));
+            return Ok(None);
         }
         let scheduled = ScheduledAuthority {
             schedule: schedule.clone(),
@@ -2866,7 +2837,7 @@ impl<'s> Worker<'s> {
         };
         if self.queue.is_none() {
             self.completed_payload = None;
-            return Ok((None, false));
+            return Ok(None);
         }
         let scope = OriginalPayloadScope::capture(
             &current_view,
@@ -2918,7 +2889,7 @@ impl<'s> Worker<'s> {
         );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
         if selected.is_empty() && merges.merges.is_empty() {
-            return Ok((None, false));
+            return Ok(None);
         }
         let assembly = Assembly {
             parent: &parent,
@@ -2974,7 +2945,6 @@ impl<'s> Worker<'s> {
             match block.resultless_proposal_wire_len() {
                 Ok(length) if length <= max_bytes => {
                     let source = GlobalPayloadSource {
-                        attest: false,
                         pending_inputs,
                         block,
                     };
@@ -3004,10 +2974,10 @@ impl<'s> Worker<'s> {
                 }
             }
         }
-        Ok((None, false))
+        Ok(None)
     }
 
-    fn finish_payload_build(&mut self) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+    fn finish_payload_build(&mut self) -> Result<Option<PayloadBytes>, PublicationError> {
         let GlobalPayloadBuild {
             scope,
             mut job,
@@ -3065,15 +3035,14 @@ impl<'s> Worker<'s> {
                     bytes = payload.as_slice().len(),
                     "sumeragi: original funded payload build completed"
                 );
-                let attest = source.attest;
                 let pending_inputs = if source.block.lane_merge().is_none() {
                     source.pending_inputs
                 } else {
                     // A selected-input receipt cannot authorize completed lane reuse.
                     None
                 };
-                self.retain_completed_payload(scope, pending_inputs, &payload, attest);
-                Ok((Some(payload), attest))
+                self.retain_completed_payload(scope, pending_inputs, &payload);
+                Ok(Some(payload))
             }
             Err((job, error)) => {
                 let retry = error.is_local_refusal();

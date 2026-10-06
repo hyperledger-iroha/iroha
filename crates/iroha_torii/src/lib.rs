@@ -13027,20 +13027,17 @@ async fn handler_zk_verify_batch(
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let halo2 = app.state.zk_snapshot().halo2;
-    if !halo2.enabled {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "halo2 verification is disabled in node configuration".to_owned(),
-            ),
-        ));
-    }
+    let zk = app.state.zk_snapshot();
+    let diagnostic = zk.ipa_commitment;
     let limits = routing::ZkVerifyBatchLimits {
-        open: iroha_zkp_halo2::OpenVerifyLimits::new(halo2.max_k, halo2.max_transcript_label_len),
+        open: iroha_zkp_halo2::OpenVerifyLimits::new(
+            diagnostic.max_k,
+            diagnostic.max_transcript_label_len,
+        ),
         max_body_bytes: app.proof_limits.max_body_bytes,
-        max_batch: halo2.verifier_max_batch.max(1) as usize,
-        max_envelope_bytes: halo2.max_envelope_bytes,
-        enforce_transcript_label_ascii: halo2.enforce_transcript_label_ascii,
+        max_batch: zk.max_verify_batch.max(1) as usize,
+        max_envelope_bytes: diagnostic.max_envelope_bytes,
+        enforce_transcript_label_ascii: diagnostic.enforce_transcript_label_ascii,
     };
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     routing::handle_v1_zk_verify_batch_admitted(format, body, limits, admission).await
@@ -13050,9 +13047,6 @@ mod exact_proof_circuit_id_tests {
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         record_id == env_id
             && match iroha_core_zk::production_verify_backend_tag(backend) {
-                Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
-                    iroha_core_zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
-                }
                 Some(iroha_data_model::zk::BackendTag::NativePipaRPasta) => {
                     iroha_core_zk::pipa_r_open_verify_circuit_id_matches_backend(backend, record_id)
                 }

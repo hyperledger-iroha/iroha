@@ -48,15 +48,9 @@ fn zk_roots_get_respects_cap_and_max() {
     state
         .set_zk(cfg::Zk {
             pipa_r: iroha_config::parameters::actual::PipaR::default(),
-            halo2: cfg::Halo2 {
-                enabled: defaults::zk::halo2::ENABLED,
-                curve: cfg::ZkCurve::Pallas,
-                backend: cfg::Halo2Backend::Ipa,
-                max_k: defaults::zk::halo2::MAX_K,
-                verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
-                verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
-                ..cfg::Halo2::default()
-            },
+            trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+            ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+            max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
             fastpq: cfg::Fastpq {
                 execution_mode: cfg::FastpqExecutionMode::Cpu,
                 poseidon_mode: cfg::FastpqPoseidonMode::Cpu,

@@ -24,10 +24,8 @@ fn native() -> NativeEvidence {
         view: 3,
         block_hash: Hash32([3; 32]),
         result: Hash32([4; 32]),
-        attest: false,
         signer: 2,
         sig: Signature([5; SIGNATURE_LEN]),
-        attestation: None,
     };
     let mut second = first.clone();
     second.block_hash = Hash32([6; 32]);

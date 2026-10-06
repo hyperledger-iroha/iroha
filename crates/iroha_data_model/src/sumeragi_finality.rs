@@ -3,13 +3,13 @@
 //! Proofs carry the canonical block and its embedded commit certificate. A structural
 //! decode is never an authenticated execution capability: only the contiguous verifier
 //! constructs [`VerifiedSumeragiBlock`]. The receipt proves exact-quorum execution finality;
-//! it does not verify embedded application attestations. Genesis has no quorum certificate; its
+//! with the signed RS16 availability binding. Genesis has no quorum certificate; its
 //! execution result is authenticated by a successor's parent-result binding or independent node
 //! attestations, not by inventing a genesis quorum certificate.
 //!
 //! This module owns the sole canonical execution-result codec and authenticated epoch/schedule
-//! graph shared with Core. Core produces execution witnesses, validates application attestations
-//! and beacon signatures, and publishes these same results; portable readers authenticate the
+//! graph shared with Core. Core produces execution witnesses, validates beacon signatures,
+//! and publishes these same results; portable readers authenticate the
 //! resulting commit-finality chain without introducing another result layout or authority source.
 
 mod schedule;
@@ -593,8 +593,7 @@ impl SumeragiFinalityProof {
                     && qc.height == header.height
                     && qc.instance == header.instance
                     && qc.block_hash == core_hash
-                    && qc.result == result
-                    && qc.attest == header.attest,
+                    && qc.result == result,
                 "current certificate does not bind this block and execution",
             )?;
             need(
@@ -607,18 +606,9 @@ impl SumeragiFinalityProof {
                 }),
                 "beacon pulse names another native consensus context",
             )?;
-            need(
-                if qc.needs_attestations() {
-                    qc.attestations.len() == committee.q()
-                } else {
-                    qc.attestations.is_empty()
-                },
-                "certificate attestation shape differs from its signed flag",
-            )?;
-            // Exact quorum signatures authenticate execution finality. Embedded application
-            // attestations remain separate evidence; this proof grants no attestation capability.
+            // Exact quorum signatures authenticate the execution commitment.
             iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee)
-                .verify_qc_signatures(&qc)
+                .verify_qc(&qc)
                 .map_err(|error| FinalityError(format!("commit certificate: {error:?}")))?;
             (Some(header), core_hash, Some(availability), Some(payload))
         };

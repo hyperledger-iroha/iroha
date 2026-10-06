@@ -101,8 +101,33 @@ pub fn sign(kind: ObjectKind, mut body: Vec<u8>, secret: u64, nonce: u64) -> Sig
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Identity {
+    #[default]
+    Payer,
+    Receiver,
+}
+impl Identity {
+    pub const fn secret(self) -> u64 {
+        match self {
+            Self::Payer => 29,
+            Self::Receiver => 43,
+        }
+    }
+}
 pub fn enrollment() -> (BootstrapWitness, Signed, Signed) {
+    enrollment_for(Identity::Payer)
+}
+pub fn enrollment_for(identity: Identity) -> (BootstrapWitness, Signed, Signed) {
     let mut w = super::bootstrap::witness();
+    let (account, nonce) = match identity {
+        Identity::Payer => (small_id(9, 10), 37),
+        Identity::Receiver => {
+            w.core[5] = Fp::from(71);
+            w.core[6] = Fp::from(72);
+            (small_id(73, 74), 53)
+        }
+    };
     let mut body = 1u16.to_le_bytes().to_vec();
     body.extend(id(w.core[1], w.core[2]));
     body.push(1);
@@ -113,8 +138,8 @@ pub fn enrollment() -> (BootstrapWitness, Signed, Signed) {
     for offset in [1, 3, 5] {
         body.extend(id(w.core[offset], w.core[offset + 1]));
     }
-    body.extend(small_id(9, 10));
-    body.extend(sec1(key(29)));
+    body.extend(account);
+    body.extend(sec1(key(identity.secret())));
     body.extend(small_id(31, 32));
     body.push(1); // Android TEE; the issuer attests evidence identities.
     for _ in 0..2 {
@@ -133,14 +158,17 @@ pub fn enrollment() -> (BootstrapWitness, Signed, Signed) {
     body.extend(0u32.to_le_bytes());
     body.extend(0u64.to_le_bytes());
     body.extend(certificate.digest().to_repr());
-    let credential = sign(ObjectKind::Credential, body, 17, 37);
+    let credential = sign(ObjectKind::Credential, body, 17, nonce);
     w.core[7] = credential.digest();
-    w.lineage[9..11].copy_from_slice(&halves(key(29).x));
-    w.lineage[11..13].copy_from_slice(&halves(key(29).y));
+    w.lineage[9..11].copy_from_slice(&halves(key(identity.secret()).x));
+    w.lineage[11..13].copy_from_slice(&halves(key(identity.secret()).y));
     super::bootstrap::rebind(&mut w);
     (w, certificate, credential)
 }
 pub fn receipt(w: &BootstrapWitness, sigma: &[u8]) -> Signed {
+    receipt_for(w, sigma, Identity::Payer)
+}
+pub fn receipt_for(w: &BootstrapWitness, sigma: &[u8], identity: Identity) -> Signed {
     let mut tape = u32::try_from(sigma.len()).unwrap().to_le_bytes().to_vec();
     tape.extend_from_slice(sigma);
     let proof_digest = p_bytes_native(u64::from_le_bytes(*b"kgwstep1"), &tape);
@@ -168,7 +196,7 @@ pub fn receipt(w: &BootstrapWitness, sigma: &[u8]) -> Signed {
     }
     body.extend(small_id(101, 102));
     body.extend(Fp::ZERO.to_repr());
-    sign(ObjectKind::Receipt, body, 29, 41)
+    sign(ObjectKind::Receipt, body, identity.secret(), 41)
 }
 pub fn policy() -> BootstrapPolicy {
     BootstrapPolicy::new([1, 2], [31, 32], key(23)).unwrap()

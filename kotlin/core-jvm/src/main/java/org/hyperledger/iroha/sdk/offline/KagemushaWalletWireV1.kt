@@ -521,13 +521,15 @@ object KagemushaWalletWireV1 {
     /**
      * Validate one canonical envelope frame header and its per-kind bound.
      *
-     * Checks, in the Rust decode order: the largest bound before parsing; magic, major and minor
+     * Checks: the largest bound before parsing; magic, major and minor
      * version; the schema hash of [ENVELOPE_FRAME_NAME]; no compression; flags exactly
      * [ENVELOPE_FLAGS]; exactly [ENVELOPE_PADDING_BYTES] zero padding bytes; the payload length;
      * the CRC64; the envelope version field and the exact field spans of the message; a known
-     * message tag; and finally the bound of the kind that tag selects.
+     * message tag; the message's own version and 32-byte decode-time scheme field; and finally
+     * the bound of the kind that tag selects.
      *
-     * The carried message itself is not decoded or verified.
+     * The carried message is not fully decoded or authenticated. These structural checks do not
+     * select a trusted scheme or authorize a payment.
      * TODO(G4): decode and validate the typed wallet message once the Kotlin exchange
      * integration owns the typed codec.
      *
@@ -670,7 +672,7 @@ object KagemushaWalletWireV1 {
         while (offset < record.size) {
             require(fields.size < fieldCount) { "KAGEMUSHA wallet V1 $label has more than $fieldCount fields" }
             val field = Varint.decode(record, offset)
-            require(field.value <= (record.size - field.nextOffset).toLong()) {
+            require(field.value in 0L..(record.size - field.nextOffset).toLong()) {
                 "KAGEMUSHA wallet V1 $label field exceeds the record"
             }
             offset = field.nextOffset + field.value.toInt()
@@ -711,8 +713,45 @@ object KagemushaWalletWireV1 {
         require(variantField.value > 0L && variantField.value == (payload.size - cursor).toLong()) {
             "KAGEMUSHA wallet V1 envelope ${kind.label} field does not span the message"
         }
+        val message = payload.copyOfRange(cursor, payload.size)
+        val versionPath = when (kind) {
+            KagemushaWalletMessageKindV1.OFFER, KagemushaWalletMessageKindV1.REQUEST -> intArrayOf(0, 0)
+            else -> intArrayOf(0)
+        }
+        val messageVersion = messageField(message, versionPath, "message version")
+        require(messageVersion.size == VERSION_FIELD_BYTES.toInt()) {
+            "KAGEMUSHA wallet V1 message version field is not two bytes"
+        }
+        require((unsigned(messageVersion[0]) or (unsigned(messageVersion[1]) shl 8)) == VERSION) {
+            "KAGEMUSHA wallet V1 message version is unsupported"
+        }
+        val schemePath = when (kind) {
+            KagemushaWalletMessageKindV1.OFFER, KagemushaWalletMessageKindV1.REQUEST -> intArrayOf(0, 1)
+            KagemushaWalletMessageKindV1.PAYMENT, KagemushaWalletMessageKindV1.LINEAGE -> intArrayOf(1, 0, 1)
+            else -> intArrayOf(1)
+        }
+        require(messageField(message, schemePath, "scheme identity").size == DIGEST_BYTES) {
+            "KAGEMUSHA wallet V1 decode-time scheme field is not 32 bytes"
+        }
         return kind
     }
+
+    /** Read only the fixed field path needed for structural version or scheme admission. */
+    private fun messageField(record: ByteArray, path: IntArray, label: String): ByteArray =
+        path.fold(record) { current, index ->
+            var offset = 0
+            var selected: ByteArray? = null
+            for (position in 0..index) {
+                require(offset < current.size) { "KAGEMUSHA wallet V1 $label field is missing" }
+                val field = Varint.decode(current, offset)
+                require(field.value in 0L..(current.size - field.nextOffset).toLong()) {
+                    "KAGEMUSHA wallet V1 $label field exceeds its record"
+                }
+                offset = field.nextOffset + field.value.toInt()
+                if (position == index) selected = current.copyOfRange(field.nextOffset, offset)
+            }
+            checkNotNull(selected)
+        }
 
     private fun readLongLe(bytes: ByteArray, offset: Int): Long {
         var value = 0L

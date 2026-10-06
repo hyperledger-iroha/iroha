@@ -42,8 +42,8 @@ plugins {
 }
 
 private object NativeBridgeBuildContract {
-    val abis = listOf("arm64-v8a", "x86_64")
-    val rustTargets = listOf("aarch64-linux-android", "x86_64-linux-android")
+    val abis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+    val rustTargets = listOf("aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android")
     const val armv7DiagnosticPlatform = "android-armv7-diagnostic"
     fun buildAbis(platform: String): List<String> = when (platform) {
         "android" -> abis
@@ -2218,7 +2218,7 @@ tasks.register("verifyAndroidNdkIdentityContract") {
             return process.waitFor() to output
         }
 
-        val taggedLibraries = listOf("arm64-v8a", "x86_64").map { abi ->
+        val taggedLibraries = NativeBridgeBuildContract.abis.map { abi ->
             val abiDirectory = Files.createDirectory(stripProbeRoot.resolve(abi))
             val library = abiDirectory.resolve(NativeBridgeBuildContract.libraryName)
             Files.write(
@@ -2350,8 +2350,8 @@ tasks.register("verifyArmv7DiagnosticContract") {
     description = "Check armv7 diagnostic routing without invoking native compilation"
     doLast {
         val diagnostic = NativeBridgeBuildContract.armv7DiagnosticPlatform
-        check(NativeBridgeBuildContract.abis == listOf("arm64-v8a", "x86_64"))
-        check(NativeBridgeBuildContract.rustTargets == listOf("aarch64-linux-android", "x86_64-linux-android"))
+        check(NativeBridgeBuildContract.abis == listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
+        check(NativeBridgeBuildContract.rustTargets == listOf("aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"))
         check(NativeBridgeBuildContract.buildAbis(diagnostic) == listOf("armeabi-v7a"))
         check(NativeBridgeBuildContract.buildTargets(diagnostic) == listOf("armv7-linux-androideabi"))
         val raw = compileArmv7DiagnosticRaw.get()

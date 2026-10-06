@@ -7,7 +7,6 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_logger::Level;
-use iroha_sumeragi::crypto::NoAttestation;
 
 use super::*;
 use crate::{
@@ -141,10 +140,8 @@ fn committed_and_certified_reads_of_a_real_chain() {
             .output_index(),
         output_index
     );
-    // The full check with an attestation verifier accepts unflagged certificates too.
-    let full = CertifiedChain::new(&view)
-        .expect("reader")
-        .with_attestation_verifier(&NoAttestation);
+    // The complete verifier authenticates the exact quorum.
+    let full = CertifiedChain::new(&view).expect("reader");
     assert_eq!(
         full.certified(4).expect("full check").verification(),
         QcVerification::Verified
@@ -283,11 +280,9 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
             ChainReadError::HeaderMismatch { height: 4 }
         ))
     );
-    // A Prepare certificate, or a flag that differs from the header's.
-    let edits: [fn(&mut BlockHeader, &mut Qc, &mut Vec<u8>); 2] = [
-        |_, qc, _| qc.kind = VoteKind::Prepare,
-        |_, qc, _| qc.attest = !qc.attest,
-    ];
+    // A Prepare certificate is not finality authority.
+    let edits: [fn(&mut BlockHeader, &mut Qc, &mut Vec<u8>); 1] =
+        [|_, qc, _| qc.kind = VoteKind::Prepare];
     for edit in edits {
         assert_eq!(
             certify(with_parts(&original, edit)).err(),
@@ -306,7 +301,7 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
     );
     // Below the quorum, or a forged aggregate.
     let (header, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();
-    let below = chain.commit_qc(4, qc.block_hash, qc.result, qc.attest, Signers::BelowQuorum);
+    let below = chain.commit_qc(4, qc.block_hash, qc.result, Signers::BelowQuorum);
     let below = with_parts(&original, |_, qc, _| *qc = below);
     assert_eq!(
         certify(below).err(),
@@ -318,7 +313,7 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
         ))
     );
     // More signatures cannot widen the protocol's exact finality authority either.
-    let all = chain.commit_qc(4, qc.block_hash, qc.result, qc.attest, Signers::All);
+    let all = chain.commit_qc(4, qc.block_hash, qc.result, Signers::All);
     let all = with_parts(&original, |_, qc, _| *qc = all);
     assert_eq!(
         certify(all).err(),
@@ -394,7 +389,7 @@ fn assert_two_valid_certificates_of_one_block_give_one_consensus_receipt(
     let reader = CertifiedChain::new(&view).expect("reader");
     let original = frame(chain, 3);
     let (_, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();
-    let other_qc = chain.commit_qc(3, qc.block_hash, qc.result, qc.attest, Signers::LastThree);
+    let other_qc = chain.commit_qc(3, qc.block_hash, qc.result, Signers::LastThree);
     assert_ne!(other_qc.signers, qc.signers);
     let other = with_parts(&original, |_, qc, _| *qc = other_qc.clone());
     assert_ne!(other.commit_certificate(), original.commit_certificate());
@@ -602,128 +597,6 @@ fn genesis_payload_is_bound_to_its_signed_header_before_authority_is_read() {
     }
     let view = chain.state().view();
     assert!(CertifiedChain::new(&view).unwrap().certified(2).is_ok());
-}
-
-#[test]
-fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() {
-    with_native_chain(
-        assert_installing_an_attestation_verifier_rechecks_the_previously_verified_prefix,
-    );
-}
-
-#[inline(never)]
-fn assert_installing_an_attestation_verifier_rechecks_the_previously_verified_prefix(
-    chain: &CertifiedTestChain,
-    _entry: HashOf<TransactionEntrypoint>,
-) {
-    let mut history = vec![frame(chain, 1)];
-    let mut parent = read_frame(history[0].clone(), 1).unwrap();
-    for height in 2..=3 {
-        let original = frame(chain, height);
-        let certificate = original.commit_certificate().unwrap();
-        let (mut header, _) = decode_certificate(certificate).unwrap();
-        header.parent_hash = parent.core_hash();
-        header.parent_result = parent.result();
-        header.attest = height == 2;
-        // Authenticate the changed header with original proposer custody and actual RS16 rows.
-        let payload = original
-            .canonical_resultless_proposal()
-            .expect("valid fixture proposal projection")
-            .encode_wire()
-            .unwrap();
-        let body = chain.author_payload(header, payload);
-        let mut qc = chain.commit_qc(
-            height,
-            body.hash(&BlsCrypto::new()),
-            result_of_preimage(certificate.result_preimage()),
-            false,
-            Signers::Quorum,
-        );
-        if body.header().attest {
-            qc.attest = true;
-            let mut keys = (0xC1..=0xC4)
-                .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
-                .collect::<Vec<_>>();
-            keys.sort_by_key(|key| core_key(key.public_key()).unwrap());
-            let signatures = keys
-                .iter()
-                .take(3)
-                .map(|key| {
-                    use iroha_sumeragi::crypto::Signer as _;
-                    crate::sumeragi::crypto::KeyPairSigner::new(key)
-                        .unwrap()
-                        .sign(&qc.preimage())
-                })
-                .collect::<Vec<_>>();
-            qc.agg_sig = iroha_sumeragi::crypto::Crypto::aggregate(&BlsCrypto::new(), &signatures);
-            let invalid_signature =
-                iroha_sumeragi::message::AttestationSignature::try_from_slice(&[0x42]).unwrap();
-            qc.attestations = vec![invalid_signature; 3];
-            qc.attestation_witness = Some(
-                iroha_sumeragi::message::ResultWitness::from_untrusted(
-                    certificate.result_preimage().to_vec(),
-                )
-                .unwrap(),
-            );
-        }
-        let changed = crate::block::reserve_block_for_tests().initialize(
-            original.as_ref().clone().with_commit_certificate(Some(
-                commit_certificate(
-                    body.header(),
-                    &qc,
-                    certificate.result_preimage().to_vec(),
-                    norito::encode_canonical(body.availability()).unwrap(),
-                )
-                .unwrap(),
-            )),
-        );
-        parent = read_frame(Clone::clone(&changed), height).unwrap();
-        history.push(changed);
-    }
-    let state = state_with_history(&history);
-    let view = state.view();
-    let native = CertifiedChain::new(&view).unwrap();
-    assert!(matches!(
-        native.certified(2),
-        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
-            ChainReadError::Certificate {
-                error: CertError::BadAttestation,
-                ..
-            }
-        ))
-    ));
-    struct ExplicitFixtureVerifier;
-    impl AttestationVerifier for ExplicitFixtureVerifier {
-        fn verify(
-            &self,
-            _: u64,
-            _: u32,
-            _: &iroha_sumeragi::types::PublicKey,
-            _: &[u8],
-            _: &iroha_sumeragi::message::ResultWitness,
-            signature: &[u8],
-        ) -> bool {
-            signature == [0x42]
-        }
-    }
-    let reader = CertifiedChain::new(&view)
-        .unwrap()
-        .with_attestation_verifier(&ExplicitFixtureVerifier);
-    assert_eq!(
-        reader.certified(2).unwrap().verification(),
-        QcVerification::Verified
-    );
-    assert!(reader.prefix.lock().is_some());
-    let full = reader.with_attestation_verifier(&NoAttestation);
-    assert!(matches!(
-        full.certified(3),
-        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
-            ChainReadError::Certificate {
-                height: 2,
-                error: CertError::BadAttestation,
-            }
-        ))
-    ));
 }
 
 #[test]

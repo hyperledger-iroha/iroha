@@ -102,6 +102,13 @@ impl<F: PastaField, A: Assignment<F>> Assignment<F> for Tampering<'_, F, A> {
         self.inner.assign_fixed(column, row, value)
     }
 
+    fn expect_fixed(&mut self, column: Column<Fixed>, row: usize, value: F) -> Result<(), Error> {
+        self.inner.expect_fixed(column, row, value)
+    }
+    fn reserve_advice(&mut self, column: Column<Advice>, row: usize) -> Result<(), Error> {
+        self.inner.reserve_advice(column, row)
+    }
+
     fn copy(
         &mut self,
         left_column: Column<Any>,

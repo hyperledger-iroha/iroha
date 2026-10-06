@@ -2050,9 +2050,9 @@
       ]
     },
     {
-      "id": "proof.config_halo2_max_proof_bytes",
+      "id": "proof.config_pipa_r_max_proof_bytes",
       "group": "proof",
-      "what": "Largest Halo2 proof the host verifier accepts. A diagnostic ceiling: it does not bound a new transparent RAM-LFE proof.",
+      "what": "Largest native PIPA-R proof the host verifier accepts. This compiled-operation admission ceiling does not establish a RAM-LFE execution relation.",
       "unit": "bytes",
       "value": 196608,
       "source": "node_local",
@@ -2063,7 +2063,7 @@
         "kind": "const",
         "anchor": [
           "pub mod zk {",
-          "pub mod halo2 {"
+          "pub mod pipa_r {"
         ],
         "expr": "192 * 1024"
       },
@@ -2076,17 +2076,22 @@
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/zk_guardrails.rs",
-          "contains": "halo2_max_proof_bytes: cfg.halo2.max_proof_bytes,"
+          "contains": "pipa_r_max_proof_bytes: cfg.pipa_r.max_proof_bytes,"
         },
         {
           "stage": "follower",
           "path": "crates/iroha_core_zk/src/lib.rs",
-          "contains": "max_proof_bytes: guardrails.halo2_max_proof_bytes,"
+          "contains": "max_proof_bytes: guardrails.pipa_r_max_proof_bytes,"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/verification.rs",
+          "contains": "policy.pipa_r_max_proof_bytes,"
         }
       ],
       "catalog": {
         "id": "zk_consensus_policy_hash",
-        "field": "halo2.max_proof_bytes"
+        "field": "pipa_r.max_proof_bytes"
       },
       "tests": [
         {
@@ -2095,18 +2100,22 @@
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "name": "halo2_and_stark_admission_inputs_bind_projection"
+          "name": "pipa_r_admission_inputs_bind_projection"
         },
         {
           "path": "crates/iroha_core_zk/src/lib.rs",
-          "name": "guardrails_enforce_halo2_max_proof_bytes_for_open_verify_envelopes"
+          "name": "guardrails_enforce_pipa_r_max_proof_bytes_for_open_verify_envelopes"
         },
         {
           "path": "crates/iroha_core_zk/src/verification/tests.rs",
           "name": "backend_confusion_and_unknown_circuits_reject_before_crypto"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/native_pipa_r_tests.rs",
+          "name": "native_real_proofs_obey_relation_policy_caps_and_preverify"
         }
       ],
-      "test_note": "The two verifier tests refuse a Halo2 proof above a lowered cap (5 bytes, and one byte against a cap of zero). No test verifies a proof of exactly the cap."
+      "test_note": "The native verifier test rejects genuine Kaigi authorization and usage proofs with either cap one byte below the corresponding envelope or proof length, then accepts both exact lengths. The copy test binds both node configuration fields to verifier guardrails."
     },
     {
       "id": "proof.config_private_settlement_max_proof_bytes",
@@ -2200,65 +2209,19 @@
       }
     },
     {
-      "id": "proof.config_halo2_max_k",
+      "id": "proof.config_max_verify_batch",
       "group": "proof",
-      "what": "Largest Halo2 circuit size exponent the host verifier accepts. A diagnostic ceiling.",
-      "unit": "log2 rows",
-      "value": 16,
-      "source": "node_local",
-      "class": "consensus",
-      "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_K",
-        "kind": "const",
-        "anchor": [
-          "pub mod zk {",
-          "pub mod halo2 {"
-        ],
-        "expr": "16"
-      },
-      "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration and bound into State only as a hash (compute_zk_consensus_policy_hash); F.4 moves the source into committed State."
-      },
-      "enforcement": [
-        {
-          "stage": "follower",
-          "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "contains": "max_k: config.halo2.max_k,"
-        }
-      ],
-      "catalog": {
-        "id": "zk_consensus_policy_hash",
-        "field": "halo2.max_k"
-      },
-      "tests": [
-        {
-          "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "name": "halo2_and_stark_admission_inputs_bind_projection"
-        }
-      ],
-      "test_gap": {
-        "owner": "F.4",
-        "summary": "The named test shows only that the value is bound into the projection. No test verifies a circuit of exactly max_k and refuses max_k + 1. F.4 moves the limit into committed State and owns its boundary test there."
-      }
-    },
-    {
-      "id": "proof.config_halo2_verifier_max_batch",
-      "group": "proof",
-      "what": "Largest batch one Halo2 verification call processes.",
+      "what": "Largest generic proof batch one Core host verification syscall processes; independent of local diagnostic trace scheduling.",
       "unit": "count",
       "value": 16,
       "source": "node_local",
       "class": "consensus",
       "owner": {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "VERIFIER_MAX_BATCH",
+        "symbol": "MAX_VERIFY_BATCH",
         "kind": "const",
         "anchor": [
-          "pub mod zk {",
-          "pub mod halo2 {"
+          "pub mod zk {"
         ],
         "expr": "16"
       },
@@ -2268,13 +2231,13 @@
       },
       "catalog": {
         "id": "zk_consensus_policy_hash",
-        "field": "halo2.verifier_max_batch"
+        "field": "max_verify_batch"
       },
       "enforcement": [
         {
           "stage": "follower",
-          "path": "crates/iroha_core/src/pipeline/zk_lane.rs",
-          "contains": "let max_batch = cfg.verifier_max_batch.max(1) as usize;"
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "contains": "let max_items = usize::try_from(self.zk_verify_limits.max_verify_batch)"
         }
       ],
       "tests": [
@@ -2284,14 +2247,14 @@
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "name": "halo2_and_stark_admission_inputs_bind_projection"
+          "name": "batch_and_stark_admission_inputs_bind_projection"
         }
       ]
     },
     {
-      "id": "proof.config_halo2_max_envelope_bytes",
+      "id": "proof.config_pipa_r_max_envelope_bytes",
       "group": "proof",
-      "what": "Largest Norito envelope payload of a Halo2 open-verify request.",
+      "what": "Largest Norito envelope payload of a native PIPA-R open-verify request.",
       "unit": "bytes",
       "value": 1048576,
       "source": "node_local",
@@ -2302,7 +2265,7 @@
         "kind": "const",
         "anchor": [
           "pub mod zk {",
-          "pub mod halo2 {"
+          "pub mod pipa_r {"
         ],
         "expr": "super::preverify::MAX_BYTES"
       },
@@ -2315,74 +2278,45 @@
       },
       "catalog": {
         "id": "zk_consensus_policy_hash",
-        "field": "halo2.max_envelope_bytes"
+        "field": "pipa_r.max_envelope_bytes"
       },
       "enforcement": [
         {
           "stage": "follower",
           "path": "crates/iroha_core_zk/src/lib.rs",
-          "contains": "if open.envelope_bytes.len() > limits.max_envelope_bytes {"
-        }
-      ],
-      "tests": [
-        {
-          "path": "crates/ivm/tests/zk_verify_gating.rs",
-          "name": "verify_syscalls_reject_over_envelope_and_proof_limits"
+          "contains": "if !guardrails.pipa_r_enabled || proof.bytes.len() > guardrails.pipa_r_max_envelope_bytes {"
         },
-        {
-          "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "name": "halo2_and_stark_admission_inputs_bind_projection"
-        }
-      ]
-    },
-    {
-      "id": "proof.config_halo2_max_transcript_label_len",
-      "group": "proof",
-      "what": "Longest transcript label of a proof envelope.",
-      "unit": "bytes",
-      "value": 64,
-      "source": "node_local",
-      "class": "consensus",
-      "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_TRANSCRIPT_LABEL_LEN",
-        "kind": "const",
-        "anchor": [
-          "pub mod zk {",
-          "pub mod halo2 {"
-        ],
-        "expr": "64"
-      },
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([zk] or [confidential]) and bound into State only through compute_zk_consensus_policy_hash; two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
-      "catalog": {
-        "id": "zk_consensus_policy_hash",
-        "field": "halo2.max_transcript_label_len"
-      },
-      "enforcement": [
         {
           "stage": "follower",
-          "path": "crates/iroha_core_zk/src/stark.rs",
-          "contains": "fn effective_max_transcript_label_len(limits: &StarkVerifierLimits) -> usize { limits .max_transcript_label_len .min(MAX_TRANSCRIPT_LABEL_LEN) }"
+          "path": "crates/iroha_core/src/zk_guardrails.rs",
+          "contains": "pipa_r_max_envelope_bytes: cfg.pipa_r.max_envelope_bytes,"
         },
         {
-          "stage": "torii",
-          "path": "crates/iroha_torii/src/lib.rs",
-          "contains": "open: iroha_zkp_halo2::OpenVerifyLimits::new(halo2.max_k, halo2.max_transcript_label_len),"
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/verification.rs",
+          "contains": "policy.pipa_r_max_envelope_bytes,"
         }
       ],
       "tests": [
         {
-          "path": "crates/iroha_core_zk/src/stark/tests.rs",
-          "name": "stark_verifier_limits_cannot_relax_canonical_structure_caps"
+          "path": "crates/iroha_core_zk/src/lib.rs",
+          "name": "guardrails_enforce_pipa_r_max_envelope_bytes"
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "name": "halo2_and_stark_admission_inputs_bind_projection"
+          "name": "pipa_r_admission_inputs_bind_projection"
+        },
+        {
+          "path": "crates/iroha_core/src/zk_guardrails.rs",
+          "name": "guardrails_from_config_copies_every_cap"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/native_pipa_r_tests.rs",
+          "name": "native_real_proofs_obey_relation_policy_caps_and_preverify"
         }
-      ]
+      ],
+      "inclusive": true,
+      "test_note": "The native verifier test rejects genuine Kaigi authorization and usage proofs with either cap one byte below the corresponding envelope or proof length, then accepts both exact lengths. The copy test binds both node configuration fields to verifier guardrails."
     },
     {
       "id": "proof.config_stark_max_proof_bytes",
@@ -2425,7 +2359,7 @@
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "name": "halo2_and_stark_admission_inputs_bind_projection"
+          "name": "batch_and_stark_admission_inputs_bind_projection"
         }
       ]
     },
@@ -2470,7 +2404,7 @@
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-          "name": "halo2_and_stark_admission_inputs_bind_projection"
+          "name": "batch_and_stark_admission_inputs_bind_projection"
         }
       ]
     },
@@ -4342,71 +4276,6 @@
       ]
     },
     {
-      "id": "transport.max_result_witness_bytes",
-      "group": "transport",
-      "what": "Largest result witness carried with an attestation.",
-      "unit": "bytes",
-      "value": 65536,
-      "source": "constant",
-      "class": "consensus",
-      "owner": {
-        "path": "crates/iroha_sumeragi/src/message/attestation.rs",
-        "symbol": "MAX_RESULT_WITNESS_BYTES",
-        "kind": "const",
-        "expr": "64 * 1024"
-      },
-      "enforcement": [
-        {
-          "stage": "transport",
-          "path": "crates/iroha_sumeragi/src/pacemaker.rs",
-          "contains": "+ crate::message::MAX_RESULT_WITNESS_BYTES as u32"
-        }
-      ],
-      "tests": [
-        {
-          "path": "crates/iroha_sumeragi/src/message.rs",
-          "name": "attestation_limits"
-        },
-        {
-          "path": "crates/iroha_sumeragi/src/pacemaker.rs",
-          "name": "frame_overhead_is_exact"
-        }
-      ]
-    },
-    {
-      "id": "transport.max_attestation_signature_bytes",
-      "group": "transport",
-      "what": "Largest attestation signature.",
-      "unit": "bytes",
-      "value": 256,
-      "source": "constant",
-      "class": "consensus",
-      "owner": {
-        "path": "crates/iroha_sumeragi/src/message/attestation.rs",
-        "symbol": "MAX_ATTESTATION_SIGNATURE_BYTES",
-        "kind": "const",
-        "expr": "256"
-      },
-      "enforcement": [
-        {
-          "stage": "transport",
-          "path": "crates/iroha_sumeragi/src/pacemaker.rs",
-          "contains": "(crate::message::MAX_ATTESTATION_SIGNATURE_BYTES",
-          "count": 2
-        }
-      ],
-      "tests": [
-        {
-          "path": "crates/iroha_sumeragi/src/message.rs",
-          "name": "attestation_limits"
-        },
-        {
-          "path": "crates/iroha_sumeragi/src/pacemaker.rs",
-          "name": "frame_overhead_is_exact"
-        }
-      ]
-    },
-    {
       "id": "transport.max_control_witness_bytes",
       "group": "transport",
       "what": "Largest control witness in a block header.",
@@ -4441,21 +4310,19 @@
     {
       "id": "transport.frame_overhead_bytes",
       "group": "transport",
-      "what": "Frame budget over max_block_bytes: the certificate and header allowance, one result witness, compact shares and worst-case member key overhead up to the generic committee bound.",
+      "what": "Frame budget over max_block_bytes: certificate and header allowance, worst-case timeout member keys/signatures up to the generic committee bound, and authenticated control witness.",
       "unit": "bytes",
-      "value": 591904,
+      "value": 264224,
       "source": "constant",
       "class": "consensus",
       "owner": {
         "path": "crates/iroha_sumeragi/src/pacemaker.rs",
         "symbol": "FRAME_OVERHEAD",
         "kind": "const",
-        "expr": "64 * 1024 + crate::message::MAX_RESULT_WITNESS_BYTES as u32 + crate::types::MAX_COMMITTEE_SIZE as u32 * (crate::message::MAX_ATTESTATION_SIGNATURE_BYTES + crate::types::MAX_PUBLIC_KEY_LEN + 64) as u32 + crate::types::MAX_CONTROL_WITNESS_BYTES as u32 + 32"
+        "expr": "64 * 1024 + crate::types::MAX_COMMITTEE_SIZE as u32 * (crate::types::MAX_PUBLIC_KEY_LEN + 64) as u32 + crate::types::MAX_CONTROL_WITNESS_BYTES as u32 + 32"
       },
       "refs": {
-        "MAX_RESULT_WITNESS_BYTES": "transport.max_result_witness_bytes",
         "MAX_COMMITTEE_SIZE": "transport.max_committee_size",
-        "MAX_ATTESTATION_SIGNATURE_BYTES": "transport.max_attestation_signature_bytes",
         "MAX_PUBLIC_KEY_LEN": "transport.max_public_key_len",
         "MAX_CONTROL_WITNESS_BYTES": "transport.max_control_witness_bytes"
       },
@@ -4483,7 +4350,7 @@
       "group": "transport",
       "what": "Largest consensus frame every node accepts: the chain-wide bound committed chain parameters are validated against, and the driver's frame limit.",
       "unit": "bytes",
-      "value": 17369120,
+      "value": 17041440,
       "source": "constant",
       "class": "consensus",
       "owner": {
@@ -10362,7 +10229,7 @@
       },
       "open": {
         "owner": "X.2",
-        "summary": "The default sync_max_bytes (16 MiB) cannot serve a 16 MiB payload: it needs 17,369,120 bytes."
+        "summary": "The default sync_max_bytes (16 MiB) cannot serve a 16 MiB payload: it needs 17,041,440 bytes."
       },
       "tests": [
         {
@@ -10383,14 +10250,14 @@
     {
       "id": "committed_payload_has_a_feasible_sync_setting",
       "expr": "block.max_block_bytes + 2 * transport.frame_overhead_bytes <= transport.chain_frame_limit_bytes",
-      "why": "A sync_max_bytes that serves the block and still fits the frame limit must exist (B + 2H <= frame limit under the current checks). The chain rule admits a payload of up to 16,777,216 bytes, but such a setting exists only up to 16,185,312 bytes: above it every node refuses to start.",
+      "why": "A sync_max_bytes that serves the block and still fits the frame limit must exist (B + 2H <= frame limit under the current checks). The chain rule admits a payload of up to 16,777,216 bytes, but such a setting exists only up to 16,512,992 bytes: above it every node refuses to start.",
       "expect": {
         "today": "holds",
         "x2_target": "violated"
       },
       "open": {
         "owner": "X.2",
-        "summary": "With a 16 MiB payload no sync_max_bytes satisfies both rules: the configured frame budget would have to be 17,961,024 bytes (a budget under the current accounting, not a measured wire size) against a 17,369,120-byte frame limit and a 17,825,792-byte P2P ceiling. Reconcile the sync frame accounting or raise both limits, and reject committed parameters that leave no feasible setting."
+        "summary": "With a 16 MiB payload no sync_max_bytes satisfies both rules: the configured frame budget would have to be 17,305,664 bytes (a budget under the current accounting, not a measured wire size) against a 17,041,440-byte frame limit and a 17,825,792-byte P2P ceiling. Reconcile the sync frame accounting or raise both limits, and reject committed parameters that leave no feasible setting."
       }
     },
     {
@@ -10593,9 +10460,9 @@
       }
     },
     {
-      "id": "attachment_count_covers_halo2_verifier_batch",
-      "expr": "proof.config_halo2_verifier_max_batch <= attachment.list_max_attachments",
-      "why": "The list count is documented as matching the governed zk.halo2.verifier_max_batch default; a batch the verifier accepts must be carriable in one list.",
+      "id": "attachment_count_covers_generic_verifier_batch",
+      "expr": "proof.config_max_verify_batch <= attachment.list_max_attachments",
+      "why": "The list count is documented as matching the governed zk.max_verify_batch default; a batch the verifier accepts must be carriable in one list.",
       "expect": {
         "today": "holds",
         "x2_target": "holds"
@@ -10903,7 +10770,7 @@
     }
   ],
   "ram_lfe": {
-    "what": "Budgets of the full RAM-LFE workload, derived from the candidate shape recorded by the R.0 contract (specs/ram_lfe_execution_proof.md): 64 input slots, 64 outputs, four registers, 32 state lanes, 256 instructions, rank 16, 64 refreshes. Every part of the workload has a budget (`component`): the registered program, key registration, the request, evaluation, the receipt, verification, the single-opener opening, the threshold opening, the validator's decode and verification scratch, each of the three classes, leakage and the prover. A budget whose inputs are all known has a number the checker recomputes. A budget with an open input has no number: its formula and inputs are recorded and the owning task supplies the measurement. Every open input and every shape bound is used by a budget. The diagnostic Halo2 k <= 16 and 192 KiB ceilings (proof.config_halo2_max_k, proof.config_halo2_max_proof_bytes) are not requirements of the new proof.",
+    "what": "Budgets of the full RAM-LFE workload, derived from the candidate shape recorded by the R.0 contract (specs/ram_lfe_execution_proof.md): 64 input slots, 64 outputs, four registers, 32 state lanes, 256 instructions, rank 16, 64 refreshes. Every part of the workload has a budget (`component`): the registered program, key registration, the request, evaluation, the receipt, verification, the single-opener opening, the threshold opening, the validator's decode and verification scratch, each of the three classes, leakage and the prover. A budget whose inputs are all known has a number the checker recomputes. A budget with an open input has no number: its formula and inputs are recorded and the owning task supplies the measurement. Every open input and every shape bound is used by a budget. The standalone IPA diagnostic domain cap is independent of operation-proof admission; the current native PIPA-R payload ceiling (proof.config_pipa_r_max_proof_bytes) does not qualify a new RAM-LFE execution relation.",
     "open_inputs": [
       {
         "id": "ram_lfe.ciphertext_bytes",
@@ -11755,11 +11622,6 @@
       "source": "node_local",
       "what": "The typed catalog of [zk] and [confidential] node configuration that decides validity: the function hashes each field into the policy hash committed in the confidential feature digest. The code is authoritative; this view records every resource bound and gas charge among its fields and why the remaining fields are not resource bounds.",
       "fields": {
-        "halo2.max_k": "proof.config_halo2_max_k",
-        "halo2.verifier_max_batch": "proof.config_halo2_verifier_max_batch",
-        "halo2.max_envelope_bytes": "proof.config_halo2_max_envelope_bytes",
-        "halo2.max_proof_bytes": "proof.config_halo2_max_proof_bytes",
-        "halo2.max_transcript_label_len": "proof.config_halo2_max_transcript_label_len",
         "stark.max_envelope_bytes": "proof.config_stark_max_envelope_bytes",
         "stark.max_proof_bytes": "proof.config_stark_max_proof_bytes",
         "sccp.max_proofs_per_transaction": "proof.config_sccp_max_proofs_per_transaction",
@@ -11803,22 +11665,22 @@
         "gas.per_public_input": "work_budget.config_confidential_gas_per_public_input",
         "gas.per_proof_byte": "work_budget.config_confidential_gas_per_proof_byte",
         "gas.per_nullifier": "work_budget.config_confidential_gas_per_nullifier",
-        "gas.per_commitment": "work_budget.config_confidential_gas_per_commitment"
+        "gas.per_commitment": "work_budget.config_confidential_gas_per_commitment",
+        "max_verify_batch": "proof.config_max_verify_batch",
+        "pipa_r.max_envelope_bytes": "proof.config_pipa_r_max_envelope_bytes",
+        "pipa_r.max_proof_bytes": "proof.config_pipa_r_max_proof_bytes"
       },
       "excluded": [
         {
           "reason": "A mode switch, not a bound on bytes, counts or work. F.4 owns it as a node-local validity switch and removes the availability toggles.",
           "fields": [
-            "halo2.enabled",
-            "halo2.enforce_transcript_label_ascii",
+            "pipa_r.enabled",
             "stark.enabled"
           ]
         },
         {
           "reason": "A relation-selecting identity (curve, backend, parameter set or verifying key), not a resource bound. F.1 and F.4 own it as committed key and relation identity.",
           "fields": [
-            "halo2.curve",
-            "halo2.backend",
             "poseidon_params_id",
             "pedersen_params_id",
             "kaigi_authorization_vk",
@@ -12150,8 +12012,33 @@
         "kind": "const",
         "module": [
           "pub mod zk {",
-          "pub mod halo2 {"
+          "pub mod pipa_r {"
         ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/defaults.rs",
+        "kind": "const",
+        "module": [
+          "pub mod zk {",
+          "pub mod ipa_commitment {"
+        ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/defaults.rs",
+        "kind": "const",
+        "module": [
+          "pub mod zk {",
+          "pub mod trace {"
+        ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/defaults.rs",
+        "kind": "const",
+        "module": [
+          "pub mod zk {"
+        ],
+        "matching": "^MAX_VERIFY_BATCH$",
+        "why": "The generic proof batch bound is defined directly in zk; nested proof and local-diagnostic modules have their own complete scans."
       },
       {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
@@ -12219,10 +12106,6 @@
       },
       {
         "path": "crates/iroha_sumeragi/src/types.rs",
-        "kind": "const"
-      },
-      {
-        "path": "crates/iroha_sumeragi/src/message/attestation.rs",
         "kind": "const"
       },
       {
@@ -12573,20 +12456,6 @@
         "path": "crates/iroha_config/src/parameters/defaults.rs",
         "module": [
           "pub mod zk {",
-          "pub mod halo2 {"
-        ],
-        "reason": "Local ZK-lane scheduling: a soft time budget, queue and retry capacities. None is in the consensus-policy hash; exhausting one delays local verification.",
-        "symbols": [
-          "VERIFIER_BUDGET_MS",
-          "VERIFIER_QUEUE_CAP",
-          "VERIFIER_RETRY_RING_CAP",
-          "VERIFIER_RETRY_MAX_ATTEMPTS"
-        ]
-      },
-      {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "module": [
-          "pub mod zk {",
           "pub mod proof {"
         ],
         "reason": "A validity window in blocks, not a bound on bytes, counts or work; excluded from catalog zk_consensus_policy_hash for the same reason. F.4 owns validity windows.",
@@ -12690,13 +12559,6 @@
       {
         "path": "crates/iroha_sumeragi/src/availability/artifact.rs",
         "reason": "An associated constant of the bounded-frame trait that names the listed frame bound of its type (rs16.max_availability_frame_bytes and the availability table bounds).",
-        "symbols": [
-          "MAX"
-        ]
-      },
-      {
-        "path": "crates/iroha_sumeragi/src/message/attestation.rs",
-        "reason": "An associated constant of the bounded-frame trait that names the listed witness and attestation bounds of its type.",
         "symbols": [
           "MAX"
         ]
@@ -13607,6 +13469,33 @@
             ]
           }
         ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/defaults.rs",
+        "module": [
+          "pub mod zk {",
+          "pub mod trace {"
+        ],
+        "reason": "Local diagnostic trace scheduling only: batching, queue capacity and retries do not grant cryptographic proof or ledger authority and are excluded from the consensus-policy hash. Exhaustion delays a diagnostic task.",
+        "symbols": [
+          "MAX_BATCH",
+          "QUEUE_CAP",
+          "RETRY_RING_CAP",
+          "RETRY_MAX_ATTEMPTS"
+        ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/defaults.rs",
+        "module": [
+          "pub mod zk {",
+          "pub mod ipa_commitment {"
+        ],
+        "reason": "The standalone polynomial-opening diagnostic endpoint has no ledger relation or registry authority. These finite request bounds can refuse only that local diagnostic request; they do not affect transaction, block or operation-proof admission.",
+        "symbols": [
+          "MAX_K",
+          "MAX_TRANSCRIPT_LABEL_LEN",
+          "MAX_ENVELOPE_BYTES"
+        ]
       }
     ]
   },
@@ -13661,9 +13550,9 @@
     },
     {
       "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
-      "name": "halo2_and_stark_admission_inputs_bind_projection",
+      "name": "batch_and_stark_admission_inputs_bind_projection",
       "pins": "projection",
-      "what": "Shows that changing a Halo2 or STARK admission input changes the authority-registry projection."
+      "what": "Shows that changing the generic proof batch or STARK admission input changes the authority-registry projection."
     },
     {
       "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
@@ -13688,6 +13577,12 @@
       "name": "every_pipeline_amx_budget_changes_projection",
       "pins": "projection",
       "what": "Shows that changing an AMX budget changes the projection."
+    },
+    {
+      "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
+      "name": "pipa_r_admission_inputs_bind_projection",
+      "pins": "projection",
+      "what": "Shows that changing native PIPA-R admission inputs changes the authority-registry projection."
     }
   ]
 }

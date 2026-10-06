@@ -285,7 +285,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             IdentifierResolutionReceipt(
                 payload,
-                IdentifierReceiptAttestation("proof", null, "halo2/ipa", "AQID"),
+                IdentifierReceiptAttestation("proof", null, "pipa-r/pasta", "AQID"),
             ).verifyAttestation(policy)
         }
 
@@ -1223,9 +1223,9 @@ class HttpClientTransportTest {
             "ping",
         )
         val attachment = ProofAttachment(
-            "halo2/ipa",
+            "pipa-r/pasta",
             byteArrayOf(1, 2, 3),
-            ProofVerifierKeyRef("halo2/ipa", "draft_substitution"),
+            ProofVerifierKeyRef("pipa-r/pasta", "draft_substitution"),
         )
         val substitutions = listOf(
             base.copy(networkId = TestNetworkIds.fromSeed(0x32L)),
@@ -1714,9 +1714,9 @@ class HttpClientTransportTest {
         )
         val substitutedInner = listOf(canonicalTestInstruction(2))
         val attachment = ProofAttachment(
-            "halo2/ipa",
+            "pipa-r/pasta",
             byteArrayOf(4, 5, 6),
-            ProofVerifierKeyRef("halo2/ipa", "multisig_substitution"),
+            ProofVerifierKeyRef("pipa-r/pasta", "multisig_substitution"),
         )
         val substitutions = listOf(
             base.copy(networkId = TestNetworkIds.fromSeed(0x42L)),
@@ -3444,7 +3444,7 @@ class HttpClientTransportTest {
 
     @Test
     fun verifierKeyRegisterAndUpdateReturnUnsignedDrafts() {
-        val backend = "halo2/ipa"
+        val backend = "pipa-r/pasta"
         val registerBytes = byteArrayOf(1, 2, 3)
         val updateBytes = byteArrayOf(10)
         val authority = testMultisigAccountId()
@@ -3550,7 +3550,7 @@ class HttpClientTransportTest {
 
     @Test
     fun verifierKeyRequestsRejectMalformedInputsBeforeRequest() {
-        val backend = "halo2/ipa"
+        val backend = "pipa-r/pasta"
         val bytes = byteArrayOf(1, 2, 3)
         val commitment = verifierKeyCommitment(backend, bytes)
         val executor = CapturingExecutor()
@@ -3615,7 +3615,7 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun verifierKeyDraftCanonicalInstructionUsesU8StatusDiscriminant() {
+    fun verifierKeyDraftCanonicalInstructionUsesU32StatusDiscriminant() {
         val fixture = loadSharedFixture("fixtures/zk/verifying_key_record_v1.json")
         @Suppress("UNCHECKED_CAST")
         val request = obj(fixture, "request") as Map<String, Any>
@@ -3646,7 +3646,7 @@ class HttpClientTransportTest {
         assertEquals(
             statusHex,
             hex(payload.copyOfRange(statusOffset, statusOffset + statusHex.length / 2)),
-            "absent inline key must end immediately before the one-byte status field",
+            "absent inline key must end immediately before the four-byte status field",
         )
     }
 
@@ -3718,7 +3718,7 @@ class HttpClientTransportTest {
             wrongStatusTransport.registerVerifyingKey(
                 verifierKeyRegisterRequest(
                     verifyingKeyBytes = verifyingKeyBytes,
-                    commitmentHex = verifierKeyCommitment("halo2/ipa", verifyingKeyBytes),
+                    commitmentHex = verifierKeyCommitment("pipa-r/pasta", verifyingKeyBytes),
                 ),
             ).join()
         }
@@ -5077,7 +5077,7 @@ class HttpClientTransportTest {
 
     private fun verifierKeyRegisterRequest(
         authority: String = testMultisigAccountId(),
-        backend: String = "halo2/ipa",
+        backend: String = "pipa-r/pasta",
         name: String = "transfer_vk",
         version: Long = 1,
         circuitId: String = "transfer-v1",
@@ -5116,7 +5116,7 @@ class HttpClientTransportTest {
 
     private fun verifierKeyUpdateRequest(
         authority: String = testMultisigAccountId(),
-        backend: String = "halo2/ipa",
+        backend: String = "pipa-r/pasta",
         name: String = "transfer_vk",
         version: Long = 1,
         circuitId: String = "transfer-v1",

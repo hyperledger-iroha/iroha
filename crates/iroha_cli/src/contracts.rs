@@ -1108,9 +1108,6 @@ where
     fn finish_tx(&mut self) -> Result<ivm::host::AccessLog, ivm::VMError> {
         self.inner.finish_tx()
     }
-    fn set_external_vk_bytes(&mut self, backend: String, bytes: Vec<u8>) {
-        self.inner.set_external_vk_bytes(backend, bytes);
-    }
     fn checkpoint(&self) -> Option<Box<dyn std::any::Any + Send>> {
         self.inner.checkpoint()
     }

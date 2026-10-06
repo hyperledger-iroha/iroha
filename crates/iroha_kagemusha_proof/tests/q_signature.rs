@@ -4,14 +4,14 @@ mod common;
 use ff::Field;
 use iroha_kagemusha_proof::q_signature::{
     QSignatureCircuit, QSignaturePlan, SignatureKey, SignatureSlot, SignatureWitness,
+    native::{QSignatureError, QSignatureProver},
 };
 use iroha_pasta::{Fq, msm::MemoryBudget};
 use iroha_plonk::{
-    ProverConfig, Witness,
+    ProverConfig,
     check::{CheckMode, check_circuit},
-    create_proof_owned_with_claim,
     frontend::{Circuit, configure, synthesize},
-    keys::{KeygenConfigV2, keygen_pk_v2},
+    keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2, pk::artifact::ReadConfig},
     verifier::accumulate_generator,
 };
 use iroha_plonk_gadgets::{
@@ -245,20 +245,35 @@ fn signature_actual_native_proof_binds_inputs_and_retains_opening() {
     let mut config = KeygenConfigV2::pipa_r(QSignaturePlan::instance_types().to_vec());
     config.compress_selectors = false;
     let key = keygen_pk_v2(&params, &c, &config).unwrap();
-    let proof = create_proof_owned_with_claim(
-        &params,
-        &key,
-        Witness::from_circuit(&key, &c, &public).unwrap(),
-        common::recovery(119),
-        ProverConfig::default(),
+    let original = key.artifact_bytes_v2().unwrap();
+    let installed = QSignatureProver::from_original_artifact(
+        c.plan().clone(),
+        params.clone(),
+        key.binding().encoded(),
+        key.vk().to_bytes(),
+        &original,
+        signature_read_config(&original),
     )
     .unwrap();
+    assert_eq!(installed.binding(), key.binding());
+    assert_eq!(installed.verifying_key().to_bytes(), key.vk().to_bytes());
+    assert_eq!(installed.proving_key().copy_digest(), key.copy_digest());
+    let mut invalid = witness();
+    invalid.signature[1] = [0; 4];
+    assert!(matches!(
+        installed.prove(&[invalid], common::recovery(118), ProverConfig::default()),
+        Err(QSignatureError::Signature)
+    ));
+    let proof = installed
+        .prove(&[witness()], common::recovery(119), ProverConfig::default())
+        .unwrap();
+    assert_eq!(proof.instances, public);
     let claim = accumulate_generator(
         &params,
         key.binding(),
         key.vk(),
         &public,
-        &proof.proof,
+        &proof.bytes,
         MemoryBudget::DEFAULT,
     )
     .unwrap();
@@ -272,11 +287,236 @@ fn signature_actual_native_proof_binds_inputs_and_retains_opening() {
                 key.binding(),
                 key.vk(),
                 &wrong,
-                &proof.proof,
+                &proof.bytes,
                 MemoryBudget::DEFAULT
             )
             .is_err()
         );
     }
-    eprintln!("signature native proof{}B", proof.proof.len());
+    eprintln!("signature native proof{}B", proof.bytes.len());
+}
+
+fn signature_read_config(original: &[u8]) -> ReadConfig {
+    ReadConfig {
+        maximum_bytes: original.len(),
+        maximum_rows: 1 << 16,
+        coset_cache: CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    }
+}
+
+#[test]
+#[ignore = "optimized actual native original-key admission component"]
+fn installed_signature_originals_reject_bounds_keys_and_slot_source() {
+    use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
+    let c = circuit(witness(), VerifyMode::Hard, true);
+    let params = iroha_plonk::pcs::ipa::PinnedParams::<iroha_pasta::Ep>::derive(16).unwrap();
+    let mut key_config = KeygenConfigV2::pipa_r(QSignaturePlan::instance_types().to_vec());
+    key_config.compress_selectors = false;
+    let key = keygen_pk_v2(&params, &c, &key_config).unwrap();
+    let original = key.artifact_bytes_v2().unwrap();
+    let config = signature_read_config(&original);
+    let mount = |bytes: &[u8], selected: ReadConfig| {
+        QSignatureProver::from_original_artifact(
+            c.plan().clone(),
+            params.clone(),
+            key.binding().encoded(),
+            key.vk().to_bytes(),
+            bytes,
+            selected,
+        )
+    };
+    let mut bounded = config;
+    bounded.maximum_bytes -= 1;
+    assert!(matches!(
+        mount(&original, bounded),
+        Err(QSignatureError::Artifact(ArtifactError::Length))
+    ));
+    bounded = config;
+    bounded.maximum_rows -= 1;
+    assert!(matches!(
+        mount(&original, bounded),
+        Err(QSignatureError::Artifact(ArtifactError::Length))
+    ));
+    assert!(mount(&original[..original.len() - 1], config).is_err());
+    let mut corrupt = original.clone();
+    corrupt[0] ^= 1;
+    assert!(matches!(
+        mount(&corrupt, config),
+        Err(QSignatureError::Artifact(ArtifactError::Encoding))
+    ));
+    corrupt = original.clone();
+    corrupt[8] ^= 1;
+    assert!(matches!(
+        mount(&corrupt, config),
+        Err(QSignatureError::Artifact(ArtifactError::Encoding))
+    ));
+    corrupt = original.clone();
+    let scalar_start = 44 + key.vk().to_bytes().len() + 32;
+    corrupt[scalar_start..scalar_start + 32].fill(0xff);
+    assert!(matches!(
+        mount(&corrupt, config),
+        Err(QSignatureError::Artifact(ArtifactError::Encoding))
+    ));
+    corrupt = original.clone();
+    corrupt[44 + key.vk().to_bytes().len()] ^= 1;
+    assert!(matches!(
+        mount(&corrupt, config),
+        Err(QSignatureError::Artifact(ArtifactError::Source))
+    ));
+    let oversized_descriptor = vec![0; (1 << 20) + 1];
+    assert!(matches!(
+        QSignatureProver::from_original_artifact(
+            c.plan().clone(),
+            params.clone(),
+            &oversized_descriptor,
+            key.vk().to_bytes(),
+            &original,
+            config
+        ),
+        Err(QSignatureError::Artifact(ArtifactError::Length))
+    ));
+    let oversized_vk = vec![0; (1 << 18) + 1];
+    assert!(matches!(
+        QSignatureProver::from_original_artifact(
+            c.plan().clone(),
+            params.clone(),
+            key.binding().encoded(),
+            &oversized_vk,
+            &original,
+            config
+        ),
+        Err(QSignatureError::Artifact(ArtifactError::Length))
+    ));
+    let mut wrong_profile =
+        iroha_plonk::cs::CircuitDescriptorV2::decode(key.binding().encoded()).unwrap();
+    wrong_profile.instance_types[0] = iroha_plonk::cs::InstanceType::Field;
+    assert!(matches!(
+        QSignatureProver::from_original_artifact(
+            c.plan().clone(),
+            params.clone(),
+            &wrong_profile.encode().unwrap(),
+            key.vk().to_bytes(),
+            &original,
+            config
+        ),
+        Err(QSignatureError::Profile)
+    ));
+    let mut wrong_vk = key.vk().to_bytes().to_vec();
+    wrong_vk[0] ^= 1;
+    assert!(
+        QSignatureProver::from_original_artifact(
+            c.plan().clone(),
+            params.clone(),
+            key.binding().encoded(),
+            &wrong_vk,
+            &original,
+            config
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        QSignatureProver::from_original_artifact(
+            c.plan().clone(),
+            iroha_plonk::pcs::ipa::PinnedParams::derive(15).unwrap(),
+            key.binding().encoded(),
+            key.vk().to_bytes(),
+            &original,
+            config
+        ),
+        Err(QSignatureError::Parameters)
+    ));
+    for plan in [
+        circuit(witness(), VerifyMode::Soft, true).plan().clone(),
+        circuit(witness(), VerifyMode::Hard, false).plan().clone(),
+        QSignaturePlan::new(vec![SignatureSlot {
+            mode: VerifyMode::Hard,
+            key: SignatureKey::Fixed(Affine::GENERATOR),
+        }])
+        .unwrap(),
+        QSignaturePlan::new(vec![
+            SignatureSlot {
+                mode: VerifyMode::Hard,
+                key: c.plan().slots()[0].key,
+            };
+            2
+        ])
+        .unwrap(),
+    ] {
+        assert!(
+            QSignatureProver::from_original_artifact(
+                plan,
+                params.clone(),
+                key.binding().encoded(),
+                key.vk().to_bytes(),
+                &original,
+                config
+            )
+            .is_err()
+        );
+    }
+    let installed = mount(&original, config).unwrap();
+    let mut wrong_key = witness();
+    wrong_key.key = [Affine::GENERATOR.x, Affine::GENERATOR.y];
+    assert!(matches!(
+        installed.prove(&[wrong_key], common::recovery(120), ProverConfig::default()),
+        Err(QSignatureError::KeyBinding)
+    ));
+}
+
+#[test]
+#[ignore = "optimized actual native total soft signature-Q proof component"]
+fn installed_signature_originals_prove_total_soft_failures() {
+    let c = circuit(witness(), VerifyMode::Soft, false);
+    let params = iroha_plonk::pcs::ipa::PinnedParams::<iroha_pasta::Ep>::derive(16).unwrap();
+    let mut key_config = KeygenConfigV2::pipa_r(QSignaturePlan::instance_types().to_vec());
+    key_config.compress_selectors = false;
+    let key = keygen_pk_v2(&params, &c, &key_config).unwrap();
+    let original = key.artifact_bytes_v2().unwrap();
+    let installed = QSignatureProver::from_original_artifact(
+        c.plan().clone(),
+        params,
+        key.binding().encoded(),
+        key.vk().to_bytes(),
+        &original,
+        signature_read_config(&original),
+    )
+    .unwrap();
+    let mut invalid = witness();
+    invalid.signature[1] = [0; 4];
+    let proof = installed
+        .prove(&[invalid], common::recovery(121), ProverConfig::default())
+        .unwrap();
+    assert_eq!(
+        proof.instances,
+        circuit(invalid, VerifyMode::Soft, false)
+            .instances(&[false])
+            .unwrap()
+    );
+    assert_eq!(proof.instances[0][9], Fq::ZERO);
+    let claim = accumulate_generator(
+        installed.params(),
+        installed.binding(),
+        installed.verifying_key(),
+        &proof.instances,
+        &proof.bytes,
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
+    claim
+        .decide(installed.params(), MemoryBudget::DEFAULT)
+        .unwrap();
+    let mut forged = proof.instances.clone();
+    forged[0][9] = Fq::ONE;
+    assert!(
+        accumulate_generator(
+            installed.params(),
+            installed.binding(),
+            installed.verifying_key(),
+            &forged,
+            &proof.bytes,
+            MemoryBudget::DEFAULT
+        )
+        .is_err()
+    );
 }

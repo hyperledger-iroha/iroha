@@ -1383,9 +1383,6 @@ pub mod isi {
         }
         Ok(())
     }
-    fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
-        crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
-    }
     fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
         if crate::zk::is_production_claim_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -1605,16 +1602,7 @@ pub mod isi {
             )
             .into());
         }
-        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
-            && !crate::zk::halo2_open_verify_circuit_id_matches_backend(backend, circuit_id)
-        {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "Halo2 OpenVerify circuit_id is not in the production circuit registry".into(),
-                ),
-            )
-            .into());
-        }
+
         Ok(())
     }
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
@@ -2677,24 +2665,6 @@ pub mod isi {
                 ));
             }
             match record.backend {
-                BackendTag::Halo2IpaPasta => {
-                    if record.curve != "pallas" {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verifying key curve must be \"pallas\"".into(),
-                            ),
-                        ));
-                    }
-                    ensure_production_verifying_key_backend_id(id_backend)?;
-                    if !is_no_trusted_setup_halo2_backend_id(id_backend) {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verifying key id backend must target no-trusted-setup Halo2 IPA"
-                                    .into(),
-                            ),
-                        ));
-                    }
-                }
                 BackendTag::NativePipaRPasta => {
                     if record.curve != "vesta" {
                         return Err(InstructionExecutionError::InvalidParameter(
@@ -11234,24 +11204,6 @@ pub mod isi {
         let id_backend = id.backend.as_str();
         ensure_open_verify_circuit_id_is_admitted_v1(id_backend, &new.circuit_id)?;
         match new.backend {
-            BackendTag::Halo2IpaPasta => {
-                if new.curve != "pallas" {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "verifying key curve must be \"pallas\"".into(),
-                        ),
-                    ));
-                }
-                ensure_production_verifying_key_backend_id(id_backend)?;
-                if !is_no_trusted_setup_halo2_backend_id(id_backend) {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "verifying key id backend must target no-trusted-setup Halo2 IPA"
-                                .into(),
-                        ),
-                    ));
-                }
-            }
             BackendTag::NativePipaRPasta => {
                 if new.curve != "vesta" {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -26625,7 +26577,7 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(extract_vote_public_inputs_rejects_retired_and_unadmitted_native_engines {
             for (backend, tag, circuit) in [
-                ("halo2/ipa", BackendTag::Halo2IpaPasta, "halo2/ipa:vote-circuit"),
+                ("halo2/ipa", BackendTag::NativePipaRPasta, "halo2/ipa:vote-circuit"),
                 ("pipa-r/pasta", BackendTag::NativePipaRPasta, "pipa-r/pasta/vote-bool-commit-merkle8-v1"),
             ] {
                 let envelope = OpenVerifyEnvelope::new(
@@ -29695,20 +29647,20 @@ seiyaku GovernanceLifecycle {
             authority: &AccountId,
             instruction: InstructionBox,
         ) -> Result<(), ValidationFail> {
-            assert!(
-                instruction
-                    .as_any()
-                    .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
-                    .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<verifying_keys::UpdateVerifyingKey>()
-                        .is_some(),
-                "the registry component fixture cannot replace another admission owner"
-            );
-            instruction
-                .execute(authority, state_transaction)
-                .map_err(ValidationFail::InstructionFailed)
+            if let Some(value) = instruction
+                .as_any()
+                .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+            {
+                value.clone().execute(authority, state_transaction)
+            } else if let Some(value) = instruction
+                .as_any()
+                .downcast_ref::<verifying_keys::UpdateVerifyingKey>()
+            {
+                value.clone().execute(authority, state_transaction)
+            } else {
+                panic!("the registry component fixture cannot replace another admission owner")
+            }
+            .map_err(ValidationFail::InstructionFailed)
         }
         fn grant_manage_verifying_keys(stx: &mut StateTransaction<'_, '_>) {
             let perm: Permission = CanManageVerifyingKeys.into();

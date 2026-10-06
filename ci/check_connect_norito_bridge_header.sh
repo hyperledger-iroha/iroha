@@ -170,10 +170,11 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_resume_v1",
     "connect_norito_kagemusha_wallet_fold_v1",
     "connect_norito_kagemusha_wallet_credit_status_v1",
+    "connect_norito_kagemusha_wallet_snapshot_v1",
 }
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "open", "close", "activity", "call")
+    for method in ("revision", "open", "close", "activity", "call", "snapshot")
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_account_read_permission_multisig_signed_transaction",

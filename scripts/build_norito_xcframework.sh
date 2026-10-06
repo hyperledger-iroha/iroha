@@ -1945,7 +1945,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_kagemusha_wallet_retry_v1",
     "connect_norito_kagemusha_wallet_resume_v1",
     "connect_norito_kagemusha_wallet_fold_v1",
-    "connect_norito_kagemusha_wallet_credit_status_v1"
+    "connect_norito_kagemusha_wallet_credit_status_v1",
+    "connect_norito_kagemusha_wallet_snapshot_v1"
   ],
   "forbidden_symbols": [
     "connect_norito_kagemusha_v1_payment_request_validate",

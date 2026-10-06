@@ -23058,6 +23058,50 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            exactSuccessStatus: 202)
     }
 
+    /// Read the payer's exact finalized issuance original under the current wallet protocol.
+    ///
+    /// The returned bytes remain unverified. Only the Native wallet may decode/admit the
+    /// pending body or root-authenticated signed load voucher; HTTP success never credits a
+    /// balance. Missing/unfinalized source is an error, never a fresh issuance or absence.
+    public func getKagemushaWalletLoadIssuanceOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> ToriiKagemushaWalletLoadIssuanceOriginalV1 {
+        try await requireCurrentOwner()
+        let request = try makeKagemushaWalletLoadIssuanceRequestV1(
+            selection: selection, canonicalAuth: canonicalAuth)
+        try await requireCurrentOwner()
+        let (data, response) = try await sendBoundedResponse(
+            request, context: "KAGEMUSHA load issuance",
+            maximumBytes: ToriiKagemushaWalletLoadIssuanceOriginalV1.maximumBytes)
+        try await requireCurrentOwner()
+        try ensureStatus(response, equals: 200, responseBody: data)
+        guard let network = localSigningContext?.networkId else {
+            throw ToriiClientError.invalidPayload("KAGEMUSHA issuance requires an exact signing network")
+        }
+        return try ToriiKagemushaWalletLoadIssuanceOriginalV1(
+            selection: selection, payerAccountID: canonicalAuth.accountId, networkID: network,
+            expectedURL: request.url, response: response, bytes: data)
+    }
+
+    /// One freshly signed canonical empty-body GET; no precomputed request-auth headers.
+    func makeKagemushaWalletLoadIssuanceRequestV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) throws -> URLRequest {
+        var request = try makeCanonicalAccountRequest(
+            path: selection.path, method: .get,
+            headers: [
+                "Accept": "application/x-norito",
+                "Accept-Encoding": "identity",
+                "Cache-Control": "no-cache, no-store",
+            ], canonicalAuth: canonicalAuth)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpShouldUsePipelining = false
+        return request
+    }
+
     /// Fetch Torii's authoritative committed Exact12 manifest as the exact
     /// canonical Norito bytes selected by the server.
     ///

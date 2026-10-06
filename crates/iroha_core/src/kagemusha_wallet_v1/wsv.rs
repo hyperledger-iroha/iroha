@@ -135,6 +135,59 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
         )?);
         self.insert_immutable(rows)
     }
+    /// Reserve one bounded native package verification under the existing transaction
+    /// and block proof quotas. Transport bytes include both carried accumulator originals.
+    pub(crate) fn reserve_package_proof(
+        &mut self,
+        package: &KagemushaWalletPackageV1,
+    ) -> Result<()> {
+        let bytes = package
+            .step_proof
+            .bytes
+            .len()
+            .checked_add(
+                package
+                    .lineage
+                    .lineage()
+                    .map_or(0, |lineage| lineage.proof.len()),
+            )
+            .ok_or(Error::Overflow)?;
+        self.state.register_confidential_proof(bytes)?;
+        Ok(())
+    }
+    /// Retain original native verifier material only after exact reserve consent and
+    /// registered-asset governance. The scheme install cannot be replaced or deleted.
+    pub(crate) fn install_verifier_pack(
+        &mut self,
+        scheme: Digest,
+        asset: Digest,
+        manifest_digest: Digest,
+        pack: Vec<u8>,
+    ) -> Result<()> {
+        use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet;
+        let registration = self.registration(&scheme, &asset)?;
+        self.require_asset(&registration)?;
+        if self.authority != registration.reserve
+            || !crate::smartcontracts::isi::helpers::world_account_has_permission(
+                self.state.world(),
+                &self.authority,
+                CanManageKagemushaWallet {
+                    asset_definition: registration.asset.asset.clone(),
+                }
+                .into(),
+            )
+        {
+            return Err(Error::Execution(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier install requires reserve consent and exact CanManageKagemushaWallet".into(),
+            )));
+        }
+        let value = super::artifacts::VerifierInstallation::authenticate(
+            &registration,
+            manifest_digest,
+            pack,
+        )?;
+        self.insert_immutable(vec![Self::row(super::artifacts::key(scheme), &value)?])
+    }
     fn insert_immutable(&mut self, rows: Vec<(KagemushaWalletLedgerKeyV1, Vec<u8>)>) -> Result<()> {
         // Prepare and compare every row before the first mutation. Permanent reference counts
         // are the sole incrementing records in this helper.

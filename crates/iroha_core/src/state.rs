@@ -11980,7 +11980,7 @@ pub struct State {
     tiered_snapshot_worker: TieredSnapshotWorker,
     /// Fraud monitoring configuration snapshot.
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
-    /// Zero-knowledge verification configuration (Halo2 backend limits, etc.).
+    /// Native proof verification and local trace configuration.
     pub zk: iroha_config::parameters::actual::Zk,
     /// Governance configuration (voting keys, policies).
     pub gov: iroha_config::parameters::actual::Governance,
@@ -27385,7 +27385,9 @@ impl State {
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: iroha_config::parameters::actual::Zk {
                 pipa_r: iroha_config::parameters::actual::PipaR::default(),
-                halo2: iroha_config::parameters::actual::Halo2::default(),
+                trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+        ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+        max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
                 fastpq: iroha_config::parameters::actual::Fastpq {
                     execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
                     poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -34895,7 +34897,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
     fn lane_incarnation_at_height(&self, lane_id: LaneId, proposal_height: u64) -> Option<Hash>;
     /// Content lane configuration snapshot.
     fn content(&self) -> &iroha_config::parameters::actual::Content;
-    /// Zero-knowledge verification settings (Halo2 backend, curve, limits).
+    /// Native proof verification and local trace settings.
     fn zk(&self) -> &iroha_config::parameters::actual::Zk;
     /// Chain identifier bound to this state view.
     fn chain_id(&self) -> &iroha_model_base::chain::ChainId;
@@ -35504,7 +35506,9 @@ pub fn compute_vk_set_hash_at_height(world: &impl WorldReadOnly, height: u64) ->
 pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
         pipa_r: iroha_config::parameters::actual::PipaR::default(),
-        halo2: iroha_config::parameters::actual::Halo2::default(),
+        trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+        ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+        max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
         fastpq: iroha_config::parameters::actual::Fastpq {
             execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
             poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -35690,19 +35694,6 @@ pub fn combine_zk_and_sccp_policy_hashes(
     zk_policy_put_bytes(&mut hasher, &sccp_policy_hash);
     Sha2Digest::finalize(hasher).into()
 }
-fn zk_curve_tag(curve: iroha_config::parameters::actual::ZkCurve) -> &'static str {
-    match curve {
-        iroha_config::parameters::actual::ZkCurve::Pallas => "pallas",
-        iroha_config::parameters::actual::ZkCurve::Pasta => "pasta",
-        iroha_config::parameters::actual::ZkCurve::Goldilocks => "goldilocks",
-        iroha_config::parameters::actual::ZkCurve::Bn254 => "bn254",
-    }
-}
-fn halo2_backend_tag(backend: iroha_config::parameters::actual::Halo2Backend) -> &'static str {
-    match backend {
-        iroha_config::parameters::actual::Halo2Backend::Ipa => "ipa",
-    }
-}
 /// Compute the ZK policy hash committed in confidential feature digests.
 ///
 /// The hash covers consensus-relevant ZK configuration, including the `[zk.sccp]` native verifier
@@ -35714,39 +35705,7 @@ pub fn compute_zk_consensus_policy_hash(
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     zk_policy_put_bytes(&mut h, b"iroha:zk:consensus-policy:v1");
-    zk_policy_put_bool(&mut h, "halo2.enabled", zk_config.halo2.enabled);
-    zk_policy_put_str(&mut h, "halo2.curve", zk_curve_tag(zk_config.halo2.curve));
-    zk_policy_put_str(
-        &mut h,
-        "halo2.backend",
-        halo2_backend_tag(zk_config.halo2.backend),
-    );
-    zk_policy_put_u32(&mut h, "halo2.max_k", zk_config.halo2.max_k);
-    zk_policy_put_u32(
-        &mut h,
-        "halo2.verifier_max_batch",
-        zk_config.halo2.verifier_max_batch,
-    );
-    zk_policy_put_usize(
-        &mut h,
-        "halo2.max_envelope_bytes",
-        zk_config.halo2.max_envelope_bytes,
-    );
-    zk_policy_put_usize(
-        &mut h,
-        "halo2.max_proof_bytes",
-        zk_config.halo2.max_proof_bytes,
-    );
-    zk_policy_put_usize(
-        &mut h,
-        "halo2.max_transcript_label_len",
-        zk_config.halo2.max_transcript_label_len,
-    );
-    zk_policy_put_bool(
-        &mut h,
-        "halo2.enforce_transcript_label_ascii",
-        zk_config.halo2.enforce_transcript_label_ascii,
-    );
+    zk_policy_put_u32(&mut h, "max_verify_batch", zk_config.max_verify_batch);
     zk_policy_put_bool(&mut h, "pipa_r.enabled", zk_config.pipa_r.enabled);
     zk_policy_put_usize(
         &mut h,

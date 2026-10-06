@@ -10,7 +10,6 @@ import kotlin.test.assertTrue
 class VerifyingKeyBackendTagTest {
 
     private val registry = linkedSetOf(
-        "halo2/ipa",
         "pipa-r/pasta",
         "pipa-r/pasta/kaigi-authorization-v1",
         "pipa-r/pasta/kaigi-usage-v1",
@@ -24,15 +23,10 @@ class VerifyingKeyBackendTagTest {
     fun `backend enum contains only canonical low-level engines`() {
         assertEquals(
             listOf(
-                VerifyingKeyBackendTag.HALO2_IPA_PASTA,
-                VerifyingKeyBackendTag.STARK,
                 VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA,
+                VerifyingKeyBackendTag.STARK,
             ),
             VerifyingKeyBackendTag.entries,
-        )
-        assertEquals(
-            VerifyingKeyBackendTag.HALO2_IPA_PASTA,
-            VerifyingKeyBackendTag.parse("halo2-ipa-pasta"),
         )
         assertEquals(VerifyingKeyBackendTag.STARK, VerifyingKeyBackendTag.parse("stark"))
         assertEquals(VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA, VerifyingKeyBackendTag.parse("native-pipa-r-pasta"))
@@ -42,6 +36,7 @@ class VerifyingKeyBackendTagTest {
     fun `backend parser rejects aliases retired engines and malformed labels`() {
         for (label in listOf(
             "",
+            "halo2-ipa-pasta",
             " halo2-ipa-pasta",
             "halo2-ipa-pasta ",
             "HALO2-IPA-PASTA",
@@ -67,7 +62,7 @@ class VerifyingKeyBackendTagTest {
 
     @Test
     fun `registry is the exact immutable native allowlist`() {
-        assertEquals(8, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1.size)
+        assertEquals(7, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1.size)
         assertEquals(registry, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1)
         assertFailsWith<UnsupportedOperationException> {
             @Suppress("UNCHECKED_CAST")
@@ -79,9 +74,7 @@ class VerifyingKeyBackendTagTest {
     @Test
     fun `every registry label resolves to one exact engine`() {
         for (label in registry) {
-            val expected = if (label.startsWith("halo2/")) {
-                VerifyingKeyBackendTag.HALO2_IPA_PASTA
-            } else if (label.startsWith("pipa-r/")) {
+            val expected = if (label.startsWith("pipa-r/")) {
                 VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA
             } else {
                 VerifyingKeyBackendTag.STARK
@@ -108,6 +101,7 @@ class VerifyingKeyBackendTagTest {
     fun `registry rejects aliases retired families and confusables`() {
         val rejected = listOf(
             "",
+            "halo2/ipa",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-authorization-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -241,9 +235,9 @@ class VerifyingKeyBackendTagTest {
     @Test
     fun `catalog classifier accepts only exact production labels`() {
         for (label in listOf(
-            "halo2-ipa-pasta",
+            "native-pipa-r-pasta",
             "stark",
-            "halo2/ipa",
+            "pipa-r/pasta",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         )) {
             assertEquals(

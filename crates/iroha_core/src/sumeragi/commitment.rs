@@ -17,7 +17,7 @@
 //!   boundary is certified and applied (§10.1, [`super::schedule`]).
 //!
 //! The canonical preimage is stored as `CommitCertificate.result_preimage` next to the block, so a
-//! proof (§11) or an application attestation (§3.7) can disclose it and anyone can re-hash it
+//! proof (§11) can disclose it and anyone can re-hash it
 //! ([`result_of_preimage`]).
 //!
 //! The World state roots are roots of the complete World state accumulator
@@ -1250,7 +1250,6 @@ mod tests {
             proposer: 2,
             skipped_leaders: Vec::new(),
             control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-            attest: true,
         };
         let qc = Qc {
             kind: VoteKind::Commit,
@@ -1260,19 +1259,8 @@ mod tests {
             view: 5,
             block_hash: Hash32([5; 32]),
             result: Hash32([6; 32]),
-            attest: true,
             signers: Bitmap::from_indices(4, [0, 2, 3]).unwrap(),
             agg_sig: AggregateSignature([7; SIGNATURE_LEN]),
-            attestations: vec![
-                iroha_sumeragi::message::AttestationSignature::try_from_slice(
-                    &[8; 200]
-                )
-                .unwrap();
-                3
-            ],
-            attestation_witness: Some(
-                iroha_sumeragi::message::ResultWitness::from_untrusted(vec![9; 4096]).unwrap(),
-            ),
         };
         let expected_header = norito::encode_canonical(&header).unwrap();
         let expected_qc = norito::encode_canonical(&qc).unwrap();

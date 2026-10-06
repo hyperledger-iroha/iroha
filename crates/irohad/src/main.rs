@@ -4853,7 +4853,7 @@ impl Iroha {
         // Start proof lanes before Torii begins accepting submissions so one-time GPU setup happens
         // during node startup instead of the first hot-path transaction burst.
         if !emergency_fast {
-            if let Some((_h, child)) = iroha_core::pipeline::zk_lane::start(&config.zk.halo2) {
+            if let Some((_h, child)) = iroha_core::pipeline::zk_lane::start(&config.zk.trace) {
                 supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
             }
             if let Some((_h, child)) =
@@ -4868,16 +4868,12 @@ impl Iroha {
             }
         }
         let online_peers_provider = include!("main/online_peers_provider.rs");
-        let kagemusha_publisher = if emergency_fast {
-            None
-        } else {
-            kagemusha_load_authorizer::Service::new(
-                config.kagemusha_load_authorizer,
-                state.clone(),
-                queue.clone(),
-            )
-            .map_err(|message| Report::new(StartError::StartTorii).attach(message))?
-        };
+        let kagemusha_publisher = kagemusha_load_authorizer::Service::new(
+            config.kagemusha_load_authorizer,
+            state.clone(),
+            queue.clone(),
+        )
+        .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             NetworkId::from_genesis_hash(config.genesis.expected_hash),
@@ -4975,9 +4971,7 @@ impl Iroha {
                 supervisor.monitor(child);
             }
         }
-        if let Some(publisher) = kagemusha_publisher {
-            supervisor.monitor(publisher.start(supervisor.shutdown_signal()));
-        }
+        supervisor.monitor(kagemusha_publisher.start(supervisor.shutdown_signal()));
         // Finalize NTS ownership only after every fallible startup preflight has
         // succeeded. Otherwise an early return would detach a task and retain
         // its process-singleton ownership across an in-process retry. Fast is a

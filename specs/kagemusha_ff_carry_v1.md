@@ -1078,3 +1078,324 @@ uses **64,928 shared / 94,792 range rows**, with unchanged **4,768-byte**
 transport (`bounded-pasta-four-bus-bootstrap-omega.log`). Its 335 newly short
 blocks remove 2,345 range rows. It still exceeds the k16 range capacity by
 **29,262 rows**; there is no actual compact k16 outer proof or release claim.
+
+## 26. Three-carry lowering onto ordinary Glue rows
+
+The ordinary serialized profile now shares the structural `carry_layout`
+selection with the staged profile. It lowers the chosen low equations onto
+the existing Glue multiplication/linear rows, rather than defining another
+gate. The full 94-bit envelope still selects four offset-104 carries. Proper
+products use three offset-89, 90-bit carries and quotient widths 87/87/84;
+the bounded Pasta envelope of Section 25 uses three offset-92, 93-bit carries
+and quotient widths 87/87/85. Ordinary admission precedes selection. This
+lowering explicitly rechecks mode/modulus restrictions before assigning roots.
+
+Result limbs remain checked at 87/87/82 bits and retain the **Proper** form.
+This is wider than the staged Pasta result, and needs a separate bound:
+bounded division has `b*c < 2^513`, `q*m < 2^514`, and exact fixed padding
+below `2^269`, so the global signed residual still has magnitude below
+`2^515 < B^3*N`. Its first three coefficients remain below `14*B^2`, giving
+the same honest carry and malicious local-residual bounds. Proper products
+retain their Section 18 bounds. The native recomposition includes every
+operand/result/quotient limb and the full fixed padding; only the fourth low
+equation is absent. Offset witnesses are rebased from the original offset-104
+representation before applying their narrower range certificates. A short
+block uses 16 ordinary Glue rows instead of 19, without adding any query,
+column, lookup or degree.
+
+The root reviewer separately inspected this lowering and independently
+rederived the wider-result bound, offset rebasing, exact padding/native
+recomposition and metadata-only selection, finding no gap in that scope.
+The required test corpus now passes 5/5 in 2.53 seconds
+(`serialized-short-carry-tests-v2.log`): both native fields, all four protocol
+moduli, maximum 256-bit Proper operands, small-custom-modulus exclusion,
+bounded numerator/divisor limits, widened metadata, zero division, forged
+result/quotient/carry, canonical aliases, every-cell mutation, known/unknown
+shape and final usable-row boundaries. Strict all-target lint for the gadgets,
+recursion and proof crates passes (`serialized-short-carry-clippy.log`).
+
+| Current reviewed lowering source | SHA-256 |
+|---|---|
+| `ff/mod.rs` | `d9fac96aab07d5af33921651c720530e26a7ddbed9d75d8bdac2eef5ea520a5b` |
+| `ff/serialized.rs` | `cd54a496ec1cf5f397ec49548bd0d633154fc16a818f85e26dfb402a2831cb13` |
+| `ff/serialized/tests.rs` | `e6417d38fae751a3b7e2cf9d43ef73227f03d3d69edfb49ce7b235d02b28cb5e` |
+| `ff/bounded_tests.rs` | `6e69b7ee1ce95814d572ee8496fc3b31fa33a5a7927e2902b7478b9949958a41` |
+
+After receiving those results and exact hashes, the root reviewer accepted
+this ordinary lowering as a source-level component. Actual A3/compact
+capacity and current-source performance qualification remain separate gates;
+earlier fixed-key artifacts must be regenerated for the new fixed schedule.
+In particular, the parallel source profile attaches the direct four-row
+rotated kernel, which still uses its four-carry predicate: ordinary Glue
+lowering must not be credited with reducing all source product blocks.
+
+The subsequent Q2/A3 Bootstrap diagnostic passes with actual 7,872-byte A
+proofs and a pinned outer inventory of 62,500 shared / 91,862 range rows
+(`serialized-short-q2-a3-bootstrap-omega.log`, 174.69 seconds). The transport
+estimate remains 4,768 bytes, but the range limit fails by 26,332 rows and no
+compact k16 proof is produced. The independently run complete Load candidate
+still fails its A2 source stage at 68,760 range rows, so this is not a uniform
+source profile or release-catalog result.
+
+## 27. Exact tagged tables in parallel source range banks
+
+The explicit tagged bank retains independent lookup arguments for independent
+range buses. Each argument uses the same fixed `(width, value)` table; its tag
+is circuit-fixed, so an out-of-range top cannot move into another width's
+interval. The 65,528 rows enumerate widths 3 through 15; widths 1 and 2 use
+exact algebraic roots. Default and padding tuples are `(15, 0)`. This replaces
+shifted-top rows without weakening a limb bound or changing CRT admission.
+The default source profile remains available as a separately named layout;
+artifact acceptance does not fall back between profiles.
+
+Both-field bank tests pass every-cell mutations, exact width failures,
+known/unknown shape, same-cell certificate reuse and rejected mixed-table or
+duplicate-column construction (`tagged-bank-tests.log`, 51.96 seconds). The
+full interpreter differential passes both curves with two and three buses,
+honest and malformed proofs, hard/soft behavior and known/unknown shape
+(`tagged-bank-interpreter.log`, 43.63 seconds). Scoped strict lint passes.
+
+The actual Q2/tagged-A3 Load diagnostic completes all four native proof stages
+(`/tmp/kg-load-q2-a3-tagged.log`, 511.01 seconds). Their maximum occupied rows
+are 55,611 / 61,808 / 57,646 / 58,164, and every source proof is 7,744 bytes.
+The common source descriptor has degree 8, 23 advice columns, 51 fixed
+queries, 57 advice queries, 16 equality columns and four lookups, with digest
+`4c9ed1f762bbad39623dd865a5c72876d5482d1ddf20bf15f6facf3259d9233b`.
+The rooted Bootstrap predecessor uses the matching source profile. This
+establishes Bootstrap/Load source feasibility; final catalog rebinding, Send,
+all remaining operations and release qualification remain open.
+
+The matching actual Bootstrap-to-compact diagnostic
+(`tagged-q2-a3-bootstrap-omega.log`, 202.90 seconds) uses 62,849 shared rows
+and 94,033 range rows. The 4,768-byte transport is descriptor-derived only;
+the range lane exceeds k16 by 28,503 rows and no compact k16 proof is produced.
+Its single Bootstrap key is not a release catalog.
+
+| Tagged source component snapshot | SHA-256 |
+|---|---|
+| `crates/iroha_plonk_gadgets/src/range/running_sum.rs` | `156044f14acd73e86d520ee43d5bd1317e1194ba90aa86586277a2afe2c548aa` |
+| `crates/iroha_plonk_gadgets/src/range/running_sum/cache_tests.rs` | `5e4a7977a05caf8d750c88367ae4ce550db235899686aa91a54c4ddf24457e8d` |
+| `crates/iroha_plonk_recursion/src/verifier/mod.rs` | `f80d9e1b22b7f09332e81264af89954fdd75ecd4596902db3f5f6d979b96ab6e` |
+| `crates/iroha_plonk_recursion/src/verifier/tests.rs` | `07e805c532e20203e588f5a67122aac2953b9591c10b40700b8860890ed95c70` |
+
+## 28. Secondary algebraic range and checked replay (qualification open)
+
+`range/secondary.rs` adds an experimental range stream on spare existing
+compact advice ports. It retains the single authenticating tuple lookup;
+its digits are constrained by polynomial roots. The named experimental phase
+encoding makes zero fixed bits the idle ECC phase, so the linear digit enable
+vanishes on unused/blinding rows. Existing production profiles keep their
+original phase encoding. An explicit compact candidate now connects this component
+to the complete interpreter through a fixed replay plan; its full predicate,
+proof and admitted-catalog qualification remain open.
+
+The second running state uses port 4 at rotations 0/+1. Glue packs digits of
+widths 3/3/2/2/2 (12 bits); Poseidon packs five 3-bit digits (15 bits). Exact
+termination widths are Glue 9/Poseidon 6 for 81-bit inputs, Glue 9 for 93-bit
+inputs, Glue 3/Poseidon 12 for 87-bit inputs, and 8 bits in either phase for 128.
+The Glue 9-bit top explicitly constrains its last digit to one bit. Every
+unused top digit is zero. Telescoping yields the exact requested integer
+bound below 2^128, strictly below either native modulus; field wrap cannot
+provide an alternative representation. A fixed primary tagged-top row keeps
+its own width control and forces a secondary step. Other rows reuse the
+otherwise unused control for a step or exact top. The shared metadata is
+circuit-fixed and never selected by a witness value.
+
+The independent root review caught a missing one-bit gate in the first
+81/93-bit extension: honest witness masking did not constrain a coordinated
+forgery. The corrected source includes that gate and a regression replacing
+all running states and the public input consistently by 2^81/2^93, with top
+digit 2. The malformed construction must fail specifically in the digit gate.
+The corrected pre-guard component suite passes 5/5, including both native proof
+curves, all assigned component cells, all supported widths/phases, zero/max/
+field-wrap boundaries, final usable rows and known/unknown layout
+(`secondary-range-expanded-fixed.log`, 253.29 seconds). Its actual descriptor
+still estimates 4,800 transport bytes, degree 9, eleven advice columns, twelve
+fixed queries, 25 advice queries, six equality columns and one lookup
+(`secondary-range-expanded-fixed-descriptor.log`). These are component
+results; they do not establish full-interpreter placement or an actual
+compact outer proof.
+
+Opt-in frontend guards now require existing/future/final fixed values to
+agree and reserve each secondary advice cell for exactly one assignment.
+Missing assignments and collisions are rejected in both known and unknown
+synthesis. Every native Assignment adapter forwards the guards. The focused
+frontend suite passes 18/18 (`guarded-placement-frontend-tests.log`). The
+guarded component suite passes 6/6 in 309.58 seconds
+(`secondary-range-guarded-v2.log`), including earlier/later fixed and advice
+collisions under known and unknown witnesses. Strict all-target lint for the
+three owning crates passes (`guarded-placement-owned-clippy.log`, 12.70 seconds).
+The root reviewer independently checked the corrected exact-top induction,
+nonnegative unused sums, explicit high-bit gate and frontend guard lifecycle,
+accepting this scope only. That review does not sign off the scheduler, full
+Omega circuit, key catalog or release qualification.
+
+Actual tagged-A3 Bootstrap placement analysis finds 20,501 wholly free Glue
+rows and 11,565 free Poseidon rows in 1,101 disjoint segments. A first greedy
+placement saves 26,598 primary rows, leaving 67,435 before exact primary-top
+alignment (`secondary-tagged-a3-placement.log`, 147.04 seconds). Reserving
+extra empty-Glue rows from the remaining shared capacity is under evaluation.
+TODO: finish the checked structural event schedule, guard all successor query
+neighborhoods and shared-control agreement, replay known/unknown synthesis,
+and generate/verify the actual compact k16 proof before claiming fit.
+
+| Reviewed secondary/guard component snapshot | SHA-256 |
+|---|---|
+| `crates/iroha_plonk_gadgets/src/range/secondary.rs` | `0d91d439a088754ad58072e7f17474505faf0a4adb86f1c6d83d608d28161c75` |
+| `crates/iroha_plonk_gadgets/src/range/secondary/tests.rs` | `a804c18381f125404640ae1f1aabbba1c6409d0b3630e6a2f2ed3dfcea4a22f3` |
+| `crates/iroha_plonk_gadgets/src/phase.rs` | `706f80d9dd269a3f5e875fe6441d78bdca3cbb2c849a48d821e6e5a19cecd701` |
+| `crates/iroha_plonk/src/frontend/assignment.rs` | `65da85c473dc8f41428c62a7c460e3a399eb023226e9b6141b809d83e277b2a1` |
+| `crates/iroha_plonk/src/frontend/layouter.rs` | `87c59e305305b90eefc0c9c5bb0b558664138d31e81ce23b45afd856f70e881d` |
+| `crates/iroha_plonk_gadgets/src/tamper.rs` | `89c425e73c73ec2935ff01acc667ac64b092f2df54430941b22c0ba373b8b7e3` |
+| `crates/iroha_plonk_gadgets/src/ecc/tests.rs` | `e21b46d487e7a5dfd693273f85f108f972d55b26265578c6465d2dae7a071e12` |
+
+A subsequent fixed-point structural projection includes primary-top alignment,
+37 rows reserved for the direct public prefix, and 2,644 additional empty-Glue
+rows. It projects 65,377 primary rows, with 153 rows remaining
+(`secondary-tagged-a3-aligned-placement.log`, 199.90 seconds). This does not yet
+model every forced successor collision or perform circuit assignments. The
+complete candidate must reject collisions through the guards, bind every
+recorded range event and source, and close an actual native proof before this
+projection can become a row-fit result.
+
+The successor-aware structural projection inserts primary gaps at every eligible
+segment endpoint so forced secondary steps cannot read a neighboring owner's state.
+It projects 65,472 primary rows for the pinned Bootstrap key (58 remaining)
+and 64,975 for the witnessed-key trace
+(`secondary-tagged-a3-neighborhood-placement.log`, 127.38 seconds). These remain
+structural estimates, without a checked replay or an actual compact proof.
+
+The opt-in replay represents every noncached range request by its exact width
+and a fixed primary/secondary location. A real secondary check emits its
+range predicate immediately; a copied source is joined by permutation equality.
+All clones share the request cursor and exact-cell certificates. Finishing
+requires every request exactly once and rejects missing, extra or mismatched
+requests; no typed result comes from an unchecked deferred constraint.
+
+On Glue rows, the five digit ports and state port lie outside the four Glue
+ports; ECC and staged CRT predicates are disabled by the guarded phase. On
+Poseidon rows, the secondary ports lie outside state/aux ports; Glue/ECC/CRT
+predicates are disabled. The primary pattern is active wherever the secondary
+control is reused, disabling the direct-public overlay. The real public prefix
+retains zero primary activity and idle ECC phase, and the Poseidon lane starts
+after a fixed 37-row prefix. Secondary checks cannot cross radix/owner boundaries,
+and primary tagged tops are excluded at segment endpoints because they force a
+secondary next-state query. Cell and fixed guards validate these promises during
+actual assignments; known/unknown compiled layouts must still match.
+
+Unclaimed dummy steps are filled backward with zero digits, using the already
+assigned successor state. Their field values carry no application meaning and
+may have harmless degrees of freedom; only real requested roots receive source
+and public bindings. No dummy result is returned as a range certificate. The
+primary successor cell is explicitly assigned, and a last-usable-row step is
+rejected. Checked tape growth prevents malformed alternating one-row phase
+inventories from indexing beyond the allocated program. These are implementation
+contracts, not yet a complete Omega/catalog qualification statement.
+
+
+The complete replay now passes on an authentic full-C4 Q2/tagged-A3 Bootstrap
+terminal proof. Both witnessed-key and pinned-one-key programs produce an
+actual **3,712-byte PIPA-R proof**, natively verify/decide it, and satisfy k16
+with known/unknown fixed columns, assignment masks and permutation equality.
+Including the two transported accumulators gives **4,800 bytes**, at degree
+nine, one lookup, 11 advice columns, 25 advice queries, 12 fixed queries and
+six equality columns. Real primary spans are **64,997** (witnessed) and
+**65,508** (pinned); the successful combined component run is
+`secondary-replay-real-bootstrap3.log`, 208.71 seconds on the busy host.
+
+The checked replay suite passes 5/5 in `secondary-replay-tests2.log` (280.62 s),
+including actual native proofs on both curves and all meaningful-cell mutations.
+The prefix integration initially exposed a continuing duplex tap that still
+used a relative block address. It now uses the lane's absolute block start;
+0/16/37-prefix native parity passes on both fields
+(`secondary-duplex-offset-tests2.log`). Bounded offset reservation also passes
+(`secondary-pow-offset-tests.log`). Strict three-crate all-target lint passes
+(`secondary-replay-current-clippy.log`, 14.64 s).
+
+This first actual compact component snapshot was not the final admitted Ω:
+it contained one Bootstrap terminal key without rebuilding its carried lineage.
+The subsequent one-terminal rooted run below closes that specific continuity
+check. Complete catalog/root continuity, every operation, recursive adversaries
+and the prescribed loaded-host measurements remain open.
+Earlier 4,768-byte descriptors and oversized generic layouts are superseded
+profile diagnostics, not produced proofs or current release qualification.
+
+| Actual compact proof snapshot (`secondary-replay-real-bootstrap3.log`) | SHA-256 |
+|---|---|
+| `range/secondary.rs` | `78c29c5e300297c35c6dff6ab18266fdd81da4743d91dd00e9411c63ba902068` |
+| `range/secondary/schedule.rs` | `6871ff1a358133dc34482c90b84365053bcb28df580dc754994f78968816fcc4` |
+| `range/secondary/schedule_tests.rs` | `fc9e560b5f940a19f6301c08a7d735a840667c750235f051b96af4829e880692` |
+| `range/running_sum.rs` | `aa594e4c3e853e81bfe50ec79008926ef66b82cb36c8b3ffee2269a135ca957f` |
+| `poseidon/pow5.rs` | `7f49423e9620a9aceb8ca7e0eafdbcd202efca7c8bdc5511c67a0d946d2b258c` |
+| `pow5_fq/duplex.rs` | `c70eb25daa1645048260559d4a437df3a26661a7160aa8248af0c73ea5c5baa9` |
+| `iroha_plonk_recursion/src/verifier/compact.rs` | `05f40fa8bec829ee3f5ca9015e413e83866f978002214bbfd9dbe5e208fc3c69` |
+| `iroha_kagemusha_proof/src/omega.rs` | `a3ef0d67c9863f04f7106004a40ec1cb477b0cbab6f21f035a8ac1a169c4e62f` |
+
+The later hard allowlist predicate uses
+`prod_i(computed_complete_key_digest - fixed_digest_i) = 0` in Fq, with the
+same nonempty/distinct/at-most-32 metadata checks. Every factor and product is
+constrained by existing Glue gates; a field has no zero divisors, making this exactly key
+membership. No exported selector is needed here; Q_sigma retains its separate
+one-hot selector/index. All 32 positions, foreign digests, metadata limits,
+every intermediate cell and known/unknown shape pass three focused tests.
+Actual k12/k14/k16 source proofs also reject another admitted key substituted
+under the original proof/public input, and reject an unauthorized complete
+digest (`omega-real-key-membership-tests.log`, 87.57 s). Strict proof all-target
+lint passes (`omega-membership-rooted-clippy.log`, 23.95 s).
+
+`rooted-compact-bootstrap.log` passes in 384.49 s: all signed objects,
+sigma/Q/A1/W/A2 proofs are rebuilt with the actual compact Omega digest,
+then the source A and Omega descriptor/VK bytes are checked unchanged. The
+actual 3,712-byte outer proof and transported Vesta accumulator both decide;
+changed public columns and proof bytes reject. Transport remains 4,800 bytes,
+k16/degree9/one lookup. The pinned single-key schedule has primary end 65,458
+and shared baseline 62,844 plus prefix 37 and explicit padding 2,649.
+This closes **one Bootstrap terminal's** immutable-key continuity, not the full
+catalog or any release/performance gate. Its observed owned-source/binary hashes
+are in `rooted-compact-bootstrap.owned-source-and-binary-sha256`; Omega source
+is `5768b457b2b56ea5d66f932c3a3de9bb503af5b8c5c9a056b2a4f27f8d07bb1b`
+and the executable is
+`c2858721b9fa187e55a0fc6a2781f44c0b25308f76bfe4f4b5ffd8937c332e34`.
+
+## 29. Retained hard integer bounds on canonical S6
+
+`CanonicalS6` now distinguishes its declared arithmetic modulus from a private
+strict integer upper bound proved for its exact retained low128/high127 cells.
+Every limb, native-word and hard decoder constructor records its actual hard
+comparison/decomposition bound. Widening the declared modulus preserves the
+tighter bound; narrowing adds the existing hard comparison only when necessary.
+Cloning preserves both cells and metadata. FF export first canonicalizes and
+conservatively records that FF modulus; it does not inherit a tighter bound from
+an unrelated earlier value or an unproved witness observation.
+
+Soft decoding retains the source scalar modulus for both selected branches:
+the valid original is constrained canonical, and the invalid branch is fixed
+zero. Its validity bit remains separate. In particular, a small Fq witness or
+an invalid Fq message selecting zero does **not** create an Fp-bound certificate.
+There is no public unchecked constructor or general branch-selection escape.
+
+The typed `Bounded` predicate can return constrained true when this retained
+hard upper bound is at most Fp. This extends the previous Vesta-native case to
+the exact Fp word embedded in Fq without repeating its comparison. All other
+values use the existing full comparison; all `Bits` checks remain intact.
+This changes no FF carry or CRT equation or admission envelope.
+
+The root's independent source review checked all constructors, widening,
+narrowing, conservative export and the two soft branches, finding no gap in
+this scoped reuse. Full codec tests pass6/6 (`s6-retained-bound-codec-tests.log`,
+24.06 s). An explicit both-field hard/soft decoder regression passes at
+0,1,m−1,m,m+1 and 2^255, including invalid/small metadata assertions,
+every-cell mutation, source-cell identity and unknown shape
+(`s6-soft-bound-tests.log`, 0.63 s). Strict all-target lint for gadgets,
+recursion and proof passes (`s6-retained-bound-clippy2.log`, 12.41 s).
+The k16 bridge suite passes 3/3, including every assigned cell on both fields
+and both bridge directions (`s6-retained-bound-bridge-tests.log`, 316.79 s).
+Composed profile capacities and measurement
+qualification must be rerun on the resulting candidate before claims of benefit.
+
+| Retained-bound source | SHA-256 |
+|---|---|
+| `iroha_plonk_gadgets/src/ff/s6.rs` | `bf463cb3fb0964f3a03086cdfdd69c67a7401e7701c296e891c0cead8824486b` |
+| `iroha_plonk_gadgets/src/ff/s6/tests.rs` | `a66bb861175d3e335ad3c0f0b6618de3e9420acb08246627d953448c477ca4d4` |
+| `iroha_plonk_recursion/src/codec.rs` | `71379a178375258b7cc99a36f7536609a0152a0e17f9920d67afd31a8a47f485` |
+| `iroha_plonk_recursion/tests/codec.rs` | `9b67d43e0314789c79f621bd4ca28e9c20e90838430cc59b91211e120fc25ac8` |

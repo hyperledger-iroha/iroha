@@ -155,10 +155,21 @@ the Rust signer passes with `kSecKeyAlgorithmECDSASignatureMessageX962SHA256`,
 passcode-bound keychain rollback anchor, protected-data canary and custody root);
 `KagemushaWalletAppleSystemV1.swift` holds its replaceable operating-system seams.
 Construct it with the app's App ID prefix, which names its own keychain access group.
-Its only app-facing operation is
-`attestEnrollment(slot:paymentPublicKey:challengeDigest:)`, the App Attest evidence of
-enrollment step E5; key use and the anchor are reached only through the Rust provider.
-Registering the adapter with the native bridge remains open (TODO(G2-bridge)).
+`attestEnrollment(slot:paymentPublicKey:challengeDigest:)` produces the App Attest
+evidence of enrollment step E5; key use and the anchor are reached only through the
+Rust provider. `KagemushaWalletV1` registers the platform callbacks with that provider
+and exposes `commit`, `retry`, `resume`, `foldOnce`, `creditStatus` and activity updates.
+Its declaration requires the Native bridge headers in every build. Every open also
+requires the actual authenticated native artifact identity; the current foreign open
+returns `artifactsUnavailable` until the operation/Λ/Ω artifact loader is connected.
+There is no software payment-key or structural-verification substitute.
+
+The current bridge does not yet export enrollment E2–E6. The Native enrollment owner
+must retain the exact E5 request together with the App Attest key identifier and its
+consumed assertion counter before dispatch. It stores the issued credential create-new,
+then Bootstrap establishes the generation-1 head. E8 activation must retain and send
+that original Bootstrap completion. The Swift adapter alone does not complete these
+issuer, ledger or physical-device workflows (TODO(G4/G5)).
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,

@@ -2985,17 +2985,17 @@ mod tests {
     fn genesis_confidential_digest_tracks_registered_verifying_keys() {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "offline-test");
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "offline-test");
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
             1,
             "offline-test",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            iroha_data_model::zk::BackendTag::NativePipaRPasta,
             "pallas",
             [0xAA; 32],
             [0xBB; 32],
         );
         record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-        record.gas_schedule_id = Some("halo2_default".into());
+        record.gas_schedule_id = Some("native_pipa_r_default".into());
         let register = InstructionBox::from(
             iroha_data_model::isi::verifying_keys::RegisterVerifyingKey { id: vk_id, record },
         );

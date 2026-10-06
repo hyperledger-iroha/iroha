@@ -148,11 +148,6 @@ pub fn verify_for_relation(
             policy.pipa_r_max_envelope_bytes,
             policy.pipa_r_max_proof_bytes,
         ),
-        BackendTag::Halo2IpaPasta => (
-            policy.halo2_enabled,
-            policy.halo2_max_envelope_bytes,
-            policy.halo2_max_proof_bytes,
-        ),
         BackendTag::Stark => (
             policy.stark_enabled,
             policy.stark_max_envelope_bytes,

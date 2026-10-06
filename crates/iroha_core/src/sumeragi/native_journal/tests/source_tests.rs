@@ -139,7 +139,6 @@ fn native_reader_rejects_foreign_prepared_source_pool_before_decode_or_control_a
                 &chain_id,
                 &network,
                 limits(),
-                &NoAttestation,
                 &pool,
                 |_| -> Result<(), NativeJournalError> {
                     panic!("foreign pool may not decode or authenticate")

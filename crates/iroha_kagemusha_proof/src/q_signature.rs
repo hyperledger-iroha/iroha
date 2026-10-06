@@ -12,6 +12,9 @@
 //! all bridge equalities are below 2^128 in Fq. This is deliberately distinct
 //! from the 128/127 canonical Pasta-scalar codec.
 
+/// Original-key intake and actual proving under one fixed signature-slot plan.
+pub mod native;
+
 #[cfg(test)]
 #[path = "q_signature_tests.rs"]
 mod tests;

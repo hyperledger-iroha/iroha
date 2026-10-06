@@ -122,10 +122,9 @@ fn check_original_attestation(chain: &CertifiedTestChain) {
             .unwrap();
         assert_eq!(native.verification(), QcVerification::Verified);
         assert!(native.commitment().schedule.boundary.is_some());
-        assert!(!native.header().unwrap().attest);
+
         let qc = native.commit_qc().unwrap();
         assert_eq!(qc.signers.count_ones(), 3);
-        assert!(!qc.attest && qc.attestations.is_empty() && qc.attestation_witness.is_none());
     }
     let fresh = capture(&view, chain, [42; 32], status(chain)).unwrap();
     assert_eq!(

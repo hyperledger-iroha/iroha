@@ -32,6 +32,16 @@ crates directly. `iroha_plonk` replays both transcript sections
 sponge chip and `iroha_kagemusha_proof` assert the `kagemusha_v1_poseidon`
 vectors (`tests/digest_parity.rs` in each).
 
+`confidential_poseidon_v1.json` retains the complete pre-retirement Core_zk
+Poseidon parity corpus: 218 outputs across both Pasta fields, seven production
+domains, and input lengths 0 through 33 under three boundary domains. Inputs
+include zero, one, minus one and the position index. The source and capture
+hashes identify the original vendored-oracle run; the Python checker independently
+re-derives every output from the pinned RP57 constants. The native Core_zk test
+`native_confidential_poseidon_matches_captured_oracle_on_both_pasta_fields`
+checks the same corpus without importing the retired prover. The corpus and
+its mutation tests remain after oracle deletion.
+
 ## Regenerate and check
 
 The generator is `crates/iroha_plonk_oracle/tests/native_prover_kats.rs`. By
@@ -53,7 +63,8 @@ transcript challenge (from the pinned constants), the absorbed encodings,
 `ParamsIPA` lengths and point validity, and checks that every recorded
 transcript rejection is a distinct malformed input (a scalar at least the
 modulus; a point that is the identity, non-canonical or off the curve). It does
-not re-derive hash-to-curve.
+not re-derive hash-to-curve. It also checks all 218 captured confidential boundary
+outputs and their exact domain/input matrix.
 
 ```sh
 python3 fixtures/native_prover/verify_kats_v1.py

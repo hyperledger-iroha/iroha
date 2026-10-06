@@ -176,6 +176,12 @@ enum ArithmeticLayout {
     Serialized {
         spans: CompactSpans,
         kernel: RotatedFfConfig,
+        secondary: Option<
+            Box<(
+                iroha_plonk_gadgets::range::secondary::SecondaryRangeConfig,
+                iroha_plonk_gadgets::range::secondary::SecondaryPlan,
+            )>,
+        >,
     },
     ParallelSerialized {
         ranges: Vec<RunningSumConfig>,
@@ -224,7 +230,22 @@ impl<C: PastaCurve> VerifierConfig<C> {
         meta: &mut ConstraintSystem<C::Base>,
         range_buses: usize,
     ) -> Result<Self, Error> {
-        Ok(Self::configure_serialized_lanes(meta, range_buses, None)?.0)
+        Ok(Self::configure_serialized_lanes(meta, range_buses, None, false)?.0)
+    }
+
+    /// Explicit source-artifact profile using independent exact-width tuple
+    /// lookups over one shared 65,528-row table. It removes shifted-top rows
+    /// and previous-row range queries; the resulting descriptor is distinct
+    /// from [`Self::configure_serialized_foreign`]. Final compact verification
+    /// still has exactly one lookup, independently of this source bus count.
+    ///
+    /// # Errors
+    /// The fixed bus count is outside `1..=8`.
+    pub fn configure_serialized_foreign_tagged(
+        meta: &mut ConstraintSystem<C::Base>,
+        range_buses: usize,
+    ) -> Result<Self, Error> {
+        Ok(Self::configure_serialized_lanes(meta, range_buses, None, true)?.0)
     }
 
     /// Uses the explicit serialized foreign-arithmetic profile with the same
@@ -238,7 +259,8 @@ impl<C: PastaCurve> VerifierConfig<C> {
         range_buses: usize,
         byte_rows: usize,
     ) -> Result<(Self, BytesConfig), Error> {
-        let (config, bytes) = Self::configure_serialized_lanes(meta, range_buses, Some(byte_rows))?;
+        let (config, bytes) =
+            Self::configure_serialized_lanes(meta, range_buses, Some(byte_rows), false)?;
         Ok((config, bytes.expect("requested byte tape is configured")))
     }
 
@@ -246,6 +268,7 @@ impl<C: PastaCurve> VerifierConfig<C> {
         meta: &mut ConstraintSystem<C::Base>,
         range_buses: usize,
         byte_rows: Option<usize>,
+        tagged: bool,
     ) -> Result<(Self, Option<BytesConfig>), Error> {
         if !(1..=8).contains(&range_buses) {
             return Err(Error::Synthesis);
@@ -255,11 +278,15 @@ impl<C: PastaCurve> VerifierConfig<C> {
         let glue = GlueConfig::configure(meta, ports, constant);
         let kernel = RotatedFfConfig::configure(meta, ports, Arithmetic::<C>::modulus());
         let bus_columns: Vec<_> = (0..range_buses).map(|_| meta.advice_column()).collect();
-        let ranges = RunningSumConfig::configure_bank(
-            meta,
-            &bus_columns,
-            LimbBits::new(15).expect("fixed limb width"),
-        );
+        let ranges = if tagged {
+            RunningSumConfig::configure_tagged_bank(meta, &bus_columns)
+        } else {
+            RunningSumConfig::configure_bank(
+                meta,
+                &bus_columns,
+                LimbBits::new(15).expect("fixed limb width"),
+            )
+        };
         let range = ranges[0];
         let ecc_columns = core::array::from_fn(|_| meta.advice_column());
         let ecc = EccConfig::configure(meta, ecc_columns);
@@ -394,13 +421,18 @@ impl<C: PastaCurve> VerifierChip<C> {
                     scalar_splits: std::collections::BTreeMap::new(),
                 }
             }
-            ArithmeticLayout::Serialized { spans, kernel } => Self::new_compact(
+            ArithmeticLayout::Serialized {
+                spans,
+                kernel,
+                secondary,
+            } => Self::new_compact(
                 config.glue,
                 config.range,
                 &config.ecc,
                 config.duplex,
                 spans,
                 &kernel,
+                secondary.map(|value| *value),
             ),
         }
     }

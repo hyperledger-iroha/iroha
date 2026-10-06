@@ -331,6 +331,68 @@ fn resolve_requested_profiles(names: &[String]) -> AnyResult<Vec<ProfileSpec>> {
     }
     Ok(out)
 }
+// tempfile 3.27 has no public constructor for adopting a natively created directory.
+// Retain only this uniquely created, unpublished staging directory; keep/drop mirror
+// the existing TempDir publication and automatic-cleanup lifetime.
+struct PrivateProfileStaging {
+    directory: Option<iroha_fs::PrivateDirectory>,
+}
+impl PrivateProfileStaging {
+    fn directory(&self) -> &iroha_fs::PrivateDirectory {
+        self.directory.as_ref().expect("unpublished profile staging")
+    }
+    fn path(&self) -> &Path {
+        self.directory().path()
+    }
+    #[must_use]
+    fn keep(mut self) -> PathBuf {
+        let directory = self.directory.take().expect("unpublished profile staging");
+        let path = directory.path().to_path_buf();
+        // Windows ancestor handles intentionally prevent directory replacement.
+        // Release them before the existing publication/backup rename corridor.
+        drop(directory);
+        path
+    }
+}
+impl Drop for PrivateProfileStaging {
+    fn drop(&mut self) {
+        if let Some(directory) = self.directory.take() {
+            // Refuse cleanup when native revalidation detects substituted custody.
+            if directory.revalidate().is_err() {
+                return;
+            }
+            let path = directory.path().to_path_buf();
+            drop(directory);
+            // Like TempDir, failed cleanup is ignored; committed bundles are kept.
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+fn create_profile_staging(output_root: &Path, slug: &str) -> AnyResult<PrivateProfileStaging> {
+    let parent = iroha_fs::OwnerDirectory::open_or_create(output_root)?;
+    let mut rng = rand_core_06::OsRng;
+    for _ in 0..32 {
+        let mut entropy = [0_u8; 16];
+        rand_core_06::RngCore::try_fill_bytes(&mut rng, &mut entropy).map_err(|error| {
+            std::io::Error::other(format!("profile staging entropy unavailable: {error}"))
+        })?;
+        let name = format!(".{slug}-staging-{}", hex::encode(entropy));
+        match parent.create_private_child(name) {
+            Ok(directory) => {
+                return Ok(PrivateProfileStaging {
+                    directory: Some(directory),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "profile private staging names exhausted",
+    )
+    .into())
+}
 fn write_profile_bundle(
     spec: &ProfileSpec,
     kagami_bin: &Path,
@@ -338,10 +400,7 @@ fn write_profile_bundle(
     nexus_xor_asset_definition_id: Option<&str>,
     xor_allocations_dir: &Path,
 ) -> AnyResult<()> {
-    fs::create_dir_all(output_root)?;
-    let staging = tempfile::Builder::new()
-        .prefix(&format!(".{}-staging-", spec.slug))
-        .tempdir_in(output_root)?;
+    let staging = create_profile_staging(output_root, spec.slug)?;
     let bundle_root = staging.path().to_path_buf();
     let genesis_key =
         deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)?;
@@ -367,7 +426,7 @@ fn write_profile_bundle(
         spec,
         &peers,
         genesis_key.public_key(),
-        &bundle_root,
+        staging.directory(),
         GenesisIdentityRendering::InlineBootstrap(GENESIS_EXPECTED_HASH_PLACEHOLDER),
         PrivateKeyRendering::Inline,
     )?;
@@ -398,7 +457,7 @@ fn write_profile_bundle(
         spec,
         &peers,
         genesis_key.public_key(),
-        &bundle_root,
+        staging.directory(),
         published_genesis_identity_rendering(spec),
         published_private_key_rendering(spec),
     )?;
@@ -422,7 +481,7 @@ fn write_profile_bundle(
     publish_profile_bundle(staging, &output_root.join(spec.slug))?;
     Ok(())
 }
-fn publish_profile_bundle(staging: tempfile::TempDir, destination: &Path) -> AnyResult<()> {
+fn publish_profile_bundle(staging: PrivateProfileStaging, destination: &Path) -> AnyResult<()> {
     if !destination.exists() {
         let staged_path = staging.keep();
         fs::rename(&staged_path, destination)?;
@@ -981,6 +1040,17 @@ fn render_peer_config_with_private_keys(
                 )
             }
         };
+    // Publisher custody is always provisioned by the operator. Profile generation never
+    // derives a Load-role key, role certificate or ledger submitter from its demo seed.
+    let publisher_file_prefix = match private_key_rendering {
+        PrivateKeyRendering::Inline => format!("kagemusha-load-authorizer-peer-{peer_index}"),
+        PrivateKeyRendering::RuntimeFiles => {
+            format!(
+                "/run/secrets/iroha/{}-peer-{peer_index}-kagemusha-load-authorizer",
+                spec.slug
+            )
+        }
+    };
     let trusted_peers = peers
         .iter()
         .map(|peer| format!("  \"{}@{}\"", peer.public_key, peer.address))
@@ -1083,6 +1153,12 @@ trusted_peers_pop = [
 {trusted_peers_pop}
 ]
 
+# Required operator-owned Load-role keyring and ordinary ledger submitter.
+# Missing or unadmitted custody prevents validator startup; no enable switch exists.
+[kagemusha_load_authorizer]
+keyring_file = "{publisher_file_prefix}-keyring.nrt"
+submitter_key_file = "{publisher_file_prefix}-submitter-private-key"
+
 [sumeragi]
 role = "validator"
 
@@ -1130,10 +1206,12 @@ fn write_peer_configs(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
     genesis_public_key: &iroha_crypto::PublicKey,
-    bundle_root: &Path,
+    directory: &iroha_fs::PrivateDirectory,
     genesis_identity_rendering: GenesisIdentityRendering<'_>,
     private_key_rendering: PrivateKeyRendering,
 ) -> AnyResult<()> {
+    // The signing projection and published developer configs carry private originals.
+    // Retain native private directory custody and publish mode-0600 files atomically.
     for peer_index in 0..peers.len() {
         let rendered = render_peer_config_with_private_keys(
             spec,
@@ -1143,9 +1221,10 @@ fn write_peer_configs(
             genesis_identity_rendering,
             private_key_rendering,
         );
-        fs::write(
-            bundle_root.join(peer_config_file_name(peer_index)),
-            rendered,
+        directory.write_atomic(
+            peer_config_file_name(peer_index),
+            rendered.as_bytes(),
+            iroha_fs::PublishMode::Replace,
         )?;
     }
     Ok(())
@@ -1174,6 +1253,22 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
         .map(|(peer_index, peer)| {
             let service = format!("iroha-{}-{peer_index}", spec.slug);
             let config_file = peer_config_file_name(peer_index);
+            let publisher_custody_volumes =
+                if published_private_key_rendering(spec) == PrivateKeyRendering::Inline {
+                    ["keyring.nrt", "submitter-private-key"]
+                        .into_iter()
+                        .map(|suffix| {
+                            let file = format!(
+                                "kagemusha-load-authorizer-peer-{peer_index}-{suffix}"
+                            );
+                            format!(
+                                "\n      - type: bind\n        source: ./{file}\n        target: /config/{file}\n        read_only: true\n        bind:\n          create_host_path: false"
+                            )
+                        })
+                        .collect::<String>()
+                } else {
+                    String::new()
+                };
             let command = r#"["iroha3d", "--sora", "--config", "/config/config.toml"]"#;
             let p2p_port = peer
                 .address
@@ -1197,7 +1292,7 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
     volumes:
       - ./{config_file}:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
-      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{genesis_identity_volume}{runtime_secrets_volume}
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{genesis_identity_volume}{runtime_secrets_volume}{publisher_custody_volumes}
     ports:
       - "{torii_port}:{torii_port}"
       - "{p2p_port}:{p2p_port}"
@@ -1297,7 +1392,10 @@ Files:
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
-{runtime_key_note}Regenerate:
+{runtime_key_note}Kagemusha publisher custody:
+- Before startup, provision each config's required `kagemusha_load_authorizer.keyring_file` and `submitter_key_file` as owner-only private files. The keyring must contain genuine network-bound, role-certified Load keys; the submitter needs ordinary ledger permissions and finite fee caps. These files and their authority are never generated from demo seeds. Missing or unadmitted custody prevents startup in every mode.
+
+Regenerate:
 - cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
 "#,
         slug = spec.slug,
@@ -2097,6 +2195,42 @@ mod tests {
 
     #[test]
     fn rendered_profile_configs_pass_actual_config_admission() {
+        use iroha_config::base::{
+            file_source::{ConfigFileAccess, ConfigFileRequest, ConfigFileSource},
+            read::ConfigReader,
+        };
+        use iroha_config::parameters::user::Root as UserConfig;
+
+        // These exact parser-only files never constitute daemon publisher custody.
+        // The noncanonical keyring must fail the daemon's role/network preflight.
+        struct PublisherParserFiles {
+            keyring: PathBuf,
+            submitter: PathBuf,
+            submitter_bytes: Vec<u8>,
+        }
+        impl ConfigFileSource for PublisherParserFiles {
+            fn read(
+                &self,
+                path: &Path,
+                request: ConfigFileRequest,
+            ) -> std::io::Result<Zeroizing<Vec<u8>>> {
+                if request.access != ConfigFileAccess::Private {
+                    return Err(std::io::ErrorKind::PermissionDenied.into());
+                }
+                let bytes = if path == self.keyring {
+                    b"profile-parser-only; not an authenticated keyring".to_vec()
+                } else if path == self.submitter {
+                    self.submitter_bytes.clone()
+                } else {
+                    return Err(std::io::ErrorKind::NotFound.into());
+                };
+                if bytes.len() > request.maximum {
+                    return Err(std::io::ErrorKind::InvalidData.into());
+                }
+                Ok(Zeroizing::new(bytes))
+            }
+        }
+
         let expected_hash =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"xtask profile config admission",
@@ -2122,16 +2256,41 @@ mod tests {
                 .expect("rendered profile config is valid TOML");
             let bundle = tempdir().expect("profile config admission directory");
             let path = bundle.path().join("peer0.toml");
+            let publisher = table["kagemusha_load_authorizer"]
+                .as_table()
+                .expect("every rendered profile declares required publisher custody");
+            assert!(!publisher.contains_key("enabled"));
+            let parser_files = PublisherParserFiles {
+                keyring: bundle.path().join(
+                    publisher["keyring_file"]
+                        .as_str()
+                        .expect("required keyring file"),
+                ),
+                submitter: bundle.path().join(
+                    publisher["submitter_key_file"]
+                        .as_str()
+                        .expect("required submitter file"),
+                ),
+                submitter_bytes: peers[0].private_key.as_bytes().to_vec(),
+            };
+            let parse = |table: toml::Table| {
+                ConfigReader::new()
+                    .without_env()
+                    .with_toml_source(TomlSource::new(path.clone(), table))
+                    .read_and_complete::<UserConfig>()
+                    .map_err(|error| format!("{error:?}"))?
+                    .parse_with_file_source(&parser_files)
+                    .map_err(|error| format!("{error:?}"))
+            };
             let _chain_discriminant = profile
                 .chain_discriminant
                 .map(ChainDiscriminantGuard::enter);
-            actual::Root::from_toml_source(TomlSource::new(path.clone(), table.clone()))
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "rendered profile {} must pass exact runtime config admission: {error:?}",
-                        profile.slug
-                    )
-                });
+            parse(table.clone()).unwrap_or_else(|error| {
+                panic!(
+                    "rendered profile {} must pass bounded config parsing: {error:?}",
+                    profile.slug
+                )
+            });
             for retired in ["block", "queues"] {
                 let mut retired_config = table.clone();
                 retired_config
@@ -2140,8 +2299,7 @@ mod tests {
                     .expect("node-local Sumeragi config")
                     .insert(retired.to_owned(), toml::Value::Table(toml::Table::new()));
                 assert!(
-                    actual::Root::from_toml_source(TomlSource::new(path.clone(), retired_config))
-                        .is_err(),
+                    parse(retired_config).is_err(),
                     "profile {} must reject retired sumeragi.{retired} configuration",
                     profile.slug
                 );
@@ -2211,12 +2369,14 @@ mod tests {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("prepared-config-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
-        let bundle = tempdir().expect("prepared config bundle");
+        let parent = tempdir().expect("prepared config parent");
+        let bundle = create_profile_staging(parent.path(), "prepared-config")
+            .expect("create native private config bundle");
         write_peer_configs(
             &PROFILES[0],
             &peers,
             genesis_key.public_key(),
-            bundle.path(),
+            bundle.directory(),
             GenesisIdentityRendering::SiblingFile,
             PrivateKeyRendering::Inline,
         )
@@ -2240,6 +2400,189 @@ mod tests {
             "compatibility config names must not be emitted"
         );
     }
+    #[test]
+    fn native_profile_staging_keeps_both_config_passes_private_and_cleans_unpublished_files() {
+        let parent = tempdir().expect("ordinary profile parent");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            // An ordinary existing reader-accessible parent must never be hardened.
+            fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let bundle = create_profile_staging(parent.path(), "native-staging-test")
+            .expect("create native private staging under ordinary parent");
+        bundle
+            .directory()
+            .revalidate()
+            .expect("native private custody");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(parent.path()).unwrap().permissions().mode() & 0o7777,
+                0o755
+            );
+            assert_eq!(
+                fs::metadata(bundle.path()).unwrap().permissions().mode() & 0o7777,
+                0o700
+            );
+        }
+        let peers = build_peers(&PROFILES[0]).expect("build existing test peers");
+        let genesis_key = deterministic_keypair("native-staging-genesis", Algorithm::Ed25519)
+            .expect("derive existing test genesis key");
+        for identity in [
+            GenesisIdentityRendering::InlineBootstrap(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+            GenesisIdentityRendering::SiblingFile,
+        ] {
+            write_peer_configs(
+                &PROFILES[0],
+                &peers,
+                genesis_key.public_key(),
+                bundle.directory(),
+                identity,
+                PrivateKeyRendering::Inline,
+            )
+            .expect("write first and second private config passes");
+            for peer_index in 0..peers.len() {
+                let path = bundle.path().join(peer_config_file_name(peer_index));
+                assert_eq!(
+                    fs::read_to_string(&path).unwrap(),
+                    render_peer_config_with_private_keys(
+                        &PROFILES[0],
+                        &peers,
+                        peer_index,
+                        genesis_key.public_key(),
+                        identity,
+                        PrivateKeyRendering::Inline,
+                    ),
+                );
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    assert_eq!(
+                        fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                        0o600
+                    );
+                }
+            }
+        }
+        let unpublished = bundle.path().to_path_buf();
+        drop(bundle);
+        assert!(
+            !unpublished.exists(),
+            "unpublished staging must be cleaned on drop"
+        );
+        assert!(parent.path().exists(), "existing parent must be preserved");
+    }
+    #[test]
+    fn native_profile_staging_publication_keeps_committed_files_after_handle_release() {
+        let parent = tempdir().expect("native publication parent");
+        let destination = parent.path().join("published-native-profile");
+        let staging = create_profile_staging(parent.path(), "native-publication-test")
+            .expect("create native private stage");
+        staging
+            .directory()
+            .write_atomic(
+                "published-data",
+                b"kept published DATA",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .expect("write native publication DATA");
+        let old_staging = staging.path().to_path_buf();
+        publish_profile_bundle(staging, &destination).expect("publish after native handles release");
+        assert!(!old_staging.exists());
+        assert_eq!(
+            fs::read(destination.join("published-data")).unwrap(),
+            b"kept published DATA"
+        );
+        iroha_fs::PrivateDirectory::open(&destination)
+            .expect("committed directory retains native private custody");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn peer_config_writer_keeps_private_modes_and_refuses_aliases() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
+        let genesis_key = deterministic_keypair("private-config-genesis", Algorithm::Ed25519)
+            .expect("derive existing test genesis key");
+        let parent = tempdir().expect("private config parent");
+        let bundle = create_profile_staging(parent.path(), "private-config")
+            .expect("create native private config bundle");
+        let write = || {
+            write_peer_configs(
+                &PROFILES[0],
+                &peers,
+                genesis_key.public_key(),
+                bundle.directory(),
+                GenesisIdentityRendering::SiblingFile,
+                PrivateKeyRendering::Inline,
+            )
+        };
+        for _ in 0..2 {
+            write().expect("create or atomically replace private configs");
+            for peer_index in 0..peers.len() {
+                let path = bundle.path().join(peer_config_file_name(peer_index));
+                assert_eq!(
+                    fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                assert_eq!(
+                    fs::read_to_string(&path).unwrap(),
+                    render_peer_config_with_private_keys(
+                        &PROFILES[0],
+                        &peers,
+                        peer_index,
+                        genesis_key.public_key(),
+                        GenesisIdentityRendering::SiblingFile,
+                        PrivateKeyRendering::Inline,
+                    ),
+                );
+            }
+        }
+        let original = bundle.path().join("original-custody");
+        fs::write(&original, b"retained parser-test original").unwrap();
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o600)).unwrap();
+        let target = bundle.path().join(peer_config_file_name(0));
+        fs::remove_file(&target).unwrap();
+        symlink(&original, &target).unwrap();
+        assert!(
+            write().is_err(),
+            "a config symlink must not replace original custody"
+        );
+        assert_eq!(
+            fs::read(&original).unwrap(),
+            b"retained parser-test original"
+        );
+        assert!(
+            fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(&target).unwrap();
+        fs::hard_link(&original, &target).unwrap();
+        assert!(write().is_err(), "shared originals must not be replaced");
+        assert_eq!(
+            fs::read(&original).unwrap(),
+            b"retained parser-test original"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"retained parser-test original");
+        fs::remove_file(&target).unwrap();
+        fs::write(&target, b"existing public config").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            write().is_err(),
+            "public private-config custody must be refused"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"existing public config");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
     #[test]
     fn readme_carries_profile_metadata() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
@@ -2330,10 +2673,8 @@ mod tests {
         let destination = temp.path().join("iroha3-dev");
         fs::create_dir(&destination).expect("create previous bundle");
         fs::write(destination.join("old-only"), b"old").expect("write previous bundle");
-        let staging = tempfile::Builder::new()
-            .prefix(".profile-publication-test-")
-            .tempdir_in(temp.path())
-            .expect("create staged bundle");
+        let staging = create_profile_staging(temp.path(), "profile-publication-test")
+            .expect("create native private staged bundle");
         fs::write(staging.path().join("new-only"), b"new").expect("write staged bundle");
         publish_profile_bundle(staging, &destination).expect("publish validated bundle");
         assert_eq!(
@@ -2565,6 +2906,19 @@ mod tests {
         );
         assert!(!rendered.contains("/run/iroha/genesis.expected_hash"));
         assert!(!rendered.contains("--genesis"));
+        for peer_index in 0..peers.len() {
+            for suffix in ["keyring.nrt", "submitter-private-key"] {
+                let file = format!("kagemusha-load-authorizer-peer-{peer_index}-{suffix}");
+                assert!(rendered.contains(&format!(
+                    "source: ./{file}\n        target: /config/{file}\n        read_only: true\n        bind:\n          create_host_path: false"
+                )));
+            }
+        }
+        assert_eq!(
+            rendered.matches("create_host_path: false").count(),
+            2 * peers.len(),
+            "every dev peer requires both existing publisher custody files"
+        );
         for peer_index in 1..peers.len() {
             assert!(rendered.contains(&format!("./peer{peer_index}.toml:/config/config.toml:ro")));
         }
@@ -2581,6 +2935,14 @@ mod tests {
         assert!(
             !runtime_rendered.contains("./genesis.expected_hash:/config/genesis.expected_hash:ro")
         );
+        assert_eq!(
+            runtime_rendered
+                .matches("/run/secrets/iroha:/run/secrets/iroha:ro")
+                .count(),
+            runtime_peers.len(),
+            "runtime peers receive their required publisher files in the secret directory"
+        );
+        assert!(!runtime_rendered.contains("source: ./kagemusha-load-authorizer-peer-"));
     }
     #[test]
     fn peer_configs_use_distinct_consensus_streaming_and_port_material() {

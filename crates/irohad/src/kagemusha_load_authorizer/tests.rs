@@ -77,30 +77,18 @@ fn config(state: &State) -> KagemushaLoadAuthorizer {
             secret: [0x34; 32],
         }],
     };
-    KagemushaLoadAuthorizer {
-        custody: Some(
-            iroha_config::parameters::actual::KagemushaLoadAuthorizerCustody {
-                keyring: zeroize::Zeroizing::new(norito::encode_canonical(&keyring).unwrap()),
-                submitter: KeyPair::from_seed(vec![0x65; 32], iroha_crypto::Algorithm::Ed25519),
-            },
-        ),
-        ..KagemushaLoadAuthorizer::default()
-    }
+    KagemushaLoadAuthorizer::new(
+        iroha_config::parameters::actual::KagemushaLoadAuthorizerCustody {
+            keyring: zeroize::Zeroizing::new(norito::encode_canonical(&keyring).unwrap()),
+            submitter: KeyPair::from_seed(vec![0x65; 32], iroha_crypto::Algorithm::Ed25519),
+        },
+    )
 }
 #[tokio::test]
-async fn disabled_service_and_invalid_custody_never_create_a_worker() {
+async fn required_service_refuses_invalid_custody_and_limits_without_queueing() {
     let (state, queue) = handles();
-    assert!(
-        Service::new(
-            KagemushaLoadAuthorizer::default(),
-            state.clone(),
-            queue.clone()
-        )
-        .unwrap()
-        .is_none()
-    );
     let mut malformed = config(&state);
-    malformed.custody.as_mut().unwrap().keyring.fill(0);
+    malformed.custody.keyring.fill(0);
     assert!(Service::new(malformed, state.clone(), queue.clone()).is_err());
     let mut capacity = config(&state);
     capacity.page_size = 0;
@@ -111,13 +99,11 @@ async fn disabled_service_and_invalid_custody_never_create_a_worker() {
 async fn unavailable_source_survives_restart_without_queueing_and_shutdown_joins() {
     let (state, queue) = handles();
     for _ in 0..2 {
-        let mut worker = Service::new(config(&state), state.clone(), queue.clone())
-            .unwrap()
-            .unwrap();
+        let mut worker = Service::new(config(&state), state.clone(), queue.clone()).unwrap();
         assert_eq!(worker.tick(), Err(TickError::SourceUnavailable));
         assert_eq!(queue.queued_len(), 0);
     }
-    let worker = Service::new(config(&state), state, queue).unwrap().unwrap();
+    let worker = Service::new(config(&state), state, queue).unwrap();
     let mut supervisor = Supervisor::new();
     let shutdown = supervisor.shutdown_signal();
     supervisor.monitor(worker.start(shutdown.clone()));

@@ -17,7 +17,6 @@ use iroha_data_model::block::consensus::{EvidenceOffender, EvidenceScope};
 use iroha_data_model::query::error::QueryExecutionFail;
 use iroha_sumeragi::{
     api::CommittedTip,
-    crypto::NoAttestation,
     evidence::{EvidenceContext, EvidenceError, verify_evidence},
     message::Evidence,
     topology::demotion_window,
@@ -307,9 +306,9 @@ pub(crate) fn verify_from_state(
         demotion_window: window,
         demotion_headers: &headers,
     };
-    // Native application certificates carry no commit attestation. A signed flagged parent
+    // Every native parent certificate requires an exact authenticated BLS quorum.
     // cannot authorize a proposal; independently signed conflicting values still prove safety.
-    let attribution = verify_evidence(&crypto, &NoAttestation, &context, evidence)?;
+    let attribution = verify_evidence(&crypto, &context, evidence)?;
     let offenders = attribution
         .offenders()
         .ones()

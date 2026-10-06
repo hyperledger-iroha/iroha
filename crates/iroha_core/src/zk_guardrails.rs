@@ -17,9 +17,7 @@ pub fn guardrails_from_config(cfg: &Zk) -> ZkVerifyGuardrails {
         pipa_r_enabled: cfg.pipa_r.enabled,
         pipa_r_max_envelope_bytes: cfg.pipa_r.max_envelope_bytes,
         pipa_r_max_proof_bytes: cfg.pipa_r.max_proof_bytes,
-        halo2_enabled: cfg.halo2.enabled,
-        halo2_max_envelope_bytes: cfg.halo2.max_envelope_bytes,
-        halo2_max_proof_bytes: cfg.halo2.max_proof_bytes,
+
         stark_enabled: cfg.stark.enabled,
         stark_max_envelope_bytes: cfg.stark.max_envelope_bytes,
         stark_max_proof_bytes: cfg.stark.max_proof_bytes,
@@ -51,9 +49,7 @@ mod tests {
     #[test]
     fn guardrails_from_config_copies_every_cap() {
         let mut cfg = default_zk_config();
-        cfg.halo2.enabled = true;
-        cfg.halo2.max_envelope_bytes = 11;
-        cfg.halo2.max_proof_bytes = 12;
+
         cfg.pipa_r.enabled = false;
         cfg.pipa_r.max_envelope_bytes = 15;
         cfg.pipa_r.max_proof_bytes = 16;
@@ -66,9 +62,7 @@ mod tests {
                 pipa_r_enabled: false,
                 pipa_r_max_envelope_bytes: 15,
                 pipa_r_max_proof_bytes: 16,
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 11,
-                halo2_max_proof_bytes: 12,
+
                 stark_enabled: false,
                 stark_max_envelope_bytes: 13,
                 stark_max_proof_bytes: 14,
@@ -87,9 +81,9 @@ mod tests {
     }
 
     #[test]
-    fn checked_verification_rejects_disabled_backend() {
-        let mut cfg = default_zk_config();
-        cfg.halo2.enabled = false;
+    fn checked_verification_rejects_retired_backend() {
+        let cfg = default_zk_config();
+
         let proof = ProofBox::new("halo2/ipa".into(), vec![0xAA; 8]);
         let report = verify_backend_with_timing_checked("halo2/ipa", &proof, None, &cfg);
         assert!(!report.ok);

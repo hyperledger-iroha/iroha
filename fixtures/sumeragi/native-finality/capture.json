@@ -5,16 +5,16 @@
   "network_id": "hash:9B2807B326BBEB61CB9A2608E2F7F19F8B1722CE4ED937395F53F0253086B3B7#F3C8",
   "generator": {
     "path": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
-    "source_sha256": "e8117b4f01cb41cad8c7291cd0dbf729530b20cafc19a9fc7011f80c442a9bf6",
+    "source_sha256": "10f24f9aac93da38615e04f621b6a75069b6993cc054cc5af7e948615546e78e",
     "test": "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
-    "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_data_model --lib --features test-fixtures,transparent_api sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --exact --ignored --nocapture",
-    "compiled_harness_path": "target/debug/deps/iroha_data_model-d765460bb85c19f6",
-    "compiled_harness_sha256": "70be26f40823ea7fb5b04c64201ec0912324a4d8bcffc53cfa28673239c28414",
-    "source_commit": "8e6bdbcce97244f57319a3b2681e2e989d0fa51c",
+    "command": "scripts/cargo_fast.sh --stable-local-metadata --target-slot kg-gadgets --jobs 2 -- test -p iroha_data_model --features test-fixtures,transparent_api --lib sumeragi_finality -- --test-threads=2",
+    "compiled_harness_path": "target/cargo-fast/kg-gadgets/debug/deps/iroha_data_model-5db0bbbc072c8009",
+    "compiled_harness_sha256": "0f91a9aa46097a8fc181070a668acfb46b32197b1a1b37c783ae7bbf92eb4b9e",
+    "source_commit": "538b5fe99730a0686e7de0677cbc2a2477471d09",
     "result_codec_sources": [
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
-        "sha256": "e90a04b163652542ea2bd7657b5a3965bb43dd4e2266733c32af757e7d56521e"
+        "sha256": "610a0eaeb052623dfd151a4a2f6b4f2e61370c5b607f9a1efae99a7914b8505d"
       },
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/commitment/wire.rs",
@@ -32,30 +32,38 @@
     "source_tree_clean": false,
     "checkpoint_codec_source": {
       "path": "crates/iroha_data_model/src/sumeragi_finality/checkpoint.rs",
-      "sha256": "75e56a904c7c346a2a2d0cdc8d81c36fe193aaa039abfe5db6a9fb7fb2c19d48"
-    }
+      "sha256": "56a51933c60a016a3a3267766b5b9d06212a602181be835af96483da336e5508"
+    },
+    "consensus_codec_sources": [
+      {
+        "path": "crates/iroha_data_model/src/sumeragi_finality.rs",
+        "sha256": "5cb9fd086a7558fe335f3d92f0dde89752cd82d55ee11c40caef6738c5122fbd"
+      },
+      {
+        "path": "crates/iroha_sumeragi/src/types.rs",
+        "sha256": "0ca0c2e0588d78c95c1c2784c0a578ddae5db8841ef9c5446a86a8f3559d768f"
+      },
+      {
+        "path": "crates/iroha_sumeragi/src/crypto.rs",
+        "sha256": "9395a34eab4c046f008039e6795354a10c1520044adb2af6faa5adb418e02493"
+      }
+    ]
   },
   "captures": [
     {
-      "log": "output/norito-bridge-repair-20261006/native-finality-capture-1.log",
-      "sha256": "3984c420fca661b36fbf005d6265ccd83bdd4859e4c3ff798bbc50f51ee76de5",
-      "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_data_model --lib --features test-fixtures,transparent_api sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --exact --ignored --nocapture",
+      "log": "target/qualification/s22-datamodel-retirement/checkpoint-capture-1.log",
+      "sha256": "ed54dd3b7b190168ae61c7a0a66da9ab1c111153909b22c8cc16ebb3a9ee8926",
+      "command": "target/cargo-fast/kg-gadgets/debug/deps/iroha_data_model-5db0bbbc072c8009 sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --exact --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     },
     {
-      "log": "output/norito-bridge-repair-20261006/native-finality-capture-2.log",
-      "sha256": "a38d085386ebfb9de30a9ffabe0e2490f844804fec1ee00fe5385d8ca4ed5499",
-      "command": "target/debug/deps/iroha_data_model-d765460bb85c19f6 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
-      "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
-    },
-    {
-      "log": "output/norito-bridge-repair-20261006/native-finality-capture-3.log",
-      "sha256": "189b63544c702f5960c2c06681ca0ce37b7f60bed7968d3769502caf6c9d31c4",
-      "command": "target/debug/deps/iroha_data_model-d765460bb85c19f6 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+      "log": "target/qualification/s22-datamodel-retirement/checkpoint-capture-2.log",
+      "sha256": "ed54dd3b7b190168ae61c7a0a66da9ab1c111153909b22c8cc16ebb3a9ee8926",
+      "command": "target/cargo-fast/kg-gadgets/debug/deps/iroha_data_model-5db0bbbc072c8009 sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --exact --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     }
   ],
-  "byte_identical_runs": 3,
+  "byte_identical_runs": 2,
   "artifacts": [
     {
       "path": "fixtures/sumeragi/native-finality/genesis-checkpoint.nrt",
@@ -66,10 +74,10 @@
     {
       "path": "fixtures/sumeragi/native-finality/height-2-checkpoint.nrt",
       "height": 2,
-      "bytes": 24944,
-      "sha256": "bf29eb961f301b0862cff1deecc6f7e352fe08e4d468e7c3ca1bca868840e078"
+      "bytes": 24929,
+      "sha256": "0f62325585493233cf88650c8cd49596677309a65fd83c9e1776f6026514da6c"
     }
   ],
-  "scope": "Deterministic protocol fixtures: exact signed genesis and real native three-of-four BLS H2 certificate plus genuine signed RS16 availability over synthetic outputs, using the sole compact ExecutionResultCommitment schedule projection. Canonical roundtrip and contiguous checkpoint page verified by exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim.",
-  "captured_at_utc": "2026-10-06T04:53:01.717760+00:00"
+  "scope": "Deterministic first-release protocol fixtures after generic consensus-attestation retirement: exact signed genesis and genuine native three-of-four BLS H2 CommitQC plus signed RS16 availability over synthetic outputs, using the sole compact ExecutionResultCommitment schedule projection. Canonical roundtrip and contiguous checkpoint page verified by the exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim.",
+  "captured_at_utc": "2026-10-06T11:09:34.267880+00:00"
 }

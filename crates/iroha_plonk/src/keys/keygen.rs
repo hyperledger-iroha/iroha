@@ -350,6 +350,95 @@ fn finish_pk<C: PastaCurve>(
     )
 }
 
+/// Validate imported originals against native source without generating a VK.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    binding: &DescriptorBinding,
+    vk: VerifyingKey<C>,
+    fixed: Vec<Vec<C::ScalarExt>>,
+    sigma: Vec<Vec<C::ScalarExt>>,
+    copy_digest: [u8; 32],
+    config: super::pk::artifact::ReadConfig,
+) -> Result<ProvingKey<C>, super::pk::artifact::Error> {
+    use super::pk::artifact::Error;
+    let descriptor = binding.descriptor();
+    let profile = KeygenConfigV2 {
+        transcript: descriptor.transcript,
+        instance_mode: descriptor.instance_mode,
+        proof_suffix: descriptor.proof_suffix,
+        instance_types: descriptor.instance_types.clone().ok_or(Error::Profile)?,
+        compress_selectors: descriptor.selectors.compress,
+        coset_cache: config.coset_cache,
+        table_budget: None,
+        msm_budget: config.msm_budget,
+    };
+    let synthesized =
+        synthesize(&circuit.without_witnesses(), params.k(), None).map_err(KeyError::from)?;
+    let (source_fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
+    let source = prepare(
+        params,
+        synthesized.cs,
+        source_fixed,
+        selectors,
+        &permutation,
+        &profile.layout_options(),
+        Some(&profile),
+    )?;
+    drop(permutation);
+    if &source.binding != binding {
+        return Err(Error::Profile);
+    }
+    if source.copy_digest != copy_digest
+        || source.fixed != fixed
+        || source.sigma != sigma
+        || source.vk_selectors != vk.selectors()
+    {
+        return Err(Error::Source);
+    }
+    let blind = default_blind::<C::ScalarExt>();
+    for (column, expected) in fixed.iter().chain(&sigma).zip(
+        vk.fixed_commitments()
+            .iter()
+            .chain(vk.permutation_commitments()),
+    ) {
+        let actual = commit_lagrange(
+            params.params(),
+            column,
+            &blind,
+            Secrecy::Public,
+            config.msm_budget,
+        )
+        .map_err(KeyError::from)?
+        .to_affine();
+        if &actual != expected {
+            return Err(Error::Commitment);
+        }
+    }
+    let Prepared {
+        constraint_system,
+        binding: source_binding,
+        fixed: source_fixed,
+        sigma: source_sigma,
+        vk_selectors,
+        ..
+    } = source;
+    // Retain one original table set while constructing coefficients and masks.
+    drop((source_binding, source_fixed, source_sigma, vk_selectors));
+    ProvingKey::new(
+        vk,
+        binding.clone(),
+        constraint_system,
+        fixed,
+        sigma,
+        copy_digest,
+        config.coset_cache,
+        CommitmentTables::none(),
+    )
+    .map_err(Error::from)
+}
+
 /// Generates the proving key (and its verifying key) from explicit tables:
 /// the pre-substitution constraint system, the `configure` fixed columns, the
 /// selector activations and the copy constraints, each over `n = 2^k` rows of

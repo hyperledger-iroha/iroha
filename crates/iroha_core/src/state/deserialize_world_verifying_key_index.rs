@@ -70,7 +70,7 @@ mod tests {
         VerifyingKeyRecord::new(
             version,
             circuit,
-            BackendTag::Halo2IpaPasta,
+            BackendTag::NativePipaRPasta,
             "pasta",
             [1; 32],
             [2; 32],

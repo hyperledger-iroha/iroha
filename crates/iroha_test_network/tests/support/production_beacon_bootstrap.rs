@@ -1395,7 +1395,6 @@ fn verify_pulse(
             &native.common.chain,
             &record.session.network_id,
             native_finality_limits(),
-            cursor.attestations(),
             cursor.allocation_budget(),
             |reader| {
                 reader
@@ -1422,13 +1421,13 @@ fn verify_pulse(
                 && context.external[0].dataspace_id == DataSpaceId::UNIVERSAL,
             "mandatory pulse carrier is not the exact one-transaction catalog execution"
         );
-        let initial_authority = &certified[0].commitment().schedule.current.authority;
+        let initial_authority = certified[0].commitment().schedule.current.generation();
         let mut prior_authorization = None;
         for proof in certified.iter().skip(1) {
             let height = proof.height();
             let context = &proof.commitment().schedule.current;
             ensure!(
-                &context.authority == initial_authority,
+                context.generation() == initial_authority,
                 "unchanged committee must retain the same immutable authority generation"
             );
             if height == epoch_length {

@@ -46,6 +46,7 @@ mod folding;
 mod index;
 mod manifest;
 mod scheduling;
+mod snapshot;
 
 pub use archive::{ArchiveKey, ArchiveStore, FsArchive};
 pub use collection::{CollectionStatus, OutgoingAbsent};
@@ -54,6 +55,7 @@ pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
+pub use snapshot::{Snapshot, SnapshotFold};
 
 /// Errors distinguish uncertain custody from invalid input and missing retained witnesses.
 #[derive(Debug, thiserror::Error)]
@@ -111,10 +113,16 @@ impl FrozenTransition {
     /// Check canonical bindings; this is additional to the mandatory native verifier.
     ///
     /// # Errors
-    /// Rejects malformed objects, another wallet/credential, or a mismatching statement.
+    /// Rejects malformed objects, another wallet/credential, a mismatching statement, or
+    /// successor regulatory policy/lease fields that differ from the credential.
     pub fn validate(&self) -> Result<(), Error> {
         valid(self.capsule.to_canonical_bytes())?;
         valid(self.credential.validate())?;
+        valid(
+            self.capsule
+                .successor_state
+                .validate_for_credential(&self.credential),
+        )?;
         valid(
             self.capsule
                 .statement

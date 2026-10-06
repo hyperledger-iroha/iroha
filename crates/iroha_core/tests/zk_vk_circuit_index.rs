@@ -2,14 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! Verifying-key registry indexing by `(circuit_id, version)`.
+#[path = "common/native_genesis.rs"]
+mod native_genesis;
 #[path = "common/zk_components.rs"]
 mod zk_components;
-use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    smartcontracts::Execute,
-    state::{State, WorldReadOnly},
-};
+use iroha_core::{smartcontracts::Execute, state::WorldReadOnly};
 use iroha_core_zk::hash_vk;
 use iroha_core_zk::{
     confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID as TRANSFER,
@@ -82,10 +79,14 @@ fn base_record(circuit: &str, version: u32) -> VerifyingKeyRecord {
 #[test]
 fn duplicate_circuit_version_registration_rejected() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = native_genesis::certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
     let id_primary = VerifyingKeyId::new("pipa-r/pasta", "vk_primary");
@@ -111,10 +112,14 @@ fn duplicate_circuit_version_registration_rejected() {
 #[test]
 fn update_rotates_circuit_version_index() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = native_genesis::certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
     let id = VerifyingKeyId::new("pipa-r/pasta", "vk_upgrade");
@@ -173,10 +178,14 @@ fn execute_verify_proof(
 #[test]
 fn verify_proof_rejects_circuit_mismatch() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = native_genesis::certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
     let public_inputs =
@@ -205,10 +214,14 @@ fn verify_proof_rejects_circuit_mismatch() {
 #[test]
 fn verify_proof_rejects_schema_hash_mismatch() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = native_genesis::certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
     let mut public_inputs =
@@ -238,10 +251,14 @@ fn verify_proof_rejects_schema_hash_mismatch() {
 #[test]
 fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = native_genesis::certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
     let public_inputs =
@@ -279,10 +296,14 @@ fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
 #[test]
 fn register_requires_circuit_and_schema_hash() {
     let world = test_world::world_with_test_accounts();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = native_genesis::certified_state(world);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
     let mut rec = base_record(TRANSFER, 1);

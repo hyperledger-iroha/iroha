@@ -188,6 +188,238 @@ impl<F: PastaField> Circuit<F> for TestCircuit {
 const K: u32 = 6;
 const CIRCUIT: TestCircuit = TestCircuit { rows: ROWS };
 
+#[test]
+fn proving_key_artifact_round_trip_proves_on_both_curves() {
+    fn check<C: PastaCurve>() {
+        use crate::{ProverConfig, ProverRandomness, Witness, create_proof_owned, verify_full};
+        let params = params::<C>();
+        for compress in [true, false] {
+            let mut profile = KeygenConfigV2::pipa_r(vec![crate::cs::InstanceType::Field]);
+            profile.compress_selectors = compress;
+            let original = keygen_pk_v2(&params, &CIRCUIT, &profile).expect("frozen producer");
+            let encoded = original.artifact_bytes_v2().expect("original bytes");
+            let config = pk::artifact::ReadConfig {
+                maximum_bytes: encoded.len(),
+                maximum_rows: 1 << K,
+                coset_cache: CosetCachePolicy::OnDemand,
+                msm_budget: MemoryBudget::DEFAULT,
+            };
+            let imported = ProvingKey::<C>::from_artifact_v2(
+                &encoded,
+                original.binding(),
+                &params,
+                &CIRCUIT,
+                config,
+            )
+            .expect("installed original");
+            assert!(!imported.has_coset_cache());
+            assert_eq!(imported.artifact_bytes_v2().unwrap(), encoded);
+            assert_eq!(imported.fixed_polys(), original.fixed_polys());
+            assert_eq!(imported.permutation_polys(), original.permutation_polys());
+            assert_eq!(imported.mask_polys(), original.mask_polys());
+            let instances = vec![vec![C::ScalarExt::from(36)]];
+            let witness = Witness::from_circuit(&imported, &CIRCUIT, &instances).unwrap();
+            let proof = create_proof_owned(
+                &params,
+                &imported,
+                witness,
+                ProverRandomness::hedged(),
+                ProverConfig::default(),
+            )
+            .expect("actual imported proof");
+            verify_full(
+                &params,
+                original.binding(),
+                original.vk(),
+                &instances,
+                &proof,
+                MemoryBudget::DEFAULT,
+            )
+            .expect("actual original VK");
+            let mut changed = instances;
+            changed[0][0] += C::ScalarExt::ONE;
+            assert!(
+                verify_full(
+                    &params,
+                    original.binding(),
+                    original.vk(),
+                    &changed,
+                    &proof,
+                    MemoryBudget::DEFAULT
+                )
+                .is_err()
+            );
+        }
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
+#[test]
+fn proving_key_artifact_rejects_source_encoding_allocation_and_commitment_changes() {
+    use pk::artifact::{Error as ArtifactError, ReadConfig};
+    #[derive(Clone, Copy)]
+    struct NeverSynthesize;
+    impl<F: PastaField> Circuit<F> for NeverSynthesize {
+        type Config = ();
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            panic!("invalid original reached synthesis")
+        }
+        fn configure(_: &mut ConstraintSystem<F>) {
+            panic!("invalid original reached configuration")
+        }
+        fn synthesize(&self, _: (), _: impl Layouter<F>) -> Result<(), Error> {
+            panic!("invalid original reached layout")
+        }
+    }
+    let params = params::<Ep>();
+    let profile = KeygenConfigV2::pipa_r(vec![crate::cs::InstanceType::Field]);
+    let original = keygen_pk_v2(&params, &CIRCUIT, &profile).unwrap();
+    let encoded = original.artifact_bytes_v2().unwrap();
+    let config = ReadConfig {
+        maximum_bytes: encoded.len(),
+        maximum_rows: 1 << K,
+        coset_cache: CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let read = |bytes: &[u8], source: &TestCircuit, selected: ReadConfig| {
+        ProvingKey::<Ep>::from_artifact_v2(bytes, original.binding(), &params, source, selected)
+            .err()
+    };
+    for bytes in [&encoded[..0], &encoded[..43], &encoded[..encoded.len() - 1]] {
+        assert_eq!(read(bytes, &CIRCUIT, config), Some(ArtifactError::Length));
+    }
+    let mut extended = encoded.clone();
+    extended.push(0);
+    assert_eq!(
+        read(&extended, &CIRCUIT, config),
+        Some(ArtifactError::Length)
+    );
+    for index in [0, 8, 39] {
+        let mut changed = encoded.clone();
+        changed[index] ^= 1;
+        assert_eq!(
+            read(&changed, &CIRCUIT, config),
+            Some(ArtifactError::Encoding)
+        );
+    }
+    let mut changed = encoded.clone();
+    changed[40] ^= 1;
+    assert_eq!(
+        read(&changed, &CIRCUIT, config),
+        Some(ArtifactError::Length)
+    );
+    let mut cap = config;
+    cap.maximum_bytes -= 1;
+    assert_eq!(read(&encoded, &CIRCUIT, cap), Some(ArtifactError::Length));
+    cap = config;
+    cap.maximum_rows -= 1;
+    assert_eq!(read(&encoded, &CIRCUIT, cap), Some(ArtifactError::Length));
+    assert_eq!(
+        ProvingKey::<Ep>::from_artifact_v2(
+            &encoded,
+            original.binding(),
+            &params,
+            &NeverSynthesize,
+            cap
+        )
+        .err(),
+        Some(ArtifactError::Length)
+    );
+    let mut malformed = encoded.clone();
+    malformed[0] ^= 1;
+    assert_eq!(
+        ProvingKey::<Ep>::from_artifact_v2(
+            &malformed,
+            original.binding(),
+            &params,
+            &NeverSynthesize,
+            config
+        )
+        .err(),
+        Some(ArtifactError::Encoding)
+    );
+    assert!(read(&encoded, &TestCircuit { rows: ROWS + 1 }, config).is_some());
+    let vk_end = 44 + original.vk().to_bytes().len();
+    let mut changed = encoded.clone();
+    changed[vk_end] ^= 1;
+    assert_eq!(
+        read(&changed, &CIRCUIT, config),
+        Some(ArtifactError::Source)
+    );
+    let mut changed = encoded.clone();
+    changed[vk_end + 32..vk_end + 64].fill(0xff);
+    assert_eq!(
+        read(&changed, &CIRCUIT, config),
+        Some(ArtifactError::Encoding)
+    );
+    let mut changed = encoded.clone();
+    changed[vk_end + 32..vk_end + 64].fill(0);
+    changed[vk_end + 32] = 19;
+    assert_eq!(
+        read(&changed, &CIRCUIT, config),
+        Some(ArtifactError::Source)
+    );
+    let sigma_start = vk_end + 32 + original.fixed_values().len() * original.binding().n() * 32;
+    let mut changed = encoded.clone();
+    changed[sigma_start..sigma_start + 32].fill(0);
+    changed[sigma_start] = 19;
+    assert_eq!(
+        read(&changed, &CIRCUIT, config),
+        Some(ArtifactError::Source)
+    );
+    let selectors_start =
+        44 + 10 + (original.fixed_values().len() + original.permutation_values().len()) * 32;
+    let mut changed = encoded.clone();
+    changed[selectors_start] ^= 1;
+    assert!(read(&changed, &CIRCUIT, config).is_some());
+    // A valid point in another column leaves codec/profile valid but changes the commitment.
+    let mut changed = encoded.clone();
+    let alternate = &original.vk().to_bytes()[10 + 32..10 + 64];
+    assert_ne!(&encoded[44 + 10..44 + 10 + 32], alternate);
+    changed[44 + 10..44 + 10 + 32].copy_from_slice(alternate);
+    assert_eq!(
+        read(&changed, &CIRCUIT, config),
+        Some(ArtifactError::Commitment)
+    );
+    let wrong_params = PinnedParams::<Ep>::derive(K + 1).unwrap();
+    assert_eq!(
+        ProvingKey::<Ep>::from_artifact_v2(
+            &encoded,
+            original.binding(),
+            &wrong_params,
+            &CIRCUIT,
+            config
+        )
+        .err(),
+        Some(ArtifactError::Profile)
+    );
+    let wrong_curve = PinnedParams::<Eq>::derive(K).unwrap();
+    assert!(
+        ProvingKey::<Eq>::from_artifact_v2(
+            &encoded,
+            original.binding(),
+            &wrong_curve,
+            &CIRCUIT,
+            config
+        )
+        .is_err()
+    );
+    let v1 = keygen_pk(
+        &params,
+        &CIRCUIT,
+        &KeygenConfig::new(TranscriptV1::Blake2bChallenge255),
+    )
+    .unwrap();
+    assert_eq!(v1.artifact_bytes_v2().err(), Some(ArtifactError::Profile));
+    assert_eq!(
+        ProvingKey::<Ep>::from_artifact_v2(&encoded, v1.binding(), &params, &CIRCUIT, config).err(),
+        Some(ArtifactError::Profile)
+    );
+}
+
 fn params<C: PastaCurve>() -> PinnedParams<C> {
     PinnedParams::<C>::derive(K).expect("params")
 }

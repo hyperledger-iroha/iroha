@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use iroha_sumeragi::{
     api::{Action, CommittedTip, Event, Init, LocalFault, LocalParams},
-    crypto::Attestation,
     message::{PayloadRequest, Status, SyncRequest, TrafficClass, VoteKind, WireMessage},
     safety::{RecordState, SafetyRecord},
     testing::FakeValidators,
@@ -81,7 +80,6 @@ fn kernel_start(
         signers: vec![Arc::new(vals.signer(0).clone())],
         crypto: Box::new(crypto.clone()),
         hasher: Box::new(crypto),
-        attestation: Attestation::none(),
         now,
         ingress: Arc::new(Mutex::new(Ingress::new(IngressLimits::default()))),
         config: DriverConfig::default(),
@@ -180,10 +178,9 @@ fn record(height: u64, vals: &FakeValidators) -> Box<SafetyRecord> {
 /// `EMPTY`, executions lack their parent).
 fn complete_exec(kernel: &mut Kernel, now: Millis, op: &ExecOp) {
     let done = match op {
-        ExecOp::BuildControlWitness { .. } => ExecDone::ControlWitnessBuilt(Ok((
-            iroha_sumeragi::types::ControlWitness::empty(),
-            false,
-        ))),
+        ExecOp::BuildControlWitness { .. } => {
+            ExecDone::ControlWitnessBuilt(Ok(iroha_sumeragi::types::ControlWitness::empty()))
+        }
         ExecOp::DriveApplicationControl(_) => ExecDone::ApplicationControlDriven(Ok(None)),
         ExecOp::ReceiveApplicationControl {
             occurrence,
@@ -195,7 +192,7 @@ fn complete_exec(kernel: &mut Kernel, now: Millis, op: &ExecOp) {
             message: message.clone(),
             result: Ok(()),
         },
-        ExecOp::Build { .. } => ExecDone::Built(Ok((None, false))),
+        ExecOp::Build { .. } => ExecDone::Built(Ok(None)),
         ExecOp::Execute { .. } => ExecDone::Executed(None),
         ExecOp::Discard { .. } => ExecDone::Discarded,
         ExecOp::Reject { .. } => ExecDone::Rejected,

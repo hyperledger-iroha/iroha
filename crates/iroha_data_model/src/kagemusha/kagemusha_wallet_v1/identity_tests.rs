@@ -1860,3 +1860,129 @@ fn kagemusha_wallet_v1_identity_frames_fit_their_caps() {
         assert!(actual <= cap, "{name}: {actual} > {cap}");
     }
 }
+
+// These reuse the explicitly unadmitted Model DATA fixtures. Valid P256 signatures test
+// current challenge admission; stand-in platform items and policies confer no authority.
+#[test]
+fn kagemusha_wallet_v1_credential_enrollment_admission_for_every_kind() {
+    for (kind, seed) in [
+        (KagemushaWalletEvidenceKindV1::AndroidKeyMintTee, 0x44),
+        (KagemushaWalletEvidenceKindV1::AndroidKeyMintStrongBox, 0x47),
+        (KagemushaWalletEvidenceKindV1::AppleAppAttest, 0x45),
+    ] {
+        let f = identity_fixture(kind, seed);
+        let original = f.credential.to_canonical_bytes().expect("original frame");
+        let credential =
+            KagemushaWalletCredentialV1::decode_canonical(&original, &f.scheme.scheme_id())
+                .expect("canonical credential");
+        credential
+            .verify_enrollment(
+                &f.scheme,
+                &f.enrollment_certificate,
+                &f.challenge,
+                &public_key(&f.payment),
+            )
+            .expect("exact retained E1 admission");
+        assert_eq!(credential.to_canonical_bytes().expect("frame"), original);
+    }
+}
+
+#[test]
+fn kagemusha_wallet_v1_credential_enrollment_admission_rejects_other_retained_scope() {
+    let f = android();
+    let key = public_key(&f.payment);
+    // The original signed credential remains valid under its scheme for every rejected
+    // challenge. A valid issuer signature alone does not select an enrollment attempt.
+    f.credential
+        .verify(&f.scheme, &f.enrollment_certificate)
+        .expect("valid signed credential");
+    let mut challenges = [f.challenge; 7];
+    challenges[0].version = 2;
+    challenges[1].scheme_id = [0x61; 32];
+    challenges[2].asset_digest = [0x62; 32];
+    challenges[3].account_digest = [0x63; 32];
+    challenges[4].app_policy = [0x64; 32];
+    challenges[5].enrollment_policy = [0x65; 32];
+    challenges[6].issuer_nonce = [0x66; 32];
+    for challenge in challenges {
+        assert!(
+            f.credential
+                .verify_enrollment(&f.scheme, &f.enrollment_certificate, &challenge, &key)
+                .is_err()
+        );
+    }
+    assert!(is_invalid(
+        f.credential.verify_enrollment(
+            &f.scheme,
+            &f.enrollment_certificate,
+            &f.challenge,
+            &public_key(&signing_key(0x67)),
+        ),
+        "credential.payment_key"
+    ));
+}
+
+#[test]
+fn kagemusha_wallet_v1_credential_enrollment_admission_rejects_signed_other_attempt() {
+    let f = android();
+    let key = public_key(&f.payment);
+    let mut other_challenge = f.challenge;
+    other_challenge.issuer_nonce = [0x68; 32];
+    let mut body = f.credential.body;
+    body.enrollment_id = other_challenge.enrollment_id(&key);
+    body.wallet_id = other_challenge.wallet_id(&key);
+    let other = f
+        .issue(&body)
+        .expect("valid issuer signature for other attempt");
+    other
+        .verify(&f.scheme, &f.enrollment_certificate)
+        .expect("other attempt is a valid credential");
+    other
+        .verify_enrollment(&f.scheme, &f.enrollment_certificate, &other_challenge, &key)
+        .expect("its own retained E1 admits it");
+    assert!(is_invalid(
+        other.verify_enrollment(&f.scheme, &f.enrollment_certificate, &f.challenge, &key),
+        "credential.enrollment_id"
+    ));
+}
+
+#[test]
+fn kagemusha_wallet_v1_credential_enrollment_admission_rejects_renewal_and_bad_issuer() {
+    let f = android();
+    let key = public_key(&f.payment);
+    let mut body = f.credential.body;
+    body.renewal_sequence = 1;
+    body.fresh_evidence.digest = [0x69; 32];
+    body.fresh_evidence.time_ms = ISSUED_AT_MS + 1;
+    body.issued_at_ms = ISSUED_AT_MS + 2;
+    let renewed = f.issue(&body).expect("valid signed renewal");
+    renewed
+        .verify(&f.scheme, &f.enrollment_certificate)
+        .expect("valid credential");
+    renewed
+        .validate_replacement_of(&f.credential)
+        .expect("valid renewal replacement");
+    assert!(is_invalid(
+        renewed.verify_enrollment(&f.scheme, &f.enrollment_certificate, &f.challenge, &key),
+        "credential.renewal_sequence"
+    ));
+    let artifact = test_certificate(
+        &f.scheme,
+        &f.root,
+        KagemushaWalletSignerRoleV1::Artifact,
+        &f.enrollment_signer,
+        2,
+    );
+    assert!(
+        f.credential
+            .verify_enrollment(&f.scheme, &artifact, &f.challenge, &key)
+            .is_err()
+    );
+    let mut signed_body_changed = f.credential;
+    signed_body_changed.body.issued_at_ms += 1;
+    assert!(
+        signed_body_changed
+            .verify_enrollment(&f.scheme, &f.enrollment_certificate, &f.challenge, &key)
+            .is_err()
+    );
+}

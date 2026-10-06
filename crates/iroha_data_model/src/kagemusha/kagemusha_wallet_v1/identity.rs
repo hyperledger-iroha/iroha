@@ -1480,6 +1480,55 @@ impl KagemushaWalletCredentialV1 {
         )
     }
 
+    /// Verify an initial credential against its retained enrollment challenge and key.
+    ///
+    /// This additionally binds the authenticated issuer's credential to the exact E1
+    /// challenge which preceded payment-key generation. The recomputed enrollment identity
+    /// binds all six challenge fields, including its enrollment-policy digest and nonce.
+    /// This method does not authenticate the issuer-selected policy preimages, platform
+    /// evidence, account authorization or challenge liveness; the enrollment owner verifies
+    /// and retains those originals before admitting the credential.
+    ///
+    /// # Errors
+    ///
+    /// Rejects what [`Self::verify`] rejects, an invalid challenge or expected payment key,
+    /// a renewal credential, or another challenge, asset, account, app policy or payment key.
+    pub fn verify_enrollment(
+        &self,
+        scheme: &KagemushaWalletSchemeV1,
+        issuer_certificate: &KagemushaWalletSignerCertificateV1,
+        challenge: &KagemushaWalletEnrollmentChallengeV1,
+        payment_key: &KagemushaDevicePublicKeyV1,
+    ) -> WalletResult<()> {
+        self.verify(scheme, issuer_certificate)?;
+        challenge.validate()?;
+        payment_key.validate()?;
+        if self.body.renewal_sequence != 0 {
+            return Err(invalid_v1("credential.renewal_sequence"));
+        }
+        require_scheme_v1(
+            "enrollment_challenge.scheme_id",
+            &challenge.scheme_id,
+            &self.body.scheme_id,
+        )?;
+        if self.body.asset_digest != challenge.asset_digest {
+            return Err(invalid_v1("credential.asset_digest"));
+        }
+        if self.body.account_digest != challenge.account_digest {
+            return Err(invalid_v1("credential.account_digest"));
+        }
+        if self.body.app_policy != challenge.app_policy {
+            return Err(invalid_v1("credential.app_policy"));
+        }
+        if self.body.payment_key != *payment_key {
+            return Err(invalid_v1("credential.payment_key"));
+        }
+        if self.body.enrollment_id != challenge.enrollment_id(payment_key) {
+            return Err(invalid_v1("credential.enrollment_id"));
+        }
+        Ok(())
+    }
+
     /// Validate `self` as the replacement of `previous` (`RefreshPolicy` Credential, design C5).
     ///
     /// Only `fresh_evidence`, `issued_at_ms`, `lease_expires_at_ms` and `issuer_certificate`

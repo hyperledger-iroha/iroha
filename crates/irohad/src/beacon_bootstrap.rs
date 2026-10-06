@@ -1052,13 +1052,6 @@ fn read_verified_rotation_selection(
         },
     )
     .map_err(iroha_data_model::sumeragi::finality::NativeFinalityDecodeError::from)?;
-    let verifier = NativeJournalCursor::new(
-        proof.chain_id.clone(),
-        proof.network_id,
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        limits,
-        budget,
-    )?;
     let selected = verify_validator_committee_selection_evidence_v1(
         &evidence,
         &proof.chain_id,
@@ -1066,7 +1059,6 @@ fn read_verified_rotation_selection(
         proof.target_epoch,
         proof.transition_id.into(),
         limits,
-        verifier.attestations(),
         budget,
     )?;
     Ok((evidence, selected))

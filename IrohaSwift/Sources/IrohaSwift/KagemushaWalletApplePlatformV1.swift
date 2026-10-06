@@ -236,6 +236,9 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   public static let anchorService = "org.hyperledger.iroha.kagemusha.wallet.v1.marker-anchor"
   /// Rust `KAGEMUSHA_WALLET_ANCHOR_MAX_BYTES_V1`.
   static let anchorMaxBytes = 256
+  /// Complete enumeration resource bound, shared with Native. Overflow refuses the inventory;
+  /// it never hides a surviving key or permits a replacement incarnation.
+  static let keyEnumerationMaxSlots = 4096
   /// Rust `KagemushaWalletAnchorPolicyV1::Keychain` tag: this platform keeps an anchor.
   static let anchorPolicyTag: UInt8 = 1
   /// Accessibility of both custody keychain items, the payment key and the rollback anchor:
@@ -614,11 +617,11 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
 
   /// Slots of every payment key in the adapter's access group, sorted by slot bytes (design
   /// R10: a payment-key item whose slot has no files is `LostCustody(KeyWithoutMarker)` after
-  /// delete and reinstall). Empty only for `errSecItemNotFound` inside protected-data
-  /// brackets. Tags are parsed strictly; a key with another tag is not a wallet key, and a
-  /// malformed `kgm-w1-` tag is reported and never read as a slot.
-  // TODO(G2-bridge): expose as a vtable entry once the Rust trait gains the key enumeration
-  // that reconcile.rs `TODO(G2-iOS)` (R10, KeyWithoutMarker) asks for.
+  /// delete and reinstall). Every successful inventory, including an empty class query or
+  /// `errSecItemNotFound`, requires protected storage before and after querying.
+  /// Tags are parsed strictly; a key with another tag is not a wallet key, and a
+  /// malformed `kgm-w1-` tag refuses the complete inventory: it may name surviving custody
+  /// and must never be silently omitted. Native consumes this through callback operation10.
   func keyEnumerate() -> Result<[KagemushaWalletAppleSlotV1], KagemushaWalletAppleUnavailableV1> {
     let answer = bracketed { () -> KagemushaWalletAppleProbeV1<[KagemushaWalletAppleSlotV1]> in
       var query = paymentKeyClassQuery()
@@ -640,14 +643,23 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
         guard let tag = item[kSecAttrApplicationTag as String] as? Data else { continue }
         if let slot = KagemushaWalletAppleSlotV1(applicationTag: tag) {
           slots.insert(slot)
+          guard slots.count <= Self.keyEnumerationMaxSlots else {
+            diagnose("payment-key enumeration exceeds resource bound")
+            return .unavailable(.platform(KagemushaWalletAppleStatusV1.malformedKeychainResult))
+          }
         } else if tag.starts(with: walletPrefix) {
           diagnose("malformed wallet payment-key tag", detail: "\(tag.count) bytes")
+          return .unavailable(.platform(KagemushaWalletAppleStatusV1.malformedKeychainResult))
         }
       }
       return .present(slots.sorted { $0.bytes.lexicographicallyPrecedes($1.bytes) })
     }
     switch answer {
-    case .present(let slots): return .success(slots)
+    case .present(let slots):
+      // `bracketed` postchecks only `.absent`; a successful class query can also produce
+      // an empty wallet inventory. Every complete inventory requires the final bracket.
+      if case .failure(let reason) = storageState() { return .failure(reason) }
+      return .success(slots)
     case .absent: return .success([])
     case .unavailable(let reason): return .failure(reason)
     }

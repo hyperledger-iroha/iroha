@@ -4,6 +4,7 @@
 #[path = "common/bootstrap.rs"]
 mod bootstrap;
 #[path = "common/bootstrap_objects.rs"]
+#[allow(dead_code)] // Shared payer/receiver helpers are consumed by distinct test binaries.
 mod bootstrap_objects;
 mod common;
 use ff::{Field, PrimeField};
@@ -1307,9 +1308,55 @@ enum Stage {
         vesta: Box<AccumulatorT<Eq>>,
     },
 }
+/// Explicit source-A candidate; existing helpers retain their scalar-bank profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourceProfile {
+    /// Original wide diagnostic profile.
+    #[default]
+    Generic,
+    /// Parallel serialized arithmetic with ordinary pooled range buses.
+    Serialized {
+        /// Independent pooled range lookup count.
+        buses: usize,
+    },
+    /// Parallel serialized arithmetic with exact tagged width/value range buses.
+    Tagged {
+        /// Independent pooled tagged lookup count.
+        buses: usize,
+    },
+}
+impl SourceProfile {
+    /// Preserve the existing zero=generic, positive=ordinary serialized helper contract.
+    pub const fn ordinary(buses: usize) -> Self {
+        if buses == 0 {
+            Self::Generic
+        } else {
+            Self::Serialized { buses }
+        }
+    }
+    /// Number of independent range buses, zero only for the generic profile.
+    pub const fn range_buses(self) -> usize {
+        match self {
+            Self::Generic => 0,
+            Self::Serialized { buses } | Self::Tagged { buses } => buses,
+        }
+    }
+    /// Configure the exact named artifact profile.
+    pub fn configure(self, meta: &mut ConstraintSystem<Fp>) -> VerifierConfig<Ep> {
+        match self {
+            Self::Generic => VerifierConfig::configure(meta),
+            Self::Serialized { buses } => {
+                VerifierConfig::configure_serialized_foreign(meta, buses).unwrap()
+            }
+            Self::Tagged { buses } => {
+                VerifierConfig::configure_serialized_foreign_tagged(meta, buses).unwrap()
+            }
+        }
+    }
+}
 #[derive(Clone)]
 struct StageCircuit {
-    range_buses: usize,
+    profile: SourceProfile,
     context: ContextCircuit,
     source: StageProof,
     stage: Stage,
@@ -1317,9 +1364,9 @@ struct StageCircuit {
 impl Circuit<Fp> for StageCircuit {
     type Config = Config;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = usize;
-    fn params(&self) -> usize {
-        self.range_buses
+    type Params = SourceProfile;
+    fn params(&self) -> SourceProfile {
+        self.profile
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -1328,13 +1375,13 @@ impl Circuit<Fp> for StageCircuit {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
-        Self::configure_with_params(meta, 0)
+        Self::configure_with_params(meta, SourceProfile::Generic)
     }
-    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, range_buses: usize) -> Config {
-        if range_buses == 0 {
+    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, profile: SourceProfile) -> Config {
+        if profile == SourceProfile::Generic {
             return Recursive::configure(meta);
         }
-        let verifier = VerifierConfig::configure_serialized_foreign(meta, range_buses).unwrap();
+        let verifier = profile.configure(meta);
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -1424,13 +1471,49 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
     range_buses: usize,
     q_range_buses: Option<usize>,
 ) -> AuthenticatedBootstrap {
+    authenticated_bootstrap_with_profile(
+        adversarial,
+        omega_digest,
+        SourceProfile::ordinary(range_buses),
+        q_range_buses,
+    )
+}
+
+/// Named profile experiment, used identically for A1 and terminal A2.
+pub(crate) fn authenticated_bootstrap_with_profile(
+    adversarial: bool,
+    omega_digest: Fp,
+    profile: SourceProfile,
+    q_range_buses: Option<usize>,
+) -> AuthenticatedBootstrap {
+    authenticated_bootstrap_with_identity(
+        adversarial,
+        omega_digest,
+        profile,
+        q_range_buses,
+        BootstrapIdentity::Payer,
+    )
+}
+
+/// Distinct genuine wallet identities; neither is an admitted release artifact.
+pub(crate) use bootstrap_objects::Identity as BootstrapIdentity;
+
+/// Same fixed Bootstrap relation for a separately enrolled receiver wallet.
+pub(crate) fn authenticated_bootstrap_with_identity(
+    adversarial: bool,
+    omega_digest: Fp,
+    profile: SourceProfile,
+    q_range_buses: Option<usize>,
+    identity: BootstrapIdentity,
+) -> AuthenticatedBootstrap {
     use iroha_kagemusha_proof::a_relation::{
         context::ContextPlan,
         split::{SplitPlan, WCircuit, WKey},
     };
     use iroha_kagemusha_proof::admin_sigma::{BOOTSTRAP_K, BootstrapCircuit};
     use iroha_kagemusha_proof::omega::OmegaWitness;
-    let (mut initial, certificate, credential) = bootstrap_objects::enrollment();
+    eprintln!("BOOTSTRAP_SOURCE_PROFILE {profile:?} Q_buses={q_range_buses:?}");
+    let (mut initial, certificate, credential) = bootstrap_objects::enrollment_for(identity);
     initial.lineage[17] = omega_digest;
     let sigma = BootstrapCircuit::new(&initial);
     let sigma_params = common::vesta_params(BOOTSTRAP_K);
@@ -1514,7 +1597,7 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
         q.verifying_key().clone(),
     )
     .unwrap();
-    let receipt = bootstrap_objects::receipt(&initial, &sigma_bytes);
+    let receipt = bootstrap_objects::receipt_for(&initial, &sigma_bytes, identity);
     let objects = [certificate, credential, receipt];
     let (signature, siginstances) = bootstrap_objects::signatures(&objects);
     let signature_key = keygen_pk_v2(
@@ -1599,7 +1682,7 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
         signature_order: [0, 1, 2],
     };
     let first = StageCircuit {
-        range_buses,
+        profile,
         context: context.clone(),
         source,
         stage: Stage::First,
@@ -1693,7 +1776,7 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
     .unwrap();
     let plan = SplitPlan::new(context.plan.clone(), 1, wkey, &params).unwrap();
     let last = StageCircuit {
-        range_buses,
+        profile,
         context: context.clone(),
         source: StageProof {
             length: u32::try_from(wrapped.proof.len()).unwrap(),
@@ -1757,6 +1840,232 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
     a2claim.decide(&vparams, MemoryBudget::DEFAULT).unwrap();
     pout.decide(&params, MemoryBudget::DEFAULT).unwrap();
     vout.decide(&vparams, MemoryBudget::DEFAULT).unwrap();
+    let mut installed_native_source = None;
+    if adversarial
+        && profile
+            == (SourceProfile::Serialized {
+                buses: iroha_kagemusha_proof::a_relation::native::bootstrap::SOURCE_RANGE_BUSES,
+            })
+    {
+        use iroha_kagemusha_proof::a_relation::native::bootstrap as native;
+        let native_plan = native::Plan::new(
+            context.plan.operation().clone(),
+            bootstrap_objects::policy(),
+            signature.plan().clone(),
+            params.clone(),
+            vparams.clone(),
+        )
+        .unwrap();
+        let input = native::Inputs {
+            state: initial,
+            sigma: first.source.sigma[4..].to_vec(),
+            objects: context
+                .authentication
+                .as_ref()
+                .unwrap()
+                .each_ref()
+                .map(|object| object.bytes.clone()),
+            q: [
+                native::QInput {
+                    proof: first.source.proof.clone(),
+                    instances: context.q[0].clone(),
+                },
+                native::QInput {
+                    proof: last.source.remaining[0].0.clone(),
+                    instances: context.q[1].clone(),
+                },
+            ],
+        };
+        let prepared = native_plan
+            .prepare(input.clone(), MemoryBudget::DEFAULT)
+            .unwrap();
+        let actual_first = prepared.first_circuit();
+        // Import actual fixed recursive tables/VK originals, rather than regenerating a
+        // runtime key. Test key generation above is the offline artifact producer only.
+        let first_original = a1key.artifact_bytes_v2().unwrap();
+        let mounted_first = iroha_plonk::ProvingKey::from_artifact_v2(
+            &first_original,
+            a1key.binding(),
+            &vparams,
+            &actual_first,
+            iroha_plonk::keys::pk::artifact::ReadConfig {
+                maximum_bytes: first_original.len(),
+                maximum_rows: 1 << 16,
+                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+                msm_budget: MemoryBudget::DEFAULT,
+            },
+        )
+        .unwrap();
+        assert_eq!(mounted_first.artifact_bytes_v2().unwrap(), first_original);
+        // Existing source artifacts must match the actual production fixed tables and copies.
+        Witness::from_circuit(&a1key, &actual_first, &first_instances).unwrap();
+        let first_check =
+            check_circuit(&actual_first, 16, &first_instances, CheckMode::Strict).unwrap();
+        assert!(
+            first_check.is_satisfied(),
+            "production A1 retains all original constraints"
+        );
+        let native_first = prepared
+            .prove_first(
+                &mounted_first,
+                common::recovery(189),
+                ProverConfig::default(),
+            )
+            .unwrap();
+        let (wrapper_circuit, _, _) = prepared
+            .wrapper_circuit(
+                &native_first,
+                &mounted_first,
+                Fq::from(191),
+                &FoldConfig::default(),
+            )
+            .unwrap();
+        let wrapper_original = wprover.artifact_bytes_v2().unwrap();
+        let mounted_wrapper = iroha_plonk::ProvingKey::from_artifact_v2(
+            &wrapper_original,
+            wprover.binding(),
+            &params,
+            &wrapper_circuit,
+            iroha_plonk::keys::pk::artifact::ReadConfig {
+                maximum_bytes: wrapper_original.len(),
+                maximum_rows: 1 << 16,
+                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+                msm_budget: MemoryBudget::DEFAULT,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            mounted_wrapper.artifact_bytes_v2().unwrap(),
+            wrapper_original
+        );
+        let native_wrapper = prepared
+            .prove_wrapper(
+                &native_first,
+                &mounted_first,
+                &mounted_wrapper,
+                Fq::from(191),
+                &FoldConfig::default(),
+                common::recovery(190),
+                ProverConfig::default(),
+            )
+            .unwrap();
+        let imported = WKey::from_artifact(
+            &context.plan,
+            0,
+            wprover.binding().clone(),
+            params.clone(),
+            wprover.vk().clone(),
+        )
+        .unwrap();
+        assert!(
+            WKey::from_artifact(
+                &context.plan,
+                1,
+                wprover.binding().clone(),
+                params.clone(),
+                wprover.vk().clone(),
+            )
+            .is_err(),
+            "terminal stage cannot import W"
+        );
+        assert!(
+            WKey::from_artifact(
+                &context.plan,
+                0,
+                signature_key.binding().clone(),
+                params.clone(),
+                signature_key.vk().clone(),
+            )
+            .is_err(),
+            "same-curve signature key cannot become W"
+        );
+        let known = synthesize(&actual_first, 16, Some(&first_instances)).unwrap();
+        let unknown = synthesize(&actual_first.without_witnesses(), 16, None).unwrap();
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+        assert_eq!(
+            known.tables.advice_assigned(),
+            unknown.tables.advice_assigned()
+        );
+        let (terminal_circuit, terminal_instances, _) = prepared
+            .terminal_circuit(
+                &native_wrapper,
+                &imported,
+                Fp::from(192),
+                &FoldConfig::default(),
+            )
+            .unwrap();
+        Witness::from_circuit(&a2key, &terminal_circuit, &[terminal_instances]).unwrap();
+        let terminal_original = a2key.artifact_bytes_v2().unwrap();
+        let mounted_terminal = iroha_plonk::ProvingKey::from_artifact_v2(
+            &terminal_original,
+            a2key.binding(),
+            &vparams,
+            &terminal_circuit,
+            iroha_plonk::keys::pk::artifact::ReadConfig {
+                maximum_bytes: terminal_original.len(),
+                maximum_rows: 1 << 16,
+                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+                msm_budget: MemoryBudget::DEFAULT,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            mounted_terminal.artifact_bytes_v2().unwrap(),
+            terminal_original
+        );
+        let terminal = prepared
+            .prove_terminal(
+                &native_wrapper,
+                &imported,
+                &mounted_terminal,
+                Fp::from(192),
+                &FoldConfig::default(),
+                common::recovery(193),
+                ProverConfig::default(),
+            )
+            .unwrap();
+        installed_native_source = Some((
+            native_plan.clone(),
+            input.clone(),
+            mounted_first,
+            mounted_wrapper,
+            mounted_terminal,
+        ));
+        terminal
+            .pallas
+            .decide(&params, MemoryBudget::DEFAULT)
+            .unwrap();
+        terminal
+            .vesta
+            .decide(&vparams, MemoryBudget::DEFAULT)
+            .unwrap();
+        terminal
+            .opening
+            .decide(&vparams, MemoryBudget::DEFAULT)
+            .unwrap();
+        for mutation in 0..3 {
+            let mut altered = input.clone();
+            match mutation {
+                0 => altered.sigma[128] ^= 1,
+                1 => altered.q[0].instances[0][1] += Fq::ONE,
+                _ => altered.q[1].proof[64] ^= 1,
+            }
+            assert!(
+                native_plan.prepare(altered, MemoryBudget::DEFAULT).is_err(),
+                "production source mutation{mutation}"
+            );
+        }
+        let mut altered = input;
+        altered.objects[2][242] ^= 1;
+        let altered = native_plan.prepare(altered, MemoryBudget::DEFAULT).unwrap();
+        assert!(
+            altered
+                .resume_wrapper(&imported, native_wrapper, MemoryBudget::DEFAULT)
+                .is_err(),
+            "original Receipt tape cannot change across a retained W"
+        );
+    }
     if adversarial {
         let (dropped, _) = create_fold(
             &params,
@@ -1877,7 +2186,7 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
             );
         }
     }
-    AuthenticatedBootstrap {
+    let output = AuthenticatedBootstrap {
         key: a2key.vk().clone(),
         binding: a2key.binding().clone(),
         proof: a2.proof,
@@ -1886,5 +2195,128 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
         pallas: pout,
         vesta_part: vout,
         state: initial,
+    };
+    if let Some((plan, input, first_key, wrapper_key, terminal_key)) = installed_native_source {
+        use iroha_kagemusha_proof::a_relation::native::bootstrap::{CheckpointKind, Prover};
+        let first_key_digest = first_key
+            .vk()
+            .kagemusha_digest(first_key.binding())
+            .unwrap()
+            .to_repr();
+        let wrapper_key_digest = wrapper_key
+            .vk()
+            .kagemusha_digest(wrapper_key.binding())
+            .unwrap()
+            .to_repr();
+        let prover = Prover::from_artifacts(
+            plan,
+            std::sync::Arc::new(first_key),
+            std::sync::Arc::new(wrapper_key),
+            std::sync::Arc::new(terminal_key),
+        )
+        .unwrap();
+        assert_eq!(prover.descriptors().len(), 3);
+        let session = prover.prepare(input, MemoryBudget::DEFAULT).unwrap();
+        let first_checkpoint = session
+            .restore_first(a1.proof.clone(), MemoryBudget::DEFAULT)
+            .unwrap();
+        let wrapper_checkpoint = session
+            .restore_wrapper(
+                last.source.proof.clone(),
+                &output.vesta_part.to_bytes(),
+                MemoryBudget::DEFAULT,
+            )
+            .unwrap();
+        // These are the maintained genuine signed Bootstrap sources, original
+        // imported keys and actual A1/W proofs. No codec DATA becomes authority.
+        let layouts = prover.checkpoint_layouts().unwrap();
+        assert_eq!(layouts[0].kind(), CheckpointKind::First);
+        assert_eq!(layouts[1].kind(), CheckpointKind::Wrapper);
+        assert_eq!(layouts[0].verifying_key_digest(), &first_key_digest);
+        assert_eq!(layouts[1].verifying_key_digest(), &wrapper_key_digest);
+        assert_eq!(layouts[0].proof_bytes(), a1.proof.len());
+        assert_eq!(layouts[1].proof_bytes(), last.source.proof.len());
+        assert_eq!(
+            layouts[0].descriptor_digest(),
+            prover.descriptors()[0].digest()
+        );
+        assert_eq!(
+            layouts[1].descriptor_digest(),
+            prover.descriptors()[1].digest()
+        );
+        let first_payload = session
+            .encode_first_checkpoint(&first_checkpoint, MemoryBudget::DEFAULT)
+            .unwrap();
+        let wrapper_payload = session
+            .encode_wrapper_checkpoint(&wrapper_checkpoint, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(first_payload.len(), layouts[0].payload_bytes());
+        assert_eq!(wrapper_payload.len(), layouts[1].payload_bytes());
+        let restored_first = session
+            .restore_first_checkpoint(&first_payload, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(restored_first.proof(), first_checkpoint.proof());
+        assert_eq!(restored_first.instances(), first_checkpoint.instances());
+        assert_eq!(
+            session
+                .encode_first_checkpoint(&restored_first, MemoryBudget::DEFAULT)
+                .unwrap(),
+            first_payload
+        );
+        let restored_wrapper = session
+            .restore_wrapper_checkpoint(&wrapper_payload, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(restored_wrapper.proof(), wrapper_checkpoint.proof());
+        assert_eq!(restored_wrapper.vesta(), wrapper_checkpoint.vesta());
+        assert_eq!(restored_wrapper.context(), wrapper_checkpoint.context());
+        assert_eq!(
+            session
+                .encode_wrapper_checkpoint(&restored_wrapper, MemoryBudget::DEFAULT)
+                .unwrap(),
+            wrapper_payload
+        );
+        assert!(
+            session
+                .restore_first_checkpoint(&wrapper_payload, MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        assert!(
+            session
+                .restore_wrapper_checkpoint(&first_payload, MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        for payload in [&first_payload, &wrapper_payload] {
+            let mut extra = payload.clone();
+            extra.push(0);
+            for bad in [&[][..], &payload[..payload.len() - 1], &extra[..]] {
+                assert!(
+                    session
+                        .restore_first_checkpoint(bad, MemoryBudget::DEFAULT)
+                        .is_err()
+                );
+                assert!(
+                    session
+                        .restore_wrapper_checkpoint(bad, MemoryBudget::DEFAULT)
+                        .is_err()
+                );
+            }
+        }
+        let mut wrong = a1.proof;
+        wrong[96] ^= 1;
+        assert!(session.restore_first(wrong, MemoryBudget::DEFAULT).is_err());
+        let mut wrong = output.vesta_part.to_bytes();
+        wrong[32..64].fill(0);
+        assert!(
+            session
+                .restore_wrapper(last.source.proof, &wrong, MemoryBudget::DEFAULT)
+                .is_err()
+        );
     }
+    output
+}
+
+#[test]
+#[ignore = "genuine common-Q2/A4 production A1/W/A2, source mutation and artifact differential"]
+fn production_native_bootstrap_stages_preserve_the_genuine_installed_relation() {
+    let _ = authenticated_bootstrap_with_q_layout(true, Fp::from(91), 4, Some(2));
 }

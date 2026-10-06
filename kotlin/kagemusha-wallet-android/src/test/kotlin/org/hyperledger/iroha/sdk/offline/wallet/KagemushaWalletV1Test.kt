@@ -49,7 +49,7 @@ class KagemushaWalletV1Test {
     }
     @Test fun `native API contains only opaque state machine calls`() {
         val type = JvmApiInventory.read(KagemushaWalletNativeV1::class.java)
-        assertEquals(setOf("revision", "open", "close", "activity", "call"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        assertEquals(setOf("revision", "open", "close", "activity", "call", "snapshot"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
         assertEquals(-4, KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE)
     }
 }

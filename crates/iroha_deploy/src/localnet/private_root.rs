@@ -993,6 +993,24 @@ mod tests {
                 Some(&peer.config_path),
             )
             .unwrap();
+            assert_eq!(table["zk"]["pipa_r"]["enabled"].as_bool(), Some(true));
+            assert!(table["zk"].get("halo2").is_none());
+            assert!(config.zk.pipa_r.enabled);
+            let retired = Zeroizing::new(format!(
+                "{}\n[zk.halo2]\nenabled = true\n",
+                std::str::from_utf8(&bytes).unwrap()
+            ));
+            assert!(parse_private_peer_config(&retired, Some(&peer.config_path)).is_err());
+            assert_eq!(
+                parse_private_peer_config(
+                    std::str::from_utf8(&bytes).unwrap(),
+                    Some(&peer.config_path),
+                )
+                .map(|retry| retry.genesis.expected_hash)
+                .unwrap(),
+                config.genesis.expected_hash,
+                "the same original generated config remains admissible after retired-field refusal"
+            );
             expected_roster.push(config.common.peer.id().clone());
             assert_eq!(&config.genesis.public_key, client.key_pair.public_key());
             assert_eq!(

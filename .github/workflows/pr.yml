@@ -325,8 +325,7 @@ jobs:
           python3 -m unittest \
             scripts.tests.connect_gating_fixture_compaction_source_test \
             scripts.tests.developer_executable_retirement_source_test \
-            scripts.tests.halo2_backend_02_compaction_source_test \
-            scripts.tests.halo2_backend_shared_circuit_source_test \
+            scripts.tests.native_prover_retirement_source_test \
             scripts.tests.integration_target_consolidation_source_test \
             scripts.tests.isi_instruction_box_macro_source_test \
             scripts.tests.ivm_vector_metal_compaction_source_test \

@@ -493,7 +493,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$sdk_root/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
       - name: Install Android Rust targets and cargo-ndk
         run: |
-          rustup target add aarch64-linux-android x86_64-linux-android
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
           cargo install cargo-ndk --version 4.1.2 --locked
           cargo fetch --locked
       - name: Bind the first-release Android Cargo envelope

@@ -135,12 +135,9 @@ impl DriverHost {
                 block: Box::new(commit.block.clone()),
                 qc: Box::new(commit.qc.clone()),
             }),
-            Op::Exec(ExecOp::BuildControlWitness { .. }) => {
-                self.complete_kernel(Completion::Exec(ExecDone::ControlWitnessBuilt(Ok((
-                    iroha_sumeragi::types::ControlWitness::empty(),
-                    false,
-                )))))
-            }
+            Op::Exec(ExecOp::BuildControlWitness { .. }) => self.complete_kernel(Completion::Exec(
+                ExecDone::ControlWitnessBuilt(Ok(iroha_sumeragi::types::ControlWitness::empty())),
+            )),
             Op::Exec(ExecOp::DriveApplicationControl(_)) => self.complete_kernel(Completion::Exec(
                 ExecDone::ApplicationControlDriven(Ok(None)),
             )),
@@ -193,7 +190,6 @@ impl Host for DriverHost {
             signers: start.signers,
             crypto: start.crypto,
             hasher: Box::new(SimCrypto::new()),
-            attestation: start.attestation,
             now: start.now,
             ingress: Arc::new(Mutex::new(Ingress::new(IngressLimits::default()))),
             config: DriverConfig::default(),
@@ -221,9 +217,9 @@ impl Host for DriverHost {
 
     fn deliver(&mut self, event: Event) {
         match event {
-            Event::PayloadBuilt {
-                payload, attest, ..
-            } => self.complete_kernel(Completion::Exec(ExecDone::Built(Ok((payload, attest))))),
+            Event::PayloadBuilt { payload, .. } => {
+                self.complete_kernel(Completion::Exec(ExecDone::Built(Ok(payload))))
+            }
             other => {
                 if let Some(kernel) = self.kernel() {
                     kernel.deliver(other);

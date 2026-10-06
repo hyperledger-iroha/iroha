@@ -1,8 +1,9 @@
 //! Receive's same-tape incoming object result and split-context ownership.
 //!
-//! This component derives the Objects result; it cannot emit an acceptance
-//! verdict. TODO: compose the other four typed result producers, own hard
-//! authorization, exact map effects and terminal iff rule before key admission.
+//! Typed owners derive all five result groups, own hard authorization, map
+//! effects and the terminal iff rule. TODO: compose and qualify their complete
+//! fixed-stage proof chain before admitting a Receive key; component checks
+//! alone do not establish execution by an authenticated stage catalog.
 
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
@@ -28,8 +29,28 @@ use crate::operation_relation::{
     statement::StatementCells,
 };
 
+pub mod authorization;
+pub mod maps;
+mod proofs;
+pub use proofs::{ReceiveProofInputs, ReceiveProofSources};
+mod signed;
+pub use signed::ReceiveSignedObjects;
+mod stage;
+pub use stage::{ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness};
+
 #[cfg(test)]
 mod tests;
+
+/// Wire section4 joint raw Omega-transport and sigma budget: `10,000 - 1,723`.
+///
+/// This is an envelope bound, not an admitted proof length. Exact lengths still
+/// come from the frozen verifier descriptors and participate in the soft check.
+pub const PAYMENT_PROOF_BUDGET: usize = 8_277;
+/// Largest incoming Omega raw tape, including its 320-byte public transcript.
+/// The other proof may be empty on the total malformed-input path.
+pub const MAX_OMEGA_RAW_BYTES: usize = PAYMENT_PROOF_BUDGET + 320;
+/// Largest incoming sigma raw tape when the other proof is empty.
+pub const MAX_SIGMA_RAW_BYTES: usize = PAYMENT_PROOF_BUDGET;
 
 /// Fixed signed Request, retained payer credential, Send receipt and Payment tape.
 #[derive(Clone, Copy)]
@@ -61,7 +82,7 @@ pub struct ReceiveObjectInputs<'a> {
 #[must_use = "bind the derived result and these exact objects to the fixed stage context"]
 #[derive(Clone, Debug)]
 pub struct ReceiveObjects {
-    objects: [SignedObjectCells; 3],
+    signed: ReceiveSignedObjects,
     payment: IncomingPaymentCells,
     context: [ContextObjectCells; 6],
     specs: [ContextObjectSpec; 6],
@@ -138,42 +159,14 @@ impl ReceiveObjects {
         let sigma = input.sigma.active_carrier()?;
         let specs = Self::context_specs(omega.run().len(), sigma.run().len())?;
         let proof_digest = input.incoming.proof_digest(chip, region, input.sigma)?;
-        let mut objects = Vec::new();
-        let mut context = Vec::new();
-        for ((kind, source), spec) in [
-            ObjectKind::Request,
-            ObjectKind::Credential,
-            ObjectKind::Receipt,
-        ]
-        .into_iter()
-        .zip([source.request, source.payer, source.receipt])
-        .zip(specs)
-        {
-            let run = bytes.run(
-                region,
-                source,
-                &kind.primary_segments(),
-                &kind.secondary_segments(),
-            )?;
-            let lanes = chip.operation_lanes()?;
-            let object = SignedObjectCells::decode_soft(
-                &mut UintChip::new(lanes.glue, lanes.range),
-                lanes.hash,
-                region,
-                kind,
-                &run,
-            )?
-            .0;
-            context.push(ContextObjectCells::from_exact_run(
-                chip,
-                region,
-                spec,
-                object.digest(),
-                &run,
-            )?);
-            objects.push(object);
-        }
-        let objects: [SignedObjectCells; 3] = objects.try_into().map_err(|_| Error::Synthesis)?;
+        let signed = ReceiveSignedObjects::decode(
+            chip,
+            bytes,
+            region,
+            [source.request, source.payer, source.receipt],
+        )?;
+        let objects = &signed.objects;
+        let mut context = signed.context.to_vec();
         let scope = policy.scope(chip, region)?;
         let run = bytes.run(
             region,
@@ -211,23 +204,36 @@ impl ReceiveObjects {
             .glue()
             .add(region, omega.length().word(), sigma.length().word())?;
         let length = uint.range_check::<33>(region, &length)?;
-        let limit = uint.constant::<33>(region, 10_000 - 1_723 + 320 + 1)?;
+        let limit = uint.constant::<33>(region, (MAX_OMEGA_RAW_BYTES + 1) as u128)?;
         checks.push(uint.lt(region, &length, &limit)?);
+        // Own effect inputs are deterministic projections of the exact
+        // Request. A prover cannot change them to manufacture a false Objects
+        // verdict for an otherwise valid fixed Payment. Scope/relation are
+        // likewise anchored by the authenticated current receiver.
         for (a, b) in [
             (&own[3..5], scope.scheme.as_slice()),
             (&own[1..3], &input.receiver.fields()[3..5]),
             (&own[3..5], &input.receiver.fields()[1..3]),
             (&own[18..20], request.object().identifier(3)?.as_slice()),
-            (&own[5..7], request.object().identifier(2)?.as_slice()),
         ] {
-            checks.push(equal(uint.glue(), region, a, b)?);
+            for (a, b) in a.iter().zip(b) {
+                GlueChip::assert_equal(region, a, b)?;
+            }
         }
         for (a, b) in [
             (&own[17], request.credit_id()),
             (&own[20], request.object().word(9)?),
         ] {
-            checks.push(uint.glue().is_equal(region, a, b)?);
+            GlueChip::assert_equal(region, a, b)?;
         }
+        // An original wrong-asset Payment remains a total soft failure. Own
+        // asset/wallet are independently hard-bound to authenticated state.
+        checks.push(equal(
+            uint.glue(),
+            region,
+            &own[5..7],
+            request.object().identifier(2)?,
+        )?);
         let valid = all(uint.glue(), region, &checks)?;
         context.push(ContextObjectCells::from_exact_run(
             chip,
@@ -251,7 +257,7 @@ impl ReceiveObjects {
             sigma,
         )?);
         Ok(Self {
-            objects,
+            signed,
             payment,
             context: context.try_into().map_err(|_| Error::Synthesis)?,
             specs,
@@ -270,7 +276,11 @@ impl ReceiveObjects {
     }
     /// Parsed Request, payer credential and Send receipt, for exact signature links.
     pub const fn objects(&self) -> &[SignedObjectCells; 3] {
-        &self.objects
+        &self.signed.objects
+    }
+    /// Reuse the already parsed signed sources when tasks share one stage.
+    pub const fn signed_sources(&self) -> &ReceiveSignedObjects {
+        &self.signed
     }
     /// Original Payment/package digest and total consumer binding.
     pub const fn payment(&self) -> &IncomingPaymentCells {
@@ -294,8 +304,23 @@ impl ReceiveObjects {
         stage: u32,
         input: &ContextInputs<'_>,
     ) -> Result<(), Error> {
-        let result_plan = plan.receive_results().ok_or(Error::Synthesis)?;
-        let claims = input.receive_results.ok_or(Error::Synthesis)?;
+        self.bind_context_inputs(chip, region, plan, input)?;
+        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
+            region,
+            plan.receive_results().ok_or(Error::Synthesis)?,
+            stage,
+            ReceiveResultTag::Objects,
+            &self.valid,
+        )
+    }
+
+    fn bind_context_inputs(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        input: &ContextInputs<'_>,
+    ) -> Result<(), Error> {
         if input.objects.len() < 6
             || plan.object_specs().len() < 6
             || plan.object_specs()[..6] != self.specs
@@ -358,12 +383,6 @@ impl ReceiveObjects {
             let actual = bounded_word(chip, region, &instances[0][index])?;
             GlueChip::assert_equal(region, &actual, expected)?;
         }
-        claims.bind_derived(
-            region,
-            result_plan,
-            stage,
-            ReceiveResultTag::Objects,
-            &self.valid,
-        )
+        Ok(())
     }
 }

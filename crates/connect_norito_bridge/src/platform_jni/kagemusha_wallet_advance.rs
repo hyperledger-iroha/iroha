@@ -147,3 +147,60 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     });
     response(&mut env, result)
 }
+
+/// Fixed typed source-selected ownership/fold projection; no caller selectors or codecs.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jobject {
+    let value = match wallet::run(|| wallet::snapshot(handle as u64)) {
+        Ok(value) => wallet::WalletSnapshot::from(value),
+        Err(error) => wallet::WalletSnapshot::from(error),
+    };
+    // Scalars are low/high bit patterns, not signed arithmetic or a binary financial codec.
+    let scalars: Vec<jlong> = [
+        value.sequence,
+        value.balance,
+        value.core_burned_total,
+        value.known_burned_total,
+        value.owned_balance,
+        value.folded_balance,
+        value.fold_backlog,
+        value.folded_sequence,
+        value.folded_burned_total,
+    ]
+    .into_iter()
+    .flat_map(|v| [v.low as jlong, v.high as jlong])
+    .collect();
+    let result = (|| -> jni::errors::Result<JObject<'_>> {
+        let scheme = env.byte_array_from_slice(&value.scheme)?;
+        let wallet_id = env.byte_array_from_slice(&value.wallet)?;
+        let head = env.byte_array_from_slice(&value.head)?;
+        let credential = env.byte_array_from_slice(&value.credential)?;
+        let folded_head = env.byte_array_from_slice(&value.folded_head)?;
+        let folded_credential = env.byte_array_from_slice(&value.folded_credential)?;
+        let numbers = env.new_long_array(18)?;
+        env.set_long_array_region(&numbers, 0, &scalars)?;
+        env.new_object(
+            "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletSnapshotReplyV1",
+            "(IIIII[B[B[B[B[B[B[J)V",
+            &[
+                JValue::Int(value.status),
+                JValue::Int(value.reason),
+                JValue::Int(value.platform_code),
+                JValue::Int(value.lifecycle as jint),
+                JValue::Int(value.flags as jint),
+                JValue::Object(&scheme),
+                JValue::Object(&wallet_id),
+                JValue::Object(&head),
+                JValue::Object(&credential),
+                JValue::Object(&folded_head),
+                JValue::Object(&folded_credential),
+                JValue::Object(&numbers),
+            ],
+        )
+    })();
+    result.map_or(std::ptr::null_mut(), |object| object.into_raw())
+}

@@ -13,7 +13,6 @@ public static class VerifierBackendRegistryLabels
 {
     private static readonly string[] SupportedLabels =
     [
-        "halo2/ipa",
         "pipa-r/pasta",
         "pipa-r/pasta/kaigi-authorization-v1",
         "pipa-r/pasta/kaigi-usage-v1",

@@ -49,14 +49,6 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
-#[cfg(not(feature = "zk-halo2"))]
-compile_error!(
-    "Halo2 backends are mandatory; enable `zk-halo2` (default) when building iroha_core"
-);
-#[cfg(not(feature = "zk-halo2-ipa"))]
-compile_error!(
-    "Halo2 IPA backends are mandatory; enable `zk-halo2-ipa` (default) when building iroha_core"
-);
 #[cfg(not(feature = "zk-ipa-native"))]
 compile_error!(
     "Native IPA helpers must remain enabled; `zk-ipa-native` is required for all builds"

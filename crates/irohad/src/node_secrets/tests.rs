@@ -295,9 +295,38 @@ fn dealt_seat(network_id: NetworkId) -> DealtSeat {
     }
 }
 
+/// Supply only the mandatory parser inputs for these independent native custody tests.
+/// The opaque keyring is deliberately unadmitted DATA, never a role certificate, signing
+/// capability or publication fixture. The canonical submitter record is a separate test key.
+fn minimal_parser_config(fixture: &SecretsFixture) -> Config {
+    let keyring = fixture.write(
+        NodeSecretFile::KagemushaLoadAuthorizerKeyring,
+        b"node-secrets-parser-only-unadmitted-keyring",
+    );
+    let submitter = fixture.write(
+        NodeSecretFile::KagemushaLoadSubmitter,
+        &signer_record(&signer_key(0x63)),
+    );
+    let mut publisher = toml::Table::new();
+    publisher.insert(
+        "keyring_file".into(),
+        toml::Value::String(keyring.to_str().expect("UTF-8 fixture path").to_owned()),
+    );
+    publisher.insert(
+        "submitter_key_file".into(),
+        toml::Value::String(submitter.to_str().expect("UTF-8 fixture path").to_owned()),
+    );
+    let mut table = minimal_config_table();
+    table.insert(
+        "kagemusha_load_authorizer".into(),
+        toml::Value::Table(publisher),
+    );
+    Config::from_toml_source(TomlSource::inline(table)).expect("private parser-only fixture")
+}
+
 fn validator_sumeragi() -> Sumeragi {
-    let config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-        .expect("minimal config parses");
+    let fixture = SecretsFixture::new();
+    let config = minimal_parser_config(&fixture);
     assert_eq!(config.sumeragi.role, NodeRole::Validator);
     config.sumeragi
 }
@@ -440,16 +469,16 @@ fn onboarding_authority_key_must_match_the_authority() {
 
 /// A parsed minimal configuration whose `data_dir` is the fixture.
 fn data_dir_config(fixture: &SecretsFixture) -> Config {
-    let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-        .expect("minimal config parses");
+    let mut config = minimal_parser_config(fixture);
     config.data_dir = Some(fixture.data_dir.clone());
     config
 }
 
 #[test]
 fn open_without_data_dir_touches_no_secret() {
-    let config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-        .expect("minimal config parses");
+    let fixture = SecretsFixture::new();
+    let config = minimal_parser_config(&fixture);
+    // Required configuration custody is already parsed; no data_dir runtime secret is opened.
     assert!(config.data_dir.is_none());
     assert!(
         secret_result(NodeSecretsV1::open(&config, &credential_test_budget()))
@@ -676,6 +705,48 @@ fn config_key_files_pass_custody_before_the_parser_reads_them() {
         fs::rename(&aside, &path).expect("restore key");
     }
     verify_config_key_custody(&fixture.data_dir).expect("restored key files");
+}
+
+/// These deliberately empty fixtures are not signer credentials or authenticated keyrings.
+#[test]
+fn publisher_files_are_subject_to_native_config_custody_preflight() {
+    for file in [
+        NodeSecretFile::KagemushaLoadAuthorizerKeyring,
+        NodeSecretFile::KagemushaLoadSubmitter,
+    ] {
+        let fixture = SecretsFixture::new();
+        let path = fixture.write(file, &[]);
+        assert_eq!(
+            verify_config_key_custody(&fixture.data_dir),
+            Err(NodeSecretsErrorV1::Custody {
+                file,
+                error: RuntimeCredentialErrorV1::InvalidLength,
+            }),
+            "an existing empty publisher file is not custody"
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("unsafe publisher file mode");
+        assert_eq!(
+            verify_config_key_custody(&fixture.data_dir),
+            Err(NodeSecretsErrorV1::Custody {
+                file,
+                error: RuntimeCredentialErrorV1::InvalidSource,
+            }),
+            "publisher files readable by others are refused before decoding"
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("restore private publisher mode");
+        let alias = fixture.root.path().join("publisher-alias");
+        fs::hard_link(&path, &alias).expect("second publisher link");
+        assert_eq!(
+            verify_config_key_custody(&fixture.data_dir),
+            Err(NodeSecretsErrorV1::Custody {
+                file,
+                error: RuntimeCredentialErrorV1::InvalidSource,
+            }),
+            "publisher custody never adopts multiply linked files"
+        );
+    }
 }
 
 fn credential_test_budget() -> AllocationBudget {

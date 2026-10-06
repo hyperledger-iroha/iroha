@@ -1,14 +1,20 @@
 //! First-release queue and storage configuration reject retired protocol controls.
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use iroha_config::parameters::user::Root;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;
 
 fn reader() -> ConfigReader {
-    ConfigReader::new()
-        .read_toml_with_extends(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml"),
-        )
-        .expect("base config")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml"),
+            )
+            .expect("base config"),
+    )
 }
 
 #[test]
@@ -36,7 +42,10 @@ fn native_queue_defaults_keep_finite_capacity_and_expiry() {
     let user = reader()
         .read_and_complete::<Root>()
         .expect("canonical config");
-    let queue = user.parse().expect("canonical runtime config").queue;
+    let queue = user
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .expect("canonical runtime config")
+        .queue;
     assert!(queue.capacity.get() > 0);
     assert!(queue.capacity_per_user.get() > 0);
     assert!(queue.max_retained_bytes.get() > 0);
@@ -71,7 +80,7 @@ fn retired_merge_ledger_cache_environment_name_is_not_an_input() {
         .with_env(environment.clone())
         .read_and_complete::<Root>()
         .expect("retired environment variable is not a schema input")
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("current configuration remains valid");
     assert!(
         environment

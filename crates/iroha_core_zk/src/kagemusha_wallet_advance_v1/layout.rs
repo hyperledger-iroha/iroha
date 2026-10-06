@@ -10,6 +10,7 @@
 //! <root>/ballast.bin                     768 KiB random reserve (worst-case Advance)
 //! <root>/slots/<slot:64x>/
 //!     intent.norito, abandoned.norito    create-new only
+//!     key-generation.norito              consumed fresh attempt, never grant authority
 //!     enrollment.norito, credential-<n>.norito, abandonment.norito
 //!     markers/m-<gen:032x>.mk            marker generations (marker.rs)
 //!     capsules/c-<gen:032x>-<digest:64x>.cap and .cap.r   (capsule.rs)
@@ -60,6 +61,8 @@ pub const KAGEMUSHA_WALLET_PROBE_DIR_NAME_V1: &str = "probe";
 pub const KAGEMUSHA_WALLET_SLOTS_DIR_NAME_V1: &str = "slots";
 /// Enrollment intent file name (create-new only).
 pub const KAGEMUSHA_WALLET_INTENT_NAME_V1: &str = "intent.norito";
+/// Fresh enrollment generation-attempt record (create-new only; never authority).
+pub const KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1: &str = "key-generation.norito";
 /// Abandoned-slot file name (create-new only).
 pub const KAGEMUSHA_WALLET_ABANDONED_NAME_V1: &str = "abandoned.norito";
 /// Enrollment record file name.

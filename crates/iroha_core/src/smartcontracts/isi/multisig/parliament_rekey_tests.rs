@@ -1,5 +1,4 @@
-// Parliament/account-rekey regression tests live in this include to keep the already-large
-// multisig implementation below its source-file budget.
+// Parliament and account-rekey regression tests for multisig instructions.
 
 use crate::governance::parliament::{
     PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1,

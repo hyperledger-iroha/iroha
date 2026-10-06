@@ -85,13 +85,13 @@ async fn zk_tree_queries_require_heavy_admission_before_state_integrity_work() {
 }
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
-async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
+async fn diagnostic_openings_require_compute_admission_when_native_operations_disabled() {
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     Arc::get_mut(&mut app_mut.state)
         .expect("unique core state fixture")
         .zk
-        .halo2
+        .pipa_r
         .enabled = false;
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
@@ -108,24 +108,25 @@ async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
     )
     .await
     {
-        Ok(_) => panic!("disabled Halo2 verifier must fail closed"),
+        Ok(_) => panic!("diagnostic opening verification must acquire heavy admission"),
         Err(error) => error,
     };
     assert!(matches!(
         error,
-        Error::Query(ValidationFail::NotPermitted(message))
-            if message == "halo2 verification is disabled in node configuration"
+        Error::Query(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+        ))
     ));
 }
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
-async fn enabled_zk_verify_batch_requires_heavy_compute_admission() {
+async fn diagnostic_openings_require_compute_admission_when_native_operations_enabled() {
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     Arc::get_mut(&mut app_mut.state)
         .expect("unique core state fixture")
         .zk
-        .halo2
+        .pipa_r
         .enabled = true;
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
