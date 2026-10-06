@@ -135,7 +135,7 @@ pub struct Root {
     pub soracloud_runtime: SoracloudRuntime,
     /// Non-secret local custody root for the injected private Musubi publisher.
     pub musubi_publication: MusubiPublication,
-    /// Optional source-verified online load voucher publisher.
+    /// Required source-verified online load voucher publisher.
     pub kagemusha_load_authorizer: KagemushaLoadAuthorizer,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
@@ -316,6 +316,10 @@ pub enum NodeSecretFile {
     Transport,
     /// Streaming identity Ed25519 private key.
     Streaming,
+    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
+    KagemushaLoadAuthorizerKeyring,
+    /// Required online KAGEMUSHA publisher's private transaction submitter key.
+    KagemushaLoadSubmitter,
     /// Soracloud runtime mutation-signer private key.
     RuntimeSigner,
     /// Global beacon partial-signer credential.
@@ -332,10 +336,12 @@ pub enum NodeSecretFile {
 }
 impl NodeSecretFile {
     /// Every fixed secret file, in a stable order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Validator,
         Self::Transport,
         Self::Streaming,
+        Self::KagemushaLoadAuthorizerKeyring,
+        Self::KagemushaLoadSubmitter,
         Self::RuntimeSigner,
         Self::BeaconCredential,
         Self::FaucetAuthority,
@@ -350,6 +356,8 @@ impl NodeSecretFile {
             Self::Validator => names::VALIDATOR_KEY,
             Self::Transport => names::TRANSPORT_KEY,
             Self::Streaming => names::STREAMING_KEY,
+            Self::KagemushaLoadAuthorizerKeyring => names::KAGEMUSHA_LOAD_AUTHORIZER_KEYRING,
+            Self::KagemushaLoadSubmitter => names::KAGEMUSHA_LOAD_SUBMITTER_KEY,
             Self::RuntimeSigner => names::RUNTIME_SIGNER_KEY,
             Self::BeaconCredential => names::BEACON_CREDENTIAL,
             Self::FaucetAuthority => names::FAUCET_AUTHORITY_KEY,
@@ -496,6 +504,8 @@ mod data_dir_tests {
                 "validator.key",
                 "transport.key",
                 "streaming.key",
+                "kagemusha_load_authorizer.keyring.norito",
+                "kagemusha_load_submitter.key",
                 "runtime_signer.key",
                 "beacon.cred",
                 "authority/faucet.key",
@@ -503,6 +513,18 @@ mod data_dir_tests {
                 "authority/sorafs_council.key",
             ]
         );
+        for (file, name) in [
+            (
+                NodeSecretFile::KagemushaLoadAuthorizerKeyring,
+                "kagemusha_load_authorizer.keyring.norito",
+            ),
+            (
+                NodeSecretFile::KagemushaLoadSubmitter,
+                "kagemusha_load_submitter.key",
+            ),
+        ] {
+            assert_eq!(data_dir.secret(file), data_dir.secrets_dir().join(name));
+        }
         assert_eq!(
             data_dir.secret(NodeSecretFile::OnboardingAuthority),
             PathBuf::from("/var/lib/iroha/taira/v1/secrets/authority/onboarding.key")

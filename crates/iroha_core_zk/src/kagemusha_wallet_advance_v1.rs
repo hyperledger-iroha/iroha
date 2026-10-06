@@ -142,7 +142,7 @@ pub use self::{
     enrollment::{
         KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1, KagemushaWalletChallengeLivenessV1,
         KagemushaWalletEnrollmentRecordV1, KagemushaWalletEnrollmentStepV1,
-        KagemushaWalletIntentV1,
+        KagemushaWalletFreshGenerationV1, KagemushaWalletIntentV1,
     },
     layout::{
         KAGEMUSHA_WALLET_BALLAST_BYTES_V1, KAGEMUSHA_WALLET_ROOT_DIR_NAME_V1,
@@ -151,8 +151,9 @@ pub use self::{
     },
     marker::{KagemushaWalletMarkerPhaseV1, KagemushaWalletMarkerRecordV1},
     platform::{
-        KAGEMUSHA_WALLET_PAYMENT_KEY_DOMAINS_V1, KagemushaWalletAnchorPolicyV1,
-        KagemushaWalletEntryKindV1, KagemushaWalletFsV1, KagemushaWalletKeyGenerationRequestV1,
+        KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1, KAGEMUSHA_WALLET_PAYMENT_KEY_DOMAINS_V1,
+        KagemushaWalletAnchorPolicyV1, KagemushaWalletEntryKindV1, KagemushaWalletFsV1,
+        KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletKeyGenerationRequestV1,
         KagemushaWalletKeyGenerationV1, KagemushaWalletKeyProfileV1, KagemushaWalletListedEntryV1,
         KagemushaWalletNotPublishedV1, KagemushaWalletPlatformSignatureV1,
         KagemushaWalletPlatformV1, KagemushaWalletProbeV1, KagemushaWalletPublishOutcomeV1,

@@ -69,6 +69,11 @@ pub fn validate_row(key: &KagemushaWalletLedgerKeyV1, bytes: &[u8]) -> Result<()
         return Err(Error::Binding);
     }
     match *kind {
+        super::artifacts::KIND => {
+            let value: super::artifacts::VerifierInstallation =
+                decode(bytes, super::artifacts::CAP)?;
+            value.validate(key)
+        }
         super::pending::KIND => {
             let value: PendingPublication = decode(bytes, super::pending::CAP)?;
             if value.wallet == [0; 32]
@@ -255,6 +260,15 @@ pub(crate) fn validate_snapshot<'a>(
         validate_row(row_key, bytes)?;
         let (kind, scheme, asset, _) = row_key.components();
         match kind {
+            super::artifacts::KIND => {
+                let value: super::artifacts::VerifierInstallation =
+                    decode(bytes, super::artifacts::CAP)?;
+                let registration_key = key(REGISTRATION, scheme, value.authorizing_asset);
+                let encoded = lookup(&registration_key).ok_or(Error::Unavailable)?;
+                validate_row(&registration_key, encoded)?;
+                let registration: Registration = decode(encoded, encoded.len())?;
+                value.require_registration(&registration)?;
+            }
             ISSUANCE => {
                 let issuance: Issuance = decode(bytes, bytes.len())?;
                 let pending = PendingPublication::from_issuance(&issuance);

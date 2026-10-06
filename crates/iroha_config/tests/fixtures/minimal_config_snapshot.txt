@@ -697,7 +697,7 @@ Root {
         pin_transaction_authority: IngressBroker,
     },
     kagemusha_load_authorizer: KagemushaLoadAuthorizer {
-        custody: None,
+        custody: KagemushaLoadAuthorizerCustody { .. },
         poll_interval: 1s,
         page_size: 16,
         finality_limits: NativeFinalityLimits {

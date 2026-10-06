@@ -382,6 +382,19 @@ stays enabled, and native ABI/symbol admission is unchanged. Selecting the relea
 corridor, targeting iOS, or compiling Release rejects this input. Canonical release,
 pin, archive, and CI handoff owners retain the five-triple/three-slice contract.
 
+`scripts/build_native_sdk_host_guarded.py` reuses the explicit stable
+`--target-dir` under an exclusive emitter lock. Omit `--jobs` for Cargo's native
+jobserver. A warm artifact retains Cargo's actual freshness observation and must
+pass all existing source, tool, dep-info, archive custody and ABI checks. Its
+external evidence directory remains create-only; the target lane is preserved.
+
+The current KAGEMUSHA wallet inventory includes the C
+`connect_norito_kagemusha_wallet_snapshot_v1` export and the JNI
+`KagemushaWalletNativeV1_snapshot` entry. Snapshot consumers retain the exact
+Native-selected head, ownership, fold progress and lifecycle. A snapshot does
+not grant operation readiness; unavailable custody or proof artifacts remain
+errors. Host symbol and snapshot unit checks do not qualify a payment or device.
+
 ## Canonical Android output and runtime inventory
 
 The Kotlin build, Android artifact checker, and package owner use the same

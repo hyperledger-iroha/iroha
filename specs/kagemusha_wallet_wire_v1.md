@@ -275,7 +275,7 @@ is the body's fields in the order shown.
 | Signer certificate (signed under `kgwcert1`) | `LE16 version ‖ scheme_id ‖ tag role ‖ key ‖ LE64 serial` | Signed by the scheme root. Roles: Enrollment 1, LoadAuthorization 2, RegulatoryPolicy 3, TimeAnchor 4, Artifact 5. Fixed depth one; no validity period or revocation is evaluated offline; the consumer requires the role it needs. Its digest `P(kgwocrt1, ·)` (§1) is what every `*_certificate` field names, a canonical σ-field value. |
 | Certificate set (`kgwcset1`) | `count`, then the certificate digests in set order (one element each) | Frame `{certificates}`: at most 3, unique, strictly ascending by certificate digest (unsigned byte order). Each carrier holds exactly the certificates it needs, with the required roles and scheme. Its digest is `P(kgwcset1, [count, digests…])`, one canonical σ-field value. |
 | Enrollment challenge (`enrollment-challenge`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ account_digest ‖ app_policy ‖ enrollment_policy ‖ issuer_nonce` | All nonzero. `challenge_digest` is the KeyMint attestation challenge and the App Attest attestation `clientDataHash`. The App Attest enrollment assertion `clientDataHash` is `H("enrollment-key-binding", challenge_digest ‖ payment_key)`. H values go to App Attest unchanged. |
-| Evidence digest (`evidence`) | `tag kind ‖ LE32 count ‖ (LE32 len ‖ bytes)…` | Kinds: AndroidKeyMintTee 1, AndroidKeyMintStrongBox 2, AppleAppAttest 3. Non-empty original items, never rewritten: Android attestation DER chain leaf first; Apple attestation object, then assertion. |
+| Evidence digest (`evidence`) | `tag kind ‖ LE32 count ‖ (LE32 len ‖ bytes)…` | Kinds: AndroidKeyMintTee 1, AndroidKeyMintStrongBox 2, AppleAppAttest 3. Non-empty original items, never rewritten: Android KeyMint attestation DER chain leaf first, then the original enrollment-time Google HTTPS decoder response acquired by the issuer; Apple attestation object, then the fresh key-binding assertion. The issuer acquires and verifies the Play Integrity response separately; a mobile decoded verdict or signing input is never an evidence item. Renewal follows its separate evidence contract and does not add periodic Play Integrity requirements. |
 | Evidence record (inline, 56) | `digest ‖ LE64 time_ms ‖ LE32 facts ‖ LE32 os_patch_level ‖ LE32 vendor_patch_level ‖ LE32 boot_patch_level` | Fact bits below; `digest` nonzero. |
 | Regulatory policy (inline, 20) | `LE32 permitted_controls ‖ LE64 blacklist_max_age_ms ‖ LE64 time_anchor_max_response_ms` | Controls: bit 0 BLACKLIST, 1 QUOTAS, 2 ATTESTATION_LEASE; others zero. `blacklist_max_age_ms > 0` requires bit 0. `time_anchor_max_response_ms > 0` iff bit 1, bit 2 or `blacklist_max_age_ms > 0`. The policy is fixed for the incarnation; with bit 1 every quota window a wallet installs is longer than `time_anchor_max_response_ms` (B8, §3.3). |
 | Credential (signed under `kgwcred1`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ account_digest ‖ payment_key(key) ‖ provider_contract ‖ tag evidence_kind ‖ enrollment_evidence(56) ‖ fresh_evidence(56) ‖ app_policy ‖ regulatory_policy(20) ‖ enrollment_id ‖ LE64 issued_at_ms ‖ LE32 renewal_sequence ‖ LE64 lease_expires_at_ms ‖ issuer_certificate` | Enrollment-role signer. Nonzero bindings; V1 provider contract even without a scheme; `wallet_id` recomputes. Renewal 0 requires `fresh_evidence = enrollment_evidence`; later renewals require `fresh.time_ms ≥ enrollment.time_ms`. `lease_expires_at_ms ≠ 0` iff the lease is permitted. A replacement changes only `fresh_evidence`, `issued_at_ms`, `lease_expires_at_ms` and `issuer_certificate`, and `renewal_sequence` is the predecessor's plus one. |
@@ -290,6 +290,136 @@ Fact bits: 0 HARDWARE_BACKED_KEY, 1 STRONGBOX, 2 BOOTLOADER_LOCKED, 3 VERIFIED_B
 Android records never carry 6–8; Apple records never carry 0–5 or 9 and have zero
 patch levels. Enrollment evidence requires bits 0, 2, 3 and 5 on Android (plus 1
 for StrongBox; TEE forbids 1) and bits 6 and 7 on Apple.
+
+### 3.1.0 Ledger native verifier installation
+
+`KagemushaWalletLedgerActionV1::InstallVerifierPack` carries, in order,
+`asset: [u8;32]`, `manifest_digest: [u8;32]`, and `pack: Vec<u8>` under the
+instruction's exact `scheme`. The asset selects an existing immutable
+registration. Its real reserve account must submit consent and hold the exact
+`CanManageKagemushaWallet` permission for that registered asset definition.
+The current World network, asset incarnation, scale and balance partition must
+still equal the registration. The manifest digest is an explicit governance
+installation pin; a received Payment does not select it.
+
+Core authenticates the complete pack of §3.1.1 against that pin, requires its
+actual Scheme to equal the registered Scheme, and retains one immutable row
+`(kind=14, scheme, owner=scheme, entry=0)`. Its canonical value schema is
+`iroha_core::kagemusha_wallet_v1::VerifierInstallation`, with ordered fields
+`version: u16=1`, `scheme: [u8;32]`, `authorizing_asset: [u8;32]`,
+`manifest: [u8;32]`, and `original: Vec<u8>`. The complete row is at most the
+verifier-pack cap plus 1,024 bytes. Missing, noncanonical, unbounded or
+unauthenticated material cannot create that row. Only exact original retries
+are accepted; replacing or deleting an installed relation is unsupported.
+Restored snapshots check the exact authorizing registration and signed
+original authority frames; execution reauthenticates the actual native keys.
+
+Each proof-consuming instruction captures this original from its same WSV
+transaction overlay, checks the current credential and receipt bindings,
+verifies the exact selected σ and required Ω, and decides Ω's own opening and
+both transported claims. One bounded package-verification reservation charges
+its total σ and Ω transport bytes against the existing transaction/block proof
+quotas before native verification and ledger mutation. Missing installation
+retains the `VerifierArtifactsUnavailable` local deferral. Invalid installed
+material or proof cannot become a success verdict. Installing verifier
+material grants no producer, foreign wallet-open or device readiness.
+
+### 3.1.1 Installed native verifier inventory
+
+The first-release native verifier pack has the canonical Norito schema
+`iroha.core_zk.kagemusha.wallet.verifier_pack.v1`. Its ordered fields are
+`version: u16`, the original canonical Scheme, Artifact signer certificate,
+ArtifactManifest and verifying-key allowlist frames (each `Vec<u8>`),
+`steps: Vec<StepOriginalV1>`, and `lineage: ArtifactOriginalV1`.
+`StepOriginalV1` is `{kind: OperationKindV1, enabled_controls: u32,
+artifact: ArtifactOriginalV1}`; `ArtifactOriginalV1` is
+`{descriptor: Vec<u8>, verifying_key: Vec<u8>}`. These are mounted originals,
+never rewritten to obtain a matching hash. The decoder admits exactly one
+uncompressed canonical frame under payload-derived allocation limits; it
+never retries another schema or profile.
+
+The installed pack requires the complete sixteen-selector catalog, in this
+order: `(1,0), (2,0), (3,0), (3,1), (3,2), (3,3), (3,4), (3,5), (3,6),
+(3,7), (4,0), (4,1), (5,0), (6,0), (7,0), (8,0)`, followed by one Ω artifact.
+The general model allowlist permits a supported control subset; this complete
+native installation rejects such a subset. Each selector must also occupy
+the same position in the manifest-bound allowlist. A descriptor is at most
+1,048,576 bytes and a VK at most 262,144 bytes; aggregate descriptor/VK
+originals are at most 16,777,216 bytes. The complete pack is at most
+16,842,752 bytes. Authority frames keep their existing §2 caps. These are
+finite loader limits, not phone memory qualification.
+
+Use the existing `H` framing for the additional artifact roles
+`eq-protocol`, `ep-protocol`, `native-profile` and `artifact-inventory`:
+`SHA256("iroha:kagemusha:wallet:v1:" ‖ ASCII role ‖ 00 ‖ LE64 len(body) ‖ body)`.
+The native owner constructs the protocol/profile bodies from compiled native
+constructors and constants; the pack has no fields that choose those bodies.
+For the following bodies, `frame(x) = LE32 len(x) ‖ x`, curve tags are Pallas 0
+and Vesta 1, and every byte/length below is exact.
+
+The Eq/Ep protocol body is, in order:
+
+- `LE16 wallet_version=1 ‖ LE16 native_protocol_version=1 ‖ curve_tag`, then
+  the native curve's 32-byte little-endian base and scalar moduli.
+- `frame(ASCII "iroha.plonk.pipa.circuit_descriptor.v2")`, the exact 16-byte
+  descriptor persona `"PIPA-v2-CircDesc"`, native `VK_VERSION` (02), exact
+  16-byte VK persona `"Iroha-PlonkVK-v2"`, key-digest domain `"kgwvkey1"`,
+  native proof domain `"pipa-rb1"`, native fold domain `"pipa-as1"`, and native
+  typed instance-frame domain `"pipainst"` (each domain eight bytes).
+- `LE32 width=3 ‖ LE32 rate=2 ‖ LE32 full_rounds=8 ‖ LE32 partial_rounds=57 ‖
+  LE32 secure_mds=0`, then `LE32 native_table_bytes ‖ SHA256(native_table)`.
+  The table is the exact `PoseidonField::rp57().to_table()` output in the
+  native proof curve's base field, Fq for Eq and Fp for Ep.
+- `frame(ASCII "Halo2-Parameters") ‖ LE32 5`, then ascending k12 through k16,
+  each `u8 k ‖ pinned_params_digest(curve,k)` from the compiled native table.
+- Two final codes: scalar encoding/challenge map. Eq is `01 01` (one exact
+  Fp integer in Fq; one subtraction Fq→Fp); Ep is `02 00` (low128/high127
+  Fq scalar pair in Fp; identity Fp→Fq).
+
+The fixed native verifier-profile body is `LE16 1 ‖ u8 family=1 ‖ LE32 16`,
+then the sixteen `(u8 operation_tag ‖ LE32 mask)` selectors above. It then
+carries `frame(sigma_policy) ‖ frame(omega_policy)`, where each policy is a
+canonical Norito `iroha.core_zk.kagemusha.wallet.descriptor_policy.v1` frame
+with ordered fields `{version: u16, curve: CurveV1, min_k: u8, max_k: u8,
+transcript: TranscriptV2, instance_mode: InstanceModeV1,
+proof_suffix: ProofSuffixV1, instance_lengths: Vec<u32>,
+instance_types: Vec<InstanceType>}`. Both use version1,
+`KagemushaPoseidonRp57Base`, `Direct`, `FoldedGenerator`. Sigma uses Vesta,
+k12..16, lengths `[1]`, types `[Bounded]`; Omega uses Pallas, k16 only,
+lengths `[1,2,16]`, types `[Bounded,Field,Bounded]`. The body ends with
+`LE32 33 ‖ LE32 8 ‖ LE32 26 ‖ LE32 18 ‖ LE32 52 ‖ LE32 16 ‖ LE32 544 ‖
+LE32 1088 ‖ "kgwomg_1" ‖ 01 02 03 04`. These bind current core/rest/statement,
+lineage public and D_A element counts, accumulator rounds, claim and fold-body
+sizes, D_A domain, and the mandatory sigma opening, Omega opening, Pallas
+claim decision and Vesta claim decision. The decision codes are fixed native
+requirements; no caller supplies verdict bits.
+
+The inventory body is `LE16 1 ‖ eq_protocol_digest ‖ ep_protocol_digest ‖
+native_profile_digest ‖ LE32 len(allowlist_original) ‖
+SHA256(allowlist_original) ‖ LE32 17`, then each artifact in catalog order.
+A sigma entry starts `u8 role=1 ‖ u8 operation_tag ‖ LE32 mask`; the final
+Omega entry starts `u8 role=2 ‖ u8 operation_tag=0 ‖ LE32 mask=0`.
+Each entry continues `u8 curve_tag ‖ u8 k ‖ LE32 descriptor_bytes ‖
+SHA256(descriptor_original) ‖ LE32 vk_bytes ‖ SHA256(vk_original) ‖
+native_descriptor_digest ‖ complete_native_vk_digest ‖ LE32 proof_bytes`.
+The descriptor digest is its native V2-domain BLAKE2b value; the VK digest is
+its complete native base-field `P_B(kgwvkey1; …)` value. Proof bytes come from
+the actual descriptor; Omega includes both 544-byte transported claims.
+Each actual key digest and length must equal its signed allowlist entry.
+Scheme/certificate/manifest originals are excluded from the inventory body:
+including them would create a cycle through relation_id. Their canonical
+frames, exact scheme identity, Artifact-role certificate/signature and exact
+manifest digest are checked separately against installation authority that
+is provisioned independently of received wallet objects.
+
+This pack authenticates the complete verifier inventory. It does not mount
+producer keys or establish complete operation preparation/folding. The
+producer inventory remains required: genuine importable Q/A/W/terminal
+proving keys and their fixed complete schedules must bind to the native
+profile before a wallet-open owner can enable monetary operations. No API
+boolean or caller-provided profile/verdict upgrades this verifier pack into
+that missing owner. The native implementation is
+`iroha_core_zk::kagemusha_wallet_artifacts_v1`.
 
 ### 3.2 State, field encoding, statement, proofs, receipt, package
 
@@ -889,10 +1019,10 @@ Every peer message travels as one complete canonical envelope frame (§2). A car
 moves that frame unchanged; its framing is outside every digest and signature and
 grants no authority. Before handing a frame to the wallet, a carrier checks it
 structurally (`KagemushaWalletWireV1.inspectEnvelope`): the byte cap, the Norito header,
-schema hash, flags, padding, CRC and exact field spans, the envelope version, a known
-message tag and the per-kind bound, without the expected-scheme check. Swift also checks
-the message's top-level version and that its decode-time scheme field is 32 bytes; Kotlin
-does not yet (TODO(G4), §7). Nested version fields, the scheme check, typed decoding and
+schema hash, flags, padding, CRC and envelope field spans, the envelope and message's
+top-level versions, a known message tag, the per-kind bound and a 32-byte decode-time
+scheme field, without the expected-scheme check. Both Swift and Kotlin apply these
+structural checks. Nested version fields, the expected-scheme check, typed decoding and
 signature verification stay with the wallet (TODO(G4)). The implementations are
 Swift `IrohaPeerWireV1`, `IrohaPeerQRV1`, `IrohaPeerNfcV1` and `IrohaPeerNearbyV1`
 (`IrohaSwift`, with the platform adapters in `IrohaSwiftMobileTransports`) and the
@@ -964,9 +1094,8 @@ encryption and checksums never replace the wallet's verification.
 ## 7. Open items
 
 - TODO(G4): Offer and SessionControl over the NFC carrier (§6).
-- TODO(G4): the Kotlin `inspectEnvelope` accepts a message whose own top-level version
-  is not 1 or whose decode-time scheme field is malformed, which the Swift carrier
-  and the Rust decoder reject (§6); no carrier checks nested version fields yet.
+- TODO(G4): nested version fields remain with the typed wallet decoder; carriers check
+  only the message's own top-level version and the decode-time scheme field's length (§6).
 - TODO(G3): the PIPA-v1 σ layout, the Ω transport-proof layout, their exact lengths
   and the frozen verifying keys. Once the artifacts freeze, the verifying-key allowlist
   (§3.1) carries them; its validation requires Ω proof + largest σ_send ≤ 10,000 −
@@ -976,8 +1105,9 @@ encryption and checksums never replace the wallet's verification.
   exceeds 8,277 − |Ω| (3,541 bytes at the Λ/Ω estimate of 4,736), Λ/Ω contingent
   question C-1 applies.
 - TODO(G3): the in-circuit signature check over the 32-byte Poseidon message, the
-  indexed map trees in circuit (Λ), the capsule's retained openings and the
-  `artifact_inventory_digest` preimage are open.
+  indexed map trees in circuit (Λ) and the capsule's retained openings are open.
+  The installed verifier inventory preimage is defined in §3.1.1; the complete
+  producer inventory remains open.
 - TODO(G3): qualify the canonical B1/B5–B8 proof relations and frozen artifacts against
   the current native objects: 26-element statements and credit IDs, 33-element core,
   8-element rest, quota-usage array, Request blacklist history and quota/time checks.

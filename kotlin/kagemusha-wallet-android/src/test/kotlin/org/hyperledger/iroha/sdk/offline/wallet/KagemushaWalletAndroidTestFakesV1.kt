@@ -226,13 +226,16 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
     val signedMessages = ArrayList<ByteArray>()
     var getKeyCalls = 0
 
+    var apiLevel = 33
     var strongBoxAvailable = true
     var getKeyFailure: Throwable? = null
     var getKeyFailureAfterGenerations: Int = Int.MAX_VALUE
     var getKeyResult: Key? = null
+    var getKeyReturnsNull = false
     var chainFailure: Throwable? = null
     var nullChain = false
     var generateFailure: Throwable? = null
+    var generateFailureAfterWrite: Throwable? = null
     var attestedChallenge: ByteArray? = null
     var descriptionEdit: (TestKeyDescriptionV1) -> TestKeyDescriptionV1 = { it }
     var factsEdit: (KagemushaWalletAndroidKeyFactsV1) -> KagemushaWalletAndroidKeyFactsV1 = { it }
@@ -243,15 +246,15 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
 
     fun facts(strongBox: Boolean): KagemushaWalletAndroidKeyFactsV1 = KagemushaWalletAndroidKeyFactsV1(
         insideSecureHardware = true,
-        securityLevel = if (strongBox) 2 else 1,
-        remainingUsageCount = -1,
+        securityLevel = if (apiLevel >= 31) (if (strongBox) 2 else 1) else null,
+        remainingUsageCount = if (apiLevel >= 31) -1 else null,
         origin = 1,
         purposes = 4,
         digests = setOf("SHA-256"),
         keySize = 256,
         userAuthenticationRequired = false,
-        userPresenceRequired = false,
-        userConfirmationRequired = false,
+        userPresenceRequired = if (apiLevel >= 28) false else null,
+        userConfirmationRequired = if (apiLevel >= 28) false else null,
     )
 
     private fun chain(pair: KeyPair, challenge: ByteArray, strongBox: Boolean) = TestAttestationV1.chain(
@@ -271,6 +274,7 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
         getKeyCalls += 1
         if (generated.size >= getKeyFailureAfterGenerations) throw IllegalStateException("keystore2 binder failure")
         getKeyFailure?.let { throw it }
+        if (getKeyReturnsNull) return null
         getKeyResult?.let { return it }
         return entries[alias]?.key
     }
@@ -289,6 +293,7 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
         val challenge = attestedChallenge ?: spec.challengeDigest()
         entries[spec.alias] = Entry(pair, TestNonExportableKeyV1(pair.private),
             chain(pair, challenge, spec.strongBox), factsEdit(facts(spec.strongBox)), spec.strongBox)
+        generateFailureAfterWrite?.let { throw it }
     }
 
     override fun facts(key: PrivateKey): KagemushaWalletAndroidKeyFactsV1 {

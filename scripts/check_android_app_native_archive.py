@@ -16,7 +16,7 @@ from typing import NoReturn
 import zipfile
 
 
-ABIS = ("arm64-v8a", "x86_64")
+ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 LIBRARY_NAME = "libconnect_norito_bridge.so"
 PROVENANCE_NAME = "native-build-provenance-v1.json"
 PROVENANCE_RELATIVE_PATH = Path("iroha") / PROVENANCE_NAME
@@ -321,7 +321,7 @@ def authenticate_source_seal(
     if (
         seal["schema"] != SOURCE_SEAL_SCHEMA
         or seal["platform"] != "android"
-        or seal["targets"] != ["aarch64-linux-android", "x86_64-linux-android"]
+        or seal["targets"] != ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
         or seal["source_tree_dirty"] is not False
         or seal["source_status"] != ""
         or seal["source_commit"] != provenance["source_commit"]

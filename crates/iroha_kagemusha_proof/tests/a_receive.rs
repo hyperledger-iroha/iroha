@@ -341,7 +341,20 @@ pub(crate) fn genuine_receive_source_for(
 ) -> ReceiveQ {
     let (payer, _, _) = bootstrap_objects::enrollment();
     let (loaded, _, _, _) = load_objects::authorized(&payer);
-    let send = send_objects::from_load(&loaded.successor);
+    genuine_receive_source_for_heads(before, &loaded.successor, valid, insert, mode)
+}
+
+/// Generate both real sigma sources for the exact independently authenticated
+/// receiver and payer heads. This keeps the incoming Send state commitment tied
+/// to the payer's actual Load Omega instead of a separately constructed fixture.
+pub(crate) fn genuine_receive_source_for_heads(
+    before: &StateWitness,
+    payer: &StateWitness,
+    valid: bool,
+    insert: bool,
+    mode: IncomingMode,
+) -> ReceiveQ {
+    let send = send_objects::from_load(payer);
     let witness = receive_objects::from_send(&send, before, Fp::from(401), valid, insert);
     let params = PinnedParams::<Ep>::derive(16).unwrap();
     let vparams = common::vesta_params(16);

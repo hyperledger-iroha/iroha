@@ -17,6 +17,29 @@ impl Drop for TestWallet {
     }
 }
 impl Wallet for TestWallet {
+    fn snapshot(&mut self) -> Result<state::Snapshot> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(state::Snapshot {
+            scheme_id: [1; 32],
+            wallet_id: [2; 32],
+            head: [3; 32],
+            credential_digest: [4; 32],
+            sequence: (1_u128 << 93) + 7,
+            lifecycle: KagemushaWalletLifecycleV1::Retiring,
+            balance: u128::MAX,
+            core_burned_total: 3,
+            known_burned_total: 3,
+            owned_balance: u128::MAX - 3,
+            folded_balance: None,
+            fold_backlog: 1,
+            verified_fold: Some(state::SnapshotFold {
+                sequence: (1_u128 << 93) + 6,
+                head: [5; 32],
+                credential_digest: [6; 32],
+                burned_total: 3,
+            }),
+        })
+    }
     fn commit(&mut self, _: state::FrozenTransition) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(Failure::code(PROOF_REJECTED))
@@ -375,4 +398,147 @@ fn collected_receive_returns_existing_credit_status_response_kind() {
     let response = completion(Some(state::Completion::CreditStatus(vec![1, 2, 3])));
     assert_eq!(response.kind, 10);
     assert_eq!(response.bytes, [1, 2, 3]);
+}
+
+#[test]
+fn callback_key_inventory_has_exact_bounded_complete_grammar_and_retained_lifetime() {
+    let state = CallbackState::default();
+    let adapter = unsafe { CallbackPlatform::new(callbacks(&state)) }.unwrap();
+    let maximum = advance::KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1;
+    let set = |tag, bytes: Vec<u8>| {
+        *state.answer.lock().unwrap() = (
+            PlatformReply {
+                tag,
+                length: bytes.len(),
+                ..PlatformReply::default()
+            },
+            bytes,
+        );
+    };
+    set(0, vec![]);
+    assert_eq!(adapter.key_enumerate(), Ok(vec![]));
+    let slots = [
+        advance::KagemushaWalletSlotIdV1([1; 32]),
+        advance::KagemushaWalletSlotIdV1([2; 32]),
+    ];
+    set(0, slots.iter().flat_map(|s| s.0).collect());
+    assert_eq!(adapter.key_enumerate(), Ok(slots.to_vec()));
+    assert_eq!(
+        state.invocations.lock().unwrap().last(),
+        Some(&(10, vec![], maximum * 32))
+    );
+    for malformed in [
+        vec![1; 31],
+        vec![0; 32],
+        [vec![1; 32], vec![1; 32]].concat(),
+        [vec![2; 32], vec![1; 32]].concat(),
+        vec![1; maximum * 32 + 1],
+    ] {
+        set(0, malformed);
+        assert_eq!(adapter.key_enumerate(), Err(U::Platform(0)));
+    }
+    // Neither an absent tag nor an unavailable answer carrying bytes is a complete inventory.
+    set(1, vec![]);
+    assert_eq!(adapter.key_enumerate(), Err(U::Platform(0)));
+    set(2, vec![1; 32]);
+    assert_eq!(adapter.key_enumerate(), Err(U::Platform(0)));
+    for reason in [0, 1, 2, 3, 4, 5, 6] {
+        *state.answer.lock().unwrap() = (
+            PlatformReply {
+                tag: 2,
+                reason,
+                code: 19,
+                ..PlatformReply::default()
+            },
+            vec![],
+        );
+        assert_eq!(
+            adapter.key_enumerate(),
+            Err(platform::reason(state.answer.lock().unwrap().0))
+        );
+    }
+    drop(adapter);
+    assert_eq!(state.retained.load(Ordering::SeqCst), 1);
+    assert_eq!(state.released.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn callback_key_inventory_accepts_exact_maximum_without_truncation() {
+    let state = CallbackState::default();
+    let adapter = unsafe { CallbackPlatform::new(callbacks(&state)) }.unwrap();
+    let maximum = advance::KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1;
+    let slots: Vec<_> = (1..=maximum)
+        .map(|i| {
+            let mut bytes = [0; 32];
+            bytes[28..].copy_from_slice(&(i as u32).to_be_bytes());
+            advance::KagemushaWalletSlotIdV1(bytes)
+        })
+        .collect();
+    let bytes: Vec<_> = slots.iter().flat_map(|slot| slot.0).collect();
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 0,
+            length: bytes.len(),
+            ..PlatformReply::default()
+        },
+        bytes,
+    );
+    assert_eq!(adapter.key_enumerate(), Ok(slots));
+}
+
+#[test]
+fn c_snapshot_preserves_u128_lifecycle_and_explicit_unfolded_value() {
+    let (id, _, _) = installed();
+    let mut result = WalletSnapshot::default();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_snapshot_v1(id, &mut result) },
+        0
+    );
+    assert_eq!((result.status, result.lifecycle, result.flags), (0, 2, 1));
+    assert_eq!((result.sequence.low, result.sequence.high), (7, 1 << 29));
+    assert_eq!(
+        (result.balance.low, result.balance.high),
+        (u64::MAX, u64::MAX)
+    );
+    assert_eq!(
+        (result.owned_balance.low, result.owned_balance.high),
+        (u64::MAX - 3, u64::MAX)
+    );
+    assert_eq!(result.folded_balance, WalletU128::default());
+    assert_eq!(result.folded_head, [5; 32]);
+    close(id).unwrap();
+    // Failure clears every projection; stale output is never an empty or spendable wallet.
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_snapshot_v1(id, &mut result) },
+        CLOSED
+    );
+    assert_eq!(
+        (result.status, result.flags, result.lifecycle),
+        (CLOSED, 0, 0)
+    );
+    assert_eq!(result.balance, WalletU128::default());
+    assert_eq!(result.head, [0; 32]);
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_snapshot_v1(id, std::ptr::null_mut()) },
+        INVALID
+    );
+}
+#[test]
+fn snapshot_pod_has_explicit_presence_for_a_valid_zero_folded_balance() {
+    let (id, _, _) = installed();
+    let mut value = snapshot(id).unwrap();
+    close(id).unwrap();
+    value.folded_balance = Some(0);
+    value.owned_balance = 0;
+    value.verified_fold.as_mut().unwrap().sequence = value.sequence;
+    let out = WalletSnapshot::from(value);
+    assert_eq!(out.flags, 3);
+    assert_eq!(out.folded_balance, WalletU128::default());
+    let fail = WalletSnapshot::from(Failure::unavailable(UNCERTAIN, U::Io(5)));
+    assert_eq!(
+        (fail.status, fail.reason, fail.platform_code),
+        (UNCERTAIN, 3, 5)
+    );
+    assert_eq!(fail.flags, 0);
+    assert_eq!(fail.owned_balance, WalletU128::default());
 }

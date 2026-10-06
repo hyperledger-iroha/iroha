@@ -150,6 +150,47 @@ impl Platform for AndroidPlatform {
             _ => G::Unavailable(U::Platform(0)),
         }
     }
+    fn key_generation_policy(
+        &self,
+    ) -> std::result::Result<advance::KagemushaWalletKeyGenerationPolicyV1, U> {
+        use advance::KagemushaWalletKeyGenerationPolicyV1 as P;
+        let (reply, bytes) = self.call(10, None, &[], 0, 0);
+        match (reply.tag, reply.reason, reply.code, bytes.is_empty()) {
+            (0, 0, 0, true) => Ok(P::DefinitiveAbsence),
+            (0, 0, 1, true) => Ok(P::FreshEnrollmentOnly),
+            (2, _, _, true) => Err(reason(reply)),
+            _ => Err(U::Platform(0)),
+        }
+    }
+
+    fn key_generate_fresh(
+        &self,
+        grant: advance::KagemushaWalletFreshGenerationV1<'_>,
+    ) -> advance::KagemushaWalletKeyGenerationV1 {
+        use advance::KagemushaWalletKeyGenerationV1 as G;
+        // Consuming this non-Clone Native grant binds the exact live owner, slot, issuer
+        // challenge and hardware profile before the sole private JNI upcall. No caller
+        // boolean, decoded intent or Kotlin DTO can manufacture this grant.
+        let (slot, request) = match grant.consume(self) {
+            Ok(bound) => bound,
+            Err(reason) => return G::Unavailable(reason),
+        };
+        let (reply, bytes) = self.call(
+            11,
+            Some(&slot),
+            &request.challenge_digest,
+            i32::from(request.profile.tag()),
+            65,
+        );
+        match reply.tag {
+            0 => PublicKey::from_sec1_bytes(&bytes)
+                .map_or(G::Unavailable(U::KeyUnusable), G::Generated),
+            3 if bytes.is_empty() => G::AlreadyPresent,
+            2 if bytes.is_empty() => G::Unavailable(reason(reply)),
+            _ => G::Unavailable(U::Platform(0)),
+        }
+    }
+
     fn key_sign(
         &self,
         slot: &Slot,

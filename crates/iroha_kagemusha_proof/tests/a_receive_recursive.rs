@@ -1,8 +1,10 @@
 //! Fixed-owner Receive continuation over real sigma, signature-Q and Omega proofs.
 //!
-//! The incoming fixture deliberately carries the receiver's unrelated but real
-//! Omega under a correctly signed Send package. Objects therefore forces burn;
-//! this does not qualify accepted credit or the full operation/catalog release.
+//! Burn uses an unrelated but real receiver Omega under a correctly signed
+//! Send package. Accepted credit uses distinct payer Load and receiver Bootstrap
+//! heads proved under the same immutable compact catalog. Every owner must fit
+//! k16, including fixed maximum incoming capacities; these diagnostic catalogs
+//! do not admit the Receive terminal or establish full release qualification.
 #![allow(clippy::duplicate_mod)]
 #[path = "common/bootstrap.rs"]
 mod bootstrap;
@@ -13,6 +15,9 @@ mod bootstrap_objects;
 #[path = "bootstrap_omega.rs"]
 pub mod bootstrap_outer;
 mod common;
+/// Genuine distinct payer/receiver heads rebuilt under one compact outer key.
+#[path = "compact_catalog.rs"]
+mod compact_catalog;
 /// Real Receive/Send source proofs and exact depth32 map witnesses.
 #[path = "a_receive.rs"]
 pub mod receive_components;
@@ -90,15 +95,50 @@ struct QSource {
     instances: Vec<Vec<Fq>>,
     opening: FoldInput<Ep>,
 }
+/// Exact original lineage artifact, independent of the operation that produced it.
+#[derive(Clone)]
+struct Head {
+    state: StateWitness,
+    key: VerifyingKey<Ep>,
+    binding: iroha_plonk::DescriptorBinding,
+    proof: Vec<u8>,
+    pallas: AccumulatorT<Ep>,
+    vesta: AccumulatorT<Eq>,
+    opening: FoldInput<Ep>,
+}
+impl From<bootstrap_outer::RootedBootstrapOmega> for Head {
+    fn from(artifact: bootstrap_outer::RootedBootstrapOmega) -> Self {
+        Self {
+            state: StateWitness::from(&artifact.source.state),
+            key: artifact.key,
+            binding: artifact.binding,
+            proof: artifact.proof,
+            pallas: artifact.source.pallas,
+            vesta: artifact.vesta,
+            opening: artifact.opening,
+        }
+    }
+}
 struct Source {
     own: receive_components::ReceiveQ,
-    predecessor: bootstrap_outer::RootedBootstrapOmega,
+    predecessor: Head,
+    incoming_head: Head,
+    accept: bool,
     plan: ReceiveStagePlan,
     q: Vec<QSource>,
     objects: [Vec<u8>; 11],
     commitments: Vec<[Fp; 3]>,
     incoming: Vec<u8>,
     params: PinnedParams<Ep>,
+}
+impl Source {
+    fn mode_words(&self) -> [Fp; 3] {
+        if self.accept {
+            [Fp::ONE, Fp::ZERO, Fp::ZERO]
+        } else {
+            [Fp::ZERO, Fp::ONE, Fp::ZERO]
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 enum IngestionCapacity {
@@ -244,24 +284,31 @@ fn signature_q(
         opening: FoldInput::from_opening(*output.opening.g(), output.opening.challenges()).unwrap(),
     }
 }
-fn source(
-    predecessor: bootstrap_outer::RootedBootstrapOmega,
-    capacity: IngestionCapacity,
-) -> Source {
+fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -> Source {
     use OperationTask::*;
     let params = PinnedParams::<Ep>::derive(16).unwrap();
-    let before = StateWitness::from(&predecessor.source.state);
-    let mut own = receive_components::genuine_receive_source_for(
-        &before,
-        false,
-        false,
-        IncomingMode::Trivial,
-    );
-    let mut incoming = public_bytes(&before.lineage);
-    incoming.extend(&predecessor.proof);
-    incoming.extend(predecessor.source.pallas.to_bytes());
-    incoming.extend(predecessor.vesta.to_bytes());
-    assert_eq!(incoming.len() - 320, 4_800);
+    let before = predecessor.state;
+    let accept = payer.is_some();
+    let incoming_head = payer.unwrap_or_else(|| predecessor.clone());
+    assert_eq!(incoming_head.binding, predecessor.binding);
+    assert_eq!(incoming_head.key.to_bytes(), predecessor.key.to_bytes());
+    assert_eq!(incoming_head.state.lineage[17], before.lineage[17]);
+    let mut own = if accept {
+        receive_components::genuine_receive_source_for_heads(
+            &before,
+            &incoming_head.state,
+            true,
+            true,
+            IncomingMode::Accept,
+        )
+    } else {
+        receive_components::genuine_receive_source_for(&before, false, false, IncomingMode::Trivial)
+    };
+    let mut incoming = public_bytes(&incoming_head.state.lineage);
+    incoming.extend(&incoming_head.proof);
+    incoming.extend(incoming_head.pallas.to_bytes());
+    incoming.extend(incoming_head.vesta.to_bytes());
+    assert!(incoming.len() - 320 <= 4_821);
     assert!(incoming.len() - 320 + own.incoming_sigma.len() <= PAYMENT_PROOF_BUDGET);
     let proof_digest = p_bytes_native(
         u64::from_le_bytes(*b"kgwprf_1"),
@@ -295,7 +342,7 @@ fn source(
     payment.extend(package.to_repr());
     assert_eq!(payment.len(), 163);
     let payment_digest = p_bytes_native(u64::from_le_bytes(*b"kgwpay_1"), &payment);
-    own.bind_payment(payment_digest, false, false);
+    own.bind_payment(payment_digest, accept, accept);
     let own_receipt = receipt(
         &own.witness.statement,
         &before.lineage[6..8],
@@ -439,6 +486,8 @@ fn source(
     Source {
         own,
         predecessor,
+        incoming_head,
+        accept,
         plan,
         q,
         objects,
@@ -810,11 +859,17 @@ impl Circuit<Fp> for Stage {
                 let pp = cells.pallas(
                     &mut chip,
                     &mut region,
-                    &source.predecessor.source.pallas.as_input(),
+                    &source.predecessor.pallas.as_input(),
                 )?;
                 let pv = cells.vesta(&mut chip, &mut region, &source.predecessor.vesta)?;
+                let ip = cells.pallas(
+                    &mut chip,
+                    &mut region,
+                    &source.incoming_head.pallas.as_input(),
+                )?;
+                let iv = cells.vesta(&mut chip, &mut region, &source.incoming_head.vesta)?;
                 let original_fields =
-                    cells.words(&mut chip, &mut region, &source.own.witness.before.lineage)?;
+                    cells.words(&mut chip, &mut region, &source.incoming_head.state.lineage)?;
                 let public_valid = chip.uint().glue().boolean(&mut region, cells.value(true))?;
                 let incoming_public = IncomingLineageCells::constrain(
                     &mut chip.uint(),
@@ -827,9 +882,13 @@ impl Circuit<Fp> for Stage {
                         let values = if index == 0
                             && matches!(self.mutation, Some(ContinuationMutation::Mode))
                         {
-                            [Fp::ONE, Fp::ZERO, Fp::ZERO]
+                            if source.accept {
+                                [Fp::ZERO, Fp::ONE, Fp::ZERO]
+                            } else {
+                                [Fp::ONE, Fp::ZERO, Fp::ZERO]
+                            }
                         } else {
-                            [Fp::ZERO, Fp::ONE, Fp::ZERO]
+                            source.mode_words()
                         };
                         let bits = cells.words(&mut chip, &mut region, &values)?;
                         ModeCells::constrain(chip.uint().glue(), &mut region, &bits)
@@ -852,10 +911,10 @@ impl Circuit<Fp> for Stage {
                 let exported = if matches!(self.mutation, Some(ContinuationMutation::Opening)) {
                     trivial.as_input()
                 } else {
-                    source.predecessor.opening.clone()
+                    source.incoming_head.opening.clone()
                 };
                 let opening = cells.pallas(&mut chip, &mut region, &exported)?;
-                let mut verdicts = [true, false, true, true, true];
+                let mut verdicts = [true, source.accept, true, true, true];
                 if let Some(ContinuationMutation::Result(index)) = self.mutation {
                     verdicts[index] = !verdicts[index];
                 }
@@ -1055,8 +1114,8 @@ impl Circuit<Fp> for Stage {
                     },
                     incoming: Some(ContextIncoming {
                         public: &incoming_public,
-                        pallas: &pp,
-                        vesta: &pv,
+                        pallas: &ip,
+                        vesta: &iv,
                         proof: ContextIncomingProof::ReceiveActive,
                     }),
                     q_instances: &q_instances,
@@ -1122,7 +1181,7 @@ impl Circuit<Fp> for Stage {
                     .map(|transport| ReceiveProofSources::from_active(transport, &incoming_sigma))
                     .transpose()?;
                 let proof_key = if tasks.contains(&OperationTask::ReceiveProofs) {
-                    Some(cells.key(&mut chip, &mut region, &source.predecessor.key)?)
+                    Some(cells.key(&mut chip, &mut region, &source.incoming_head.key)?)
                 } else {
                     None
                 };
@@ -1168,7 +1227,7 @@ impl Circuit<Fp> for Stage {
                     let insert = chip
                         .uint()
                         .glue()
-                        .boolean(&mut region, cells.value(false))?;
+                        .boolean(&mut region, cells.value(source.own.witness.insert))?;
                     Some(ReceiveMapWitness {
                         consumed,
                         credit,
@@ -1313,15 +1372,15 @@ fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Fp {
     words.extend(before.core);
     words.extend(before.rest);
     words.extend(before.lineage);
-    push_pallas(&mut words, &source.predecessor.source.pallas.as_input());
+    push_pallas(&mut words, &source.predecessor.pallas.as_input());
     words.extend(vesta_words(&source.predecessor.vesta.as_input()));
     words.extend(after.core);
     words.extend(after.rest);
     words.extend(after.lineage);
-    words.extend(before.lineage);
+    words.extend(source.incoming_head.state.lineage);
     words.push(Fp::ONE);
-    push_pallas(&mut words, &source.predecessor.source.pallas.as_input());
-    words.extend(vesta_words(&source.predecessor.vesta.as_input()));
+    push_pallas(&mut words, &source.incoming_head.pallas.as_input());
+    words.extend(vesta_words(&source.incoming_head.vesta.as_input()));
     for q in &source.q {
         for (column, ty) in q.instances.iter().zip(
             q.plan
@@ -1342,10 +1401,16 @@ fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Fp {
         }
     }
     words.extend(source.commitments.iter().flatten().copied());
-    words.extend([Fp::ONE, Fp::ZERO, Fp::ONE, Fp::ONE, Fp::ONE]);
-    push_pallas(&mut words, &source.predecessor.opening);
+    words.extend([
+        Fp::ONE,
+        Fp::from(u64::from(source.accept)),
+        Fp::ONE,
+        Fp::ONE,
+        Fp::ONE,
+    ]);
+    push_pallas(&mut words, &source.incoming_head.opening);
     for _ in 0..4 {
-        words.extend([Fp::ZERO, Fp::ONE, Fp::ZERO]);
+        words.extend(source.mode_words());
     }
     let trivial = AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap();
     let (x, y) = trivial.g().coordinates().unwrap();
@@ -1425,8 +1490,8 @@ impl Stage {
         words.extend(vesta_words(&self.source.predecessor.vesta.as_input()));
         // A exports the ORIGINAL incoming V and its mode; Omega performs the
         // mode selection and includes the chosen deciding claim exactly once.
-        words.extend(vesta_words(&self.source.predecessor.vesta.as_input()));
-        words.extend([Fp::ZERO, Fp::ONE, Fp::ZERO]);
+        words.extend(vesta_words(&self.source.incoming_head.vesta.as_input()));
+        words.extend(self.source.mode_words());
         let trivial =
             AccumulatorT::trivial(&common::vesta_params(16), MemoryBudget::DEFAULT).unwrap();
         words.extend(&vesta_words(&trivial.as_input())[..4]);
@@ -1539,15 +1604,61 @@ fn canonical_envelope_receive_burn_owner_chain() {
     receive_owner_chain(IngestionCapacity::CanonicalEnvelope);
 }
 
+#[test]
+#[ignore = "genuine payer Load and receiver Bootstrap, real Send/Receive sigmas, all fixed Receive owners at maximum capacity"]
+fn canonical_envelope_receive_accepts_exact_payer_and_receiver_heads() {
+    let wallets = compact_catalog::compact_payer_load_and_receiver();
+    let receiver = Head {
+        state: StateWitness::from(&wallets.receiver.source.state),
+        key: wallets.receiver.key,
+        binding: wallets.receiver.binding,
+        proof: wallets.receiver.proof,
+        pallas: wallets.receiver.source.pallas,
+        vesta: wallets.receiver.vesta,
+        opening: wallets.receiver.opening,
+    };
+    let payer = Head {
+        state: wallets.payer.source.state,
+        key: wallets.payer.key,
+        binding: wallets.payer.binding,
+        proof: wallets.payer.proof,
+        pallas: wallets.payer.source.pallas,
+        vesta: wallets.payer.vesta,
+        opening: wallets.payer.opening,
+    };
+    assert_ne!(receiver.state.core[5..7], payer.state.core[5..7]);
+    let source = source(receiver, Some(payer), IngestionCapacity::CanonicalEnvelope);
+    assert_eq!(source.own.send.before.core, source.incoming_head.state.core);
+    assert_eq!(source.own.send.before.rest, source.incoming_head.state.rest);
+    assert_eq!(
+        source.own.send.before.lineage,
+        source.incoming_head.state.lineage
+    );
+    assert_eq!(
+        source.own.witness.after.core[iroha_kagemusha_proof::witness::core_index::BALANCE]
+            - source.own.witness.before.core[iroha_kagemusha_proof::witness::core_index::BALANCE],
+        source.own.witness.statement[20],
+    );
+    assert_eq!(
+        source.own.witness.after.lineage[14], source.own.witness.before.lineage[14],
+        "accepted value never enters the burn accumulator",
+    );
+    prove_receive_owner_chain(source);
+}
+
 fn receive_owner_chain(capacity: IngestionCapacity) {
     let receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
         bootstrap_outer::bootstrap_chain::BootstrapIdentity::Receiver,
     );
-    let source = Arc::new(source(receiver, capacity));
+    prove_receive_owner_chain(source(receiver.into(), None, capacity));
+}
+
+fn prove_receive_owner_chain(source: Source) {
+    let source = Arc::new(source);
     let (first_fold, pallas) = create_fold(
         &source.params,
         &[
-            source.predecessor.source.pallas.as_input(),
+            source.predecessor.pallas.as_input(),
             source.predecessor.opening.clone(),
         ],
         Fp::from(247).to_repr(),
@@ -1627,8 +1738,15 @@ fn receive_owner_chain(capacity: IngestionCapacity) {
         let split =
             SplitPlan::new(source.plan.context().clone(), stage, wkey, &source.params).unwrap();
         if split.is_terminal() {
-            let trivial = AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap();
-            claims.extend([trivial.as_input(), trivial.as_input()]);
+            if source.accept {
+                claims.extend([
+                    source.incoming_head.pallas.as_input(),
+                    source.incoming_head.opening.clone(),
+                ]);
+            } else {
+                let trivial = AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap();
+                claims.extend([trivial.as_input(), trivial.as_input()]);
+            }
         }
         claims.extend(
             source
@@ -1707,6 +1825,8 @@ fn receive_owner_chain(capacity: IngestionCapacity) {
         .decide(&source.params, MemoryBudget::DEFAULT)
         .unwrap();
     eprintln!(
-        "Receive actual eight-stage bound-invalid Payment burn PASS; final_catalog=false accepted_credit_qualified=false"
+        "RECEIVE_OWNER_CHAIN stages={} accepted_credit={} original_sources_bound=true final_catalog=false release_qualified=false",
+        source.plan.context().stage_count(),
+        source.accept,
     );
 }

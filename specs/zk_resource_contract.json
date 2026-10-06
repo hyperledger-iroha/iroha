@@ -2082,6 +2082,11 @@
           "stage": "follower",
           "path": "crates/iroha_core_zk/src/lib.rs",
           "contains": "max_proof_bytes: guardrails.pipa_r_max_proof_bytes,"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/verification.rs",
+          "contains": "policy.pipa_r_max_proof_bytes,"
         }
       ],
       "catalog": {
@@ -2104,9 +2109,13 @@
         {
           "path": "crates/iroha_core_zk/src/verification/tests.rs",
           "name": "backend_confusion_and_unknown_circuits_reject_before_crypto"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/native_pipa_r_tests.rs",
+          "name": "native_real_proofs_obey_relation_policy_caps_and_preverify"
         }
       ],
-      "test_note": "The two verifier tests refuse a native PIPA-R proof above a lowered cap (5 bytes, and one byte against a cap of zero). No test verifies a proof of exactly the cap."
+      "test_note": "The native verifier test rejects genuine Kaigi authorization and usage proofs with either cap one byte below the corresponding envelope or proof length, then accepts both exact lengths. The copy test binds both node configuration fields to verifier guardrails."
     },
     {
       "id": "proof.config_private_settlement_max_proof_bytes",
@@ -2276,6 +2285,16 @@
           "stage": "follower",
           "path": "crates/iroha_core_zk/src/lib.rs",
           "contains": "if !guardrails.pipa_r_enabled || proof.bytes.len() > guardrails.pipa_r_max_envelope_bytes {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/zk_guardrails.rs",
+          "contains": "pipa_r_max_envelope_bytes: cfg.pipa_r.max_envelope_bytes,"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/verification.rs",
+          "contains": "policy.pipa_r_max_envelope_bytes,"
         }
       ],
       "tests": [
@@ -2286,8 +2305,18 @@
         {
           "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
           "name": "pipa_r_admission_inputs_bind_projection"
+        },
+        {
+          "path": "crates/iroha_core/src/zk_guardrails.rs",
+          "name": "guardrails_from_config_copies_every_cap"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/native_pipa_r_tests.rs",
+          "name": "native_real_proofs_obey_relation_policy_caps_and_preverify"
         }
-      ]
+      ],
+      "inclusive": true,
+      "test_note": "The native verifier test rejects genuine Kaigi authorization and usage proofs with either cap one byte below the corresponding envelope or proof length, then accepts both exact lengths. The copy test binds both node configuration fields to verifier guardrails."
     },
     {
       "id": "proof.config_stark_max_proof_bytes",

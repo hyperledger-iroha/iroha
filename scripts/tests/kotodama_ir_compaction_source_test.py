@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/kotodama_lang/src/ir.rs"
 PUBLIC_LEAF = REPO_ROOT / "crates/kotodama_lang/src/ir/tests/public_argument_record_abi.rs"
 TAIL_LEAF = REPO_ROOT / "crates/kotodama_lang/src/ir_tail_tests.rs"
+SUM_LEAF = REPO_ROOT / "crates/kotodama_lang/src/ir/sum.rs"
 FIXTURE_MANIFEST = REPO_ROOT / "crates/kotodama_lang/kotodama_fixtures_v1.manifest.json"
 IR_MANIFEST = REPO_ROOT / "crates/kotodama_lang/kotodama_ir_v1.manifest.json"
 HELPER_NAMES = (
@@ -381,10 +382,37 @@ def _asset_ledger(source: str, tail_leaf: str, overrides: dict[str, bytes] | Non
     return ledger
 
 
+def _sum_module_inventory(production: str, sum_leaf: str) -> dict[str, object]:
+    """Seal the sole compiled production child, including its own tests."""
+
+    declaration = "\nmod sum;\n"
+    _require(production.count(declaration) == 1,
+             "compiled sum owner must declare exactly one local sum module")
+    # The remaining production source retains the blanket prohibition on
+    # unowned modules, redirections, includes and body-dispatch seams.
+    _validate_forbidden_seams(production.replace(declaration, "\n", 1))
+    child_production, child_tests = _split_candidate(sum_leaf)
+    _validate_forbidden_seams(child_production)
+    names = list(_leaf_test_names(child_tests))
+    _require(bool(names) and len(names) == len(set(names)),
+             "compiled sum test IDs must be present and unique")
+    functions = re.findall(r"(?m)^(?:pub\(super\) )?fn ([A-Za-z_]\w*)\(", child_production)
+    _require(len(functions) == len(set(functions)), "duplicate sum function")
+    return {
+        "owner": "crates/kotodama_lang/src/ir.rs", "declaration": "mod sum;",
+        "source": "crates/kotodama_lang/src/ir/sum.rs",
+        "bytes": len(sum_leaf.encode()), "sha256": _sha256(sum_leaf),
+        "functions": functions, "tests": ["sum::tests::" + name for name in names],
+    }
+
+
 def _candidate_inventory(source: str, public_leaf: str, tail_leaf: str,
-                         asset_overrides: dict[str, bytes] | None = None) -> dict[str, object]:
+                         asset_overrides: dict[str, bytes] | None = None,
+                         sum_leaf: str | None = None) -> dict[str, object]:
     production, suffix = _split_candidate(source)
-    _validate_forbidden_seams(production)
+    if sum_leaf is None:
+        sum_leaf = _regular_bytes(SUM_LEAF, REPO_ROOT).decode("utf-8")
+    production_modules = [_sum_module_inventory(production, sum_leaf)]
     _validate_v1_lowering_contract(production)
     _require("StateKeys" not in production and "Builtin::StateKeys" not in production,
              "retired offset traversal must not return")
@@ -411,6 +439,7 @@ def _candidate_inventory(source: str, public_leaf: str, tail_leaf: str,
     return {
         "format": "iroha.kotodama.ir-source-inventory", "version": 1,
         "ownership": _source_ownership(),
+        "production_modules": production_modules,
         "public_api": public_api, "instruction_variants": variants,
         "production_literals": sorted({match.group(0) for match in RUST_LITERAL_RE.finditer(production)}),
         "main_tests": list(main_tests), "compiled_tests": list(all_tests),
@@ -424,9 +453,10 @@ def _candidate_inventory(source: str, public_leaf: str, tail_leaf: str,
 
 
 def _validate_candidate(source: str, public_leaf: str, tail_leaf: str, *,
-                        asset_overrides: dict[str, bytes] | None = None) -> None:
+                        asset_overrides: dict[str, bytes] | None = None,
+                        sum_leaf: str | None = None) -> None:
     expected = json.loads(_regular_bytes(IR_MANIFEST, REPO_ROOT))
-    observed = _candidate_inventory(source, public_leaf, tail_leaf, asset_overrides)
+    observed = _candidate_inventory(source, public_leaf, tail_leaf, asset_overrides, sum_leaf)
     _require(expected.keys() == observed.keys(), "IR inventory fields changed")
     for key, value in observed.items():
         _require(value == expected[key], f"IR inventory drift: {key}")
@@ -518,6 +548,41 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
                       '#[path = "other.rs"]\n#[allow(dead_code)]\npub mod ir;'):
             with self.assertRaisesRegex(GuardError, "compiled IR owner"):
                 _source_ownership(owner)
+
+    def test_current_sum_module_and_tests_are_sealed(self) -> None:
+        sum_leaf = _regular_bytes(SUM_LEAF, REPO_ROOT).decode("utf-8")
+        observed = _candidate_inventory(self.source, self.public_leaf, self.tail_leaf)
+        self.assertEqual(len(observed["production_modules"]), 1)
+        child = observed["production_modules"][0]
+        self.assertEqual(child["source"], "crates/kotodama_lang/src/ir/sum.rs")
+        self.assertEqual(child["functions"], [
+            "sum_layout_for_type", "sum_active_payload_type", "emit_sum_value",
+            "load_sum_tag", "load_sum_payload", "payload_word_address",
+        ])
+        self.assertEqual(child["tests"], [
+            "sum::tests::payload_addresses_cross_the_immediate_boundary_without_truncation",
+            "sum::tests::overflowing_payload_addresses_record_an_error_without_emitting_access",
+            "sum::tests::wide_payload_construction_and_loading_share_the_complete_address_range",
+        ])
+        for before, after in (
+            ("layout.validate_active_width(tag, actual_words)",
+             "layout.validate_active_width(tag, 0)"),
+            ("fn load_sum_tag(", "fn load_wrong_tag("),
+            ("fn overflowing_payload_addresses_record_an_error_without_emitting_access",
+             "fn overflowing_payload_addresses_are_ignored"),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(sum_leaf.count(before), 1)
+                with self.assertRaisesRegex(GuardError, "production_modules"):
+                    _validate_candidate(self.source, self.public_leaf, self.tail_leaf,
+                                        sum_leaf=sum_leaf.replace(before, after, 1))
+        self.rejects("\nmod sum;\n", "\nmod other;\n", "compiled sum owner")
+        self.rejects("\nmod sum;\n", "\nmod sum;\nmod other;\n", "forbidden seam")
+        self.rejects("\nmod sum;\n", '\n#[path = "other.rs"]\nmod sum;\n',
+                     "forbidden production token")
+        with self.assertRaisesRegex(GuardError, "forbidden seam"):
+            _validate_candidate(self.source, self.public_leaf, self.tail_leaf,
+                                sum_leaf=sum_leaf.replace("use super::*;", "mod hidden;", 1))
 
     def test_forbidden_helpers_and_retired_traversal_fail(self) -> None:
         anchor = "//! Intermediate representation for Kotodama programs."

@@ -80,7 +80,7 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
 def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
     """Keep the independently reviewed publication and admission inventories exact."""
     expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS
-    assert len(expected) == len(set(expected)) == 9
+    assert len(expected) == len(set(expected)) == 10
     for relative, start, end in (
         ("scripts/build_norito_xcframework.sh", '"required_symbols": [', '"forbidden_symbols": ['),
         ("scripts/validate_norito_bridge_xcframework.py", "EXPECTED_REQUIRED_SYMBOLS = [", "EXPECTED_FORBIDDEN_SYMBOLS = ["),
@@ -97,7 +97,7 @@ def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
 
 def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() -> None:
     current = MODULE.KAGEMUSHA_WALLET_C_EXPORTS + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
-    assert len(current) == len(set(current)) == 14
+    assert len(current) == len(set(current)) == 16
     for sdk in ("c-jni", "csharp"):
         MODULE.validate_retired_protocol_symbols(current, sdk=sdk)
         for symbol in (*current, "connect_norito_free"):
@@ -668,7 +668,7 @@ def test_current_wallet_jni_inventory_matches_shipping_consumer_and_definitions(
     """Wallet artifacts require the exact JNI surface exposed to Kotlin."""
     consumer = (REPO_ROOT / "kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletV1.kt").read_text()
     declared = set(re.findall(r"@JvmStatic\s+external\s+fun\s+(\w+)\s*\(", consumer))
-    assert declared == {"revision", "open", "close", "activity", "call"}
+    assert declared == {"revision", "open", "close", "activity", "call", "snapshot"}
     owner = "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_"
     expected = MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
     assert len(expected) == len(set(expected)) == len(declared)

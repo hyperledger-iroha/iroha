@@ -1,4 +1,4 @@
-//! Optional supervised online publisher. Original finalized issuance authorizes signing;
+//! Required supervised online publisher. Original finalized issuance authorizes signing;
 //! normal queue admission authorizes submission. Neither queue success nor timeout is finality.
 use std::sync::Arc;
 
@@ -32,16 +32,12 @@ enum TickError {
     SubmissionUnavailable,
 }
 impl Service {
-    /// Preflight before supervision; malformed custody fails startup rather than disabling an
-    /// explicitly configured monetary service. No secret contents are returned in the error.
+    /// Preflight required custody before supervision. No secret contents reach the error.
     pub(crate) fn new(
-        mut config: KagemushaLoadAuthorizer,
+        config: KagemushaLoadAuthorizer,
         state: Arc<State>,
         queue: Arc<Queue>,
-    ) -> Result<Option<Self>, &'static str> {
-        let Some(custody) = config.custody.take() else {
-            return Ok(None);
-        };
+    ) -> Result<Self, &'static str> {
         if config.finality_limits.validate().is_err()
             || !(1..=iroha_core::kagemusha_wallet_v1::MAX_PENDING_PAGE).contains(&config.page_size)
             || config.poll_interval.is_zero()
@@ -52,18 +48,18 @@ impl Service {
         {
             return Err("invalid KAGEMUSHA publisher limits");
         }
-        let worker = PublicationWorker::from_canonical_keyring(&custody.keyring)
+        let worker = PublicationWorker::from_canonical_keyring(&config.custody.keyring)
             .map_err(|_| "invalid KAGEMUSHA publisher custody binding")?;
         worker
             .require_network(*state.network_id_ref().as_bytes())
             .map_err(|_| "KAGEMUSHA publisher keys belong to another network")?;
-        Ok(Some(Self {
+        Ok(Self {
             worker,
-            submitter: custody.submitter,
+            submitter: config.custody.submitter.clone(),
             config,
             state,
             queue,
-        }))
+        })
     }
 
     fn tick(&mut self) -> Result<usize, TickError> {

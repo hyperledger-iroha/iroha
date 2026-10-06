@@ -55,13 +55,15 @@ fn soranet_transport_identity_is_required_even_with_streaming_identity() {
     let mut missing_identity = canonical_test_base_table();
     missing_identity.remove("soranet_transport_public_key");
     missing_identity.remove("soranet_transport_private_key");
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(missing_identity))
-        .read_and_complete::<UserConfig>()
-        .expect("the public transport identity is derived from the private key")
-        .parse()
-        .expect_err("dedicated SoraNet transport identity must be required");
+    let error = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(MockEnv::new())
+            .with_toml_source(TomlSource::inline(missing_identity)),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("the public transport identity is derived from the private key")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect_err("dedicated SoraNet transport identity must be required");
     let message = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(
         message,
@@ -75,13 +77,15 @@ fn soranet_transport_identity_is_required_even_with_streaming_identity() {
         .to_owned();
     let mut derived_public = canonical_test_base_table();
     derived_public.remove("soranet_transport_public_key");
-    let config = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(derived_public))
-        .read_and_complete::<UserConfig>()
-        .expect("the private transport key completes the user schema")
-        .parse()
-        .expect("the public transport identity is derived from the private key");
+    let config = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(MockEnv::new())
+            .with_toml_source(TomlSource::inline(derived_public)),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("the private transport key completes the user schema")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect("the public transport identity is derived from the private key");
     assert_eq!(
         config
             .common
@@ -93,13 +97,15 @@ fn soranet_transport_identity_is_required_even_with_streaming_identity() {
 
     let mut missing_private = canonical_test_base_table();
     missing_private.remove("soranet_transport_private_key");
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(missing_private))
-        .read_and_complete::<UserConfig>()
-        .expect("the public identity makes the user schema complete")
-        .parse()
-        .expect_err("dedicated SoraNet transport private identity must be required");
+    let error = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(MockEnv::new())
+            .with_toml_source(TomlSource::inline(missing_private)),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("the public identity makes the user schema complete")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect_err("dedicated SoraNet transport private identity must be required");
     let message = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(
         message,
@@ -118,13 +124,15 @@ fn soranet_transport_identity_env_pair_populates_actual_common() {
             "P2P_SORANET_TRANSPORT_PRIVATE_KEY",
             ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
         );
-    let config = ConfigReader::new()
-        .with_env(env.clone())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .read_and_complete::<UserConfig>()
-        .expect("transport env pair should complete user config")
-        .parse()
-        .expect("transport env pair should parse");
+    let config = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(env.clone())
+            .with_toml_source(TomlSource::inline(canonical_test_base_table())),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("transport env pair should complete user config")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect("transport env pair should parse");
     assert_eq!(config.common.soranet_transport_key_pair, key_pair);
     assert_eq!(
         config.common.soranet_transport_key_pair.algorithm(),
@@ -147,14 +155,16 @@ fn soranet_transport_identity_rejects_mismatched_pair_without_disclosing_keys() 
         "soranet_transport_private_key".into(),
         TomlValue::String(FIXTURE_STREAMING_PRIVATE_KEY.to_owned()),
     );
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .with_toml_source(TomlSource::inline(layer))
-        .read_and_complete::<UserConfig>()
-        .expect("mismatched pair remains syntactically valid")
-        .parse()
-        .expect_err("mismatched SoraNet transport pair must fail");
+    let error = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(MockEnv::new())
+            .with_toml_source(TomlSource::inline(canonical_test_base_table()))
+            .with_toml_source(TomlSource::inline(layer)),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("mismatched pair remains syntactically valid")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect_err("mismatched SoraNet transport pair must fail");
     let message = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(message, "Invalid dedicated SoraNet transport identity");
     assert_contains!(message, "[REDACTED]");
@@ -165,14 +175,16 @@ fn soranet_transport_identity_rejects_mismatched_pair_without_disclosing_keys() 
 fn soranet_transport_identity_rejects_non_ed25519_pair() {
     let bls = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal)
         .expect("derive non-Ed25519 transport test pair");
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .with_toml_source(TomlSource::inline(soranet_transport_layer(&bls)))
-        .read_and_complete::<UserConfig>()
-        .expect("BLS pair remains syntactically valid")
-        .parse()
-        .expect_err("BLS SoraNet transport pair must fail");
+    let error = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(MockEnv::new())
+            .with_toml_source(TomlSource::inline(canonical_test_base_table()))
+            .with_toml_source(TomlSource::inline(soranet_transport_layer(&bls))),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("BLS pair remains syntactically valid")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect_err("BLS SoraNet transport pair must fail");
     let message = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(message, "Invalid dedicated SoraNet transport identity");
     assert_contains!(
@@ -182,16 +194,18 @@ fn soranet_transport_identity_rejects_non_ed25519_pair() {
 }
 #[test]
 fn soranet_transport_identity_rejects_streaming_public_key_reuse() {
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .with_toml_source(TomlSource::inline(soranet_transport_layer(
-            &fixture_streaming_key_pair(),
-        )))
-        .read_and_complete::<UserConfig>()
-        .expect("reused pair remains syntactically valid")
-        .parse()
-        .expect_err("SoraNet transport key reuse must fail");
+    let error = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(MockEnv::new())
+            .with_toml_source(TomlSource::inline(canonical_test_base_table()))
+            .with_toml_source(TomlSource::inline(soranet_transport_layer(
+                &fixture_streaming_key_pair(),
+            ))),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("reused pair remains syntactically valid")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect_err("SoraNet transport key reuse must fail");
     let message = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(message, "Invalid dedicated SoraNet transport identity");
     assert_contains!(

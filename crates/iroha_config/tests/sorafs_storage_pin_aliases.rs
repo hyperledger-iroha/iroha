@@ -1,12 +1,18 @@
 //! Validate the V1 hard cut for the retired local storage-pin admission policy.
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 fn strip_ansi_codes(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
@@ -88,7 +94,7 @@ fn retired_storage_pin_environment_aliases_are_unvisited() {
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("retired environment aliases are not schema inputs")
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("retired environment aliases cannot alter V1 configuration");
     let unvisited = env.unvisited();
     for alias in RETIRED_ALIASES {

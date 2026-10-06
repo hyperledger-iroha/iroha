@@ -55,7 +55,8 @@ pub struct PlatformCallbacks {
     pub release: Option<unsafe extern "C" fn(*mut c_void)>,
     /// Operations: 0 key probe, 1 key generate (input challenge32, auxiliary profile1/2),
     /// 2 key sign (input exact domain-checked32), 3 delete key, 4 anchor read,
-    /// 5 anchor create, 6 anchor update, 7 storage state, 8 boot UUID (UTF-8, 36 bytes), 9 prepared no-backup custody root (UTF-8, <=4096).
+    /// 5 anchor create, 6 anchor update, 7 storage state, 8 boot UUID (UTF-8, 36 bytes), 9 prepared no-backup custody root (UTF-8, <=4096),
+    /// 10 complete key-slot inventory (ascending unique nonzero32, <=4096 slots).
     /// Slot is exactly32 bytes for operations0..6, null otherwise. Results are key SEC1
     /// (65 bytes), signature DER (8..72), anchor (<=256), or boot UUID, as appropriate.
     pub invoke: Option<
@@ -200,6 +201,27 @@ pub(crate) fn reason(reply: PlatformReply) -> Unavailable {
     }
 }
 impl Platform for CallbackPlatform {
+    fn key_enumerate(&self) -> std::result::Result<Vec<Slot>, Unavailable> {
+        let maximum = advance::KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1;
+        let (reply, bytes) = self.call(10, None, &[], 0, maximum * 32);
+        if reply.tag == 2 && bytes.is_empty() {
+            return Err(reason(reply));
+        }
+        if reply.tag != 0 || !bytes.len().is_multiple_of(32) {
+            return Err(Unavailable::Platform(0));
+        }
+        let slots: Vec<_> = bytes
+            .chunks_exact(32)
+            .map(|bytes| Slot(bytes.try_into().expect("exact slot chunk")))
+            .collect();
+        if slots.iter().any(|slot| slot.0 == [0; 32])
+            || !slots.windows(2).all(|pair| pair[0] < pair[1])
+        {
+            return Err(Unavailable::Platform(0));
+        }
+        Ok(slots)
+    }
+
     fn key_probe(&self, slot: &Slot) -> Probe<PublicKey> {
         let (reply, bytes) = self.call(0, Some(slot), &[], 0, 65);
         match reply.tag {

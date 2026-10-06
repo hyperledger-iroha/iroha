@@ -839,17 +839,31 @@ def _check_mandatory_cli_runtime_dependencies(
     return errors
 
 
-def _check_mandatory_core_backends(document: dict[str, Any], manifest_path: Path) -> list[str]:
-    """Require the native circuit, arithmetic and gadget owners with defaults disabled."""
+MANDATORY_CORE_BACKENDS: dict[str, tuple[str, ...]] = {
+    "iroha_core": ("kaigi_zk",),
+    "iroha_core_zk": ("kaigi_zk", "iroha_plonk", "iroha_plonk_gadgets", "iroha_pasta"),
+}
+
+
+def _check_mandatory_core_backends(
+    document: dict[str, Any], manifest_path: Path, owners: tuple[str, ...]
+) -> list[str]:
+    """Require canonical native owners as unconditional normal dependencies."""
 
     dependencies = document.get("dependencies", {})
     errors: list[str] = []
-    for owner in ("kaigi_zk", "iroha_plonk", "iroha_plonk_gadgets", "iroha_pasta"):
+    for owner in owners:
         specification = dependencies.get(owner) if isinstance(dependencies, dict) else None
-        if (not isinstance(specification, dict)
-                or specification.get("optional", False) is not False
-                or specification.get("path") != f"../{owner}"):
-            errors.append(f"{manifest_path}: mandatory Core backend `{owner}` must retain its non-optional local owner")
+        if (
+            not isinstance(specification, dict)
+            or specification.get("optional", False) is not False
+            or specification.get("path") != f"../{owner}"
+            or specification.get("package", owner) != owner
+        ):
+            errors.append(
+                f"{manifest_path}: mandatory Core backend `{owner}` must retain "
+                "its non-optional local owner"
+            )
     return errors
 
 
@@ -874,7 +888,9 @@ def _check_expected_features(
     if expected is None:
         return []
 
-    errors: list[str] = []
+    errors = _check_mandatory_core_backends(
+        document, manifest_path, MANDATORY_CORE_BACKENDS.get(package_name, ())
+    )
     if package_name == "irohad_lib":
         errors.extend(_check_mandatory_daemon_cuda(document, manifest_path))
     if package_name == "iroha_data_model":
@@ -882,7 +898,6 @@ def _check_expected_features(
     if package_name == "iroha_cli_lib":
         errors.extend(_check_mandatory_cli_runtime_dependencies(document, manifest_path))
     if package_name == "iroha_core_zk":
-        errors.extend(_check_mandatory_core_backends(document, manifest_path))
         dependencies = document.get("dependencies", {})
         specification = (
             dependencies.get("fastpq_prover")

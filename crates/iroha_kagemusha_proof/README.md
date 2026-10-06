@@ -83,6 +83,22 @@ credential stages. All four current component stages prove at k16
 full consuming-transcript and dropped/relabelled-opening regressions.
 Earlier three-stage measurements omitted C4 and do not qualify complete Load.
 
+`a_relation::native::load` assembles those exact four A stages and three W
+continuations from typed original state/map witnesses and the five signed tapes.
+Preparation verifies the original predecessor and all three Q proofs in full,
+and decides both predecessor claims and every derived opening. Fixed installed
+A/W keys drive proving and source-bound checkpoint restoration; the runtime
+never generates keys or chooses a witness-dependent profile. The native terminal
+exports the distinct accumulated Pallas, current Vesta, predecessor Vesta and
+terminal-A opening obligations for final Omega. It grants no monetary head.
+The ignored `installed_native_load_proves_and_restores_all_four_stages` regression
+exercises genuine proving under fixture-installed keys and exact-original replay.
+
+TODO: mount the complete authenticated producer inventory and canonical G1
+conversion in the native wallet proof provider, then qualify the final common
+Omega catalog, transport and physical-device execution. Source-stage assembly
+and verifier-pack admission alone do not complete those release gates.
+
 ## Send composition
 
 `a_relation::send` binds the exact payer credential, signed Request and held-fee
@@ -121,6 +137,24 @@ Payment into a burn. Original incoming asset/recipient mismatches remain soft.
 The staged Receive context retains exact active tape commitments and typed Q
 instances, with four-bus internal A circuits and a three-bus terminal candidate;
 internal keys cannot enter the final Omega catalog.
+
+## Unload and Retiring
+
+The fixed k12 `UnloadCircuit` and `RetiringCircuit` share the administrative
+transition constraints with Load. Unload spends only the folded lineage's
+adjusted available balance, binds the scheme/wallet/redeem-ordinal nullifier,
+and checks its charge, counters and exact changed fields. Retiring permits
+only Active → Retiring and synchronizes adjusted burned/pending values without
+moving value. Both real native proofs are 3,296 bytes and verify their complete
+opening; rehashed state mutations, overflow, invalid charges, burned-value
+spending and reverse/repeated retirement reject.
+
+`a_relation::unload` assigns mandatory hard predecessor/proof-byte, current
+credential/direct Enrollment/own receipt, and recovery-map or retirement-state
+tasks. Its fixed schema rejects missing, duplicated and misplaced owners.
+TODO: execute and qualify the complete genuine Q → A → Ω chains, rebind their
+terminal keys into the common catalog, and connect the installed wallet provider.
+The leaf and task checks alone do not authorize an unload or retirement.
 
 ## Controls
 

@@ -2,9 +2,12 @@
 //!
 //! Every sample under `defaults/kagami/` and the public Taira validator template must stay
 //! admissible: a retired table or key in a sample is an unknown parameter and fails here.
+//! Publisher file references are bound to parser-only fixture data. These tests neither
+//! start a daemon publisher nor provide deployment custody.
 
 use std::path::{Path, PathBuf};
 
+use crate::publisher_config_fixture;
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use toml::{Table, Value};
@@ -130,12 +133,24 @@ fn bind_inrou_trusted_guest(table: &mut Table) {
     }
 }
 
-fn parse(table: Table, sample: &str) -> ActualConfig {
+fn parse(mut table: Table, sample: &str) -> ActualConfig {
+    // Fixture substitution must not hide an incomplete production sample.
+    let publisher = sub_table(&mut table, "kagemusha_load_authorizer");
+    for field in ["keyring_file", "submitter_key_file"] {
+        assert!(
+            publisher
+                .get(field)
+                .and_then(Value::as_str)
+                .is_some_and(|path| !path.trim().is_empty()),
+            "{sample} must declare required publisher {field}"
+        );
+    }
+    publisher_config_fixture::bind_fixture_refs(&mut table);
     ConfigReader::new()
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .unwrap_or_else(|error| panic!("{sample} must match the configuration schema: {error:?}"))
-        .parse()
+        .parse_with_file_source(&publisher_config_fixture::ParserOnlyPublisherFiles)
         .unwrap_or_else(|error| panic!("{sample} must parse: {error:?}"))
 }
 

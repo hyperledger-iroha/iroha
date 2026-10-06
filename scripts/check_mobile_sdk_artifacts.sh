@@ -10,7 +10,7 @@ Validate the sole first-release mobile SDK surface:
   - canonical NoritoBridge C/header exports and retired export rejection;
   - current Swift and Kotlin SDK packaging;
   - source-authenticated NoritoBridge XCFramework manifest and slices; and
-  - optional built Android jars/AARs with both qualified native ABIs.
+  - optional built Android jars/AARs with all three maintained native ABIs.
 USAGE
 }
 
@@ -484,6 +484,7 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_kagemusha_wallet_resume_v1
   connect_norito_kagemusha_wallet_fold_v1
   connect_norito_kagemusha_wallet_credit_status_v1
+  connect_norito_kagemusha_wallet_snapshot_v1
 )
 REQUIRED_WALLET_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision
@@ -491,6 +492,7 @@ REQUIRED_WALLET_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot
 )
 RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
   connect_norito_private_settlement_auditor_capsule_response
@@ -672,6 +674,7 @@ check_android() {
     classes.jar \
     assets/iroha/native-build-provenance-v1.json \
     jni/arm64-v8a/libconnect_norito_bridge.so \
+    jni/armeabi-v7a/libconnect_norito_bridge.so \
     jni/x86_64/libconnect_norito_bridge.so; do
     if ! unzip -Z1 "$aar" | grep -Fxq -- "$entry"; then
       fail "client-android release AAR is missing $entry"
@@ -682,7 +685,7 @@ check_android() {
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/iroha-mobile-sdk.XXXXXX")"
   trap 'rm -rf "$tmp"' RETURN
   local abi
-  for abi in arm64-v8a x86_64; do
+  for abi in arm64-v8a armeabi-v7a x86_64; do
     local archive_entry="jni/$abi/libconnect_norito_bridge.so"
     if unzip -p "$aar" "$archive_entry" >"$tmp/$abi.so"; then
       check_binary_symbols "$tmp/$abi.so" "client-android $abi bridge" elf

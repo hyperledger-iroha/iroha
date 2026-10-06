@@ -216,3 +216,159 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_credit_status_v1(
         })
     }
 }
+
+/// Lossless scalar representation shared by the typed snapshot C ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WalletU128 {
+    /// Least significant 64 bits.
+    pub low: u64,
+    /// Most significant 64 bits.
+    pub high: u64,
+}
+impl From<u128> for WalletU128 {
+    fn from(value: u128) -> Self {
+        Self {
+            low: value as u64,
+            high: (value >> 64) as u64,
+        }
+    }
+}
+
+/// Fixed typed Native projection; no caller identities, financial codec, or allocated bytes.
+/// Zeroed optional storage is meaningful only under its explicit flags after status success.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletSnapshot {
+    /// Zero success; otherwise an exact negative failure and no snapshot values.
+    pub status: i32,
+    /// Platform failure reason, or -1.
+    pub reason: i32,
+    /// Platform failure code, or zero.
+    pub platform_code: i32,
+    /// Actual lifecycle tag: Active1 or Retiring2; never operation readiness.
+    pub lifecycle: u32,
+    /// Bit0: verified_fold exists; bit1: current head is folded. Other bits zero.
+    pub flags: u32,
+    /// Current Native scheme identity.
+    pub scheme: [u8; 32],
+    /// Current Native wallet incarnation identity.
+    pub wallet: [u8; 32],
+    /// Exact current source-selected head.
+    pub head: [u8; 32],
+    /// Exact current credential digest.
+    pub credential: [u8; 32],
+    /// Exact source-indexed verified folded head, iff bit0.
+    pub folded_head: [u8; 32],
+    /// Credential of that folded head, iff bit0; renewal may differ from current.
+    pub folded_credential: [u8; 32],
+    /// Current retained sequence.
+    pub sequence: WalletU128,
+    /// Current retained gross balance.
+    pub balance: WalletU128,
+    /// Burns in current retained core.
+    pub core_burned_total: WalletU128,
+    /// Last verified burns, or actual retained core before any fold.
+    pub known_burned_total: WalletU128,
+    /// Gross minus known burns, computed by Native only; unfinished folds remain subject to P4.
+    pub owned_balance: WalletU128,
+    /// Balance with Ω of current head, iff bit1; grants no operation readiness.
+    pub folded_balance: WalletU128,
+    /// Released heads still requiring local proof.
+    pub fold_backlog: WalletU128,
+    /// Exact folded head sequence, iff bit0.
+    pub folded_sequence: WalletU128,
+    /// Exact verified cumulative burns, iff bit0.
+    pub folded_burned_total: WalletU128,
+}
+impl Default for WalletSnapshot {
+    fn default() -> Self {
+        Self {
+            status: INTERNAL,
+            reason: -1,
+            platform_code: 0,
+            lifecycle: 0,
+            flags: 0,
+            scheme: [0; 32],
+            wallet: [0; 32],
+            head: [0; 32],
+            credential: [0; 32],
+            folded_head: [0; 32],
+            folded_credential: [0; 32],
+            sequence: WalletU128::default(),
+            balance: WalletU128::default(),
+            core_burned_total: WalletU128::default(),
+            known_burned_total: WalletU128::default(),
+            owned_balance: WalletU128::default(),
+            folded_balance: WalletU128::default(),
+            fold_backlog: WalletU128::default(),
+            folded_sequence: WalletU128::default(),
+            folded_burned_total: WalletU128::default(),
+        }
+    }
+}
+impl From<state::Snapshot> for WalletSnapshot {
+    fn from(value: state::Snapshot) -> Self {
+        let mut out = Self {
+            status: 0,
+            lifecycle: u32::from(value.lifecycle.tag()),
+            scheme: value.scheme_id,
+            wallet: value.wallet_id,
+            head: value.head,
+            credential: value.credential_digest,
+            sequence: value.sequence.into(),
+            balance: value.balance.into(),
+            core_burned_total: value.core_burned_total.into(),
+            known_burned_total: value.known_burned_total.into(),
+            owned_balance: value.owned_balance.into(),
+            fold_backlog: value.fold_backlog.into(),
+            ..Self::default()
+        };
+        if let Some(fold) = value.verified_fold {
+            out.flags |= 1;
+            out.folded_head = fold.head;
+            out.folded_credential = fold.credential_digest;
+            out.folded_sequence = fold.sequence.into();
+            out.folded_burned_total = fold.burned_total.into();
+        }
+        if let Some(balance) = value.folded_balance {
+            out.flags |= 2;
+            out.folded_balance = balance.into();
+        }
+        out
+    }
+}
+impl From<Failure> for WalletSnapshot {
+    fn from(error: Failure) -> Self {
+        Self {
+            status: error.status,
+            reason: error.reason,
+            platform_code: error.platform_code,
+            ..Self::default()
+        }
+    }
+}
+
+/// Read a source-selected current ownership/fold snapshot. Run off the UI thread.
+/// Pending, uncertain, missing witness and proof failures return no monetary projection.
+/// # Safety
+/// Out must be writable aligned complete WalletSnapshot storage. It owns no allocated memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_snapshot_v1(
+    handle: u64,
+    out: *mut WalletSnapshot,
+) -> i32 {
+    if out.is_null() {
+        return INVALID;
+    }
+    // SAFETY: caller supplies writable aligned snapshot memory.
+    unsafe { out.write(WalletSnapshot::default()) };
+    let value = match run(|| snapshot(handle)) {
+        Ok(value) => WalletSnapshot::from(value),
+        Err(error) => WalletSnapshot::from(error),
+    };
+    let status = value.status;
+    // SAFETY: admitted complete output storage; all fields are initialized, no heap ownership.
+    unsafe { out.write(value) };
+    status
+}

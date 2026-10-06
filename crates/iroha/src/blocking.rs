@@ -9,6 +9,7 @@ pub mod configuration;
 pub mod consensus;
 pub mod data_availability;
 pub mod funding;
+pub mod kagemusha;
 pub mod musubi;
 pub mod nexus;
 pub mod sccp;

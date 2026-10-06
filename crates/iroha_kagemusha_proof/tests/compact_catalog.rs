@@ -315,6 +315,78 @@ fn rebuild_bootstrap_load(
     }
 }
 
+/// Independently enrolled wallets under one genuine two-terminal compact key.
+/// The payer has completed Load; the receiver is at Bootstrap. The catalog admits
+/// only those two source relations and does not qualify a Receive terminal.
+#[allow(dead_code)] // Consumed by the accepted Receive integration fixture.
+pub(crate) struct SharedKeyWallets {
+    /// Payer predecessor with spendable loaded value and a verified outer proof.
+    pub(crate) payer: DiagnosticLoadOmega,
+    /// Distinct receiver with its own signed enrollment and verified outer proof.
+    pub(crate) receiver: RootedBootstrapOmega,
+}
+
+/// Rebuilds both wallets' exact signed objects and all recursive source proofs
+/// under the same immutable compact Bootstrap/Load catalog key. No statement or
+/// state word is changed after proving; both retained accumulators are decided.
+#[allow(dead_code)] // Consumed by the accepted Receive integration fixture.
+pub(crate) fn compact_payer_load_and_receiver() -> SharedKeyWallets {
+    let initial_root = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
+    let initial_load =
+        load_chain::authenticated_load_with_profile(&initial_root, PROFILE, Some(2), false);
+    let initial_bootstrap = &initial_root.source;
+    assert_eq!(initial_bootstrap.binding, initial_load.binding);
+    let trivial = AccumulatorT::trivial(
+        &PinnedParams::<Eq>::derive(16).unwrap(),
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
+    let program = Program::new(
+        bootstrap_terminal(initial_bootstrap, &trivial),
+        vec![initial_bootstrap.key.clone(), initial_load.key.clone()],
+        &initial_root.binding,
+    );
+    let payer = rebuild_bootstrap_load(&program, initial_bootstrap, &initial_load);
+    let source = bootstrap_chain::authenticated_bootstrap_with_identity(
+        false,
+        program.digest(),
+        PROFILE,
+        Some(2),
+        bootstrap_chain::BootstrapIdentity::Receiver,
+    );
+    assert_eq!(source.binding, initial_bootstrap.binding);
+    assert_eq!(source.key.to_bytes(), initial_bootstrap.key.to_bytes());
+    assert_eq!(source.state.lineage[17], program.digest());
+    assert_ne!(source.state.core[5..7], payer.source.state.core[5..7]);
+    let outer = program.prove(bootstrap_terminal(&source, &trivial), "Receiver-Bootstrap");
+    source
+        .pallas
+        .decide(
+            &PinnedParams::<Ep>::derive(16).unwrap(),
+            MemoryBudget::DEFAULT,
+        )
+        .unwrap();
+    let receiver = RootedBootstrapOmega {
+        source,
+        key: program.key.clone(),
+        binding: program.binding.clone(),
+        proof: outer.proof,
+        instances: outer.public,
+        opening: outer.opening,
+        vesta: outer.vesta,
+    };
+    assert_eq!(payer.binding, receiver.binding);
+    assert_eq!(payer.key.to_bytes(), receiver.key.to_bytes());
+    assert_eq!(
+        payer.source.state.lineage[17],
+        receiver.source.state.lineage[17]
+    );
+    eprintln!(
+        "COMPACT_SHARED_WALLETS payer=Load receiver=Bootstrap distinct_wallets=true immutable_key=true signed_objects_rebuilt=true all_native_proofs=true transport=4800 catalog_size=2 receive_terminal_admitted=false full_catalog=false"
+    );
+    SharedKeyWallets { payer, receiver }
+}
+
 fn catalog_roundtrip(include_send: bool) {
     let initial_root = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
     let initial_load =
@@ -382,4 +454,21 @@ fn compact_bootstrap_load_catalog_rebinds_every_proof_and_key() {
 #[ignore = "actual compact Bootstrap/Load/Send-mask0 rebuilt under one immutable three-terminal key"]
 fn compact_bootstrap_load_send_catalog_rebinds_every_proof_and_key() {
     catalog_roundtrip(true);
+}
+
+#[test]
+#[ignore = "genuine distinct payer Load and receiver Bootstrap rebuilt under one compact key"]
+fn compact_distinct_wallets_share_the_exact_predecessor_catalog() {
+    let wallets = compact_payer_load_and_receiver();
+    assert_eq!(wallets.payer.binding, wallets.receiver.binding);
+    assert_eq!(
+        wallets.payer.key.to_bytes(),
+        wallets.receiver.key.to_bytes()
+    );
+    assert_eq!(wallets.payer.proof.len(), 3712);
+    assert_eq!(wallets.receiver.proof.len(), 3712);
+    assert_ne!(
+        wallets.payer.source.state.core[5..7],
+        wallets.receiver.source.state.core[5..7]
+    );
 }

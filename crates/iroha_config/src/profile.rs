@@ -134,7 +134,8 @@ pub fn keyless_role_account(
 }
 
 /// Per-node keys a profile node file may set, as dotted paths. An entry also admits every key
-/// below it. The profile's `node_tunable` keys are admitted in addition.
+/// below it, except the scalar KAGEMUSHA publisher custody-file keys. The profile's
+/// `node_tunable` keys are admitted in addition.
 pub const PROFILE_NODE_KEYS: &[&str] = &[
     "chain",
     "data_dir",
@@ -150,6 +151,8 @@ pub const PROFILE_NODE_KEYS: &[&str] = &[
     "torii.account_onboarding.credentials",
     "torii.faucet.authority",
     "genesis",
+    "kagemusha_load_authorizer.keyring_file",
+    "kagemusha_load_authorizer.submitter_key_file",
     "soracloud_runtime.submission.signer",
     "soracloud_runtime.inrou.enabled",
     "soracloud_runtime.inrou.portable_vm_uid",
@@ -784,7 +787,11 @@ impl Profile {
             .iter()
             .copied()
             .chain(self.node_tunable.iter().map(String::as_str))
-            .any(|allowed| key == allowed || is_below(key, allowed))
+            .any(|allowed| {
+                key == allowed
+                    || (!allowed.starts_with("kagemusha_load_authorizer.")
+                        && is_below(key, allowed))
+            })
     }
 
     /// Admit a roster of `n` validators and compute its geometry.

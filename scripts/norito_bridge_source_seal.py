@@ -37,6 +37,7 @@ APPLE_TARGETS = (
 )
 ANDROID_TARGETS = (
     "aarch64-linux-android",
+    "armv7-linux-androideabi",
     "x86_64-linux-android",
 )
 # Development-only closure; it never widens the admitted Android inventory.

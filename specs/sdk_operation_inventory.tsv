@@ -266,6 +266,7 @@ contracts.evidence_status_get	GET	/v1/evidence/status	public	canonical_account_s
 contracts.evidence_viewer_css_get	GET	/v1/evidence/viewer/app.css	public	unauthenticated	public	read	http	feature(app_api)	false	false	false	false
 contracts.evidence_viewer_get	GET	/v1/evidence/viewer	public	unauthenticated	public	read	http	feature(app_api)	false	false	false	false
 contracts.evidence_viewer_js_get	GET	/v1/evidence/viewer/app.js	public	unauthenticated	public	read	http	feature(app_api)	false	false	false	false
+contracts.kagemusha_load_issuance_get	GET	/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.mint_requests_by_request_id_get	GET	/v1/mint-requests/{request_id}	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
 contracts.mint_requests_get	GET	/v1/mint-requests	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
 contracts.multisig_approve_post	POST	/v1/multisig/approve	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true

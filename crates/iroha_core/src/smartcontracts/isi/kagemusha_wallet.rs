@@ -25,27 +25,14 @@ where
         .map_err(|_| wallet::Error::Binding)
 }
 
-/// Temporary closed artifact boundary. It cannot authorize any native package.
-// TODO(G6): replace this owner with the authenticated scheme/descriptor artifact loader once
-// the production A/Ω circuit set is complete. No config flag or foreign verdict may bypass it.
-struct ArtifactsUnavailable;
-impl NativePackageVerifier for ArtifactsUnavailable {
-    fn verify(
-        &self,
-        _: &KagemushaWalletSchemeV1,
-        _: &KagemushaWalletCredentialV1,
-        _: &KagemushaWalletPackageV1,
-    ) -> wallet::Result<()> {
-        Err(wallet::Error::ArtifactsUnavailable)
-    }
-}
 impl Execute for KagemushaWalletLedgerV1 {
     fn execute(
         self,
         authority: &AccountId,
         state: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        match execute_with_verifier(self, authority, state, &ArtifactsUnavailable) {
+        let verifier = wallet::artifacts::LedgerVerifier::from_state(state, self.scheme);
+        match execute_with_verifier(self, authority, state, &verifier) {
             Err(wallet::Error::ArtifactsUnavailable) => {
                 Err(state.world.attempt_error_to_instruction_error(
                     crate::execution_attempt::ExecutionAttemptError::Deferred(
@@ -58,8 +45,8 @@ impl Execute for KagemushaWalletLedgerV1 {
     }
 }
 
-/// Internal dependency boundary for the authenticated native artifact owner. Tests inject a
-/// rejecting verifier or explicitly labelled fixture verifier; neither is a production loader.
+/// Internal dependency boundary. Production uses the same-overlay immutable World
+/// installation; explicit test fixture verifiers establish orchestration only.
 pub(crate) fn execute_with_verifier(
     instruction: KagemushaWalletLedgerV1,
     authority: &AccountId,
@@ -91,20 +78,25 @@ pub(crate) fn execute_with_verifier(
                 load_authorizer,
             })
         }
-        Action::Activate(bytes) => wallet::activate(
-            &mut ledger,
-            verifier,
-            &KagemushaWalletActivationV1::decode_canonical(&bytes, &scheme_id)?,
-        ),
+        Action::InstallVerifierPack {
+            asset,
+            manifest_digest,
+            pack,
+        } => ledger.install_verifier_pack(scheme_id, asset, manifest_digest, pack),
+        Action::Activate(bytes) => {
+            let activation = KagemushaWalletActivationV1::decode_canonical(&bytes, &scheme_id)?;
+            ledger.reserve_package_proof(&activation.bootstrap)?;
+            wallet::activate(&mut ledger, verifier, &activation)
+        }
         Action::Abandon(bytes) => wallet::abandon(
             &mut ledger,
             &KagemushaWalletAbandonmentV1::decode_canonical(&bytes, &scheme_id)?,
         ),
-        Action::CloseLoads(bytes) => wallet::close_loads(
-            &mut ledger,
-            verifier,
-            &KagemushaWalletCloseLoadsV1::decode_canonical(&bytes, &scheme_id)?,
-        ),
+        Action::CloseLoads(bytes) => {
+            let close = KagemushaWalletCloseLoadsV1::decode_canonical(&bytes, &scheme_id)?;
+            ledger.reserve_package_proof(&close.package)?;
+            wallet::close_loads(&mut ledger, verifier, &close)
+        }
         Action::IssueLoad {
             wallet: wallet_id,
             request_id,
@@ -131,18 +123,16 @@ pub(crate) fn execute_with_verifier(
             )
             .map(|_| ())
         }
-        Action::Unload(bytes) => wallet::pay_unload(
-            &mut ledger,
-            verifier,
-            &KagemushaWalletUnloadClaimV1::decode_canonical(&bytes, &scheme_id)?,
-        )
-        .map(|_| ()),
-        Action::ClaimFee(bytes) => wallet::pay_fee(
-            &mut ledger,
-            verifier,
-            &KagemushaWalletFeeClaimV1::decode_canonical(&bytes, &scheme_id)?,
-        )
-        .map(|_| ()),
+        Action::Unload(bytes) => {
+            let claim = KagemushaWalletUnloadClaimV1::decode_canonical(&bytes, &scheme_id)?;
+            ledger.reserve_package_proof(&claim.package)?;
+            wallet::pay_unload(&mut ledger, verifier, &claim).map(|_| ())
+        }
+        Action::ClaimFee(bytes) => {
+            let claim = KagemushaWalletFeeClaimV1::decode_canonical(&bytes, &scheme_id)?;
+            ledger.reserve_package_proof(&claim.payment.send)?;
+            wallet::pay_fee(&mut ledger, verifier, &claim).map(|_| ())
+        }
         Action::RetainCertificate { asset, certificate } => {
             let certificate: KagemushaWalletSignerCertificateV1 =
                 decode(&certificate, KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1)?;

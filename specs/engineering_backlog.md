@@ -3854,8 +3854,10 @@ evidence.
 
 - Completed 2026-10-05: the KAGEMUSHA V1 Offline API (`/v1/kagemusha/*`
   readiness, top-up, redeem and operation status) was deleted with the old
-  KAGEMUSHA implementation. Torii serves no KAGEMUSHA routes; the ledger family
-  of `specs/kagemusha_single_design_proposal.md` §6 will define its own.
+  KAGEMUSHA implementation. The current wallet exposes only the canonically
+  authenticated private finalized-load issuance read at
+  `/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}`. Other ledger-family
+  routes from `specs/kagemusha_single_design_proposal.md` §6 remain open.
 - Completed 2026-07-30 and finalized 2026-08-30: removed the unshipped
   governance council `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP
   surfaces, and independently authorized persist/replace/manual epoch-roster

@@ -73,6 +73,10 @@ pub enum SigmaError {
     },
     /// Key generation failed.
     Key(KeyError),
+    /// The original proving-key material failed bounded source/commitment admission.
+    Artifact(iroha_plonk::keys::pk::artifact::Error),
+    /// The imported original does not retain the independently installed verifying key.
+    ArtifactKeyMismatch,
     /// The verifying key failed strict decoding.
     VerifyingKey(VkError),
     /// The witness belongs to another step relation.
@@ -116,6 +120,8 @@ impl fmt::Display for SigmaError {
                 )
             }
             Self::Key(error) => write!(f, "key generation: {error}"),
+            Self::Artifact(error) => write!(f, "proving-key original: {error}"),
+            Self::ArtifactKeyMismatch => f.write_str("proving-key original differs from installed key"),
             Self::VerifyingKey(error) => write!(f, "verifying key: {error}"),
             Self::WrongRelation { expected, found } => {
                 write!(f, "a {found:?} witness for a {expected:?} circuit")
@@ -230,6 +236,63 @@ where
         config.table_budget = options.commitment_tables;
         let circuit = SigmaCircuit::<C::ScalarExt>::keygen(shape.params);
         let pk = keygen_pk_v2(&params, &circuit, &config).map_err(SigmaError::Key)?;
+        Ok(Self { shape, params, pk })
+    }
+
+    /// Import one original proving key against a fixed native sigma source and the
+    /// independently installed descriptor/VK originals. This never generates a key,
+    /// selects another source profile or falls back after an import failure.
+    ///
+    /// The native installation owner must first authenticate the complete descriptor,
+    /// VK and proving-key originals in its signed inventory and select their scheme,
+    /// operation and resource policy independently of wallet/witness input. This
+    /// constructor checks key/source continuity; its result is a proving component,
+    /// not a signed scheme admission, a NativeProofs owner or a wallet-open grant.
+    /// Allocation bounds cover original/domain intake, not all synthesis/prover heap.
+    ///
+    /// # Errors
+    /// Wrong shape/domain or sigma profile, noncanonical installed descriptor/VK,
+    /// substituted original key, or any bounded source/commitment import failure.
+    pub fn from_original_artifact(
+        shape: SigmaShape,
+        params: PinnedParams<C>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: iroha_plonk::keys::pk::artifact::ReadConfig,
+    ) -> Result<Self, SigmaError> {
+        if params.k() != shape.k {
+            return Err(SigmaError::ParamsK {
+                expected: shape.k,
+                found: params.k(),
+            });
+        }
+        use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
+        let rows = 1_usize.checked_shl(shape.k)
+            .ok_or(SigmaError::Artifact(ArtifactError::Length))?;
+        if original.len() > config.maximum_bytes || rows > config.maximum_rows {
+            return Err(SigmaError::Artifact(ArtifactError::Length));
+        }
+        // Move the pinned generator vectors; even a refused mount must not clone them.
+        let verifier = SigmaVerifier::from_bytes(
+            shape.params.relation().relation,
+            params,
+            descriptor,
+            installed_vk,
+        )?;
+        let circuit = SigmaCircuit::<C::ScalarExt>::keygen(shape.params);
+        let pk = ProvingKey::from_artifact_v2(
+            original,
+            verifier.binding(),
+            &verifier.params,
+            &circuit,
+            config,
+        )
+        .map_err(SigmaError::Artifact)?;
+        if pk.vk().to_bytes() != installed_vk {
+            return Err(SigmaError::ArtifactKeyMismatch);
+        }
+        let params = verifier.params;
         Ok(Self { shape, params, pk })
     }
 

@@ -1,11 +1,9 @@
-//! File-only optional publisher settings. Secret contents are never embedded in diagnostics.
+//! File-only required publisher settings. Secret contents are never embedded in diagnostics.
 use super::*;
 
-/// Optional online finalized-load publisher. No field accepts environment overrides.
+/// Required online finalized-load publisher. No field accepts environment overrides.
 #[derive(Debug, ReadConfig)]
 pub struct KagemushaLoadAuthorizer {
-    #[config(default)]
-    enabled: bool,
     keyring_file: Option<WithOrigin<PathBuf>>,
     submitter_key_file: Option<WithOrigin<PathBuf>>,
     #[config(default = "defaults::kagemusha_load_authorizer::POLL_INTERVAL_MS")]
@@ -58,9 +56,8 @@ impl KagemushaLoadAuthorizer {
             );
             return None;
         }
-        let custody = match (self.enabled, self.keyring_file, self.submitter_key_file) {
-            (false, None, None) => None,
-            (true, Some(keyring), Some(submitter)) => {
+        let custody = match (self.keyring_file, self.submitter_key_file) {
+            (Some(keyring), Some(submitter)) => {
                 let keyring = read_checked(
                     files,
                     &keyring.resolve_relative_path(),
@@ -78,7 +75,7 @@ impl KagemushaLoadAuthorizer {
                     (Ok(keyring), Ok((secret, _))) if !keyring.is_empty() => {
                         match KeyPair::from_private_key(secret) {
                             Ok(submitter) => {
-                                Some(actual::KagemushaLoadAuthorizerCustody { keyring, submitter })
+                                actual::KagemushaLoadAuthorizerCustody { keyring, submitter }
                             }
                             Err(_) => {
                                 emit("kagemusha_load_authorizer submitter key is invalid");
@@ -95,9 +92,7 @@ impl KagemushaLoadAuthorizer {
                 }
             }
             _ => {
-                emit(
-                    "kagemusha_load_authorizer must be disabled without key files or enabled with both keyring_file and submitter_key_file",
-                );
+                emit("kagemusha_load_authorizer requires both keyring_file and submitter_key_file");
                 return None;
             }
         };
@@ -115,6 +110,7 @@ impl KagemushaLoadAuthorizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     use std::cell::Cell;
 
     struct Files {
@@ -144,18 +140,17 @@ mod tests {
         }
     }
     fn config() -> KagemushaLoadAuthorizer {
-        let defaults = actual::KagemushaLoadAuthorizer::default();
+        use defaults::kagemusha_load_authorizer as d;
         KagemushaLoadAuthorizer {
-            enabled: false,
             keyring_file: None,
             submitter_key_file: None,
-            poll_interval_ms: defaults.poll_interval.as_millis().try_into().unwrap(),
-            page_size: defaults.page_size,
-            block_bytes: defaults.finality_limits.block_bytes,
-            journal_bytes: defaults.finality_limits.journal_bytes,
-            block_count: defaults.finality_limits.block_count,
-            allocated_bytes: defaults.finality_limits.allocated_bytes,
-            transaction_ttl_ms: defaults.transaction_ttl.as_millis().try_into().unwrap(),
+            poll_interval_ms: d::POLL_INTERVAL_MS,
+            page_size: d::PAGE_SIZE,
+            block_bytes: d::BLOCK_BYTES,
+            journal_bytes: d::JOURNAL_BYTES,
+            block_count: d::BLOCK_COUNT,
+            allocated_bytes: d::ALLOCATED_BYTES,
+            transaction_ttl_ms: d::TRANSACTION_TTL_MS,
             charge_limits: Vec::new(),
         }
     }
@@ -170,33 +165,30 @@ mod tests {
             calls: Cell::new(0),
         }
     }
-    fn enabled() -> KagemushaLoadAuthorizer {
+    fn with_custody() -> KagemushaLoadAuthorizer {
         let mut config = config();
-        config.enabled = true;
         config.keyring_file = Some(WithOrigin::inline(PathBuf::from("keyring")));
         config.submitter_key_file = Some(WithOrigin::inline(PathBuf::from("submitter")));
         config
     }
     #[test]
-    fn disabled_default_reads_no_secret_and_enabled_custody_is_redacted() {
+    fn missing_required_custody_refuses_and_admitted_custody_is_redacted() {
         let files = files();
         let mut emitter = Emitter::new();
-        let default = config()
-            .parse(&ConfigFiles::Supplied(&files), &mut emitter)
-            .unwrap();
-        emitter.into_result().unwrap();
-        assert!(default.custody.is_none());
+        assert!(
+            config()
+                .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
         assert_eq!(files.calls.get(), 0);
         let mut emitter = Emitter::new();
-        let loaded = enabled()
+        let loaded = with_custody()
             .parse(&ConfigFiles::Supplied(&files), &mut emitter)
             .unwrap();
         emitter.into_result().unwrap();
         assert_eq!(files.calls.get(), 2);
-        assert_eq!(
-            loaded.custody.as_ref().unwrap().keyring.as_slice(),
-            &[1, 2, 3]
-        );
+        assert_eq!(loaded.custody.keyring.as_slice(), &[1, 2, 3]);
         let debug = format!("{loaded:?}");
         assert!(!debug.contains("1, 2, 3"));
         assert!(!debug.contains(std::str::from_utf8(&files.submitter).unwrap()));
@@ -212,7 +204,7 @@ mod tests {
             files.error = Some(error);
             let mut emitter = Emitter::new();
             assert!(
-                enabled()
+                with_custody()
                     .parse(&ConfigFiles::Supplied(&files), &mut emitter)
                     .is_none()
             );
@@ -226,14 +218,14 @@ mod tests {
             files.keyring = vec![0; size];
             let mut emitter = Emitter::new();
             assert!(
-                enabled()
+                with_custody()
                     .parse(&ConfigFiles::Supplied(&files), &mut emitter)
                     .is_none()
             );
             assert!(emitter.into_result().is_err());
         }
         for missing_submitter in [false, true] {
-            let mut config = enabled();
+            let mut config = with_custody();
             if missing_submitter {
                 config.submitter_key_file = None;
             } else {
@@ -248,21 +240,11 @@ mod tests {
             );
             assert!(emitter.into_result().is_err());
         }
-        let mut disabled_with_keys = enabled();
-        disabled_with_keys.enabled = false;
-        let files = files();
-        let mut emitter = Emitter::new();
-        assert!(
-            disabled_with_keys
-                .parse(&ConfigFiles::Supplied(&files), &mut emitter)
-                .is_none()
-        );
-        assert!(emitter.into_result().is_err());
     }
     #[test]
     fn zero_or_excessive_runtime_limits_are_rejected() {
         for index in 0..6 {
-            let mut config = config();
+            let mut config = with_custody();
             match index {
                 0 => config.poll_interval_ms = 0,
                 1 => config.page_size = 257,
@@ -283,18 +265,41 @@ mod tests {
         }
     }
     #[test]
-    fn toml_defaults_and_explicit_fee_caps_are_canonical() {
-        use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+    fn toml_defaults_require_explicit_custody() {
         let parsed = ConfigReader::new()
             .with_toml_source(TomlSource::inline(toml::Table::new()))
             .read_and_complete::<KagemushaLoadAuthorizer>()
             .unwrap();
-        assert!(!parsed.enabled);
+        assert!(parsed.keyring_file.is_none() && parsed.submitter_key_file.is_none());
         assert!(parsed.charge_limits.is_empty());
         assert_eq!(
             parsed.page_size,
             defaults::kagemusha_load_authorizer::PAGE_SIZE
         );
+        let files = files();
+        let mut emitter = Emitter::new();
+        assert!(
+            parsed
+                .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
+        assert_eq!(files.calls.get(), 0);
+    }
+    #[test]
+    fn retired_enabled_toggle_is_rejected() {
+        for enabled in [false, true] {
+            let table = toml::Table::from_iter([("enabled".into(), toml::Value::Boolean(enabled))]);
+            assert!(
+                ConfigReader::new()
+                    .with_toml_source(TomlSource::inline(table))
+                    .read_and_complete::<KagemushaLoadAuthorizer>()
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn explicit_fee_caps_are_canonical_and_duplicate_caps_are_rejected() {
         let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             iroha_model_base::domain::DomainId::parse_fully_qualified("issuer.sora").unwrap(),
             "fees".parse().unwrap(),
@@ -306,13 +311,14 @@ mod tests {
         );
         for limits in [vec![limit.clone()], vec![limit.clone(), limit]] {
             let valid = limits.len() == 1;
-            let mut config = config();
+            let mut config = with_custody();
             config.charge_limits = limits.clone();
             let files = files();
             let mut emitter = Emitter::new();
             let result = config.parse(&ConfigFiles::Supplied(&files), &mut emitter);
             assert_eq!(result.is_some(), valid);
             assert_eq!(emitter.into_result().is_ok(), valid);
+            assert_eq!(files.calls.get(), if valid { 2 } else { 0 });
             if let Some(result) = result {
                 assert_eq!(result.charge_limits, limits);
             }

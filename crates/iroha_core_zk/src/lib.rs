@@ -87,6 +87,10 @@ pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, ver
 #[cfg(test)]
 pub(crate) mod frame_test_support;
 pub mod kagemusha_wallet_advance_v1;
+/// Complete installed wallet verifier inventory and native artifact identity owner.
+pub mod kagemusha_wallet_artifacts_v1;
+/// Authenticated native wallet proof artifacts and full sigma/Omega verification.
+pub mod kagemusha_wallet_proofs_v1;
 pub mod kagemusha_wallet_state_v1;
 /// Exact native PIPA-R built-in relations and their canonical proof containers.
 pub mod native_pipa_r;

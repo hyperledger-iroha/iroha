@@ -3,6 +3,9 @@ import Darwin
 import Foundation
 import Security
 import XCTest
+#if canImport(NoritoBridge)
+import NoritoBridge
+#endif
 
 @testable import IrohaSwift
 
@@ -943,7 +946,8 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     XCTAssertEqual(try platform.keyEnumerate().get(), [])
 
     probe.push(0, EPERM)
-    XCTAssertEqual(failure(platform.keyEnumerate()), .locked, "an empty answer counts only if still unlocked")
+    XCTAssertEqual(
+      failure(platform.keyEnumerate()), .locked, "an empty answer counts only if still unlocked")
     probe.push(EPERM)
     let before = keychain.operations.count
     XCTAssertEqual(failure(platform.keyEnumerate()), .locked)
@@ -960,20 +964,156 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     keychain.storeKey(tag: slot.applicationTag, label: request().label)
     keychain.storeKey(tag: slot.applicationTag, label: nil)
     keychain.storeKey(tag: Data("com.example.app.signing".utf8), label: nil)
-    keychain.storeKey(tag: Data(("kgm-w1-" + String(repeating: "AB", count: 32)).utf8), label: nil)
-    keychain.storeKey(tag: Data(("kgm-w1-" + String(repeating: "00", count: 32)).utf8), label: nil)
     keychain.storeKey(tag: nil, label: nil)
     XCTAssertEqual(try platform.keyEnumerate().get(), [slot, other], "sorted, each slot once")
     XCTAssertEqual(
       diagnostics.all.map(\.event),
-      ["malformed payment-key enumeration", "malformed wallet payment-key tag",
-       "malformed wallet payment-key tag"])
+      ["malformed payment-key enumeration"])
+
+    for tag in [
+      Data(("kgm-w1-" + String(repeating: "AB", count: 32)).utf8),
+      Data(("kgm-w1-" + String(repeating: "00", count: 32)).utf8),
+    ] {
+      keychain.copyResultOverride = .some(
+        [
+          [kSecAttrApplicationTag as String: slot.applicationTag],
+          [kSecAttrApplicationTag as String: tag],
+        ] as NSArray)
+      XCTAssertEqual(
+        failure(platform.keyEnumerate()), .platform(Status.malformedKeychainResult),
+        "a malformed wallet tag must not be hidden from the complete inventory")
+    }
+    XCTAssertEqual(
+      diagnostics.all.suffix(2).map(\.event),
+      ["malformed wallet payment-key tag", "malformed wallet payment-key tag"])
 
     let query = try XCTUnwrap(keychain.queries.last)
     XCTAssertEqual(query[kSecMatchLimit as String] as? String, kSecMatchLimitAll as String)
     XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
     XCTAssertNil(query[kSecReturnRef as String])
   }
+
+  func testSuccessfulKeyInventoryRequiresPostQueryProtectedStorage() throws {
+    let keychain = FakeWalletKeychain()
+    let probe = FakeProtectedData()
+    let platform = try makePlatform(keychain: keychain, probe: probe)
+    let inventories: [[[String: Any]]] = [
+      [],
+      [[kSecAttrApplicationTag as String: Data("com.example.app.signing".utf8)]],
+      [[kSecAttrApplicationTag as String: slot.applicationTag]],
+    ]
+    for rows in inventories {
+      keychain.copyResultOverride = .some(rows as NSArray)
+      probe.push(0, EPERM)
+      let before = keychain.operations.count
+      let canaryReads = probe.canaryReads
+      XCTAssertEqual(failure(platform.keyEnumerate()), .locked)
+      XCTAssertEqual(keychain.operations.count, before + 1, "the complete query ran once")
+      XCTAssertEqual(probe.canaryReads, canaryReads + 2, "both storage brackets are required")
+    }
+    keychain.copyResultOverride = .some([[String: Any]]() as NSArray)
+    XCTAssertEqual(try platform.keyEnumerate().get(), [])
+    XCTAssertFalse(keychain.operations.contains("delete"))
+    XCTAssertTrue(keychain.generationAttributes.isEmpty)
+  }
+
+  func testKeyEnumerationResourceBoundRefusesCompleteInventoryWithoutTruncation() throws {
+    let keychain = FakeWalletKeychain()
+    let platform = try makePlatform(keychain: keychain)
+    let maximum = KagemushaWalletApplePlatformV1.keyEnumerationMaxSlots
+    var expected: [KagemushaWalletAppleSlotV1] = []
+    for index in 1...maximum + 1 {
+      var bytes = Data(repeating: 0, count: 28)
+      bytes.append(contentsOf: [
+        UInt8((index >> 24) & 255), UInt8((index >> 16) & 255),
+        UInt8((index >> 8) & 255), UInt8(index & 255),
+      ])
+      expected.append(try XCTUnwrap(KagemushaWalletAppleSlotV1(bytes)))
+    }
+    let rows = expected.map { [kSecAttrApplicationTag as String: $0.applicationTag] }
+    keychain.copyResultOverride = .some(Array(rows.prefix(maximum)) as NSArray)
+    XCTAssertEqual(try platform.keyEnumerate().get(), Array(expected.prefix(maximum)))
+    keychain.copyResultOverride = .some(rows as NSArray)
+    XCTAssertEqual(failure(platform.keyEnumerate()), .platform(Status.malformedKeychainResult))
+    XCTAssertFalse(keychain.operations.contains("delete"))
+    XCTAssertTrue(keychain.generationAttributes.isEmpty)
+  }
+
+  #if canImport(NoritoBridge)
+    func testNativeKeyEnumerationCallbackReturnsExactOriginalSlotBytesAndNoWrite() throws {
+      let keychain = FakeWalletKeychain()
+      let platform = try makePlatform(keychain: keychain)
+      let other = try XCTUnwrap(KagemushaWalletAppleSlotV1(Data(repeating: 0xab, count: 32)))
+      keychain.storeKey(tag: other.applicationTag, label: nil)
+      keychain.storeKey(tag: slot.applicationTag, label: nil)
+      let table = kagemushaWalletCallbacksV1(platform)
+      let invoke = try XCTUnwrap(table.invoke)
+      var output = [UInt8](repeating: 0, count: 64)
+      var reply = connect_norito_kagemusha_platform_reply_v1()
+      output.withUnsafeMutableBufferPointer { buffer in
+        invoke(table.context, 10, nil, nil, 0, 0, buffer.baseAddress, buffer.count, &reply)
+      }
+      XCTAssertEqual(reply.tag, 0)
+      XCTAssertEqual(reply.length, 64)
+      XCTAssertEqual(Data(output), slot.bytes + other.bytes)
+      let before = keychain.operations.count
+      slot.bytes.withUnsafeBytes { bytes in
+        invoke(
+          table.context, 10, bytes.bindMemory(to: UInt8.self).baseAddress,
+          nil, 0, 0, nil, 0, &reply)
+      }
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(reply.length, 0)
+      XCTAssertEqual(keychain.operations.count, before, "offered slot selector must not query keys")
+      invoke(table.context, 10, nil, nil, 0, 1, nil, 0, &reply)
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(keychain.operations.count, before, "offered metadata must not query keys")
+      XCTAssertFalse(keychain.operations.contains("delete"))
+      XCTAssertTrue(keychain.generationAttributes.isEmpty)
+    }
+
+    func testNativeKeyEnumerationCallbackErrorOrCapacityCannotLookEmpty() throws {
+      let keychain = FakeWalletKeychain()
+      let probe = FakeProtectedData()
+      let platform = try makePlatform(keychain: keychain, probe: probe)
+      keychain.storeKey(tag: slot.applicationTag, label: nil)
+      let table = kagemushaWalletCallbacksV1(platform)
+      let invoke = try XCTUnwrap(table.invoke)
+      var reply = connect_norito_kagemusha_platform_reply_v1()
+      var output = [UInt8](repeating: 0x5a, count: 31)
+      output.withUnsafeMutableBufferPointer { buffer in
+        invoke(table.context, 10, nil, nil, 0, 0, buffer.baseAddress, buffer.count, &reply)
+      }
+      XCTAssertEqual(reply.tag, UInt32.max)
+      XCTAssertEqual(reply.length, 0)
+      XCTAssertEqual(output, [UInt8](repeating: 0x5a, count: 31), "no partial slot copy")
+      keychain.copyStatus = errSecIO
+      invoke(table.context, 10, nil, nil, 0, 0, nil, 0, &reply)
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(reply.reason, 4)
+      XCTAssertEqual(reply.code, errSecIO)
+      XCTAssertEqual(reply.length, 0)
+      keychain.copyStatus = nil
+      probe.push(0, EPERM)
+      invoke(table.context, 10, nil, nil, 0, 0, nil, 0, &reply)
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(reply.reason, 0)
+      XCTAssertEqual(reply.length, 0)
+      let inventories: [[[String: Any]]] = [
+        [],
+        [[kSecAttrApplicationTag as String: Data("com.example.app.signing".utf8)]],
+      ]
+      for rows in inventories {
+        keychain.copyResultOverride = .some(rows as NSArray)
+        probe.push(0, EPERM)
+        invoke(table.context, 10, nil, nil, 0, 0, nil, 0, &reply)
+        XCTAssertEqual(reply.tag, 2, "a successful empty class query cannot hide a lock")
+        XCTAssertEqual(reply.reason, 0)
+        XCTAssertEqual(reply.length, 0)
+      }
+      XCTAssertFalse(keychain.operations.contains("delete"))
+    }
+  #endif
 
   // MARK: Rollback anchor
 

@@ -1825,8 +1825,9 @@ typedef struct {
     void (*release)(void* context);
     /* op: 0 key probe, 1 generate (input32/aux profile1/2), 2 sign (input32),
        3 key delete, 4 anchor read, 5 anchor create, 6 update, 7 storage state,
-       8 boot UUID UTF8, 9 prepare non-backup custody root UTF8.
-       slot32 is null for operations7..9. Never retain or exceed borrowed buffers. */
+       8 boot UUID UTF8, 9 prepare non-backup custody root UTF8,
+       10 complete ascending unique nonzero32 key slots (at most4096, no truncation).
+       slot32 is null for operations7..10. Never retain or exceed borrowed buffers. */
     void (*invoke)(void* context, uint32_t operation, const uint8_t* slot32,
                    const uint8_t* input, size_t input_len, uint32_t auxiliary,
                    uint8_t* output, size_t output_capacity,
@@ -1844,6 +1845,34 @@ typedef struct {
     uint8_t* bytes;
     size_t length;
 } connect_norito_kagemusha_wallet_result_v1;
+/* Source-selected snapshot. All amounts are Native projections, never operation permission.
+   An unfolded head owns value subject to P4; only bit1 admits folded_balance. Failure clears
+   all projection fields. Optional field storage is meaningful only under its explicit bit. */
+typedef struct { uint64_t low; uint64_t high; } connect_norito_kagemusha_wallet_u128_v1;
+typedef struct {
+    int32_t status;
+    int32_t reason;
+    int32_t platform_code;
+    uint32_t lifecycle; /* Active1, Retiring2; Retiring can Send/Unload remaining value */
+    uint32_t flags; /* bit0 verified fold exists; bit1 exact current head folded */
+    uint8_t scheme[32];
+    uint8_t wallet[32];
+    uint8_t head[32];
+    uint8_t credential[32];
+    uint8_t folded_head[32];
+    uint8_t folded_credential[32];
+    connect_norito_kagemusha_wallet_u128_v1 sequence;
+    connect_norito_kagemusha_wallet_u128_v1 balance;
+    connect_norito_kagemusha_wallet_u128_v1 core_burned_total;
+    connect_norito_kagemusha_wallet_u128_v1 known_burned_total;
+    connect_norito_kagemusha_wallet_u128_v1 owned_balance;
+    connect_norito_kagemusha_wallet_u128_v1 folded_balance;
+    connect_norito_kagemusha_wallet_u128_v1 fold_backlog;
+    connect_norito_kagemusha_wallet_u128_v1 folded_sequence;
+    connect_norito_kagemusha_wallet_u128_v1 folded_burned_total;
+} connect_norito_kagemusha_wallet_snapshot_v1_t;
+/* Fixed writable output, no allocated bytes to free. Call on a worker; it may verify Ω. */
+int32_t connect_norito_kagemusha_wallet_snapshot_v1(uint64_t handle, connect_norito_kagemusha_wallet_snapshot_v1_t* out);
 uint32_t connect_norito_kagemusha_wallet_revision_v1(void);
 int32_t connect_norito_kagemusha_wallet_open_v1(const connect_norito_kagemusha_platform_v1*, const uint8_t* slot32, const uint8_t* scheme32, const uint8_t* wallet32, const uint8_t* artifact32, uint64_t* out_handle);
 int32_t connect_norito_kagemusha_wallet_close_v1(uint64_t handle);

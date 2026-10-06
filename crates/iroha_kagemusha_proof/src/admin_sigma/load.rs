@@ -71,7 +71,7 @@ impl LoadCircuit {
         [InstanceType::Bounded]
     }
 }
-const LOAD_HASH_ROWS: usize = (2
+const BASE_HASH_ROWS: usize = (2
     * (domain_permutations(CORE_FIELDS + 1, true) + domain_permutations(REST_FIELDS, true))
     + domain_permutations(26, true))
     * ROWS_PER_PERMUTATION;
@@ -113,20 +113,51 @@ impl Circuit<Fp> for LoadCircuit {
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
         BootstrapCircuit::configure(meta)
     }
-    fn synthesize(
+    fn synthesize(&self, config: Self::Config, layouter: impl Layouter<Fp>) -> Result<(), Error> {
+        Transition {
+            predecessor: &self.witness.predecessor,
+            successor: &self.witness.successor,
+            statement: &self.witness.statement,
+            variant: Variant::Load,
+            known: self.known,
+        }
+        .synthesize(config, layouter)
+    }
+}
+
+/// Shared fixed-variant synthesis; callers pin the variant in their Rust type.
+pub(super) struct Transition<'a> {
+    pub predecessor: &'a StateWitness,
+    pub successor: &'a StateWitness,
+    pub statement: &'a [Fp; 26],
+    pub variant: Variant,
+    pub known: bool,
+}
+impl Transition<'_> {
+    pub(super) fn synthesize(
         &self,
-        config: Self::Config,
+        config: AdminConfig,
         mut layouter: impl Layouter<Fp>,
     ) -> Result<(), Error> {
-        let mut glue = GlueChip::starting_at(config.glue, LOAD_HASH_ROWS);
+        let (label, hash_rows) = match self.variant {
+            Variant::Load => ("Load administrative sigma", BASE_HASH_ROWS),
+            Variant::Retiring => ("Retiring administrative sigma", BASE_HASH_ROWS),
+            Variant::Unload => (
+                "Unload administrative sigma",
+                // Bootstrap's configuration does not fold the nullifier prefix.
+                BASE_HASH_ROWS + domain_permutations(5, false) * ROWS_PER_PERMUTATION,
+            ),
+            _ => return Err(Error::Synthesis),
+        };
+        let mut glue = GlueChip::starting_at(config.glue, hash_rows);
         let mut range = RunningSumChip::new(config.range);
         let mut sponge = SpongeChip::new(config.sponge);
         range.load_table(&mut layouter)?;
         let digest = layouter.assign_region(
-            || "Load administrative sigma",
+            || label,
             |mut region| {
-                let before = &self.witness.predecessor;
-                let after = &self.witness.successor;
+                let before = self.predecessor;
+                let after = self.successor;
                 let values = before
                     .core
                     .iter()
@@ -135,7 +166,7 @@ impl Circuit<Fp> for LoadCircuit {
                     .chain(&after.core)
                     .chain(&after.rest)
                     .chain(&after.lineage)
-                    .chain(&self.witness.statement)
+                    .chain(self.statement)
                     .map(|v| {
                         if self.known {
                             Value::known(*v)
@@ -158,7 +189,7 @@ impl Circuit<Fp> for LoadCircuit {
                     &mut uint,
                     &mut sponge,
                     &mut region,
-                    Variant::Load,
+                    self.variant,
                     &core::array::from_fn(|i| words[2 * STATE_WORDS + i].clone()),
                 )?;
                 administrative::monetary(
@@ -177,7 +208,7 @@ impl Circuit<Fp> for LoadCircuit {
                         },
                     },
                 )?;
-                if sponge.lane().rows_used() != LOAD_HASH_ROWS {
+                if sponge.lane().rows_used() != hash_rows {
                     return Err(Error::Synthesis);
                 }
                 Ok(statement.digest().clone())

@@ -60,13 +60,19 @@ NATIVE_ARTIFACT_WORKFLOWS = (
     Path(".github/workflows/mobile_sdk_artifacts.yml"),
     Path(".github/workflows/sorafs-orchestrator-sdk.yml"),
 )
-# This exact build produces a test subprocess used by core-jvm's
+# These exact builds produce test subprocesses used by core-jvm's
 # FixtureGeneratorRunner through IROHA_KOTLIN_FIXTURE_GEN_BIN. The reviewed
-# workflow uploads the native ABI manifest and test reports, not this binary.
+# workflows upload SDK artifacts, ABI manifests and test reports, not these binaries.
 # Keep this classification scoped to the sealed consumer declaration and exact
 # Cargo command; selecting the same package anywhere else remains shipping and
 # therefore fails the positive shipping policy below.
 NONSHIPPING_WORKFLOW_BUILD_COMMANDS = {
+    Path(".github/workflows/mobile_sdk_artifacts.yml"): frozenset({
+        (
+            "cargo", "build", "--locked", "-p", "kotlin-fixture-gen",
+            "--features", "dev-tools", "--bin", "kotlin-fixture-gen",
+        ),
+    }),
     Path(".github/workflows/sorafs-orchestrator-sdk.yml"): frozenset({
         (
             "cargo", "build", "--locked", "--offline", "--release",

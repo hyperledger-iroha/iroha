@@ -77,6 +77,12 @@ class KagemushaWalletV1 private constructor(handle: Long) : Closeable {
     fun resume(): KagemushaWalletCallV1 = call(2)
     /** Compute at most one checkpoint. Run off the UI thread; activity enables background work. */
     fun foldOnce(): KagemushaWalletCallV1 = call(3)
+    /** Native ownership and proof backlog, without operation readiness. Call on a worker. */
+    fun snapshot(): KagemushaWalletSnapshotV1 {
+        val reply = KagemushaWalletNativeV1.snapshot(handle()) ?: throw KagemushaWalletExceptionV1(-100)
+        if (reply.status < 0) throw KagemushaWalletExceptionV1(reply.status, reply.reason, reply.platformCode)
+        return KagemushaWalletSnapshotV1(reply)
+    }
     /** Canonical CreditStatus for the immutable first Payment identity. */
     fun creditStatus(creditId: ByteArray, paymentDigest: ByteArray): KagemushaWalletCallV1 {
         word(creditId); word(paymentDigest); return call(4, creditId, paymentDigest)
@@ -120,4 +126,5 @@ internal object KagemushaWalletNativeV1 {
     @JvmStatic external fun close(handle: Long): Int
     @JvmStatic external fun activity(handle: Long, foreground: Int, charging: Int): Int
     @JvmStatic external fun call(handle: Long, operation: Int, first: ByteArray, second: ByteArray): KagemushaWalletCallV1?
+    @JvmStatic external fun snapshot(handle: Long): KagemushaWalletSnapshotReplyV1?
 }

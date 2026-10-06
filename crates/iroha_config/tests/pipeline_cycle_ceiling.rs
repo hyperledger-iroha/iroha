@@ -1,12 +1,18 @@
 //! Validate the mandatory non-zero IVM cycle admission ceiling.
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 fn inline_source(source: &str) -> TomlSource {
     let table: toml::Table = source.parse().expect("inline TOML should parse");
@@ -17,7 +23,7 @@ fn cycle_ceiling_defaults_to_one_million() {
     let config = base_reader()
         .read_and_complete::<UserConfig>()
         .expect("default user config should read")
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("default actual config should parse");
     assert_eq!(config.pipeline.ivm_max_cycles_upper_bound.get(), 1_000_000);
 }
@@ -32,7 +38,7 @@ ivm_max_cycles_upper_bound = 42
         ))
         .read_and_complete::<UserConfig>()
         .expect("positive cycle ceiling should read")
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("positive cycle ceiling should parse");
     assert_eq!(config.pipeline.ivm_max_cycles_upper_bound.get(), 42);
 }
@@ -57,14 +63,16 @@ ivm_max_cycles_upper_bound = 0
 fn cycle_ceiling_has_no_environment_override() {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     let env = MockEnv::new().set("PIPELINE_IVM_MAX_CYCLES_UPPER_BOUND", "42");
-    let config: ActualConfig = ConfigReader::new()
-        .with_env(env.clone())
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("unrecognized environment variable must not affect configuration")
-        .parse()
-        .expect("default actual config should parse");
+    let config: ActualConfig = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(env.clone())
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("unrecognized environment variable must not affect configuration")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect("default actual config should parse");
     assert_eq!(config.pipeline.ivm_max_cycles_upper_bound.get(), 1_000_000);
     assert!(
         env.unvisited()

@@ -14,7 +14,7 @@ DIRECT_CALL = re.compile(r"impl_direct_instruction_box!\(([^)]+)\);")
 
 
 class InstructionBoxMacroSourceTest(unittest.TestCase):
-    """Keep direct conversions unique and the retired KAGEMUSHA V1 ISIs absent."""
+    """Require the canonical wallet ledger and deny retired KAGEMUSHA V1 ISIs."""
 
     def test_typed_direct_conversions_are_unique(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
@@ -29,7 +29,10 @@ class InstructionBoxMacroSourceTest(unittest.TestCase):
             call for call in DIRECT_CALL.findall(source)
             if "kagemusha" in call.lower()
         }
-        self.assertEqual(kagemusha_calls, set())
+        self.assertEqual(
+            kagemusha_calls,
+            {"crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1"},
+        )
         for retired in ("TopUpKagemushaV1", "TopUpKagemushaOrdinaryV1", "RedeemKagemushaV1"):
             self.assertNotIn(retired, source)
 

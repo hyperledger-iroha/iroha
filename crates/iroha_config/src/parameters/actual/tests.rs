@@ -1189,6 +1189,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 "#;
     pub(super) fn minimal_root() -> Root {
         let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
+        let table = crate::parameters::user::parser_only_publisher_test_fixture::install(table);
         Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
     }
     fn minimal_root_with_sorafs_admission() -> Root {
@@ -1200,6 +1201,7 @@ enabled = true
 "
         );
         let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");
+        let table = crate::parameters::user::parser_only_publisher_test_fixture::install(table);
         Root::from_toml_source(TomlSource::inline(table))
             .expect("load config with valid SoraFS admission")
     }

@@ -46,6 +46,7 @@ zk-tests = ["test-utils"]
 [dependencies]
 iroha_plonk_gadgets = { path = "../iroha_plonk_gadgets", default-features = false }
 iroha_plonk = { path = "../iroha_plonk", default-features = false }
+iroha_plonk_recursion = { path = "../iroha_plonk_recursion", default-features = false }
 iroha_pasta = { path = "../iroha_pasta", default-features = false }
 iroha_fs = { workspace = true }
 iroha_primitives = { workspace = true }

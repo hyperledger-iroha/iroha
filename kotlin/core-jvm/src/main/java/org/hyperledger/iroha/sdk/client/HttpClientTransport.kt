@@ -649,6 +649,113 @@ class HttpClientTransport private constructor(
     fun getLedgerExecutedBlockWire(height: Long): CompletableFuture<ByteArray> =
         getLedgerExecutedBlockWire(BigInteger.valueOf(height))
 
+    /**
+     * Read one bounded, unverified Load issuance original with the existing account signer.
+     *
+     * [requireCurrentOwner] must throw whenever the captured application actor/account or wallet
+     * incarnation has changed. It is checked before signing, before dispatch and before delivery;
+     * it must be safe to invoke on the completion thread. The consumer must check it again before
+     * passing the original to Native. Request cancellation cancels this client's underlying call.
+     *
+     * This performs one signed empty-body GET without compatibility probes, retries, redirects,
+     * JSON fallback or monetary decoding. The expected payer and network remain immutable; server
+     * authentication and Native own canonical controller/signer admission and response binding.
+     * Native must bind request/payer/scheme/wallet and the original signed voucher, verify Load
+     * authorization and perform the complete proof/durable transition before any balance change.
+     * A nonempty malformed binary response is still unverified transport data, never completion.
+     */
+    fun getKagemushaWalletLoadIssuanceOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: Runnable,
+    ): CompletableFuture<ToriiKagemushaWalletLoadIssuanceOriginalV1> {
+        requireCurrentOwner.run()
+        val expectedNetwork = config.requireLocalSigningContext().networkId()
+        val expectedPayer = canonicalAuth.accountId
+        val request = buildKagemushaWalletLoadIssuanceRequestV1(selection, canonicalAuth)
+        val result = CompletableFuture<ToriiKagemushaWalletLoadIssuanceOriginalV1>()
+        val upstream = try {
+            requireCurrentOwner.run()
+            notifyRequest(request)
+            // An observer may have changed application ownership while seeing the request.
+            requireCurrentOwner.run()
+            executor.execute(request)
+        } catch (error: Throwable) {
+            try { notifyFailure(request, error) } catch (observerError: Throwable) {
+                if (observerError !== error) error.addSuppressed(observerError)
+            }
+            result.completeExceptionally(error)
+            return result
+        }
+        result.whenComplete { _, _ -> if (result.isCancelled) upstream.cancel(false) }
+        upstream.whenComplete { response, failure ->
+            if (result.isDone) return@whenComplete
+            if (upstream.isCancelled) {
+                result.cancel(false)
+                return@whenComplete
+            }
+            try {
+                if (failure != null) throw unwrapCompletion(failure)
+                requireCurrentOwner.run()
+                requireExactSignedResponseProvenance(request, response, "KAGEMUSHA load issuance")
+                val body = response.body
+                require(body.isNotEmpty() && body.size <= ToriiKagemushaWalletLoadIssuanceOriginalV1.MAXIMUM_BYTES) {
+                    "KAGEMUSHA issuance original is empty or exceeds its bound"
+                }
+                requireExactOptionalContentLength(response.headers, body.size, "KAGEMUSHA load issuance")
+                if (response.statusCode != 200) {
+                    throw ToriiApiException.fromResponse(
+                        response.statusCode, response.headers, body, "KAGEMUSHA load issuance",
+                    )
+                }
+                requireExactHeader(response.headers, "Content-Type", APPLICATION_NORITO, "KAGEMUSHA load issuance")
+                requireAbsentOrIdentityEncoding(response.headers, "KAGEMUSHA load issuance")
+                val original = ToriiKagemushaWalletLoadIssuanceOriginalV1(
+                    selection, expectedPayer, expectedNetwork, body,
+                )
+                notifyResponse(request, ClientResponse(response.statusCode, body, response.message))
+                requireCurrentOwner.run()
+                result.complete(original)
+            } catch (error: Throwable) {
+                try { notifyFailure(request, error) } catch (observerError: Throwable) {
+                    if (observerError !== error) error.addSuppressed(observerError)
+                }
+                result.completeExceptionally(error)
+            }
+        }
+        return result
+    }
+
+    /** Build one exact account-signed Load read; retained headers cannot replace its signer. */
+    internal fun buildKagemushaWalletLoadIssuanceRequestV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): TransportRequest {
+        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+            "KAGEMUSHA issuance requires an HTTPS Torii endpoint"
+        }
+        require(config.baseUri().rawUserInfo == null && config.baseUri().rawQuery == null &&
+            config.baseUri().rawFragment == null) {
+            "KAGEMUSHA issuance base URI must not contain user information, query or fragment"
+        }
+        require(!config.requestTimeout().isZero) { "KAGEMUSHA issuance requires a positive request timeout" }
+        require(!CanonicalRequestSigner.isCanonicalAsciiAccountAlias(canonicalAuth.accountId)) {
+            "KAGEMUSHA issuance requires the expected canonical payer account, not an alias"
+        }
+        val forbiddenHeaders = CANONICAL_AUTH_HEADERS + setOf(
+            "X-Iroha-Witness", "X-Iroha-Operator-Public-Key", "X-Iroha-Operator-Signature",
+            "X-Iroha-Operator-Timestamp-Ms", "X-Iroha-Operator-Nonce", "Content-Type",
+            "Content-Encoding", "Accept", "Accept-Encoding", "Cache-Control",
+        )
+        require(config.defaultHeaders().keys.none { name ->
+            forbiddenHeaders.any { it.equals(name, ignoreCase = true) }
+        }) { "KAGEMUSHA issuance request authentication, encoding and cache headers are owned by the transport" }
+        return buildExactNoritoGetRequest(
+            selection.path, ToriiKagemushaWalletLoadIssuanceOriginalV1.MAXIMUM_BYTES.toLong(),
+            canonicalAuth, requestNoStore = true,
+        )
+    }
+
     /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
     fun getPrivacyCapabilities(
         canonicalAuth: ToriiCanonicalRequestAuth,

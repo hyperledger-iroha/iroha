@@ -65,6 +65,21 @@ checked constructors directly. Their private field carriers serve strict JSON
 decoding only; binary decoding retains the public owners' declared identities
 and does not cast archived values to a second wire type.
 
+## KAGEMUSHA ledger verifier installation
+
+The first-release `KagemushaWalletLedgerActionV1` includes the closed
+`InstallVerifierPack { asset: [u8; 32], manifest_digest: [u8; 32], pack: Vec<u8> }`
+action. The enclosing instruction retains its original exact scheme identity.
+These fields carry an installation request, not a native proof verdict. Core
+requires the real registered reserve account and asset permission, independently
+pins the signed manifest identity, authenticates every native original, and
+stores one immutable canonical World row. The row's fixed key tag is 14; its
+value schema and bounds are specified in
+[`kagemusha_wallet_wire_v1.md`](specs/kagemusha_wallet_wire_v1.md#310-ledger-native-verifier-installation).
+Existing proof-consuming actions use that same-overlay installed owner and
+retain native proof quotas and complete accumulator decisions. No alternative
+or compatibility action accepts retired artifact layouts.
+
 ## Contract error presentation metadata
 
 The V1 `EmbeddedContractInterfaceV1` payload appends `error_messages` after

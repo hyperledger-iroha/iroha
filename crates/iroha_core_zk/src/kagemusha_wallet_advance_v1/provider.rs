@@ -233,15 +233,40 @@ where
         &self.options
     }
 
-    /// Every slot under the root, ascending.
+    /// Every file slot and, on Keychain platforms, every surviving payment-key slot,
+    /// ascending and unique. A key with no app files is retained for read-only R10 diagnosis;
+    /// listing creates no slot, key, marker or replacement wallet.
     ///
     /// # Errors
     ///
-    /// `Unavailable` on a listing error and `UnexpectedEntry` for a foreign entry.
+    /// `Unavailable` on storage, listing or Keychain enumeration errors, including malformed
+    /// or oversized platform inventories, and `UnexpectedEntry` for a foreign file entry.
     pub fn slots(&self) -> Result<Vec<KagemushaWalletSlotIdV1>, KagemushaWalletProviderErrorV1> {
-        let mut slots = kagemusha_wallet_list_slots_v1(&self.store)?.unwrap_or_default();
-        slots.sort_unstable();
-        Ok(slots)
+        self.require_storage()?;
+        let answer = (|| {
+            let mut slots = kagemusha_wallet_list_slots_v1(&self.store)?.unwrap_or_default();
+            if self.platform.anchor_policy() == super::KagemushaWalletAnchorPolicyV1::Keychain {
+                let keys = self
+                    .platform
+                    .key_enumerate()
+                    .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+                if keys.len() > super::KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1
+                    || keys.iter().any(|slot| slot.0 == [0; 32])
+                    || !keys.windows(2).all(|pair| pair[0] < pair[1])
+                {
+                    return Err(KagemushaWalletProviderErrorV1::Unavailable(
+                        KagemushaWalletUnavailableV1::Platform(0),
+                    ));
+                }
+                slots.extend(keys);
+            }
+            slots.sort_unstable();
+            slots.dedup();
+            Ok(slots)
+        })();
+        // A successful empty read, or a custody-loss candidate, counts only while storage
+        // remained available. A lock transition never authorizes empty-wallet recreation.
+        self.require_storage().and(answer)
     }
 
     /// Reconcile `slot` without signing: a selected head stays `Pending`.

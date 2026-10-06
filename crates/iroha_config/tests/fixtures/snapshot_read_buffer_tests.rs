@@ -3,15 +3,17 @@
 use super::*;
 
 fn parse_snapshot_read_budget(extra: &str) -> std::result::Result<Config, String> {
-    ConfigReader::new()
-        .without_env()
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .map_err(|error| format!("{error:?}"))?
-        .with_toml_source(TomlSource::inline(extra.parse().unwrap()))
-        .read_and_complete::<UserConfig>()
-        .map_err(|error| format!("{error:?}"))?
-        .parse()
-        .map_err(|error| format!("{error:?}"))
+    with_fixture_refs(
+        ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .map_err(|error| format!("{error:?}"))?
+            .with_toml_source(TomlSource::inline(extra.parse().unwrap())),
+    )
+    .read_and_complete::<UserConfig>()
+    .map_err(|error| format!("{error:?}"))?
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .map_err(|error| format!("{error:?}"))
 }
 
 #[test]
