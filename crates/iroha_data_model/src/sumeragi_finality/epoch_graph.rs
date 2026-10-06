@@ -130,6 +130,24 @@ impl EpochValidationScope {
     ) -> Result<EpochConfig, ScheduleError> {
         self.validated_epoch(context).map_err(ScheduleError::Epoch)
     }
+    // The signed-genesis producer already authenticated and reconstructed this value.
+    // Reuse only an exact previously validated context. A miss performs its original
+    // validation-only work: no context hash, canonical admission or optional insertion.
+    pub(super) fn validate_known_or_fresh(
+        &self,
+        context: &ValidatorEpochContextV1,
+    ) -> Result<(), String> {
+        if self
+            .entries
+            .iter()
+            .flatten()
+            .any(|entry| entry.context == *context)
+        {
+            Ok(())
+        } else {
+            context.validate()
+        }
+    }
     fn validated_epoch(
         &mut self,
         context: &ValidatorEpochContextV1,

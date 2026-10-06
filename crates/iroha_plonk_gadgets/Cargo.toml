@@ -25,6 +25,10 @@ iroha_plonk = { workspace = true }
 ff = "0.13.1"
 
 [dev-dependencies]
+# Fallible kernel resource probes for the qualification harness only.
+iroha_measurement = { workspace = true }
+# The harness owns and verifies its actual computational worker pool.
+rayon = { workspace = true }
 # The shared KAGEMUSHA Poseidon vectors in `fixtures/native_prover/kats_v1.json`.
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # Deterministic recovery streams for reproducible test proofs.

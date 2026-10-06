@@ -285,9 +285,12 @@ fn kagemusha_wallet_v1_signing_domains_are_pinned_and_distinct() {
     }
     // No signing domain reuses a non-signing Poseidon domain.
     for (name, domain) in KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1 {
-        assert!(!words.contains(&domain), "{name}");
+        assert!(words.insert(domain), "{name}");
     }
-    assert_eq!(words.len() + KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1.len(), 43);
+    for domain in KagemushaWalletObjectDigestDomainV1::ALL {
+        assert!(words.insert(domain.domain()), "{}", domain.as_str());
+    }
+    assert_eq!(words.len(), 60);
 }
 
 #[test]
@@ -355,10 +358,7 @@ fn kagemusha_wallet_v1_object_digest_hashes_message_and_numeric_signature_halves
         bytes.copy_from_slice(&low[offset..offset + 16]);
         kagemusha_wallet_field_from_u128_v1(u128::from_be_bytes(bytes))
     };
-    assert_eq!(
-        items,
-        vec![message, half(16), half(0), half(48), half(32)]
-    );
+    assert_eq!(items, vec![message, half(16), half(0), half(48), half(32)]);
     for object in KagemushaWalletObjectDigestDomainV1::ALL {
         assert_eq!(
             kagemusha_wallet_signed_object_digest_v1(object, &message, &signature),

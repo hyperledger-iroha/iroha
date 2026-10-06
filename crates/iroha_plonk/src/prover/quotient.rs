@@ -37,16 +37,16 @@
 //! Rows are independent, so the rows of a coset are split across the
 //! caller's Rayon pool; every row's arithmetic is the same at any pool size.
 
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use ff::Field;
-use iroha_pasta::{PastaCurve, PastaField};
+use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
 use rayon::prelude::*;
 
 use super::{Challenges, ProverError};
 use crate::{
     cs::{
-        CircuitDescriptorV1, DescriptorError, DescriptorRule,
+        DescriptorError, DescriptorRule, ProtocolDescriptor,
         descriptor::{ColumnKindV1, ExprNodeV1, ExprV1, MAX_EXPRESSION_STACK, QueryV1},
     },
     keys::{CosetPolynomial, KeyError, ProvingKey},
@@ -65,6 +65,8 @@ enum Node<F> {
     Advice(u32),
     Instance(u32),
     Negated(u32),
+    Doubled(u32),
+    Squared(u32),
     Sum(u32, u32),
     Product(u32, u32),
     Scaled(u32, F),
@@ -93,7 +95,7 @@ pub struct CompiledExpressions<F> {
 struct Builder<'a, F> {
     nodes: Vec<Node<F>>,
     index: BTreeMap<Node<F>, u32>,
-    descriptor: &'a CircuitDescriptorV1,
+    descriptor: &'a ProtocolDescriptor,
 }
 
 /// The descriptor rule-6 error.
@@ -104,6 +106,49 @@ fn malformed() -> DescriptorError {
 impl<F: PastaField> Builder<'_, F> {
     /// The index of `node`, adding it if new.
     fn intern(&mut self, node: Node<F>) -> Result<u32, DescriptorError> {
+        // Normalize only exact field identities. The descriptor, gate order,
+        // challenge order and resulting polynomial remain unchanged. These
+        // choices depend exclusively on public circuit structure.
+        let node = match node {
+            Node::Negated(operand) => match self.nodes[operand as usize] {
+                Node::Constant(value) => Node::Constant(-value),
+                Node::Negated(inner) => return Ok(inner),
+                _ => Node::Negated(operand),
+            },
+            Node::Scaled(operand, factor) => {
+                if bool::from(factor.is_zero()) {
+                    Node::Constant(F::ZERO)
+                } else if factor == F::ONE {
+                    return Ok(operand);
+                } else if factor == -F::ONE {
+                    return self.intern(Node::Negated(operand));
+                } else if let Node::Constant(value) = self.nodes[operand as usize] {
+                    Node::Constant(value * factor)
+                } else if factor == F::from(2) {
+                    Node::Doubled(operand)
+                } else {
+                    Node::Scaled(operand, factor)
+                }
+            }
+            Node::Sum(left, right) => match (self.nodes[left as usize], self.nodes[right as usize])
+            {
+                (Node::Constant(a), Node::Constant(b)) => Node::Constant(a + b),
+                (Node::Constant(value), _) if bool::from(value.is_zero()) => return Ok(right),
+                (_, Node::Constant(value)) if bool::from(value.is_zero()) => return Ok(left),
+                _ if left == right => Node::Doubled(left),
+                _ => Node::Sum(left.min(right), left.max(right)),
+            },
+            Node::Product(left, right) => {
+                match (self.nodes[left as usize], self.nodes[right as usize]) {
+                    (Node::Constant(a), Node::Constant(b)) => Node::Constant(a * b),
+                    (Node::Constant(factor), _) => return self.intern(Node::Scaled(right, factor)),
+                    (_, Node::Constant(factor)) => return self.intern(Node::Scaled(left, factor)),
+                    _ if left == right => Node::Squared(left),
+                    _ => Node::Product(left.min(right), left.max(right)),
+                }
+            }
+            other => other,
+        };
         if let Some(index) = self.index.get(&node) {
             return Ok(*index);
         }
@@ -224,7 +269,7 @@ impl<F: PastaField> CompiledExpressions<F> {
     /// Rule 6 ([`DescriptorRule::Expression`]) for a malformed expression;
     /// validated descriptors always compile.
     pub fn compile(
-        descriptor: &CircuitDescriptorV1,
+        descriptor: &ProtocolDescriptor,
         include_gates: bool,
     ) -> Result<Self, DescriptorError> {
         let mut builder = Builder {
@@ -307,6 +352,8 @@ impl<F: PastaField> CompiledExpressions<F> {
                 Node::Advice(query) => read(columns.advice[query as usize]),
                 Node::Instance(query) => read(columns.instance[query as usize]),
                 Node::Negated(operand) => -scratch[operand as usize],
+                Node::Doubled(operand) => scratch[operand as usize].double(),
+                Node::Squared(operand) => scratch[operand as usize].square(),
                 Node::Sum(left, right) => scratch[left as usize] + scratch[right as usize],
                 Node::Product(left, right) => scratch[left as usize] * scratch[right as usize],
                 Node::Scaled(operand, factor) => scratch[operand as usize] * factor,
@@ -441,6 +488,47 @@ pub(super) struct QuotientInputs<'a, F> {
 /// The coset values of one lookup: `z`, `A'`, `S'`.
 type LookupCoset<F> = [Vec<F>; 3];
 
+/// Reuses a coset buffer for the next evaluation of the same polynomial.
+fn evaluate_into<F: PastaField>(
+    domain: &FftDomain<F>,
+    coefficients: &[F],
+    shift: F,
+    values: &mut [F],
+) -> Result<(), KeyError> {
+    if values.len() != coefficients.len() {
+        return Err(KeyError::Shape {
+            what: "coset coefficients",
+            expected: values.len(),
+            actual: coefficients.len(),
+        });
+    }
+    values.copy_from_slice(coefficients);
+    domain.coset_fft(values, shift)?;
+    Ok(())
+}
+
+/// Updates owned key-polynomial buffers in place, or changes the borrowed
+/// slice when the key already caches every coset.
+fn refresh_key_cosets<'a, C: PastaCurve>(
+    pk: &'a ProvingKey<C>,
+    coefficients: &[Vec<C::ScalarExt>],
+    values: &mut [Cow<'a, [C::ScalarExt]>],
+    polynomial: impl Fn(usize) -> CosetPolynomial,
+    coset: usize,
+) -> Result<(), KeyError> {
+    let shift = pk
+        .quotient_domain()
+        .shift(coset)
+        .ok_or(KeyError::CosetIndex)?;
+    for (index, (values, coefficients)) in values.iter_mut().zip(coefficients).enumerate() {
+        match values {
+            Cow::Owned(values) => evaluate_into(pk.domain(), coefficients, shift, values)?,
+            Cow::Borrowed(_) => *values = pk.coset_values(polynomial(index), coset)?,
+        }
+    }
+    Ok(())
+}
+
 /// Computes the `(d - 1) n` coefficients of `h` (see the module
 /// documentation). `filter` is [`AllTerms`](crate::protocol::AllTerms) for
 /// every real proof (inlined away); the malicious-prover tests omit the
@@ -474,47 +562,75 @@ pub(super) fn evaluate<C: PastaCurve>(
     let one = C::ScalarExt::ONE;
     let delta = <C::ScalarExt as ff::PrimeField>::DELTA;
     let mut cosets = Vec::with_capacity(shape.quotient_pieces);
+    // Each column needs one coset-sized workspace. Keep that allocation
+    // across all cosets instead of leaving the allocator to retain a new
+    // wave of large freed buffers after each evaluation. Eager key caches
+    // remain borrowed; OnDemand key columns become reusable owned buffers.
+    let mut fixed = (0..shape.num_fixed)
+        .map(|i| pk.coset_values(CosetPolynomial::Fixed(i), 0))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut sigma = (0..shape.permutation_columns)
+        .map(|j| pk.coset_values(CosetPolynomial::Permutation(j), 0))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut advice = inputs.advice.to_vec();
+    let mut instance = inputs.instance.to_vec();
+    let mut products: Vec<Vec<C::ScalarExt>> = inputs
+        .permutation_products
+        .iter()
+        .map(|poly| poly.to_vec())
+        .collect();
+    let mut lookups: Vec<LookupCoset<C::ScalarExt>> = inputs
+        .lookups
+        .iter()
+        .map(|lookup| {
+            [
+                lookup.product.to_vec(),
+                lookup.input.to_vec(),
+                lookup.table.to_vec(),
+            ]
+        })
+        .collect();
     for coset in 0..shape.quotient_pieces {
         let shift = quotient.shift(coset).ok_or(KeyError::CosetIndex)?;
-        let to_coset = |coeffs: &[C::ScalarExt]| quotient.evaluate(domain, coeffs, coset);
-        let fixed = (0..shape.num_fixed)
-            .map(|i| pk.coset_values(CosetPolynomial::Fixed(i), coset))
-            .collect::<Result<Vec<_>, _>>()?;
-        let sigma = (0..shape.permutation_columns)
-            .map(|j| pk.coset_values(CosetPolynomial::Permutation(j), coset))
-            .collect::<Result<Vec<_>, _>>()?;
+        if coset != 0 {
+            refresh_key_cosets(
+                pk,
+                pk.fixed_polys(),
+                &mut fixed,
+                CosetPolynomial::Fixed,
+                coset,
+            )?;
+            refresh_key_cosets(
+                pk,
+                pk.permutation_polys(),
+                &mut sigma,
+                CosetPolynomial::Permutation,
+                coset,
+            )?;
+        }
         let masks = pk.coset_masks(coset)?;
         let (l0, l_last, l_active) = (
             masks.l0.as_slice(),
             masks.l_last.as_slice(),
             masks.l_active.as_slice(),
         );
-        let advice = inputs
-            .advice
-            .par_iter()
-            .map(|poly| to_coset(poly))
-            .collect::<Result<Vec<_>, _>>()?;
-        let instance = inputs
-            .instance
-            .par_iter()
-            .map(|poly| to_coset(poly))
-            .collect::<Result<Vec<_>, _>>()?;
-        let products = inputs
-            .permutation_products
-            .par_iter()
-            .map(|poly| to_coset(poly))
-            .collect::<Result<Vec<_>, _>>()?;
-        let lookups = inputs
-            .lookups
-            .iter()
-            .map(|lookup| -> Result<LookupCoset<C::ScalarExt>, KeyError> {
-                Ok([
-                    to_coset(lookup.product)?,
-                    to_coset(lookup.input)?,
-                    to_coset(lookup.table)?,
-                ])
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        advice
+            .par_iter_mut()
+            .zip(inputs.advice)
+            .try_for_each(|(values, poly)| evaluate_into(domain, poly, shift, values))?;
+        instance
+            .par_iter_mut()
+            .zip(inputs.instance)
+            .try_for_each(|(values, poly)| evaluate_into(domain, poly, shift, values))?;
+        products
+            .par_iter_mut()
+            .zip(&inputs.permutation_products)
+            .try_for_each(|(values, poly)| evaluate_into(domain, poly, shift, values))?;
+        for ([product, input, table], lookup) in lookups.iter_mut().zip(&inputs.lookups) {
+            evaluate_into(domain, lookup.product, shift, product)?;
+            evaluate_into(domain, lookup.input, shift, input)?;
+            evaluate_into(domain, lookup.table, shift, table)?;
+        }
         let fixed_refs: Vec<&[C::ScalarExt]> = fixed.iter().map(AsRef::as_ref).collect();
         let advice_refs: Vec<&[C::ScalarExt]> = advice.iter().map(Vec::as_slice).collect();
         let instance_refs: Vec<&[C::ScalarExt]> = instance.iter().map(Vec::as_slice).collect();
@@ -652,6 +768,8 @@ pub(super) fn evaluate<C: PastaCurve>(
         values.par_iter_mut().for_each(|value| *value *= inverse);
         cosets.push(values);
     }
+    // Recombination needs only the accumulated numerator cosets.
+    drop((fixed, sigma, advice, instance, products, lookups));
     Ok(quotient.recombine(domain, cosets)?)
 }
 

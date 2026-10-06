@@ -1037,7 +1037,10 @@ mod std_fs {
     fn wallet_advance_v1_std_fs_listing_and_reads_fail_closed() {
         let (temp, store) = std_store();
         let path = temp.path().join("root").join("d");
+        use std::os::unix::fs::PermissionsExt as _;
         std::fs::write(path.join("big"), vec![0_u8; 64]).expect("big");
+        std::fs::set_permissions(path.join("big"), std::fs::Permissions::from_mode(0o600))
+            .expect("private fixture");
         assert_eq!(
             store.read(&dir(), &name("big"), 63),
             KagemushaWalletReadV1::Oversized
@@ -1053,6 +1056,11 @@ mod std_fs {
             KagemushaWalletReadV1::Unavailable(_)
         ));
         std::fs::write(path.join(".tmp-0123456789abcdef0123456789abcdef"), b"t").expect("tmp");
+        std::fs::set_permissions(
+            path.join(".tmp-0123456789abcdef0123456789abcdef"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .expect("private fixture");
         let KagemushaWalletProbeV1::Present(entries) = store.list(&dir()) else {
             panic!("listing");
         };
@@ -1106,5 +1114,76 @@ mod std_fs {
         let staging = store.fs().staging_name();
         assert!(crate::kagemusha_wallet_advance_v1::kagemusha_wallet_is_staging_name_v1(&staging));
         assert_ne!(staging, store.fs().staging_name());
+    }
+    #[test]
+    fn wallet_advance_v1_std_fs_retains_root_and_child_authority_across_replacement() {
+        use std::os::unix::fs::PermissionsExt as _;
+        for replace_root in [false, true] {
+            let (temp, store) = std_store();
+            assert_eq!(
+                store.write_new(&dir(), &name("f"), BYTES),
+                KagemushaWalletPublishOutcomeV1::Published
+            );
+            let original = if replace_root {
+                temp.path().join("root")
+            } else {
+                temp.path().join("root/d")
+            };
+            let displaced = temp.path().join("displaced");
+            std::fs::rename(&original, &displaced).expect("move original");
+            assert!(
+                matches!(
+                    store.read(&dir(), &name("f"), 1024),
+                    KagemushaWalletReadV1::Unavailable(_)
+                ),
+                "missing retained parent is unavailable, never file absence"
+            );
+            std::fs::create_dir(&original).expect("replacement");
+            std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o700))
+                .expect("private replacement");
+            assert!(matches!(
+                store.list(&dir()),
+                KagemushaWalletProbeV1::Unavailable(_)
+            ));
+            assert!(matches!(
+                store.write_new(&dir(), &name("intruder"), OTHER),
+                KagemushaWalletPublishOutcomeV1::NotPublished(_)
+            ));
+            assert!(!original.join("intruder").exists());
+            std::fs::remove_dir(&original).expect("remove replacement");
+            std::os::unix::fs::symlink(&displaced, &original).expect("redirect");
+            assert!(matches!(
+                store.read(&dir(), &name("f"), 1024),
+                KagemushaWalletReadV1::Unavailable(_)
+            ));
+        }
+    }
+    #[test]
+    fn wallet_advance_v1_std_fs_refuses_substituted_staging_and_distinguishes_absence() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (temp, store) = std_store();
+        let fs = store.fs();
+        let staged = fs.staging_name();
+        let mut file = fs.create_new(&dir(), &staged).expect("create");
+        fs.write_all(&mut file, BYTES).expect("write");
+        fs.sync_staged(&file).expect("sync");
+        let path = temp.path().join("root/d").join(&staged);
+        std::fs::remove_file(&path).expect("remove original");
+        std::fs::write(&path, OTHER).expect("substitute");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("private substitute");
+        assert!(fs.rename_noreplace(&dir(), &staged, "published").is_err());
+        assert_eq!(
+            store.read(&dir(), &name("published"), 1024),
+            KagemushaWalletReadV1::Absent
+        );
+        assert!(!temp.path().join("root/d/published").exists());
+        assert!(fs.write_all(&mut file, OTHER).is_err());
+        assert!(fs.sync_staged(&file).is_err());
+        std::fs::write(temp.path().join("root/d/shared"), OTHER).expect("shared mode");
+        assert!(matches!(
+            store.read(&dir(), &name("shared"), 1024),
+            KagemushaWalletReadV1::Unavailable(_)
+        ));
     }
 }

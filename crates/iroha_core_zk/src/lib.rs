@@ -94,6 +94,7 @@ pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, ver
 pub(crate) mod frame_test_support;
 mod halo2_backend;
 pub mod kagemusha_wallet_advance_v1;
+pub mod kagemusha_wallet_state_v1;
 // TODO: Qualify the complete private RAM-LFE relation before admitting a circuit.
 // These internal experiments have no production verifier entry point.
 #[cfg(test)]

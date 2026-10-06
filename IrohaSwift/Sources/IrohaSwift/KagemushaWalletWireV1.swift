@@ -37,14 +37,11 @@ public enum KagemushaWalletWireErrorV1: Error, Equatable, Sendable {
 
 /// Exact role label of one domain-separated KAGEMUSHA wallet V1 digest `H(role, body)`.
 ///
-/// The 34 cases and their order mirror the Rust `KagemushaWalletDigestRoleV1::ALL`. `H` remains
-/// only for small fixed bodies that no relation recomputes over a large input, and at ledger,
-/// HTTP, platform-attestation and artifact boundaries. A signed object's digest role (for example
-/// ``certificate``) hashes `m || signature`, where `m` is the object's 32-byte Poseidon signing
-/// message (``KagemushaWalletSigningDomainV1``). `credit_id`, `proof_digest`, the Payment,
-/// lineage, credit-opening, credit-status and credited digests, every signing message and the
-/// blacklist, quota-window, map and credit-digest trees are Poseidon σ-field values, not SHA roles
-/// (wire record §1).
+/// The 18 cases and their order mirror the Rust `KagemushaWalletDigestRoleV1::ALL`. `H` remains
+/// only for values no relation recomputes: fixed identities, ledger, platform-attestation and
+/// artifact boundaries, output descriptors and local custody records. Only the artifact manifest hashes
+/// `m || signature`. Signed-object, certificate-set, package, statement, operation and nullifier
+/// digests are opaque Poseidon field values computed by the native core (wire record §1).
 public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   /// Scheme identity.
   case scheme = "scheme"
@@ -64,56 +61,24 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case enrollmentKeyBinding = "enrollment-key-binding"
   /// Wallet incarnation identity.
   case walletID = "wallet-id"
-  /// Signer certificate digest.
-  case certificate = "certificate"
-  /// Count-prefixed ordered certificate digests.
-  case certificateSet = "certificate-set"
-  /// Credential digest.
-  case credential = "credential"
-  /// Scheme policy digest.
-  case schemePolicy = "scheme-policy"
-  /// Fee schedule digest.
-  case feeSchedule = "fee-schedule"
-  /// Blacklist digest.
-  case blacklist = "blacklist"
-  /// Quota share digest.
-  case quotaShare = "quota-share"
-  /// Time anchor digest.
-  case timeAnchor = "time-anchor"
-  /// Request digest.
-  case request = "request"
-  /// Transition statement.
-  case statement = "statement"
-  /// Provider commit receipt digest.
-  case receipt = "receipt"
-  /// Complete state package.
-  case `package` = "package"
-  /// Provider operation identity.
-  case operationID = "operation-id"
+  /// Artifact manifest digest.
+  case artifactManifest = "artifact-manifest"
+  /// Original platform evidence bytes.
+  case evidence = "evidence"
+  /// App Attest renewal assertion client data.
+  case renewalAssertion = "renewal-assertion"
+  /// σ verifying-key allowlist; its digest is the manifest's `verifying_key_set_digest`.
+  case verifyingKeySet = "verifying-key-set"
   /// Receipt-free output descriptor.
   case output = "output"
-  /// Local recovery capsule frame.
-  case capsule = "capsule"
   /// Local provider marker frame.
   case marker = "marker"
+  /// Local recovery capsule frame.
+  case capsule = "capsule"
   /// Local completion record frame.
   case completion = "completion"
   /// Durable fold record of one self-verified Ω.
   case fold = "fold"
-  /// Load voucher digest.
-  case voucher = "voucher"
-  /// Unload claim nullifier.
-  case unloadNullifier = "unload-nullifier"
-  /// App Attest renewal assertion client data.
-  case renewalAssertion = "renewal-assertion"
-  /// Artifact manifest digest.
-  case artifactManifest = "artifact-manifest"
-  /// σ verifying-key allowlist; its digest is the manifest's `verifying_key_set_digest`.
-  case verifyingKeySet = "verifying-key-set"
-  /// Charge quote digest.
-  case chargeQuote = "charge-quote"
-  /// Original platform evidence bytes.
-  case evidence = "evidence"
 }
 
 /// Signing domain of one signed KAGEMUSHA wallet V1 body (wire record §1, owner answer A1).
@@ -179,28 +144,9 @@ public enum KagemushaWalletSigningDomainV1: String, CaseIterable, Sendable {
     case .chargeQuote: 219
     case .offer: 194
     case .sessionControl: 197
-    case .request: 418
+    case .request: 458
     case .voucher: 250
     case .ledgerControl: 211
-    }
-  }
-
-  /// Digest role of the signed object, `H(role, m || signature)`, or `nil` when it has none.
-  public var objectDigestRole: KagemushaWalletDigestRoleV1? {
-    switch self {
-    case .certificate: .certificate
-    case .credential: .credential
-    case .artifactManifest: .artifactManifest
-    case .receipt: .receipt
-    case .schemePolicy: .schemePolicy
-    case .feeSchedule: .feeSchedule
-    case .blacklist: .blacklist
-    case .quotaShare: .quotaShare
-    case .timeAnchor: .timeAnchor
-    case .chargeQuote: .chargeQuote
-    case .request: .request
-    case .voucher: .voucher
-    case .renewalChallenge, .renewalKeyBinding, .offer, .sessionControl, .ledgerControl: nil
     }
   }
 }
@@ -296,7 +242,7 @@ public enum KagemushaWalletWireV1 {
   /// Lineage.
   public static let messageMaximumBytes = 10_000
   /// `F_payment`: the bytes of a Payment envelope frame other than its Ω and σ_send proofs.
-  public static let paymentFixedBytes = 1_681
+  public static let paymentFixedBytes = 1_723
   /// Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`.
   ///
   /// σ and Ω carry no other byte caps than this budget and ``lineageProofCapBytes``: their exact
@@ -317,6 +263,10 @@ public enum KagemushaWalletWireV1 {
   /// Depth of every Poseidon indexed map tree and of the credit-digest tree (owner answer A2):
   /// every opening carries exactly this many siblings.
   public static let indexedTreeDepth = 32
+  /// Depth of the quota-window and aligned quota-usage arrays.
+  public static let quotaTreeDepth = 6
+  /// Exact number of slots in each quota-usage array.
+  public static let quotaUsageSlots = 1 << quotaTreeDepth
   /// Exact credit-opening transcript of a CreditStatus: `credit_id ‖ payment_digest ‖ u8 burned ‖
   /// next_key ‖ LE32 slot ‖ 32 siblings`.
   public static let creditOpeningBytes = 3 * 32 + 1 + 4 + indexedTreeDepth * 32
@@ -424,13 +374,12 @@ public enum KagemushaWalletWireV1 {
     return Data(hasher.finalize())
   }
 
-  /// Digest of one signed object: `H(role, m || signature)`, where `m` is its 32-byte Poseidon
-  /// signing message (a canonical σ-field value).
+  /// Artifact manifest digest: `H(artifact-manifest, m || signature)`, where `m` is its
+  /// 32-byte Poseidon signing message (a canonical σ-field value).
   ///
   /// - Throws: ``KagemushaWalletWireErrorV1/invalidField(_:)`` for a message that is not one
   ///   canonical 32-byte σ-field value or a signature that is not canonical low-S.
-  public static func signedObjectDigest(
-    role: KagemushaWalletDigestRoleV1,
+  public static func artifactManifestDigest(
     message: Data,
     signature: Data
   ) throws -> Data {
@@ -442,7 +391,7 @@ public enum KagemushaWalletWireV1 {
     }
     var body = Data(message)
     body.append(signature)
-    return digest(role: role, body: body)
+    return digest(role: .artifactManifest, body: body)
   }
 
   // MARK: σ-field values

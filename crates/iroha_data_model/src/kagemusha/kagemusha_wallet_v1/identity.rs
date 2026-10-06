@@ -717,8 +717,9 @@ impl KagemushaWalletCertificateSetV1 {
     #[must_use]
     pub fn field_items(&self) -> Vec<[u8; 32]> {
         let count = u128::try_from(self.certificates.len()).unwrap_or(u128::MAX);
-        let mut items = WalletFieldItemsV1::with_capacity(self.certificates.len().saturating_add(1))
-            .integer(count);
+        let mut items =
+            WalletFieldItemsV1::with_capacity(self.certificates.len().saturating_add(1))
+                .integer(count);
         for digest in self.digests() {
             items = items.field(&digest);
         }

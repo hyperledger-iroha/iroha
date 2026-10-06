@@ -4,35 +4,31 @@
 //! computes exactly the field values and verdicts of the circuit
 //! (`crate::control_circuit`).
 //!
-//! # Blacklist (owner answers A4 and A5)
+//! # Blacklist
 //!
-//! A wallet enforces only its own committed list, and only while its
-//! BLACKLIST control is enabled and it holds a list (`blacklist_version !=
-//! 0`); with version 0 no account is refused. `sigma_send` proves the
-//! Request's receiver account digest absent from the payer's list and the
-//! maximum list age; `sigma_recv` (the Receive selector with the blacklist
-//! bit) proves the Request's payer account digest absent from the
-//! receiver's list. Absence is one gap opening ([`BlacklistGap`]) with
-//! `lower < account < upper` in limb order against the head-committed
-//! `blacklist_root`.
+//! A Send enforces the payer's current committed list while its BLACKLIST
+//! control is enabled and it holds a list (`blacklist_version != 0`).
+//! A Receive enforces the receiver's list recorded in the Request, with
+//! its relation selected by that recorded version. Current list or mask
+//! changes do not invalidate an already issued Request. Absence is one gap
+//! opening ([`BlacklistGap`]) with `lower < account < upper` in limb order
+//! against the corresponding root. Send also checks maximum list age.
 //!
 //! # Attestation lease
 //!
 //! With the lease control, `sigma_send` requires the accepted upper time
-//! below the lease expiry (`U < lease_expires_at_ms`, the native G1
-//! `check_lease`).
+//! below the lease expiry (`U < lease_expires_at_ms`).
 //!
 //! # Quotas
 //!
 //! With the quota control, `sigma_send` charges the gross `amount + fee`
 //! against every window of the head-committed quota-window tree that the
 //! accepted interval `[L, U]` touches (`start <= U` and `L < end`), requires
-//! `used + gross <= limit` in each, requires a touched window of every kind
-//! the share defines, and updates the quota-usage map: the usage leaf of a
-//! window key `kind * 2^128 + start` is updated in place, or inserted when
-//! absent (the native G1 `charge_send`). The successor's
-//! `quota_usage_root` is the root after the charges, in window order
-//! (Daily before Monthly, ascending start).
+//! `used + gross <= limit` in each and a touched window of every defined
+//! kind, and updates the fixed 64-slot quota-usage array. Each usage leaf
+//! is aligned to the same slot as its window and commits that window's
+//! kind and start, including zero usage for initially unused windows.
+//! Charges run in window order (Daily before Monthly, ascending start).
 //!
 //! Per window kind the witness is a [`WindowSegment`]: four consecutive
 //! slots of the window tree, where slot `-1` and slots from 64 are virtual
@@ -47,18 +43,17 @@
 //! below it and position 1 above it.
 //!
 //! At most [`QUOTA_CHARGES_PER_KIND`] windows of one kind can be touched by
-//! one Send: a Send whose interval touches three or more windows of one kind
-//! has no witness and is refused (owner question recorded in the wire
-//! record).
-// TODO(G3, owner question): the quota share's own expiry (`U <
-// expires_at_ms`, native `charge_send`) is not a core field, so no σ can
-// enforce it; the native Send check and the lineage relation do.
+//! one Send. The core's authenticated maximum response span bounds `U - L`
+//! (B8), and installed windows are longer than that span. The core also
+//! authenticates the quota-share expiry, enforced as `U < expires_at_ms`
+//! (B7). Those two rules are checked by `crate::witness` and
+//! `crate::relation` alongside the other Send arithmetic.
 
 use iroha_pasta::poseidon::PoseidonField;
 
 use crate::tree::{
-    BlacklistGap, INDEXED_NODE_DOMAIN, IndexedLeaf, IndexedUpsert, QUOTA_DEPTH, QUOTA_NODE_DOMAIN,
-    QuotaWindow, WINDOW_DAILY, WINDOW_KINDS, WINDOW_MONTHLY, field_less, path_root,
+    BlacklistGap, QUOTA_DEPTH, QUOTA_NODE_DOMAIN, QUOTA_USAGE_NODE_DOMAIN, QuotaWindow,
+    WINDOW_DAILY, WINDOW_KINDS, WINDOW_MONTHLY, path_root,
 };
 
 /// Positions of a window segment.
@@ -69,8 +64,6 @@ pub const QUOTA_CHARGES_PER_KIND: usize = 2;
 pub const QUOTA_CHARGES: usize = QUOTA_CHARGES_PER_KIND * WINDOW_KINDS.len();
 /// The largest segment base: position 0 at slot 63.
 pub const SEGMENT_BASE_MAX: u8 = 64;
-/// Bits of a quota-usage key bound (`kind * 2^128 + start < 2^130`).
-pub const USAGE_KEY_BITS: usize = 130;
 
 /// One opened slot of the quota-window tree: the window (or the empty slot)
 /// and its six siblings. A virtual position's slot is ignored.
@@ -144,12 +137,13 @@ impl<F: PoseidonField> WindowSegment<F> {
     }
 }
 
-/// One quota charge: the usage-map witness and the window's usage before
-/// the charge (zero for an insertion).
+/// One quota charge: the aligned usage-array opening and prior usage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuotaCharge<F> {
-    /// The indexed-tree update or insertion.
-    pub upsert: IndexedUpsert<F>,
+    /// Array slot, equal to the charged window slot.
+    pub slot: u8,
+    /// Siblings against the running usage root.
+    pub siblings: [F; QUOTA_DEPTH],
     /// The usage before the charge.
     pub used: u128,
 }
@@ -159,7 +153,8 @@ impl<F: PoseidonField> QuotaCharge<F> {
     #[must_use]
     pub fn unused() -> Self {
         Self {
-            upsert: IndexedUpsert::unused(),
+            slot: 0,
+            siblings: [F::ZERO; QUOTA_DEPTH],
             used: 0,
         }
     }
@@ -200,7 +195,7 @@ pub enum ControlViolation {
     QuotaWindowSkipped,
     /// A window kind the share defines has no touched window.
     QuotaKindUntouched,
-    /// A usage-map update or insertion does not verify.
+    /// An aligned usage-array opening or update does not verify.
     QuotaUsageOpening,
     /// A touched window's usage exceeds its limit (or overflows).
     QuotaExceeded,
@@ -263,6 +258,7 @@ pub struct QuotaSend<F> {
 }
 
 /// Whether a field value is below `2^bits` (`bits < 256`).
+#[cfg(test)]
 fn fits<F: PoseidonField>(value: &F, bits: usize) -> bool {
     let limbs = value.to_canonical_limbs();
     limbs.iter().enumerate().all(|(index, limb)| {
@@ -350,13 +346,19 @@ pub fn evaluate_quota<F: PoseidonField>(
         let charges = witness.charges[segment_index * QUOTA_CHARGES_PER_KIND..]
             .iter()
             .take(QUOTA_CHARGES_PER_KIND);
-        for ((fact, slot), charge) in candidates.zip(charges) {
+        for (offset, ((fact, slot), charge)) in candidates.zip(charges).enumerate() {
             let window = QuotaWindow {
                 kind,
                 ..slot.window
             };
-            let (next_root, charge_violations) =
-                evaluate_charge(charge, &window, fact.touched, root, send);
+            let (next_root, charge_violations) = evaluate_charge(
+                charge,
+                &window,
+                segment.slot(offset + 1),
+                fact.touched,
+                root,
+                send,
+            );
             root = next_root;
             violations.extend(charge_violations);
         }
@@ -375,81 +377,43 @@ pub fn evaluate_quota<F: PoseidonField>(
 fn evaluate_charge<F: PoseidonField>(
     charge: &QuotaCharge<F>,
     window: &QuotaWindow,
+    slot: u64,
     taken: bool,
     root: F,
     send: &QuotaSend<F>,
 ) -> (F, Vec<ControlViolation>) {
     let mut violations = Vec::new();
-    let upsert = &charge.upsert;
-    let key = window.usage_key::<F>();
     let used_before = F::from_u128(charge.used);
     let used_after = used_before + send.gross;
-    let old_value = window.usage_value(used_before);
-    let new_value = window.usage_value(used_after);
-    // Unconditional range checks: the usage sum and the opened keys.
     let sum = send
         .gross_integer
         .and_then(|gross| charge.used.checked_add(gross));
+    // The circuit range-checks every candidate's sum, even an unused one.
     if sum.is_none() {
         violations.push(ControlViolation::QuotaExceeded);
     }
-    let leaf = upsert.leaf;
-    if !fits(&leaf.key, USAGE_KEY_BITS) || !fits(&leaf.next_key, USAGE_KEY_BITS) {
+    if charge.slot >= 64 {
         violations.push(ControlViolation::QuotaUsageOpening);
     }
-    let written = if upsert.insert {
-        IndexedLeaf {
-            next_key: key,
-            ..leaf
-        }
-    } else {
-        IndexedLeaf {
-            value: new_value,
-            ..leaf
-        }
-    };
-    let leaf_slot = u64::from(upsert.leaf_slot);
-    let slot = u64::from(upsert.slot);
     let opened = path_root(
-        INDEXED_NODE_DOMAIN,
-        leaf.hash(),
-        leaf_slot,
-        &upsert.leaf_siblings,
+        QUOTA_USAGE_NODE_DOMAIN,
+        window.usage_value(used_before),
+        u64::from(charge.slot),
+        &charge.siblings,
     );
-    let middle = path_root(
-        INDEXED_NODE_DOMAIN,
-        written.hash(),
-        leaf_slot,
-        &upsert.leaf_siblings,
+    let after = path_root(
+        QUOTA_USAGE_NODE_DOMAIN,
+        window.usage_value(used_after),
+        u64::from(charge.slot),
+        &charge.siblings,
     );
-    let empty = path_root(INDEXED_NODE_DOMAIN, F::ZERO, slot, &upsert.slot_siblings);
-    let content = if upsert.insert {
-        IndexedLeaf {
-            key,
-            value: new_value,
-            next_key: leaf.next_key,
-        }
-        .hash()
-    } else {
-        F::ZERO
-    };
-    let after = path_root(INDEXED_NODE_DOMAIN, content, slot, &upsert.slot_siblings);
     if taken {
         if sum.is_none_or(|sum| sum > window.limit)
             && !violations.contains(&ControlViolation::QuotaExceeded)
         {
             violations.push(ControlViolation::QuotaExceeded);
         }
-        let opening_ok = opened == root
-            && empty == middle
-            && if upsert.insert {
-                charge.used == 0
-                    && field_less(&leaf.key, &key)
-                    && (bool::from(leaf.next_key.is_zero()) || field_less(&key, &leaf.next_key))
-            } else {
-                leaf.key == key && leaf.value == old_value
-            };
-        if !opening_ok {
+        if u64::from(charge.slot) != slot || charge.slot >= 64 || opened != root {
             violations.push(ControlViolation::QuotaUsageOpening);
         }
         (after, violations)
@@ -470,7 +434,7 @@ mod tests {
     use iroha_pasta::Fp;
 
     use super::*;
-    use crate::tree::{IndexedTree, QuotaWindowTree};
+    use crate::tree::{QuotaUsageTree, QuotaWindowTree};
 
     #[test]
     fn segment_positions_follow_the_base() {
@@ -492,7 +456,7 @@ mod tests {
 
     /// A share with three daily windows and one monthly window, and the
     /// witness of a Send at `[lower, upper]` inside the middle day.
-    fn sample() -> (QuotaWitness<Fp>, QuotaSend<Fp>, IndexedTree<Fp>) {
+    fn sample() -> (QuotaWitness<Fp>, QuotaSend<Fp>, QuotaUsageTree<Fp>) {
         let day = 86_400_000_u64;
         let windows = [
             QuotaWindow {
@@ -525,25 +489,14 @@ mod tests {
             window: tree.slot(slot),
             siblings: tree.siblings(slot),
         };
-        let mut usage = IndexedTree::<Fp>::new();
-        let _ = usage.upsert(
-            windows[3].usage_key(),
-            windows[3].usage_value(Fp::from(7_u64)),
-        );
+        let mut usage = QuotaUsageTree::<Fp>::new(&tree);
+        assert!(usage.set(3, 7));
         let usage_root = usage.root();
         let gross = 10_u128;
-        let daily = usage
-            .upsert(
-                windows[1].usage_key(),
-                windows[1].usage_value(Fp::from(10_u64)),
-            )
-            .expect("insert");
-        let monthly = usage
-            .upsert(
-                windows[3].usage_key(),
-                windows[3].usage_value(Fp::from(17_u64)),
-            )
-            .expect("update");
+        let daily = usage.siblings(1).expect("slot");
+        assert!(usage.set(1, 10));
+        let monthly = usage.siblings(3).expect("slot");
+        assert!(usage.set(3, 17));
         let witness = QuotaWitness {
             segments: [
                 WindowSegment {
@@ -557,12 +510,14 @@ mod tests {
             ],
             charges: [
                 QuotaCharge {
-                    upsert: daily,
+                    slot: 1,
+                    siblings: daily,
                     used: 0,
                 },
                 QuotaCharge::unused(),
                 QuotaCharge {
-                    upsert: monthly,
+                    slot: 3,
+                    siblings: monthly,
                     used: 7,
                 },
                 QuotaCharge::unused(),
@@ -624,7 +579,7 @@ mod tests {
         );
         // An insertion claimed for a present key.
         let mut present = honest;
-        present.charges[2].upsert.insert = true;
+        present.charges[2].slot = present.charges[0].slot;
         assert!(
             evaluate_quota(&present, &send)
                 .violations

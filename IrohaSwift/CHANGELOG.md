@@ -4,23 +4,13 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
-- `KagemushaWalletDigestRoleV1` follows the 2026-10-05 KAGEMUSHA wallet wire
-  revision (34 roles): the roles whose values are now Poseidon σ-field values that
-  the native Rust core computes are removed (`credit`, `proof`, `stepProof`,
-  `payment`, the blacklist and quota-window tree roles, every signed-body role,
-  `renewalChallenge`, `renewalKeyBinding`, `lineage`, `creditOpening`,
-  `creditStatus` and `credited`), and `verifyingKeySet` is added.
-  `KagemushaWalletSigningDomainV1` names the 17 signing domains: every signature
-  signs the 32-byte Poseidon message of its body, so
-  `verifySignature(publicKey:message:signature:)` and
-  `signedObjectDigest(role:message:signature:)` take that message, and the
-  preimage and role-and-body verification overloads are removed.
-  `KagemushaWalletWireV1` adds `fieldModulus`, `fieldValueBytes`,
-  `isCanonicalFieldValue(_:)` and `signingMessageBytes`, and the
-  `paymentFixedBytes`, `paymentProofBudgetBytes`, `creditedStatusFixedBytes`,
-  `lineageProofCapBytes`, `verifyingKeyEntriesMaximum`,
-  `verifyingKeyAllowlistMaximumBytes`, `indexedTreeDepth` and `creditOpeningBytes`
-  bounds.
+- KAGEMUSHA wallet V1 follows the single-design G1 layout: 18 SHA-256 roles,
+  60 Poseidon domains and 17 signing domains. Every signature signs its exact
+  32-byte Poseidon message. The artifact manifest alone has a SHA signed-object
+  digest (`artifactManifestDigest(message:signature:)`); circuit-visible object,
+  package, statement, operation and nullifier digests are opaque native Poseidon
+  values. Requests include the receiver's recorded blacklist version and root;
+  quota usage uses a depth-6 array. Only this layout is accepted.
 - Added `KagemushaWalletApplePlatformV1`, the iPhone platform adapter behind the
   Rust KAGEMUSHA wallet Advance provider: the Secure Enclave payment key, which
   signs exactly the 32-byte message the Rust signer passes with

@@ -525,10 +525,6 @@ const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 /// Name of the optional developer sample asset.
 pub const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
-const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
-const LOCALNET_KAGEMUSHA_ASSET_NAME: &str = "usd";
-const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland.universal";
-const LOCALNET_KAGEMUSHA_INITIAL_QUANTITY: u64 = 100;
 const TAIRA_DIGITAL_SHEKEL_ASSET_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 const TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS: &str = "ds#boi.is";
 const TAIRA_IS_DATASPACE_ID: u64 = 6_647_857_470_246_403_404;
@@ -816,36 +812,14 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
 pub fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
-#[cfg(test)]
-fn localnet_kagemusha_asset_literal() -> String {
-    LOCALNET_KAGEMUSHA_ASSET_ID.to_owned()
-}
-fn localnet_kagemusha_asset_spec_for_client(
-    client_account_id: &AccountId,
-    taira: bool,
-) -> AssetSpec {
-    let (id, name, alias, quantity) = if taira {
-        (
-            TAIRA_DIGITAL_SHEKEL_ASSET_ID,
-            "ds",
-            TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS,
-            TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY,
-        )
-    } else {
-        (
-            LOCALNET_KAGEMUSHA_ASSET_ID,
-            LOCALNET_KAGEMUSHA_ASSET_NAME,
-            LOCALNET_KAGEMUSHA_ASSET_ALIAS,
-            LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
-        )
-    };
+fn taira_digital_shekel_asset_spec(client_account_id: &AccountId) -> AssetSpec {
     AssetSpec {
-        id: id.to_owned(),
-        name: name.to_owned(),
-        alias: Some(alias.to_owned()),
+        id: TAIRA_DIGITAL_SHEKEL_ASSET_ID.to_owned(),
+        name: "ds".to_owned(),
+        alias: Some(TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS.to_owned()),
         owned_by: client_account_id.clone(),
         mint_to: client_account_id.clone(),
-        quantity,
+        quantity: TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY,
     }
 }
 /// Validate an explicitly requested definition and build its developer bootstrap specification.
@@ -876,10 +850,9 @@ fn effective_localnet_assets_for_client(
     taira: bool,
 ) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
-    assets.push(localnet_kagemusha_asset_spec_for_client(
-        client_account_id,
-        taira,
-    ));
+    if taira {
+        assets.push(taira_digital_shekel_asset_spec(client_account_id));
+    }
     let default_client = localnet_client_account_id();
     for asset in extra_assets {
         let mut asset = asset.clone();
@@ -895,22 +868,20 @@ fn effective_localnet_assets_for_client(
 }
 
 fn validate_localnet_asset_specs(extra_assets: &[AssetSpec], taira: bool) -> Result<()> {
-    let builtin = localnet_kagemusha_asset_spec_for_client(&localnet_client_account_id(), taira);
     let mut seen_asset_ids = BTreeSet::new();
     let mut seen_aliases = BTreeSet::new();
-    seen_asset_ids.insert(
-        AssetDefinitionId::parse_address_literal(&builtin.id)
-            .expect("built-in localnet asset definition id must parse"),
-    );
-    seen_aliases.insert(
-        builtin
-            .alias
-            .as_deref()
-            .expect("built-in asset always has an alias")
-            .parse::<AssetDefinitionAlias>()
-            .expect("built-in localnet asset alias must parse")
-            .to_string(),
-    );
+    if taira {
+        seen_asset_ids.insert(
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_SHEKEL_ASSET_ID)
+                .expect("Taira Digital Shekel asset definition id must parse"),
+        );
+        seen_aliases.insert(
+            TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS
+                .parse::<AssetDefinitionAlias>()
+                .expect("Taira Digital Shekel asset alias must parse")
+                .to_string(),
+        );
+    }
     for (index, asset) in extra_assets.iter().enumerate() {
         ensure!(
             !asset.name.trim().is_empty(),
@@ -7906,13 +7877,12 @@ fn write_localnet_readme(
     alias_setup_intent_path: &Path,
     shell_out_dir: &str,
 ) -> Result<()> {
-    let builtin = localnet_kagemusha_asset_spec_for_client(
-        &localnet_client_account_id(),
-        chain_id == PUBLIC_TAIRA_CHAIN_ID,
-    );
     let taira_catalog_note = if chain_id == PUBLIC_TAIRA_CHAIN_ID {
         format!(
-            "- Digital Shekel namespace: `is` (dataspace `{TAIRA_IS_DATASPACE_ID}`, restricted full-replica lane `{TAIRA_IS_LANE_INDEX}`)\n\
+            "- Digital Shekel asset definition: `{TAIRA_DIGITAL_SHEKEL_ASSET_ID}`\n\
+             - Digital Shekel asset alias: `{TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS}`\n\
+             - Initial Digital Shekel quantity: `{TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY}`\n\
+             - Digital Shekel namespace: `is` (dataspace `{TAIRA_IS_DATASPACE_ID}`, restricted full-replica lane `{TAIRA_IS_LANE_INDEX}`)\n\
              - Public lane manifest: `{}`; retain this exact directory with the generated peer configs\n\
              - Registered lanes: `0,1,2,3,4,7`; lanes `5` (BPNG) and `6` (DPN) are reserved and absent\n",
             out_dir.join("lane-manifests/is.manifest.json").display()
@@ -7932,7 +7902,7 @@ fn write_localnet_readme(
         })
         .unwrap_or_default();
     let profile_notes = concat!(
-        "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
+        "- Generated peer configs enable structural `torii.account_onboarding`\n",
         "- The signed BLS validator topology and original proofs of possession establish generation zero\n",
         "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
         "Run `kagami docker` without `--seed` against this directory to validate the exact ",
@@ -7956,9 +7926,6 @@ fn write_localnet_readme(
             "- Owner-held genesis signing key: `{genesis_private_key}`\n",
             "- Client config: `{client_config}`\n\n",
             "## Built-in App API bootstrap\n\n",
-            "- KAGEMUSHA V1 asset definition: `{kagemusha_asset}`\n",
-            "- KAGEMUSHA V1 asset alias: `{kagemusha_alias}`\n",
-            "- Initial KAGEMUSHA asset reserve: `{kagemusha_quantity}`\n",
             "{taira_catalog_note}",
             "- Ephemeral ledger administrator: `{operator_account_id}`\n",
             "- Ephemeral onboarding authority: `{onboarding_account_id}`\n",
@@ -7967,7 +7934,6 @@ fn write_localnet_readme(
             "- Onboarding signer sidecar: `{onboarding_signer_key}`\n",
             "- Onboarding API token sidecar: `{onboarding_token_file}`\n",
             "- Secret-free alias setup intent: `{alias_setup_intent}`\n",
-            "- KAGEMUSHA reserve account: deterministic account derived from the exact genesis network id and asset definition\n",
             "{profile_notes}",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
@@ -7992,9 +7958,6 @@ fn write_localnet_readme(
         genesis_public_key = genesis_public_key_path.display(),
         genesis_private_key = genesis_private_key_path.display(),
         client_config = client_config_path.display(),
-        kagemusha_asset = builtin.id,
-        kagemusha_alias = builtin.alias.as_deref().expect("built-in asset alias"),
-        kagemusha_quantity = builtin.quantity,
         taira_catalog_note = taira_catalog_note,
         operator_account_id = operator_account_id,
         onboarding_account_id = onboarding_account_id,

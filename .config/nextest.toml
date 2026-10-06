@@ -52,7 +52,7 @@ default-filter = '''
     | package(iroha_wallet)
     | (package(iroha) & kind(lib))
     | (package(concread) & kind(lib) & test(/^(bptree|ebrcell|internals)::/))
-    | (package(iroha_data_model) & kind(lib) & test(/^(asset::id|block|isi::kagemusha_v1|nexus|query|sumeragi|sumeragi_finality)::/))
+    | (package(iroha_data_model) & kind(lib) & test(/^(asset::id|block|kagemusha::kagemusha_wallet_v1|nexus|query|sumeragi|sumeragi_finality)::/))
     | (package(iroha_crypto) & kind(lib) & test(/^(signature::bls|soranet::puzzle)::/))
     | (package(iroha_p2p) & kind(lib) & test(/^(network|peer)::/))
     | (package(fastpq_prover) & kind(lib) & test(/^(axt_binding|backend::compact_quantity_producer|proof)::tests::/))
@@ -70,7 +70,7 @@ default-filter = '''
         & test(/^(beacon_bootstrap|configured_genesis_tests|runtime_provider_broker|snapshot_restore_policy|startup_[a-z_]+|taira_runtime_signer|tests)::/))
     | (package(iroha_cli_lib) & kind(lib)
         & test(/^(address|client_config|operator_key|soracloud|taira[a-z_]*|tests)::/))
-    | (package(iroha_kagami) & kind(bin) & test(/^(genesis::generate::consensus_manifest_tests|genesis::sign|kura|localnet|verify)::/))
+    | (package(iroha_kagami) & kind(bin) & test(/^(genesis::generate::consensus_manifest_tests|genesis::sign|kura|localnet|verify|tests)::/))
     | (package(iroha_test_network) & kind(lib) & test(/^(config|disposable_runtime_provider_broker|tests)::/))
     | (package(iroha_test_network) & kind(test) & not test(/four_peer/))
 '''

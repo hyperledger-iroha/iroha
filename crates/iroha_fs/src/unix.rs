@@ -1,5 +1,8 @@
 //! Descriptor-relative Unix custody and atomic publication.
 
+#[path = "unix/custody_io.rs"]
+mod custody_io;
+
 use super::*;
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use std::{
@@ -277,6 +280,29 @@ impl Directory {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn child_reader(&self, name: &OsStr) -> io::Result<Self> {
+        self.revalidate()?;
+        let file = File::from(rustix::fs::openat(
+            &self.current().file,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        validate_directory(&file, false)?;
+        let mut links = self.links.clone();
+        if links.len() >= 128 {
+            return Err(invalid("private directory depth bound exceeded"));
+        }
+        links.push(Arc::new(Link {
+            path: self.path().join(name),
+            file,
+            private: false,
+        }));
+        let result = Self { links };
+        result.revalidate()?;
+        Ok(result)
     }
 
     pub(super) fn child(&self, name: &OsStr, create: bool, exclusive: bool) -> io::Result<Self> {

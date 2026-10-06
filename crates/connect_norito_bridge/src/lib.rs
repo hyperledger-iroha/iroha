@@ -155,6 +155,9 @@ use connect_approval_ffi::{
 };
 mod confidential_note_ffi;
 mod confidential_prover_ffi;
+/// Native KAGEMUSHA custody callbacks and exclusive shared-wallet ownership.
+#[cfg(unix)]
+pub mod kagemusha_wallet_ffi;
 mod private_settlement_ffi;
 pub use private_settlement_ffi::{
     CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,

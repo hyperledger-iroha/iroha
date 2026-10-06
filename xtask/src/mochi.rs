@@ -2,8 +2,8 @@
 
 use crate::{
     kagami_bundle::{
-        collect_native_programs, copy_program, digest, retain_created_output, retain_output,
-        retain_published_output,
+        admit_published_output, collect_native_programs, copy_program, digest,
+        retain_created_output, retain_output,
     },
     network_profiles, workspace_root,
 };
@@ -326,28 +326,40 @@ fn finalize_bundle(
         bundle_root.file_name().ok_or("Mochi bundle has no name")?,
         PublishMode::CreateNew,
     )?;
+    // Retain one original directory graph and share it across every output and namespace.
+    // Reopening the entire native ancestor chain for each file otherwise exhausts the native
+    // descriptor limit for ordinary macOS application layouts and nested workspace paths.
+    let root_reader = ReaderDirectory::open(directory.path())?;
+    let root_snapshot = root_reader.snapshot()?;
+    let mut namespaces = BTreeMap::from([(PathBuf::new(), (root_reader, root_snapshot))]);
     for (relative, snapshot, hash) in output_snapshots {
         let program = RUNTIME_BINARIES
             .iter()
             .any(|name| NativeBundleLayout::current().executable(Path::new(""), name) == relative);
-        let output =
-            retain_published_output(&directory.path().join(&relative), snapshot, hash, program)?;
+        let parent = retain_bundle_directory(
+            &mut namespaces,
+            relative
+                .parent()
+                .ok_or("published bundle file has no parent")?,
+        )?;
+        let file = parent.open_retained_regular(
+            relative
+                .file_name()
+                .ok_or("published bundle file has no name")?,
+        )?;
+        let output = admit_published_output(file, snapshot, hash, program)?;
         custody.outputs.push((relative, output));
     }
-    let namespaces = WalkDir::new(directory.path())
-        .follow_root_links(false)
-        .into_iter()
-        .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_type().is_dir() => {
-                Some(ReaderDirectory::open(entry.path()).and_then(|directory| {
-                    let snapshot = directory.snapshot()?;
-                    Ok((directory, snapshot))
-                }))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(std::io::Error::other(error))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    for entry in WalkDir::new(directory.path()).follow_root_links(false) {
+        let entry = entry.map_err(std::io::Error::other)?;
+        if entry.file_type().is_dir() {
+            retain_bundle_directory(
+                &mut namespaces,
+                entry.path().strip_prefix(directory.path())?,
+            )?;
+        }
+    }
+    let namespaces = namespaces.into_values().collect();
     let mut publication = BundlePublication {
         directory,
         namespaces,
@@ -357,6 +369,36 @@ fn finalize_bundle(
     };
     publication.verify()?;
     Ok(publication)
+}
+
+// A namespace is opened once through its already-retained original parent. A later lookup
+// rechecks both its exact snapshot and all original native ancestors before borrowing it.
+fn retain_bundle_directory<'a>(
+    namespaces: &'a mut BTreeMap<PathBuf, (ReaderDirectory, FileSnapshot)>,
+    relative: &Path,
+) -> Result<&'a ReaderDirectory, Box<dyn Error>> {
+    if !relative
+        .components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err("bundle namespace requires a direct relative path".into());
+    }
+    if !namespaces.contains_key(relative) {
+        let parent = relative
+            .parent()
+            .ok_or("bundle namespace has no retained parent")?;
+        let name = relative.file_name().ok_or("bundle namespace has no name")?;
+        let child = retain_bundle_directory(namespaces, parent)?.open_child(name)?;
+        let snapshot = child.snapshot()?;
+        namespaces.insert(relative.to_path_buf(), (child, snapshot));
+    }
+    let (directory, snapshot) = namespaces
+        .get(relative)
+        .ok_or("bundle namespace root is absent")?;
+    if directory.snapshot()? != *snapshot {
+        return Err("Mochi published directory namespace changed".into());
+    }
+    Ok(directory)
 }
 
 fn sync_tree(root: &Path) -> Result<(), Box<dyn Error>> {
@@ -2306,6 +2348,68 @@ mod tests {
                         .replace('\\', "/")
                 )),
             "archive listing did not include bundle payload: {stdout}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shared_namespace_tests {
+    //! Native shared namespace custody keeps the original object and refuses substitution.
+    use super::*;
+
+    #[test]
+    fn original_shared_namespace_admits_once_and_refuses_indirect_relative_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temporary.path().join("one/two")).unwrap();
+        let root = ReaderDirectory::open(temporary.path()).unwrap();
+        let snapshot = root.snapshot().unwrap();
+        let mut namespaces = BTreeMap::from([(PathBuf::new(), (root, snapshot))]);
+        let identity = retain_bundle_directory(&mut namespaces, Path::new("one/two"))
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        assert_eq!(namespaces.len(), 3);
+        assert_eq!(
+            retain_bundle_directory(&mut namespaces, Path::new("one/two"))
+                .unwrap()
+                .snapshot()
+                .unwrap(),
+            identity
+        );
+        assert_eq!(namespaces.len(), 3);
+        for indirect in ["../one", "one/../two", "/one", "."] {
+            assert!(retain_bundle_directory(&mut namespaces, Path::new(indirect)).is_err());
+            assert_eq!(namespaces.len(), 3);
+        }
+        assert!(retain_bundle_directory(&mut namespaces, Path::new("missing")).is_err());
+        assert!(!temporary.path().join("missing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn original_shared_namespace_refuses_equal_file_directory_substitution() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::create_dir(temporary.path().join("original")).unwrap();
+        fs::write(temporary.path().join("original/source"), b"original").unwrap();
+        let root = ReaderDirectory::open(temporary.path()).unwrap();
+        let snapshot = root.snapshot().unwrap();
+        let mut namespaces = BTreeMap::from([(PathBuf::new(), (root, snapshot))]);
+        let file = retain_bundle_directory(&mut namespaces, Path::new("original"))
+            .unwrap()
+            .open_retained_regular("source")
+            .unwrap();
+        fs::rename(
+            temporary.path().join("original"),
+            temporary.path().join("saved"),
+        )
+        .unwrap();
+        fs::create_dir(temporary.path().join("original")).unwrap();
+        fs::write(temporary.path().join("original/source"), b"original").unwrap();
+        assert!(retain_bundle_directory(&mut namespaces, Path::new("original")).is_err());
+        assert!(file.revalidate().is_err());
+        assert_eq!(
+            fs::read(temporary.path().join("saved/source")).unwrap(),
+            b"original"
         );
     }
 }

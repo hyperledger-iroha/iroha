@@ -4,6 +4,22 @@ The Iroha-native PIPA-v1 PLONKish/IPA proof system (`specs/plonk_ipa_v1.md`),
 built on `iroha_pasta`. The vendored halo2 stack is a test oracle only
 (`crates/iroha_plonk_oracle`); this crate never depends on it.
 
+PIPA-R uses explicit `CircuitDescriptorV2` admission (`DescriptorBinding::new_v2`
+or `decode_v2`) and `KeygenConfigV2::pipa_r`. Its RP57 transcript runs in the
+proof curve's base field, with canonical point coordinates, injective scalar
+encodings and declared instance ranges. V1 retained consumers continue to choose
+their scalar transcript explicitly; a V2 frame is never retried as V1.
+`VerifyingKey::transcript_repr` returns an explicit scalar/base-field enum.
+
+`create_proof_owned_with_claim` returns proof bytes and the same run's `(G, u)`
+opening obligation. `accumulate_generator` checks the succinct equation and
+returns a `#[must_use]` `GeneratorClaim`; only `decide`, or inclusion in a finally
+decided recursive accumulation, accepts that claim. The retained
+`accumulate_succinct` wire accumulator accepts scalar-profile provenance only.
+The native PIPA-R KATs have a standard-library Python calculation in
+`tests/pipa_r_reference.py`; the full independent reference verifier remains an
+M4 requirement.
+
 Stage ENGINE-1 (tasks T8 and T9) provides:
 
 - `cs`: the constraint-system IR. Expressions, gates, halo2 permuted lookups,
@@ -52,7 +68,11 @@ Stage ENGINE-2 (tasks T10, T11 and the PCS half of T13) provides:
   GLV-split scalars with signed-digit windows. The split keeps the two
   halves, their signs and the endomorphism image per term (97 bytes) and
   recodes each window's digits from the halves; terms are split in chunks
-  whose split data takes at most half the memory budget.
+  whose split data takes at most half the memory budget. Complete verifier
+  MSMs reserve all split, limb, window-result and bucket buffers against
+  the same process-wide 64 MiB scratch ceiling as the Pasta prover MSMs.
+  `msm_complete_with_shared_budget` additionally accepts a shared caller
+  ceiling; contention takes a stack-only complete path without waiting.
 - `pcs::multiopen`: the halo2 multi-point opening with static query grouping:
   queries are grouped by slot (column kind and index), never by commitment
   value, and a repeated query must repeat its evaluation bit for bit.
@@ -66,7 +86,14 @@ Stage ENGINE-3 (tasks T12 and T13) provides:
   computed from the opening plan, and (S11) the constraint-term table that
   the verifier's fold interprets and the transcript schedule that the prover
   and the verifier are tested against operation for operation.
-- `prover`: `create_proof` and `prove_circuit`. Randomness comes only from an
+- `prover`: `create_proof`, `create_proof_owned` and `prove_circuit`.
+  `create_proof_owned` consumes its witness; `prove_circuit` uses that path.
+  Advice buffers are moved into the prover and transformed to coefficients
+  in place after the lookup and permutation products consume evaluations.
+  The borrowed `create_proof` remains available for callers reusing a
+  witness; both paths produce identical proof bytes, and the owned advice
+  and coefficient buffers are zeroized on success and errors. Randomness
+  comes only from an
   opaque `ProverRandomness` (OS-keyed ChaCha20, a hedged derivation over OS
   entropy, the statement digest and the witness digest, or a recovery stream:
   the prover draws 32 bytes from the caller's derivation and keys ChaCha20

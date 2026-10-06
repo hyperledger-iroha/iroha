@@ -37,10 +37,10 @@ use super::{
     overflow_v1,
     policy::{
         KagemushaWalletAnchoredTimeV1, KagemushaWalletBlacklistGapOpeningV1,
-        KagemushaWalletBlacklistV1, KagemushaWalletFeeScheduleV1, KagemushaWalletMonotonicReadingV1,
-        KagemushaWalletQuotaChargeV1, KagemushaWalletQuotaShareV1,
-        KagemushaWalletRecordedBlacklistProofV1, KagemushaWalletSchemePolicyV1,
-        KagemushaWalletTimeIntervalV1,
+        KagemushaWalletBlacklistV1, KagemushaWalletFeeScheduleV1,
+        KagemushaWalletMonotonicReadingV1, KagemushaWalletQuotaChargeV1,
+        KagemushaWalletQuotaShareV1, KagemushaWalletRecordedBlacklistProofV1,
+        KagemushaWalletSchemePolicyV1, KagemushaWalletTimeIntervalV1,
     },
     poseidon::{
         KAGEMUSHA_WALLET_CREDIT_DOMAIN_V1, KAGEMUSHA_WALLET_CREDIT_OPENING_DOMAIN_V1,
@@ -56,8 +56,8 @@ use super::{
         KagemushaWalletEffectV1, KagemushaWalletFeeClaimLeafV1, KagemushaWalletLineagePublicV1,
         KagemushaWalletLineageV1, KagemushaWalletOperationKindV1, KagemushaWalletPackageDigestsV1,
         KagemushaWalletPackageV1, KagemushaWalletPendingOutgoingLeafV1,
-        KagemushaWalletReceiptSignerV1, KagemushaWalletReceiptV1, KagemushaWalletRecvChainEntryV1,
-        KagemushaWalletQuotaUsageArrayV1, KagemushaWalletSendChainEntryV1, KagemushaWalletStateV1,
+        KagemushaWalletQuotaUsageArrayV1, KagemushaWalletReceiptSignerV1, KagemushaWalletReceiptV1,
+        KagemushaWalletRecvChainEntryV1, KagemushaWalletSendChainEntryV1, KagemushaWalletStateV1,
         KagemushaWalletStatementV1,
     },
 };
@@ -763,14 +763,48 @@ fn validate_request_parts_v1(
     Ok(())
 }
 
+/// Bind a payer credential to a Request body and a distinct receiver key.
+fn require_request_payer_v1(
+    body: &KagemushaWalletRequestBodyV1,
+    receiver_payment_key: &KagemushaDevicePublicKeyV1,
+    payer_credential: &KagemushaWalletCredentialV1,
+) -> WalletResult<()> {
+    payer_credential.validate()?;
+    let payer = &payer_credential.body;
+    require_scheme_v1(
+        "request.payer_credential.scheme_id",
+        &payer.scheme_id,
+        &body.scheme_id,
+    )?;
+    if payer.asset_digest != body.asset_digest {
+        return Err(invalid_v1("request.payer_credential.asset_digest"));
+    }
+    if payer.wallet_id != body.payer_wallet_id {
+        return Err(invalid_v1("request.payer_wallet_id"));
+    }
+    if payer.account_digest != body.payer_account_digest {
+        return Err(invalid_v1("request.payer_account_digest"));
+    }
+    if payer.payment_key == *receiver_payment_key {
+        return Err(invalid_v1("request.payment_key"));
+    }
+    Ok(())
+}
+
 impl KagemushaWalletRequestV1 {
-    /// Freeze the receiver payment-key signature over `body`.
+    /// Accept the receiver payment-key signer output only after authenticating its payer Offer.
+    ///
+    /// The output is already produced: this constructor enforces context before freezing the
+    /// signature. The receiver platform must authenticate this context before invoking its key.
     ///
     /// # Errors
     ///
     /// Rejects what [`Self::validate`] rejects before the signature, and a signature that does
-    /// not verify under the receiver payment key.
+    /// not verify under the receiver payment key. The Offer and its issuer must verify under
+    /// `scheme`, and its credential must match the Request payer wallet, account and asset.
     pub fn sign(
+        scheme: &KagemushaWalletSchemeV1,
+        offer: &KagemushaWalletOfferV1,
         body: KagemushaWalletRequestBodyV1,
         receiver_credential: KagemushaWalletCredentialV1,
         fee_schedule: KagemushaWalletFeeScheduleSlotV1,
@@ -778,6 +812,15 @@ impl KagemushaWalletRequestV1 {
         signer_output: KagemushaWalletSignerOutputV1<'_>,
     ) -> WalletResult<Self> {
         validate_request_parts_v1(&body, &receiver_credential, &fee_schedule, &certificates)?;
+        // The Offer's credential and issuer are authenticated before any signer output is
+        // frozen into a Request. A caller cannot choose another payer account in the body.
+        require_scheme_v1("request.scheme_id", &body.scheme_id, &scheme.scheme_id())?;
+        offer.verify(scheme)?;
+        require_request_payer_v1(
+            &body,
+            &receiver_credential.body.payment_key,
+            &offer.payer_credential,
+        )?;
         let signature = kagemusha_wallet_freeze_signature_v1(
             &receiver_credential.body.payment_key,
             Domain::Request,
@@ -984,30 +1027,13 @@ impl KagemushaWalletRequestV1 {
         Ok(())
     }
 
-    /// Require that `payer_credential` is the payer this Request names: same scheme and asset,
-    /// the Request's payer wallet and payer account digest, and a payment key other than the
-    /// receiver's (design C5, owner answer A5).
+    /// Require the Request's exact payer credential account and a distinct payment key.
     fn require_payer(&self, payer_credential: &KagemushaWalletCredentialV1) -> WalletResult<()> {
-        let body = &self.body;
-        let payer = &payer_credential.body;
-        require_scheme_v1(
-            "request.payer_credential.scheme_id",
-            &payer.scheme_id,
-            &body.scheme_id,
-        )?;
-        if payer.asset_digest != body.asset_digest {
-            return Err(invalid_v1("request.payer_credential.asset_digest"));
-        }
-        if payer.wallet_id != body.payer_wallet_id {
-            return Err(invalid_v1("request.payer_wallet_id"));
-        }
-        if payer.account_digest != body.payer_account_digest {
-            return Err(invalid_v1("request.payer_account_digest"));
-        }
-        if payer.payment_key == self.receiver_credential.body.payment_key {
-            return Err(invalid_v1("request.payment_key"));
-        }
-        Ok(())
+        require_request_payer_v1(
+            &self.body,
+            &self.receiver_credential.body.payment_key,
+            payer_credential,
+        )
     }
 
     /// Send effect of this Request at the effective accepted time `interval` (§7), the effect

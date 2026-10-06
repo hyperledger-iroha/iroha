@@ -2600,9 +2600,7 @@ impl KagemushaWalletStateV1 {
                 if usage.root() != old_core.quota_usage_root {
                     return Err(invalid_v1("state.core.quota_usage_root"));
                 }
-                let floor = old_core
-                    .accepted_time_floor_ms
-                    .max(share.body.issued_at_ms);
+                let floor = old_core.accepted_time_floor_ms.max(share.body.issued_at_ms);
                 let rebuilt = usage.rebuild_for_share(
                     old_rest.quota_share_id == 0,
                     &share.windows,

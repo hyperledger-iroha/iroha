@@ -326,10 +326,6 @@ fn invalid_asset_requests_do_not_create_partial_output_directories() {
             vec![asset(valid_id.clone(), None), asset(valid_id, None)],
         ),
         (
-            "built-in-collision",
-            vec![asset(localnet_kagemusha_asset_literal(), None)],
-        ),
-        (
             "duplicate-alias",
             vec![
                 asset(localnet_sample_asset_literal(), Some("sample#localnet")),
@@ -1881,7 +1877,6 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
     assert!(contents.contains(&format!("- Base seed BLAKE3 fingerprint: `{fingerprint}`")));
     assert!(!contents.contains("- Base seed: `Iroha`"));
     assert!(!contents.contains("`Iroha`"));
-    assert!(contents.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
     assert!(contents.contains("genesis.expected_hash"));
     assert!(contents.contains("`kagami docker` without `--seed`"));
     assert!(!contents.contains("IROHA_GENESIS_SIGNED_FILE"));
@@ -1891,11 +1886,6 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
     assert!(contents.contains("- Ledger/faucet signer sidecar: `"));
     assert!(contents.contains("- Dedicated HTTP operator signer sidecar: `"));
     assert!(contents.contains("- Ephemeral onboarding authority: `"));
-    assert!(
-        contents.contains(
-            "- KAGEMUSHA reserve account: deterministic account derived from the exact genesis network id and asset definition"
-        )
-    );
     assert!(!contents.contains("Localnet app authority / escrow account"));
 }
 #[test]

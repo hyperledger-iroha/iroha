@@ -283,6 +283,8 @@ impl MessageFixture {
         certificates: KagemushaWalletCertificateSetV1,
     ) -> WalletResult<KagemushaWalletRequestV1> {
         KagemushaWalletRequestV1::sign(
+            &self.payer.scheme,
+            &self.offer(),
             *body,
             self.receiver.credential,
             slot,
@@ -1364,7 +1366,55 @@ fn kagemusha_wallet_v1_send_rule_and_send_effect() {
     let (mut body, slot, certificates) = f.request_parts(true, 1_000);
     body.payer_wallet_id = same_key.body.wallet_id;
     body.payer_account_digest = same_key.body.account_digest;
-    let same_key_request = f.sign_request(&body, slot, certificates).expect("request");
+    // The ordinary fixture Offer names another payer, so canonical construction refuses it.
+    assert_invalid(
+        f.sign_request(&body, slot, certificates.clone()),
+        "request.payer_wallet_id",
+    );
+    // Even an authenticated Offer naming this payer cannot reuse the receiver payment key.
+    let mut offer_body = f.offer().body;
+    offer_body.payer_wallet_id = same_key.body.wallet_id;
+    offer_body.payer_credential_digest = same_key.credential_digest();
+    let same_key_offer = KagemushaWalletOfferV1::sign(
+        offer_body,
+        same_key,
+        &f.receiver.enrollment_certificate,
+        raw_output(&f.receiver.payment, &offer_body.signing_message()),
+    )
+    .expect("authenticated same-key Offer");
+    same_key_offer
+        .verify(&f.payer.scheme)
+        .expect("same-key issuer");
+    assert_invalid(
+        KagemushaWalletRequestV1::sign(
+            &f.payer.scheme,
+            &same_key_offer,
+            body,
+            f.receiver.credential,
+            slot,
+            certificates.clone(),
+            raw_output(&f.receiver.payment, &body.signing_message()),
+        ),
+        "request.payment_key",
+    );
+    // Build a receiver-signed adversarial object directly in this test: no canonical constructor
+    // is bypassed in production, and the retained Send rule must independently refuse it.
+    let same_key_request = KagemushaWalletRequestV1 {
+        body,
+        receiver_credential: f.receiver.credential,
+        fee_schedule: slot,
+        certificates,
+        signature: kagemusha_wallet_freeze_signature_v1(
+            &f.receiver.credential.body.payment_key,
+            Domain::Request,
+            &body.signing_message(),
+            raw_output(&f.receiver.payment, &body.signing_message()),
+        )
+        .expect("adversarial receiver signature"),
+    };
+    same_key_request
+        .validate()
+        .expect("receiver-authenticated shape");
     let mut same_key_state =
         KagemushaWalletStateV1::bootstrap(&same_key, field_value(0x5d)).expect("state");
     same_key_state.core.policy_epoch = state.core.policy_epoch;
@@ -3528,9 +3578,25 @@ fn kagemusha_wallet_v1_two_sided_blacklist_at_request_send_and_recorded_receive(
         .expect("send rule");
     let (mut body, slot, certificates) = f.request_parts(true, 1_000);
     body.payer_account_digest = other_account;
-    let foreign = f
-        .sign_request(&body, slot, certificates)
-        .expect("foreign account candidate");
+    assert_invalid(
+        f.sign_request(&body, slot, certificates.clone()),
+        "request.payer_account_digest",
+    );
+    // A malicious receiver can still provide a signed wire object outside the constructor;
+    // Send must independently enforce the payer account binding.
+    let foreign = KagemushaWalletRequestV1 {
+        body,
+        receiver_credential: f.receiver.credential,
+        fee_schedule: slot,
+        certificates,
+        signature: kagemusha_wallet_freeze_signature_v1(
+            &f.receiver.credential.body.payment_key,
+            Domain::Request,
+            &body.signing_message(),
+            raw_output(&f.receiver.payment, &body.signing_message()),
+        )
+        .expect("adversarial receiver signature"),
+    };
     assert_invalid(
         foreign.check_send_rule(
             &f.payer.credential,
@@ -3886,4 +3952,144 @@ fn kagemusha_wallet_v1_later_blacklists_preserve_original_payment_and_evidence()
     payment
         .verify(&scheme, &f.payer.credential, &payer_set, &request)
         .expect("fee claim after later lists");
+}
+
+#[test]
+fn kagemusha_wallet_v1_request_binds_both_credential_accounts() {
+    let f = message_fixture();
+    let request = f.request(true);
+    let items = request.body.field_items();
+    let limbs = |value: &[u8; 32]| {
+        let mut low = [0; 32];
+        let mut high = [0; 32];
+        low[..16].copy_from_slice(&value[..16]);
+        high[..16].copy_from_slice(&value[16..]);
+        [low, high]
+    };
+    assert_eq!(
+        &items[7..9],
+        &limbs(&f.payer.credential.body.account_digest)
+    );
+    assert_eq!(
+        &items[11..13],
+        &limbs(&f.receiver.credential.body.account_digest)
+    );
+    let mutations: [(&str, RequestBodyMutation); 2] = [
+        ("request.payer_account_digest", |body| {
+            body.payer_account_digest = [0; 32]
+        }),
+        ("request.receiver_account_digest", |body| {
+            body.receiver_account_digest = [0; 32]
+        }),
+    ];
+    for (field, mutation) in mutations {
+        let mut body = request.body;
+        mutation(&mut body);
+        assert_invalid(body.validate(), field);
+        assert_ne!(body.credit_id(), request.credit_id());
+        assert_ne!(body.signing_message(), request.body.signing_message());
+    }
+    let (mut receiver_body, slot, certificates) = f.request_parts(true, 1_000);
+    receiver_body.receiver_account_digest = f.payer.credential.body.account_digest;
+    assert_invalid(
+        f.sign_request(&receiver_body, slot, certificates),
+        "request.receiver_account_digest",
+    );
+    // A valid receiver signature must not grant Send authority for another payer account.
+    let (mut payer_body, slot, certificates) = f.request_parts(true, 1_000);
+    payer_body.payer_account_digest = f.receiver.credential.body.account_digest;
+    assert_invalid(
+        f.sign_request(&payer_body, slot, certificates.clone()),
+        "request.payer_account_digest",
+    );
+    // Even a raw adversarial receiver-signed Request outside the canonical constructor must
+    // fail the retained Send and Payment account checks.
+    let wrong_payer = KagemushaWalletRequestV1 {
+        body: payer_body,
+        receiver_credential: f.receiver.credential,
+        fee_schedule: slot,
+        certificates,
+        signature: kagemusha_wallet_freeze_signature_v1(
+            &f.receiver.credential.body.payment_key,
+            Domain::Request,
+            &payer_body.signing_message(),
+            raw_output(&f.receiver.payment, &payer_body.signing_message()),
+        )
+        .expect("raw fixture signature"),
+    };
+    let interval =
+        KagemushaWalletTimeIntervalV1::new(ACCEPTED_MS, ACCEPTED_MS + 1).expect("interval");
+    assert_invalid(
+        wrong_payer.send_effect(&f.payer.credential, &interval),
+        "request.payer_account_digest",
+    );
+    let state = f.payer_state(&request);
+    let omega = f.payer_omega(&state);
+    assert_invalid(
+        wrong_payer.check_send_rule(&f.payer.credential, &state, &omega),
+        "request.payer_account_digest",
+    );
+}
+
+#[test]
+fn kagemusha_wallet_v1_request_signing_authenticates_offer_before_freezing() {
+    let f = message_fixture();
+    let (body, slot, certificates) = f.request_parts(true, 1_000);
+    let offer = f.offer();
+    let sign = |offer: &KagemushaWalletOfferV1, output| {
+        KagemushaWalletRequestV1::sign(
+            &f.payer.scheme,
+            offer,
+            body,
+            f.receiver.credential,
+            slot,
+            certificates.clone(),
+            output,
+        )
+    };
+    sign(
+        &offer,
+        raw_output(&f.receiver.payment, &body.signing_message()),
+    )
+    .expect("authenticated payer context");
+    let mut unauthenticated = offer.clone();
+    unauthenticated.body.session_nonce[0] ^= 1;
+    assert_signature(
+        sign(
+            &unauthenticated,
+            KagemushaWalletSignerOutputV1::Raw([0; 64]),
+        ),
+        Domain::Offer,
+    );
+    // An issuer-authenticated Offer with the same payer key/wallet but another canonical
+    // account is still the wrong Request context.
+    let mut credential_body = f.payer.credential.body;
+    credential_body.account_digest = f.receiver.credential.body.account_digest;
+    let credential = KagemushaWalletCredentialV1::sign(
+        credential_body,
+        &f.payer.enrollment_certificate,
+        raw_output(
+            &f.payer.enrollment_signer,
+            &credential_body.signing_message(),
+        ),
+    )
+    .expect("issuer-signed context");
+    let altered_body = KagemushaWalletOfferBodyV1 {
+        payer_credential_digest: credential.credential_digest(),
+        ..offer.body
+    };
+    let other_account = KagemushaWalletOfferV1::sign(
+        altered_body,
+        credential,
+        &f.payer.enrollment_certificate,
+        raw_output(&f.payer.payment, &altered_body.signing_message()),
+    )
+    .expect("signed Offer");
+    other_account
+        .verify(&f.payer.scheme)
+        .expect("authenticated Offer");
+    assert_invalid(
+        sign(&other_account, KagemushaWalletSignerOutputV1::Raw([0; 64])),
+        "request.payer_account_digest",
+    );
 }

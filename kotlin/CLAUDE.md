@@ -136,6 +136,16 @@ All mutable collections and byte arrays are copied on construction and access. U
 
 JUnit 5 with `@ParameterizedTest` / `@MethodSource` for data-driven tests. Test companion objects provide argument lists via `@JvmStatic` methods.
 
+The separate `:client-android:testDebugHostNative` task requires an explicitly
+rebuilt host bridge in one absolute `IROHA_NATIVE_LIBRARY_PATH` directory.
+It runs the tagged Java software-key-manager and explicit-chain-context cases,
+plus the shared SoraFS reference-validator cases. Missing native artifacts or
+capabilities fail; host JNI execution is separate from Android/device qualification.
+
+The current wallet module declares managed platform, payment-key and backup-rule
+unit tests. Its Rust `KagemushaWalletPlatformV1` JNI adapter and provider-open call
+remain TODO; there is no wallet host-JNI test task or native execution claim.
+
 ## Version Catalog
 
 Dependencies managed in `gradle/libs.versions.toml`: Kotlin 2.3.10, AGP 9.0.1, JUnit 5.11.4, BouncyCastle 1.78.1, zstd-jni 1.5.7-7, OkHttp 4.12.0, Netty 4.2.17.Final.

@@ -36,6 +36,7 @@ struct FakePlatformV1 {
     key: SigningKey,
     mode: Mutex<SignModeV1>,
     sign_calls: AtomicUsize,
+    signed_messages: Mutex<Vec<(KagemushaWalletSigningDomainV1, [u8; 32])>>,
 }
 
 impl FakePlatformV1 {
@@ -44,6 +45,7 @@ impl FakePlatformV1 {
             key,
             mode: Mutex::new(SignModeV1::Der),
             sign_calls: AtomicUsize::new(0),
+            signed_messages: Mutex::new(Vec::new()),
         }
     }
 
@@ -86,6 +88,10 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
         message: KagemushaWalletSignMessageV1<'_>,
     ) -> Result<KagemushaWalletPlatformSignatureV1, KagemushaWalletUnavailableV1> {
         self.sign_calls.fetch_add(1, Ordering::SeqCst);
+        self.signed_messages
+            .lock()
+            .expect("messages")
+            .push((message.domain(), *message.as_bytes()));
         let message = message.as_bytes();
         let signature: Signature = self.key.sign(message);
         Ok(match *self.mode.lock().expect("mode") {
@@ -368,6 +374,13 @@ fn wallet_advance_v1_platform_receipt_signer_freezes_and_verifies() {
             &signature,
         )
         .expect("verifies over the 32-byte receipt signing message");
+        assert_eq!(
+            platform.signed_messages.lock().expect("messages").last(),
+            Some(&(
+                KagemushaWalletSigningDomainV1::Receipt,
+                kagemusha_wallet_signing_message_v1(KagemushaWalletSigningDomainV1::Receipt, &body)
+            ))
+        );
         assert!(
             signature.verify(capability.payment_key(), &body).is_err(),
             "the receipt transcript itself is not the signed message"
@@ -507,6 +520,10 @@ fn wallet_advance_v1_platform_domain_signer_refuses_receipt_and_issuer_domains()
             &body,
         )
         .expect("permitted domain");
+        assert_eq!(
+            platform.signed_messages.lock().expect("messages").last(),
+            Some(&(domain, kagemusha_wallet_signing_message_v1(domain, &body)))
+        );
         kagemusha_wallet_verify_signature_v1(
             capability.payment_key(),
             domain,

@@ -60,7 +60,7 @@ end); the labels are defined in the legend below.
 | M1 | First native σ: `iroha_pasta`, `iroha_plonk`, `iroha_plonk_gadgets` v0, `iroha_plonk_oracle`, σ_send/σ_recv. Exit criteria groups: |
 | M1.a (M1a) | Engine parity: native proofs reproduce the vendored golden SHA-256 at 1/2/4/7 threads on aarch64 and x86_64; `ParamsIPA` bytes for k6-k16 and VK bytes identical; verifier verdicts match on the tamper corpora. The `iroha_pasta` parity suites and the `halo2curves` 0.9 encoding KATs belong here |
 | M1.b (M1b) | Kernel timings on the M1 Ultra (MSM 2^16, fold, k11 σ-shaped prove) |
-| M1.c (M1c) | Native σ: the 24 M7 relation cases, in-circuit digests equal `kagemusha_v1_poseidon::hash`, proof size, prove/verify time and RSS budgets |
+| M1.c (M1c) | Native σ: the 24 M7 relation cases, in-circuit digests equal the canonical wallet Poseidon hash, proof size, prove/verify time and RSS budgets |
 | M1.d | Hygiene: no `vendor/` change; fmt, clippy and tests pass for the new crates |
 | M2 | Ledger relations and the consensus verifier on the native stack, one family per change: (a) SoraFS PoP, (b) Kaigi, (c) confidential (re-keyed), (d) vote tally, `halo2_backend` and the `lib.rs`/`verification.rs` dispatch |
 | M3 | Gadgets II: native ECC, P-256 ECDSA, SHA-256 lanes, SMT depth 256/128, App Attest DER |
@@ -71,9 +71,9 @@ end); the labels are defined in the legend below.
 | Step 1-8 | Migration steps of the plan: 1 M0 capture; 2 M1 crates beside the vendored stack; 3 native state hashes first (`kagemusha_v1_poseidon` and the confidential native Poseidon move to `iroha_pasta::poseidon`, Pasta imports switch to `iroha_pasta`; gate: KAT equality on every M0 vector); 4 M2 families; 5 M3-M5 KAGEMUSHA; 6 harnesses (`ram_lfe_*`; the KAGEMUSHA harnesses `g3_proof_scaling_measurement_tests.rs` and `prover_golden_tests.rs` were deleted with the old relations); 7 peripheral owners (fuzz manifests, scripts, pytests); 8 M7 deletion |
 | T1-T21 | First-milestone tasks. Cited here: T7 `iroha_pasta::poseidon` with a KAT test against the M0 `kagemusha_v1_poseidon` vectors; T15 `iroha_plonk_oracle`; T16 `iroha_core_zk/src/prover_golden_parity_tests.rs` re-proving the σ golden natively (no longer possible: the old circuits were deleted on 2026-10-05; the goldens stay pinned in `kats_v1.json`) |
 
-Outstanding outcomes and owners for the programme belong in `roadmap.md`
-(TODO: add a native PLONK/IPA row with owners and the M0-M7 completion
-criteria).
+Outstanding outcomes and owners for the programme are tracked by C9 and S7
+in `roadmap.md`. Retained consumers must migrate and re-key before M7 removes
+the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 
 ## Direct users of the vendored stack
 
@@ -81,14 +81,14 @@ criteria).
 | --- | --- | --- | --- | --- |
 | `iroha_core_zk` verify dispatch: `lib.rs` (`verify_halo2_ipa`, `zkparse`), `verification.rs`, `halo2_backend.rs` (+`_01/_02/_03` tests), `zk1_test_helpers.rs`, `ivm_proof_identity` | halo2-axiom | V T | Taira `[zk.halo2] enabled = true` (`configs/soranexus/taira/config.toml:314`). Stored proofs and registered VKs: unknown offline | M2(d) |
 | `iroha_core_zk::confidential_v2` (+tests): transfer v2, unshield v2/v3 circuits | halo2-axiom, halo2-base, snark-verifier | P V H | Taira `[confidential] enabled = true` (`config.toml:288`). Shielded notes and registered `CONFIDENTIAL_*_VK_DIGEST_V1`: unknown offline | Note hash: Step 3 (KAT gate). Circuits: M2(c), re-key |
-| `iroha_core_zk::kagemusha_v1_poseidon` | halo2-base spec, snark-verifier `Poseidon` | H | Only the consensus mint-finality roots of `mint_finality.rs` (below) | Removed with that consensus residue; the T7 KAT vectors stay in `kats_v1.json` |
+| Retired consensus Poseidon owner | — | — | None | Deleted with the mint-finality authority; the primitive KAT vectors stay in `kats_v1.json` and are checked by current native consumers. |
 | Old KAGEMUSHA owners: `iroha_core_zk::kagemusha_v1_state`, `kagemusha_v1_recursion` except `mint_finality.rs`, the `pasta_*`, `kagemusha_p256_curve_gadget.rs` and `app_attest_der_gadget.rs` gadgets, `kagemusha_polynomial_store_v1`, `prover_golden_tests.rs`, `g3_proof_scaling_measurement_tests.rs`, and `iroha_core` `isi/kagemusha.rs` and `kagemusha_v1_reserve.rs` | — | — | None in source | Deleted 2026-10-05 (owner decision, first release). M5 rebuilds KAGEMUSHA natively in `iroha_kagemusha_proof`; the golden table stays pinned in `kats_v1.json` |
-| `kagemusha_v1_recursion/mint_finality.rs` | halo2-axiom Pasta, `kagemusha_v1_poseidon` | T H | Consensus: `irohad` (`main.rs`, `taira_runtime_signer.rs`, `consensus_threshold`), `iroha_kagami` genesis, `iroha_test_network` | Consensus residue. Removed by the consensus mint-finality cut (owner decision 2026-10-04), not ported |
+| Retired paired-Pasta mint-finality authority | — | — | None | Deleted with its consensus, genesis, daemon and test-network integration. |
 | `ram_lfe_*` (`#[cfg(test)]`) | halo2-axiom | P | None | Owner: re-express or delete |
 | `kaigi_*_v1_tests.rs` (in `iroha_core_zk`) | halo2-axiom | P V | Test | M2(b) |
 | `iroha_core` Kaigi: `isi/kaigi/privacy{,/authorization_v1,/proof_fixture_v1}.rs`, `privacy_release_evidence/kaigi.rs`, `tests/kaigi_privacy.rs` | halo2-axiom | V | Kaigi VKs are config refs (`kaigi_authorization_vk`, `kaigi_usage_vk`), unset in the Taira template. Live: unknown | M2(b) |
 | `iroha_core` vote tally and tooling: `tests/zk_vote_tally_audit.rs`, `tests/zk_testkit.rs`, `benches/zk_poseidon.rs`; feature `circuit-params = ["halo2_proofs/circuit-params"]` | halo2-axiom | P V | Test | M2(d). Remove the feature forward |
-| `kaigi_zk` (7 files; Poseidon from `poseidon-primitives` `Spec` over Pasta `Fp`) | halo2-axiom | P V H | Through `iroha_core` `zk-halo2` | M2(b). Keep VK bytes, bump IDs (critique). TODO: RP56 KATs |
+| `kaigi_zk` (7 files; Poseidon from `poseidon-primitives` `Spec` over Pasta `Fp`) | halo2-axiom | P V H | Through `iroha_core` `zk-halo2` | M2(b). Re-key the migrated first-release consumer and regenerate its fixtures; no old-key decoder or compatibility shim. TODO: RP56 KATs |
 | `sorafs_manifest::pop_credentials::zk` (own `poseidon-primitives` Poseidon, `zk.rs:100-115`) | halo2-axiom | P V H | SoraFS PoP credentials (irohad runtime provider). Live: unknown | M2(a). TODO: PoP Poseidon KATs |
 | `iroha_js_host` (`kaigi_proof_v1.rs`, OsRng; `confidential_wallet.rs` through `iroha_core_zk`) | halo2-axiom | P | npm package | M2(b)(c), caller RNG |
 | `xtask` `vote_tally.rs` (feature `dev-vote-fixture`) | halo2-axiom | P | Fixture only | M2(d) |
@@ -98,12 +98,11 @@ criteria).
 
 | Consumer | Stack | Use | Live exposure | Milestone |
 | --- | --- | --- | --- | --- |
-| `iroha_data_model::sumeragi::epoch` (`epoch.rs:124`) through `iroha_zkp_poseidon::pasta_keys` | halo2curves 0.9 Pasta | T | Consensus paired-Pasta key check on native epochs | Retained. Owner decides on convergence; cross-implementation encoding KATs in M1a |
-| `iroha_zkp_poseidon` (`pasta_keys.rs`, `pasta.rs`, `poseidon.rs`; dev `halo2curves-axiom` cross-check in `pasta/tests.rs`) | halo2curves 0.9; dev halo2curves-axiom | T H | `pasta_keys` is consensus (also `mint_finality.rs:345`) | Dev oracle moves to `iroha_pasta` at Step 3 |
+| `iroha_zkp_poseidon` (`pasta.rs`, `poseidon.rs`; dev `halo2curves-axiom` cross-check in `pasta/tests.rs`) | halo2curves 0.9; dev halo2curves-axiom | T H | Shared proof-system primitives; the paired-key authority helper is deleted | Dev oracle moves to `iroha_pasta` at Step 3 |
 | `iroha_zkp_halo2` (native Pallas/BN254 IPA, SHA3 transcript; used by `ivm`, `iroha_core` `zk-ipa-native`, `iroha_cli`, `iroha_torii`, `iroha_core_privacy`, `fastpq_prover`, `iroha_core_zk`, `iroha_python_rs`) | halo2curves 0.9 (optional) | P V T | Non-optional dependency of `iroha_core`, so every node | Owner: converge or keep separate |
 | `iroha_core_privacy` `privacy_engines/orchard.rs`; `iroha_core` feature `privacy-release-evidence` | orchard 0.15.4 (git rev `9d07047d`, a non-optional dependency of `iroha_core_privacy`), Zcash `halo2_proofs` 0.3.4, `pasta_curves` 0.5.2 | V | Taira privacy catalog `orchard-halo2-actions-v1`, `activation_state: not-executed` (`privacy_bootstrap_plan.json`) | Carve-out: stays after M7; allowlist in `check_no_vendored_halo2.sh` (TODO: the script does not exist yet; M7 adds it) |
 | Orchard linkers (through `iroha_core_privacy`): `connect_norito_bridge` (iOS/Android), `irohad`, `iroha_torii`, `iroha_cli`, `iroha_kagami`, `iroha_js_host`, `zk_ace_prover`, `integration_tests`, and `python/iroha_python/iroha_python_rs` (`privacy_wallet_bundle.rs`, `privacy_native_actions.rs` build Orchard spend/change prover inputs) | orchard, Zcash `halo2_proofs` 0.3.4, `pasta_curves` 0.5.2 (linked, not imported) | P V T | Every node binary, the mobile bridge, npm and PyPI wheels | Carve-out with Orchard; binary-size and seal reports count it |
-| `vendor/vega-prover` (Microsoft Vega; `src/provider/pasta.rs`) | Own `ff` 0.13 Pasta provider; not a workspace member | T | Reference for the pinned Pasta points in `iroha_data_model` `sumeragi/epoch/tests.rs` and for the `iroha_zkp_halo2` Vega fixtures (`vega/canonical_mc_exact.rs`, `vega/microsoft_mc/*`) | Out of the halo2 M7 scope; owner decides whether those KATs move to `iroha_pasta` |
+| `vendor/vega-prover` (Microsoft Vega; `src/provider/pasta.rs`) | Own `ff` 0.13 Pasta provider; not a workspace member | T | Reference for the `iroha_zkp_halo2` Vega fixtures (`vega/canonical_mc_exact.rs`, `vega/microsoft_mc/*`) | Out of the halo2 M7 scope; owner decides whether those KATs move to `iroha_pasta` |
 | `ivm` (BN254 `poseidon.rs`, `bn254_vec.rs`); ZK verify syscalls reach `iroha_core_zk` through the `iroha_core` host | halo2curves 0.9 BN254 | H | All nodes | No direct change; follows M2(d) dispatch |
 | `fastpq_prover` (BN254 Poseidon, Metal, CUDA bench) | halo2curves 0.9 BN254 | H | FASTPQ | Out of scope |
 | `iroha_sccp` (optional, dev); `iroha_deploy` dev (`verify/finality/tests.rs`) | halo2curves 0.9 | T | Tests, SCCP | Out of scope |
@@ -113,7 +112,7 @@ criteria).
 
 | Consumer | What it reaches | Live exposure | Milestone |
 | --- | --- | --- | --- |
-| `irohad`, `iroha_torii` (`zk_prover.rs`, routing), `iroha_cli` (`zk.rs`), `iroha_kagami` (genesis), `iroha_test_network` | Verify dispatch, mint finality (until the consensus cut), confidential | All nodes and operators | M2 (dispatch) |
+| `irohad`, `iroha_torii` (`zk_prover.rs`, routing), `iroha_cli` (`zk.rs`), `iroha_kagami` (genesis), `iroha_test_network` | Verify dispatch and confidential | All nodes and operators | M2 (dispatch) |
 | `iroha_deploy` (`localnet.rs` registers confidential VK records; `genesis/staging.rs`) | Confidential VKs | Localnet, staging | M2(c) fixtures |
 | `connect_norito_bridge` (`confidential_prover_ffi`, `confidential_note_ffi`) | Confidential prover and note hash | iOS and Android apps (staticlib/cdylib) | Step 3, M2(c); reseal and size report |
 | `iroha_python_rs` (`confidential_wallet.rs`), `iroha_js_host` | Confidential wallet | PyPI wheels, npm | M2(c) |
@@ -144,21 +143,20 @@ criteria).
     the source no longer has; the Taira reset is their cutover. The Digital Shekel
     asset stays in the genesis template.
   - The genesis templates register no halo2 VKs.
-  - Unknown offline: registered VKs by backend label, stored proofs, shielded commitment and nullifier counts, Kaigi sessions, PoP credentials, installed KAGEMUSHA releases and mint-finality epochs.
+  - Unknown offline: registered VKs by backend label, stored proofs, shielded commitment and nullifier counts, Kaigi sessions, PoP credentials, current wallet artifacts and authenticated validator epochs.
 - **Minamoto:** no checked-in config, and the skill lists no ZK surface. Everything is unknown offline; stay read-only.
 
-A read-only MCP inventory of both networks must gate the M2 cutover and the M7
-deletion (spec §9: old-format value keeps its verifier until holders exit).
+Inventory deployed candidates before resetting them to the first-release protocol.
+Retired formats, verifiers and compatibility paths are not retained in the release.
 
 ## Corrections applied to the judge plan
 
-- Mint finality is consensus code with its own removal (owner decision
-  2026-10-04), not part of the M5 `mint_*` deletion or a port.
+- The paired-Pasta mint-finality authority and its consensus integration are deleted;
+  they are not part of the native proof implementation.
 - Orchard and Zcash `halo2_proofs` 0.3.4 are a production dependency of
   `iroha_core_privacy` and stay after M7.
-- The consensus Pasta key check (`iroha_data_model` epoch, through
-  `iroha_zkp_poseidon::pasta_keys`, halo2curves 0.9) is a fourth Pasta
-  implementation. It is out of M7 scope unless the owner decides to converge.
+- Validator generations contain ordered BLS identities; the retired consensus Pasta
+  key checks are deleted. Audit remaining non-consensus Pasta consumers separately.
 - The KAGEMUSHA and confidential native hashes are byte-identical
   constructions: the same RP57 spec and the same `[domain, len, inputs]`
   preimage, with different domains. One `iroha_pasta::poseidon` sponge serves

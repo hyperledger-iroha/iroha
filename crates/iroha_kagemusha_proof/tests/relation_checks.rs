@@ -29,6 +29,7 @@ use common::{
     CHECK_SEED, RECEIVE_BLACKLIST, RELATION_CASES, RELATION_CHECK_CASES, SEND_BLACKLIST,
     case_label, check_witness, check_witness_of, folded, relation_shapes, smallest_shape,
 };
+use ff::PrimeField;
 use iroha_kagemusha_proof::{
     CONTROL_ATTESTATION_LEASE, CONTROL_BLACKLIST, CONTROL_QUOTAS, LIFECYCLE_RETIRING, Mutation,
     RelationShape, SigmaCircuit, SigmaRelation, StepInputs, StepRelation, StepWitness, Violation,
@@ -314,12 +315,14 @@ fn blacklist_gap_edits() -> Vec<(&'static str, Vec<Violation>, Edit)> {
 /// Edits of the relations with the blacklist control that stay honest:
 /// no list held refuses no account (owner answer A5).
 fn blacklist_gap_boundary_edits() -> Vec<(&'static str, Edit)> {
-    vec![("no list held refuses a listed account", |w| {
+    vec![("the list source follows the step", |w| {
         w.predecessor.core.controls.blacklist_version = 0;
         match &mut w.inputs {
             StepInputs::Send(send) => send.receiver_account_digest = send.blacklist.lower,
-            StepInputs::Receive(receive) => {
-                receive.payer_account_digest = receive.blacklist.lower;
+            StepInputs::Receive(_) => {
+                // The recorded Request list and opening remain authoritative
+                // after the current list is dropped.
+                w.predecessor.core.controls.enabled = 0;
             }
         }
     })]
@@ -379,9 +382,15 @@ fn blacklist_boundary_edits() -> Vec<(&'static str, Edit)> {
 fn receive_rule_edits() -> Vec<(&'static str, Vec<Violation>, Edit)> {
     vec![
         (
-            "the core blacklist bit is not the relation's",
+            "the Request blacklist version does not match the relation",
             vec![Violation::ControlsMismatch],
-            |w| w.predecessor.core.controls.enabled ^= CONTROL_BLACKLIST,
+            |w| {
+                let version = receive_inputs(w).request.receiver_blacklist_version;
+                let root = w.predecessor.core.controls.blacklist_root.to_repr();
+                let terms = &mut receive_inputs(w).request;
+                terms.receiver_blacklist_version = u64::from(version == 0);
+                terms.receiver_blacklist_root = if version == 0 { root } else { [0; 32] };
+            },
         ),
         ("lifecycle", vec![Violation::Lifecycle], |w| {
             w.predecessor.core.lifecycle = 0;
@@ -414,8 +423,8 @@ fn receive_boundary_edits() -> Vec<(&'static str, Edit)> {
             w.predecessor.core.sequence = u128::MAX - 1;
         }),
         ("other controls enabled", |w| {
-            // A Receive is selected by the blacklist bit alone; the other
-            // bits are the receiver's Send controls.
+            // A Receive is selected by its Request snapshot; the current
+            // mask controls only subsequent Sends.
             w.predecessor.core.controls.enabled |= CONTROL_QUOTAS | CONTROL_ATTESTATION_LEASE;
         }),
         ("a Retiring receiver", |w| {
@@ -566,11 +575,14 @@ fn rule_failures_have_their_kinds() {
             .iter()
             .any(|failure| matches!(failure, CheckFailure::CopyMismatch { .. }))
     );
-    // The Receive relation with the blacklist bit refuses a core without
-    // it (the bit's constant copy).
+    // The Receive blacklist relation refuses a Request recording no list
+    // (the derived selector's constant copy).
     let receive_blacklist = smallest_shape(folded(RECEIVE_BLACKLIST));
     let mut cleared = check_witness_of(RECEIVE_BLACKLIST, Mutation::None);
-    cleared.predecessor.core.controls.enabled = 0;
+    receive_inputs(&mut cleared)
+        .request
+        .receiver_blacklist_version = 0;
+    receive_inputs(&mut cleared).request.receiver_blacklist_root = [0; 32];
     let report = check_witness(&receive_blacklist, &cleared);
     assert!(
         report

@@ -577,6 +577,9 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   func sign(_ key: SecKey, slot: KagemushaWalletAppleSlotV1, message: Data)
     -> Result<Data, KagemushaWalletAppleUnavailableV1>
   {
+    guard message.count == Self.signingMessageBytes else {
+      return .failure(.platform(KagemushaWalletAppleStatusV1.invalidSigningMessage))
+    }
     let algorithm = Self.signingAlgorithm
     guard SecKeyIsAlgorithmSupported(key, .sign, algorithm) else {
       diagnose("payment key does not support ECDSA P-256 SHA-256 signing", slot: slot)

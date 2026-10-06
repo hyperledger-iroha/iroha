@@ -18,8 +18,8 @@ import time
 import unittest
 from unittest import mock
 
-PATH=Path(__file__).resolve().parents[1]/'taira_seed_observation.py'
-spec=importlib.util.spec_from_file_location('seed_observation',PATH)
+PATH=Path(__file__).resolve().parents[1]/'taira_signer_observation.py'
+spec=importlib.util.spec_from_file_location('signer_observation',PATH)
 s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
 NATIVE=Path('/usr/bin/sha256sum') if Path('/usr/bin/sha256sum').exists() else Path('/sbin/sha256sum')
 
@@ -60,20 +60,20 @@ class NativeHashTests(unittest.TestCase):
         self.assertEqual(seen[0][1]['env'],{'PATH':'/usr/bin:/bin','LC_ALL':'C'})
     def test_wrong_hash_rejects_without_private_output(self):
         self.hash='0'*64
-        with self.assertRaisesRegex(s.SeedObservationError,'^native config digest differs$'):
+        with self.assertRaisesRegex(s.SignerObservationError,'^native config digest differs$'):
             self.check()
     def test_content_mutation_after_native_digest_rejects(self):
         original=subprocess.run
         def run(*args,**kwargs):
             value=original(*args,**kwargs);self.path.write_bytes(b'changed private fixture');return value
         with mock.patch.object(subprocess,'run',side_effect=run):
-            with self.assertRaisesRegex(s.SeedObservationError,'private config identity changed'):self.check()
+            with self.assertRaisesRegex(s.SignerObservationError,'private config identity changed'):self.check()
     def test_path_replacement_after_native_digest_rejects(self):
         original=subprocess.run
         def run(*args,**kwargs):
             value=original(*args,**kwargs);self.path.unlink();self.path.write_bytes(self.body);self.path.chmod(0o600);return value
         with mock.patch.object(subprocess,'run',side_effect=run):
-            with self.assertRaisesRegex(s.SeedObservationError,'private config identity changed'):self.check()
+            with self.assertRaisesRegex(s.SignerObservationError,'private config identity changed'):self.check()
     def test_symlink_hardlink_and_mode_reject_before_hash(self):
         for fault in ('symlink','hardlink','mode'):
             with self.subTest(fault=fault):
@@ -81,12 +81,12 @@ class NativeHashTests(unittest.TestCase):
                 elif fault=='hardlink':os.link(self.path,self.root/'extra')
                 else:self.path.chmod(0o644)
                 with mock.patch.object(subprocess,'run',side_effect=AssertionError('native hash must not run')):
-                    with self.assertRaises(s.SeedObservationError):self.check()
+                    with self.assertRaises(s.SignerObservationError):self.check()
                 if fault=='symlink':self.path.unlink();(self.root/'retained').rename(self.path)
                 elif fault=='hardlink':(self.root/'extra').unlink()
     def test_native_timeout_is_redacted(self):
         with mock.patch.object(subprocess,'run',side_effect=subprocess.TimeoutExpired('PRIVATE_CONTENT',1)):
-            with self.assertRaisesRegex(s.SeedObservationError,'^native config observation failed$'):self.check()
+            with self.assertRaisesRegex(s.SignerObservationError,'^native config observation failed$'):self.check()
 
 class ProfileTests(unittest.TestCase):
     def test_closed_subclass_never_calls_original_config_reader(self):
@@ -101,7 +101,7 @@ class ProfileTests(unittest.TestCase):
     def test_extended_inventory_rejects_without_constructing_publisher(self):
         binding={'config_path':'/config','config_sha256':'a'*64,'config_files':[{'path':'/config','sha256':'a'*64},{'path':'/extends','sha256':'b'*64}],'launch_selector':{}}
         with mock.patch.object(os,'geteuid',return_value=0):
-            with self.assertRaisesRegex(s.SeedObservationError,'single flat config'):s._node(mock.Mock(side_effect=AssertionError('base constructed')),binding,time.monotonic()+5)
+            with self.assertRaisesRegex(s.SignerObservationError,'single flat config'):s._node(mock.Mock(side_effect=AssertionError('base constructed')),binding,time.monotonic()+5)
 
 class HttpTests(unittest.TestCase):
     @contextlib.contextmanager
@@ -129,7 +129,7 @@ class HttpTests(unittest.TestCase):
     def test_http_errors_recheck_identity_and_retry_only_allowlist(self):
         for code in (404,500,503,401,403,429):
             with self.subTest(code=code),self.server(status=code) as node:
-                expected=s._Retryable if code in (404,500,503) else s.SeedObservationError
+                expected=s._Retryable if code in (404,500,503) else s.SignerObservationError
                 with self.assertRaises(expected) as caught:s._get(node,'/status/blocks',{},time.monotonic()+5)
                 if code not in (404,500,503):self.assertNotIsInstance(caught.exception,s._Retryable)
                 self.assertEqual(node.identities,2)
@@ -143,7 +143,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(node.identities,2)
     def test_bad_200_json_is_terminal_and_rechecks_identity(self):
         with self.server(body=b'{"duplicate":1,"duplicate":2}') as node:
-            with self.assertRaises(s.SeedObservationError) as caught:s._get(node,'/status/blocks',{},time.monotonic()+5)
+            with self.assertRaises(s.SignerObservationError) as caught:s._get(node,'/status/blocks',{},time.monotonic()+5)
             self.assertNotIsInstance(caught.exception,s._Retryable);self.assertEqual(node.identities,2)
     def test_slow_response_headers_obey_absolute_socket_deadline(self):
         stopped=threading.Event()
@@ -161,7 +161,7 @@ class HttpTests(unittest.TestCase):
         node=Node();node.port=server.server_port;started=time.monotonic()
         try:
             with mock.patch.object(s,'REQUEST_SECONDS',0.08):
-                with self.assertRaises(s.SeedObservationError):s._get(node,'/status/blocks',{},time.monotonic()+5)
+                with self.assertRaises(s.SignerObservationError):s._get(node,'/status/blocks',{},time.monotonic()+5)
             self.assertLess(time.monotonic()-started,0.8)
             self.assertEqual(node.identities,2)
             self.assertTrue(stopped.wait(0.5))
@@ -169,7 +169,7 @@ class HttpTests(unittest.TestCase):
     def test_failed_transport_cannot_hide_identity_drift(self):
         node=Node();node.assert_identity=mock.Mock(side_effect=[None,RuntimeError('PRIVATE')])
         with mock.patch.object(http.client.HTTPConnection,'request',side_effect=ConnectionResetError('PRIVATE')):
-            with self.assertRaisesRegex(s.SeedObservationError,'^bound local validator identity changed$'):s._get(node,'/status/blocks',{},time.monotonic()+5)
+            with self.assertRaisesRegex(s.SignerObservationError,'^bound local validator identity changed$'):s._get(node,'/status/blocks',{},time.monotonic()+5)
 
 class ObservationTests(unittest.TestCase):
     def setUp(self):
@@ -197,7 +197,7 @@ class ObservationTests(unittest.TestCase):
                 if isinstance(result,dict):result['body']['challenge']=value
                 return result
             with self.subTest(value=value),mock.patch.object(s,'_get',side_effect=get) as call,mock.patch.object(s.secrets,'token_bytes',return_value=challenge):
-                with self.assertRaisesRegex(s.SeedObservationError,'^attestation identity differs$'):self.observe()
+                with self.assertRaisesRegex(s.SignerObservationError,'^attestation identity differs$'):self.observe()
                 self.assertEqual(call.call_count,2)
     def test_transient_retry_restarts_height_and_fresh_challenge(self):
         failed=[]
@@ -209,12 +209,12 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(self.paths.count('/status/blocks'),2);self.assertNotEqual(*self.challenges)
     def test_retry_exhausts_exactly_three_attempts(self):
         with mock.patch.object(s,'_get',side_effect=s._Retryable('temporary')) as get:
-            with self.assertRaisesRegex(s.SeedObservationError,'retries exhausted'):self.observe()
+            with self.assertRaisesRegex(s.SignerObservationError,'retries exhausted'):self.observe()
         self.assertEqual(get.call_count,3)
     def test_bad_height_and_generic_200_do_not_retry(self):
         for value in (True,0,{'status':'ok'},18446744073709551616):
             with self.subTest(value=value),mock.patch.object(s,'_get',return_value=value) as get:
-                with self.assertRaises(s.SeedObservationError):self.observe()
+                with self.assertRaises(s.SignerObservationError):self.observe()
                 self.assertEqual(get.call_count,1)
     def test_mismatched_attestation_is_terminal(self):
         for field,value in [('challenge',[True]*32),('node_id','other'),('status',{}),('genesis_block_hash','wrong')]:
@@ -223,15 +223,15 @@ class ObservationTests(unittest.TestCase):
                 if isinstance(result,dict):result['body'][field]=value
                 return result
             with self.subTest(field=field),mock.patch.object(s,'_get',side_effect=get) as call:
-                with self.assertRaises(s.SeedObservationError):self.observe()
+                with self.assertRaises(s.SignerObservationError):self.observe()
                 self.assertEqual(call.call_count,2)
     def test_zero_challenge_fails_before_attestation_request(self):
         with mock.patch.object(s,'_get',return_value=12) as get,mock.patch.object(s.secrets,'token_bytes',return_value=bytes(32)):
-            with self.assertRaisesRegex(s.SeedObservationError,'generated challenge'):self.observe()
+            with self.assertRaisesRegex(s.SignerObservationError,'generated challenge'):self.observe()
             self.assertEqual(get.call_count,1)
     def test_total_deadline_prevents_another_attempt(self):
         with mock.patch.object(s,'_get',side_effect=s._Retryable('temporary')) as get,mock.patch.object(s.time,'monotonic',side_effect=[0,31]):
-            with self.assertRaisesRegex(s.SeedObservationError,'deadline'):self.observe()
+            with self.assertRaisesRegex(s.SignerObservationError,'deadline'):self.observe()
             self.assertEqual(get.call_count,1)
 
 if __name__=='__main__':unittest.main()

@@ -29,17 +29,17 @@ REQUEST_SECONDS = 5
 NATIVE_HASH = Path('/usr/bin/sha256sum')
 
 
-class SeedObservationError(RuntimeError):
+class SignerObservationError(RuntimeError):
     """A fixed, secret-free observation failure; never publish an underlying exception."""
 
 
-class _Retryable(SeedObservationError):
+class _Retryable(SignerObservationError):
     pass
 
 
 def _need(ok, label):
     if not ok:
-        raise SeedObservationError(label)
+        raise SignerObservationError(label)
 
 
 def _stamp(info):
@@ -49,7 +49,7 @@ def _stamp(info):
 
 def _remaining(deadline):
     value = deadline - time.monotonic()
-    _need(value > 0, 'seed observation deadline exceeded')
+    _need(value > 0, 'signer observation deadline exceeded')
     return min(REQUEST_SECONDS, value)
 
 
@@ -103,10 +103,10 @@ def native_config_identity(path, expected, deadline):
         _need(_stamp(os.fstat(fd)) == _stamp(before) == _stamp(os.lstat(path)),
               'private config identity changed')
         return _stamp(before)
-    except SeedObservationError:
+    except SignerObservationError:
         raise
     except Exception:
-        raise SeedObservationError('native config observation failed') from None
+        raise SignerObservationError('native config observation failed') from None
     finally:
         if fd is not None:
             os.close(fd)
@@ -115,7 +115,7 @@ def native_config_identity(path, expected, deadline):
 
 
 def _node(node_class, binding, deadline):
-    _need(os.geteuid() == 0, 'seed observation requires Linux root')
+    _need(os.geteuid() == 0, 'signer observation requires Linux root')
     _need(isinstance(binding, dict) and binding.get('launch_selector') is not None
           and binding.get('config_files') == [{'path': binding.get('config_path'),
                                               'sha256': binding.get('config_sha256')}],
@@ -134,7 +134,7 @@ def _identity(node, deadline):
     try:
         node.assert_identity()
     except Exception:
-        raise SeedObservationError('bound local validator identity changed') from None
+        raise SignerObservationError('bound local validator identity changed') from None
     _remaining(deadline)
 
 
@@ -147,7 +147,7 @@ def _object(pairs):
 
 
 def _constant(value):
-    raise SeedObservationError('invalid public JSON number')
+    raise SignerObservationError('invalid public JSON number')
 
 
 def _get(node, path, headers, deadline):
@@ -213,13 +213,13 @@ def _get(node, path, headers, deadline):
             raise _Retryable('public startup transport interrupted') from None
         if error.errno in (errno.ETIMEDOUT, errno.ECONNRESET, errno.ECONNREFUSED, errno.EPIPE):
             raise _Retryable('public startup transport interrupted') from None
-        raise SeedObservationError('public startup transport rejected') from None
-    except SeedObservationError:
+        raise SignerObservationError('public startup transport rejected') from None
+    except SignerObservationError:
         raise
     except Exception:
         if expired.is_set():
             raise _Retryable('public startup transport interrupted') from None
-        raise SeedObservationError('invalid public startup response') from None
+        raise SignerObservationError('invalid public startup response') from None
     finally:
         if timer is not None:
             timer.cancel()
@@ -263,10 +263,10 @@ def _validate(attestation, height, challenge, row, network_id, genesis_hash):
               and isinstance(body['genesis_finality_proof'], dict)
               and isinstance(body['finality_proof'], dict), 'attestation proof or fingerprint differs')
         return status
-    except SeedObservationError:
+    except SignerObservationError:
         raise
     except Exception:
-        raise SeedObservationError('invalid attestation schema') from None
+        raise SignerObservationError('invalid attestation schema') from None
 
 
 def observe_attested_status(node_class, binding, expected_row, network_id, genesis_hash):
@@ -293,13 +293,13 @@ def observe_attested_status(node_class, binding, expected_row, network_id, genes
                 return node, status, attestation
             except _Retryable:
                 if attempt + 1 == MAX_ATTEMPTS:
-                    raise SeedObservationError('public startup retries exhausted') from None
+                    raise SignerObservationError('public startup retries exhausted') from None
                 _remaining(deadline)
-        raise SeedObservationError('public startup retries exhausted')
-    except SeedObservationError:
+        raise SignerObservationError('public startup retries exhausted')
+    except SignerObservationError:
         raise
     except Exception:
-        raise SeedObservationError('seed observation failed') from None
+        raise SignerObservationError('signer observation failed') from None
 
 
 if __name__ == '__main__':

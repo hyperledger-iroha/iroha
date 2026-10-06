@@ -43,7 +43,7 @@ use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget, poseidon::PoseidonF
 
 use crate::{
     cs::{
-        CircuitDescriptorV1, DescriptorError, DescriptorRule, ProofSuffixV1,
+        DescriptorError, DescriptorRule, ProofSuffixV1, ProtocolDescriptor,
         descriptor::ColumnKindV1,
     },
     keys::{DescriptorBinding, VerifyingKey, VkError},
@@ -67,7 +67,7 @@ use crate::{
     },
     transcript::{
         DescriptorHash, Transcript, TranscriptError, TranscriptRead, TranscriptReader,
-        absorb_prelude,
+        TranscriptRepr, absorb_prelude, absorb_prelude_v2,
     },
 };
 
@@ -84,6 +84,14 @@ pub enum VerifyError {
     /// and `k`.
     ParamsMismatch,
     /// The number of instance columns differs from the descriptor (S4).
+    /// An instance value is outside its declared integer type.
+    InstanceType {
+        /// Instance column.
+        column: usize,
+        /// Row within the column.
+        row: usize,
+    },
+    /// Incorrect instance-column count.
     InstanceColumns {
         /// The descriptor's count.
         expected: usize,
@@ -141,6 +149,9 @@ pub enum VerifyError {
 impl fmt::Display for VerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InstanceType { column, row } => {
+                write!(f, "instance ({column}, {row}) is outside its declared type")
+            }
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
             Self::VerifyingKey(error) => write!(f, "verifying key: {error}"),
             Self::KeyMismatch => f.write_str("the verifying key is bound to another descriptor"),
@@ -223,9 +234,9 @@ impl From<ProtocolError> for VerifyError {
 /// How the transcript is primed (production, or oracle mode with the
 /// vendored `transcript_repr`, spec 6.4).
 #[derive(Clone, Copy, Debug)]
-struct Mode<F> {
+struct Mode<C: PastaCurve> {
     oracle: bool,
-    transcript_repr: F,
+    transcript_repr: TranscriptRepr<C>,
 }
 
 /// A read proof: the pending IPA opening and the optional suffix.
@@ -235,8 +246,8 @@ struct ReadProof<C: PastaCurve> {
 }
 
 /// Checks the instance shape against the descriptor (S4).
-fn check_instances<F>(
-    descriptor: &CircuitDescriptorV1,
+fn check_instances<F: PastaField>(
+    descriptor: &ProtocolDescriptor,
     instances: &[Vec<F>],
 ) -> Result<(), VerifyError> {
     if instances.len() != descriptor.instance_lengths.len() {
@@ -258,6 +269,9 @@ fn check_instances<F>(
                 found: values.len(),
             });
         }
+    }
+    if let Some((column, row)) = descriptor.invalid_instance(instances) {
+        return Err(VerifyError::InstanceType { column, row });
     }
     Ok(())
 }
@@ -332,7 +346,7 @@ struct Masks<F> {
 
 /// Everything a constraint term reads at `x`.
 struct ConstraintEvaluations<'a, F> {
-    descriptor: &'a CircuitDescriptorV1,
+    descriptor: &'a ProtocolDescriptor,
     protocol: &'a Protocol,
     /// The gate polynomials, flattened in descriptor order.
     gates: Vec<&'a crate::cs::descriptor::ExprV1>,
@@ -459,12 +473,13 @@ fn read_proof<C: PastaCurve>(
     vk: &VerifyingKey<C>,
     instances: &[Vec<C::ScalarExt>],
     proof: &[u8],
-    mode: Mode<C::ScalarExt>,
+    mode: Mode<C>,
     budget: MemoryBudget,
     filter: &impl ConstraintFilter,
 ) -> Result<ReadProof<C>, VerifyError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let descriptor = binding.descriptor();
     if vk.descriptor_digest() != binding.digest() {
@@ -484,17 +499,30 @@ where
     }
 
     let hash = if mode.oracle {
-        oracle_hash::<C>(descriptor)
+        oracle_hash::<C>(descriptor)?
     } else {
         DescriptorHash::<C>::production(descriptor.transcript)
     };
     let mut transcript = TranscriptReader::<C, _>::new(hash, proof);
     if mode.oracle {
-        transcript.common_scalar(&mode.transcript_repr);
+        transcript.common_scalar(
+            mode.transcript_repr
+                .scalar()
+                .ok_or(TranscriptError::ProfileMismatch)?,
+        );
+    } else if let Some(types) = &descriptor.instance_types {
+        absorb_prelude_v2::<C, _>(
+            &mut transcript,
+            &mode.transcript_repr,
+            &descriptor.instance_lengths,
+            types,
+        )?;
     } else {
         absorb_prelude::<C, _>(
             &mut transcript,
-            &mode.transcript_repr,
+            mode.transcript_repr
+                .scalar()
+                .ok_or(TranscriptError::ProfileMismatch)?,
             &descriptor.instance_lengths,
         );
     }
@@ -707,25 +735,35 @@ where
 
 /// The oracle-mode hash of the descriptor's transcript.
 #[cfg(any(test, iroha_plonk_oracle))]
-fn oracle_hash<C: PastaCurve>(descriptor: &CircuitDescriptorV1) -> DescriptorHash<C>
+fn oracle_hash<C: PastaCurve>(
+    descriptor: &ProtocolDescriptor,
+) -> Result<DescriptorHash<C>, TranscriptError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
-    DescriptorHash::<C>::oracle(descriptor.transcript)
+    Ok(DescriptorHash::<C>::oracle(
+        descriptor
+            .transcript
+            .retained()
+            .ok_or(TranscriptError::ProfileMismatch)?,
+    ))
 }
 
-/// Oracle mode does not exist in shipping builds; the production hash keeps
-/// the code path total.
+/// Oracle mode is unavailable in shipping builds and explicitly rejects use.
 #[cfg(not(any(test, iroha_plonk_oracle)))]
-fn oracle_hash<C: PastaCurve>(descriptor: &CircuitDescriptorV1) -> DescriptorHash<C>
+fn oracle_hash<C: PastaCurve>(
+    _descriptor: &ProtocolDescriptor,
+) -> Result<DescriptorHash<C>, TranscriptError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
-    DescriptorHash::<C>::production(descriptor.transcript)
+    Err(TranscriptError::ProfileMismatch)
 }
 
 /// The production mode of a verifying key.
-fn production<C: PastaCurve>(vk: &VerifyingKey<C>) -> Mode<C::ScalarExt> {
+fn production<C: PastaCurve>(vk: &VerifyingKey<C>) -> Mode<C> {
     Mode {
         oracle: false,
         transcript_repr: *vk.transcript_repr(),
@@ -748,6 +786,7 @@ pub fn verify_full<C: PastaCurve>(
 ) -> Result<(), VerifyError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let read = read_proof(
         params,
@@ -794,6 +833,7 @@ pub fn accumulate_succinct<C: PastaCurve>(
 ) -> Result<PendingAccumulator<C>, VerifyError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     if binding.descriptor().proof_suffix != ProofSuffixV1::FoldedGenerator {
         return Err(VerifyError::SuffixRequired);
@@ -809,9 +849,14 @@ where
         &AllTerms,
     )?;
     let folded = read.suffix.ok_or(VerifyError::SuffixRequired)?;
-    Ok(read
-        .pending
-        .accumulate(params, &folded, vk.transcript_repr(), budget)?)
+    Ok(read.pending.accumulate(
+        params,
+        &folded,
+        vk.transcript_repr()
+            .scalar()
+            .ok_or(TranscriptError::ProfileMismatch)?,
+        budget,
+    )?)
 }
 
 /// [`verify_full`] from the canonical descriptor frame `D` and the `0x02`
@@ -832,6 +877,7 @@ pub fn verify_full_from_bytes<C: PastaCurve>(
 ) -> Result<(), VerifyError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let binding = DescriptorBinding::decode(descriptor)?;
     let vk = VerifyingKey::<C>::read(vk, &binding)?;
@@ -858,10 +904,11 @@ pub fn verify_full_oracle<C: PastaCurve>(
 ) -> Result<(), VerifyError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let mode = Mode {
         oracle: true,
-        transcript_repr: vendored_transcript_repr,
+        transcript_repr: TranscriptRepr::Scalar(vendored_transcript_repr),
     };
     let read = read_proof(
         params, binding, vk, instances, proof, mode, budget, &AllTerms,
@@ -885,6 +932,7 @@ pub(crate) fn verify_full_filtered<C: PastaCurve>(
 ) -> Result<(), VerifyError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let budget = MemoryBudget::DEFAULT;
     let read = read_proof(
@@ -946,6 +994,7 @@ pub fn batch_verify<C: PastaCurve>(
 ) -> Result<(), VerifyError>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     let item_error = |index: usize, error: VerifyError| VerifyError::BatchItem {
         index,
@@ -967,7 +1016,10 @@ where
         .map_err(|error| item_error(index, error))?;
         let body = proof_item_body(
             item.binding.digest(),
-            item.vk.transcript_repr(),
+            item.vk
+                .transcript_repr()
+                .scalar()
+                .ok_or(TranscriptError::ProfileMismatch)?,
             item.instances,
             item.proof,
         )
@@ -979,7 +1031,11 @@ where
     for (item, read) in items.iter().zip(&reads) {
         if let Some(folded) = read.suffix {
             let claim = PendingAccumulator::<C>::new(
-                *item.vk.transcript_repr(),
+                *item
+                    .vk
+                    .transcript_repr()
+                    .scalar()
+                    .ok_or(TranscriptError::ProfileMismatch)?,
                 read.pending.k(),
                 folded,
                 read.pending.challenges().to_vec(),
@@ -1036,3 +1092,59 @@ where
 
 #[cfg(test)]
 mod tests;
+
+/// Succinctly checks a proof and returns a provenance-free generator obligation.
+/// The descriptor and instances bind provenance; this result still must be
+/// decided or folded exactly once by its recursive consumer.
+///
+/// # Errors
+/// Missing suffix, malformed proof/profile/instances, or failed succinct equation.
+pub fn accumulate_generator<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    binding: &DescriptorBinding,
+    vk: &VerifyingKey<C>,
+    instances: &[Vec<C::ScalarExt>],
+    proof: &[u8],
+    budget: MemoryBudget,
+) -> Result<crate::pcs::ipa::GeneratorClaim<C>, VerifyError>
+where
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+{
+    if binding.descriptor().proof_suffix != ProofSuffixV1::FoldedGenerator {
+        return Err(VerifyError::SuffixRequired);
+    }
+    let read = read_proof(
+        params,
+        binding,
+        vk,
+        instances,
+        proof,
+        production(vk),
+        budget,
+        &AllTerms,
+    )?;
+    let folded = read.suffix.ok_or(VerifyError::SuffixRequired)?;
+    Ok(read.pending.into_generator_claim(params, &folded, budget)?)
+}
+
+/// Fully verifies using explicit V2 descriptor admission, without V1 fallback.
+///
+/// # Errors
+/// The V2 descriptor, VK and proof validation errors.
+pub fn verify_full_from_bytes_v2<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    descriptor: &[u8],
+    vk: &[u8],
+    instances: &[Vec<C::ScalarExt>],
+    proof: &[u8],
+    budget: MemoryBudget,
+) -> Result<(), VerifyError>
+where
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+{
+    let binding = DescriptorBinding::decode_v2(descriptor)?;
+    let vk = VerifyingKey::read(vk, &binding)?;
+    verify_full(params, &binding, &vk, instances, proof, budget)
+}

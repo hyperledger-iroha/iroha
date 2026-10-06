@@ -15,15 +15,16 @@
 //!
 //! # State
 //!
-//! A wallet state is a 32-element core ([`CoreState`], in the G1
+//! A wallet state is a 33-element core ([`CoreState`], in the G1
 //! `KagemushaWalletStateV1::core_field_items` order: lifecycle; scheme id,
-//! asset digest, `wallet_id` and credential digest (two limbs each);
+//! asset digest and `wallet_id` (two limbs each), credential digest (one field);
 //! balance, `burned_total`, sequence, `next_send`, `next_load`,
 //! `next_redeem`; both chains; the consumed-credit, pending-outgoing,
 //! load/redeem-recovery, fee-claim and quota-usage roots; the
-//! enabled-controls mask; the quota-windows root; the blacklist version,
-//! root, issue time and maximum age; the lease expiry; the policy epoch; the
-//! accepted-time floor; the state nonce) and a 13-element rest
+//! enabled-controls mask; the quota-windows root and quota-share expiry;
+//! the blacklist version, root, issue time and maximum age; the maximum
+//! accepted response span; the lease expiry; the policy epoch; the
+//! accepted-time floor; the state nonce) and an 8-element rest
 //! ([`StateRest`]) that no step relation opens. The commitment is one `Fp`
 //! value `P(kgwcore1, core || P(kgwrest1, rest))` (owner answer Q10).
 //!
@@ -31,11 +32,11 @@
 //!
 //! A [`SigmaRelation`] is a step and the enabled-controls mask its
 //! verifying key is selected by (the G1 selector `(operation tag, mask)`,
-//! owner answer Q11; Receive by the blacklist bit alone). Both steps open
+//! owner answer Q11; Receive by the Request's recorded blacklist version). Both steps open
 //! the predecessor commitment, require the lifecycle to be Active or
 //! Retiring (carried unchanged: a Retiring wallet keeps sending and
 //! receiving, spec section 6.3), a nonzero `u128` amount and `sequence + 1 <
-//! 2^128`, hash the 28-element Request body into `credit_id = P(kgwcrdt1,
+//! 2^128`, hash the 26-element Request body into `credit_id = P(kgwcrdt1,
 //! body)` (one element, owner answers Q1 and A5: both wallets and both
 //! account digests are in the preimage), require distinct payer and
 //! receiver wallets, append one chain and commit the successor with a fresh
@@ -54,7 +55,7 @@
 //!   `burned_total` the lineage input, its accepted-time floor `lower`, and
 //!   its pending-outgoing and fee-claim roots are carried witnesses.
 //!   `send_chain' = P(kgwschn1, [send_chain, credit_id, receiver (2),
-//!   ordinal, amount, fee, request digest (2)])`. Each control in its mask
+//!   ordinal, amount, fee, request digest])`. Each control in its mask
 //!   is enforced against the head-committed fields ([`crate::controls`]):
 //!   - blacklist: while a list is held (`blacklist_version != 0`), the
 //!     Request's receiver account digest is absent from the list (a gap
@@ -64,8 +65,9 @@
 //!     `check_send_blacklist` rules);
 //!   - quotas: every touched window of the committed quota-window tree is
 //!     charged `amount + fee` within its limit, every defined kind is
-//!     touched, and the successor's `quota_usage_root` is the usage map
-//!     after the charges;
+//!     touched, `upper < quota_share_expires_at_ms`, and the interval span
+//!     is at most `time_anchor_max_response_ms`. The successor's
+//!     `quota_usage_root` is the fixed 64-slot usage array after the charges;
 //!   - attestation lease: `upper < lease_expires_at_ms`.
 //! - `sigma_recv` credits the amount (`balance + amount < 2^128`). The
 //!   Request's receiver is the core `wallet_id` (owner answer Q8: matched by
@@ -75,9 +77,10 @@
 //!   native Payment check and `Λ_recv`'s). `recv_chain' = P(kgwrchn1,
 //!   [recv_chain, credit_id, payer (2), amount])`, and the successor's
 //!   consumed-credit root is a carried witness. Its relation is selected by
-//!   bit 0 of the core mask, which it checks; with the blacklist bit, while
-//!   a list is held, the Request's payer account digest is absent from the
-//!   receiver's list (owner answer A5).
+//!   the Request's recorded blacklist version: version zero selects no
+//!   list, otherwise the Request's payer account digest must be absent
+//!   from the Request's recorded root (B6). Current list changes do not
+//!   invalidate an already issued Request.
 //!
 //! Map roots that a step does not touch are copied; the consumed-credit,
 //! pending-outgoing and fee-claim roots a step updates are carried
@@ -85,7 +88,7 @@
 //! Advance check and to the lineage relation). Only the quota control makes
 //! a σ constrain a map root transition.
 //!
-//! The public input is the statement digest `P(kgwstmt1, 28 elements)`
+//! The public input is the statement digest `P(kgwstmt1, 26 elements)`
 //! ([`iroha_plonk_gadgets::statement`]): the G1
 //! `KagemushaWalletStatementV1::field_items` with the scheme-level relation
 //! identity carried by the witness ([`StepWitness::relation_id`]).
@@ -100,7 +103,7 @@
 use iroha_pasta::poseidon::{PoseidonField, hash_with_domain};
 use iroha_plonk_gadgets::statement::{
     EFFECT_UNION_FIELDS, STATEMENT_DOMAIN, STATEMENT_FIELDS, STATEMENT_HEADER_FIELDS,
-    STATEMENT_VERSION, StatementV1, StepRelation, digest_fields,
+    STATEMENT_VERSION, StatementV1, StepRelation, canonical_field, digest_fields,
 };
 
 use crate::{
@@ -111,20 +114,20 @@ use crate::{
 };
 
 /// Core elements: every field a step relation reads, changes or carries.
-pub const CORE_FIELDS: usize = 32;
+pub const CORE_FIELDS: usize = 33;
 /// Rest elements: the fields only the lineage relation opens.
-pub const REST_FIELDS: usize = 13;
+pub const REST_FIELDS: usize = 8;
 /// Inputs of the state commitment: the core and the rest digest.
 pub const COMMITMENT_ARITY: usize = CORE_FIELDS + 1;
 /// Elements of the Request body (the `credit_id` preimage).
-pub const REQUEST_FIELDS: usize = 28;
-/// Inputs of a `send_chain` append: the chain and the 8 descriptor elements.
-pub const SEND_CHAIN_FIELDS: usize = 9;
+pub const REQUEST_FIELDS: usize = 26;
+/// Inputs of a `send_chain` append: the chain and the 7 descriptor elements.
+pub const SEND_CHAIN_FIELDS: usize = 8;
 /// Inputs of a `recv_chain` append: the chain and 4 descriptor elements.
 pub const RECEIVE_CHAIN_FIELDS: usize = 5;
 /// Effect elements of `sigma_send`: `credit_id`, receiver (2), send
-/// ordinal, amount, fee, Request digest (2), accepted lower and upper time.
-pub const SEND_EFFECT_FIELDS: usize = 10;
+/// ordinal, amount, fee, Request digest, accepted lower and upper time.
+pub const SEND_EFFECT_FIELDS: usize = 9;
 /// Effect elements of `sigma_recv`: `credit_id`, payer (2), amount.
 pub const RECEIVE_EFFECT_FIELDS: usize = 4;
 /// The Request body version (G1 `KAGEMUSHA_WALLET_VERSION_V1`).
@@ -156,8 +159,8 @@ pub const CONTROL_QUOTAS: u32 = 1 << 1;
 pub const CONTROL_ATTESTATION_LEASE: u32 = 1 << 2;
 /// Every defined control bit: the masks a `sigma_send` relation may enforce.
 pub const CONTROLS_DEFINED: u32 = CONTROL_BLACKLIST | CONTROL_QUOTAS | CONTROL_ATTESTATION_LEASE;
-/// The control bits a `sigma_recv` relation is selected by (G1: the
-/// Receive selector takes the blacklist bit alone).
+/// The allowed control bits of a `sigma_recv` relation (B6 maps a nonzero
+/// Request blacklist version to the blacklist bit).
 pub const RECEIVE_CONTROLS: u32 = CONTROL_BLACKLIST;
 
 const _: () = assert!(SEND_EFFECT_FIELDS <= EFFECT_UNION_FIELDS);
@@ -174,61 +177,65 @@ pub mod core_index {
     pub const ASSET: usize = 3;
     /// The `wallet_id` limbs.
     pub const WALLET: usize = 5;
-    /// The credential digest limbs.
+    /// The `credential` core field.
     pub const CREDENTIAL: usize = 7;
-    /// The `u128` balance.
-    pub const BALANCE: usize = 9;
-    /// The `u128` `burned_total`.
-    pub const BURNED_TOTAL: usize = 10;
-    /// The `u128` sequence number.
-    pub const SEQUENCE: usize = 11;
-    /// The next send ordinal.
-    pub const NEXT_SEND: usize = 12;
-    /// The next load ordinal.
-    pub const NEXT_LOAD: usize = 13;
-    /// The next redeem ordinal.
-    pub const NEXT_REDEEM: usize = 14;
-    /// The send chain.
-    pub const SEND_CHAIN: usize = 15;
-    /// The receive chain.
-    pub const RECEIVE_CHAIN: usize = 16;
-    /// The consumed-credit root.
-    pub const CONSUMED_CREDIT_ROOT: usize = 17;
-    /// The pending-outgoing root.
-    pub const PENDING_OUTGOING_ROOT: usize = 18;
-    /// The load/redeem recovery root (one map keyed by `(kind, ordinal)`).
-    pub const LOAD_REDEEM_ROOT: usize = 19;
-    /// The fee-claim recovery root.
-    pub const FEE_CLAIM_ROOT: usize = 20;
-    /// The quota-usage root.
-    pub const QUOTA_USAGE_ROOT: usize = 21;
-    /// The enabled-controls mask.
-    pub const ENABLED_CONTROLS: usize = 22;
-    /// The quota-windows root.
-    pub const QUOTA_WINDOWS_ROOT: usize = 23;
-    /// The blacklist version.
+    /// The `balance` core field.
+    pub const BALANCE: usize = 8;
+    /// The `burned_total` core field.
+    pub const BURNED_TOTAL: usize = 9;
+    /// The `sequence` core field.
+    pub const SEQUENCE: usize = 10;
+    /// The `next_send` core field.
+    pub const NEXT_SEND: usize = 11;
+    /// The `next_load` core field.
+    pub const NEXT_LOAD: usize = 12;
+    /// The `next_redeem` core field.
+    pub const NEXT_REDEEM: usize = 13;
+    /// The `send_chain` core field.
+    pub const SEND_CHAIN: usize = 14;
+    /// The `receive_chain` core field.
+    pub const RECEIVE_CHAIN: usize = 15;
+    /// The `consumed_credit_root` core field.
+    pub const CONSUMED_CREDIT_ROOT: usize = 16;
+    /// The `pending_outgoing_root` core field.
+    pub const PENDING_OUTGOING_ROOT: usize = 17;
+    /// The `load_redeem_root` core field.
+    pub const LOAD_REDEEM_ROOT: usize = 18;
+    /// The `fee_claim_root` core field.
+    pub const FEE_CLAIM_ROOT: usize = 19;
+    /// The `quota_usage_root` core field.
+    pub const QUOTA_USAGE_ROOT: usize = 20;
+    /// The `enabled_controls` core field.
+    pub const ENABLED_CONTROLS: usize = 21;
+    /// The `quota_windows_root` core field.
+    pub const QUOTA_WINDOWS_ROOT: usize = 22;
+    /// The `quota_share_expiry` core field.
+    pub const QUOTA_SHARE_EXPIRY: usize = 23;
+    /// The `blacklist_version` core field.
     pub const BLACKLIST_VERSION: usize = 24;
-    /// The blacklist root.
+    /// The `blacklist_root` core field.
     pub const BLACKLIST_ROOT: usize = 25;
-    /// The blacklist issue time.
+    /// The `blacklist_issued_at` core field.
     pub const BLACKLIST_ISSUED_AT: usize = 26;
-    /// The regulatory policy's maximum blacklist age.
+    /// The `blacklist_max_age` core field.
     pub const BLACKLIST_MAX_AGE: usize = 27;
-    /// The lease expiry.
-    pub const LEASE_EXPIRY: usize = 28;
-    /// The `u64` policy epoch.
-    pub const POLICY_EPOCH: usize = 29;
-    /// The `u64` accepted-time floor.
-    pub const TIME_FLOOR: usize = 30;
-    /// The state nonce.
-    pub const STATE_NONCE: usize = 31;
+    /// The `time_anchor_max_response` core field.
+    pub const TIME_ANCHOR_MAX_RESPONSE: usize = 28;
+    /// The `lease_expiry` core field.
+    pub const LEASE_EXPIRY: usize = 29;
+    /// The `policy_epoch` core field.
+    pub const POLICY_EPOCH: usize = 30;
+    /// The `time_floor` core field.
+    pub const TIME_FLOOR: usize = 31;
+    /// The `state_nonce` core field.
+    pub const STATE_NONCE: usize = 32;
 }
 
 /// A step relation and the enabled-controls mask it enforces: the G1
 /// verifying-key selector `(operation tag, mask)` (owner answer Q11).
 ///
 /// `sigma_send` has one relation per mask; `sigma_recv` one without and one
-/// with the blacklist bit (G1 selects Receive by `enabled_controls & 1`).
+/// with the blacklist bit (B6 selects Receive by Request recorded version).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SigmaRelation {
     step: StepRelation,
@@ -250,8 +257,8 @@ impl SigmaRelation {
         }
     }
 
-    /// `sigma_recv` selected by `enabled_controls` (the blacklist bit or
-    /// zero).
+    /// `sigma_recv` for the derived Request selector (the blacklist bit or
+    /// zero, selected from its recorded version).
     #[must_use]
     pub const fn receive(enabled_controls: u32) -> Self {
         Self {
@@ -351,6 +358,10 @@ pub struct Controls<F> {
     pub enabled: u32,
     /// The windows root of the held quota share.
     pub quota_windows_root: F,
+    /// Expiry of the held quota share.
+    pub quota_share_expires_at_ms: u64,
+    /// Maximum time-anchor response and Send interval width.
+    pub time_anchor_max_response_ms: u64,
     /// The held blacklist version (zero: none held).
     pub blacklist_version: u64,
     /// The held blacklist gap-tree root.
@@ -405,7 +416,7 @@ impl<F: PoseidonField> CoreState<F> {
         let [scheme_lo, scheme_hi] = digest_fields::<F>(&self.identity.scheme_id);
         let [asset_lo, asset_hi] = digest_fields::<F>(&self.identity.asset_digest);
         let [wallet_lo, wallet_hi] = digest_fields::<F>(&self.identity.wallet_id);
-        let [credential_lo, credential_hi] = digest_fields::<F>(&self.identity.credential_digest);
+        let credential = field_value::<F>(&self.identity.credential_digest);
         let controls = &self.controls;
         [
             F::from(u64::from(self.lifecycle)),
@@ -415,8 +426,7 @@ impl<F: PoseidonField> CoreState<F> {
             asset_hi,
             wallet_lo,
             wallet_hi,
-            credential_lo,
-            credential_hi,
+            credential,
             F::from_u128(self.balance),
             F::from_u128(self.burned_total),
             F::from_u128(self.sequence),
@@ -432,10 +442,12 @@ impl<F: PoseidonField> CoreState<F> {
             self.roots.quota_usage,
             F::from(u64::from(controls.enabled)),
             controls.quota_windows_root,
+            F::from(controls.quota_share_expires_at_ms),
             F::from(controls.blacklist_version),
             controls.blacklist_root,
             F::from(controls.blacklist_issued_at_ms),
             F::from(controls.blacklist_max_age_ms),
+            F::from(controls.time_anchor_max_response_ms),
             F::from(controls.lease_expires_at_ms),
             F::from(self.policy_epoch),
             F::from(self.accepted_time_floor_ms),
@@ -450,8 +462,6 @@ impl<F: PoseidonField> CoreState<F> {
 pub struct StateRest {
     /// Controls the credential's regulatory policy permits.
     pub permitted_controls: u32,
-    /// The regulatory policy's time-anchor response-age bound.
-    pub time_anchor_max_response_ms: u64,
     /// Digest of the held scheme policy.
     pub scheme_policy: [u8; 32],
     /// The fee schedule the held scheme policy names.
@@ -464,31 +474,23 @@ pub struct StateRest {
     pub quota_share_id: u64,
     /// Digest of the committed time anchor.
     pub time_anchor: [u8; 32],
+    /// Root of the wallet's committed blacklist history.
+    pub blacklist_history_root: [u8; 32],
 }
 
 impl StateRest {
     /// The element encoding (G1 rest element order).
     #[must_use]
     pub fn fields<F: PoseidonField>(&self) -> [F; REST_FIELDS] {
-        let [policy_lo, policy_hi] = digest_fields::<F>(&self.scheme_policy);
-        let [schedule_lo, schedule_hi] = digest_fields::<F>(&self.fee_schedule);
-        let [blacklist_lo, blacklist_hi] = digest_fields::<F>(&self.blacklist);
-        let [share_lo, share_hi] = digest_fields::<F>(&self.quota_share);
-        let [anchor_lo, anchor_hi] = digest_fields::<F>(&self.time_anchor);
         [
             F::from(u64::from(self.permitted_controls)),
-            F::from(self.time_anchor_max_response_ms),
-            policy_lo,
-            policy_hi,
-            schedule_lo,
-            schedule_hi,
-            blacklist_lo,
-            blacklist_hi,
-            share_lo,
-            share_hi,
+            field_value(&self.scheme_policy),
+            field_value(&self.fee_schedule),
+            field_value(&self.blacklist),
+            field_value(&self.quota_share),
             F::from(self.quota_share_id),
-            anchor_lo,
-            anchor_hi,
+            field_value(&self.time_anchor),
+            field_value(&self.blacklist_history_root),
         ]
     }
 
@@ -539,13 +541,17 @@ pub struct RequestTerms {
     /// The receiver's authenticated accepted time (G1
     /// `receiver_accepted_time_ms`).
     pub request_time: u64,
+    /// Receiver blacklist version recorded at Request issuance (zero: no list).
+    pub receiver_blacklist_version: u64,
+    /// Receiver blacklist root recorded at Request issuance.
+    pub receiver_blacklist_root: [u8; 32],
     /// The certificate-set digest.
     pub certificates: [u8; 32],
     /// The fresh Request nonce.
     pub nonce: [u8; 32],
 }
 
-/// The canonical 28-element Request body (spec section 5.1; G1
+/// The canonical 26-element Request body (spec section 5.1; G1
 /// `KagemushaWalletRequestBodyV1::field_items`): the `credit_id` preimage,
 /// as both wallets and every consumer hold it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -571,6 +577,20 @@ pub struct RequestBody {
 }
 
 impl RequestBody {
+    /// Whether the Request's Poseidon digests are canonical field encodings.
+    #[must_use]
+    pub fn canonical_digests<F: PoseidonField>(&self) -> bool {
+        [
+            self.receiver_credential_digest,
+            self.terms.fee_schedule,
+            self.terms.scheme_policy,
+            self.terms.certificates,
+            self.terms.receiver_blacklist_root,
+        ]
+        .iter()
+        .all(|bytes| canonical_field::<F>(bytes).is_some())
+    }
+
     /// The element encoding in request-body order.
     #[must_use]
     pub fn fields<F: PoseidonField>(&self) -> [F; REQUEST_FIELDS] {
@@ -581,11 +601,11 @@ impl RequestBody {
         let [payer_account_lo, payer_account_hi] = pair(&self.payer_account);
         let [receiver_lo, receiver_hi] = pair(&self.receiver_wallet);
         let [receiver_account_lo, receiver_account_hi] = pair(&self.receiver_account);
-        let [credential_lo, credential_hi] = pair(&self.receiver_credential_digest);
+        let credential = field_value::<F>(&self.receiver_credential_digest);
         let terms = &self.terms;
-        let [schedule_lo, schedule_hi] = pair(&terms.fee_schedule);
-        let [policy_lo, policy_hi] = pair(&terms.scheme_policy);
-        let [certificates_lo, certificates_hi] = pair(&terms.certificates);
+        let schedule = field_value::<F>(&terms.fee_schedule);
+        let policy = field_value::<F>(&terms.scheme_policy);
+        let certificates = field_value::<F>(&terms.certificates);
         let [nonce_lo, nonce_hi] = pair(&terms.nonce);
         [
             F::from(REQUEST_VERSION),
@@ -602,18 +622,16 @@ impl RequestBody {
             receiver_account_lo,
             receiver_account_hi,
             F::from_u128(self.send_ordinal),
-            credential_lo,
-            credential_hi,
+            credential,
             F::from_u128(terms.amount),
-            schedule_lo,
-            schedule_hi,
+            schedule,
             F::from_u128(terms.fee),
             F::from(terms.policy_epoch),
-            policy_lo,
-            policy_hi,
+            policy,
             F::from(terms.request_time),
-            certificates_lo,
-            certificates_hi,
+            F::from(terms.receiver_blacklist_version),
+            field_value(&terms.receiver_blacklist_root),
+            certificates,
             nonce_lo,
             nonce_hi,
         ]
@@ -651,9 +669,9 @@ pub struct SendInputs<F> {
     pub receiver_credential_digest: [u8; 32],
     /// The other Request terms.
     pub request: RequestTerms,
-    /// The digest of the signed Request (G1 `H("request", e || signature)`),
-    /// bound by the Send effect and the chain append; `sigma_send` does not
-    /// recompute it (SHA-256).
+    /// The Poseidon object digest of the signed Request (`P(kgworeq1,
+    /// [message, r_lo, r_hi, s_lo, s_hi])`), bound by the Send effect and
+    /// chain append. The lineage relation binds its signature and recomputes it.
     pub request_digest: [u8; 32],
     /// The accepted lower time.
     pub accepted_lower: u64,
@@ -697,9 +715,8 @@ pub struct ReceiveInputs<F> {
     /// `credit_id` inserted; checked natively at Advance and by the lineage
     /// relation).
     pub successor_consumed_credit: F,
-    /// The gap opening of the payer's account in the receiver's committed
-    /// blacklist (read only by the relation with the blacklist bit, while a
-    /// list is held).
+    /// The gap opening of the payer's account in the receiver's blacklist
+    /// recorded in the Request (read by the relation with the blacklist bit).
     pub blacklist: BlacklistGap<F>,
 }
 
@@ -757,6 +774,14 @@ pub struct StepWitness<F> {
 pub enum Violation {
     /// The witness belongs to another step than the relation.
     WrongStep,
+    /// A Poseidon digest has a noncanonical field encoding.
+    NoncanonicalDigest,
+    /// The Request list version and root disagree about absence.
+    RequestBlacklist,
+    /// The Send reaches or exceeds the quota-share expiry.
+    QuotaShareExpired,
+    /// The Send interval exceeds the committed response bound.
+    SendSpan,
     /// The relation enables an undefined control (or Receive a bit other
     /// than the blacklist bit).
     UnsupportedRelation,
@@ -769,7 +794,7 @@ pub enum Violation {
     /// The payer and receiver wallets are equal.
     SelfPayment,
     /// `sigma_send`: the core's enabled-controls mask is not the relation's;
-    /// `sigma_recv`: the core mask's blacklist bit is not the relation's, or
+    /// `sigma_recv`: the Request's recorded blacklist version selects another relation, or
     /// the mask has an undefined bit.
     ControlsMismatch,
     /// `sigma_send`: `amount + fee` reaches `2^128`.
@@ -808,7 +833,7 @@ pub enum Violation {
     /// `sigma_send` with the quota control: a window kind the share defines
     /// has no touched window.
     QuotaKindUntouched,
-    /// `sigma_send` with the quota control: a usage-map update or insertion
+    /// `sigma_send` with the quota control: an aligned usage-array update
     /// does not verify against the committed root.
     QuotaUsageOpening,
     /// `sigma_send` with the quota control: a touched window's usage
@@ -919,6 +944,13 @@ fn violations<F: PoseidonField>(
 ) -> Vec<Violation> {
     let core = &witness.predecessor.core;
     let mut found = Vec::new();
+    if !witness.canonical_digests() {
+        found.push(Violation::NoncanonicalDigest);
+    }
+    let terms = witness.inputs.terms();
+    if (terms.receiver_blacklist_version == 0) != (terms.receiver_blacklist_root == [0; 32]) {
+        found.push(Violation::RequestBlacklist);
+    }
     if witness.inputs.relation() != relation.step() {
         found.push(Violation::WrongStep);
     }
@@ -992,6 +1024,18 @@ fn violations<F: PoseidonField>(
             {
                 found.push(Violation::LeaseExpired);
             }
+            if relation.enforces(CONTROL_QUOTAS) {
+                if send.accepted_upper >= controls.quota_share_expires_at_ms {
+                    found.push(Violation::QuotaShareExpired);
+                }
+                if send
+                    .accepted_upper
+                    .checked_sub(send.accepted_lower)
+                    .is_none_or(|span| span > controls.time_anchor_max_response_ms)
+                {
+                    found.push(Violation::SendSpan);
+                }
+            }
             found.extend(
                 quota
                     .unwrap_or_default()
@@ -1002,7 +1046,8 @@ fn violations<F: PoseidonField>(
         StepInputs::Receive(receive) => {
             let controls = &core.controls;
             if controls.enabled & !CONTROLS_DEFINED != 0
-                || controls.enabled & RECEIVE_CONTROLS != relation.enabled_controls()
+                || u32::from(receive.request.receiver_blacklist_version != 0)
+                    != relation.enabled_controls()
             {
                 found.push(Violation::ControlsMismatch);
             }
@@ -1011,8 +1056,8 @@ fn violations<F: PoseidonField>(
             }
             if relation.enforces(CONTROL_BLACKLIST)
                 && !blacklist_holds(
-                    controls.blacklist_version,
-                    &controls.blacklist_root,
+                    receive.request.receiver_blacklist_version,
+                    &field_value::<F>(&receive.request.receiver_blacklist_root),
                     &receive.blacklist,
                     &receive.payer_account_digest,
                 )
@@ -1024,7 +1069,38 @@ fn violations<F: PoseidonField>(
     found
 }
 
+/// Reference encoding of a field digest. Invalid encodings get zero only for
+/// diagnostic arithmetic; `canonical_digests` rejects them before proving.
+#[must_use]
+pub(crate) fn field_value<F: PoseidonField>(bytes: &[u8; 32]) -> F {
+    canonical_field(bytes).unwrap_or(F::ZERO)
+}
+
 impl<F: PoseidonField> StepWitness<F> {
+    /// Whether every carried Poseidon digest is canonically encoded.
+    #[must_use]
+    pub fn canonical_digests(&self) -> bool {
+        let rest = &self.predecessor.rest;
+        let request = self.request_body();
+        let common = [
+            self.predecessor.core.identity.credential_digest,
+            rest.scheme_policy,
+            rest.fee_schedule,
+            rest.blacklist,
+            rest.quota_share,
+            rest.time_anchor,
+            rest.blacklist_history_root,
+        ];
+        common
+            .iter()
+            .all(|bytes| canonical_field::<F>(bytes).is_some())
+            && request.canonical_digests::<F>()
+            && match &self.inputs {
+                StepInputs::Send(send) => canonical_field::<F>(&send.request_digest).is_some(),
+                StepInputs::Receive(_) => true,
+            }
+    }
+
     /// The step of this witness.
     #[must_use]
     pub const fn relation(&self) -> StepRelation {
@@ -1178,7 +1254,7 @@ impl<F: PoseidonField> StepWitness<F> {
         let (chain_entry, chain_domain, effect, lineage) = match &self.inputs {
             StepInputs::Send(send) => {
                 let [receiver_lo, receiver_hi] = digest_fields::<F>(&send.receiver_wallet);
-                let [request_lo, request_hi] = digest_fields::<F>(&send.request_digest);
+                let request_digest = field_value::<F>(&send.request_digest);
                 let ordinal = core[core_index::NEXT_SEND];
                 let fee = F::from_u128(send.request.fee);
                 let entry = vec![
@@ -1189,8 +1265,7 @@ impl<F: PoseidonField> StepWitness<F> {
                     ordinal,
                     amount,
                     fee,
-                    request_lo,
-                    request_hi,
+                    request_digest,
                 ];
                 let effect = vec![
                     credit,
@@ -1199,8 +1274,7 @@ impl<F: PoseidonField> StepWitness<F> {
                     ordinal,
                     amount,
                     fee,
-                    request_lo,
-                    request_hi,
+                    request_digest,
                     F::from(send.accepted_lower),
                     F::from(send.accepted_upper),
                 ];
@@ -1251,7 +1325,6 @@ impl<F: PoseidonField> StepWitness<F> {
             core[core_index::ASSET],
             core[core_index::ASSET + 1],
             core[core_index::CREDENTIAL],
-            core[core_index::CREDENTIAL + 1],
             successor_core[core_index::LIFECYCLE],
             successor_core[core_index::SEQUENCE],
             successor_core[core_index::NEXT_LOAD],
@@ -1310,7 +1383,7 @@ mod tests {
         assert_eq!(CREDIT_DOMAIN.to_le_bytes(), *b"kgwcrdt1");
         assert_eq!(SEND_CHAIN_DOMAIN.to_le_bytes(), *b"kgwschn1");
         assert_eq!(RECEIVE_CHAIN_DOMAIN.to_le_bytes(), *b"kgwrchn1");
-        assert_eq!(COMMITMENT_ARITY, 33);
+        assert_eq!(COMMITMENT_ARITY, 34);
         assert_eq!(SigmaRelation::SEND.selector(), (3, 0));
         assert_eq!(SigmaRelation::send(CONTROL_BLACKLIST).selector(), (3, 1));
         assert_eq!(SigmaRelation::send(CONTROLS_DEFINED).selector(), (3, 7));
@@ -1370,7 +1443,7 @@ mod tests {
         assert_eq!(core[core_index::STATE_NONCE], state.core.state_nonce);
         let rest = state.rest.fields::<Fp>();
         assert_eq!(rest[0], Fp::from(u64::from(state.rest.permitted_controls)));
-        assert_eq!(rest[10], Fp::from(state.rest.quota_share_id));
+        assert_eq!(rest[5], Fp::from(state.rest.quota_share_id));
         assert_eq!(
             state.commitment(),
             hash_with_domain(
@@ -1396,7 +1469,7 @@ mod tests {
         assert_eq!(fields[7..9], digest_fields::<Fp>(&body.payer_account));
         assert_eq!(fields[11..13], digest_fields::<Fp>(&body.receiver_account));
         assert_eq!(fields[13], Fp::from_u128(core.next_send));
-        assert_eq!(fields[16], Fp::from_u128(body.terms.amount));
+        assert_eq!(fields[15], Fp::from_u128(body.terms.amount));
         assert_eq!(
             body.credit_id::<Fp>(),
             hash_with_domain(CREDIT_DOMAIN, &fields)
@@ -1483,11 +1556,11 @@ mod tests {
             native.statement[STATEMENT_HEADER_FIELDS],
             native.digests.credit
         );
-        // The Send effect and chain bind the Request digest limbs after the
+        // The Send effect and chain bind the Request digest field after the
         // fee.
-        let request = digest_fields::<Fp>(&send.request_digest);
-        assert_eq!(native.statement[24..26], request);
-        assert_eq!(native.chain_entry[7..9], request);
+        let request = field_value::<Fp>(&send.request_digest);
+        assert_eq!(native.statement[23], request);
+        assert_eq!(native.chain_entry[7], request);
         assert_eq!(
             native.digests.credit,
             hash_with_domain(CREDIT_DOMAIN, &native.request.fields::<Fp>())
@@ -1521,8 +1594,8 @@ mod tests {
         assert_eq!(native.chain_entry.len(), RECEIVE_CHAIN_FIELDS);
         assert_eq!(native.public().instance(), vec![native.digests.statement]);
         // The lineage inputs of a Receive statement are zero.
+        assert_eq!(native.statement[12], Fq::ZERO);
         assert_eq!(native.statement[13], Fq::ZERO);
-        assert_eq!(native.statement[14], Fq::ZERO);
         assert_eq!(witness.relation(), StepRelation::Receive);
         assert_eq!(successor.commitment(), native.digests.successor);
     }
@@ -1703,8 +1776,15 @@ mod tests {
         for relation in [blacklist, receive_blacklist] {
             let mut witness = sample_witness::<Fp>(9, relation, Mutation::Listed);
             witness.predecessor.core.controls.blacklist_version = 0;
+            let checked_relation = if let StepInputs::Receive(receive) = &mut witness.inputs {
+                receive.request.receiver_blacklist_version = 0;
+                receive.request.receiver_blacklist_root = [0; 32];
+                SigmaRelation::RECEIVE
+            } else {
+                relation
+            };
             assert!(
-                witness.evaluate(relation).is_honest(),
+                witness.evaluate(checked_relation).is_honest(),
                 "{}",
                 relation.label()
             );
@@ -1761,6 +1841,8 @@ mod tests {
         let controls = |version, issued, max_age| Controls {
             enabled: CONTROL_BLACKLIST,
             quota_windows_root: Fp::ZERO,
+            quota_share_expires_at_ms: 0,
+            time_anchor_max_response_ms: 0,
             blacklist_version: version,
             blacklist_root: Fp::ONE,
             blacklist_issued_at_ms: issued,

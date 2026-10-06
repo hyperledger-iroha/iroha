@@ -103,7 +103,9 @@ def test_production_exports_have_no_feature_opt_out() -> None:
     for source in core.rglob("*.rs"):
         assert 'feature = "kagemusha-production-prover"' not in source.read_text(), source
     core_entry = (core / "lib.rs").read_text()
-    assert 'pub mod kagemusha_v1_recursion;' in core_entry
+    assert 'pub mod kagemusha_wallet_advance_v1;' in core_entry
+    assert 'pub mod kagemusha_v1_recursion;' not in core_entry
+    assert not (core / "kagemusha_v1_recursion").exists()
     assert 'mod kagemusha_v1_state;' not in core_entry
     assert not (core / "kagemusha_v1_state").exists()
 
@@ -147,9 +149,9 @@ def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> N
     for source in core.rglob("*.rs"):
         for name in retired:
             assert f'feature = "{name}"' not in source.read_text(), (source, name)
-    recursion = (core / "kagemusha_v1_recursion/mod.rs").read_text()
-    assert 'mod mint_finality;' in recursion
-    assert 'derive_kagemusha_mint_finality_validator_keys_v1' in recursion
+    provider = (core / "kagemusha_wallet_advance_v1.rs").read_text()
+    assert "KagemushaWalletProviderV1" in provider
+    assert not (core / "kagemusha_v1_test_fixtures.rs").exists()
 
 
 def test_stark_owns_optional_fastpq_dependency_and_rejects_mutations() -> None:

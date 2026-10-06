@@ -33,7 +33,7 @@ pub(super) fn with_worker(
     with_worker_from(permissioned_chain, ConsensusMode::Permissioned, test);
 }
 
-fn with_worker_from(
+pub(super) fn with_worker_from(
     make_chain: impl FnOnce() -> CertifiedTestChain + Send + 'static,
     consensus_mode: ConsensusMode,
     test: impl FnOnce(

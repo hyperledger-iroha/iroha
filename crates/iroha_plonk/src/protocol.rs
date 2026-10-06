@@ -1,6 +1,6 @@
 //! PIPA-v1 protocol tables shared by the prover and the verifier.
 //!
-//! Everything here is a pure function of a validated [`CircuitDescriptorV1`]:
+//! Everything here is a pure function of a validated [`ProtocolDescriptor`]:
 //!
 //! - [`Shape`]: the counts of spec section 1 (`n`, `d`, `b`, `u`, the column,
 //!   query, permutation-set and lookup counts, the instance mode and the
@@ -30,7 +30,7 @@ use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
 
 use crate::{
     cs::{
-        CircuitDescriptorV1, InstanceModeV1, ProofSuffixV1,
+        DescriptorSource, InstanceModeV1, ProofSuffixV1, ProtocolDescriptor,
         descriptor::{ColumnKindV1, ExprNodeV1, MAX_EXPRESSION_STACK},
     },
     pcs::{
@@ -130,7 +130,9 @@ impl Shape {
     ///
     /// [`ProtocolError::Overflow`] when `k`, `d` or `b` are outside the
     /// ranges a validated descriptor guarantees.
-    pub fn new(descriptor: &CircuitDescriptorV1) -> Result<Self, ProtocolError> {
+    pub fn new(source: &impl DescriptorSource) -> Result<Self, ProtocolError> {
+        let normalized = source.protocol_descriptor();
+        let descriptor = normalized.as_ref();
         let k = u32::from(descriptor.k);
         if !(1..=crate::cs::constraint_system::MAX_K).contains(&k) {
             return Err(ProtocolError::Overflow);
@@ -252,7 +254,9 @@ impl Protocol {
     ///
     /// [`ProtocolError`] when the descriptor breaks an invariant that
     /// validation guarantees (a missing rotation-0 query, an overflow).
-    pub fn new(descriptor: &CircuitDescriptorV1) -> Result<Self, ProtocolError> {
+    pub fn new(source: &impl DescriptorSource) -> Result<Self, ProtocolError> {
+        let normalized = source.protocol_descriptor();
+        let descriptor = normalized.as_ref();
         let shape = Shape::new(descriptor)?;
         let queries = opening_queries(descriptor, &shape)?;
         let plan = OpeningPlan::new(&queries)?;
@@ -345,7 +349,7 @@ impl Protocol {
 
 /// The opening queries of spec section 9.1, in order.
 fn opening_queries(
-    descriptor: &CircuitDescriptorV1,
+    descriptor: &ProtocolDescriptor,
     shape: &Shape,
 ) -> Result<Vec<OpeningQuery>, ProtocolError> {
     let mut queries = Vec::new();

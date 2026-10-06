@@ -1,11 +1,11 @@
 # KAGEMUSHA verification checklist
 
-Status: working checklist, 2026-10-04, for proposal revision 2026-10-04 (split
+Status: working checklist, 2026-10-06, for proposal revision 2026-10-04 (split
 lineage). This document records useful checks for
 [the single protocol](kagemusha_single_design_proposal.md). It is not an
 approval process and does not block use, production integration or deployment.
-The filename is retained for existing links. No check below has been run for
-the consolidated design.
+The filename is retained for existing links. Section 8 records current
+component checks; complete protocol and physical-device qualification remain open.
 
 Runtime signature, proof, authorization, replay and durability checks remain
 part of the protocol. Removing a release gate does not make an invalid
@@ -409,6 +409,56 @@ Starting points, not evidence that this protocol has passed:
 - [Android attestation](https://developer.android.com/privacy-and-security/security-key-attestation), [Apple validation](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server) and [Apple fraud-risk guidance](https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk): capture the exact statements and their limits in each evidence record.
 
 ## 8. Recorded results
+
+### Current implementation checkpoint (2026-10-06)
+
+The current `optimizations` checkout includes uncommitted coordinated work over
+`bddb072b97`; a commit hash alone does not reproduce it. No authenticated artifact
+set, full-protocol qualification, phone result or completed offline payment is
+claimed. Earlier measurements of deleted implementations below do not qualify
+this candidate. The [Λ/Ω construction](kagemusha_lambda_omega_v1.md#10-milestones-named-tests-and-thresholds)
+defines the unchanged engineering limits and current shared-host method.
+
+| Milestone | Current evidence | Remaining boundary |
+|---|---|---|
+| G1 revision-4 σ and controls | Native proof crate release suite: 90 passed, 41 intentionally ignored; statement gadget 5 unit and 8 integration cases passed. Shared Rust vectors, all 8 Send masks and both Receive selectors are pinned. Fixed64 usage, recorded blacklist, share expiry and time-span checks have negative tests. Real k14 proofs for masks 2 and 7 verify at 3,456 B; other descriptor lengths are 3,296 B at k12. | The same suite and real k12/k14 cases pass after PIPA-R migration. Authenticated artifacts, cross-language rebuilt consumers and exhaustive ignored sweeps remain open. No wallet protocol path consumes σ yet. |
+| Envelope arithmetic | Canonical fixed Payment overhead is 1,723 B; largest current σ_send is 3,456 B, leaving at most 4,821 B for Ω. The earlier 4,736 B Ω was an estimate, not an implemented proof. The first generic Ω frame descriptor requires 11,392 B transport; bounded foreign arithmetic and direct S6 reduce it to 10,944 B. | Both generic Ω descriptors fail the hard cap. Compact layout work remains necessary. Actual complete Norito Payment/Status encodings must establish frozen bounds; no stand-in proof establishes a completed payment. |
+| M3b carry/range binding | [Carry memo](kagemusha_ff_carry_v1.md) includes the four corrections, independent exact rederivation and reviewed source hashes. FF 20 existing plus 2 boundary tests and 4 shared-Q-layout tests passed. | Scoped engineering review, not an external cryptographic audit or proof-engine qualification. |
+| M3 consuming witness / MSM budget | Native engine 228 tests passed (4 ignored); Pasta 102 passed (1 ignored). All 42 non-timing oracle cases retain their proof bytes after owned-buffer and quotient-evaluator changes. Owned and borrowed witness paths preserve proof bytes in parity tests. Shared nonblocking MSM reservations enforce a process-wide 64 MiB ceiling. | Performance gates still require current-candidate fresh-process qualification. |
+| Measurement controls | Fallible direct CPU/kernel RSS probes; verified 1/4-worker pools; two separately verified owned-witness proofs; source/binary and actual descriptor binding. Python runner 14 tests pass, including missing configurations, stale identity, malformed probes, cap overruns and retained-report revalidation. | The complete nine-process, three-block schedule has not qualified a candidate. Invalid attempts remain recorded; elapsed-time failures are never normalized. |
+| PIPA-R / recursion | Native PIPA-R typed transcripts/proofs and PIPA-AS folds pass both-curve tests. The complete succinct circuit interpreter matches real source proofs. Total soft accumulator decoding, malformed-claim → burn → Trivial replacement → hard fold, and exceptional identity-correction rejection pass on both curves. Obligation tests cover the branch truth table and all 14 unsplit schedules, with four fixed Vesta fold slots including explicit trivial fillers. The [soundness argument](kagemusha_recursion_soundness_v1.md) records assumptions and outstanding review. | A genuine Q → A → Ω composition, full key continuity, operation relations and recursive mutations remain open. Component proofs do not establish unbounded-PCD soundness or a joint simulator. |
+| Q sigma relation | Real Receive-k12 and incoming Send-k14 proofs are verified in Q with a hard three-slot local accumulation. The shared byte/ECC layout has 29 advice, 42 fixed, 22 equality columns and 12 lookups; largest row span 50,799 at k16. Its actual native Q proof is 10,496 B and verifies, with altered public chunks rejected. Native preparation binds exact proof lengths, class keys, selected claims and exported frames. | One four-worker synthesis/prove/self-verify diagnostic took 12.8297 s; this is neither an isolated proof timing nor qualification. Q is local, not the transported Omega proof. |
+| A / Ω recursive frames | Real Q-to-A frame passes k16 at 46,645 rows after bounded foreign-arithmetic optimization (previously 70,756 FF rows, a k16 failure). All 14 A variants share the tested 69-field frame. Same-tape length/message and statement mutations reject. Isolated Ω frame tests pass for source k12/k14/k16 with the fixed four-slot Vesta fold. | Frame fixtures do not implement complete operation authorization or full lineage. Send Q/predecessor/F_P diagnostic reaches 70,549 UInt rows before operation effects and fails k16; the specified A-split and compact Ω remain in progress. |
+| Indexed maps / state openings | Eight IMT tests pass, covering both fields, full-depth G1 vectors, authenticated empty insertion, removed-slot clearing, full integer key order, immutable first records and every-cell small-circuit tampering. Seven state/statement tests pass for core33/rest8/statement26, all operation tags, recomputed-hash forgeries, exact control masks and identity/head continuity. | These constraints are components to be bound to authenticated operation inputs and recursive verdicts. They do not authorize a payment by themselves. |
+| Wallet / integration | Shared Rust coordination retains exact replay, durable fold witnesses, Patricia indexes, source-bound checkpoints, CreditStatus and cooperative payment preemption around G2. Wallet component suite 17/17 passed; combined G2/wallet suite 203/203 passed before the latest native-storage change. Latest descriptor-relative backend tests 8/8 and lower-layer custody test passed, as did scoped library lint. The backend retains directory/staging identities through publication. | The real NativeProofs provider remains mandatory and depends on unfinished authenticated artifacts. Bridge handles, rebuilt SDK artifacts, finalized ledger services, A → B → C → unload and four-validator qualification remain open. |
+
+The current repaired-harness **diagnostic**, binary SHA-256
+`58b0368064ce8ab590d4e0a6bafce17e73d3aea9115b23ec41826db92903217b`, produced
+two valid PIPA-R proofs in each configuration below on the shared Mac. It
+includes shared A round selectors, reused quotient coset buffers and exact
+DAG normalization. The worktree was not frozen for these runs; there was no
+calibration/repetition qualification. Raw records are retained in
+`target/qualification/m3-pilot-20261006-normalized-dag/`; earlier raw attempts
+remain under the adjacent `m3-pilot-*` directories. RSS is the kernel lifetime
+peak, including key generation, and is not phase-subtracted. Time is the slower
+of the two proofs. Q is the 5-variable-key/1-fixed-key signature chip workload;
+A is the IMT-like load, not a complete operation relation.
+
+| Real workload | Workers | Judged diagnostic time | Peak RSS bytes | Gate observation |
+|---|---:|---:|---:|---|
+| Q chips | 1 | 29.9847 s CPU | 750,321,664 | Inside hard limits; lacks 10% time margin |
+| Q chips | 4 | 10.1756 s elapsed | 674,955,264 | Exceeds 10 s; RSS below 0.75 GiB |
+| A IMT load | 1 | 33.0941 s CPU | 764,788,736 | Inside hard limits; lacks 10% time margin |
+| A IMT load | 4 | 10.0960 s elapsed (diagnostic) | 728,449,024 | RSS below 0.85 GiB; no A4 time gate is invented |
+
+Q proofs are 7,936 bytes; the shared-selector A workload proofs are 7,584 bytes.
+Those are local chip workload proofs, not transported Omega artifacts.
+
+No synthetic-shape or phone result is inferred from these chip diagnostics.
+Streaming/allocation changes or narrower/split workloads must meet the existing
+limits before M3 is marked qualified.
+
+### Earlier observations (retired layouts; not current qualification)
 
 Records below follow §2. Source: `optimizations` at `df9c70cdb3` plus the
 uncommitted working tree of 2026-10-03; host: Apple-silicon Mac, 20 CPUs, 128 GiB,

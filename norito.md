@@ -412,6 +412,17 @@ payload against the original frame through the existing streaming canonical
 writer. It preserves original codec/resource causes separately from local
 prepared-destination failures; neither is retried through an owning decoder.
 
+The prepared entry preserves the caller's original owning boundary. The canonical
+field entry keeps its whole-payload field-length check and record depth before the
+first child. `decode_canonical_archive_into`, used by the prepared SignedBlock
+reader, instead follows `ArchiveView::decode`: it authenticates the frame and type,
+installs the original schema/layout flags, derives limits from the payload length,
+and enters the generated record without an extra whole-record field or depth.
+The first field and every child still use the sole bounded framing kernels. Both
+entries share the positional walk, destination/refusal custody and exact complete
+canonical frame comparison; neither introduces another V1 representation, a
+scratch archived decoder or a limit override.
+
 Prepared sequence destinations supply initialized `SequenceSpan` scratch and
 initialized output storage. The existing scalar sequence walker validates the
 complete span plan before any element callback, preserving late-framing error

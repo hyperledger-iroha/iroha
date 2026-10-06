@@ -21,21 +21,15 @@
 //!   checks on three running-sum tables) filled to capacity, and the exact
 //!   shape (32 / 44 / 10 / 3).
 //!
-//! Each proof test prints one `M3_GATE` line: the shape, key generation,
-//! synthesis and proving time per proof, verification time, proof bytes,
-//! `load1` before and after, the peak resident set per phase, sampled with
-//! `ps` every 100 ms (the whole-process peak comes from `/usr/bin/time -l`),
-//! and the process CPU time per phase (every thread; on one thread it
-//! approximates the wall time of an idle host, which a loaded host
-//! inflates), and the size of the compiled (hash-consed) expression DAG. The
-//! thread count is the global Rayon pool (`RAYON_NUM_THREADS`). Keys use the
-//! on-demand coset policy and no commitment tables (design section 6, rules
-//! 2 and 6), Direct instances, the folded-generator suffix and the KAGEMUSHA
-//! Poseidon transcript; prover and verifier MSMs get the design's 64 MiB
-//! budget (rule 5) per kernel; the prover uses today's API (the
-//! owned-witness API is M4). Parameters come from a cache file in the
-//! target directory when it holds the pinned bytes (setup only; the cache
-//! never changes a key or a proof).
+//! Each proof test emits a `M3_GATE_JSON` record. CPU comes directly from
+//! the process clock, RSS from the kernel's lifetime high-water figure,
+//! and each proof is verified outside its timed synthesis/proving/cleanup
+//! interval. Probe failures invalidate the run. The harness constructs and
+//! checks a one- or four-worker Rayon pool; `RAYON_NUM_THREADS` selects it.
+//! Keys use on-demand cosets without commitment tables. The consuming
+//! witness API and the shared process MSM budget are measured explicitly.
+//! `scripts/kagemusha_qualify.py` owns fresh processes, source/binary
+//! provenance, environmental checks and the fixed repetition schedule.
 //!
 //! ```text
 //! scripts/cargo_fast.sh --stable-local-metadata --incremental --target-slot m3b -- \
@@ -46,33 +40,26 @@
 use std::{
     convert::Infallible,
     fmt::Write as _,
+    io::Read as _,
     ops::Range,
     path::{Path, PathBuf},
-    process::Command,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use ::ff::{Field as _, PrimeField as _};
+use iroha_measurement::probe::ProcessSnapshot;
 use iroha_pasta::{
     Ep as Pallas, Eq as Vesta, Fp, Fq, PastaCurve, PastaField,
-    msm::MemoryBudget,
+    msm::{MemoryBudget, SharedMemoryBudget},
     poseidon::{PoseidonField, hash_with_domain},
 };
 use iroha_plonk::{
     Expression, ProverConfig, ProverRandomness, Witness,
     check::{CheckMode, check_circuit},
-    create_proof,
-    cs::{
-        Advice, Column, ConstraintSystem, Fixed, Instance, InstanceModeV1, ProofSuffixV1, Rotation,
-        TableColumn, TranscriptV1,
-    },
+    create_proof_owned,
+    cs::{Advice, Column, ConstraintSystem, Fixed, Instance, InstanceType, Rotation, TableColumn},
     frontend::{Cell, Circuit, Error, Layouter, SimpleFloorPlanner, Value, configure, synthesize},
-    keys::{CosetCachePolicy, KeygenConfig, keygen_pk},
+    keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2},
     pcs::ipa::PinnedParams,
     prover::quotient::CompiledExpressions,
     verify_full,
@@ -88,6 +75,7 @@ use iroha_plonk_gadgets::{
             words_is_zero, words_lt,
         },
     },
+    poseidon::SharedRoundSelectors,
     q_leaf::{Q_LEAF_ADVICE_COLUMNS, QLeafChips, QLeafConfig, sha_rows},
     sha256::native::sha256_of_digest,
     tamper::undetected_tampers,
@@ -96,187 +84,53 @@ use rand_chacha::{
     ChaCha20Rng,
     rand_core::{RngCore, SeedableRng},
 };
+use sha2::{Digest as _, Sha256};
 
 /// The circuit size of every gate.
 const K: u32 = 16;
 /// Proofs per measurement process (the key is generated once).
 const PROVES: usize = 2;
-/// The MSM scratch budget of the measured prover and verifier: the design's
-/// 64 MiB (section 6, rule 5), per kernel (the engine has no process-wide
-/// cap yet; concurrent advice commitments each get one).
+/// The local kernel ceiling; every kernel also reserves against the shared
+/// process-wide 64 MiB budget.
 const MSM_BUDGET: MemoryBudget = MemoryBudget::new(64 << 20);
 
-// ---------------------------------------------------------------------------
-// Process probes: load average and resident set.
-// ---------------------------------------------------------------------------
-
-/// The 1-minute load average from `sysctl -n vm.loadavg` text
-/// (`{ 1.00 2.00 3.00 }`) or `/proc/loadavg` text (`1.00 2.00 3.00 1/2 3`).
-fn parse_loadavg(text: &str) -> Option<f64> {
-    text.split_whitespace()
-        .map(|token| token.trim_matches(|c| c == '{' || c == '}'))
-        .find(|token| !token.is_empty())
-        .and_then(|token| token.parse().ok())
-}
-
-/// The current 1-minute load average.
-fn load1() -> Option<f64> {
-    let text = Command::new("sysctl")
-        .args(["-n", "vm.loadavg"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .or_else(|| std::fs::read_to_string("/proc/loadavg").ok())?;
-    parse_loadavg(&text)
-}
-
-/// The resident set in KiB from `ps -o rss=` text.
-fn parse_rss_kib(text: &str) -> Option<u64> {
-    text.trim().parse().ok()
-}
-
-/// The resident set of process `pid` in KiB.
-fn rss_kib(pid: u32) -> Option<u64> {
-    let output = Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    parse_rss_kib(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Seconds from `ps -o time=` text: `[dd-][hh:]mm:ss[.ss]` (macOS prints
-/// unbounded minutes, `83:30.02`; Linux prints `01:23:45`).
-fn parse_cpu_seconds(text: &str) -> Option<f64> {
-    let text = text.trim();
-    let (days, clock) = match text.split_once('-') {
-        Some((days, clock)) => (days.parse::<f64>().ok()?, clock),
-        None => (0.0, text),
-    };
-    let mut seconds = 0.0;
-    for field in clock.split(':') {
-        seconds = f64::mul_add(seconds, 60.0, field.parse::<f64>().ok()?);
+/// Only the two declared qualification worker counts are accepted.
+fn worker_count(value: Option<&str>) -> Result<usize, &'static str> {
+    match value.unwrap_or("1") {
+        "1" => Ok(1),
+        "4" => Ok(4),
+        _ => Err("M3 qualification requires exactly one or four Rayon workers"),
     }
-    Some(days.mul_add(86_400.0, seconds))
 }
 
-/// The CPU time (user and system, every thread) of process `pid` in
-/// seconds.
-fn cpu_seconds(pid: u32) -> Option<f64> {
-    let output = Command::new("ps")
-        .args(["-o", "time=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    parse_cpu_seconds(&String::from_utf8_lossy(&output.stdout))
+/// Lowercase hexadecimal without allocating a second copy of the input.
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(out, "{byte:02x}").expect("string write");
+    }
+    out
 }
 
-/// Measurement phases, in order.
-const PHASES: [&str; 4] = ["setup", "keygen", "prove", "verify"];
-/// Phase index: parameters and configuration.
-const SETUP: usize = 0;
-/// Phase index: key generation.
-const KEYGEN: usize = 1;
-/// Phase index: synthesis and proving.
-const PROVE: usize = 2;
-/// Phase index: verification.
-const VERIFY: usize = 3;
-/// The sampling period of [`RssSampler`].
-const SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
-
-/// Records this process's resident set into the current phase's peak.
-fn sample_into(phase: &AtomicUsize, peaks: &Mutex<[u64; PHASES.len()]>) {
-    if let Some(kib) = rss_kib(std::process::id()) {
-        let index = phase.load(Ordering::SeqCst);
-        if let Ok(mut peaks) = peaks.lock() {
-            peaks[index] = peaks[index].max(kib);
+/// Hash the actual executable with a fixed-size buffer before measurement.
+fn binary_digest() -> String {
+    let path = std::env::current_exe().expect("benchmark executable");
+    let mut file = std::fs::File::open(path).expect("read benchmark executable");
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 8 << 10];
+    loop {
+        let count = file.read(&mut buffer).expect("hash benchmark executable");
+        if count == 0 {
+            break;
         }
+        hash.update(&buffer[..count]);
     }
+    hex(&hash.finalize())
 }
 
-/// Samples this process's resident set per phase on a background thread,
-/// and its CPU time at every phase boundary.
-struct RssSampler {
-    phase: Arc<AtomicUsize>,
-    peaks: Arc<Mutex<[u64; PHASES.len()]>>,
-    stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
-    /// CPU seconds at the start of the current phase.
-    cpu_mark: Mutex<f64>,
-    /// CPU seconds spent per phase.
-    cpu: Mutex<[f64; PHASES.len()]>,
-}
-
-/// What [`RssSampler::finish`] reports per phase.
-struct PhaseUse {
-    /// Peak resident set in KiB.
-    rss_kib: [u64; PHASES.len()],
-    /// CPU seconds (every thread).
-    cpu_seconds: [f64; PHASES.len()],
-}
-
-impl RssSampler {
-    /// Starts sampling in [`SETUP`].
-    fn start() -> Self {
-        let phase = Arc::new(AtomicUsize::new(SETUP));
-        let peaks = Arc::new(Mutex::new([0; PHASES.len()]));
-        let stop = Arc::new(AtomicBool::new(false));
-        let handle = {
-            let (phase, peaks, stop) = (Arc::clone(&phase), Arc::clone(&peaks), Arc::clone(&stop));
-            thread::spawn(move || {
-                while !stop.load(Ordering::SeqCst) {
-                    sample_into(&phase, &peaks);
-                    thread::sleep(SAMPLE_INTERVAL);
-                }
-            })
-        };
-        Self {
-            phase,
-            peaks,
-            stop,
-            handle: Some(handle),
-            cpu_mark: Mutex::new(cpu_seconds(std::process::id()).unwrap_or(0.0)),
-            cpu: Mutex::new([0.0; PHASES.len()]),
-        }
-    }
-
-    /// Charges the CPU time since the last boundary to the current phase.
-    fn close_cpu(&self) {
-        let now = cpu_seconds(std::process::id()).unwrap_or(0.0);
-        let mut mark = self.cpu_mark.lock().expect("cpu mark");
-        let index = self.phase.load(Ordering::SeqCst);
-        self.cpu.lock().expect("cpu")[index] += (now - *mark).max(0.0);
-        *mark = now;
-    }
-
-    /// Closes the current phase with a sample and enters `phase`.
-    fn enter(&self, phase: usize) {
-        sample_into(&self.phase, &self.peaks);
-        self.close_cpu();
-        self.phase.store(phase, Ordering::SeqCst);
-        sample_into(&self.phase, &self.peaks);
-    }
-
-    /// Stops sampling and returns the peaks and CPU time per phase.
-    fn finish(mut self) -> PhaseUse {
-        sample_into(&self.phase, &self.peaks);
-        self.close_cpu();
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.handle.take() {
-            handle.join().expect("sampler thread");
-        }
-        PhaseUse {
-            rss_kib: *self.peaks.lock().expect("peaks"),
-            cpu_seconds: *self.cpu.lock().expect("cpu"),
-        }
-    }
-}
-
-/// KiB as MiB with one decimal.
-fn mib(kib: u64) -> String {
-    format!(
-        "{:.1}",
-        f64::from(u32::try_from(kib).unwrap_or(u32::MAX)) / 1024.0
-    )
+/// Convert an elapsed duration to the report's checked nanosecond field.
+fn elapsed_ns(start: Instant) -> u64 {
+    u64::try_from(start.elapsed().as_nanos()).expect("measurement shorter than 584 years")
 }
 
 // ---------------------------------------------------------------------------
@@ -404,116 +258,211 @@ fn pinned_params<C: PastaCurve>(k: u32) -> (PinnedParams<C>, &'static str) {
     (params, "derived")
 }
 
-/// Generates keys for `circuit` at `k = 16` (design section 6 policy),
-/// proves it [`PROVES`] times and verifies the last proof, sampling the
-/// resident set per phase; prints one `M3_GATE` line.
+/// Measure inside a pool whose actual worker count is checked explicitly.
 fn measure_proof<C, Ci>(gate: &str, circuit: &Ci, public: &[C::ScalarExt])
+where
+    C: PastaCurve,
+    C::ScalarExt: PoseidonField,
+    Ci: Circuit<C::ScalarExt> + Sync,
+{
+    let requested = std::env::var("RAYON_NUM_THREADS").ok();
+    let workers = worker_count(requested.as_deref()).expect("worker configuration");
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .expect("measurement pool");
+    let binary_sha256 = binary_digest();
+    pool.install(|| {
+        assert_eq!(rayon::current_num_threads(), workers);
+        measure_in_pool::<C, Ci>(gate, circuit, public, workers, &binary_sha256);
+    });
+}
+
+/// The same key and transcript configuration for inventory and timed proofs.
+fn measurement_key_config() -> KeygenConfigV2 {
+    let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Field]);
+    config.coset_cache = CosetCachePolicy::OnDemand;
+    config
+}
+
+/// Bind the measurement workload before executing any qualification schedule.
+fn record_layout<C, Ci>(gate: &str, circuit: &Ci)
 where
     C: PastaCurve,
     C::ScalarExt: PoseidonField,
     Ci: Circuit<C::ScalarExt>,
 {
-    let threads = std::env::var("RAYON_NUM_THREADS").unwrap_or_else(|_| "default".to_owned());
-    let load_before = load1();
-    let sampler = RssSampler::start();
+    let (cs, _) = configure(circuit).expect("configure inventory");
+    let (params, _) = pinned_params::<C>(K);
+    let pk = keygen_pk_v2(
+        &params,
+        &circuit.without_witnesses(),
+        &measurement_key_config(),
+    )
+    .expect("inventory proving key");
+    let report = norito::json!({
+        "gate": gate, "k": K, "shape": (shape_line(&cs)),
+        "descriptor_digest": (hex(pk.vk().descriptor_digest())),
+        "descriptor_hash": "blake2b256-pipa-v2-circdesc", "transcript_profile": "pipa-r",
+    });
+    println!(
+        "M3_LAYOUT_JSON {}",
+        norito::json::to_json(&report).expect("layout JSON")
+    );
+}
+
+/// Synthesis through witness cleanup is timed independently for each proof.
+/// Parameters/keygen and each verification are outside that interval.
+fn measure_in_pool<C, Ci>(
+    gate: &str,
+    circuit: &Ci,
+    public: &[C::ScalarExt],
+    workers: usize,
+    binary_sha256: &str,
+) where
+    C: PastaCurve,
+    C::ScalarExt: PoseidonField,
+    Ci: Circuit<C::ScalarExt>,
+{
+    let process_before = ProcessSnapshot::capture().expect("valid starting resource probes");
     let (cs, _) = configure(circuit).expect("configure");
     let started = Instant::now();
     let (params, params_source) = pinned_params::<C>(K);
-    let params_ms = started.elapsed().as_millis();
-    sampler.enter(KEYGEN);
+    let params_ns = elapsed_ns(started);
+    let rss_after_params = ProcessSnapshot::capture()
+        .expect("post-params probes")
+        .peak_rss_bytes;
     let started = Instant::now();
-    let mut config = KeygenConfig::new(TranscriptV1::KagemushaPoseidonRp57);
-    config.instance_mode = InstanceModeV1::Direct;
-    config.proof_suffix = ProofSuffixV1::FoldedGenerator;
-    config.coset_cache = CosetCachePolicy::OnDemand;
-    let pk = keygen_pk(&params, &circuit.without_witnesses(), &config).expect("proving key");
-    let keygen_ms = started.elapsed().as_millis();
+    let config = measurement_key_config();
+    let pk = keygen_pk_v2(&params, &circuit.without_witnesses(), &config).expect("proving key");
+    let keygen_ns = elapsed_ns(started);
+    let rss_after_keygen = ProcessSnapshot::capture()
+        .expect("post-keygen probes")
+        .peak_rss_bytes;
     let key_cs = pk.constraint_system().constraint_system();
-    let fixed_commitments = pk.vk().fixed_commitments().len();
-    let key_fixed = key_cs.num_fixed_columns();
-    // The hash-consed expression DAG the quotient evaluates (gates and
-    // lookups of the finalized descriptor), not the source-tree node sum.
     let compiled = CompiledExpressions::<C::ScalarExt>::compile(pk.binding().descriptor(), true)
         .expect("compiled expressions");
-    sampler.enter(PROVE);
     let instances = vec![public.to_vec()];
-    let mut synthesis_ms = Vec::with_capacity(PROVES);
-    let mut prove_ms = Vec::with_capacity(PROVES);
-    let mut total_ms = Vec::with_capacity(PROVES);
-    let mut proof = Vec::new();
+    let mut samples = Vec::with_capacity(PROVES);
+    let seed = std::env::var("M3_SEED")
+        .map_or(Ok(7), |value| value.parse::<u64>())
+        .expect("M3_SEED must be a u64");
     for index in 0..PROVES {
-        let seed = u8::try_from(index).expect("few proofs").wrapping_add(7);
+        let mut seed_bytes = [0; 32];
+        seed_bytes[..8].copy_from_slice(&seed.to_le_bytes());
+        seed_bytes[8..16]
+            .copy_from_slice(&u64::try_from(index).expect("proof index").to_le_bytes());
+        let before = ProcessSnapshot::capture().expect("valid pre-proof resource probes");
         let started = Instant::now();
         let witness = Witness::from_circuit(&pk, circuit, &instances).expect("witness");
-        let synthesized = started.elapsed().as_millis();
+        let synthesis_ns = elapsed_ns(started);
+        let rss_after_witness = ProcessSnapshot::capture()
+            .expect("post-witness probes")
+            .peak_rss_bytes;
         let randomness = ProverRandomness::recovery(move |_context: &[u8; 32]| {
-            Ok::<_, Infallible>(ChaCha20Rng::from_seed([seed; 32]))
+            Ok::<_, Infallible>(ChaCha20Rng::from_seed(seed_bytes))
         });
         let proving = Instant::now();
-        let prover = ProverConfig {
-            msm_budget: MSM_BUDGET,
-        };
-        proof = create_proof(&params, &pk, &witness, randomness, prover).expect("proof");
-        prove_ms.push(proving.elapsed().as_millis());
-        drop(witness);
-        synthesis_ms.push(synthesized);
-        total_ms.push(started.elapsed().as_millis());
-    }
-    sampler.enter(VERIFY);
-    let started = Instant::now();
-    let verified = verify_full(
-        &params,
-        pk.binding(),
-        pk.vk(),
-        &instances,
-        &proof,
-        MSM_BUDGET,
-    );
-    let verify_ms = started.elapsed().as_millis();
-    assert_eq!(verified, Ok(()), "{gate}: proof rejected");
-    let mut wrong = instances.clone();
-    wrong[0][0] += C::ScalarExt::ONE;
-    assert!(
-        verify_full(&params, pk.binding(), pk.vk(), &wrong, &proof, MSM_BUDGET).is_err(),
-        "{gate}: wrong public input accepted"
-    );
-    let used = sampler.finish();
-    let load_after = load1();
-    let rss = PHASES
-        .iter()
-        .zip(used.rss_kib)
-        .map(|(phase, kib)| format!("rss_{phase}_mib={}", mib(kib)))
-        .chain(
-            PHASES
-                .iter()
-                .zip(used.cpu_seconds)
-                .map(|(phase, seconds)| format!("cpu_{phase}_s={seconds:.2}")),
+        let proof = create_proof_owned(
+            &params,
+            &pk,
+            witness,
+            randomness,
+            ProverConfig {
+                msm_budget: MSM_BUDGET,
+            },
         )
-        .collect::<Vec<_>>()
-        .join(" ");
-    let cpu_per_proof =
-        used.cpu_seconds[PROVE] / f64::from(u32::try_from(PROVES).expect("few proofs"));
+        .expect("proof");
+        let create_proof_ns = elapsed_ns(proving);
+        // The consumed witness has already been released here.
+        let total_ns = elapsed_ns(started);
+        let after = ProcessSnapshot::capture().expect("valid post-proof resource probes");
+        let cpu_ns = after.cpu_since(before).expect("monotonic process CPU");
+        let verifying = Instant::now();
+        assert_eq!(
+            verify_full(
+                &params,
+                pk.binding(),
+                pk.vk(),
+                &instances,
+                &proof,
+                MSM_BUDGET
+            ),
+            Ok(()),
+            "{gate}: proof {index} rejected",
+        );
+        let verify_ns = elapsed_ns(verifying);
+        let rss_after_verify = ProcessSnapshot::capture()
+            .expect("post-verify probes")
+            .peak_rss_bytes;
+        let mut wrong = instances.clone();
+        wrong[0][0] += C::ScalarExt::ONE;
+        assert!(
+            verify_full(&params, pk.binding(), pk.vk(), &wrong, &proof, MSM_BUDGET).is_err(),
+            "{gate}: proof {index} accepted the wrong public input",
+        );
+        samples.push(norito::json!({
+            "index": index, "synthesis_ns": synthesis_ns,
+            "create_proof_ns": create_proof_ns, "total_ns": total_ns,
+            "cpu_ns": cpu_ns, "verify_ns": verify_ns,
+            "proof_bytes": (proof.len()), "verified": true,
+            "rss_before_witness": (before.peak_rss_bytes), "rss_after_witness": rss_after_witness,
+            "rss_after_prove": (after.peak_rss_bytes), "rss_after_verify": rss_after_verify,
+            "load_milli_before": (before.load_milli), "load_milli_after": (after.load_milli),
+            "thermal_before": (before.thermal.as_str()), "thermal_after": (after.thermal.as_str()),
+        }));
+    }
+    let process_after = ProcessSnapshot::capture().expect("valid final resource probes");
+    let scratch = SharedMemoryBudget::process_default();
+    assert_eq!(scratch.in_use_bytes(), 0, "all MSM scratch released");
+    assert!(scratch.peak_bytes() <= scratch.limit_bytes());
+    let report = norito::json!({
+        "schema": "kagemusha.m3.process.v1", "gate": gate, "k": K,
+        "shape": (shape_line(&cs)), "workers": workers,
+        "fixed_after_selector_compression": (key_cs.num_fixed_columns()),
+        "fixed_commitments": (pk.vk().fixed_commitments().len()),
+        "compiled_nodes": (compiled.node_count()), "compiled_gate_polys": (compiled.gate_count()),
+        "descriptor_digest": (hex(pk.vk().descriptor_digest())),
+        "descriptor_hash": "blake2b256-pipa-v2-circdesc", "transcript_profile": "pipa-r",
+        "binary_sha256": binary_sha256, "seed": seed,
+        "witness_api": "owned", "coset_cache": "on_demand",
+        "commitment_tables": false, "msm_kernel_budget_bytes": (64_u64 << 20),
+        "msm_process_budget_bytes": (iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES),
+        "msm_process_peak_bytes": (scratch.peak_bytes()),
+        "msm_process_retained_bytes": (scratch.in_use_bytes()),
+        "params_source": params_source, "params_ns": params_ns, "keygen_ns": keygen_ns,
+        "rss_after_params": rss_after_params, "rss_after_keygen": rss_after_keygen,
+        "peak_rss_bytes": (process_after.peak_rss_bytes),
+        "peak_rss_source": "kernel_lifetime_high_water",
+        "process_cpu_ns": (process_after.cpu_since(process_before).expect("monotonic process CPU")),
+        "thermal_before": (process_before.thermal.as_str()),
+        "thermal_after": (process_after.thermal.as_str()), "samples": samples,
+    });
     println!(
-        "M3_GATE gate={gate} k={K} {} fixed_after_selector_compression={key_fixed} \
-         fixed_commitments={fixed_commitments} compiled_nodes={} compiled_gate_polys={} \
-         msm_budget_mib=64 params_source={params_source} params_ms={params_ms} \
-         public={} threads={threads} \
-         load1_before={load_before:?} load1_after={load_after:?} keygen_ms={keygen_ms} \
-         synthesis_ms={synthesis_ms:?} create_proof_ms={prove_ms:?} prove_total_ms={total_ms:?} \
-         verify_ms={verify_ms} proof_bytes={} {rss} cpu_prove_per_proof_s={cpu_per_proof:.2} \
-         available_parallelism={}",
-        shape_line(&cs),
-        compiled.node_count(),
-        compiled.gate_count(),
-        public.len(),
-        proof.len(),
-        thread::available_parallelism().map_or(0, usize::from),
+        "M3_GATE_JSON {}",
+        norito::json::to_json(&report).expect("public report")
     );
 }
 
 // ---------------------------------------------------------------------------
 // G3.6: the Q leaf filled with the P-256 and SHA-256 chips.
 // ---------------------------------------------------------------------------
+
+/// Freeze all four workload descriptors from actual keys before qualification.
+#[test]
+#[ignore = "key generation for four k=16 qualification workloads; run in release"]
+fn qualification_candidate_layouts() {
+    record_layout::<Pallas, _>("G3.6/q_leaf_chips", &q_leaf(Q_VARIABLE, Q_FIXED, 60));
+    record_layout::<Pallas, _>(
+        "G3.6/q_exact_shape",
+        &ExactCircuit::<Fq>::new(Q_SHAPE, ExactCircuit::<Fq>::usable_rows(Q_SHAPE, K), 66),
+    );
+    record_layout::<Vesta, _>("G3.7/a_imt_load", &a_load(70));
+    record_layout::<Vesta, _>(
+        "G3.7/a_exact_shape",
+        &ExactCircuit::<Fp>::new(A_SHAPE, ExactCircuit::<Fp>::usable_rows(A_SHAPE, K), 77),
+    );
+}
 
 /// A uniform nonzero scalar below `n`.
 fn random_scalar(rng: &mut ChaCha20Rng) -> [u64; 4] {
@@ -1017,10 +966,20 @@ impl Circuit<Fp> for ALoad {
         let glue = GlueConfig::configure(meta, glue_columns, constants);
         let round_constants = RoundConstantColumns::allocate(meta);
         let folded = [(D_LEAF, 3), (D_NODE, 2)];
+        // Every lane performs the same number and sequence of permutations.
+        // Sharing their four round schedules reduces fixed columns without
+        // changing the actual IMT path workload or its public roots.
+        let shared = SharedRoundSelectors::allocate(meta);
         let sponges = (0..params.lanes)
             .map(|_| {
                 let lane = Pow5Columns::allocate(meta);
-                SpongeConfig::configure(meta, lane, round_constants, &folded)
+                SpongeConfig::configure_with_shared_round_selectors(
+                    meta,
+                    lane,
+                    round_constants,
+                    &folded,
+                    shared,
+                )
             })
             .collect();
         let ranges = params.range_bits.map(|bits| {
@@ -1425,49 +1384,27 @@ impl<F: PastaField> Circuit<F> for ExactCircuit<F> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn probes_parse_their_tools_output() {
-    assert_eq!(parse_loadavg("{ 3.52 4.10 5.00 }\n"), Some(3.52));
-    assert_eq!(parse_loadavg("0.25 0.30 0.35 1/234 5678\n"), Some(0.25));
-    assert_eq!(parse_loadavg(""), None);
-    assert_eq!(parse_loadavg("{ x }"), None);
-    assert_eq!(parse_rss_kib("  123456\n"), Some(123_456));
-    assert_eq!(parse_rss_kib(""), None);
-    assert_eq!(parse_cpu_seconds("  0:00.01\n"), Some(0.01));
-    assert_eq!(parse_cpu_seconds("83:30.50"), Some(5010.5));
-    assert_eq!(parse_cpu_seconds("01:02:03"), Some(3723.0));
-    assert_eq!(parse_cpu_seconds("2-00:00:01"), Some(172_801.0));
-    assert_eq!(parse_cpu_seconds("x:1"), None);
-    assert!(cpu_seconds(std::process::id()).is_some_and(|seconds| seconds >= 0.0));
-    assert_eq!(mib(1536), "1.5");
-    // The live probes answer on this host.
-    assert!(load1().is_some_and(|load| load >= 0.0));
-    assert!(rss_kib(std::process::id()).is_some_and(|kib| kib > 0));
+fn qualification_workers_are_explicit_and_actual() {
+    assert_eq!(worker_count(None), Ok(1));
+    for count in [1, 4] {
+        assert_eq!(worker_count(Some(&count.to_string())), Ok(count));
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(count)
+            .build()
+            .unwrap();
+        assert_eq!(pool.install(rayon::current_num_threads), count);
+    }
+    for bad in ["", "0", "2", "default", "-1"] {
+        assert!(worker_count(Some(bad)).is_err());
+    }
 }
 
 #[test]
-fn rss_sampler_records_every_phase() {
-    let sampler = RssSampler::start();
-    for phase in [KEYGEN, PROVE, VERIFY] {
-        sampler.enter(phase);
-    }
-    let used = sampler.finish();
-    assert!(
-        used.rss_kib.iter().all(|kib| *kib > 0),
-        "{:?}",
-        used.rss_kib
-    );
-    assert!(used.cpu_seconds.iter().all(|seconds| *seconds >= 0.0));
-    // Busy work in one phase shows up as CPU time of that phase.
-    let sampler = RssSampler::start();
-    sampler.enter(PROVE);
-    let started = Instant::now();
-    let mut x = Fp::ONE;
-    while started.elapsed() < Duration::from_millis(300) {
-        x = x.square() + Fp::ONE;
-    }
-    assert_ne!(x, Fp::ZERO);
-    let used = sampler.finish();
-    assert!(used.cpu_seconds[PROVE] >= 0.1, "{:?}", used.cpu_seconds);
+fn qualification_records_the_executable_and_checked_duration() {
+    assert_eq!(hex(&[0, 1, 0xfe, 0xff]), "0001feff");
+    assert_eq!(binary_digest().len(), 64);
+    assert_eq!(binary_digest(), binary_digest());
+    assert!(elapsed_ns(Instant::now()) < 1_000_000_000);
 }
 
 #[test]

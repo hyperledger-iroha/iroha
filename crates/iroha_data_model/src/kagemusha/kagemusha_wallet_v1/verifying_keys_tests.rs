@@ -7,13 +7,13 @@ use crate::kagemusha::kagemusha_wallet_v1::{
     KAGEMUSHA_WALLET_CREDITED_STATUS_FIXED_BYTES_V1, KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1,
     KAGEMUSHA_WALLET_VERSION_V1, KagemushaWalletValidationErrorV1,
     codec_tests::norito_tag,
-    messages::KagemushaWalletRequestBodyV1,
     identity::{
         KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1, KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1,
         KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1, KagemushaWalletEvidenceKindV1,
         identity_tests::identity_fixture, kagemusha_wallet_provider_contract_v1,
         kagemusha_wallet_relation_id_v1,
     },
+    messages::KagemushaWalletRequestBodyV1,
     state::{
         KagemushaWalletEffectV1, KagemushaWalletLifecycleV1, KagemushaWalletLineageSlotV1,
         state_tests::{
@@ -395,7 +395,10 @@ fn kagemusha_wallet_v1_verifying_key_selection_and_lengths() {
     );
     let mut short_omega = allowlist.clone();
     short_omega.lineage_proof_bytes -= 1;
-    assert_invalid(short_omega.check_package(&package, None), "lineage.proof_length");
+    assert_invalid(
+        short_omega.check_package(&package, None),
+        "lineage.proof_length",
+    );
     let bootstrap = signed_package(&f, &f.credential, &bootstrap_statement(&f), sigma);
     assert!(matches!(
         bootstrap.statement.effect,

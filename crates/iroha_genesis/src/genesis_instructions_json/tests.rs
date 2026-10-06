@@ -826,7 +826,7 @@ fn assert_genesis_source_template_parses_structured_instructions(relative_path: 
     assert_eq!(parameter_blocks, 1, "one authoritative parameter block");
     assert!(
         super::RawGenesisTransaction::from_path(&path).is_err(),
-        "{} must remain an incomplete source template until an operator supplies mint-finality authority",
+        "{} must remain an incomplete source template until an operator materializes the validator topology and signed Sumeragi context",
         path.display()
     );
 }

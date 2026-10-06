@@ -46,6 +46,10 @@ late views, bounded rebuild after oversized payloads, far-behind joiners and
 poisoned payloads. The application executor separately rejects both empty bytes
 and canonically encoded zero-transaction proposals, and real node tests submit
 work before and after restart.
+Both scopes retain prepared signature custody across allocation refusal,
+validation, publication and replay. Queued successor builds wait for Core's
+exact applied parent, preserve transaction arrivals and permanently cancel
+their original owners when that parent or view is withdrawn.
 
 Both scopes reject pulse-only proposal work, including received and recovered
 bodies. An idle mandatory height defers session activation and signing until
@@ -135,7 +139,7 @@ Before peers start, both scopes verify that only the original fixture launch may
 assert fresh consensus signing keys; restart cannot repeat that assertion.
 The generic test-network harness also rejects this assertion after history loss.
 They also check that stock beacon configuration retains existing providers and
-sets the inherited descriptor for mint finality seed custody.
+uses the exact authenticated beacon credential binding.
 The daemon selection checks exact broker catalog composition and rejects changed
 credentials, substituted catalogs and unsupported provider slots.
 

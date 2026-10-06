@@ -16,11 +16,11 @@ use super::{
 };
 
 /// Measured `σ_send`, in bytes: the exact PIPA-v1 proof length of `sigma_send` of
-/// `iroha_kagemusha_proof` over the 32-element §3 core and the 28-element statement at its
+/// `iroha_kagemusha_proof` over the earlier measured §3 core and statement at its
 /// 3.5 KB budget shape (`k = 12`, one lane), with the empty mask and with the blacklist
 /// list-age control alike.
 // TODO(G3): re-measure once σ_send carries the blacklist non-membership, quota and lease checks
-// (spec §7); the R9 budget then bounds Ω by `8,319 − |σ_send|`.
+// (spec §7); the R9 budget then bounds Ω by `8,277 − |σ_send|`.
 const MEASURED_SIGMA_SEND_BYTES: usize = 3_296;
 /// Placeholder Ω transport proof length; Ω is unbuilt and unmeasured (spec §11).
 // TODO(G3): replace with the exact transport length of the frozen verifying-key allowlist

@@ -227,6 +227,38 @@ Registry obligation (M2): a PIPA-v1 VK record carries `D`, or its digest, beside
 `hash_vk` covers both. It uses new `pipa-v1` backend labels and circuit IDs; a vendored-halo2
 label never names a PIPA-v1 proof.
 
+### 4.1 CircuitDescriptorV2 and PIPA-R [P]
+
+PIPA-R uses canonical schema `iroha.plonk.pipa.circuit_descriptor.v2` while
+`protocol_version` remains 1. It has the V1 fields in the same semantic order,
+with `transcript: TranscriptV2`, followed after `lookups` by
+`instance_types: Vec<InstanceType>`. The transcript enum adds
+`KagemushaPoseidonRp57Base`; this profile requires Direct instances and the
+FoldedGenerator suffix. There is exactly one type per instance column:
+
+- `Field`: canonical proof-scalar field element, transcript type code 0.
+- `Bounded`: additionally strictly below the smaller Pasta modulus p, code 1.
+- `Bits(b)`: additionally strictly below `2^b`, for `0 <= b <= 253`, code `2+b`.
+  Bits(0) admits only zero; wider declarations are invalid descriptors.
+
+The V1 validation rules still apply to the common arithmetization. A shared
+`ProtocolDescriptor` is an internal representation, not another wire encoding.
+Admission uses explicit V1 or V2 constructors/decoders; a failed decode never
+tries another profile. KAGEMUSHA consumers are re-keyed to PIPA-R and reject
+the retired scalar-field KAGEMUSHA profile.
+
+```text
+descriptor_digest = BLAKE2b(32, person "PIPA-v2-CircDesc", canonical V2 frame)
+transcript_repr   = B::from_uniform_bytes(
+    BLAKE2b(64, person "Iroha-PlonkVK-v2", descriptor_digest || vk_bytes))
+```
+
+`B` is the proof curve's base field for PIPA-R. The key API distinguishes
+`TranscriptRepr::Base` from retained `TranscriptRepr::Scalar` profiles; it
+never reduces one through the other field. V2 retained scalar profiles use
+the V2 domains with their scalar-field representation and typed frame.
+These distinct profiles are explicit protocols, not fallback decoders.
+
 ## 5. Verifying key bytes (0x02) [V]
 
 ```text
@@ -287,6 +319,30 @@ A point `(x, y)` with canonical integer coordinates is buffered as:
 
 KATs: `kats_v1.json` `poseidon_transcript` (oracle mode). TODO (T11): production KATs.
 
+### 6.2b PIPA-R base-field RP57 [P]
+
+The RP57 sponge runs over B, starts at `[2^64, 0, 0]`, and first buffers the
+native element `B::from(u64::from_le_bytes(*b"pipa-rb1"))`. Padding and state
+continuity are the same as §6.2. Canonical nonidentity points absorb `[x, y]`
+directly, and proof scalars have an injective integer encoding:
+
+- Vesta (`F = Fp`, `B = Fq`): one base element, without reduction.
+- Pallas (`F = Fq`, `B = Fp`): low 128 bits then high 127 bits, including
+  zero limbs. No instance type changes this generic scalar encoding.
+
+For sponge output w, the scalar challenge is w for Pallas, and `w-p` if
+`w >= p` else w for Vesta. Both are full-width; no short challenge or byte
+reduction is substituted. The Vesta map has only the statistical bias caused
+by `q-p`; its boundary cases are pinned in `fq_to_fp_challenge_map_kat`.
+Zero/degenerate challenge rejection follows the existing protocol equations.
+
+Native KATs for both curves, profile/type mutations and proof/schedule parity
+are in `crates/iroha_plonk/src/pipa_r_tests.rs`. The constrained duplex state
+and metadata frame in `iroha_plonk_recursion::transcript` match both fields.
+Full circuit scalar decoding, challenge conversion and total succinct
+verification remain separate M4 work; transcript parity alone does not
+establish those properties.
+
 ### 6.3 Prelude and instance modes
 
 The prelude has three steps:
@@ -305,6 +361,14 @@ The prelude has three steps:
 
 **[P]** Both modes require the column count and every length to equal `D`. The vendored verifier
 checks lengths only in Committed mode and absorbs none.
+
+For V2 the frame is key representation, `pipainst`, column count, all column
+lengths, then all column type codes, before the instance values. PIPA-R
+absorbs the representation and framing integers as native base-field
+elements; the actual instance values use §6.2b scalar encoding. Both prover
+and verifier reject any value outside its descriptor type. Mixed-type public
+statements use homogeneous columns (Ω has lengths 1, 2 and 16), rather than
+silently mixing encodings inside a column.
 
 ### 6.4 Oracle mode (test only)
 
@@ -630,6 +694,8 @@ already requires the exact length.
 | DEV-09 | Batch weights | `OsRng` | deterministic (11) | both |
 | DEV-10 | Descriptor rules | none | section 4, at build time | both |
 | DEV-11 | Hybrid mode, multi-circuit proofs, phases | supported | rejected | both |
+| DEV-12 | PIPA-R transcript field | proof scalar field | explicit V2 base-field profile, §6.2b | production |
+| DEV-13 | PIPA-R instance types | untyped field values | descriptor-pinned Field/Bounded/Bits bounds, §6.3 | production |
 
 ## 15. Conformance tests and open items
 

@@ -16,6 +16,11 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(unix)]
+mod custody_io;
+#[cfg(unix)]
+pub use custody_io::CustodyEntryKind;
+
 mod private_files;
 pub use private_files::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
 pub use private_files::{PendingPrivateFile, PrivateFileMetadata, SealedPrivateFile};
@@ -452,6 +457,19 @@ impl ReaderDirectory {
     pub fn path(&self) -> &Path {
         self.inner.path()
     }
+    /// Retain one existing directory child using this reader's original ancestor handles.
+    ///
+    /// This opens only one read-only directory handle. No writable directory capability,
+    /// file or namespace is created, and every original ancestor remains revalidated.
+    ///
+    /// # Errors
+    /// Refuses invalid names, links, unsafe custody, changed ancestors and native errors.
+    pub fn open_child(&self, name: impl AsRef<OsStr>) -> io::Result<Self> {
+        Ok(Self {
+            inner: self.inner.child_reader(checked_name(name.as_ref())?)?,
+        })
+    }
+
     /// Retain one private child while sharing this reader's existing ancestor handles.
     /// # Errors
     /// Refuses invalid names, unsafe private custody, replaced paths and native errors.
@@ -724,6 +742,95 @@ impl OwnerDirectory {
 #[derive(Debug)]
 pub struct RetainedFile {
     inner: platform::RetainedFile,
+}
+
+/// One explicitly selected regular file and its original native custody.
+///
+/// Selection resolves the parent directory while leaving the final component unfollowed.
+/// The retained file, its resolved name and every native ancestor remain inseparable across
+/// later work. This type retains no plaintext and cannot be cloned into a second selection.
+#[derive(Debug)]
+pub struct SelectedRegularFile {
+    path: PathBuf,
+    original: RetainedFile,
+}
+
+impl SelectedRegularFile {
+    /// Capture a direct regular file before work which must preserve its original identity.
+    /// Relative paths and parent components are resolved at selection time. A final-component
+    /// link, unsafe custody or a nonregular object is refused by the native owner.
+    /// # Errors
+    /// Returns genuine native path, ownership, identity or access failures.
+    pub fn capture(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        let name = path
+            .file_name()
+            .ok_or_else(|| invalid("selected file has no name"))?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let path = parent.canonicalize()?.join(name);
+        let original = RetainedFile::open_regular(&path)?;
+        original.revalidate()?;
+        Ok(Self { path, original })
+    }
+
+    /// The original resolved path, never a caller-supplied replacement for its descriptor.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Recheck the original immutable regular file and every retained ancestor.
+    /// # Errors
+    /// Refuses replacement, mutation, changed custody and genuine native errors.
+    pub fn revalidate(&self) -> io::Result<()> {
+        self.original.revalidate()
+    }
+
+    /// Read the original descriptor from offset zero within an exact byte limit.
+    /// Every call uses explicit offsets; repeated or concurrent reads do not rely on the
+    /// descriptor's shared cursor. A single stack byte probes EOF at the original extent
+    /// before the final native fence. The returned buffer is ordinary owned file input,
+    /// suitable for a compiler or public artifact, rather than private secret storage.
+    /// # Errors
+    /// Refuses an oversized or changing original, truncation and genuine native errors.
+    pub fn read(&self, maximum: usize) -> io::Result<Vec<u8>> {
+        self.revalidate()?;
+        let length = self.original.file().metadata()?.len();
+        let length =
+            usize::try_from(length).map_err(|_| invalid("selected file exceeds its bound"))?;
+        if length > maximum {
+            return Err(invalid("selected file exceeds its bound"));
+        }
+        let mut bytes = vec![0; length];
+        read_exact_at(self.original.file(), &mut bytes, 0)?;
+        let mut extra = [0_u8; 1];
+        if read_at(self.original.file(), &mut extra, length as u64)? != 0 {
+            return Err(invalid(
+                "selected file changed while its bounded bytes were read",
+            ));
+        }
+        self.revalidate()?;
+        Ok(bytes)
+    }
+
+    /// Observe the original length after rechecking native immutable custody.
+    /// # Errors
+    /// Refuses a changed original or genuine native errors.
+    pub fn len(&self) -> io::Result<u64> {
+        self.revalidate()?;
+        let length = self.original.file().metadata()?.len();
+        self.revalidate()?;
+        Ok(length)
+    }
+
+    /// Whether the original immutable file is empty.
+    /// # Errors
+    /// Refuses a changed original or genuine native errors.
+    pub fn is_empty(&self) -> io::Result<bool> {
+        self.len().map(|length| length == 0)
+    }
 }
 
 impl RetainedFile {

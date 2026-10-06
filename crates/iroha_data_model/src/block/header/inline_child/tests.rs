@@ -14,7 +14,7 @@ use norito::core::{
     CanonicalField, DecodeField, DecodeFlagsGuard, DecodeLimits, Encoder, FieldDestination,
     SerializePayload, classify_decode_attempt, header_flags, with_decode_limits_scope,
 };
-use std::{convert::Infallible, io::Write as _, num::NonZeroU64};
+use std::{convert::Infallible, num::NonZeroU64};
 
 fn typed_hash<T>(label: &[u8]) -> HashOf<T> {
     HashOf::from_untyped_unchecked(Hash::new(label))
@@ -194,11 +194,13 @@ fn raw(value: BlockHeader) -> RawHeader {
         creation_time_ms: value.creation_time_ms,
         view_change_index: value.view_change_index,
         confidential_features: value.confidential_features.map(|d| RawDigest {
-            vk_set_hash: d.vk_set_hash.map(|bytes| RawBytes(bytes.to_vec())),
+            // Option<[u8; 32]> uses the installed framed-array layout.
+            // Keep the unchanged array serializer in this malformed-source producer.
+            vk_set_hash: d.vk_set_hash.map(|bytes| RawBytes(bare(&bytes))),
             poseidon_params_id: d.poseidon_params_id,
             pedersen_params_id: d.pedersen_params_id,
             conf_rules_version: d.conf_rules_version,
-            zk_policy_hash: d.zk_policy_hash.map(|bytes| RawBytes(bytes.to_vec())),
+            zk_policy_hash: d.zk_policy_hash.map(|bytes| RawBytes(bare(&bytes))),
         }),
         execution_context_hash: value.execution_context_hash,
         global_beacon_pulse_hash: value.global_beacon_pulse_hash,

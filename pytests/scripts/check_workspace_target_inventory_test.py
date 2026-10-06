@@ -565,3 +565,38 @@ def test_artifact_admission_tool_cannot_escape_development_inventory(mutation: s
         assert len(TARGET_INVENTORY.resolved_default_bins(modified)) == 24
         assert any("non-shipping binaries enabled by default" in e and repr(owner) in e for e in errors)
         assert not any("exceeds" in e or "declared binary count" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "owner",
+    (
+        ("connect_norito_bridge", "kagemusha_sender_release_parser"),
+        ("iroha", "iroha_ordinary_native_inventory_assemble"),
+        ("iroha", "hardware_evidence_bootstrap_prepare"),
+    ),
+)
+def test_retired_tools_cannot_reenter_development_inventory(
+    owner: tuple[str, str],
+) -> None:
+    """Retired tool implementations cannot return through non-default features."""
+
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    assert owner not in TARGET_INVENTORY.EXPECTED_DECLARED_BINS
+    assert owner not in TARGET_INVENTORY.all_workspace_bins(metadata)
+    modified = copy.deepcopy(metadata)
+    package = next(row for row in modified["packages"] if row["name"] == owner[0])
+    package["targets"].append({
+        "kind": ["bin"], "name": owner[1], "required-features": ["dev-tools"],
+    })
+    assert TARGET_INVENTORY.resolved_default_bins(modified) == (
+        TARGET_INVENTORY.resolved_default_bins(metadata)
+    )
+    errors = TARGET_INVENTORY.check_metadata(modified)
+    assert any(
+        "unreviewed binary owners are declared" in error and repr(owner) in error
+        for error in errors
+    )
+    assert any(
+        "declared binary count 104 differs from the expected 103" in error
+        for error in errors
+    )

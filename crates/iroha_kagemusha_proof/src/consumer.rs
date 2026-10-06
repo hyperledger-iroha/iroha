@@ -39,8 +39,8 @@ use iroha_pasta::poseidon::PoseidonField;
 use iroha_plonk_gadgets::statement::{StatementV1, StepRelation, digest_fields};
 
 use crate::witness::{
-    LIFECYCLE_ACTIVE, LIFECYCLE_RETIRING, RECEIVE_CONTROLS, RECEIVE_EFFECT_FIELDS, RequestBody,
-    SEND_EFFECT_FIELDS, SigmaRelation, StepPublic,
+    LIFECYCLE_ACTIVE, LIFECYCLE_RETIRING, RECEIVE_EFFECT_FIELDS, RequestBody, SEND_EFFECT_FIELDS,
+    SigmaRelation, StepPublic,
 };
 
 /// The public outputs of the predecessor's lineage proof Ω(pred) that a
@@ -169,6 +169,12 @@ fn check_common<F: PoseidonField>(
     request: &RequestBody,
     statement: &StatementV1<F>,
 ) -> Result<(), ConsumerError> {
+    require(request.canonical_digests::<F>(), ConsumerError::Effect)?;
+    require(
+        (request.terms.receiver_blacklist_version == 0)
+            == (request.terms.receiver_blacklist_root == [0; 32]),
+        ConsumerError::Controls,
+    )?;
     require(
         statement.step == step && statement.relation_id == *relation_id,
         ConsumerError::Relation,
@@ -253,8 +259,7 @@ pub fn check_send<F: PoseidonField>(
 /// against the scheme's relation identity and the Request body the consumer
 /// holds. The receiver's credential digest is not compared with the
 /// Request's (owner answer Q8). Returns the `sigma_recv` relation the
-/// statement's blacklist bit selects (G1 `(4, enabled_controls & 1)`; the
-/// relation checks that bit against the receiver's core mask) and the
+/// Request's recorded blacklist version selects (B6: `(4, version != 0)`) and the
 /// public input to verify the proof against.
 ///
 /// # Errors
@@ -272,7 +277,11 @@ pub fn check_receive<F: PoseidonField>(
     )?;
     let statement_digest = statement.digest().ok_or(ConsumerError::Effect)?;
     Ok(Accepted {
-        relation: SigmaRelation::receive(statement.enabled_controls & RECEIVE_CONTROLS),
+        relation: crate::proof::selector_for(
+            StepRelation::Receive,
+            statement.enabled_controls,
+            request.terms.receiver_blacklist_version,
+        ),
         public: StepPublic {
             statement: statement_digest,
         },

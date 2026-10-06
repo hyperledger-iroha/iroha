@@ -110,6 +110,7 @@
 
 mod advance;
 mod anchor;
+mod archive;
 mod capsule;
 mod completion;
 mod enrollment;
@@ -130,6 +131,7 @@ pub use self::store::{
 #[cfg(unix)]
 pub use self::store::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 pub use self::{
+    archive::{KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1, KagemushaWalletArchiveAccessV1, kagemusha_wallet_archive_checkpoint_digest_v1, kagemusha_wallet_archive_object_digest_v1},
     advance::{
         KAGEMUSHA_WALLET_CAPACITY_HEADROOM_BYTES_V1, KagemushaWalletAdvanceCapsuleV1,
         KagemushaWalletAdvanceOutcomeV1, KagemushaWalletAdvanceRequestV1,

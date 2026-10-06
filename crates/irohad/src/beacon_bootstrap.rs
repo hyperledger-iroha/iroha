@@ -1089,7 +1089,7 @@ fn validate_rotation_bundle(
         .incumbent_authority()
         .validators
         .iter()
-        .map(|seat| seat.validator.clone())
+        .cloned()
         .collect::<Vec<_>>();
     bundle.record.validate(budget).map_err(Error::from)?;
     if bundle.schema != "iroha.validator-committee.rotation-dkg.v1"

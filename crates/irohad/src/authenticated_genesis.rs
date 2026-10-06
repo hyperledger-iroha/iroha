@@ -6,7 +6,7 @@ use iroha_data_model::NetworkId;
 /// Signed network, committee size and execution policies authenticated during offline genesis
 /// validation.
 /// Construction is private to the daemon's original validation boundary.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct AuthenticatedGenesis {
     pub(crate) network_id: NetworkId,
     /// Ready committee size retained from original native genesis execution.

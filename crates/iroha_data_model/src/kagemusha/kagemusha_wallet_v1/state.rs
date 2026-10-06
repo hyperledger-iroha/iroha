@@ -1132,7 +1132,10 @@ pub fn kagemusha_wallet_quota_usage_node_v1(
     left: &[u8; 32],
     right: &[u8; 32],
 ) -> WalletResult<[u8; 32]> {
-    kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_USAGE_NODE_DOMAIN_V1, &[*left, *right])
+    kagemusha_wallet_poseidon_v1(
+        KAGEMUSHA_WALLET_QUOTA_USAGE_NODE_DOMAIN_V1,
+        &[*left, *right],
+    )
 }
 
 /// Root of the all-padding quota-usage array: the Bootstrap `quota_usage_root` and the root of
@@ -1145,10 +1148,7 @@ pub fn kagemusha_wallet_quota_usage_empty_root_v1() -> [u8; 32] {
 
 /// Levels of one depth-6 Poseidon tree over 64 leaves with node domain `node_domain`: level 0
 /// holds the leaves and level 6 the root.
-pub(super) fn quota_tree_levels_v1(
-    leaves: Vec<[u8; 32]>,
-    node_domain: u64,
-) -> Vec<Vec<[u8; 32]>> {
+pub(super) fn quota_tree_levels_v1(leaves: Vec<[u8; 32]>, node_domain: u64) -> Vec<Vec<[u8; 32]>> {
     debug_assert_eq!(leaves.len(), KAGEMUSHA_WALLET_QUOTA_USAGE_SLOTS_V1);
     let mut levels = Vec::with_capacity(KAGEMUSHA_WALLET_QUOTA_TREE_DEPTH_V1 + 1);
     let mut level = leaves;
@@ -1315,7 +1315,10 @@ impl KagemushaWalletQuotaUsageArrayV1 {
     }
 
     fn levels(&self) -> Vec<Vec<[u8; 32]>> {
-        quota_tree_levels_v1(self.leaf_hashes(), KAGEMUSHA_WALLET_QUOTA_USAGE_NODE_DOMAIN_V1)
+        quota_tree_levels_v1(
+            self.leaf_hashes(),
+            KAGEMUSHA_WALLET_QUOTA_USAGE_NODE_DOMAIN_V1,
+        )
     }
 
     /// Array root, one canonical σ-field value.
@@ -1836,7 +1839,9 @@ impl KagemushaWalletConsumedCreditTransitionV1 {
     ) -> WalletResult<()> {
         let value = entry.leaf_value()?;
         let expected = match self {
-            Self::Accept { witness } => witness.verify(predecessor_root, &entry.credit_id, &value)?,
+            Self::Accept { witness } => {
+                witness.verify(predecessor_root, &entry.credit_id, &value)?
+            }
             Self::BurnUnchanged => *predecessor_root,
             Self::BurnInserted {
                 key,

@@ -1024,7 +1024,7 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
     "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
 )), ("native beacon configuration and original signing custody", (
     "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
-    "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
+    "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_binds_the_broker",
 )),)
 # Every platform qualifies retained authority generations against the same four
 # independent genesis-anchored chains and full application workload.
@@ -1282,7 +1282,7 @@ DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", 
     "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
     "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
     "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
-    "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
+    "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
     "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
     "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
 )), )
@@ -1473,7 +1473,7 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'taira_runtime_signer::tests::registry_allows_bootstrap_without_beacon_and_rejects_extra_or_duplicate_slots',
     'taira_runtime_signer::tests::registry_resolves_exact_configured_beacon_and_preserves_soracloud_binding',
     'taira_runtime_signer::tests::offline_introspection_never_requires_the_runtime_signer',
-    'taira_runtime_signer::tests::mint_seed_loader_consumes_exact_private_record_and_preserves_restart_source',
+    'taira_runtime_signer::tests::consumption_preserves_restart_source_and_starves_child_descriptor',
     'taira_runtime_signer::tests::descriptor_loader_accepts_only_canonical_owner_only_ed25519',
     'beacon_bootstrap::tests::each_seat_credential_binds_exact_public_session_and_private_share',
     'beacon_bootstrap::tests::genesis_session_rejects_mutated_identity_under_same_attempt',

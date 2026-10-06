@@ -962,3 +962,129 @@ def test_model_test_selection_keeps_dev_oracle_without_relaxing_shipping_or_laye
         "package": "iroha_zkp_halo2", "forbidden_feature": "full",
         "path": ["iroha_data_model", "iroha_plonk_oracle", "iroha_zkp_halo2"],
     }]
+
+
+# Canonical metadata parsing is pure; feature-boundary Cargo tests above stay separate.
+def _canonical_resolved_fixture() -> dict:
+    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def _focused_resolved_ids(metadata: dict) -> frozenset[str]:
+    return MODULE.resolved_package_ids(
+        metadata, root_names=["iroha_data_model"], workspace=False
+    )
+
+
+@pytest.mark.parametrize("redundant_ids", [False, True])
+def test_canonical_resolved_deps_are_required_even_with_redundant_ids(redundant_ids) -> None:
+    metadata = _canonical_resolved_fixture()
+    node = metadata["resolve"]["nodes"][0]
+    dependencies = node.pop("deps")
+    if redundant_ids:
+        node["dependencies"] = [dependency["pkg"] for dependency in dependencies]
+    with pytest.raises(ValueError, match="deps must be a list"):
+        _focused_resolved_ids(metadata)
+
+
+@pytest.mark.parametrize("invalid", [None, False, 1, {}, "package-id"])
+def test_canonical_resolved_deps_reject_malformed_lists_without_fallback(invalid) -> None:
+    metadata = _canonical_resolved_fixture()
+    node = metadata["resolve"]["nodes"][0]
+    node["dependencies"] = [dependency["pkg"] for dependency in node["deps"]]
+    node["deps"] = invalid
+    with pytest.raises(ValueError, match="deps must be a list"):
+        _focused_resolved_ids(metadata)
+
+
+@pytest.mark.parametrize("invalid", [None, False, 1, [], "package-id", {}])
+def test_canonical_resolved_deps_reject_nonrecords_and_missing_fields(invalid) -> None:
+    metadata = _canonical_resolved_fixture()
+    metadata["resolve"]["nodes"][0]["deps"][0] = invalid
+    with pytest.raises(ValueError, match=r"deps\[0\]"):
+        _focused_resolved_ids(metadata)
+
+
+@pytest.mark.parametrize("field", ["name", "pkg"])
+@pytest.mark.parametrize("invalid", [None, False, 1, [], {}, ""])
+def test_canonical_resolved_deps_reject_malformed_names_and_ids(field, invalid) -> None:
+    metadata = _canonical_resolved_fixture()
+    metadata["resolve"]["nodes"][0]["deps"][0][field] = invalid
+    with pytest.raises(ValueError, match=field + " must be a nonempty string"):
+        _focused_resolved_ids(metadata)
+
+
+@pytest.mark.parametrize("invalid", [None, False, 1, {}, "normal", []])
+def test_canonical_resolved_deps_require_nonempty_kind_descriptions(invalid) -> None:
+    metadata = _canonical_resolved_fixture()
+    metadata["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = invalid
+    with pytest.raises(ValueError, match="dep_kinds must be a nonempty list"):
+        _focused_resolved_ids(metadata)
+
+
+def test_canonical_resolved_deps_reject_missing_kind_descriptions() -> None:
+    metadata = _canonical_resolved_fixture()
+    del metadata["resolve"]["nodes"][0]["deps"][0]["dep_kinds"]
+    with pytest.raises(ValueError, match="dep_kinds must be a nonempty list"):
+        _focused_resolved_ids(metadata)
+
+
+@pytest.mark.parametrize("invalid", [
+    None, False, 1, [], {},
+    {"kind": None}, {"target": None},
+    {"kind": "normal", "target": None},
+    {"kind": "unknown", "target": None},
+    {"kind": [], "target": None},
+    {"kind": None, "target": False},
+    {"kind": None, "target": 1},
+    {"kind": None, "target": []},
+    {"kind": None, "target": {}},
+    {"kind": None, "target": ""},
+])
+def test_canonical_resolved_deps_reject_malformed_kind_records(invalid) -> None:
+    metadata = _canonical_resolved_fixture()
+    metadata["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = [invalid]
+    with pytest.raises(ValueError, match=r"dep_kinds\[0\]"):
+        _focused_resolved_ids(metadata)
+
+
+@pytest.mark.parametrize("kind", [None, "build", "dev"])
+@pytest.mark.parametrize("target", [None, "cfg(unix)"])
+def test_canonical_resolved_deps_preserve_all_declared_kinds_and_targets(kind, target) -> None:
+    metadata = _canonical_resolved_fixture()
+    expected = _focused_resolved_ids(metadata)
+    metadata["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = [
+        {"kind": kind, "target": target}
+    ]
+    assert _focused_resolved_ids(metadata) == expected
+    assert len(expected) == 3
+
+
+def test_canonical_resolved_deps_keep_renamed_edges_and_ignore_redundant_ids() -> None:
+    metadata = _canonical_resolved_fixture()
+    expected = _focused_resolved_ids(metadata)
+    node = metadata["resolve"]["nodes"][0]
+    node["deps"][0]["name"] = "renamed_crypto"
+    node["dependencies"] = [metadata["packages"][3]["id"]]
+    assert _focused_resolved_ids(metadata) == expected
+    assert metadata["packages"][3]["id"] not in expected
+
+
+def test_canonical_resolved_deps_report_unknown_canonical_package_ids() -> None:
+    metadata = _canonical_resolved_fixture()
+    metadata["resolve"]["nodes"][0]["deps"][0]["pkg"] = "unknown-package-id"
+    with pytest.raises(ValueError, match="unknown-package-id.*has no node"):
+        _focused_resolved_ids(metadata)
+
+
+def test_canonical_resolved_deps_cli_refuses_before_emitting_a_partial_report(tmp_path, capsys) -> None:
+    metadata = _canonical_resolved_fixture()
+    del metadata["resolve"]["nodes"][0]["deps"]
+    path = tmp_path / "missing-deps.json"
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    result = MODULE.main([
+        "--metadata-json", str(path), "-p", "iroha_data_model", "--json-out", "-"
+    ])
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert "deps must be a list" in captured.err

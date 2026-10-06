@@ -339,8 +339,13 @@ required, absolute `IROHA_NATIVE_LIBRARY_PATH` directory. Missing libraries
 fail before execution; a missing native capability fails the test. Its results
 are never reused from Gradle's test cache. This host JNI task does not qualify
 Android native artifacts, StrongBox, or physical devices.
-It covers the software key manager and explicit chain-context codecs that
-require the canonical Rust address validator.
+It covers the software key manager, explicit chain-context codecs, and shared
+SoraFS reference validators through the current canonical Kotlin/native API.
+
+The wallet module currently declares managed platform, payment-key and backup-rule
+unit tests. They check the private platform-upcall descriptors and direct adapter
+behavior. The Rust `KagemushaWalletPlatformV1` JNI adapter and native provider-open
+call remain TODO, so the module has no host-JNI test task or native execution claim.
 
 ### Java transaction metadata
 
@@ -546,10 +551,14 @@ Lane observations do not confer finality.
 ### KAGEMUSHA wallet peer transports
 
 `KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, domain-separated
-digest roles, signing domains, envelope header validation and strict `kgm1:` text,
+18 SHA-256 digest roles, 17 signing domains, envelope header validation and strict `kgm1:` text,
 matching the Rust owner `iroha_data_model::kagemusha::kagemusha_wallet_v1`. Every
 signature is ECDSA-P256-SHA256 over the 32-byte Poseidon message of its body, which
 the native core computes; the SDK checks it only as a canonical σ-field value.
+Only `artifactManifestDigest` hashes a signed object with SHA-256. Circuit-visible
+object, package, statement, operation and nullifier digests use the canonical
+60-domain Poseidon table. Requests bind the recorded receiver blacklist; quota
+usage is a depth-6 array.
 `KagemushaP256Codec` is the P-256 device-key boundary: uncompressed SEC1 public keys
 and fixed-width low-S `r || s` signatures. The Android payment key
 (`kagemusha-wallet-android`) is a `DIGEST_SHA256` KeyMint key that signs exactly the

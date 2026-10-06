@@ -256,7 +256,7 @@ pub(super) fn assemble_rotation_dkg_command(
         .incumbent_authority()
         .validators
         .iter()
-        .map(|seat| seat.validator.clone())
+        .cloned()
         .collect::<Vec<_>>();
     let certificate = draft_rotation_certificate(
         &authorization_roster,

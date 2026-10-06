@@ -659,6 +659,32 @@ impl Directory {
         Ok(())
     }
 
+    pub(super) fn child_reader(&self, name: &OsStr) -> io::Result<Self> {
+        self.revalidate()?;
+        let path = self.path().join(name);
+        let file = open_file(
+            &path,
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            OPEN_EXISTING,
+            true,
+            false,
+        )?;
+        snapshot(&file, false, true)?;
+        let mut links = self.links.clone();
+        if links.len() >= 128 {
+            return Err(invalid("private directory depth bound exceeded"));
+        }
+        links.push(Arc::new(Link {
+            path,
+            file,
+            private: false,
+        }));
+        let result = Self { links };
+        result.revalidate()?;
+        Ok(result)
+    }
+
     pub(super) fn child(&self, name: &OsStr, create: bool, exclusive: bool) -> io::Result<Self> {
         self.child_policy(name, create, exclusive, true)
     }

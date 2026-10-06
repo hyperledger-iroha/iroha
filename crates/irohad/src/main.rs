@@ -745,8 +745,8 @@ fn startup_beep(enable_beep: bool) -> bool {
 pub struct StartupArgs {
     /// Validate configuration and available genesis, then exit without binding network sockets.
     ///
-    /// The runtime-only secrets under `<data_dir>/secrets/` (runtime signer, mint-finality seed,
-    /// beacon credential) are never opened; the key files the configuration names are read by
+    /// The runtime-only secrets under `<data_dir>/secrets/` (runtime signer and beacon
+    /// credential) are never opened; the key files the configuration names are read by
     /// the parser after their custody checks.
     #[arg(long)]
     pub check_config: bool,
@@ -8298,9 +8298,8 @@ fn run_main_with_config_guard(
     validate_startup_config_offline(&config).change_context(MainError::Config)?;
     // A `data_dir` node started by the stock launcher reads its runtime secrets from fixed files
     // under `<data_dir>/secrets/`; deployment launchers keep their own registries.
-    let node_secrets_launch = config.data_dir.is_some()
-        && !emergency_fast
-        && runtime_provider_registry.is_none();
+    let node_secrets_launch =
+        config.data_dir.is_some() && !emergency_fast && runtime_provider_registry.is_none();
     let authenticated_genesis = genesis
         .as_ref()
         .map(|local_genesis| {
@@ -8518,9 +8517,7 @@ fn validate_config_and_genesis_for_check(
 /// Opens the fixed files under `<data_dir>/secrets/` through [`node_secrets::NodeSecretsV1`] and
 /// resolves the Soracloud runtime signer and the global-beacon partial signer.
 #[cfg(feature = "daemon")]
-fn resolve_node_secrets_runtime_deps(
-    config: &Config,
-) -> ReportResult<IrohaRuntimeDeps, MainError> {
+fn resolve_node_secrets_runtime_deps(config: &Config) -> ReportResult<IrohaRuntimeDeps, MainError> {
     let secrets_error = |error: node_secrets::NodeSecretsErrorV1| {
         Report::new(MainError::Config).attach(error.to_string())
     };
@@ -8533,9 +8530,7 @@ fn resolve_node_secrets_runtime_deps(
     let secrets = node_secrets::NodeSecretsV1::open(config, &credential_budget)
         .map_err(|error| Report::new(error).change_context(MainError::Config))?
         .ok_or_else(|| Report::new(MainError::Config).attach("node secrets require data_dir"))?;
-    secrets
-        .resolve_runtime_deps(config)
-        .map_err(secrets_error)
+    secrets.resolve_runtime_deps(config).map_err(secrets_error)
 }
 /// A build without daemon providers cannot resolve fixed-secret runtime providers.
 #[cfg(not(feature = "daemon"))]

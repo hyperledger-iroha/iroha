@@ -23,7 +23,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 /** Rust-authored canonical DTO bytes, decoded by the Kotlin implementation. */
 class ValidatorStakingNoritoV1FixtureTest {
     private val expectedKinds = setOf(
-        "authority_generation", "epoch_authorization", "dkg_session", "dkg_transcript",
+        "validator_generation", "epoch_authorization", "dkg_session", "dkg_transcript",
         "committee_transition", "monetary_plan", "monetary_bond_plan", "monetary_unbond_plan",
         "monetary_slash_plan", "reward_claim_plan", "fee_reward_claim_plan", "rebind_peer",
     )
@@ -33,10 +33,10 @@ class ValidatorStakingNoritoV1FixtureTest {
         val rows = fixtureRows()
         assertEquals(expectedKinds, rows.keys)
 
-        val authority = ValidatorStakingNoritoV1.AuthorityGeneration.decode(rows.getValue("authority_generation"))
+        val authority = ValidatorStakingNoritoV1.ValidatorGeneration.decode(rows.getValue("validator_generation"))
         assertEquals(0L, authority.generation)
         assertEquals(4, authority.validators.size)
-        assertContentEquals(rows.getValue("authority_generation"), authority.encode())
+        assertContentEquals(rows.getValue("validator_generation"), authority.encode())
 
         val epoch = ValidatorStakingNoritoV1.EpochAuthorization.decode(rows.getValue("epoch_authorization"))
         assertEquals(ValidatorStakingNoritoV1.EpochAuthorization.Decision.GENESIS, epoch.decision)
@@ -73,7 +73,7 @@ class ValidatorStakingNoritoV1FixtureTest {
             assertEquals(96, member.proofOfPossession.bytes().size)
             assertContentEquals(member.encode(), ValidatorStakingNoritoV1.CommitteeMember.decode(member.encode()).encode())
         }
-        assertEquals(1L, assertNotNull(transition.credentials).authority.generation)
+        assertContentEquals(ByteArray(32) { 0x31 }, assertNotNull(transition.credentials).beacon.sessionId.bytes())
         assertEquals(ValidatorStakingNoritoV1.EpochAuthorization.Decision.ACTIVATE, assertNotNull(transition.outcome).decision)
         assertContentEquals(rows.getValue("committee_transition"), transition.encode())
 
@@ -117,6 +117,42 @@ class ValidatorStakingNoritoV1FixtureTest {
         val rebind = ValidatorStakingNoritoV1.RebindPeer.decode(rows.getValue("rebind_peer"))
         assertEquals(0L, rebind.laneId)
         assertContentEquals(rows.getValue("rebind_peer"), rebind.encode())
+    }
+
+    @Test
+    fun validatorGenerationAcceptsOnlyTheCanonicalBlsRoster() {
+        val rows = fixtureRows()
+        val original = rows.getValue("validator_generation")
+        val generation = fields(original)
+        val peers = vectorFields(generation[2])
+        assertEquals(3, generation.size)
+        val decoded = ValidatorStakingNoritoV1.ValidatorGeneration.decode(original)
+        assertTrue(decoded.validators.all { it.algorithm == SigningAlgorithm.BLS_NORMAL })
+        assertContentEquals(original, decoded.encode())
+        for (number in listOf(0L, Long.MAX_VALUE, Long.MIN_VALUE, -1L)) {
+            val changed = replacing(generation, 1, uint(number, 64))
+            assertEquals(number, ValidatorStakingNoritoV1.ValidatorGeneration.decode(changed).generation)
+        }
+        for (roster in listOf(peers.take(3), peers.reversed(), listOf(peers[0]) + peers.dropLast(1),
+            peers.toMutableList().apply { this[0] = fields(rows.getValue("rebind_peer"))[2] })) {
+            assertFails { ValidatorStakingNoritoV1.ValidatorGeneration.decode(replacing(generation, 2, vector(roster))) }
+        }
+        assertFails { ValidatorStakingNoritoV1.ValidatorGeneration.decode(replacing(generation, 0, ByteArray(32))) }
+        // A version-prefixed generation and a paired-key member belong to the deleted layout.
+        assertFails { ValidatorStakingNoritoV1.ValidatorGeneration.decode(record(listOf(uint(1, 16)) + generation)) }
+        val pairedMembers = peers.map { record(listOf(it, ByteArray(32) { 1 }, ByteArray(32) { 2 })) }
+        assertFails { ValidatorStakingNoritoV1.ValidatorGeneration.decode(replacing(generation, 2, vector(pairedMembers))) }
+    }
+
+    @Test
+    fun committeeCredentialsAndReadinessRejectTheRetiredAuthorityFields() {
+        val beacon = record(listOf(ByteArray(32) { 0x31 }, ByteArray(32) { 0x58 }))
+        val credentials = record(listOf(beacon))
+        assertContentEquals(credentials, ValidatorStakingNoritoV1.CommitteeCredentials.decode(credentials).encode())
+        assertFails { ValidatorStakingNoritoV1.CommitteeCredentials.decode(record(listOf(fixtureRows().getValue("validator_generation"), beacon))) }
+        val readiness = record(listOf(uint(0, 32), byteArrayOf(2)))
+        assertContentEquals(readiness, ValidatorStakingNoritoV1.SeatReadiness.decode(readiness).encode())
+        assertFails { ValidatorStakingNoritoV1.SeatReadiness.decode(record(listOf(uint(0, 32), byteArrayOf(1), byteArrayOf(2)))) }
     }
 
     @Test
@@ -239,7 +275,7 @@ class ValidatorStakingNoritoV1FixtureTest {
     fun `truncated canonical records fail closed`() {
         val rows = fixtureRows()
         val decoders: Map<String, (ByteArray) -> Any> = mapOf(
-            "authority_generation" to ValidatorStakingNoritoV1.AuthorityGeneration::decode,
+            "validator_generation" to ValidatorStakingNoritoV1.ValidatorGeneration::decode,
             "epoch_authorization" to ValidatorStakingNoritoV1.EpochAuthorization::decode,
             "dkg_session" to ValidatorStakingNoritoV1.DkgSession::decode,
             "dkg_transcript" to ValidatorStakingNoritoV1.DkgTranscript::decode,
@@ -645,10 +681,10 @@ class ValidatorStakingNoritoV1FixtureTest {
     @Test
     fun decodedAuthorityAndDkgCollectionsRetainOriginalValues() {
         val rows = fixtureRows()
-        val authority = ValidatorStakingNoritoV1.AuthorityGeneration.decode(rows.getValue("authority_generation"))
+        val authority = ValidatorStakingNoritoV1.ValidatorGeneration.decode(rows.getValue("validator_generation"))
         (authority.validators as MutableList<*>).clear()
         assertEquals(4, authority.validators.size)
-        assertContentEquals(rows.getValue("authority_generation"), authority.encode())
+        assertContentEquals(rows.getValue("validator_generation"), authority.encode())
 
         val transcript = ValidatorStakingNoritoV1.DkgTranscript.decode(rows.getValue("dkg_transcript"))
         val dealer = transcript.dealerCommitments.first()
@@ -676,7 +712,7 @@ class ValidatorStakingNoritoV1FixtureTest {
         val transition = fields(fixtureRows().getValue("committee_transition"))
         // These opaque proof fields exercise collection ownership only; decoding
         // does not authenticate possession or authorize a committee transition.
-        val readiness = record(listOf(uint(0, 32), byteArrayOf(1), byteArrayOf(2)))
+        val readiness = record(listOf(uint(0, 32), byteArrayOf(2)))
         val payload = replacing(transition, 2, vector(listOf(readiness, readiness)))
         val decoded = ValidatorStakingNoritoV1.CommitteeTransition.decode(payload)
         (decoded.readiness as MutableList<*>).clear()

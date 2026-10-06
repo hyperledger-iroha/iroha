@@ -36,6 +36,26 @@ fn checkpoint_epoch_work_is_lexical_and_standalone_proofs_remain_independent() {
     let original = checkpoint.encode_canonical().unwrap();
     let expected = verifier.verify_retained_decision(checkpoint.tip()).unwrap();
     assert!(!norito::core::decode_limits_active());
+    // The exact context is reconstructed from authenticated signed source, not selected
+    // by a cache key or epoch number. Public readers still validate it independently.
+    let signed_epoch = genesis_epoch(&fixture.genesis).unwrap();
+    assert_eq!(
+        signed_epoch,
+        checkpoint
+            .tip()
+            .decode_checked()
+            .unwrap()
+            .commitment
+            .schedule
+            .current
+    );
+    assert_eq!(signed_epoch, checkpoint.decisions[0].schedule.current);
+    let before = validation_counts::calls();
+    assert_eq!(genesis_epoch(&fixture.genesis).unwrap(), signed_epoch);
+    assert_eq!(validation_counts::calls() - before, 1);
+    let before = validation_counts::calls();
+    assert_eq!(fixture.verifier().genesis_epoch, signed_epoch);
+    assert_eq!(validation_counts::calls() - before, 1);
     for _ in 0..2 {
         let before = validation_counts::calls();
         let (imported, tip) = SumeragiFinalityVerifier::from_trusted_checkpoint_with_tip(
@@ -46,8 +66,8 @@ fn checkpoint_epoch_work_is_lexical_and_standalone_proofs_remain_independent() {
         .unwrap();
         assert_eq!(
             validation_counts::calls() - before,
-            2,
-            "one importer workspace miss plus the independently reconstructed signed genesis"
+            1,
+            "one exact importer context also matches the authenticated signed genesis"
         );
         assert_eq!(tip.context_id(), expected.context_id());
         assert_eq!(
@@ -119,7 +139,7 @@ fn warmed_import_epoch_work_never_replaces_fresh_roster_or_quorum_authentication
             panic!("{refusal:?}");
         };
         assert_eq!(actual, expected, "the original witness gate still refuses");
-        assert_eq!(validation_counts::calls() - before, 2);
+        assert_eq!(validation_counts::calls() - before, 1);
         assert_eq!(calls.get(), 0);
         assert_eq!(changed.encode_canonical().unwrap(), bytes);
     }
@@ -290,4 +310,265 @@ fn positive_outer_refusal_keeps_native_provenance_and_original_source_retry() {
     );
     assert_eq!(actual_budget.consumed_allocated_bytes(), consumed);
     assert_eq!(checkpoint.encode_canonical().unwrap(), original);
+}
+
+#[test]
+fn signed_genesis_signature_refusal_survives_a_matching_import_epoch() {
+    use crate::block::{BlockSignature, BlockSignatures};
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+
+    let fixture = Fixture::new();
+    let (verifier, checkpoint) = selected(&fixture);
+    let original = checkpoint.encode_canonical().unwrap();
+    let original_genesis = fixture.genesis.encode_wire().unwrap();
+    let mut changed = fixture.genesis.clone();
+    let wrong = KeyPair::from_seed(vec![93; 32], Algorithm::Ed25519);
+    let signature = SignatureOf::try_from_hash(wrong.private_key(), changed.hash()).unwrap();
+    changed
+        .replace_signatures(
+            BlockSignatures::try_from_iter([BlockSignature::new(0, signature)]).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(changed.header(), fixture.genesis.header());
+    assert_eq!(changed.hash(), fixture.genesis.hash());
+    assert_eq!(
+        changed.external_transactions().collect::<Vec<_>>(),
+        fixture.genesis.external_transactions().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        genesis_registrations(&changed).unwrap(),
+        genesis_registrations(&fixture.genesis).unwrap()
+    );
+    assert_ne!(changed.encode_wire().unwrap(), original_genesis);
+    let before = validation_counts::calls();
+    let expected =
+        SumeragiFinalityVerifier::new(&changed, CHAIN, fixture.validators.clone()).unwrap_err();
+    assert!(matches!(
+        &expected,
+        FinalityReadError::Genesis(GenesisReadError::Invalid(_))
+    ));
+    assert_eq!(
+        validation_counts::calls() - before,
+        0,
+        "source signature refuses before epoch validation"
+    );
+    let mut selected = checkpoint.clone();
+    selected.genesis_wire = changed.encode_wire().unwrap();
+    assert_eq!(selected.network_id, checkpoint.network_id);
+    assert_eq!(selected.decisions, checkpoint.decisions);
+    assert_eq!(selected.tip, checkpoint.tip);
+    let selected_bytes = selected.encode_canonical().unwrap();
+    let calls = Cell::new(0_u32);
+    let before = validation_counts::calls();
+    let refusal = SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+        &selected,
+        &fixture.network,
+        CHAIN,
+        |_, _, _| calls.set(calls.get() + 1),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        &refusal,
+        FinalityReadError::Genesis(GenesisReadError::Invalid(_))
+    ));
+    assert_eq!(refusal.to_string(), expected.to_string());
+    assert_eq!(
+        validation_counts::calls() - before,
+        1,
+        "bounds warms the matching context before original signature refusal"
+    );
+    assert_eq!(calls.get(), 0);
+    assert_eq!(selected.encode_canonical().unwrap(), selected_bytes);
+    let before = validation_counts::calls();
+    let (imported, tip) = SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+        &checkpoint,
+        &fixture.network,
+        CHAIN,
+        |_, verifier, tip| {
+            calls.set(calls.get() + 1);
+            (verifier, tip)
+        },
+    )
+    .unwrap();
+    assert_eq!(validation_counts::calls() - before, 1);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(
+        tip.commitment(),
+        verifier
+            .verify_retained_decision(checkpoint.tip())
+            .unwrap()
+            .commitment()
+    );
+    assert_eq!(
+        imported.export_checkpoint(checkpoint.tip()).unwrap(),
+        checkpoint
+    );
+    assert_eq!(fixture.genesis.encode_wire().unwrap(), original_genesis);
+    assert_eq!(checkpoint.encode_canonical().unwrap(), original);
+}
+
+#[test]
+fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_credentials() {
+    use crate::{
+        isi::{InstructionBox, RegisterBox, RegisterPeerWithPop},
+        transaction::{Executable, FeePaymentIntent, TransactionBuilder},
+    };
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+
+    let fixture = Fixture::new();
+    let original_wire = fixture.genesis.encode_wire().unwrap();
+    let epoch = genesis_epoch(&fixture.genesis).unwrap();
+    let mut validation = EpochValidationScope::new();
+    validation.core_epoch(&epoch).unwrap();
+    let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
+    let wrong = KeyPair::from_seed(vec![94; 32], Algorithm::Ed25519);
+    let original_transaction = fixture.genesis.external_transactions().next().unwrap();
+    assert_eq!(
+        original_transaction.authority().try_signatory(),
+        Some(authority.public_key())
+    );
+    let Executable::Instructions(instructions) = original_transaction.instructions() else {
+        panic!("fixture must use signed instructions");
+    };
+    let builder = TransactionBuilder::new_genesis(
+        original_transaction.authority().clone(),
+        FeePaymentIntent::authority(vec![], None),
+    )
+    .with_instructions(instructions.clone());
+    let hash = builder.payload_hash_bytes();
+    let wrong_signature = Signature::try_new(wrong.private_key(), &hash).unwrap();
+    wrong_signature.verify(wrong.public_key(), &hash).unwrap();
+    let transaction = builder.build_with_signature(wrong_signature);
+    assert!(transaction.verify_signature().is_err());
+    let wrong_transaction =
+        SignedBlock::try_genesis(vec![transaction], authority.private_key(), None, None).unwrap();
+    wrong_transaction
+        .signatures()
+        .next()
+        .unwrap()
+        .signature()
+        .verify_hash(authority.public_key(), wrong_transaction.hash())
+        .unwrap();
+    assert_eq!(
+        genesis_registrations(&wrong_transaction).unwrap(),
+        genesis_registrations(&fixture.genesis).unwrap()
+    );
+    let before = validation_counts::calls();
+    let expected = genesis_epoch(&wrong_transaction).unwrap_err();
+    assert_eq!(validation_counts::calls() - before, 0);
+    let before = validation_counts::calls();
+    let actual =
+        super::super::genesis::genesis_epoch_with_validation(&wrong_transaction, Some(&validation))
+            .unwrap_err();
+    assert!(matches!(&actual, GenesisReadError::Invalid(_)));
+    assert_eq!(actual.to_string(), expected.to_string());
+    assert_eq!(
+        validation_counts::calls() - before,
+        0,
+        "a warm scope never supplies a transaction signature verdict"
+    );
+
+    // Every signature is genuine here. The altered signed PoP reaches the reconstructed
+    // context's original validation-only miss, rather than an earlier signature failure.
+    let mut replacements = 0;
+    let changed_instructions: Vec<InstructionBox> = instructions
+        .iter()
+        .map(|instruction| {
+            if let Some(RegisterBox::Peer(register)) =
+                instruction.as_any().downcast_ref::<RegisterBox>()
+            {
+                if replacements == 0 {
+                    replacements += 1;
+                    let mut register: RegisterPeerWithPop = register.clone();
+                    register.pop[0] ^= 1;
+                    return register.into();
+                }
+            }
+            instruction.clone()
+        })
+        .collect();
+    assert_eq!(replacements, 1);
+    let transaction = TransactionBuilder::new_genesis(
+        original_transaction.authority().clone(),
+        FeePaymentIntent::authority(vec![], None),
+    )
+    .with_instructions(changed_instructions)
+    .sign(authority.private_key());
+    transaction.verify_signature().unwrap();
+    let wrong_credential =
+        SignedBlock::try_genesis(vec![transaction], authority.private_key(), None, None).unwrap();
+    wrong_credential
+        .signatures()
+        .next()
+        .unwrap()
+        .signature()
+        .verify_hash(authority.public_key(), wrong_credential.hash())
+        .unwrap();
+    assert_ne!(
+        genesis_registrations(&wrong_credential).unwrap(),
+        genesis_registrations(&fixture.genesis).unwrap()
+    );
+    let before = validation_counts::calls();
+    let expected = genesis_epoch(&wrong_credential).unwrap_err();
+    assert_eq!(
+        validation_counts::calls() - before,
+        1,
+        "authenticated source reaches the actual PoP validator"
+    );
+    let before = validation_counts::calls();
+    let actual =
+        super::super::genesis::genesis_epoch_with_validation(&wrong_credential, Some(&validation))
+            .unwrap_err();
+    assert!(matches!(&actual, GenesisReadError::Invalid(_)));
+    assert_eq!(actual.to_string(), expected.to_string());
+    assert_eq!(validation_counts::calls() - before, 1);
+    // A genuinely signed different source remains valid but is not inserted by this
+    // final validation-only step. Each repeated reconstruction still validates it anew.
+    let mut changed_instructions = instructions.to_vec();
+    changed_instructions.push(
+        crate::isi::Log::new(
+            crate::level::Level::INFO,
+            "different signed genesis body".into(),
+        )
+        .into(),
+    );
+    let transaction = TransactionBuilder::new_genesis(
+        original_transaction.authority().clone(),
+        FeePaymentIntent::authority(vec![], None),
+    )
+    .with_instructions(changed_instructions)
+    .sign(authority.private_key());
+    let other_genesis =
+        SignedBlock::try_genesis(vec![transaction], authority.private_key(), None, None).unwrap();
+    assert_ne!(other_genesis.hash(), fixture.genesis.hash());
+    let other_wire = other_genesis.encode_wire().unwrap();
+    let expected = genesis_epoch(&other_genesis).unwrap();
+    assert_ne!(expected, epoch);
+    for _ in 0..2 {
+        let before = validation_counts::calls();
+        let reconstructed =
+            super::super::genesis::genesis_epoch_with_validation(&other_genesis, Some(&validation))
+                .unwrap();
+        assert_eq!(validation_counts::calls() - before, 1);
+        assert_eq!(reconstructed, expected);
+    }
+    let before = validation_counts::calls();
+    let resumed = SumeragiFinalityVerifier::new_with_validation(
+        &other_genesis,
+        CHAIN,
+        fixture.validators.clone(),
+        Some(&validation),
+    )
+    .unwrap();
+    assert_eq!(validation_counts::calls() - before, 1);
+    assert_eq!(resumed.genesis_epoch, expected);
+    assert_eq!(other_genesis.encode_wire().unwrap(), other_wire);
+    let before = validation_counts::calls();
+    assert_eq!(
+        super::super::genesis::genesis_epoch_with_validation(&fixture.genesis, Some(&validation))
+            .unwrap(),
+        epoch
+    );
+    assert_eq!(validation_counts::calls() - before, 0);
+    assert_eq!(fixture.genesis.encode_wire().unwrap(), original_wire);
 }

@@ -21,7 +21,7 @@
 //!   constants, booleans, select, is-zero, equality);
 //! - [`bytes`] (M3): byte linking: the `P_bytes` packing on a one-row-per-byte
 //!   tape, 32-byte proof messages linked to compressed points `(x, y
-//!   parity)` and canonical scalars, and the 107-piece sigma export;
+//!   parity)` and canonical scalars, and descriptor-sized sigma exports;
 //! - [`ecc`] (M3): Pasta native ECC (Pallas in `Fp`, Vesta in `Fq`):
 //!   complete addition, GLV variable-base multiplication with the lattice
 //!   bound and a complete tail, identity-guarded Horner chains, fixed-base
@@ -44,11 +44,12 @@
 //! - [`q_leaf`] (M3b): the 17-column Q-leaf layout of the P-256 and SHA-256
 //!   chips (ten lookup arguments, twelve equality columns), its row plan and
 //!   the audit of the shared-table conditions;
-//! - [`statement`]: the G1 step statement encoding (28 elements under
+//! - [`imt`]: authenticated indexed-map membership, soft gap checks,
+//!   empty-slot insertion and predecessor relinking with slot clearing;
+//! - [`statement`]: the G1 step statement encoding (26 elements under
 //!   `kgwstmt1`) of the split-lineage step relations, the canonical
 //!   cross-field limb encoding of spec S6, and the canonical limb
-//!   decomposition of an own-field word. Nothing here is wired into a
-//!   protocol path yet.
+//!   decomposition of an own-field word, used by the native step proofs.
 //! - [`cells`]: the typed cells chips exchange ([`cells::Word`],
 //!   [`cells::Bit`], [`cells::Uint`]) and row cursors;
 //! - [`tamper`]: the per-cell tamper harness every chip test runs. It shows
@@ -87,6 +88,7 @@ pub mod bytes;
 pub mod cells;
 pub mod ecc;
 pub mod ff;
+pub mod imt;
 pub mod p256;
 pub mod poseidon;
 pub mod pow5_fq;

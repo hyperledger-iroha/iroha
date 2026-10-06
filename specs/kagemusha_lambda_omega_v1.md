@@ -7,8 +7,10 @@ circuit kinds, accumulation, the Ω bytes, the receiver's native work, per-opera
 memory, the soundness argument, the gadget set and milestones M3–M5. The proposal and the
 wire record govern protocol semantics and encodings; this record governs the proof
 construction. It applies the third set of owner answers of 2026-10-05 (B1–B8, §1.1), which
-the proposal and the wire record now carry (§12). Only the k12 step proofs σ exist.
-Everything else here is unbuilt, and every figure carries a label:
+the proposal and the wire record now carry (§12). Revision-4 native step proofs σ
+(k12 without quota, k14 with the fixed quota array) and the M3 gadgets exist.
+The recursive construction remains under implementation and unqualified. Every
+figure carries a label:
 
 - **[M]** measured with the native engine on the shared Apple-silicon Mac (20 CPUs, timings
   ±25%), or where stated in the [checklist](kagemusha_evidence_gate.md) §8;
@@ -50,7 +52,7 @@ record.
 | Constraint | Met by | Status |
 |---|---|---|
 | 1–2 s to durable completion; Ω verified on the path unless pre-verified | §4: ≈ 35–140 ms of phone proof CPU when pre-verified, +0.29–0.75 s cold | met [E]; hardware signing and durable commit unmeasured |
-| R9: Ω + largest σ_send ≤ 10,000 − F_payment = 8,277 B (wire §4, F_payment = 1,723† with the B6 Request fields) | §3: Ω = 4,736 B; with the measured σ_send (3,296 B) the Ω budget is 4,981 B | met [C], margin 245 B |
+| R9: Ω + largest σ_send ≤ 10,000 − F_payment = 8,277 B (wire §4, F_payment = 1,723† with the B6 Request fields) | §3: Ω = 4,736 B; with the largest measured revision-4 σ_send (3,456 B) the Ω budget is 4,821 B | conditional [C], margin 85 B; Ω unbuilt |
 | Credited::Status ≤ 10,000 B, Ω ≤ 7,812 B (wire §4, F_status = 2,188†) | 2,188 + 4,736 = 6,924 B | met [C] |
 | Fold peak RAM ≤ 1 GiB | §6: one prover at a time, ≤ 0.85 GiB per sub-proof plus ≤ 0.15 GiB wallet core | met [E]; thresholds G3.6, G3.7, G4.6, G5.3 |
 | First release; formats may be redesigned | PIPA-R profile and PIPA-AS-v1 (§8); σ moves to the base-field transcript at unchanged byte length | used |
@@ -79,7 +81,7 @@ non-hiding PIPA-AS-v1 fold proofs (§3.4).
 | **A** aggregator | Fp / Vesta | 16 | 32 / ~44 / 10 / 3 | all `P` work (openings, IMT, digests, `P_bytes`, consumer checks, lineage-adjusted values, burn logic); succinct verification of Ω(pred) (hard), Ω_in or Ω(h) (soft) and every Q (hard); fold F_P |
 | **Ω** wrap | Fq / Pallas | 16 | 11 / ~18 / 4 / 1 | succinct verification of A (hard); fold F_V^Ω; selection of A's key; D_A passed through |
 | **W** (context wrap) | Fq / Pallas | 16 | Ω's descriptor, other context domain | intermediate wrap of the A-split (§2.8); never transported |
-| F_V^Q, F_P, F_V^Ω | PIPA-AS-v1 fold proofs | K = 16 | — | local, 1,088 B each [C] |
+| F_V^Q, F_P, F_V^Ω | PIPA-AS-v1 fold proofs | K = 16 | — | local, 1,088 B body plus 32 B salt each [C] |
 
 Field placement:
 
@@ -99,7 +101,7 @@ Field placement:
         |
   Fq   Q_1 … Q_r (Pallas)    P-256 V/F + SHA slots (soft for incoming objects, hard for own)
         Q_σ (one of them)    σ verifiers (own hard; σ_send / σ_recv soft) + F_V^Q over the O_σ
-        |        out: per signature (m, key, valid); per σ (d_σ, vk_index, valid, 107 byte chunks);
+        |        out: per signature (m, key, valid); per σ (d_σ, vk_index, valid, descriptor-sized byte chunks);
         |             acc_V^part; gated-slot modes
   Fp   A (Vesta)             verifies Ω(pred) [hard, witness key K], Ω_in or Ω(h) [soft, same K],
         |                    Q_1..Q_r [hard, keys fixed per A variant];
@@ -108,7 +110,7 @@ Field placement:
         |        out: D_A (binds the public fields, vkΩ_digest and acc_P); acc_V^part;
         |             acc_V(pred), acc_V(in) with its mode
   Fq   Ω (Pallas)            verifies A [hard, key K_A one-hot from T_A];
-                             F_V^Ω over {acc_V^part, O_A, acc_V(pred), [acc_V(in)]}
+                             F_V^Ω over {acc_V^part, O_A, pred-or-TRIV, incoming-or-TRIV}
                  out: [D_A, acc_V]; transported: π_Ω ‖ acc_P ‖ acc_V
 ```
 
@@ -126,9 +128,9 @@ Proving is native and sequential; each output is durable before the next proof s
 
 | Obligation | Curve, k | Created by | Folded in | Mode |
 |---|---|---|---|---|
-| O_σ(own) | Vesta, 12 | σ verifier in Q_σ | F_V^Q; with one σ it is forwarded as acc_V^part (u padded 0^4 ‖ u) | hard |
-| O_σsend (Receive), O_σrecv (ArchiveSent (i)) | Vesta, 12 | soft σ verifier in Q_σ | F_V^Q | gated |
-| acc_V^part | Vesta, 16 | F_V^Q output, carried Q_σ → A → Ω as instances | F_V^Ω | hard |
+| O_σ(own) | Vesta, source k12/k14 | σ verifier in Q_σ | F_V^Q; with one σ it is forwarded as acc_V^part with checked prefix padding and its original source k | hard |
+| O_σsend (Receive), O_σrecv (ArchiveSent (i)) | Vesta, selected source k12/k14 | soft σ verifier in Q_σ | F_V^Q | gated |
+| acc_V^part | Vesta, 16 after a fold or original source k when forwarded | F_V^Q output or single O_σ, carried Q_σ → A → Ω as instances | F_V^Ω | hard |
 | acc_V(pred) | Vesta, 16 | Ω(pred) instance, forwarded by A | F_V^Ω | hard |
 | acc_V(in) / acc_V(h) | Vesta, 16 | Ω_in / Ω(h) instance, forwarded by A with mode and G* | F_V^Ω | gated |
 | O_A | Vesta, 16 | A verifier in Ω | F_V^Ω | hard |
@@ -146,6 +148,26 @@ lineage. Pallas and Vesta obligations cannot share an MSM (PIPA §11), so a cons
 exactly two 2^16 MSMs. A build-time test asserts the ledger for every variant
 (`every_obligation_folded_exactly_once`).
 
+A fold whose actual obligations all have source k < 16 includes one additional,
+explicit fixed `ACC_TRIV` slot at k16 (§3.4). This public constant is not an obligation
+and does not discharge another slot. Its position, count and transcript absorption
+are fixed by the consuming circuit; it is never added or removed implicitly.
+In particular, F_V^Q over two short σ openings has three slots including this constant.
+
+**One Ω descriptor.** Every A variant exports one Bounded instance column of
+69 fields: `D_A`; the part's source k, G coordinates in S6 and 16 normalized
+challenges (21); the predecessor's G in S6 and 16 challenges (20); the incoming
+G in S6, 16 challenges, three mode bits and corrected G in S6 (27). An absent
+predecessor or incoming claim is the pinned full-length `ACC_TRIV`, constrained
+by that A variant; absent incoming uses Trivial mode and the pinned trivial
+point for its unused correction. Ω always folds four slots in the diagram's
+order. Its part source k is constrained to 12, 14 or 16, with exact zero-prefix
+padding and nonzero active challenges. All A variants share one descriptor
+(including instance types/lengths and selector layout); their full key digests
+select the operation in `T_A`. Variant-dependent Ω keys would break the single
+carried `vkΩ_digest` construction and are not permitted. These explicit absent
+slots discharge no obligation and cannot replace a present claim.
+
 ### 2.4 Verifying keys without a cycle (PIPA S14)
 
 Build order: σ VKs → Q VKs → A VKs → Ω VK → `vkΩ_digest` and
@@ -162,6 +184,20 @@ Build order: σ VKs → Q VKs → A VKs → Ω VK → `vkΩ_digest` and
 `relation_id` is a carried value in every circuit, σ included: σ takes it as witness limbs
 bound by its statement digest (wire §3.2, `StatementV1`). It is never a circuit constant
 (`relation_id_is_never_a_circuit_constant`).
+
+**VK digest framing.** A PIPA-R verifying key has the base-field digest
+`P_B(kgwvkey1; 1, curve_code, k, fixed_count, permutation_count, transcript_repr,
+descriptor_digest_lo128, descriptor_digest_hi128, fixed_points[x,y]..., permutation_points[x,y]...)`.
+Pallas has curve code 0 and Vesta 1; counts and commitment order match the canonical
+VK encoding, coordinates and the base-field representation are canonical, and every
+point is finite. The descriptor digest is split as a little-endian integer into
+two 128-bit limbs. `P_B` includes the domain and arity prefix, as the native
+`hash_with_domain` function does. With n commitment points this takes n + 6 RP57
+permutations, replacing the preceding approximate cost estimates. The same framing
+applies to σ/Q/A/Ω/W key hashes in each key's base field. Verified descriptors are
+circuit-fixed, so their limbs are constants in the recursive key-hash gadget;
+the gadget does not recompute BLAKE2b. It also binds the witnessed key's
+`transcript_repr`; a bare representation is not the allowlist key digest.
 
 ### 2.5 Variants and the allowlist
 
@@ -186,7 +222,13 @@ bound by its statement digest (wire §3.2, `StatementV1`). It is never a circuit
 - Bootstrap's A has no Ω slot. It enforces the unique zero state (proposal §3.2) and writes
   free `vkΩ_digest` and `relation_id` fields, which every native verifier pins.
 - F_P has one input, so acc_P = O_Q, passed through without a fold.
-- F_V^Ω folds {acc_V^part = O_σ, O_A}.
+- F_V^Ω folds {acc_V^part = O_σ, O_A, ACC_TRIV, ACC_TRIV}; the last two are
+  the fixed absent-predecessor and absent-incoming slots of the uniform frame.
+- A forwarded `acc_V^part` is an internal checked fold input, not a transported
+  `AccumulatorT`. It retains the source k derived from the selected σ descriptor
+  and has exactly `16-k` leading zeros. A real F_V^Q output instead has source
+  k16 and no zero challenges. Both A and Ω constrain this distinction; relabeling
+  a padded short claim as a k16 transported claim is rejected.
 - **Trivial accumulator** `ACC_TRIV(C) = (Σ_{i<2^16} g_i, 1^16)`: s_i = 1 for every i, so it
   decides by construction. It is pinned per curve by a KAT.
 
@@ -246,9 +288,12 @@ Why this meets proposal §3.2 (§7 C8):
   them true. Burn requires a false soft bit (a deterministic function of the bytes) or a folded
   corrected claim, which forces G*_j = ⟨s(u_j), g⟩ ≠ G_j, so obligation j truly fails. The
   branch equals the native verdict; the prover cannot choose it.
-- **No poison.** On burn, the only Payment-derived claim folded is a corrected claim, which
-  decides for every u_j because the honest receiver computes G*_j itself. The lineage stays
-  decidable and its other value is unaffected.
+- **No poison.** On a completed burn, the only Payment-derived claim folded is a corrected
+  claim, which decides because the honest receiver computes G*_j itself. The lineage stays
+  decidable and its other value is unaffected. Algebraic correction is defined for every u_j,
+  but the exceptional G*_j = O cannot use the finite-point transport and returns an encoding
+  failure, not a completed burn. Liveness therefore has the IPA's computational/negligible-
+  exception scope, not an unconditional claim for every possible challenge vector.
 - **Kernel diversity.** The honest prover locates a failing claim with `msm_public`; the
   receiver's native check used `msm_complete`. Poisoning needs both kernels wrong on the same
   input.
@@ -317,44 +362,60 @@ public transcript, the transported acc_P and the constant `vkΩ_digest`.
 - **Fold-input padding:** an obligation of k < 16 enters as (G, 0^{16−k} ‖ u); then s_i = 0
   for i ≥ 2^k, which is the k-round decide (prefix property, PIPA §3). Zero u_j occur only as
   fold inputs, never in transported accumulators.
+- **Non-hiding fold completeness:** at least one input slot has source k16. If every
+  actual obligation is shorter, the caller supplies an explicit pinned `ACC_TRIV`
+  slot. Otherwise the upper half of h is identically zero, forcing the first IPA L
+  point to be the identity for every salt, which the point format rejects. Native
+  and circuit verifiers enforce this structural requirement. Full-length inputs
+  still use fallible proving for exceptional zero challenges or identity messages;
+  a salt retry cannot repair the all-short structural case.
 
 ### 3.4 PIPA-AS-v1 fold proof
 
 BCMS20 PC_DL accumulation (snark-verifier `IpaAs`; reference `iroha_core_zk`
 `accumulation.rs`):
 
-- **Transcript.** A base-field sponge with tag `pipa-as1` absorbs a prover salt (one element),
-  r, and for each slot (G_i as [x, y], k_i, u_i), then squeezes full-width α and z.
+- **Transcript.** A base-field sponge with tag `pipa-as1` absorbs a canonical prover salt
+  (one base-field element), r, and for each slot (finite G_i as [x, y], source k_i,
+  normalized 16-element u_i), then squeezes full-width α, z and ζ_ipa in that order.
+  The only permitted zero entries in input u_i are the checked prefix padding of §3.3.
+  For each of the 16 rounds it absorbs L_j, R_j and squeezes nonzero u'_j; it then
+  reads and absorbs c and reads the unabsorbed suffix G'. Challenge conversion and
+  scalar/point absorption follow PIPA-R (§8). A zero u'_j rejects the proof.
 - **Prover.** h(X) = Σ α^i h_{u_i}(X), C = Σ α^i G_i, v = h(z); a **non-hiding** 16-round IPA
   opening of C at z (PIPA §9.2 without ξ·C_s and f·W): L_j, R_j, c and the suffix G'.
+  Its coefficient vector is `a = h − h(z)e_0`, so its evaluation is zero and its
+  initial commitment is `C − v g[0]`; ζ_ipa scales U in the IPA equation below.
 - **Verifier (succinct).** Recompute C with a complete Horner chain and v = Σ α^i Π_j (1 +
   u_{i,15−j} z^{2^j}); check C − v·g[0] + Σ(u'^{-1}_j L_j + u'_j R_j) − c·G' − c·b(z)·ζ·U = O;
   output (G', u').
-- **Bytes and time.** 32·(2·16 + 2) = **1,088 B** [C], local only; 2.9–3.1 s on 1 Mac thread
+- **Bytes and time.** 32·(2·16 + 2) = **1,088 B** [C] for the IPA body. The canonical local
+  `FoldWitness` is `salt (32 B) ‖ proof_body (1,088 B)`, **1,120 B** in total; neither is
+  transported in a Payment. Time: 2.9–3.1 s on 1 Mac thread
   [E: generator fold 1.92–2.03 s [M] + L/R MSMs ≈ 0.7 s].
 
 ### 3.5 Byte budget and thresholds
 
 With PIPA §7, d = 6, k = 16 and the suffix, π_Ω is 32·(44 + V) bytes, where
 V = n_a + 8n_l + n_z + q_a + q_f + m + max(3n_z − 1, 0) + n_s. The Ω budget with the
-measured σ_send is 8,277 − 3,296 = 4,981 B (B6 adds 42 B to F_payment), so
-32·(44 + V) + 1,088 ≤ 4,981 requires **V ≤ 77**. The baseline Ω descriptor has V = 70 [E].
+largest measured revision-4 σ_send is 8,277 − 3,456 = 4,821 B (B6 adds 42 B to
+F_payment), so 32·(44 + V) + 1,088 ≤ 4,821 requires **V ≤ 72**. The baseline Ω descriptor has V = 70 [E].
 
-| Ω descriptor [E] | Transport [C] | Margin to 4,981 B |
+| Ω descriptor [E] | Transport [C] | Margin to 4,821 B |
 |---|---:|---:|
-| n_a 11, n_l 1, m 4, q_a 22, q_f 18, n_s 4 (baseline) | **4,736** | 245 |
-| m 5 | 4,896 | 85 |
-| n_a 12, q_a 24 | 4,832 | 149 |
-| m 6, n_a 12, q_a 24 | 5,024 | −43 (fails) |
-| + 1 lookup argument | 5,024 | −43 (fails) |
-| Pow5 round constants share fixed columns with glue coefficients (q_f 13) | 4,576 | 405 |
-| no suffix (reserve) | 4,704 | 277 |
+| n_a 11, n_l 1, m 4, q_a 22, q_f 18, n_s 4 (baseline) | **4,736** | 85 |
+| m 5 | 4,896 | −75 (fails) |
+| n_a 12, q_a 24 | 4,832 | −11 (fails) |
+| m 6, n_a 12, q_a 24 | 5,024 | −203 (fails) |
+| + 1 lookup argument | 5,024 | −203 (fails) |
+| Pow5 round constants share fixed columns with glue coefficients (q_f 13) | 4,576 | 245 |
+| no suffix (reserve) | 4,704 | 117 |
 
-- **G-Ω1:** the measured Ω descriptor has V ≤ 77 and exactly one lookup argument.
+- **G-Ω1:** the measured Ω descriptor has V ≤ 72 and exactly one lookup argument.
 - **G-Ω2 (R9 joint):** |Ω| + max over allowlisted σ_send of |σ_send| ≤ 8,277 B, so with
   Ω = 4,736 B every σ_send is ≤ **3,541 B** [C]. k12 with one lane (3,296 B [M]) passes; k14
-  with one lane (≈ 3,424 B [C]; the B5 quota-enabled shape, ≈ 346 permutations ≈ 12.8k lane
-  rows [E]) and k15 with one lane (3,488 B [C]) pass; k16 with one lane (the measured pre-B5
+  with one lane (3,456 B [M]; the B5 quota-enabled shape, 309–345 permutations,
+  12,123–13,542 used rows [S]) and k15 with one lane (3,488 B [C]) pass; k16 with one lane (the measured pre-B5
   quota shape, 3,584 B [M]) and k14 with two lanes (3,840 B [C]) fail. If no single-lane shape
   fits an enabled control, proposal §8 requires a new owner decision (contingent question
   C-1, §12).
@@ -362,6 +423,25 @@ measured σ_send is 8,277 − 3,296 = 4,981 B (B6 adds 42 B to F_payment), so
   (wire §§3.1, 4), a derived envelope bound that B1–B8 leave unchanged.
 - F_payment (1,723 B, computed from the B6 Request fields) and F_status are marked † in wire
   §4 until `size_tests.rs` re-measures them; the thresholds follow those constants.
+
+The current revision-4 single-lane descriptor inventory is below. Real native proofs
+for quota-only and all-controls Send verify at 3,456 B; the remaining lengths are
+exact descriptor calculations checked against both curves. PIPA-R migration and
+actual Ω construction must preserve or re-establish these bounds before artifact
+freeze; this is not an end-to-end payment measurement.
+
+| Relation / mask | k | Poseidon permutations | Used rows | Folded proof bytes |
+|---|---:|---:|---:|---:|
+| Send 0 | 12 | 69 | 2,587 | 3,296 |
+| Send 1 | 12 | 106 | 4,041 | 3,296 |
+| Send 2 | 14 | 309 | 12,123 | 3,456 |
+| Send 3 | 14 | 345 | 13,541 | 3,456 |
+| Send 4 | 12 | 69 | 2,588 | 3,296 |
+| Send 5 | 12 | 106 | 4,042 | 3,296 |
+| Send 6 | 14 | 309 | 12,124 | 3,456 |
+| Send 7 | 14 | 345 | 13,542 | 3,456 |
+| Receive 0 | 12 | 67 | 2,510 | 3,296 |
+| Receive 1 (recorded blacklist) | 12 | 104 | 3,958 | 3,296 |
 
 ### 3.6 Ω contents and rows
 
@@ -468,9 +548,12 @@ instance and feeds its 32-byte canonical encoding to SHA-256.
 | RefreshPolicy (every kind) | 3 / 2 | 5 | 1 | 1 | σ |
 
 **σ byte crossing.** σ is verified in Q (Fq) but its `P_bytes` digest is computed in A (Fp).
-Q decomposes σ into 31-byte chunks (2–3 cells per byte) and exports the 107 chunks as Bounded
-instances (each < 2^248 < p); A pays their Lagrange evaluation, ≈ 0.43k cells each [E], about
-46k cells per σ.
+Q decomposes the length-prefixed σ bytes into 31-byte chunks (2–3 cells per byte)
+and exports them as Bounded instances (each < 2^248 < p). The fixed descriptor
+selects the export length: `ceil((4 + |σ|) / 31)`, 107 chunks for the measured
+3,296-byte k12 class and 112 for the measured 3,456-byte k14 class. A checks the
+same class and length, including the final zero padding. Its estimated Lagrange
+evaluation cost is ≈ 0.43k cells per chunk [E], about 46k–48k cells per σ.
 
 ### 5.3 Shapes and unit costs
 
@@ -551,7 +634,11 @@ Time model [E]:
 
 ### 5.6 Scheduling, checkpoints, preemption
 
-- **Checkpoints.** Sub-proofs run strictly in order and each output (≤ 7.4 KB) is persisted; a
+- **Checkpoints.** Sub-proofs run strictly in order and each output is persisted with
+  the exact stage type and byte bound from the frozen proof descriptors. The earlier
+  approximately 7.4 KB estimate was based on the estimated A layout (7,424 bytes),
+  not an independent 7,400-byte wire limit. Current local workload proofs are larger;
+  their measured bounds must replace estimates before the wallet schedule is frozen. A
   crash loses at most one sub-proof (15–36 s on 1 Mac thread).
 - **Preemption.** Any payment interaction (Offer, Request, Payment) aborts the running
   sub-proof through a cooperative cancellation token checked at Rayon task boundaries, which
@@ -607,12 +694,17 @@ state-restoration / round-by-round soundness. PIPA-R changes only absorption enc
 stay injective, and the challenge map: points as native [x, y]; a Vesta proof's Fp scalar as one
 Fq element; a Pallas proof's Fq scalar as S6 limbs (lo < 2^128, hi < 2^127, lo + 2^128·hi <
 q); challenges map Fq → Fp by w mod p and Fp → Fq by identity, at distance ≤ (q − p)/q =
-2^−167.84 [C] from uniform. The Fiat–Shamir memo is required before freezing (G4.1).
+2^−167.84 [C] from uniform. The [implementation argument](kagemusha_recursion_soundness_v1.md) records the
+framing and challenge-map derivation; its remaining composition and simulator
+review obligations must be closed before freezing (G4.1).
 
-**C2. Accumulation (PIPA-AS-v1).** BCMS20 PC_DL accumulation (ePrint 2020/499 §6) on BGH19 §3.
+**C2. Accumulation (PIPA-AS-v1).** BCMS20 PC_DL accumulation (ePrint 2020/499 §7 and Appendix A) on BGH19 §3.
 If (G', u') decides then, except with probability about (r + 2^16)/|F| per hash query, the
-opened C = Commit(h) and every input decides: α is squeezed after every input is absorbed
-(cancelling inputs is a degree-r event) and z after C (a degree-2^16 event). The format has no
+opened C = Commit(h) and every input decides, except with the computational soundness
+error: α is squeezed after every input is absorbed (cancelling inputs is a degree-r event)
+and z after those bound inputs and α determine C (a degree-2^16 event). C is not absorbed
+again. These are computational claims under Fiat–Shamir, not a literal equivalence for
+every possible challenge output. The format has no
 hiding term, so "G is the commitment" is enforced by the decide itself.
 
 **C3. PCD composition.** Each step is a constant-depth DAG (Q → A → Ω, or Q → A_1 → W → A_2 →
@@ -660,13 +752,16 @@ recomputed with the receiver's field.
 **C8. Containment (§2.7). Novel selection rule.** Accept is sound by C2 on every gated slot.
 Burn is sound because either a soft bit is false (by C7 the native verifier also rejects) or a
 corrected claim is folded, so by C2 G* = ⟨s(u_j), g⟩ ≠ G_j and the native decide of that
-obligation rejects. A corrected claim decides for every u (liveness). (accept ⇔ native accept)
+obligation rejects. A representable corrected claim decides; exceptional identity corrections
+fail encoding as described in §2.7. For completed proofs, (accept ⇔ native accept)
 ∧ (burn ⇔ native reject), so the branch is unique. A burn moves value only out of the
 receiver's spendable balance; it cannot create value. The OQ-3 root rule keeps the
 consumed-credit IMT invariant (C10) on the burn branch, so no later non-membership becomes
 false. The B6 history lookup keeps the branch unique: its opening is hard, and its soft bit
 is a function of the authenticated leaf or low leaf, so the prover cannot select burn with a
-bad path. A written memo is required (G4.1); it reduces to C2, C7 and C10.
+bad path. The [containment argument](kagemusha_recursion_soundness_v1.md#branch-uniqueness-and-containment)
+reduces the selection rule to C2, C7 and C10; complete operation binding and
+independent review remain G4.1 work.
 
 **C9. Liveness of hard verification.** Q, A and Ω are hiding and are re-proved with fresh
 blinds if self-verification fails, which by C7 never happens for honest witnesses. PIPA-AS takes
@@ -716,13 +811,24 @@ M4 work (PIPA §13 TODO).
   `KagemushaPoseidonRp57Base` transcript and `instance_types` (`Field`, `Bounded` (< p),
   `Bits(b)`, b ≤ 253) per instance column. PIPA-R requires `Direct` instances and the suffix;
   `descriptor_digest` and `transcript_repr` move to v2 domains, with `transcript_repr` a B
-  element.
+  element. Protocol version remains 1; the canonical descriptor schema uses the explicit
+  v2 domain `PIPA-v2-CircDesc` and key domain `Iroha-PlonkVK-v2`. No decoder guesses a
+  descriptor version or retries another profile. Type codes are Field = 0, Bounded = 1
+  and Bits(b) = 2 + b for 0 ≤ b ≤ 253. Each instance column has one homogeneous type;
+  mixed public statements use multiple columns (Ω lengths 1, 2 and 16).
 - **§6.2b base-field transcript.** `iroha_pasta::poseidon::Sponge` over B, first element
   `B::from(u64::from_le_bytes(*b"pipa-rb1"))`; points as canonical [x, y] (O rejected);
   scalars as one element when |F| < |B| and as S6 limbs when |F| > |B|; challenges c = w − p
-  if w ≥ p else w (Vesta proofs) and c = w (Pallas proofs); `common_scalar(transcript_repr)`
+  if w ≥ p else w (Vesta proofs) and c = w (Pallas proofs); `common_base(transcript_repr)`
   absorbed first. §6.3 absorbs one type code per instance column, and a value outside its type
-  is rejected (`InstanceType`).
+  is rejected (`InstanceType`). The precise prelude is the key representation, the
+  `pipainst` tag, column count, all column lengths, all column type codes and finally
+  the column-major values. The tag, count, lengths and type codes are native base-field
+  metadata elements, not proof-scalar messages. Field
+  requires a canonical proof-scalar value, Bounded additionally requires `< p`, and
+  Bits(b) additionally requires `< 2^b` (Bits(0) admits only zero). Generic proof scalars
+  use the curve's scalar-absorption rule regardless of the declared instance type;
+  Pallas scalar absorption therefore always uses S6 limbs.
 - **§9.3 in-circuit verifiers.** Horner chains with complete joins; variable-base `[c]P` by GLV
   (`c = k1 + λk2`, |k1|, |k2| < 2^128, one foreign-field multiplication), acc = [2]T_top,
   incomplete addition for i ≤ 122 and complete after; identity-guarded bases;
@@ -757,7 +863,7 @@ oracle; the `iroha_core_zk` gadgets below are references, never dependencies.
 | SHA-256 compression `::sha256` | Fq | ≤ 2,800 rows, ≤ 50k cells per block | `pasta_sha256_table8.rs` (degree 9 → 6) | exactly one block: the 32-byte canonical (little-endian, wire §3.2) encoding of m, loaded as eight big-endian words, then the fixed padding; codec m → bytes with the `< p` canonicity check (≈ 0.1k) |
 | Pow5 Fq lane | Fq | 148 per permutation | existing generic `poseidon::pow5` | parity vectors against `RP57_FQ` |
 | IMT chip `::imt` (depth 32) | Fp | insert 39.7k; removal ≈ 39.7k; non-membership 10.0k; membership 9.9k; membership-or-insert ≈ insert | wire §3.2; `iroha_data_model` native trees | shares its path layer with the blacklist gap, quota-window and quota-usage array path chips; written slot must be empty; next free index is native (slot `2^32 − 1` valid) |
-| Byte linking `::bytes` | Fp, Fq | 2–3 cells per byte; opaque chunk ≈ 20 | `statement.rs` codecs | `P_bytes` chunks; signed-message transcripts; compressed point ↔ (x, y parity); 107-chunk σ export |
+| Byte linking `::bytes` | Fp, Fq | 2–3 cells per byte; opaque chunk ≈ 20 | `statement.rs` codecs | `P_bytes` chunks; signed-message transcripts; compressed point ↔ (x, y parity); descriptor-fixed 107/112-chunk σ export |
 | u128, glue, statement | Fp | existing | `iroha_plonk_gadgets` | — |
 | PIPA-R transcript `iroha_plonk_recursion::transcript` | Fp, Fq | 148 per permutation; ≈ 30 per S6 limb pair; challenge map ≈ 10 | native `kagemusha_poseidon.rs` | 6.2b |
 | Succinct verifier interpreter `::verifier` | Pallas-in-Fp, Vesta-in-Fq | §5.3 | S11 `constraint_terms`, `transcript_schedule` | hard and soft modes; typed instances; one-hot key or carried digest |
@@ -771,8 +877,10 @@ a cooperative cancellation token and the `ACC_TRIV` constants.
 
 ## 10. Milestones, named tests and thresholds
 
-Measurement thresholds are measured natively at k16 on the shared Mac at load1 < 4 unless
-stated; each names its fallback.
+Measurement thresholds are measured natively at k16 on the shared Mac under the
+loaded-host procedure below. One-worker budgets use process CPU time; four-worker
+budgets use observed elapsed time. This replaces the earlier `load1 < 4` condition;
+a CPU result does not establish idle elapsed time. Each threshold names its fallback.
 
 ### M3: gadgets (`iroha_plonk_gadgets`)
 
@@ -817,6 +925,53 @@ tampered and the circuit must become unsatisfiable.
 | G3.5 GLV multiplication | ≤ 1.6k cells with the complete tail | verifier budgets are recomputed |
 | G3.6 synthetic Q-shaped proof (22 / 32 / 8 / 3) | ≤ 30 s Mac 1t; ≤ 10 s 4t; peak RSS ≤ 0.75 GiB | time model recalibrated; the leaf is narrowed |
 | G3.7 synthetic A-shaped proof (32 / 44 / 10 / 3) | ≤ 36 s Mac 1t; peak RSS ≤ 0.85 GiB with the owned-witness API | A is split by default |
+
+### M3 qualification on a shared machine
+
+`m3_gates` measures synthesis through consuming-witness proving and cleanup;
+parameter setup, key generation and verification are reported separately. Every
+measured proof is verified. A one- or four-worker Rayon pool is constructed and
+its actual worker count checked. Missing CPU/RSS probes invalidate a run. Memory
+is the kernel lifetime high-water RSS of a fresh process, including setup; it is
+never a subtraction of phase peaks or the maximum of periodic RSS samples.
+
+Run `scripts/kagemusha_qualify.py prepare --output <untracked-directory>` to build
+and freeze a candidate, then its `run` subcommand. Preserve source and binary
+hashes, compiler/profile/features, descriptor, machine/OS, power and thermal
+state, cache policy, witness API, process scratch cap, seeds and all raw results.
+The exact synthetic Q/A shapes and real chip-filled Q/A workloads are separate
+configurations and cannot stand in for each other.
+
+For each configuration collect three separated blocks of three fresh processes,
+balancing configuration order with a recorded shuffle seed. Retain the first two
+proofs of each process and use the slower one for its timing sample. Bracket each
+process with a fixed k16 proof calibration of its family; both CPU and elapsed
+calibration samples must agree within 5%. Require nominal thermal/power state,
+normal memory pressure and no new compression, pageout or swapout episode from
+before process creation through exit. A fresh process starts without compressed
+pages; unchanged global compression counters also exclude compression of that
+process. Existing compressed pages of other processes do not invalidate a run.
+Keep failed attempts/reasons; at most 18 attempts per configuration may be used
+to collect nine valid samples, otherwise the result is inconclusive.
+
+| Metric | Each block median | Every valid sample |
+|---|---:|---:|
+| Q, one worker, process CPU | ≤ 27 s | ≤ 30 s |
+| A, one worker, process CPU | ≤ 32.4 s | ≤ 36 s |
+| Q, four workers, observed elapsed | ≤ 9 s | ≤ 10 s |
+
+The maximum kernel peak RSS across both worker counts must be ≤ 0.7125 GiB for
+Q and ≤ 0.8075 GiB for A for a qualification pass. The hard caps remain 0.75 and
+0.85 GiB respectively. A4 supplies memory and diagnostic timing evidence. Values
+within hard limits but missing headroom are borderline; hard-limit violations
+fail. Invalid environmental evidence is inconclusive, never a pass. Normalized
+estimates cannot turn an observed four-worker failure into a pass. Load is logged,
+not used to cherry-pick low-load runs. These margins are engineering headroom,
+not statistical confidence intervals.
+
+The [FF carry memo](kagemusha_ff_carry_v1.md) pins the arithmetic and the M3b
+range/shared-table proof obligations. Carry review, completed adversarial tests
+and final-layout shape counts precede performance qualification.
 
 ### M4: recursion and accumulation (`iroha_plonk`, `iroha_plonk_recursion`)
 
@@ -866,7 +1021,7 @@ hard slot; MV14 skip the VK-digest equality in A; MV15 allow a Corrected slot wi
 | G4.7 | Cycle demo prove time within ±30% of §5.3 per proof kind |
 | G4.8 | σ under PIPA-R: 3,296 B unchanged; prove ≤ 0.85 CPU-s 1t; verify ≤ 45 ms 1t |
 
-### M5: Λ and Ω relations (`iroha_kagemusha_proof`, `kagemusha_v1_recursion`, `kagemusha_v1_state`)
+### M5: Λ and Ω relations (`iroha_kagemusha_proof` and the canonical wallet state integration)
 
 Named tests:
 

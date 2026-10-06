@@ -126,7 +126,7 @@
       {"path":"crates/iroha_data_model/src/nexus/privacy.rs","uses":{"MerkleTree":2},"use":"test","reason":"Fixtures of the inline lane-privacy tests"},
       {"path":"crates/iroha_data_model/src/parliament_casting.rs","uses":{"MerkleTree":7},"roots":["parliament_casting_snapshot_root"]},
       {"path":"crates/iroha_data_model/src/sumeragi_finality.rs","uses":{"WORLD_STATE_ACCUMULATOR_LANES":1},"roots":["world_state_root"]},
-      {"path":"crates/iroha_data_model/src/sumeragi_finality/commitment.rs","uses":{"MerkleTree":6},"use":"block_content","reason":"Merkle commitments of the block's events, network inputs and typed outputs carried in R, and the KAGEMUSHA top-up tree of one block"},
+      {"path":"crates/iroha_data_model/src/sumeragi_finality/commitment.rs","uses":{"MerkleTree":6},"use":"block_content","reason":"Merkle commitments of the block's events, network inputs and typed outputs carried in R"},
       {"path":"crates/iroha_data_model/src/sumeragi_finality/world_state.rs","uses":{"WORLD_STATE_ACCUMULATOR_LANES":6},"roots":["world_state_root"]}
     ],
     "state_hash_functions": [

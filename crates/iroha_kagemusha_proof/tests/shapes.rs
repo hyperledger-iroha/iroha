@@ -10,20 +10,16 @@ use common::{
     smallest_shape, vesta_prover,
 };
 use iroha_kagemusha_proof::{
-    PROOF_BYTES_GATE, ProofFormat, ShapePolicy, SigmaParams, SigmaRelation, SigmaShape,
-    SigmaVerifier, limb_bits_for, select_shape,
+    PROOF_BYTES_GATE, ShapePolicy, SigmaParams, SigmaRelation, SigmaShape, SigmaVerifier,
+    limb_bits_for, select_shape,
 };
 use iroha_pasta::{Ep, Eq, Fp};
 use iroha_plonk_gadgets::poseidon::ROWS_PER_PERMUTATION;
 
 fn describe(label: &str, shape: &SigmaShape) -> usize {
     let inventory = shape.inventory::<Fp>().expect("inventory");
-    let bytes = shape
-        .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-        .expect("proof length");
-    let descriptor = shape
-        .descriptor::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-        .expect("descriptor");
+    let bytes = shape.proof_length::<Eq>().expect("proof length");
+    let descriptor = shape.descriptor::<Eq>().expect("descriptor");
     println!(
         "SHAPE {label} case={} k={} lanes={} limb_bits={} permutations={:?} lane_rows={:?} \
          glue_rows={} range_rows={} cells={} advice_cols={} fixed_cols={} degree={} \
@@ -91,8 +87,8 @@ fn selected_shapes_fit_and_meet_the_budget() {
 }
 
 /// The pinned shapes of one relation: the selector's smallest `k` (fewest
-/// lanes), its shape within the 3.5 KB budget (none for the quota
-/// relations), the fewest lanes at `k = 11` (none for the quota relations)
+/// lanes), its shape within the 3.5 KB budget, the fewest lanes at
+/// `k = 11` (none for the quota relations)
 /// and every pinned shape's exact proof length.
 struct Pinned {
     relation: SigmaRelation,
@@ -102,7 +98,7 @@ struct Pinned {
 }
 
 /// The pinned shapes of every relation (folded prefixes).
-fn pinned() -> [Pinned; 7] {
+fn pinned() -> [Pinned; 10] {
     use common::{RECEIVE_BLACKLIST, SEND_BLACKLIST, SEND_EVERY, SEND_LEASE, SEND_QUOTAS};
     let k12_class = |relation, budget_bytes| Pinned {
         relation,
@@ -120,12 +116,12 @@ fn pinned() -> [Pinned; 7] {
         budget: Some((BUDGET_SHAPE, 3_296)),
         k11: Some((K11_SHAPE, 3_840)),
     };
-    // The quota rule (1,192 permutations) needs k = 14 on four lanes and
-    // k = 16 on one lane; no shape meets the 3.5 KB budget.
+    // Fixed-array quota charges need k = 12 on four lanes and k = 14
+    // on one lane; the latter meets both the 3.5 KB and joint Payment budgets.
     let quota_class = |relation| Pinned {
         relation,
-        smallest: ((14, 4), 5_440),
-        budget: None,
+        smallest: ((12, 4), 5_280),
+        budget: Some(((14, 1), 3_456)),
         k11: None,
     };
     [
@@ -133,6 +129,9 @@ fn pinned() -> [Pinned; 7] {
         gap_class(SEND_BLACKLIST),
         k12_class(SEND_LEASE, 3_296),
         quota_class(SEND_QUOTAS),
+        quota_class(SigmaRelation::send(3)),
+        gap_class(SigmaRelation::send(5)),
+        quota_class(SigmaRelation::send(6)),
         quota_class(SEND_EVERY),
         k12_class(SigmaRelation::RECEIVE, 3_296),
         gap_class(RECEIVE_BLACKLIST),
@@ -141,13 +140,8 @@ fn pinned() -> [Pinned; 7] {
 
 /// The exact proof length of `shape` (the same on both curves).
 fn length(shape: &SigmaShape) -> usize {
-    let bytes = shape
-        .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-        .expect("length");
-    assert_eq!(
-        Ok(bytes),
-        shape.proof_length::<Ep>(ProofFormat::KAGEMUSHA_STEP)
-    );
+    let bytes = shape.proof_length::<Eq>().expect("length");
+    assert_eq!(Ok(bytes), shape.proof_length::<Ep>());
     bytes
 }
 
@@ -195,33 +189,41 @@ fn every_relation_selects_the_pinned_shapes() {
     }
 }
 
-/// The quota relations on one lane (the joint Payment budget R9 needs a
-/// single-lane `σ_send`): `k = 16`, at most 1,298 permutations in 50,074
-/// rows, one selector column beyond the base relations (32 bytes); the
-/// lengths the allowlist would record.
+/// The fixed-array quota relations on one lane meet the joint Payment
+/// budget at `k = 14`, including every control and both core time bounds.
 #[test]
-fn quota_relations_fit_one_lane_at_k16() {
+fn quota_relations_fit_one_lane_at_k14() {
     use common::{SEND_EVERY, SEND_QUOTAS};
-    for (relation, bytes, rows) in [(SEND_QUOTAS, 3_584, 48_618), (SEND_EVERY, 3_584, 50_074)] {
+    for (relation, rows) in [(SEND_QUOTAS, 12_123), (SEND_EVERY, 13_542)] {
         let relation = folded(relation);
-        let shape = pinned_shape(relation, (16, 1));
-        let inventory = shape.inventory::<Fp>().expect("fits k = 16");
+        let shape = pinned_shape(relation, (14, 1));
+        let inventory = shape.inventory::<Fp>().expect("fits k = 14");
         assert_eq!(inventory.rows(), rows, "{}", relation.label());
-        assert_eq!(length(&shape), bytes, "{}", relation.label());
-        let k15 = pinned_shape(relation, (15, 1));
-        assert!(k15.inventory::<Fp>().is_err(), "{}", relation.label());
-        describe("k16_one_lane", &shape);
+        assert_eq!(length(&shape), 3_456, "{}", relation.label());
+        assert!(
+            length(&shape) <= 3_541,
+            "G1rev4 sigma share of Payment budget"
+        );
+        let k13 = pinned_shape(relation, (13, 1));
+        assert!(k13.inventory::<Fp>().is_err(), "{}", relation.label());
+        describe("k14_one_lane", &shape);
     }
 }
 
 #[test]
 fn verifiers_rebuild_from_descriptor_and_key_bytes() {
+    use iroha_kagemusha_proof::{SigmaCircuit, SigmaError};
+    use iroha_plonk::{
+        cs::{InstanceType, TranscriptV2},
+        keys::{KeygenConfig, keygen_pk},
+    };
     let shape = smallest_shape(folded(SigmaRelation::RECEIVE));
     let prover = vesta_prover(shape);
-    let descriptor = shape
-        .descriptor::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-        .expect("descriptor");
-    assert_eq!(prover.proving_key().binding().descriptor(), &descriptor);
+    let descriptor = shape.descriptor::<Eq>().expect("descriptor");
+    assert_eq!(
+        prover.proving_key().binding().encoded(),
+        descriptor.encode().expect("encoded")
+    );
     let verifier = prover.verifier();
     let rebuilt = SigmaVerifier::<Eq>::from_bytes(
         SigmaRelation::RECEIVE,
@@ -237,6 +239,44 @@ fn verifiers_rebuild_from_descriptor_and_key_bytes() {
     // Keys are deterministic.
     let again = vesta_prover(shape);
     assert_eq!(again.verifier().vk_bytes(), verifier.vk_bytes());
+    // Sigma admits exactly V2, PIPA-R, Direct, suffix, one Bounded value.
+    for change in 0..3 {
+        let mut invalid = descriptor.clone();
+        match change {
+            0 => invalid.transcript = TranscriptV2::KagemushaPoseidonRp57,
+            1 => invalid.instance_types = vec![InstanceType::Field],
+            _ => invalid.instance_lengths = vec![2],
+        }
+        assert!(matches!(
+            SigmaVerifier::<Eq>::from_bytes(
+                SigmaRelation::RECEIVE,
+                prover.params().clone(),
+                &invalid.encode().expect("valid alternate descriptor"),
+                verifier.vk_bytes(),
+            ),
+            Err(SigmaError::Profile)
+        ));
+    }
+    let retired = keygen_pk(
+        prover.params(),
+        &SigmaCircuit::<Fp>::keygen(shape.params),
+        &KeygenConfig::new(iroha_plonk::cs::TranscriptV1::KagemushaPoseidonRp57),
+    )
+    .expect("V1 fixture");
+    assert!(matches!(
+        SigmaVerifier::<Eq>::from_bytes(
+            SigmaRelation::RECEIVE,
+            prover.params().clone(),
+            retired.binding().encoded(),
+            retired.vk().to_bytes(),
+        ),
+        Err(SigmaError::Descriptor(_))
+    ));
+    assert_eq!(
+        descriptor.transcript,
+        TranscriptV2::KagemushaPoseidonRp57Base
+    );
+    assert_eq!(descriptor.instance_types, [InstanceType::Bounded]);
     // Parameters of another k are refused.
     assert!(
         SigmaVerifier::<Eq>::from_bytes(
@@ -268,7 +308,6 @@ fn commitment_tables_change_no_key_or_proof_byte() {
     let plain = vesta_prover(shape);
     let tabled = SigmaProver::<Eq>::keygen_with_options(
         shape,
-        ProofFormat::KAGEMUSHA_STEP,
         common::vesta_params(shape.k),
         KeyOptions::WITH_TABLES,
     )
@@ -302,25 +341,17 @@ fn commitment_tables_change_no_key_or_proof_byte() {
 #[test]
 #[ignore = "probe"]
 fn shape_table_probe() {
-    use common::{RECEIVE_BLACKLIST, SEND_BLACKLIST, SEND_EVERY, SEND_LEASE, SEND_QUOTAS};
-    for case in [
-        SigmaRelation::SEND,
-        SEND_BLACKLIST,
-        SEND_LEASE,
-        SEND_QUOTAS,
-        SEND_EVERY,
-        SigmaRelation::RECEIVE,
-        RECEIVE_BLACKLIST,
-    ] {
+    for case in (0..=7)
+        .map(SigmaRelation::send)
+        .chain([SigmaRelation::RECEIVE, common::RECEIVE_BLACKLIST])
+    {
         let relation = folded(case);
         for k in 10..=16 {
             for lanes in 1..=iroha_kagemusha_proof::MAX_LANES {
                 let params = SigmaParams::new(relation, lanes, limb_bits_for(k)).expect("params");
                 let shape = SigmaShape::new(params, k);
                 if let Ok(inventory) = shape.inventory::<Fp>() {
-                    let bytes = shape
-                        .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-                        .expect("length");
+                    let bytes = shape.proof_length::<Eq>().expect("length");
                     println!(
                         "SHAPE_TABLE case={} k={k} lanes={lanes} bytes={bytes} perms={:?} rows={:?} glue={} range={}",
                         relation.label(),

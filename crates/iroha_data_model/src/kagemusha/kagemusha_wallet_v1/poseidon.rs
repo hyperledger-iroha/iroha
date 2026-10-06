@@ -160,7 +160,10 @@ pub const KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1: [(&str, u64); 32] = [
         "blacklist_history_value",
         KAGEMUSHA_WALLET_BLACKLIST_HISTORY_VALUE_DOMAIN_V1,
     ),
-    ("certificate_set", KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1),
+    (
+        "certificate_set",
+        KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1,
+    ),
     ("package", KAGEMUSHA_WALLET_PACKAGE_DOMAIN_V1),
     ("nullifier", KAGEMUSHA_WALLET_NULLIFIER_DOMAIN_V1),
     (

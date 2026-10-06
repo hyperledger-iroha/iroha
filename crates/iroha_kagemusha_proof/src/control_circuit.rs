@@ -20,12 +20,12 @@ use crate::{
     circuit::{HashSite, LanePlan, UsagePath},
     controls::{
         QUOTA_CHARGES_PER_KIND, QuotaCharge, QuotaWitness, SEGMENT_BASE_MAX, SEGMENT_POSITIONS,
-        USAGE_KEY_BITS, WindowSegment,
+        WindowSegment,
     },
     tree::{
-        BLACKLIST_DEPTH, BLACKLIST_LEAF_DOMAIN, BLACKLIST_NODE_DOMAIN, BlacklistGap, INDEXED_DEPTH,
-        INDEXED_LEAF_DOMAIN, INDEXED_NODE_DOMAIN, QUOTA_DEPTH, QUOTA_NODE_DOMAIN,
-        QUOTA_USAGE_DOMAIN, QUOTA_WINDOW_DOMAIN, WINDOW_DAILY, WINDOW_KINDS,
+        BLACKLIST_DEPTH, BLACKLIST_LEAF_DOMAIN, BLACKLIST_NODE_DOMAIN, BlacklistGap, QUOTA_DEPTH,
+        QUOTA_NODE_DOMAIN, QUOTA_USAGE_DOMAIN, QUOTA_USAGE_NODE_DOMAIN, QUOTA_WINDOW_DOMAIN,
+        WINDOW_DAILY, WINDOW_KINDS,
     },
 };
 
@@ -514,6 +514,7 @@ impl<F: PoseidonField> ControlChips<'_, '_, F> {
         let intersects = self.glue().and(region, &started, &not_ended)?;
         let touched = self.glue().and(region, &of_kind, &intersects)?;
         Ok(Position {
+            slot_index,
             present,
             kind_one,
             kind_two,
@@ -527,7 +528,7 @@ impl<F: PoseidonField> ControlChips<'_, '_, F> {
     }
 
     /// One charge candidate: when `position` is touched, the usage leaf of
-    /// its window is updated or inserted with `used + gross <= limit`;
+    /// its aligned window slot is updated with `used + gross <= limit`;
     /// returns the usage root after it.
     #[allow(
         clippy::too_many_arguments,
@@ -535,7 +536,7 @@ impl<F: PoseidonField> ControlChips<'_, '_, F> {
     )]
     #[allow(
         clippy::too_many_lines,
-        reason = "one straight-line layout of the unified update-or-insert"
+        reason = "one straight-line layout of the aligned array update"
     )]
     fn charge(
         &mut self,
@@ -550,13 +551,6 @@ impl<F: PoseidonField> ControlChips<'_, '_, F> {
         let index = u8::try_from(charge_index).map_err(|_| Error::Synthesis)?;
         let taken = &position.touched;
         let kind_value = F::from(u64::from(kind));
-        // key = kind * 2^128 + start.
-        let two_64 = F::from_u128(1 << 64);
-        let key = self.glue().add_constant(
-            region,
-            position.start.word(),
-            kind_value * two_64 * two_64,
-        )?;
         // used' = used + gross < 2^128, and taken -> used' <= limit.
         let used = self
             .uint
@@ -593,155 +587,57 @@ impl<F: PoseidonField> ControlChips<'_, '_, F> {
                 AbsorbInput::Word(used_after.word()),
             ],
         )?;
-        // The opened leaf: the key's (update) or the low leaf (insertion).
-        let upsert = charge.map(|charge| &charge.upsert);
-        let insert = self
-            .glue()
-            .boolean(region, value(upsert, |upsert| upsert.insert))?;
-        let update = self.glue().not(region, &insert)?;
-        let leaf = self.words(
+        // The array index is explicitly linked to the window slot. Paths
+        // use six bits and the same siblings before and after the in-place write.
+        let slot = self
+            .uint
+            .assign::<6>(region, value(charge, |charge| u128::from(charge.slot)))?;
+        self.assert_gated_equal(region, taken, slot.word(), &position.slot_index)?;
+        let bits = self.index_bits(
             region,
-            &[
-                value(upsert, |upsert| upsert.leaf.key),
-                value(upsert, |upsert| upsert.leaf.value),
-                value(upsert, |upsert| upsert.leaf.next_key),
-            ],
+            value(charge, |charge| u64::from(charge.slot)),
+            QUOTA_DEPTH,
         )?;
-        let [leaf_key, leaf_value, next_key] = leaf.as_slice() else {
-            return Err(Error::Synthesis);
-        };
-        self.uint
-            .range()
-            .range_check(region, leaf_key, USAGE_KEY_BITS)?;
-        self.uint
-            .range()
-            .range_check(region, next_key, USAGE_KEY_BITS)?;
-        let leaf_bits = self.index_bits(
-            region,
-            value(upsert, |upsert| u64::from(upsert.leaf_slot)),
-            INDEXED_DEPTH,
-        )?;
-        let leaf_siblings: Vec<Value<F>> = (0..INDEXED_DEPTH)
-            .map(|height| value(upsert, |upsert| upsert.leaf_siblings[height]))
+        let mut recomposed = self.glue().constant(region, F::ZERO)?;
+        for (height, bit) in bits.iter().enumerate() {
+            recomposed = self.glue().linear(
+                region,
+                &[
+                    (F::ONE, &recomposed),
+                    (F::from(1_u64 << height), bit.word()),
+                ],
+                F::ZERO,
+            )?;
+        }
+        GlueChip::assert_equal(region, &recomposed, slot.word())?;
+        let siblings: Vec<_> = (0..QUOTA_DEPTH)
+            .map(|height| value(charge, |charge| charge.siblings[height]))
             .collect();
-        let leaf_siblings = self.words(region, &leaf_siblings)?;
-        let before = HashSite::UsagePath(index, UsagePath::LeafBefore);
-        let opened_leaf = self.hash(
-            region,
-            before,
-            INDEXED_LEAF_DOMAIN,
-            &[
-                AbsorbInput::Word(leaf_key),
-                AbsorbInput::Word(leaf_value),
-                AbsorbInput::Word(next_key),
-            ],
-        )?;
+        let siblings = self.words(region, &siblings)?;
         let opened = self.merkle_root(
             region,
-            before,
-            INDEXED_NODE_DOMAIN,
-            &opened_leaf,
-            &leaf_bits,
-            &leaf_siblings,
+            HashSite::UsagePath(index, UsagePath::LeafBefore),
+            QUOTA_USAGE_NODE_DOMAIN,
+            &old_value,
+            &bits,
+            &siblings,
         )?;
-        // The leaf after the first write: the new value (update) or the new
-        // key as `next_key` (insertion).
-        let written_value = self
-            .glue()
-            .select(region, &insert, leaf_value, &new_value)?;
-        let written_next = self.glue().select(region, &insert, &key, next_key)?;
-        let after = HashSite::UsagePath(index, UsagePath::LeafAfter);
-        let written_leaf = self.hash(
-            region,
-            after,
-            INDEXED_LEAF_DOMAIN,
-            &[
-                AbsorbInput::Word(leaf_key),
-                AbsorbInput::Word(&written_value),
-                AbsorbInput::Word(&written_next),
-            ],
-        )?;
-        let middle = self.merkle_root(
-            region,
-            after,
-            INDEXED_NODE_DOMAIN,
-            &written_leaf,
-            &leaf_bits,
-            &leaf_siblings,
-        )?;
-        // The second slot: empty in the middle root; it receives the new
-        // leaf (insertion) or stays empty (update).
-        let slot_bits = self.index_bits(
-            region,
-            value(upsert, |upsert| u64::from(upsert.slot)),
-            INDEXED_DEPTH,
-        )?;
-        let slot_siblings: Vec<Value<F>> = (0..INDEXED_DEPTH)
-            .map(|height| value(upsert, |upsert| upsert.slot_siblings[height]))
-            .collect();
-        let slot_siblings = self.words(region, &slot_siblings)?;
-        let zero = self.glue().constant(region, F::ZERO)?;
-        let empty_root = self.merkle_root(
-            region,
-            HashSite::UsagePath(index, UsagePath::SlotBefore),
-            INDEXED_NODE_DOMAIN,
-            &zero,
-            &slot_bits,
-            &slot_siblings,
-        )?;
-        let written = HashSite::UsagePath(index, UsagePath::SlotAfter);
-        let new_leaf = self.hash(
-            region,
-            written,
-            INDEXED_LEAF_DOMAIN,
-            &[
-                AbsorbInput::Word(&key),
-                AbsorbInput::Word(&new_value),
-                AbsorbInput::Word(next_key),
-            ],
-        )?;
-        let content = self.glue().select(region, &insert, &new_leaf, &zero)?;
         let charged = self.merkle_root(
             region,
-            written,
-            INDEXED_NODE_DOMAIN,
-            &content,
-            &slot_bits,
-            &slot_siblings,
+            HashSite::UsagePath(index, UsagePath::LeafAfter),
+            QUOTA_USAGE_NODE_DOMAIN,
+            &new_value,
+            &bits,
+            &siblings,
         )?;
-        // The rules, while taken.
         self.assert_gated_equal(region, taken, &opened, root)?;
-        self.assert_gated_equal(region, taken, &empty_root, &middle)?;
-        let taken_update = self.glue().and(region, taken, &update)?;
-        self.assert_gated_equal(region, &taken_update, leaf_key, &key)?;
-        self.assert_gated_equal(region, &taken_update, leaf_value, &old_value)?;
-        let taken_insert = self.glue().and(region, taken, &insert)?;
-        let unused = self.glue().mul(region, taken_insert.word(), used.word())?;
-        GlueChip::assert_constant(region, &unused, F::ZERO)?;
-        // Insertion order: leaf key < key, and key < next key unless zero.
-        let above_low =
-            self.glue()
-                .linear(region, &[(F::ONE, &key), (-F::ONE, leaf_key)], -F::ONE)?;
-        let gated = self.glue().mul(region, taken_insert.word(), &above_low)?;
-        self.uint
-            .range()
-            .range_check(region, &gated, USAGE_KEY_BITS)?;
-        let last = self.glue().is_zero(region, next_key)?;
-        let bounded = self.glue().not(region, &last)?;
-        let taken_bounded = self.glue().and(region, &taken_insert, &bounded)?;
-        let below_next =
-            self.glue()
-                .linear(region, &[(F::ONE, next_key), (-F::ONE, &key)], -F::ONE)?;
-        let gated = self.glue().mul(region, taken_bounded.word(), &below_next)?;
-        self.uint
-            .range()
-            .range_check(region, &gated, USAGE_KEY_BITS)?;
         self.glue().select(region, taken, &charged, root)
     }
 }
 
 /// The cells and bits of one segment position.
 struct Position<F: PoseidonField> {
+    slot_index: Word<F>,
     present: Bit<F>,
     kind_one: Bit<F>,
     kind_two: Bit<F>,

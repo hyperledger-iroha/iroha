@@ -253,7 +253,7 @@ fn credit_identifier_is_the_in_circuit_request_digest() {
         assert_eq!(native.digests.credit, credit);
         // The chain entry and the effect carry it as one element.
         assert_eq!(native.chain_entry[1], credit);
-        assert_eq!(native.statement[18], credit);
+        assert_eq!(native.statement[17], credit);
         let statement = honest.statement(relation).expect("statement");
         // Any other credit: one the wallet already used, or a neighbour.
         let used = sample_witness::<Fp>(CHECK_SEED + 1, relation, Mutation::None)

@@ -13557,9 +13557,8 @@ export interface StakingRewardClaimPlanV1 {
   expected_state: StakingRewardClaimStateV1 | null; records: StakingRewardRecordRefV1[];
   sources: StakingRewardClaimSourceV1[]; fee_claim: StakingFeeRewardClaimV1 | null;
 }
-export interface StakingValidatorKeysV1 { validator: StakingPeerIdV1; eq_proof_public_key: Uint8Array; ep_proof_public_key: Uint8Array; }
-export interface StakingAuthorityGenerationV1 {
-  version: StakingUnsignedV1; network_id: NetworkId; generation: StakingUnsignedV1; validators: StakingValidatorKeysV1[];
+export interface StakingValidatorGenerationV1 {
+  network_id: NetworkId; generation: StakingUnsignedV1; validators: StakingPeerIdV1[];
 }
 export interface StakingEpochAuthorizationV1 {
   version: StakingUnsignedV1; network_id: NetworkId; epoch: StakingUnsignedV1;
@@ -13572,7 +13571,7 @@ export interface StakingEpochAuthorizationV1 {
 export interface ValidatorStakingValueMapV1 {
   PreparationRequest: StakingPreparationRequestV1; Preparation: StakingPreparationV1;
   MonetaryPlan: StakingMonetaryPlanV1; RewardClaimPlan: StakingRewardClaimPlanV1;
-  AuthorityGeneration: StakingAuthorityGenerationV1; EpochAuthorization: StakingEpochAuthorizationV1;
+  ValidatorGeneration: StakingValidatorGenerationV1; EpochAuthorization: StakingEpochAuthorizationV1;
 }
 /** u64 values decode as bigint; explicit optional fields never default to null. */
 export function encodeValidatorStakingValueV1<K extends keyof ValidatorStakingValueMapV1>(name: K, value: ValidatorStakingValueMapV1[K]): Buffer;

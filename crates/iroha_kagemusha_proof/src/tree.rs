@@ -19,8 +19,8 @@
 //! - `sigma_recv` with the blacklist control: one gap opening of the
 //!   Request's payer account digest in the receiver's gap tree.
 //! - `sigma_send` with the quota control: openings of the quota-window tree
-//!   ([`QuotaWindowTree`], depth 6) and value updates or insertions in the
-//!   quota-usage map ([`IndexedTree`], depth 32), against the head-committed
+//!   ([`QuotaWindowTree`], depth 6) and aligned value updates in the
+//!   quota-usage array ([`QuotaUsageTree`], depth 6), against the head-committed
 //!   `quota_windows_root` and `quota_usage_root`.
 //!
 //! The lineage relation opens every other map (consumed-credit,
@@ -75,6 +75,9 @@ pub const INDEXED_DEPTH: usize = 32;
 /// Quota-usage value domain `kgwquse1` (G1
 /// `KAGEMUSHA_WALLET_QUOTA_USAGE_VALUE_DOMAIN_V1`).
 pub const QUOTA_USAGE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwquse1");
+
+/// Quota-usage array node domain `kgwqusn1` (B5).
+pub const QUOTA_USAGE_NODE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwqusn1");
 
 /// Whether `left < right` in the blacklist's limb order (owner answer A4):
 /// `int(a) = hi * 2^128 + lo`, the 32 bytes read as one little-endian
@@ -338,12 +341,6 @@ impl QuotaWindow {
         self.start_ms <= upper && lower < self.end_ms
     }
 
-    /// The quota-usage map key `kind * 2^128 + start`.
-    #[must_use]
-    pub fn usage_key<F: PoseidonField>(&self) -> F {
-        usage_key(self.kind, self.start_ms)
-    }
-
     /// The quota-usage value `P(kgwquse1, [kind, start, end, used])` of this
     /// window with `used` (a field value: the circuit's sum).
     #[must_use]
@@ -358,12 +355,6 @@ impl QuotaWindow {
             ],
         )
     }
-}
-
-/// The quota-usage map key `kind * 2^128 + start_ms`.
-#[must_use]
-pub fn usage_key<F: PoseidonField>(kind: u8, start_ms: u64) -> F {
-    F::from(u64::from(kind)) * F::from_u128(1 << 64) * F::from_u128(1 << 64) + F::from(start_ms)
 }
 
 /// A quota-window tree: the windows first, sorted by `(kind, start)`, then
@@ -440,6 +431,80 @@ impl QuotaWindowTree {
     }
 }
 
+/// Fixed quota-usage array aligned with the 64 quota-window slots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuotaUsageTree<F> {
+    windows: QuotaWindowTree,
+    used: [u128; QUOTA_SLOTS],
+    field: core::marker::PhantomData<F>,
+}
+
+impl<F: PoseidonField> QuotaUsageTree<F> {
+    /// Build zero usage at every window slot.
+    #[must_use]
+    pub fn new(windows: &QuotaWindowTree) -> Self {
+        Self {
+            windows: windows.clone(),
+            used: [0; QUOTA_SLOTS],
+            field: core::marker::PhantomData,
+        }
+    }
+
+    /// Usage at an array slot, or `None` outside the array.
+    #[must_use]
+    pub fn used(&self, slot: usize) -> Option<u128> {
+        self.used.get(slot).copied()
+    }
+
+    /// Set usage at a populated slot; padding remains zero.
+    pub fn set(&mut self, slot: usize, used: u128) -> bool {
+        if slot >= QUOTA_SLOTS || self.windows.slot(slot).kind == 0 {
+            return false;
+        }
+        self.used[slot] = used;
+        true
+    }
+
+    fn levels(&self) -> Vec<Vec<F>> {
+        let mut level: Vec<F> = (0..QUOTA_SLOTS)
+            .map(|slot| {
+                self.windows
+                    .slot(slot)
+                    .usage_value(F::from_u128(self.used[slot]))
+            })
+            .collect();
+        let mut levels = Vec::with_capacity(QUOTA_DEPTH + 1);
+        while level.len() > 1 {
+            let next = level
+                .chunks_exact(2)
+                .map(|pair| hash_with_domain(QUOTA_USAGE_NODE_DOMAIN, &[pair[0], pair[1]]))
+                .collect();
+            levels.push(level);
+            level = next;
+        }
+        levels.push(level);
+        levels
+    }
+
+    /// The committed array root.
+    #[must_use]
+    pub fn root(&self) -> F {
+        self.levels()[QUOTA_DEPTH][0]
+    }
+
+    /// Six siblings at `slot`, height zero first; `None` outside the array.
+    #[must_use]
+    pub fn siblings(&self, slot: usize) -> Option<[F; QUOTA_DEPTH]> {
+        if slot >= QUOTA_SLOTS {
+            return None;
+        }
+        let levels = self.levels();
+        Some(core::array::from_fn(|height| {
+            levels[height][(slot >> height) ^ 1]
+        }))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Indexed Merkle tree (wire record section 3.2)
 // ---------------------------------------------------------------------------
@@ -499,7 +564,7 @@ pub struct IndexedTree<F> {
     slots: BTreeMap<u32, IndexedLeaf<F>>,
     nodes: Vec<BTreeMap<u64, F>>,
     empty: [F; INDEXED_DEPTH + 1],
-    next_free: u32,
+    next_free: u64,
 }
 
 impl<F: PoseidonField> Default for IndexedTree<F> {
@@ -530,7 +595,7 @@ impl<F: PoseidonField> IndexedTree<F> {
 
     /// The next free slot.
     #[must_use]
-    pub const fn next_free(&self) -> u32 {
+    pub const fn next_free(&self) -> u64 {
         self.next_free
     }
 
@@ -599,34 +664,17 @@ impl<F: PoseidonField> IndexedTree<F> {
         self.find(key).map(|(_, leaf)| leaf.value)
     }
 
-    /// Updates a present `key` or inserts an absent one with `value`, and
-    /// returns the witness of the operation (`None` for a zero key or a
-    /// full tree).
+    /// Inserts a fresh nonzero `key` and `value`, returning the two ordered
+    /// authentication paths. A duplicate, zero key/value or full tree is
+    /// rejected without mutation. Indexed maps never update a value in place;
+    /// quota usage uses the separate fixed array.
     #[must_use]
-    pub fn upsert(&mut self, key: F, value: F) -> Option<IndexedUpsert<F>> {
-        if bool::from(key.is_zero()) {
+    pub fn insert(&mut self, key: F, value: F) -> Option<IndexedInsert<F>> {
+        if bool::from(key.is_zero()) || bool::from(value.is_zero()) || self.find(&key).is_some() {
             return None;
-        }
-        if let Some((slot, leaf)) = self.find(&key) {
-            let leaf_siblings = self.siblings(slot);
-            self.write(slot, Some(IndexedLeaf { value, ..leaf }));
-            // The no-op empty-slot opening: the highest slot, never written
-            // by a wallet that has not filled its tree.
-            let empty_slot = u32::MAX;
-            return Some(IndexedUpsert {
-                insert: false,
-                leaf,
-                leaf_slot: slot,
-                leaf_siblings,
-                slot: empty_slot,
-                slot_siblings: self.siblings(empty_slot),
-            });
         }
         let (low_slot, low) = self.low(&key)?;
-        let slot = self.next_free;
-        if slot == u32::MAX {
-            return None;
-        }
+        let slot = u32::try_from(self.next_free).ok()?;
         let leaf_siblings = self.siblings(low_slot);
         self.write(
             low_slot,
@@ -644,9 +692,8 @@ impl<F: PoseidonField> IndexedTree<F> {
                 next_key: low.next_key,
             }),
         );
-        self.next_free = slot + 1;
-        Some(IndexedUpsert {
-            insert: true,
+        self.next_free = u64::from(slot) + 1;
+        Some(IndexedInsert {
             leaf: low,
             leaf_slot: low_slot,
             leaf_siblings,
@@ -656,41 +703,20 @@ impl<F: PoseidonField> IndexedTree<F> {
     }
 }
 
-/// The witness of one indexed-tree update or insertion, in the unified
-/// form the quota charge opens: the key's leaf (update) or its low leaf
-/// (insertion) with its opening against the old root, then an empty slot
-/// opened against the root after the first write (the written slot of an
-/// insertion; any empty slot, written back empty, for an update).
+/// Witness of one indexed-tree insertion: the bracketing low leaf against
+/// the old root, then an empty slot against the root after relinking it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IndexedUpsert<F> {
-    /// Whether the key was absent (an insertion).
-    pub insert: bool,
-    /// The key's leaf (update) or the low leaf (insertion), before the
-    /// operation.
+pub struct IndexedInsert<F> {
+    /// The low leaf before the insertion.
     pub leaf: IndexedLeaf<F>,
     /// The slot of `leaf`.
     pub leaf_slot: u32,
     /// The siblings of `leaf_slot` against the old root.
     pub leaf_siblings: [F; INDEXED_DEPTH],
-    /// The written slot (insertion) or the empty no-op slot (update).
+    /// The written slot, authenticated as empty before the insertion.
     pub slot: u32,
     /// The siblings of `slot` against the root after the first write.
     pub slot_siblings: [F; INDEXED_DEPTH],
-}
-
-impl<F: PoseidonField> IndexedUpsert<F> {
-    /// The all-zero witness of a charge that is not taken.
-    #[must_use]
-    pub fn unused() -> Self {
-        Self {
-            insert: false,
-            leaf: IndexedLeaf::sentinel(),
-            leaf_slot: 0,
-            leaf_siblings: [F::ZERO; INDEXED_DEPTH],
-            slot: 0,
-            slot_siblings: [F::ZERO; INDEXED_DEPTH],
-        }
-    }
 }
 
 #[cfg(test)]
@@ -782,14 +808,46 @@ mod tests {
         assert!(QuotaWindowTree::new(&[windows[1], windows[0]]).is_none());
         assert!(windows[0].touches(19, 30) && !windows[0].touches(20, 30));
         assert!(windows[0].touches(0, 10) && !windows[0].touches(0, 9));
-        assert_eq!(
-            windows[1].usage_key::<Fp>(),
-            Fp::from_u128(1 << 64).square().double() + Fp::ZERO
-        );
+        let mut usage = QuotaUsageTree::<Fp>::new(&tree);
+        let before = usage.root();
+        assert!(usage.set(1, 9));
+        assert_eq!(usage.used(1), Some(9));
+        assert_ne!(usage.root(), before);
+        for slot in [0, 1, 2, 63] {
+            assert_eq!(
+                path_root(
+                    QUOTA_USAGE_NODE_DOMAIN,
+                    tree.slot(slot)
+                        .usage_value(Fp::from_u128(usage.used(slot).expect("slot"))),
+                    slot as u64,
+                    &usage.siblings(slot).expect("siblings")
+                ),
+                usage.root()
+            );
+        }
+        assert!(!usage.set(2, 1));
+        assert!(!usage.set(64, 0));
+        assert_eq!(usage.used(64), None);
+        assert_eq!(usage.siblings(64), None);
     }
 
     #[test]
-    fn indexed_upserts_verify_against_the_roots() {
+    fn indexed_allocator_uses_the_last_slot_then_refuses_without_mutation() {
+        let mut tree = IndexedTree::<Fp>::new();
+        tree.next_free = u64::from(u32::MAX);
+        let last = tree.insert(Fp::from(7), Fp::from(9)).expect("last slot");
+        assert_eq!(last.slot, u32::MAX);
+        assert_eq!(tree.next_free, 1_u64 << 32);
+        let full = tree.clone();
+        assert_eq!(tree.insert(Fp::from(8), Fp::from(10)), None);
+        assert_eq!(tree, full);
+        assert_eq!(tree.insert(Fp::from(7), Fp::from(11)), None);
+        assert_eq!(tree, full);
+        assert_eq!(tree.get(&Fp::from(7)), Some(Fp::from(9)));
+    }
+
+    #[test]
+    fn indexed_insertions_verify_against_the_roots() {
         let mut tree = IndexedTree::<Fp>::new();
         assert_eq!(tree.root(), {
             let empty = indexed_empty::<Fp>();
@@ -800,60 +858,60 @@ mod tests {
                 &empty[..INDEXED_DEPTH],
             )
         });
-        for (key, value) in [(5_u64, 50_u64), (3, 30), (9, 90), (5, 55)] {
+        for (key, value) in [(5_u64, 50_u64), (3, 30), (9, 90)] {
             let old = tree.root();
             let key = Fp::from(key);
             let value = Fp::from(value);
-            let upsert = tree.upsert(key, value).expect("upsert");
+            let insertion = tree.insert(key, value).expect("insertion");
             let leaf_root = path_root(
                 INDEXED_NODE_DOMAIN,
-                upsert.leaf.hash(),
-                u64::from(upsert.leaf_slot),
-                &upsert.leaf_siblings,
+                insertion.leaf.hash(),
+                u64::from(insertion.leaf_slot),
+                &insertion.leaf_siblings,
             );
             assert_eq!(leaf_root, old);
-            let written = if upsert.insert {
-                assert!(upsert.leaf.brackets(&key));
-                IndexedLeaf {
-                    next_key: key,
-                    ..upsert.leaf
-                }
-            } else {
-                assert_eq!(upsert.leaf.key, key);
-                IndexedLeaf {
-                    value,
-                    ..upsert.leaf
-                }
+            assert!(insertion.leaf.brackets(&key));
+            let written = IndexedLeaf {
+                next_key: key,
+                ..insertion.leaf
             };
             let middle = path_root(
                 INDEXED_NODE_DOMAIN,
                 written.hash(),
-                u64::from(upsert.leaf_slot),
-                &upsert.leaf_siblings,
+                u64::from(insertion.leaf_slot),
+                &insertion.leaf_siblings,
             );
-            let slot = u64::from(upsert.slot);
+            let slot = u64::from(insertion.slot);
             assert_eq!(
-                path_root(INDEXED_NODE_DOMAIN, Fp::ZERO, slot, &upsert.slot_siblings),
+                path_root(
+                    INDEXED_NODE_DOMAIN,
+                    Fp::ZERO,
+                    slot,
+                    &insertion.slot_siblings
+                ),
                 middle
             );
-            let content = if upsert.insert {
-                IndexedLeaf {
-                    key,
-                    value,
-                    next_key: upsert.leaf.next_key,
-                }
-                .hash()
-            } else {
-                Fp::ZERO
-            };
+            let content = IndexedLeaf {
+                key,
+                value,
+                next_key: insertion.leaf.next_key,
+            }
+            .hash();
             assert_eq!(
-                path_root(INDEXED_NODE_DOMAIN, content, slot, &upsert.slot_siblings),
+                path_root(INDEXED_NODE_DOMAIN, content, slot, &insertion.slot_siblings),
                 tree.root()
             );
             assert_eq!(tree.get(&key), Some(value));
         }
         assert_eq!(tree.next_free(), 4);
-        assert!(tree.upsert(Fp::ZERO, Fp::ONE).is_none());
-        assert_eq!(IndexedUpsert::<Fq>::unused().leaf, IndexedLeaf::sentinel());
+        let original = tree.clone();
+        for (key, value) in [
+            (Fp::ZERO, Fp::ONE),
+            (Fp::from(6), Fp::ZERO),
+            (Fp::from(5), Fp::from(55)),
+        ] {
+            assert!(tree.insert(key, value).is_none());
+            assert_eq!(tree, original);
+        }
     }
 }

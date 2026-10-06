@@ -438,7 +438,8 @@ impl KagemushaWalletAnchorPolicyV1 {
 ///
 /// Only the provider's domain-checked signers construct it, so the platform key is reached with
 /// a receipt body only under a current Selected marker and with other bodies only under a
-/// permitted signing domain.
+/// permitted signing domain. The domain is explicit context for the platform adapter, never
+/// an additional byte in the message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KagemushaWalletSignMessageV1<'a> {
     domain: KagemushaWalletSigningDomainV1,
@@ -482,6 +483,8 @@ pub trait KagemushaWalletPlatformV1: Send + Sync {
 
     /// Sign `message` (exactly 32 bytes; the platform hashes it with SHA-256) with
     /// the payment key of `slot`. Only the domain-checked signers can construct the message.
+    /// The domain is context for the adapter and must not be prepended to, or substituted for,
+    /// these bytes.
     ///
     /// # Errors
     ///

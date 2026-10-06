@@ -351,8 +351,9 @@ impl SumeragiFinalityVerifier {
     {
         // Optional epoch reuse is lexical to this complete import. An existing cumulative
         // decoder owner keeps the original independent scopes and optional retention charges;
-        // never move its admitted work into a fresh shared scope. Signed genesis remains
-        // independently validated, and every native frame, roster and certificate is reread.
+        // never move its admitted work into a fresh shared scope. Signed genesis is fully
+        // authenticated and reconstructed before exact pure epoch reuse; every native frame,
+        // roster and certificate is reread.
         let mut validation =
             (!norito::core::decode_limits_active()).then(EpochValidationScope::new);
         let selected = checkpoint.borrow();
@@ -385,7 +386,12 @@ impl SumeragiFinalityVerifier {
                     == selected.genesis_wire,
             "checkpoint genesis differs from selected network or canonical root",
         )?;
-        let mut verifier = Self::new(&genesis, chain_id, selected.genesis_committee.clone())?;
+        let mut verifier = Self::new_with_validation(
+            &genesis,
+            chain_id,
+            selected.genesis_committee.clone(),
+            validation.as_ref(),
+        )?;
         verifier.decisions = selected
             .decisions
             .iter()

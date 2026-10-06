@@ -141,6 +141,37 @@ pub struct LeElement<F: PastaField> {
 }
 
 impl<F: PastaField> LeElement<F> {
+    /// Assigns one exact 32-byte private message as bounded low/high limbs and
+    /// its top bit, without a separate byte tape. This representation is
+    /// bijective for all 256-bit strings, including malformed proof encodings.
+    /// Use the tape decoder when the same bytes also enter a digest or export:
+    /// this constructor does not bind a separately assigned byte sequence.
+    ///
+    /// # Errors
+    /// A range or glue row cannot be assigned.
+    pub fn assign(
+        uint: &mut UintChip<'_, F>,
+        region: &mut Region<'_, F>,
+        bytes: Value<[u8; 32]>,
+    ) -> Result<Self, Error> {
+        let lo = bytes.map(|bytes| {
+            let mut low = [0; 16];
+            low.copy_from_slice(&bytes[..16]);
+            u128::from_le_bytes(low)
+        });
+        let hi = bytes.map(|bytes| {
+            let mut high = [0; 16];
+            high.copy_from_slice(&bytes[16..]);
+            u128::from_le_bytes(high) & ((1_u128 << 127) - 1)
+        });
+        let lo = uint.assign::<128>(region, lo)?;
+        let hi = uint.assign::<127>(region, hi)?;
+        let top = uint
+            .glue()
+            .boolean(region, bytes.map(|bytes| bytes[31] >> 7 == 1))?;
+        Ok(Self { lo, hi, top })
+    }
+
     /// Bytes `0 .. 16` as an integer.
     #[must_use]
     pub const fn lo(&self) -> &U128<F> {

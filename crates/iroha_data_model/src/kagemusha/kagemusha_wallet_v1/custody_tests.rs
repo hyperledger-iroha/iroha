@@ -502,7 +502,7 @@ fn kagemusha_wallet_v1_output_descriptors_are_receipt_free() {
     let nullifier = kagemusha_wallet_unload_nullifier_v1(&body.scheme_id, &body.wallet_id, 0);
     let effects = [
         KagemushaWalletEffectV1::Load {
-            voucher: [0x51; 32],
+            voucher: field_value(0x51),
             load_ordinal: 0,
             amount: 10,
             online_charge: 0,
@@ -679,7 +679,7 @@ fn kagemusha_wallet_v1_recovery_capsule_rules() {
             "capsule.successor_state.wallet_id",
         ),
         (
-            |capsule| capsule.successor_state.core.credential_digest = [0x68; 32],
+            |capsule| capsule.successor_state.core.credential_digest = field_value(0x68),
             "capsule.successor_state.credential_digest",
         ),
         (
@@ -723,7 +723,7 @@ fn kagemusha_wallet_v1_recovery_capsule_rules() {
             "capsule.successor_state.commitment",
         ),
         (
-            |capsule| capsule.successor_state.rest.time_anchor = [0x6e; 32],
+            |capsule| capsule.successor_state.rest.time_anchor = field_value(0x6e),
             "capsule.successor_state.commitment",
         ),
         (
@@ -964,7 +964,7 @@ fn kagemusha_wallet_v1_completion_record_rebuilds_the_output() {
         "completion.receipt.capsule_digest",
     );
     let mut other_operation = record.clone();
-    other_operation.receipt.operation_id = [0x74; 32];
+    other_operation.receipt.operation_id = field_value(0x74);
     assert_invalid(
         other_operation.validate(),
         "completion.receipt.operation_id",

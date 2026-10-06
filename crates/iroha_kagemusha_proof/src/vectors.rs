@@ -31,7 +31,7 @@ use iroha_plonk_gadgets::statement::StepRelation;
 use crate::{
     controls::{QuotaCharge, QuotaWitness, WindowSegment, WindowSlot},
     tree::{
-        BlacklistGap, BlacklistTree, IndexedTree, QuotaWindow, QuotaWindowTree, WINDOW_DAILY,
+        BlacklistGap, BlacklistTree, QuotaUsageTree, QuotaWindow, QuotaWindowTree, WINDOW_DAILY,
         WINDOW_MONTHLY,
     },
     witness::{
@@ -145,6 +145,13 @@ impl SplitMix64 {
         bytes
     }
 
+    /// Canonical field bytes below both Pasta moduli, for carried Poseidon digests.
+    pub fn next_digest(&mut self) -> [u8; 32] {
+        let mut bytes = self.next_bytes();
+        bytes[31] &= 0x3f;
+        bytes
+    }
+
     /// The next field element (a 256-bit word reduced modulo the field).
     pub fn next_field<F: PastaField>(&mut self) -> F {
         F::from_raw_reduced([
@@ -252,16 +259,12 @@ fn sample_quota<F: PoseidonField>(
     let tree = QuotaWindowTree::new(&windows).unwrap_or_else(|| unreachable!("sorted windows"));
     let daily_count = windows.len() - 1;
     let touched_first = daily_count - 3;
-    // The usage map: an earlier day's usage and the monthly window's.
-    let mut usage = IndexedTree::<F>::new();
+    // Each usage leaf exists at its window slot, even before the first charge.
+    let mut usage = QuotaUsageTree::<F>::new(&tree);
     if touched_first == 1 {
-        let earlier = windows[0];
-        let _ = usage.upsert(earlier.usage_key(), earlier.usage_value(F::from(3_u64)));
+        let _ = usage.set(0, 3);
     }
-    let _ = usage.upsert(
-        monthly.usage_key(),
-        monthly.usage_value(F::from_u128(monthly_used)),
-    );
+    let _ = usage.set(daily_count, monthly_used);
     let usage_root = usage.root();
     let slot = |index: usize| WindowSlot {
         window: tree.slot(index),
@@ -278,7 +281,6 @@ fn sample_quota<F: PoseidonField>(
     let segments = [segment(touched_first), segment(daily_count)];
     // The charges, in window order.
     let mut charges = [QuotaCharge::unused(); 4];
-    let gross_field = F::from_u128(gross);
     for (charge, index) in [(0, touched_first), (1, touched_first + 1), (2, daily_count)] {
         let window = windows[index];
         if !window.touches(lower, upper) {
@@ -289,10 +291,14 @@ fn sample_quota<F: PoseidonField>(
         } else {
             0
         };
-        let value = window.usage_value(F::from_u128(used) + gross_field);
-        if let Some(upsert) = usage.upsert(window.usage_key(), value) {
-            charges[charge] = QuotaCharge { upsert, used };
-        }
+        charges[charge] = QuotaCharge {
+            slot: u8::try_from(index).unwrap_or(0),
+            siblings: usage
+                .siblings(index)
+                .unwrap_or([F::ZERO; crate::tree::QUOTA_DEPTH]),
+            used,
+        };
+        let _ = usage.set(index, used + gross);
     }
     (tree.root(), usage_root, QuotaWitness { segments, charges })
 }
@@ -329,7 +335,7 @@ pub fn sample_witness<F: PoseidonField>(
         scheme_id: rng.next_bytes(),
         asset_digest: rng.next_bytes(),
         wallet_id: rng.next_bytes(),
-        credential_digest: rng.next_bytes(),
+        credential_digest: rng.next_digest(),
     };
     let request_policy_epoch = match mutation {
         Mutation::StaleEpoch => policy_epoch.saturating_add(1),
@@ -364,7 +370,7 @@ pub fn sample_witness<F: PoseidonField>(
         Mutation::LeaseExpired => accepted_upper,
         _ => accepted_upper.saturating_add(1 + (rng.next_u64() >> 24)),
     };
-    let mut core = CoreState {
+    let mut core: CoreState<F> = CoreState {
         lifecycle: LIFECYCLE_ACTIVE,
         identity,
         balance,
@@ -385,6 +391,8 @@ pub fn sample_witness<F: PoseidonField>(
         controls: Controls {
             enabled,
             quota_windows_root: rng.next_field(),
+            quota_share_expires_at_ms: accepted_upper.saturating_add(DAY_MS),
+            time_anchor_max_response_ms: 600_000,
             blacklist_version: (rng.next_u64() >> 40).saturating_add(1),
             blacklist_root: rng.next_field(),
             blacklist_issued_at_ms: issued_at,
@@ -397,22 +405,24 @@ pub fn sample_witness<F: PoseidonField>(
     };
     let rest = StateRest {
         permitted_controls: u32::try_from(rng.next_u64() & 7).unwrap_or(0),
-        time_anchor_max_response_ms: rng.next_u64() >> 40,
-        scheme_policy: rng.next_bytes(),
-        fee_schedule: rng.next_bytes(),
-        blacklist: rng.next_bytes(),
-        quota_share: rng.next_bytes(),
+        scheme_policy: rng.next_digest(),
+        fee_schedule: rng.next_digest(),
+        blacklist: rng.next_digest(),
+        quota_share: rng.next_digest(),
         quota_share_id: rng.next_u64() >> 32,
-        time_anchor: rng.next_bytes(),
+        time_anchor: rng.next_digest(),
+        blacklist_history_root: rng.next_digest(),
     };
-    let request = RequestTerms {
+    let mut request = RequestTerms {
         amount,
         fee,
-        fee_schedule: rng.next_bytes(),
+        fee_schedule: rng.next_digest(),
         policy_epoch: request_policy_epoch,
-        scheme_policy: rng.next_bytes(),
+        scheme_policy: rng.next_digest(),
         request_time,
-        certificates: rng.next_bytes(),
+        receiver_blacklist_version: 0,
+        receiver_blacklist_root: [0; 32],
+        certificates: rng.next_digest(),
         nonce: rng.next_bytes(),
     };
     let counterparty = if mutation == Mutation::SelfPayment {
@@ -447,15 +457,25 @@ pub fn sample_witness<F: PoseidonField>(
     debug_assert!(
         relation.enforces(CONTROL_ATTESTATION_LEASE) || core.controls.lease_expires_at_ms != 0
     );
+    if relation.step() == StepRelation::Receive {
+        let recorded =
+            relation.enforces(CONTROL_BLACKLIST) ^ (mutation == Mutation::ControlsMismatch);
+        if recorded {
+            request.receiver_blacklist_version = core.controls.blacklist_version;
+            let limbs = core.controls.blacklist_root.to_canonical_limbs();
+            request.receiver_blacklist_root =
+                core::array::from_fn(|i| limbs[i / 8].to_le_bytes()[i % 8]);
+        }
+    }
     let inputs = match relation.step() {
         StepRelation::Send => StepInputs::Send(Box::new(SendInputs {
             payer_account_digest: own_account,
             receiver_wallet: counterparty,
             receiver_account_digest: counterparty_account,
-            receiver_credential_digest: rng.next_bytes(),
+            receiver_credential_digest: rng.next_digest(),
             request,
             // A stand-in Request digest derived from the nonce.
-            request_digest: request.nonce.map(|byte| byte ^ 0x5a),
+            request_digest: rng.next_digest(),
             accepted_lower,
             accepted_upper,
             lineage: LineageInputs {

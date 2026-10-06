@@ -14,8 +14,8 @@ use std::{
 use ff::Field;
 use iroha_kagemusha_proof::{
     CONTROL_ATTESTATION_LEASE, CONTROL_BLACKLIST, CONTROL_QUOTAS, CONTROLS_DEFINED, Mutation,
-    PrefixMode, ProofFormat, RelationShape, ShapePolicy, SigmaCircuit, SigmaProver, SigmaRelation,
-    SigmaShape, StepDigests, StepPublic, StepWitness, select_shape,
+    PrefixMode, RelationShape, ShapePolicy, SigmaCircuit, SigmaProver, SigmaRelation, SigmaShape,
+    StepDigests, StepPublic, StepWitness, select_shape,
 };
 use iroha_pasta::{Eq, Fp, PastaCurve, poseidon::PoseidonField};
 use iroha_plonk::{
@@ -41,7 +41,7 @@ pub const RECEIVE_BLACKLIST: SigmaRelation = SigmaRelation::receive(CONTROL_BLAC
 /// The relations of the k12 class under test: `sigma_send` without a
 /// control, with the blacklist control and with the lease control, and
 /// `sigma_recv` without and with the blacklist bit. The quota relations
-/// (`tests/controls.rs`) are a k14-k16 class.
+/// (`tests/controls.rs`) are a k12-k14 class.
 pub const RELATIONS: [SigmaRelation; 5] = [
     SigmaRelation::SEND,
     SEND_BLACKLIST,
@@ -221,7 +221,7 @@ pub fn vesta_params(k: u32) -> PinnedParams<Eq> {
 
 /// Keys of `shape` on Vesta in the KAGEMUSHA step format.
 pub fn vesta_prover(shape: SigmaShape) -> SigmaProver<Eq> {
-    SigmaProver::keygen_with_params(shape, ProofFormat::default(), vesta_params(shape.k))
+    SigmaProver::keygen_with_params(shape, vesta_params(shape.k))
         .unwrap_or_else(|error| panic!("keygen: {error}"))
 }
 

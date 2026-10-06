@@ -41,9 +41,9 @@ use crate::{
     controls::{QUOTA_CHARGES, SEGMENT_POSITIONS},
     relation::{self, Chips},
     tree::{
-        BLACKLIST_DEPTH, BLACKLIST_LEAF_DOMAIN, BLACKLIST_NODE_DOMAIN, INDEXED_DEPTH,
-        INDEXED_LEAF_DOMAIN, INDEXED_NODE_DOMAIN, QUOTA_DEPTH, QUOTA_NODE_DOMAIN,
-        QUOTA_USAGE_DOMAIN, QUOTA_WINDOW_DOMAIN, WINDOW_KINDS,
+        BLACKLIST_DEPTH, BLACKLIST_LEAF_DOMAIN, BLACKLIST_NODE_DOMAIN, QUOTA_DEPTH,
+        QUOTA_NODE_DOMAIN, QUOTA_USAGE_DOMAIN, QUOTA_USAGE_NODE_DOMAIN, QUOTA_WINDOW_DOMAIN,
+        WINDOW_KINDS,
     },
     witness::{
         COMMITMENT_ARITY, CONTROL_BLACKLIST, CONTROL_QUOTAS, CORE_DOMAIN, CREDIT_DOMAIN,
@@ -104,29 +104,17 @@ impl Default for RelationShape {
     }
 }
 
-/// One indexed-tree path of a quota charge.
+/// One path of a fixed-array quota charge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UsagePath {
-    /// The opened leaf (the key's, or the low leaf) and its path to the old
-    /// root.
+    /// Old usage leaf to the running root.
     LeafBefore,
-    /// The same leaf after the first write and its path to the middle root.
+    /// Updated usage leaf to the successor root.
     LeafAfter,
-    /// The second slot's path, empty, to the middle root.
-    SlotBefore,
-    /// The new leaf, its selection, and the second slot's path to the new
-    /// root.
-    SlotAfter,
 }
-
 impl UsagePath {
-    /// Every path of a charge, in layout order.
-    pub const ALL: [Self; 4] = [
-        Self::LeafBefore,
-        Self::LeafAfter,
-        Self::SlotBefore,
-        Self::SlotAfter,
-    ];
+    /// Both paths in layout order.
+    pub const ALL: [Self; 2] = [Self::LeafBefore, Self::LeafAfter];
 }
 
 /// A hash site of the relation: one hash, or a tree leaf with its path
@@ -150,7 +138,7 @@ pub enum HashSite {
     QuotaWindow(u8, u8),
     /// The quota control: the old and new usage values of a charge.
     UsageValues(u8),
-    /// The quota control: one indexed-tree path of a charge.
+    /// The quota control: one six-level usage-array path of a charge.
     UsagePath(u8, UsagePath),
 }
 
@@ -241,14 +229,7 @@ impl RelationShape {
                 QUOTA_DEPTH,
             ),
             (HashSite::UsageValues(_), _) => vec![(QUOTA_USAGE_DOMAIN, 4); 2],
-            (HashSite::UsagePath(_, UsagePath::SlotBefore), _) => {
-                path(None, INDEXED_NODE_DOMAIN, INDEXED_DEPTH)
-            }
-            (HashSite::UsagePath(..), _) => path(
-                Some((INDEXED_LEAF_DOMAIN, 3)),
-                INDEXED_NODE_DOMAIN,
-                INDEXED_DEPTH,
-            ),
+            (HashSite::UsagePath(..), _) => path(None, QUOTA_USAGE_NODE_DOMAIN, QUOTA_DEPTH),
         }
     }
 
@@ -325,8 +306,8 @@ impl RelationShape {
     }
 
     /// The Pow5 permutations of the relation (folded prefixes: `sigma_send`
-    /// 69, with the blacklist control 106, with the quota control 1,261
-    /// and with every control 1,298; `sigma_recv` 67 and with the
+    /// 69, with the blacklist control 106, with the quota control 309
+    /// and with every control 345; `sigma_recv` 67 and with the
     /// blacklist bit 104).
     #[must_use]
     pub fn permutations(self) -> usize {
@@ -799,39 +780,39 @@ mod tests {
         let every = SigmaRelation::send(crate::witness::CONTROLS_DEFINED);
         let lease = SigmaRelation::send(crate::witness::CONTROL_ATTESTATION_LEASE);
         let receive_blacklist = SigmaRelation::receive(CONTROL_BLACKLIST);
-        // Absorbed prefixes: openings 18 (33 inputs), credit 16 (28),
-        // send chain 6, receive chain 4, statement 16 (28 inputs).
+        // Absorbed prefixes: openings 19 (34 inputs), credit 15 (26),
+        // send chain 6, receive chain 4, statement 15 (26 inputs).
         assert_eq!(shape(SigmaRelation::SEND, Absorbed).permutations(), 74);
         assert_eq!(shape(SigmaRelation::RECEIVE, Absorbed).permutations(), 72);
         // Folding saves one permutation per hash; the lease adds none, the
-        // blacklist gap 35 (leaf 3, 16 nodes of 2), the quota rule 1,192
-        // (8 window openings of 15, 4 charges of 268). With the gap, two
+        // blacklist gap 35 (leaf 3, 16 nodes of 2), the quota rule 240
+        // (8 window openings of 15, 4 charges of 30). With the gap, two
         // single-hash prefixes stay absorbed (two permutations) so the
         // start selectors fill whole columns.
         assert_eq!(shape(SigmaRelation::SEND, Folded).permutations(), 69);
         assert_eq!(shape(lease, Folded).permutations(), 69);
         assert_eq!(shape(blacklist, Folded).permutations(), 106);
-        assert_eq!(shape(quotas, Folded).permutations(), 1_261);
-        assert_eq!(shape(every, Folded).permutations(), 1_298);
+        assert_eq!(shape(quotas, Folded).permutations(), 309);
+        assert_eq!(shape(every, Folded).permutations(), 345);
         assert_eq!(shape(SigmaRelation::RECEIVE, Folded).permutations(), 67);
         assert_eq!(shape(receive_blacklist, Folded).permutations(), 104);
         assert_eq!(shape(blacklist, Absorbed).permutations(), 74 + 52);
-        assert_eq!(shape(every, Absorbed).permutations(), 74 + 52 + 1_780);
+        assert_eq!(shape(every, Absorbed).permutations(), 74 + 52 + 352);
         let send = shape(SigmaRelation::SEND, Folded);
-        assert_eq!(send.site_permutations(HashSite::Statement), 15);
-        assert_eq!(send.site_permutations(HashSite::Credit), 15);
-        assert_eq!(send.site_permutations(HashSite::Predecessor), 17);
+        assert_eq!(send.site_permutations(HashSite::Statement), 14);
+        assert_eq!(send.site_permutations(HashSite::Credit), 14);
+        assert_eq!(send.site_permutations(HashSite::Predecessor), 18);
         assert_eq!(send.site_permutations(HashSite::Chain), 5);
         let quota = shape(quotas, Folded);
         assert_eq!(quota.site_permutations(HashSite::QuotaWindow(1, 3)), 15);
         assert_eq!(quota.site_permutations(HashSite::UsageValues(2)), 6);
         assert_eq!(
             quota.site_permutations(HashSite::UsagePath(0, UsagePath::LeafBefore)),
-            66
+            12
         );
         assert_eq!(
-            quota.site_permutations(HashSite::UsagePath(0, UsagePath::SlotBefore)),
-            64
+            quota.site_permutations(HashSite::UsagePath(0, UsagePath::LeafAfter)),
+            12
         );
         assert_eq!(
             shape(SigmaRelation::RECEIVE, Folded).site_permutations(HashSite::Chain),
@@ -839,7 +820,7 @@ mod tests {
         );
         assert_eq!(
             send.site_hashes(HashSite::Predecessor),
-            vec![(CORE_DOMAIN, 33)]
+            vec![(CORE_DOMAIN, 34)]
         );
         assert_eq!(send.step(), StepRelation::Send);
         assert_eq!(send.label(), "sigma_send_m0_folded");
@@ -850,7 +831,7 @@ mod tests {
         );
         assert_eq!(send.sites().len(), 5);
         assert_eq!(shape(receive_blacklist, Folded).sites().len(), 6);
-        assert_eq!(quota.sites().len(), 5 + 8 + 4 * 5);
+        assert_eq!(quota.sites().len(), 5 + 8 + 4 * 3);
         assert_eq!(RelationShape::default(), send);
     }
 
@@ -874,14 +855,14 @@ mod tests {
         assert_eq!(
             two.folded(send, 0),
             vec![
-                (CORE_DOMAIN, 33),
-                (CREDIT_DOMAIN, 28),
-                (SEND_CHAIN_DOMAIN, 9)
+                (CORE_DOMAIN, 34),
+                (CREDIT_DOMAIN, 26),
+                (SEND_CHAIN_DOMAIN, 8)
             ]
         );
         assert_eq!(
             two.folded(send, 1),
-            vec![(CORE_DOMAIN, 33), (STATEMENT_DOMAIN, 28)]
+            vec![(CORE_DOMAIN, 34), (STATEMENT_DOMAIN, 26)]
         );
         // A tree site folds its node prefix on its lane; the gap leaf and
         // the statement stay absorbed (`RelationShape::unfolded`).
@@ -890,7 +871,7 @@ mod tests {
         assert_eq!(plan.lane_permutations(), &[106]);
         let folded = plan.folded(gap, 0);
         assert!(!folded.contains(&(BLACKLIST_LEAF_DOMAIN, 4)));
-        assert!(!folded.contains(&(STATEMENT_DOMAIN, 28)));
+        assert!(!folded.contains(&(STATEMENT_DOMAIN, 26)));
         assert!(folded.contains(&(BLACKLIST_NODE_DOMAIN, 2)));
         assert_eq!(folded.len(), 4);
         let absorbed = shape(SigmaRelation::SEND, PrefixMode::Absorbed);
@@ -926,33 +907,30 @@ mod tests {
             let relation = shape(relation, Folded);
             assert_eq!(
                 relation.unfolded(),
-                vec![(BLACKLIST_LEAF_DOMAIN, 4), (STATEMENT_DOMAIN, 28)]
+                vec![(BLACKLIST_LEAF_DOMAIN, 4), (STATEMENT_DOMAIN, 26)]
             );
             assert!(!relation.is_folded((BLACKLIST_LEAF_DOMAIN, 4)));
             assert!(relation.is_folded((BLACKLIST_NODE_DOMAIN, 2)));
             assert_eq!(relation.site_permutations(HashSite::BlacklistGap), 36);
-            assert_eq!(relation.site_permutations(HashSite::Statement), 16);
+            assert_eq!(relation.site_permutations(HashSite::Statement), 15);
         }
         // The quota rule's nine prefixes fill two columns; every control
         // overflows by two again.
         let quotas = shape(SigmaRelation::send(CONTROL_QUOTAS), Folded);
         assert_eq!(
             quotas.prefix_uses().len() + 1,
-            2 * STARTS_PER_SELECTOR_COLUMN
+            2 * STARTS_PER_SELECTOR_COLUMN - 1
         );
         assert!(quotas.unfolded().is_empty());
-        assert_eq!(
-            every.unfolded(),
-            vec![(BLACKLIST_LEAF_DOMAIN, 4), (STATEMENT_DOMAIN, 28)]
-        );
+        assert_eq!(every.unfolded(), vec![(BLACKLIST_LEAF_DOMAIN, 4)]);
         assert_eq!(
             every.prefix_uses().last(),
-            Some(&((INDEXED_NODE_DOMAIN, 2), 4 * 4 * INDEXED_DEPTH))
+            Some(&((QUOTA_USAGE_NODE_DOMAIN, 2), 4 * 2 * QUOTA_DEPTH))
         );
         // Absorbed relations fold nothing.
         let absorbed = shape(SigmaRelation::send(CONTROL_BLACKLIST), Absorbed);
         assert!(absorbed.unfolded().is_empty());
-        assert!(!absorbed.is_folded((CORE_DOMAIN, 33)));
+        assert!(!absorbed.is_folded((CORE_DOMAIN, 34)));
     }
 
     #[test]

@@ -22,14 +22,15 @@ from unittest.mock import MagicMock, patch
 
 # Exact current-source native census. Both scopes retain the closed MV/Concread
 # ownership suite, including funded replacement/snapshot and deletion controls.
+# Prepared signature custody and exact parent activation add six Core controls.
 # Linux additionally selects OpenSSH descriptor custody. All platforms select
 # the same genuine four-peer beacon workload.
 EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1744 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1777 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1762 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1795 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -363,6 +364,9 @@ class BeaconGateTests(unittest.TestCase):
 
     def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
         assert_native_coverage(self, ['native publication custody', 'native witness admission'])
+
+    def test_prepared_signature_custody_and_parent_activation_are_required_in_both_scopes(self):
+        assert_native_coverage(self, ['native publication custody', 'native driver scheduling'])
 
     def test_actual_publication_controls_are_unique_and_focused_in_both_scopes(self):
         assert_native_coverage(self, ['native original publication', 'native pending original execution'])
@@ -724,7 +728,7 @@ class BeaconGateTests(unittest.TestCase):
         exact_height = "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip"
         launch_controls = (
             "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
-            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
+            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_binds_the_broker",
         )
         seam = "taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs"
         fixture_root = SCRIPT.resolve().parents[1] / "crates/iroha_test_network/tests"
@@ -1767,7 +1771,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
                 "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
-                "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
+                "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
                 "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
                 "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
             ),

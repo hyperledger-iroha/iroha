@@ -486,7 +486,7 @@ pub const TX_HEADER: usize = 1 + 8 + 1 + 2;
 
 /// Transaction flag: the transaction is poison (every block holding it is `Invalid`).
 const TX_POISON: u8 = 0x01;
-/// Transaction flag: the transaction needs mint finality, so its block is flagged (§3.7, F37).
+/// Transaction flag: the transaction requires a test attestation, so its block is flagged (§3.7, F37).
 const TX_MINT: u8 = 0x02;
 
 /// Encode a transaction: `0x54 ‖ be64(id) ‖ flags ‖ be16(pad) ‖ pad bytes`; flag bit 0 = poison.
@@ -494,7 +494,7 @@ pub fn encode_tx(id: u64, poison: bool, pad: u16) -> Vec<u8> {
     encode_tx_flagged(id, poison, false, pad)
 }
 
-/// [`encode_tx`] with flag bit 1 = the transaction needs mint finality (§3.7, F37).
+/// [`encode_tx`] with flag bit 1 = the transaction requires a test attestation (§3.7, F37).
 pub fn encode_tx_flagged(id: u64, poison: bool, mint: bool, pad: u16) -> Vec<u8> {
     let mut out = Vec::with_capacity(TX_HEADER + usize::from(pad));
     out.push(TX_TAG);

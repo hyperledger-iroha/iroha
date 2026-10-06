@@ -192,6 +192,7 @@ fn state_for(
             quota_usage_root: field_value(0x36),
             enabled_controls: 0,
             quota_windows_root: [0; 32],
+            quota_share_expires_at_ms: 0,
             blacklist_version: 0,
             blacklist_root: [0; 32],
             blacklist_issued_at_ms: 0,
@@ -199,14 +200,15 @@ fn state_for(
             lease_expires_at_ms: 0,
             policy_epoch: 0,
             accepted_time_floor_ms: 0,
+            time_anchor_max_response_ms: 0,
             state_nonce: statement.successor.value,
         },
         rest: KagemushaWalletStateRestV1 {
             permitted_controls: 0,
-            time_anchor_max_response_ms: 0,
             scheme_policy: [0; 32],
             fee_schedule: [0; 32],
             blacklist: [0; 32],
+            blacklist_history_root: field_value(0x37),
             quota_share: [0; 32],
             quota_share_id: 0,
             time_anchor: [0; 32],
@@ -307,7 +309,9 @@ pub(super) fn capsule_for(
         version: 1,
         scheme_id: f.scheme_id(),
         wallet_id: f.wallet_id(),
-        operation_id: statement.operation_id(&f.wallet_id()),
+        operation_id: statement
+            .operation_id(&f.wallet_id())
+            .expect("operation id"),
         kind,
         predecessor_capsule_digest,
         successor_state,
@@ -356,7 +360,7 @@ pub(super) fn bootstrap_capsule_variant(
         version: 1,
         scheme_id: f.scheme_id(),
         relation_id: [0x41; 32],
-        credential_digest: [0x42; 32],
+        credential_digest: field_value(0x42),
         asset_digest: f.enrollment.asset_digest,
         lifecycle: KagemushaWalletLifecycleV1::Active,
         sequence: 0,
@@ -935,7 +939,11 @@ impl
             operation_id: capsule.operation_id,
             predecessor: capsule.statement.predecessor,
             successor: capsule.statement.successor,
-            statement_digest: capsule.statement.statement_digest(),
+            statement_digest: capsule.statement.statement_digest().map_err(|_| {
+                super::KagemushaWalletProviderErrorV1::Invalid {
+                    field: "receipt.statement_digest",
+                }
+            })?,
             proof_digest: capsule.proof_digest().map_err(|_| {
                 super::KagemushaWalletProviderErrorV1::Invalid {
                     field: "receipt.proof_digest",

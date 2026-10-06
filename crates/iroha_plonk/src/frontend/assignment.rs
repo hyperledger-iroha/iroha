@@ -769,6 +769,12 @@ impl<F> AssignedTables<F> {
         self.advice.take()
     }
 
+    /// Moves the public key-generation inputs out and releases synthesis
+    /// bookkeeping before FFTs, commitments and proving-key caches are built.
+    pub(crate) fn into_keygen_parts(self) -> (Vec<Vec<F>>, Vec<Vec<bool>>, PermutationAssembly) {
+        (self.fixed, self.selectors, self.permutation)
+    }
+
     /// Whether each advice cell was assigned.
     #[must_use]
     pub fn advice_assigned(&self) -> &[Vec<bool>] {
@@ -929,6 +935,14 @@ mod tests {
         assert!(tables.advice().is_none() && tables.instance().is_none());
         assert_eq!(tables.fixed()[0][1], Fp::from(5));
         assert!(tables.advice_assigned()[0][0]);
+        let fixed_ptr = tables.fixed()[0].as_ptr();
+        let selector_ptr = tables.selectors().as_ptr();
+        let copy_digest = tables.permutation().mapping_digest();
+        let (fixed, selectors, permutation) = tables.into_keygen_parts();
+        assert_eq!(fixed[0].as_ptr(), fixed_ptr);
+        assert_eq!(selectors.as_ptr(), selector_ptr);
+        assert_eq!(permutation.mapping_digest(), copy_digest);
+        assert_eq!(fixed[0][1], Fp::from(5));
 
         let mut witness = Assembly::new(&cs, 4, Some(&[vec![Fp::ONE, Fp::ZERO]])).expect("new");
         assert_eq!(

@@ -1145,3 +1145,127 @@ fn retained_child_readers_refuse_replaced_ancestor_and_foreign_child() {
     assert!(child.open_retained_private("record").is_err());
     assert_eq!(fs::read(child.path().join("record")).unwrap(), b"foreign");
 }
+
+#[test]
+fn reader_children_share_native_ancestors_and_preserve_exact_original_files() {
+    let (_temporary, store) = store();
+    for index in 0..32 {
+        let child = store.create_child(format!("child-{index}")).unwrap();
+        child
+            .write_atomic("source", b"original", PublishMode::CreateNew)
+            .unwrap();
+    }
+    let reader = ReaderDirectory::open(store.path()).unwrap();
+    let mut children = Vec::new();
+    let mut sources = Vec::new();
+    for index in 0..32 {
+        let child = reader.open_child(format!("child-{index}")).unwrap();
+        let source = child.open_retained_regular("source").unwrap();
+        let mut bytes = [0_u8; 8];
+        assert_eq!(read_at(source.file(), &mut bytes, 0).unwrap(), 8);
+        assert_eq!(&bytes, b"original");
+        sources.push((source, child.snapshot().unwrap()));
+        children.push(child);
+    }
+    for (child, (source, snapshot)) in children.iter().zip(&sources) {
+        child.revalidate().unwrap();
+        assert_eq!(child.snapshot().unwrap(), *snapshot);
+        source.revalidate().unwrap();
+    }
+    for invalid in ["", ".", "..", "child-0/source"] {
+        assert!(reader.open_child(invalid).is_err());
+    }
+    assert!(reader.open_child("absent").is_err());
+    assert!(!reader.path().join("absent").exists());
+    reader.revalidate().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_reader_children_refuse_link_substitution_and_changed_ancestors() {
+    let (temporary, store) = store();
+    let original = store.create_child("original").unwrap();
+    original
+        .write_atomic("source", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let reader = ReaderDirectory::open(store.path()).unwrap();
+    std::os::unix::fs::symlink("original", store.path().join("indirect")).unwrap();
+    assert!(reader.open_child("indirect").is_err());
+    assert!(reader.open_child("original/source").is_err());
+    let child = reader.open_child("original").unwrap();
+    let source = child.open_retained_regular("source").unwrap();
+    let saved = temporary.path().join("original-child");
+    fs::rename(original.path(), &saved).unwrap();
+    store
+        .create_child("original")
+        .unwrap()
+        .write_atomic("source", b"original", PublishMode::CreateNew)
+        .unwrap();
+    assert!(child.revalidate().is_err());
+    assert!(source.revalidate().is_err());
+    let renamed_store = temporary.path().join("renamed-store");
+    fs::rename(store.path(), &renamed_store).unwrap();
+    assert!(reader.open_child("original").is_err());
+}
+
+#[test]
+fn selected_regular_file_keeps_native_identity_bounds_and_independent_read_offsets() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = temporary.path().join("nested");
+    fs::create_dir(&parent).unwrap();
+    let path = temporary.path().join("source");
+    fs::write(&path, b"original bytes").unwrap();
+    let selected = SelectedRegularFile::capture(parent.join("../source")).unwrap();
+    assert_eq!(
+        selected.path(),
+        temporary.path().canonicalize().unwrap().join("source")
+    );
+    assert_eq!(selected.len().unwrap(), 14);
+    assert!(!selected.is_empty().unwrap());
+    assert_eq!(selected.read(14).unwrap(), b"original bytes");
+    assert_eq!(selected.read(14).unwrap(), b"original bytes");
+    assert_eq!(
+        selected.read(13).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| selected.read(14).unwrap());
+        let second = scope.spawn(|| selected.read(14).unwrap());
+        assert_eq!(first.join().unwrap(), b"original bytes");
+        assert_eq!(second.join().unwrap(), b"original bytes");
+    });
+    selected.revalidate().unwrap();
+    let empty = temporary.path().join("empty");
+    fs::write(&empty, []).unwrap();
+    let empty = SelectedRegularFile::capture(&empty).unwrap();
+    assert!(empty.is_empty().unwrap());
+    assert!(empty.read(0).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_regular_file_refuses_original_mutation_replacement_and_link_substitution() {
+    use std::os::unix::fs::symlink;
+    let temporary = tempfile::tempdir().unwrap();
+    for mutation in ["edit", "replace", "link"] {
+        let path = temporary.path().join(mutation);
+        fs::write(&path, b"original bytes").unwrap();
+        let selected = SelectedRegularFile::capture(&path).unwrap();
+        match mutation {
+            "edit" => fs::write(&path, b"changed bytes").unwrap(),
+            "replace" => {
+                fs::rename(&path, temporary.path().join("retired-replace")).unwrap();
+                fs::write(&path, b"original bytes").unwrap();
+            }
+            "link" => {
+                fs::rename(&path, temporary.path().join("retired-link")).unwrap();
+                let target = temporary.path().join("link-target");
+                fs::write(&target, b"original bytes").unwrap();
+                symlink(&target, &path).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(selected.revalidate().is_err(), "{mutation}");
+        assert!(selected.read(14).is_err(), "{mutation}");
+    }
+}

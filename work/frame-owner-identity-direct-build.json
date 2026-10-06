@@ -1,0 +1,48 @@
+{
+  "source": "/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/frame_owner_identity_tests.rs",
+  "source_sha256": "8836edce290570c35ace163d23fdc6c0361c2c166a587f3c99eb414f6d3936a4",
+  "externs": {
+    "iroha_data_model": "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libiroha_data_model-8e829a754b26ac28.rlib",
+    "norito": "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libnorito-200d9bb6ba42bc22.rlib",
+    "hex": "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libhex-0f4f42a803e7f004.rlib",
+    "sha2": "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libsha2-5413f81ddc1f1feb.rlib"
+  },
+  "native_paths": [
+    "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/blake3-e0228c4464eeed90/out",
+    "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/blst-9ccc274ec75a641a/out",
+    "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/pqcrypto-internals-d1646aa81b623bcd/out",
+    "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/pqcrypto-mldsa-90c87914fa5b0fef/out",
+    "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/pqcrypto-mlkem-5abd067b367787b8/out",
+    "/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/zstd-sys-37c4e206410553e0/out"
+  ],
+  "command": [
+    "rustc",
+    "--edition=2024",
+    "--test",
+    "/Users/takemiyamakoto/soramitsudev/iroha/work/frame-owner-identity-direct.rs",
+    "-L",
+    "dependency=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps",
+    "-o",
+    "/Users/takemiyamakoto/soramitsudev/iroha/work/frame-owner-identity-direct",
+    "--extern",
+    "iroha_data_model=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libiroha_data_model-8e829a754b26ac28.rlib",
+    "--extern",
+    "norito=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libnorito-200d9bb6ba42bc22.rlib",
+    "--extern",
+    "hex=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libhex-0f4f42a803e7f004.rlib",
+    "--extern",
+    "sha2=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/deps/libsha2-5413f81ddc1f1feb.rlib",
+    "-L",
+    "native=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/blake3-e0228c4464eeed90/out",
+    "-L",
+    "native=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/blst-9ccc274ec75a641a/out",
+    "-L",
+    "native=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/pqcrypto-internals-d1646aa81b623bcd/out",
+    "-L",
+    "native=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/pqcrypto-mldsa-90c87914fa5b0fef/out",
+    "-L",
+    "native=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/pqcrypto-mlkem-5abd067b367787b8/out",
+    "-L",
+    "native=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/build/zstd-sys-37c4e206410553e0/out"
+  ]
+}

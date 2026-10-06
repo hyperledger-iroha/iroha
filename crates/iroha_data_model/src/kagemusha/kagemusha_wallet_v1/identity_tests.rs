@@ -809,11 +809,7 @@ fn kagemusha_wallet_v1_certificate_set_order_digest_and_selection() {
     // certificate digest as one element (owner answer B1).
     let mut items = vec![kagemusha_wallet_field_from_u128_v1(3)];
     items.extend(digests.iter().copied());
-    assert!(
-        digests
-            .iter()
-            .all(kagemusha_wallet_is_canonical_field_v1)
-    );
+    assert!(digests.iter().all(kagemusha_wallet_is_canonical_field_v1));
     assert_eq!(set.field_items(), items);
     assert_eq!(
         set.digest().expect("digest"),

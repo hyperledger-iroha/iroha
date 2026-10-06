@@ -342,9 +342,10 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
   /// hands to `key_sign`.
   private let message = Data(
     [
-      0xce, 0xf6, 0x6b, 0xb0, 0xa3, 0x8d, 0x8d, 0x73, 0x1b, 0x65, 0x1b, 0x16, 0xc6, 0x1f, 0x79,
-      0x91, 0x64, 0x7e, 0x67, 0xb5, 0x9b, 0x94, 0x18, 0x82, 0x7a, 0x38, 0x9b, 0x21, 0x11, 0x76,
-      0x84, 0x20,
+      0xa5, 0xe8, 0xb3, 0x24, 0x21, 0xe1, 0x75, 0x95,
+      0x04, 0x0c, 0xdc, 0xde, 0xea, 0xf4, 0x6f, 0x06,
+      0xda, 0x85, 0x29, 0x1d, 0x68, 0xcf, 0xf8, 0xe0,
+      0x5d, 0xab, 0x8b, 0xfc, 0x64, 0xa9, 0x6a, 0x2d,
     ])
 
   private func makePlatform(
@@ -883,12 +884,22 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     let platform = try makePlatform(keychain: keychain)
     _ = try generatedKey(platform)
     let before = keychain.operations.count
-    for length in [0, 1, 31, 33, 338] {
+    for length in [0, 1, 31, 33, 338, 1024] {
       XCTAssertEqual(
         failure(platform.keySign(slot, message: Data(repeating: 7, count: length))),
         .platform(KagemushaWalletAppleStatusV1.invalidSigningMessage), "length \(length)")
     }
     XCTAssertEqual(keychain.operations.count, before, "nothing is queried for a refused message")
+  }
+
+  func testDirectSignerRefusesAnyOtherMessageLength() throws {
+    let platform = try makePlatform(keychain: FakeWalletKeychain())
+    let key = FakeWalletKeychain.softwareKey()
+    for length in [0, 1, 31, 33, 338, 1024] {
+      XCTAssertEqual(
+        failure(platform.sign(key, slot: slot, message: Data(repeating: 7, count: length))),
+        .platform(KagemushaWalletAppleStatusV1.invalidSigningMessage), "length \(length)")
+    }
   }
 
   func testKeySignReportsAKeyThatCannotSignAsUnusable() throws {

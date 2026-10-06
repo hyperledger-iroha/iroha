@@ -218,7 +218,20 @@ pub(crate) fn retain_published_output(
     expected_hash: String,
     program: bool,
 ) -> Result<(RetainedFile, FileSnapshot, String), Box<dyn Error>> {
-    let mut file = RetainedFile::open_regular(path)?;
+    admit_published_output(
+        RetainedFile::open_regular(path)?,
+        snapshot,
+        expected_hash,
+        program,
+    )
+}
+
+pub(crate) fn admit_published_output(
+    mut file: RetainedFile,
+    snapshot: FileSnapshot,
+    expected_hash: String,
+    program: bool,
+) -> Result<(RetainedFile, FileSnapshot, String), Box<dyn Error>> {
     if file.snapshot()? != snapshot {
         return Err("published package output differs from its exact staged object".into());
     }

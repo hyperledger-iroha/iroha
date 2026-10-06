@@ -26,6 +26,12 @@ type Registrar = fn(InstructionRegistry) -> InstructionRegistry;
 pub fn default() -> InstructionRegistry {
     wire_ids::register_all()
 }
+/// Read the sole built-in encoding inventory without constructing the decoder registry.
+pub(super) fn default_encoding_entry(
+    type_name: &'static str,
+) -> Option<super::InstructionEncodingEntry> {
+    wire_ids::encoding_entry(type_name)
+}
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
 /// Sponsor-program revision validation uses this fail-closed lookup before an
@@ -34,6 +40,12 @@ pub fn default() -> InstructionRegistry {
 pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
     DEFAULT_REGISTRY.get_or_init(default).contains(wire_id)
+}
+#[cfg(test)]
+pub(super) fn encoding_inventory_for_tests() -> impl Iterator<Item = (&'static str, &'static str)> {
+    wire_ids::ALL
+        .iter()
+        .map(|record| ((record.type_name)(), record.wire_id))
 }
 #[cfg(test)]
 mod tests {

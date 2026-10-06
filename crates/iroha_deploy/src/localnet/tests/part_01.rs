@@ -407,11 +407,6 @@ fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
         json::to_value(*digital_shekels[0]).expect("native definition JSON"),
         *expected
     );
-    assert!(
-        definitions
-            .iter()
-            .all(|definition| definition.id.to_string() != LOCALNET_KAGEMUSHA_ASSET_ID)
-    );
     let digital_shekel_alias = TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS
         .parse::<AssetDefinitionAlias>()
         .expect("Digital Shekel alias");
@@ -458,8 +453,6 @@ fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
     let readme = fs::read_to_string(temp.path().join("README.md")).expect("generated public guide");
     assert!(readme.contains(TAIRA_DIGITAL_SHEKEL_ASSET_ID));
     assert!(readme.contains(TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS));
-    assert!(!readme.contains(LOCALNET_KAGEMUSHA_ASSET_ID));
-    assert!(!readme.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
     assert!(readme.contains("Registered lanes: `0,1,2,3,4,7`"));
     assert!(readme.contains("lane-manifests/is.manifest.json"));
     let peer_config_text = fs::read_to_string(temp.path().join("peer0.toml"))
@@ -1249,33 +1242,23 @@ fn localnet_asset_defaults_are_selected_by_exact_taira_chain_context() {
     assert_eq!(taira[0].owned_by, client);
     assert_eq!(taira[0].mint_to, client);
     let generic = effective_localnet_assets_for_client(&[], &client, false);
-    assert_eq!(generic.len(), 1);
-    assert_eq!(generic[0].id, LOCALNET_KAGEMUSHA_ASSET_ID);
-    assert_eq!(
-        generic[0].alias.as_deref(),
-        Some(LOCALNET_KAGEMUSHA_ASSET_ALIAS)
+    assert!(
+        generic.is_empty(),
+        "ordinary localnets bootstrap only explicitly requested assets"
     );
-    assert_eq!(generic[0].name, LOCALNET_KAGEMUSHA_ASSET_NAME);
-    assert_eq!(generic[0].quantity, 100);
-    assert_eq!(generic[0].owned_by, client);
-    assert_eq!(generic[0].mint_to, client);
 }
 
 #[test]
-fn localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision() {
-    let client = localnet_client_account_id();
-    for taira in [false, true] {
-        let builtin = localnet_kagemusha_asset_spec_for_client(&client, taira);
-        let by_id = requested_localnet_asset_spec(&builtin.id).expect("requested builtin identity");
-        assert!(validate_localnet_asset_specs(&[by_id], taira).is_err());
-        let mut by_alias = requested_localnet_asset_spec(&localnet_sample_asset_literal())
-            .expect("distinct requested identity");
-        by_alias.alias = builtin.alias;
-        assert!(validate_localnet_asset_specs(&[by_alias], taira).is_err());
-        let other_profile = localnet_kagemusha_asset_spec_for_client(&client, !taira);
-        validate_localnet_asset_specs(&[other_profile], taira)
-            .expect("the other workflow's independent asset can be explicitly requested");
-    }
+fn taira_asset_validation_rejects_builtin_identity_or_alias_collision() {
+    let builtin = taira_digital_shekel_asset_spec(&localnet_client_account_id());
+    let by_id = requested_localnet_asset_spec(&builtin.id).expect("requested builtin identity");
+    assert!(validate_localnet_asset_specs(&[by_id], true).is_err());
+    let mut by_alias = requested_localnet_asset_spec(&localnet_sample_asset_literal())
+        .expect("distinct requested identity");
+    by_alias.alias = builtin.alias.clone();
+    assert!(validate_localnet_asset_specs(&[by_alias], true).is_err());
+    validate_localnet_asset_specs(&[builtin], false)
+        .expect("ordinary localnets may explicitly request the independent Digital Shekel asset");
 }
 
 #[test]
@@ -1366,36 +1349,41 @@ fn generated_localnet_registers_requested_asset_definition_for_client_owner() {
 }
 #[test]
 #[allow(clippy::too_many_lines)]
-fn generated_localnet_bootstraps_universal_kagemusha_asset() {
+fn generated_localnet_bootstraps_explicitly_requested_asset() {
+    let mut requested = requested_localnet_asset_spec(&localnet_sample_asset_literal()).unwrap();
+    requested.alias = Some("sample#wonderland.universal".to_owned());
     let opts = LocalnetOptions {
         service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
-        seed: Some("kagemusha-bootstrap".to_owned()),
+        seed: Some("requested-asset-bootstrap".to_owned()),
         bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
         public_host: DEFAULT_PUBLIC_HOST.to_owned(),
         base_api_port: 29080,
         base_p2p_port: 33337,
         out_dir: PathBuf::from("unused"),
         extra_accounts: 0,
-        assets: Vec::new(),
+        assets: vec![requested.clone()],
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Npos,
     };
     let manifest = localnet_genesis_for_opts(&opts);
-    let kagemusha_asset_id = AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
-        .expect("KAGEMUSHA V1 asset id");
-    let kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS
+    let requested_asset_id =
+        AssetDefinitionId::parse_address_literal(&requested.id).expect("requested asset id");
+    let requested_alias = requested
+        .alias
+        .as_deref()
+        .unwrap()
         .parse::<AssetDefinitionAlias>()
-        .expect("KAGEMUSHA V1 asset alias");
+        .expect("requested asset alias");
     let client_account_id = localnet_client_account_id();
     let (genesis_public_key, _) =
         generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED)
             .expect("test localnet genesis key generation should succeed");
     let genesis_account_id = AccountId::new(genesis_public_key);
     let expected_mint_destination =
-        AssetId::new(kagemusha_asset_id.clone(), client_account_id.clone());
+        AssetId::new(requested_asset_id.clone(), client_account_id.clone());
     let has_definition = manifest.instructions().any(|instruction| {
         instruction
             .as_any()
@@ -1404,26 +1392,23 @@ fn generated_localnet_bootstraps_universal_kagemusha_asset() {
                 matches!(
                     register,
                     RegisterBox::AssetDefinition(register)
-                        if register.object().id == kagemusha_asset_id
+                        if register.object().id == requested_asset_id
                 )
             })
     });
-    assert!(
-        has_definition,
-        "localnet must register the built-in KAGEMUSHA V1 asset"
-    );
+    assert!(has_definition, "localnet must register the requested asset");
     let has_alias_binding = manifest.instructions().any(|instruction| {
         instruction
             .as_any()
             .downcast_ref::<SetAssetDefinitionAlias>()
             .is_some_and(|set_alias| {
-                set_alias.asset_definition_id() == &kagemusha_asset_id
-                    && set_alias.alias().as_ref() == Some(&kagemusha_alias)
+                set_alias.asset_definition_id() == &requested_asset_id
+                    && set_alias.alias().as_ref() == Some(&requested_alias)
             })
     });
     assert!(
         has_alias_binding,
-        "localnet must bind the built-in KAGEMUSHA V1 asset alias"
+        "localnet must bind the requested asset alias"
     );
     let has_initial_mint = manifest.instructions().any(|instruction| {
         instruction
@@ -1438,7 +1423,7 @@ fn generated_localnet_bootstraps_universal_kagemusha_asset() {
     });
     assert!(
         has_initial_mint,
-        "localnet must mint the built-in KAGEMUSHA V1 asset to the client signer"
+        "localnet must mint the requested asset to the client signer"
     );
     let has_owner_transfer = manifest.instructions().any(|instruction| {
         instruction
@@ -1446,7 +1431,7 @@ fn generated_localnet_bootstraps_universal_kagemusha_asset() {
             .downcast_ref::<TransferBox>()
             .is_some_and(|transfer| match transfer {
                 TransferBox::AssetDefinition(transfer_asset) => {
-                    transfer_asset.object() == &kagemusha_asset_id
+                    transfer_asset.object() == &requested_asset_id
                         && transfer_asset.destination() == &client_account_id
                 }
                 _ => false,
@@ -1454,7 +1439,7 @@ fn generated_localnet_bootstraps_universal_kagemusha_asset() {
     });
     assert!(
         has_owner_transfer,
-        "localnet must transfer KAGEMUSHA V1 asset ownership to the client signer"
+        "localnet must transfer requested asset ownership to the client signer"
     );
     let mut has_alias_manage = false;
     let mut has_manifest_publish = false;
@@ -1520,7 +1505,7 @@ fn generated_localnet_bootstraps_universal_kagemusha_asset() {
 }
 #[test]
 #[allow(clippy::too_many_lines)]
-fn generated_localnet_needs_no_kagemusha_feature_switch() {
+fn generated_localnet_onboarding_keeps_credentials_in_owner_only_sidecars() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     #[cfg(unix)]
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
@@ -1530,7 +1515,7 @@ fn generated_localnet_needs_no_kagemusha_feature_switch() {
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
-        seed: Some("kagemusha-config".to_owned()),
+        seed: Some("onboarding-config".to_owned()),
         bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
         public_host: DEFAULT_PUBLIC_HOST.to_owned(),
         base_api_port: 29080,

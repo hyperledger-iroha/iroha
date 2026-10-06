@@ -1557,13 +1557,13 @@ pub fn build_runtime_package(
     cache_root: &Path,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
-    manifest: &Path,
+    manifest: &iroha_fs::SelectedRegularFile,
     package: Option<&str>,
     contract: Option<&str>,
     locked: bool,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
-    build::build_runtime_package(
+    let artifact = build::build_runtime_package(
         config,
         cache_root,
         registry_config,
@@ -1574,7 +1574,9 @@ pub fn build_runtime_package(
         locked,
         archive_transport,
     )
-    .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))
+    .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))?;
+    manifest.revalidate()?;
+    Ok(artifact)
 }
 #[derive(Clone)]
 struct WorkspaceResolutionOptionsV1<'a> {

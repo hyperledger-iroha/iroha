@@ -104,6 +104,7 @@
 
 pub mod mont;
 pub mod nat;
+mod s6;
 #[cfg(test)]
 mod tests;
 
@@ -116,6 +117,7 @@ use iroha_plonk::{
 };
 
 pub use self::nat::Nat;
+pub use self::s6::CanonicalS6;
 use crate::{
     arith::GlueChip,
     cells::{Bit, RowCursor, Word, assign_constant, assign_word, copy_word},

@@ -8,7 +8,7 @@ import XCTest
 /// Rust-authored canonical validator and staking DTO bytes consumed by Swift.
 final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
     private let expectedKinds: Set<String> = [
-        "authority_generation", "epoch_authorization", "dkg_session", "dkg_transcript",
+        "validator_generation", "epoch_authorization", "dkg_session", "dkg_transcript",
         "committee_transition", "monetary_plan", "monetary_bond_plan", "monetary_unbond_plan",
         "monetary_slash_plan", "reward_claim_plan", "fee_reward_claim_plan", "rebind_peer",
     ]
@@ -17,12 +17,13 @@ final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
         let rows = try fixtureRows()
         XCTAssertEqual(Set(rows.keys), expectedKinds)
 
-        let authority = try ValidatorStakingNoritoV1.AuthorityGeneration(
-            noritoPayload: rows["authority_generation"]!
+        let authority = try ValidatorStakingNoritoV1.ValidatorGeneration(
+            noritoPayload: rows["validator_generation"]!
         )
         XCTAssertEqual(authority.generation, 0)
         XCTAssertEqual(authority.validators.count, 4)
-        XCTAssertEqual(authority.noritoPayload, rows["authority_generation"])
+        XCTAssertTrue(authority.validators.allSatisfy { $0.algorithm == .blsNormal })
+        XCTAssertEqual(authority.noritoPayload, rows["validator_generation"])
 
         let epoch = try ValidatorStakingNoritoV1.EpochAuthorization(
             noritoPayload: rows["epoch_authorization"]!
@@ -69,7 +70,7 @@ final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
             XCTAssertEqual(try ValidatorStakingNoritoV1.CommitteeMember(noritoPayload: member.noritoPayload).noritoPayload,
                            member.noritoPayload)
         }
-        XCTAssertEqual(transition.credentials?.authority.generation, 1)
+        XCTAssertEqual(transition.credentials?.beacon.sessionID, Data(repeating: 0x31, count: 32))
         XCTAssertEqual(transition.outcome?.decision, .activate)
         XCTAssertEqual(transition.noritoPayload, rows["committee_transition"])
 
@@ -118,6 +119,56 @@ final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
         )
         XCTAssertEqual(rebind.laneID, 0)
         XCTAssertEqual(rebind.noritoPayload, rows["rebind_peer"])
+    }
+
+    func testValidatorGenerationRequiresTheExactOrderedBlsRoster() throws {
+        let rows = try fixtureRows()
+        let generation = try fields(XCTUnwrap(rows["validator_generation"]))
+        let validators = try vectorFields(generation[2])
+        let foreignPeer = try fields(XCTUnwrap(rows["rebind_peer"]))[2]
+        let invalid: [Data] = [
+            record(Array(generation.dropLast())),
+            record([uint(1, bytes: 2)] + generation),
+            replacing(generation, index: 0, value: Data(repeating: 0, count: 32)),
+            replacing(generation, index: 2, value: vector(Array(validators.reversed()))),
+            replacing(generation, index: 2, value: vector(Array(repeating: validators[0], count: 4))),
+            replacing(generation, index: 2, value: vector(Array(validators.prefix(3)))),
+            replacing(generation, index: 2, value: vector(validators + [validators[0]])),
+            replacing(generation, index: 2, value: vector([foreignPeer] + Array(validators.dropFirst()))),
+            replacing(generation, index: 2, value: vector(validators.map {
+                record([$0, Data(repeating: 1, count: 32), Data(repeating: 2, count: 32)])
+            })),
+        ]
+        for bytes in invalid {
+            XCTAssertThrowsError(try ValidatorStakingNoritoV1.ValidatorGeneration(noritoPayload: bytes))
+        }
+        let payload = replacing(generation, index: 1, value: uint(UInt64.max))
+        let decoded = try ValidatorStakingNoritoV1.ValidatorGeneration(noritoPayload: payload)
+        XCTAssertEqual(decoded.generation, UInt64.max)
+        XCTAssertEqual(decoded.validators.map(\.noritoPayload), validators)
+        XCTAssertEqual(decoded.noritoPayload, payload)
+    }
+
+    func testCommitteeCredentialsAndReadinessCarryOnlyBeaconCustody() throws {
+        let transition = try ValidatorStakingNoritoV1.CommitteeTransition(
+            noritoPayload: XCTUnwrap(fixtureRows()["committee_transition"]))
+        let credentials = try XCTUnwrap(transition.credentials)
+        XCTAssertEqual(try fields(credentials.noritoPayload).count, 1)
+        XCTAssertEqual(credentials.beacon.noritoPayload, try fields(credentials.noritoPayload)[0])
+        XCTAssertThrowsError(try ValidatorStakingNoritoV1.CommitteeCredentials(
+            noritoPayload: record([Data(), credentials.beacon.noritoPayload])))
+
+        // This DTO retains the proof payload; native beacon verification authenticates it.
+        let proof = Data([0x42, 0x43])
+        let payload = record([uint(3, bytes: 4), proof])
+        let readiness = try ValidatorStakingNoritoV1.SeatReadiness(noritoPayload: payload)
+        XCTAssertEqual(readiness.validatorIndex, 3)
+        XCTAssertEqual(readiness.beaconPossession, proof)
+        XCTAssertEqual(readiness.noritoPayload, payload)
+        XCTAssertThrowsError(try ValidatorStakingNoritoV1.SeatReadiness(
+            noritoPayload: record([uint(3, bytes: 4), Data(), proof])))
+        XCTAssertThrowsError(try ValidatorStakingNoritoV1.SeatReadiness(
+            noritoPayload: record([uint(3, bytes: 4)])))
     }
 
     func testMonetaryOperationFixturesBindExactTypedFieldsAndNetworkXor() throws {
@@ -238,7 +289,7 @@ final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
     func testTruncatedRecordsFailClosed() throws {
         let rows = try fixtureRows()
         let decoders: [String: (Data) throws -> Void] = [
-            "authority_generation": { _ = try ValidatorStakingNoritoV1.AuthorityGeneration(noritoPayload: $0) },
+            "validator_generation": { _ = try ValidatorStakingNoritoV1.ValidatorGeneration(noritoPayload: $0) },
             "epoch_authorization": { _ = try ValidatorStakingNoritoV1.EpochAuthorization(noritoPayload: $0) },
             "dkg_session": { _ = try ValidatorStakingNoritoV1.DkgSession(noritoPayload: $0) },
             "dkg_transcript": { _ = try ValidatorStakingNoritoV1.DkgTranscript(noritoPayload: $0) },

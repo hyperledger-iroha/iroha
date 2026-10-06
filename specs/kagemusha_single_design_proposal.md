@@ -1235,16 +1235,16 @@ target does not authorize skipping proof or durability work.
 
 ## 9. Implementation ownership and retirement
 
-Implement in the existing owners. The detailed capability inventory and deletion
+Use the current owners below; build missing integration against the canonical objects. The detailed capability inventory and deletion
 checks are in [the evidence appendix](kagemusha_single_design_evidence.md).
 
-| Owner | Work to retain and change |
+| Owner | Current responsibility and remaining work |
 |---|---|
-| `crates/iroha_core_zk/src/kagemusha_v1_state/` | Single state machine, pending maps, transition validation and recovery projections. Replace old operation ordering with: native verification and step proof, then Advance, then the background lineage fold. Add the fold scheduler, witness custody, the lineage-adjusted values and credit-digest root, and the burn/no-op branches. |
-| `crates/iroha_core_zk/src/kagemusha_v1_recursion/` | One artifact set on PIPA-v1 (`crates/iroha_plonk`, `iroha_plonk_gadgets`, `iroha_pasta`): step relations, the lineage relation and the transport wrap. Port the retained P-256 and recursion gadgets off vendored halo2, which remains only the `iroha_plonk_oracle` test oracle. Replace per-operation online and hardware-only authority assumptions. |
+| `crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/`; future monetary state owner | The current provider owns custody bytes and head selection. Build the monetary state machine with native verification and step proof, then Advance, then background lineage folding. Add fold scheduling, witness custody, lineage-adjusted values, the credit-digest root and burn/no-op branches. |
+| `crates/iroha_kagemusha_proof/` | One artifact set on PIPA-v1: native step relations, the lineage relation and the transport wrap. Complete the P-256 and recursion gadgets in the native proof owners; vendored halo2 remains the test oracle. |
 | `crates/iroha_plonk`, `crates/iroha_plonk_gadgets`, `crates/iroha_pasta` | The PIPA-v1 proof system: arithmetization, transcripts, prover, verifier, accumulation and `decide`, gadget chips, Pasta fields, curves, MSM and Poseidon ([PIPA-v1](plonk_ipa_v1.md)). |
-| `crates/iroha_crypto/src/kagemusha.rs` | Retain encryption and recovery primitives; update caller contracts and domain bindings. |
-| `crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/` | Opaque state/proof handles, platform dispatch and durable retry coordination. Remove per-payment service phases. |
+| `iroha_crypto`; canonical wallet custody types | Use the current encryption and recovery primitives with canonical caller contracts and domain bindings. The retired KAGEMUSHA crypto module is deleted. |
+| `crates/connect_norito_bridge/` (integration pending) | Build one adapter for opaque current state/proof handles, Advance platform dispatch and durable retry coordination. The superseded coordinator and per-payment service phases are deleted. |
 | Swift; Kotlin `core-jvm`, `client-android`, `kagemusha-wallet-android` | Thin shared-core clients; platform evidence/key/storage adapters and carriers remain in their appropriate modules. Kotlin owns JVM behavior; preserve Java consumer assertions. |
 | `iroha_data_model`, `iroha_core`, `iroha_torii`, `iroha_config` | One model and service family for enrollment, load, unload and policy; reserve/finality/replay enforcement; configuration through user → actual → defaults. |
 | Formal models, fixtures and package tools | Update the selected trust boundary, messages and crash transitions; preserve useful assertions and regenerate one canonical set of vectors. |
@@ -1361,27 +1361,31 @@ Update the finite-state model to match this exchange; a model's provider
 assumption is not proof that a phone API implements it. Each result identifies
 its code, artifacts, devices and trust assumptions.
 
-At this rewrite's inspected working-tree baseline, substantial state, crypto,
-attestation, recursive gadget, ledger and carrier code exists. The ordinary
-outgoing path still depends on Reserve/Commit and FI-control responses; complete
-production State proving still has rejection paths. A Receive consumer now
-exists and must be reused where applicable. There is no demonstrated complete
-phone implementation of this consolidated design, or measured end-to-end
-2-second proof exchange. The single-parity wrap Ω is unbuilt and unmeasured.
-σ_send and σ_recv have been measured with the §3 core and every §7 control:
-3,296 bytes each without controls, with the blacklist control (σ_send and
-σ_recv) or with the lease, and σ_send 3,584 bytes with the quota control (the
-depth-32 usage tree that the third set replaces). Ω, Payment and CreditStatus
-sizes and the 2 s target remain to be measured. The data model implements the
-Poseidon signing messages, the indexed map trees, the further `P_bytes` digests,
-the blacklist limb order and the Request account digests (revision 2026-10-05,
-second set); Λ, which checks them in circuit, is unbuilt. The third set (B1–B8:
-the remaining Poseidon digests, the Request-recorded receiver blacklist and its
-history, the fixed quota-usage array, the quota share expiry and the Send time
-span) is specified here and in the wire record; the data model, vectors, step
-relations and SDKs do not implement it yet. The source inventory identifies
-those exact boundaries.
+The current `optimizations` candidate implements the revision-4 G1 objects,
+Poseidon transcripts, fixed 64-slot quota usage, Request-recorded blacklist
+selection, share expiry and Send time-span bounds. Shared Rust/SDK vectors and
+native σ relations cover all eight Send masks and both Receive selectors. The
+largest measured σ_send is 3,456 bytes; the fixed Payment overhead is 1,723
+bytes, leaving at most 4,821 bytes for the complete transported Ω. The retired
+Reserve/Commit monetary engines and mint-finality authority are deleted.
 
-No build, device experiment, live payment, deployment or implementation-code
-deletion was performed for this documentation rewrite. These facts distinguish
-the target from its implementation; they add no approval gate.
+Native PIPA-R/PIPA-AS, total soft circuit verification and authenticated indexed
+map components have tests. A real Q verifies a Receive-k12 and incoming Send-k14
+proof and produces a verified 10,496-byte local proof. The Q-to-A recursive
+frame fits k16 after bounded foreign-arithmetic optimization. These are
+component proofs: every operation's object signatures, effects and full
+recursive composition are still being connected. The current generic Ω frame
+exceeds the 4,821-byte transport cap; compact layout work continues without
+relaxing the cap or freezing artifacts from a failing descriptor.
+
+The shared Rust wallet coordinator now retains exact outputs, fold witnesses,
+checkpoints and permanent replay indexes around the existing durable `Advance`
+provider. Its component tests exercise interruption, recovery and missing or
+rolled-back archives. Native storage uses retained directory descriptors and
+identity-checked publication. The coordinator requires a real authenticated
+proof provider; bridge/SDK wiring, complete finalized ledger services and real
+A → B → C → unload remain unfinished. Component tests do not demonstrate a
+complete phone payment, the two-second p95 requirement or physical-device
+latency, energy, durability or memory compliance. The [current evidence
+checklist](kagemusha_evidence_gate.md#8-recorded-results) distinguishes executed
+component checks, diagnostic hard failures and outstanding qualification.

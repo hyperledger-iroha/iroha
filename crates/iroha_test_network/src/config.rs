@@ -28,8 +28,7 @@ use iroha_data_model::{
     domain::Domain,
     hijiri::HijiriParametersV1,
     isi::{
-        Grant, InstructionBox, Mint, Revoke, SetParameter,
-        consensus_keys::RegisterConsensusKey,
+        Grant, InstructionBox, Mint, Revoke, SetParameter, consensus_keys::RegisterConsensusKey,
         register::Register,
     },
     parameter::{
@@ -938,9 +937,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             })
             .collect();
         // Keep the proof-bearing topology in the raw manifest until signing. The
-        // signer validates that this exact validator set matches the independently
-        // derived KAGEMUSHA mint-finality authority before lowering the entries
-        // into `RegisterPeerWithPop` instructions.
+        // signer validates the exact validator set and its proofs of possession
+        // before lowering the entries into `RegisterPeerWithPop` instructions.
         let mut manifest_topology = Vec::with_capacity(topology_vec.len());
         for peer_id in &topology_vec {
             let pop_bytes = pop_map

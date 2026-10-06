@@ -540,9 +540,10 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
     Adjust the file layout if you prefer another location. `irohad` resolves
     relative paths from the directory that contains `config.toml`. The checked-in
     Nexus source is intentionally not a `RawGenesisTransaction` and cannot be
-    signed or selected by `[genesis]`. Materialize it with operator-provisioned
-    public mint-finality parameters for the final validator identities. Do not
-    substitute Taira authority or Taira's XOR asset ID.
+    signed or selected by `[genesis]`. Materialize it with the network's explicit
+    canonical XOR asset definition, then embed the final ordered BLS topology and
+    proofs of possession before signing. Do not substitute Taira validator keys
+    or Taira's XOR asset ID.
 
 3. **Provision keys and network settings.**
 

@@ -20,26 +20,16 @@ blacklist, quota-window and credit-digest trees and openings, and the packed-byt
 the lineage roots of the Payment's Ω(pred) in the vectors are labelled stand-ins; map
 roots, credit-digest roots and openings are computed.
 
-The second set of owner answers of 2026-10-05 is implemented in the data model and
-its vectors: the Poseidon signing message and the remaining 34 SHA-256 roles (§1), the
-`P_bytes` lineage, credit-opening, credit-status and credited digests (§§1, 3.2, 3.4),
-the depth-32 indexed map trees and their openings (§3.2), the limb-ordered blacklist
-and two-sided blacklist enforcement (§§3.3, 3.4), the Request account digests (§3.4),
-the Receive verifying-key selector (§3.1) and the vector consistency rules (§5). The
-code is authoritative; a change to it updates this record and the vectors together.
-
 **Third set (2026-10-05, B1–B8; proposal revision 2026-10-05).** This record now fixes
-the third set as the G1 target layout: every digest a relation recomputes is `P`, so the
+the third set as the canonical G1 layout: every digest a relation recomputes is `P`, so the
 object digests, the certificate-set, package, statement, operation and nullifier digests
 leave the SHA-256 role table (B1, §§1, 3.2); the Request records the receiver blacklist
 version and root used at issuance, Receive checks only that recorded list, and the
 wallet keeps a blacklist history in the rest (B6, §§3.2, 3.4); the quota-usage map is a
 depth-6 array aligned with the window slots and charged in place (B5, §3.3); the quota
 share expiry and the maximum anchor response time are core fields, and σ_send enforces
-the expiry and the Send time span (B7, B8, §3.3). The data model, the vectors, the σ
-relations and the SDK consumers still implement the second set; until they move in one
-G1 revision, §§1–3 describe the target, §§4–5 the current measurements and vectors, and §7
-lists the open items (TODO(G1, third set)).
+the expiry and the Send time span (B7, B8, §3.3). The data model, shared vectors and Kotlin/Swift consumers implement this layout.
+Proof-relation integration and qualification remain separate G3 work; §7 records open items.
 
 Notation: `‖` is concatenation; `LE16`…`LE128` are little-endian unsigned
 integers; every name without a width is a raw 32-byte digest, identifier, nonce or
@@ -220,7 +210,7 @@ Canonical bytes are one complete `norito::encode_canonical` frame ([Norito](../n
 | Envelope, Request, Payment, Credited, PolicyData and Lineage | 10,000 |
 | `kgm1:` text, session / message | 2,736 / 13,339 |
 | Nested payer credential of an Offer (complete frame) | ≤ 1,024 |
-| σ bytes and Ω transport-proof bytes | ≥ 1; the exact lengths of the frozen verifying-key allowlist (§3.1), with Ω + the largest σ_send ≤ 10,000 − F_payment (8,319 with the measured F_payment = 1,681; 8,277 with the B6 Request fields, F_payment = 1,723 [computed], §4) and Ω ≤ 7,812 = 10,000 − F_status (F_status = 2,188, §4; a derived envelope bound, unchanged by the third set); until it freezes only the carrying frame |
+| σ bytes and Ω transport-proof bytes | ≥ 1; the exact lengths of the frozen verifying-key allowlist (§3.1), with Ω + the largest σ_send ≤ 10,000 − F_payment (8,277 with the measured F_payment = 1,723, §4) and Ω ≤ 7,812 = 10,000 − F_status (F_status = 2,188, §4; a derived envelope bound, unchanged by the third set); until it freezes only the carrying frame |
 | Map and credit-digest opening siblings | exactly 32 (§3.2) |
 | Quota-usage array and quota-window openings | exactly 6 siblings (§3.3) |
 | Verifying-key allowlist entries | 8..=16 (one per operation; Send also per enabled-controls mask; Receive also for a Request-recorded blacklist decision) |
@@ -509,8 +499,8 @@ carries no Payment digest. `ArchiveSent` uses the Credited digest, a `P_bytes` v
   effect tag, then the effect's elements in field order zero-filled to 9. The
   `iroha_kagemusha_proof` step relations and `iroha_plonk_gadgets::statement::StatementV1`
   encode this layout, with the relation identity as witness limbs bound by the digest,
-  and reproduce the statement vectors natively and in circuit (they still encode the
-  28-element second-set layout: TODO(G1, third set)).
+  and must reproduce the statement vectors natively and in circuit; final artifact
+  qualification remains G3 work.
 - **Consumer checks** (proposal §3.2) of a statement carrying Ω(pred), before
   mutation: scheme and relation equal Ω's; `predecessor = Ω.head`;
   `credential_digest = Ω.credential_digest`; the lineage fields equal Ω's
@@ -773,30 +763,23 @@ Abandon) are ledger state: design only, TODO(G6).
 ## 4. Measured sizes
 
 Worst-case valid envelopes, printed by `size_tests.rs`. The Payment and Request carry
-a fee schedule and two Request certificates. σ_send is the 3,296-byte proof of
-`sigma_send` (`iroha_kagemusha_proof`, the §3.2 layout, `k = 12`, one lane; the
-exact descriptor length) without controls, with the blacklist control (gap opening
-and list age) or with the lease, and σ_recv the 3,296-byte `sigma_recv` at that shape,
-with or without the blacklist bit. With the quota control σ_send is 3,584 bytes (`k =
-16`, one lane: 1,298 permutations with every control), the largest σ_send; an allowlist
-with a quota mask then leaves Ω proofs up to 4,735 bytes (8,319 − 3,584). Ω is
-unmeasured: the rows use the named placeholder Ω transport proof of 4,000 bytes
-(TODO(G3)). The Request account digests
-add 66 bytes to every Request and Payment, and the fixed 32-sibling credit opening fixes
-the Credited::Status overhead. `F_payment` = 1,681 bytes with the joint budget 8,319
-bytes (`KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1`,
-`KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`), and `F_status` = 2,188 bytes with the Ω cap
-7,812 (`KAGEMUSHA_WALLET_CREDITED_STATUS_FIXED_BYTES_V1`,
-`KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1`), are pinned constants that the size test and
-the verifying-key allowlist check; they hold for Ω and σ lengths of 128 to 9,999 bytes
-each.
+a fee schedule and two Request certificates. The size test uses 3,296-byte σ_send and
+σ_recv stand-ins from the earlier measured single-lane `k = 12` shape, plus an explicit
+4,000-byte Ω placeholder. These lengths measure envelope framing; current proof relations
+and the final Ω transport still need artifact qualification (G3).
+`F_payment` = 1,723 bytes and the joint proof budget is 8,277 bytes
+(`KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1`, `KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`).
+`F_status` = 2,188 bytes and the Ω cap is 7,812 bytes
+(`KAGEMUSHA_WALLET_CREDITED_STATUS_FIXED_BYTES_V1`, `KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1`).
+The size tests and verifying-key allowlist pin these constants for Ω and σ lengths of
+128 to 9,999 bytes each.
 
 | Envelope | Bytes / bound | Fixed overhead | Largest fitting proof |
 |---|---:|---|---|
 | Offer (credential frame 618 / 1,024) | 1,104 / 2,048 | — | — |
 | SessionControl (signed ReceiveDeferred) | 338 / 2,048 | — | — |
-| Request (fee schedule, 2 certificates) | 1,801 / 10,000 | — | — |
-| Payment (σ_send 3,296; Ω proof 4,000) | 8,977 / 10,000 | 1,681 + Ω proof + σ_send | Ω proof 5,023 with the measured σ_send; Ω proof + σ_send 8,319 |
+| Request (fee schedule, 2 certificates) | 1,843 / 10,000 | — | — |
+| Payment (σ_send 3,296; Ω proof 4,000) | 9,019 / 10,000 | 1,723 + Ω proof + σ_send | Ω proof 4,981 with the selected σ_send; Ω proof + σ_send 8,277 |
 | Credited::Receive (σ_recv 3,296) | 3,975 / 10,000 | 679 + σ_recv | — |
 | Credited::Status (Ω(h) proof 4,000, 32 siblings; CreditStatus frame 6,133) | 6,188 / 10,000 | 2,188 + Ω(h) proof | Ω(h) proof 7,812 |
 | Lineage (Ω proof 4,000) | 4,413 / 10,000 | 413 + Ω proof | — |
@@ -808,15 +791,14 @@ largest Android renewal request (8 certificates totalling 65,536 DER bytes) is
 66,021 of 73,728 bytes; a 64-window quota share is 2,941 bytes; the full
 65,535-entry blacklist, an online download rather than an envelope, is 2,228,433 of
 2,228,736 bytes. Vector frames with 48-byte stand-in σ and Ω proofs: envelopes
-Payment 1,774, Credited::Receive 725, Credited::Status 2,235 and Lineage 460;
+Payment 1,816, Credited::Receive 725, Credited::Status 2,235 and Lineage 460;
 standalone scheme 208, certificate 222, credential 618, verifying-key allowlist (10
-entries) 581, Payment 1,763, fold record 616 and Receive recovery capsule 8,200 (with
+entries) 581, Payment 1,805, fold record 616 and Receive recovery capsule 8,326 (with
 its two consumed-credit insertion openings).
 
-**Third set (computed, not yet re-measured; TODO(G1, third set)).** The B6 Request
-fields add 40 transcript bytes (418 → 458) and 42 frame bytes (an `LE64` field and a
-digest field) to every Request and Payment: Request 1,843 bytes, `F_payment` 1,723
-bytes and the joint budget `|Ω| + |σ_send| ≤ 8,277` bytes. B1 changes no field width,
+**Canonical framing.** The B6 Request transcript is 458 bytes, including the blacklist
+version and root. Tests measure Request 1,843 bytes, `F_payment` 1,723 bytes and the
+joint budget `|Ω| + |σ_send| ≤ 8,277` bytes. B1 changes no field width,
 and B5, B7 and B8 change only private state, so `F_status` (2,188 bytes) and the Ω cap
 (7,812 bytes) stay. With the Λ/Ω estimate of 4,736 bytes for Ω, the largest σ_send must
 be at most 3,541 bytes: k12 (3,296 bytes) fits and the measured pre-B5 quota σ_send
@@ -828,31 +810,31 @@ paths fit), to be measured.
 ## 5. Vectors
 
 `fixtures/kagemusha/wallet_v1_vectors.json` holds the prefix and digest rule, one
-digest vector per SHA-256 role (34: body, preimage, digest), 18 signature vectors, each
+digest vector per SHA-256 role (18: body, preimage, digest), 18 signature vectors, each
 with its transcript, signing domain and 32-byte message `m`, and their high-S twins
 (`codec_ok` false, `verify_ok` true), the low-S boundary scalars (`s = floor(n/2)`
 accepted; `floor(n/2) + 1`, `r` or `s` zero or `n` rejected), nine envelope vectors
 (header fields, padding, CRC, canonical bytes, `kgm1:` text and bound), the 26 frame
 identities and caps, 30 pinned object frames, the enum tag table, and:
 
-- `field_encodings`: the modulus, the element, Poseidon and packing rules, the 43
-  Poseidon domains (the 26 of §3.2 and the 17 signing domains of §1), the element lists
+- `field_encodings`: the modulus, the element, Poseidon and packing rules, the 60
+  Poseidon domains (32 general domains, 17 signing domains and 11 object-digest domains), the element lists
   of every map value and the credit-digest value, a `send_chain` append from the empty
   chain and a `recv_chain` append with their chain values, a Send and a Receive
   statement with their σ digests, a Receive successor state's core and rest elements,
   rest digest and commitment, and the same for a `controlled_state` (Retiring, every
-  control enabled, every policy object held) whose 32 core and 13 rest elements are
+  control enabled, every policy object held) whose 33 core and 8 rest elements are
   pairwise distinct, with every field's value by name, so that each consumer binds every
   element position to its field;
 - `poseidon`: one `P` known-answer vector per domain (over `[1, 2, 3]`), the `P_bytes`
-  packing at lengths 0, 1, 30, 31, 32, 62 and 63, `credit_id` with its 28 elements, both
+  packing at lengths 0, 1, 30, 31, 32, 62 and 63, `credit_id` with its 26 elements, both
   `proof_digest` domains, the Payment, lineage, credit-opening, credit-status and
   credited digests and the signed message of each signed body (bodies, element counts,
   digests), every map value with its key, the indexed tree (the empty slot, the sentinel
   leaf, the empty-tree root, successive insertions at slots 1, 2, … with every
   intermediate root, the empty subtree of height 1, a membership opening,
   non-membership openings through the sentinel, through an interior low leaf and above
-  the largest key, a quota-usage update and a pending-outgoing removal with the next
+  the largest key, a pending-outgoing removal with the next
   free slot), the `CreditStatus` credit-digest opening, the blacklist
   leaf, node, root and a gap opening over entries whose unsigned byte order differs
   from their limb order, the quota-window leaf, empty slot, node and root, and the
@@ -871,13 +853,13 @@ to low S; stand-ins follow the labelled rules in `stand_ins`. The Rust test
 `kagemusha_wallet_v1_vectors_file_matches_the_generated_vectors` compares the file
 byte for byte; `IROHA_UPDATE_KAGEMUSHA_WALLET_VECTORS=1` rewrites it (test-only).
 The Kotlin (`KagemushaWalletVectorsV1Test`) and Swift (`KagemushaWalletVectorsV1Tests`)
-consumers recompute the 34 SHA-256 role digests with every retired role rejected, mirror
+consumers recompute the 18 SHA-256 role digests with every retired role rejected, mirror
 the 17 signing domains with their transcript lengths, verify every signature vector over
 its pinned 32-byte message `m` after the low-S rule (and reject it over the transcript),
 validate envelope headers and per-kind bounds, and round-trip `kgm1:` text. They
 re-derive the element lists (statements, state core and rest with the named
-`controlled_state` positions, chains, map values and the 28-element `credit_id` with
-both Request account digests), the `P_bytes` packing and element counts of every
+`controlled_state` positions, chains, map values and the 26-element `credit_id` with
+both Request account digests and the recorded blacklist pair), the `P_bytes` packing and element counts of every
 large-input digest and signing message, the depth-32 indexed-tree openings (sorted
 links, low-leaf brackets, fixed 32 siblings, empty subtrees and transcripts), the
 CreditStatus opening, the limb-ordered blacklist and the verifying-key allowlist with
@@ -888,8 +870,8 @@ and quota-window trees) and `iroha_plonk_gadgets` (`tests/statement_digest.rs`, 
 byte-linking tests of `src/bytes` for the packing, every large-input digest and every
 signing message) reproduce them natively and in circuit.
 
-**Third set (TODO(G1, third set)).** The regenerated vectors carry 18 SHA-256 role
-vectors (the consumers reject the 16 deleted roles), 60 Poseidon domains (the 43 above,
+**Canonical third-set coverage.** The vectors carry 18 SHA-256 role
+vectors (the consumers reject the 16 deleted roles), 60 Poseidon domains (the 17 signing and 26 base domains,
 the 11 object-digest domains of §1, and `kgwcset1`, `kgwpkg_1`, `kgwopid1`, `kgwnull1`,
 `kgwqusn1` and `kgwbhst1`), every object, certificate-set, package, operation and
 nullifier digest as a `P` vector, the 26-element statement and `credit_id` (with the
@@ -993,20 +975,11 @@ encryption and checksums never replace the wallet's verification.
 - TODO(G3): the in-circuit signature check over the 32-byte Poseidon message, the
   indexed map trees in circuit (Λ), the capsule's retained openings and the
   `artifact_inventory_digest` preimage are open.
-- TODO(G1, third set): the data model, the vectors (§5), the pinned size constants
-  (§4), the σ relations of `iroha_kagemusha_proof` and
-  `iroha_plonk_gadgets::statement::StatementV1`, and the Kotlin and Swift consumers and
-  structural Request parsers still implement the second set: the 28-element statement
-  and `credit_id`, the 34 SHA-256 roles with `H` object, statement, package, operation
-  and nullifier digests, the 32-element core and 13-element rest, the depth-32
-  quota-usage indexed tree with 130-bit keys and insertion witnesses (`QuotaCharge`,
-  `IndexedUpsert`), σ_recv against the head's `blacklist_root` with the Receive key
-  selected by the core mask, no σ check of the quota share expiry or Send time span, a
-  17-field Request body, and separate native Send control checks. They move to §§1–3
-  together: B1 digests and element lists, the B5 array (charges in place, the refresh
-  rebuild and the proof-side slot rule of §3.2), the B6 Request fields, history,
-  Request-derived Receive selector and retained gap openings, the B7 and B8 σ checks, and
-  the one native Send pre-check and Receive preparation path (§3.4).
+- TODO(G3): qualify the canonical B1/B5–B8 proof relations and frozen artifacts against
+  the current native objects: 26-element statements and credit IDs, 33-element core,
+  8-element rest, quota-usage array, Request blacklist history and quota/time checks.
+  The data model, vectors, size constants and Kotlin/Swift structural consumers use
+  this layout and reject superseded roles and Request encodings.
 - Closed by the third set (2026-10-05): the quota share expiry in σ (B7), two charge
   candidates per kind (B8), the quota charge order (B5; §3.3, Time), the Payment
   transcript digest (kept: it binds the frame transitively, §3.4), the indexed-tree

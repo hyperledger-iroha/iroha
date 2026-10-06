@@ -21,7 +21,7 @@
 //! too; a forged identity proves only its own head; a proof under one
 //! selector does not verify under another; a listed counterparty and the
 //! quota rule's violations have no accepted proof; the full mask proves and
-//! verifies at its single-lane `k = 16` shape; keys and proofs do not depend
+//! verifies at its single-lane `k = 14` shape; keys and proofs do not depend
 //! on the Rayon pool size. All tests here prove for real and are ignored in
 //! debug builds.
 
@@ -36,8 +36,8 @@ use common::{
 };
 use ff::Field;
 use iroha_kagemusha_proof::{
-    ConsumerError, Mutation, ProofFormat, SigmaAllowlist, SigmaError, SigmaProver, SigmaRelation,
-    StepRelation, VerifyingKeyEntry, Violation, check_send, lineage_view_of, sample_witness,
+    ConsumerError, Mutation, SigmaAllowlist, SigmaError, SigmaProver, SigmaRelation, StepRelation,
+    VerifyingKeyEntry, Violation, check_send, lineage_view_of, sample_witness,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq};
 use iroha_plonk::{ProverConfig, ProverError, create_proof, prove_circuit};
@@ -63,9 +63,7 @@ fn relation_checks_as_real_proofs() {
                 let proof = prover.prove(&witness, recovery(2)).expect("proof");
                 assert_eq!(
                     proof.bytes.len(),
-                    shape
-                        .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-                        .expect("length")
+                    shape.proof_length::<Eq>().expect("length")
                 );
                 assert_eq!(
                     verifier.verify(&proof.public, &proof.bytes),
@@ -199,8 +197,7 @@ fn every_proof_byte_is_bound() {
 fn pallas_step_proofs_verify() {
     for case in [SigmaRelation::SEND, SigmaRelation::RECEIVE] {
         let shape = budget_shape(folded(case));
-        let prover =
-            SigmaProver::<Ep>::keygen(shape, ProofFormat::KAGEMUSHA_STEP).expect("Pallas keys");
+        let prover = SigmaProver::<Ep>::keygen(shape).expect("Pallas keys");
         let witness = sample_witness::<Fq>(CHECK_SEED, case, Mutation::None);
         let proof = prover.prove(&witness, recovery(5)).expect("Pallas proof");
         assert_eq!(
@@ -209,9 +206,7 @@ fn pallas_step_proofs_verify() {
         );
         assert_eq!(
             proof.bytes.len(),
-            shape
-                .proof_length::<Ep>(ProofFormat::KAGEMUSHA_STEP)
-                .expect("length")
+            shape.proof_length::<Ep>().expect("length")
         );
         let mutated = sample_witness::<Fq>(
             CHECK_SEED,
@@ -254,10 +249,7 @@ fn proofs_verify_only_under_their_selector() {
         vec![(3, 0), (3, 1), (3, 4), (4, 0), (4, 1)]
     );
     for (entry, (_, prover)) in entries.iter().zip(&provers) {
-        let length = prover
-            .shape()
-            .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-            .expect("length");
+        let length = prover.shape().proof_length::<Eq>().expect("length");
         assert_eq!(usize::try_from(entry.proof_bytes).expect("u32"), length);
         assert_eq!(entry.transcript()[5..37], entry.verifying_key_digest);
         println!(
@@ -357,23 +349,33 @@ fn a_listed_counterparty_has_no_accepted_proof() {
         engine_refuses(&prover, &listed, &case.label());
         let mut unheld = listed;
         unheld.predecessor.core.controls.blacklist_version = 0;
-        let proof = prover.prove(&unheld, recovery(2)).expect("no list held");
+        let unheld_prover = match &mut unheld.inputs {
+            iroha_kagemusha_proof::StepInputs::Send(_) => prover,
+            iroha_kagemusha_proof::StepInputs::Receive(receive) => {
+                receive.request.receiver_blacklist_version = 0;
+                receive.request.receiver_blacklist_root = [0; 32];
+                vesta_prover(budget_shape(folded(SigmaRelation::RECEIVE)))
+            }
+        };
+        let proof = unheld_prover
+            .prove(&unheld, recovery(2))
+            .expect("no list held");
         assert_eq!(
-            prover.verifier().verify(&proof.public, &proof.bytes),
+            unheld_prover.verifier().verify(&proof.public, &proof.bytes),
             Ok(())
         );
     }
 }
 
-/// The quota relation and the full mask at their single-lane `k = 16`
+/// The quota relation and the full mask at their single-lane `k = 14`
 /// shape: honest proofs verify; an exceeded window and an untouched kind are
 /// refused by the library and the engine, and a forger who zeroes the
 /// exceeded window's failing range check gets a rejected proof.
 #[test]
-#[ignore = "k = 16 keys and proofs; run in release"]
-fn quota_relations_prove_at_k16() {
+#[ignore = "k = 14 keys and proofs; run in release"]
+fn quota_relations_prove_at_k14() {
     for case in [SEND_QUOTAS, SEND_EVERY] {
-        let shape = pinned_shape(folded(case), (16, 1));
+        let shape = pinned_shape(folded(case), (14, 1));
         let prover = vesta_prover(shape);
         let verifier = prover.verifier();
         let honest = sample_witness::<Fp>(CHECK_SEED + 1, case, Mutation::None);
@@ -381,9 +383,7 @@ fn quota_relations_prove_at_k16() {
         assert_eq!(verifier.verify(&proof.public, &proof.bytes), Ok(()));
         assert_eq!(
             proof.bytes.len(),
-            shape
-                .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
-                .expect("length")
+            shape.proof_length::<Eq>().expect("length")
         );
         for (mutation, violation) in [
             (Mutation::QuotaExceeded, Violation::QuotaExceeded),
@@ -417,7 +417,7 @@ fn quota_relations_prove_at_k16() {
         assert_eq!(claimed.instance(), instance);
         assert!(verifier.verify(&claimed, &forged_proof).is_err());
         println!(
-            "M12_QUOTA case={} k=16 lanes=1 bytes={} exceeded=refused untouched=refused forged=rejected",
+            "M12_QUOTA case={} k=14 lanes=1 bytes={} exceeded=refused untouched=refused forged=rejected",
             case.label(),
             proof.bytes.len()
         );
@@ -474,12 +474,8 @@ fn keys_and_proofs_do_not_depend_on_the_pool_size() {
                 .build()
                 .expect("pool");
             let (vk, descriptor, proof) = pool.install(|| {
-                let prover = SigmaProver::<Eq>::keygen_with_params(
-                    shape,
-                    ProofFormat::KAGEMUSHA_STEP,
-                    vesta_params(shape.k),
-                )
-                .expect("keys");
+                let prover = SigmaProver::<Eq>::keygen_with_params(shape, vesta_params(shape.k))
+                    .expect("keys");
                 let proof = prover.prove(&witness, recovery(7)).expect("proof");
                 let verifier = prover.verifier();
                 assert_eq!(verifier.verify(&proof.public, &proof.bytes), Ok(()));

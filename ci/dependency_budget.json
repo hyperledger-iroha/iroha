@@ -763,7 +763,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:6dffa2c862078f7f558aeb3e3779a22182d8f2d1a196c016911fed0ccb970f3c",
+    "manifest_fingerprint": "sha256:7341b4126b1c053bd1855ed53f4c2682eff656821dd2c16373427506420c0b51",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -870,13 +870,13 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1084,
+        "declared_dependency_edges": 1083,
         "declared_external_dependency_edges": 660,
         "declared_external_packages": 186,
         "declared_local_packages": 80,
         "declared_path_packages": 4,
         "declared_workspace_packages": 76,
-        "required_dependency_edges": 901,
+        "required_dependency_edges": 900,
         "required_external_dependency_edges": 528,
         "required_external_packages": 136,
         "required_local_packages": 75,
@@ -890,18 +890,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2129,
-        "declared_external_dependency_edges": 1173,
+        "declared_dependency_edges": 2136,
+        "declared_external_dependency_edges": 1177,
         "declared_external_packages": 237,
-        "declared_local_packages": 127,
+        "declared_local_packages": 128,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 123,
-        "required_dependency_edges": 1952,
-        "required_external_dependency_edges": 1035,
+        "declared_workspace_packages": 124,
+        "required_dependency_edges": 1959,
+        "required_external_dependency_edges": 1039,
         "required_external_packages": 189,
-        "required_local_packages": 127,
+        "required_local_packages": 128,
         "required_path_packages": 4,
-        "required_workspace_packages": 123
+        "required_workspace_packages": 124
       },
       "roots": [
         "*"

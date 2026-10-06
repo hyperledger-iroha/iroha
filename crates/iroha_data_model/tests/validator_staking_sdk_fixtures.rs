@@ -318,6 +318,7 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         SignatureOf::try_new(new_peer_key.private_key(), &consent).unwrap(),
     );
     let mut rows = vec![
+        ("validator_generation", genesis_generation.encode()),
         ("epoch_authorization", genesis_authorization.encode()),
         ("dkg_session", session.encode()),
         ("dkg_transcript", transcript.encode()),
@@ -410,7 +411,7 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
 }
 
 // Bare DTO payload fixtures stay separate from full request/response frames.
-// Swift and Kotlin consumers retain their exact, unchanged DTO identity set.
+// SDK consumers decode only the current first-release DTO identities.
 fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
     all_fixture_rows()
         .into_iter()
@@ -545,10 +546,11 @@ fn retired_synthetic_xor_has_the_same_rejected_sdk_identity() {
 
 #[test]
 fn committed_validator_staking_sdk_fixtures_match_current_rust_records() {
-    let committed = include_str!(concat!(
+    let committed = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../fixtures/validator_staking/norito_v1.tsv"
-    ));
+    ))
+    .expect("read canonical validator-staking fixture");
     let rows = committed
         .lines()
         .filter(|line| !line.is_empty() && !line.starts_with('#'))

@@ -2729,7 +2729,7 @@ no environment variables need to be exported.
   invoke Norito-encoded RPC endpoints without vendor-specific transports.
 
 The `validator_staking` module exposes immutable `StakingMonetaryPlanV1`,
-`StakingRewardClaimPlanV1`, `StakingAuthorityGenerationV1` and
+`StakingRewardClaimPlanV1`, `StakingValidatorGenerationV1` and
 `StakingEpochAuthorizationV1` values with `from_norito` / `to_norito`. The sole
 compact layout uses the existing Norito codec and mandatory native identity
 validation. Monetary preconditions are typed; `fee_claim` is a required argument

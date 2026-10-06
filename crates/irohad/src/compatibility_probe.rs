@@ -6,7 +6,7 @@
 //!   Kura hash at the newest snapshot's height and a snapshot-restore dry run, all read with this
 //!   build's decoders.
 //!
-//! Neither probe opens runtime-only secrets (runtime signer, mint-finality seed, beacon
+//! Neither probe opens runtime-only secrets (runtime signer and beacon
 //! credential), binds a socket or mutates node storage. Both parse the configuration, which reads
 //! the key files it names after their custody checks (`node_secrets::verify_config_key_custody`).
 

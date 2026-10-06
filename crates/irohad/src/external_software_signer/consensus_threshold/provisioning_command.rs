@@ -242,7 +242,7 @@ fn run(args: Args) -> Result<(), PreparationError> {
         .incumbent_authority()
         .validators
         .iter()
-        .position(|seat| seat.validator == args.local_validator)
+        .position(|seat| seat == &args.local_validator)
         .map(|index| u16::try_from(index + 1).map_err(|_| "invalid incumbent index"))
         .transpose()?;
     if incumbent_index.is_some() && binding.is_none() {

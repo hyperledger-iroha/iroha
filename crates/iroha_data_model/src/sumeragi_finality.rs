@@ -797,12 +797,20 @@ impl SumeragiFinalityVerifier {
         chain_id: &str,
         validators: Vec<FinalityValidator>,
     ) -> Result<Self, FinalityReadError> {
+        Self::new_with_validation(trusted_genesis, chain_id, validators, None)
+    }
+    fn new_with_validation(
+        trusted_genesis: &SignedBlock,
+        chain_id: &str,
+        validators: Vec<FinalityValidator>,
+        validation: Option<&EpochValidationScope>,
+    ) -> Result<Self, FinalityReadError> {
         need(
             trusted_genesis.header().is_genesis(),
             "trust root must be signed genesis",
         )?;
         let (crypto, committee) = ProofCrypto::new(&validators)?;
-        let genesis_epoch = genesis_epoch(trusted_genesis)?;
+        let genesis_epoch = genesis::genesis_epoch_with_validation(trusted_genesis, validation)?;
         need(
             validators.len() == genesis_epoch.committee.len()
                 && validators

@@ -47,7 +47,7 @@
 
 use std::borrow::Cow;
 
-use ff::{BatchInvert, Field, PrimeField, WithSmallOrderMulGroup};
+use ff::{BatchInvert, Field, WithSmallOrderMulGroup};
 use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
 
 use super::{DescriptorBinding, KeyError, check_shape, vk::VerifyingKey};

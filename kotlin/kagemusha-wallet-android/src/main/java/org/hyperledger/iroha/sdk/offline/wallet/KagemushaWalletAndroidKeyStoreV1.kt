@@ -173,12 +173,16 @@ internal class KagemushaWalletAndroidSystemKeyStoreV1 : KagemushaWalletAndroidKe
         return KagemushaWalletAndroidKeyInfoApi31V1.facts(info)
     }
 
-    override fun sign(key: PrivateKey, message: ByteArray): ByteArray =
-        Signature.getInstance(KAGEMUSHA_WALLET_ANDROID_SIGNATURE_ALGORITHM_V1).run {
+    override fun sign(key: PrivateKey, message: ByteArray): ByteArray {
+        require(message.size == KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1) {
+            "signing message must be exactly $KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1 bytes"
+        }
+        return Signature.getInstance(KAGEMUSHA_WALLET_ANDROID_SIGNATURE_ALGORITHM_V1).run {
             initSign(key)
             update(message)
             sign()
         }
+    }
 
     override fun deleteEntry(alias: String) {
         keyStore().deleteEntry(alias)

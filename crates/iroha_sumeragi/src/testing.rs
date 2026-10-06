@@ -277,9 +277,8 @@ pub fn fake_attestation(
 }
 
 /// The statements `(height, att_preimage(height, bh, R))` of the blocks a node executed to
-/// `Valid(R)`, shared between its executor and an execution-gated [`FakeAttestor`]: like a
-/// KAGEMUSHA authority, which needs `R`'s preimage from its own execution, it attests only
-/// these (§3.7 A2).
+/// `Valid(R)`, shared between its executor and an execution-gated [`FakeAttestor`].
+/// The fixture attests only these completed executions (§3.7 A2).
 #[derive(Clone, Debug, Default)]
 pub struct Executed(Arc<Mutex<Statements>>);
 

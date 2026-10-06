@@ -4,12 +4,13 @@ use super::{
     BlockHashRead, GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly,
     StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key,
 };
-use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::beacon::{
-    GlobalThresholdBeaconSessionBindingV1, authenticated_global_threshold_beacon_roster_hash_iter_v1,
+    GlobalThresholdBeaconSessionBindingV1,
+    authenticated_global_threshold_beacon_roster_hash_iter_v1,
     authenticated_global_threshold_beacon_roster_hash_v1,
     seat_readiness::verify_global_threshold_beacon_seat_readiness_v1,
 };
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use iroha_data_model::sumeragi::epoch::{
     BeaconEpochBindingV1, ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1,
     ValidatorGenerationV1,

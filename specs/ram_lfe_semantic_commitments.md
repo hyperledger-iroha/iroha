@@ -455,10 +455,9 @@ parallel accepted 57/56 layouts, legacy decoder, alias or fallback.
 
 | Current source | Affected behavior |
 | --- | --- |
-| `zk/kagemusha_v1_poseidon.rs` | Fp/Fq generated 8 + 57 native sponge used only by the consensus mint-finality residue until its removal; current comments claiming reviewed 128-bit security also need correction |
 | `zk/confidential_v2.rs` | Fp/Fq confidential commitments, Merkle roots and admitted transfer/unshield circuit keys |
 
-Follow transitive consumers through the mint-finality roots, protocol hashes,
+Follow transitive consumers through the confidential commitments, protocol hashes,
 admission registries, PK/VK generation, cached keys, encoded fixtures, genesis/restoration and SDK
 metadata. Confidential circuit families currently include
 `confidential-transfer-2x2-merkle16-axiom-poseidon-v3`,

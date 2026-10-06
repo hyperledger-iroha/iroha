@@ -1866,7 +1866,7 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         uses: &[("MerkleTree", 6)],
         owner: UseOwner::Other(
             Use::BlockContent,
-            "Merkle commitments of the block's events, network inputs and typed outputs carried in R, and the KAGEMUSHA top-up tree of one block",
+            "Merkle commitments of the block's events, network inputs and typed outputs carried in R",
         ),
     },
     ConstructionUse {
@@ -7072,7 +7072,7 @@ fn source_scan_classifies_every_domain_literal_and_construction_use() {
     for literal in [
         "iroha:world-state:shadow:v1\\0",
         "iroha:state:shadow-codec:v1",
-        "iroha:kagemusha:v1:shadow-record",
+        "iroha:kagemusha:wallet:v1:shadow-record",
         "iroha:validator-seat-readiness:shadow:v1",
         "fastpq:v2:permission-table:blake2b-256",
     ] {

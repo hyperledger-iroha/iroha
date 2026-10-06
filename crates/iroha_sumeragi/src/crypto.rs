@@ -56,7 +56,7 @@ pub enum AttestOutcome {
     /// The attestation bytes: the same for the same inputs.
     Attested(CommitAttestation),
     /// Not yet: the authority lacks application data the attestation binds that only this
-    /// node's own execution of the block provides (in KAGEMUSHA, `R`'s preimage). No Commit
+    /// node's own execution of the block provides. No Commit
     /// vote and no fault; the core asks again after each `Valid` execution of the current
     /// proposal's block and at each stage raise.
     Pending,
@@ -65,8 +65,8 @@ pub enum AttestOutcome {
     NoAuthority,
 }
 
-/// A node's application authority for commit attestations (§3.7), e.g. its KAGEMUSHA
-/// mint-finality authority. Like [`Signer::sign`], `attest` runs inside `handle` and MUST be
+/// A node's application authority for commit attestations (§3.7).
+/// Like [`Signer::sign`], `attest` runs inside `handle` and MUST be
 /// local, non-blocking and deterministic (the same inputs give the same bytes).
 pub trait Attestor {
     /// Attest `statement` (`att_preimage(height, bh, R)`, §3.3) as the authority of member `key`

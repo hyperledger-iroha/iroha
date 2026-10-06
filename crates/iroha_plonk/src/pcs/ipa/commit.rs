@@ -38,14 +38,16 @@
 //! endomorphism image of the base (`32 + 1 + 64` bytes); each window recodes
 //! its signed digits from the halves in closed form, so there is no digit
 //! table. The terms are split in chunks whose split data takes at most half
-//! the memory budget, and the chunk sums add up, so the working set beyond
-//! the caller's inputs is bounded by the budget.
+//! the memory budget, and the chunk sums add up. Split data, window results
+//! and concurrent bucket arrays are reserved against the same process-wide
+//! 64 MiB scratch cap as the Pasta prover MSMs. If no allocation fits, a
+//! stack-only complete scalar multiplication path preserves the result.
 
 use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
 use iroha_pasta::{
     PastaAffine, PastaCurve, PastaField,
-    msm::{FixedBaseTable, MemoryBudget, MsmError, msm_public, msm_secret},
+    msm::{FixedBaseTable, MemoryBudget, MsmError, SharedMemoryBudget, msm_public, msm_secret},
     params::ParamsIpa,
 };
 use rayon::prelude::*;
@@ -88,10 +90,9 @@ fn commit_with_bases<C: PastaCurve>(
         (_, Secrecy::Public) => msm_public::<C>(scalars, bases, budget)?,
         (_, Secrecy::Secret) => msm_secret::<C>(scalars, bases, budget)?,
     };
-    let blind_term = match secrecy {
-        Secrecy::Public => w.to_curve().mul_vartime(blind),
-        Secrecy::Secret => w.to_curve() * *blind,
-    };
+    // The constant-time multiplication is stack-only; the variable-time
+    // GLV helper allocates wNAF vectors outside MSM admission.
+    let blind_term = w.to_curve() * *blind;
     Ok(sum + blind_term)
 }
 
@@ -517,11 +518,12 @@ fn combine_windows<C: PastaCurve>(
     concurrency: usize,
     window_sum: impl Fn(usize) -> C + Sync,
 ) -> C {
-    let indices: Vec<usize> = (0..windows).collect();
-    let mut sums: Vec<C> = Vec::with_capacity(windows);
-    for wave in indices.chunks(concurrency.clamp(1, windows.max(1))) {
-        let wave_sums: Vec<C> = wave.par_iter().map(|window| window_sum(*window)).collect();
-        sums.extend(wave_sums);
+    let concurrency = concurrency.clamp(1, windows.max(1));
+    let mut sums = vec![C::identity(); windows];
+    for (wave, slots) in sums.chunks_mut(concurrency).enumerate() {
+        slots.par_iter_mut().enumerate().for_each(|(slot, sum)| {
+            *sum = window_sum(wave * concurrency + slot);
+        });
     }
     let mut total = C::identity();
     for sum in sums.iter().rev() {
@@ -533,6 +535,43 @@ fn combine_windows<C: PastaCurve>(
     total
 }
 
+/// Accounts for persistent columns, all window results, and every bucket
+/// array in one parallel wave before any of those allocations are made.
+fn window_scratch<C: PastaCurve>(
+    persistent: usize,
+    windows: usize,
+    buckets_per_window: usize,
+    budget: MemoryBudget,
+) -> Option<(usize, usize)> {
+    let point = core::mem::size_of::<C>();
+    let fixed = persistent.checked_add(windows.checked_mul(point)?)?;
+    let window = buckets_per_window.checked_mul(point)?;
+    let concurrency = budget
+        .bytes()
+        .checked_sub(fixed)?
+        .checked_div(window)?
+        .min(windows)
+        .min(rayon::current_num_threads());
+    if concurrency == 0 {
+        return None;
+    }
+    Some((
+        concurrency,
+        fixed.checked_add(concurrency.checked_mul(window)?)?,
+    ))
+}
+
+/// Complete scalar multiplication uses a stack-only fixed window. Scarce scratch
+/// changes performance, never the verifier's accepted group equation.
+fn complete_without_scratch<C: PastaCurve>(scalars: &[C::ScalarExt], bases: &[C::AffineExt]) -> C {
+    scalars
+        .iter()
+        .zip(bases)
+        .fold(C::identity(), |sum, (scalar, base)| {
+            sum + base.to_curve() * *scalar
+        })
+}
+
 /// [`msm_complete`] on GLV-split, signed-digit windows, or `None` when a
 /// split is unavailable. The terms are split in chunks of
 /// [`glv_chunk_terms`] whose sums add up: the split data never takes more
@@ -541,20 +580,39 @@ fn msm_complete_glv<C: PastaCurve>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
     budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
 ) -> Option<C> {
     let n = scalars.len().min(bases.len());
-    let chunk = glv_chunk_terms::<C>(budget);
     let mut total = C::identity();
-    for (scalars, bases) in scalars[..n].chunks(chunk).zip(bases[..n].chunks(chunk)) {
-        let split_bytes = scalars.len().saturating_mul(glv_term_bytes::<C>());
-        let buckets = MemoryBudget::new(budget.bytes().saturating_sub(split_bytes));
-        let terms = glv_terms::<C>(scalars, bases)?;
-        let width = signed_window(scalars.len().saturating_mul(2), buckets);
-        let windows = signed_windows(width);
-        let concurrency = buckets.bytes() / (BUCKET_BYTES << (width - 1));
-        total += combine_windows(windows, width, concurrency, |window| {
-            signed_window_sum::<C>(&terms, bases, window, width)
+    let mut start = 0;
+    while start < n {
+        let available = MemoryBudget::new(budget.bytes().min(shared.available_bytes()));
+        let count = glv_chunk_terms::<C>(available).min(n - start);
+        let split_bytes = count.saturating_mul(glv_term_bytes::<C>());
+        let buckets = MemoryBudget::new(available.bytes().saturating_sub(split_bytes));
+        let preferred = signed_window(count.saturating_mul(2), buckets);
+        let plan = (1..=preferred).rev().find_map(|width| {
+            let windows = signed_windows(width);
+            window_scratch::<C>(split_bytes, windows, 1 << (width - 1), available)
+                .map(|(concurrency, bytes)| (width, windows, concurrency, bytes))
         });
+        let Some((width, windows, concurrency, bytes)) = plan else {
+            return Some(
+                total + complete_without_scratch::<C>(&scalars[start..n], &bases[start..n]),
+            );
+        };
+        // Never wait while a Rayon task may own another reservation.
+        let Some(_scratch) = shared.try_reserve(bytes) else {
+            return Some(
+                total + complete_without_scratch::<C>(&scalars[start..n], &bases[start..n]),
+            );
+        };
+        let end = start + count;
+        let terms = glv_terms::<C>(&scalars[start..end], &bases[start..end])?;
+        total += combine_windows(windows, width, concurrency, |window| {
+            signed_window_sum::<C>(&terms, &bases[start..end], window, width)
+        });
+        start = end;
     }
     Some(total)
 }
@@ -564,14 +622,37 @@ fn msm_complete_glv<C: PastaCurve>(
 /// equal lengths; extra entries of the longer one are ignored. Each scalar is
 /// split with the GLV endomorphism into two signed-digit halves (see the
 /// module documentation). Windows run in waves on the caller's Rayon pool,
-/// at most as many at once as `budget` holds buckets for (always at least
-/// one), and are combined in window order, so the result is the same group
-/// element for every thread count and budget. It never fails.
+/// limited by both `budget` and the process-wide shared MSM scratch cap.
+/// Windows are combined in order, so the result is the same group element
+/// for every thread count and budget. With no scratch available it uses
+/// complete scalar multiplications without heap allocation. It never fails.
 #[must_use]
 pub fn msm_complete<C: PastaCurve>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
     budget: MemoryBudget,
+) -> C {
+    msm_complete_with_shared_budget(
+        scalars,
+        bases,
+        budget,
+        &SharedMemoryBudget::process_default(),
+    )
+}
+
+/// [`msm_complete`] with an additional shared caller scratch ceiling.
+///
+/// All kernel-owned heap buffers, including GLV splits, scalar limbs,
+/// window results and concurrent bucket arrays, are admitted before
+/// allocation. Contention uses the allocation-free complete path without
+/// waiting, and cannot change the result. Input slices and retained caller
+/// data are outside this scratch budget.
+#[must_use]
+pub fn msm_complete_with_shared_budget<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
 ) -> C {
     debug_assert_eq!(scalars.len(), bases.len());
     let n = scalars.len().min(bases.len());
@@ -579,8 +660,8 @@ pub fn msm_complete<C: PastaCurve>(
         return C::identity();
     }
     let (scalars, bases) = (&scalars[..n], &bases[..n]);
-    msm_complete_glv::<C>(scalars, bases, budget)
-        .unwrap_or_else(|| msm_complete_unsigned::<C>(scalars, bases, budget))
+    msm_complete_glv::<C>(scalars, bases, budget, shared)
+        .unwrap_or_else(|| msm_complete_unsigned::<C>(scalars, bases, budget, shared))
 }
 
 /// [`msm_complete`] on unsigned full-width windows: the fallback when a GLV
@@ -589,14 +670,28 @@ fn msm_complete_unsigned<C: PastaCurve>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
     budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
 ) -> C {
     let n = scalars.len().min(bases.len());
     if n == 0 {
         return C::identity();
     }
-    let width = complete_window(n, budget);
+    let available = MemoryBudget::new(budget.bytes().min(shared.available_bytes()));
+    let persistent = n.saturating_mul(core::mem::size_of::<[u64; 4]>());
+    let buckets = MemoryBudget::new(available.bytes().saturating_sub(persistent));
+    let preferred = complete_window(n, buckets);
     let bits = usize::try_from(<C::ScalarExt as PrimeField>::NUM_BITS).unwrap_or(256);
-    let windows = bits.div_ceil(width);
+    let plan = (1..=preferred).rev().find_map(|width| {
+        let windows = bits.div_ceil(width);
+        window_scratch::<C>(persistent, windows, (1 << width) - 1, available)
+            .map(|(concurrency, bytes)| (width, windows, concurrency, bytes))
+    });
+    let Some((width, windows, concurrency, bytes)) = plan else {
+        return complete_without_scratch::<C>(scalars, bases);
+    };
+    let Some(_scratch) = shared.try_reserve(bytes) else {
+        return complete_without_scratch::<C>(scalars, bases);
+    };
     let limbs: Vec<[u64; 4]> = scalars[..n]
         .par_iter()
         .map(|scalar| {
@@ -611,7 +706,6 @@ fn msm_complete_unsigned<C: PastaCurve>(
         })
         .collect();
     let bases = &bases[..n];
-    let concurrency = budget.bytes() / (BUCKET_BYTES << width);
     combine_windows(windows, width, concurrency, |window| {
         complete_window_sum::<C>(&limbs, bases, window * width, width)
     })
@@ -897,7 +991,12 @@ mod tests {
             let budget = MemoryBudget::new(2 * terms * term);
             assert_eq!(glv_chunk_terms::<Ep>(budget), terms);
             assert_eq!(
-                msm_complete_glv::<Ep>(&scalars, &bases, budget),
+                msm_complete_glv::<Ep>(
+                    &scalars,
+                    &bases,
+                    budget,
+                    &SharedMemoryBudget::process_default(),
+                ),
                 Some(expected),
                 "{terms} terms per chunk"
             );
@@ -1043,12 +1142,22 @@ mod tests {
                 MemoryBudget::new(BUCKET_BYTES * 8),
             ] {
                 assert_eq!(
-                    msm_complete_glv::<C>(&scalars, &bases, budget),
+                    msm_complete_glv::<C>(
+                        &scalars,
+                        &bases,
+                        budget,
+                        &SharedMemoryBudget::process_default(),
+                    ),
                     Some(expected),
                     "n = {n}"
                 );
                 assert_eq!(
-                    msm_complete_unsigned::<C>(&scalars, &bases, budget),
+                    msm_complete_unsigned::<C>(
+                        &scalars,
+                        &bases,
+                        budget,
+                        &SharedMemoryBudget::process_default(),
+                    ),
                     expected
                 );
             }
@@ -1077,15 +1186,133 @@ mod tests {
             let scalars: Vec<Fq> = (0..n).map(|_| Fq::random(&mut rng)).collect();
             let bases: Vec<_> = (0..n).map(|_| Ep::random(&mut rng).to_affine()).collect();
             assert_eq!(
-                msm_complete_glv::<Ep>(&scalars, &bases, MemoryBudget::DEFAULT),
+                msm_complete_glv::<Ep>(
+                    &scalars,
+                    &bases,
+                    MemoryBudget::DEFAULT,
+                    &SharedMemoryBudget::process_default(),
+                ),
                 Some(msm_complete_unsigned::<Ep>(
                     &scalars,
                     &bases,
-                    MemoryBudget::DEFAULT
+                    MemoryBudget::DEFAULT,
+                    &SharedMemoryBudget::process_default(),
                 )),
                 "round {round}"
             );
         }
+    }
+
+    #[test]
+    fn window_scratch_accounts_for_all_heap_buffers() {
+        let point = core::mem::size_of::<Ep>();
+        let persistent = 17 * glv_term_bytes::<Ep>();
+        let windows = signed_windows(4);
+        let buckets = 1 << 3;
+        let minimum = persistent + (windows + buckets) * point;
+        assert!(
+            window_scratch::<Ep>(persistent, windows, buckets, MemoryBudget::new(minimum - 1))
+                .is_none()
+        );
+        assert_eq!(
+            window_scratch::<Ep>(persistent, windows, buckets, MemoryBudget::new(minimum)),
+            Some((1, minimum))
+        );
+        assert!(
+            window_scratch::<Ep>(usize::MAX, windows, buckets, MemoryBudget::DEFAULT).is_none()
+        );
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .expect("pool");
+            let (concurrency, bytes) = pool.install(|| {
+                window_scratch::<Ep>(persistent, windows, buckets, MemoryBudget::DEFAULT)
+                    .expect("plan")
+            });
+            assert_eq!(concurrency, workers);
+            assert_eq!(
+                bytes,
+                persistent + windows * point + workers * buckets * point
+            );
+        }
+    }
+
+    /// Concurrent complete verifier MSMs use shared admission, and a zero
+    /// shared ceiling exercises the stack-only path on both kernels.
+    fn complete_shared_budget<C: PastaCurve>(seed: u64) {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
+        let (scalars, bases) = adversarial::<C>(65, &mut rng);
+        let expected = msm_naive::<C>(&scalars, &bases);
+        let shared = SharedMemoryBudget::new(32 << 10);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("pool");
+        pool.install(|| {
+            (0..8).into_par_iter().for_each(|_| {
+                assert_eq!(
+                    msm_complete_with_shared_budget::<C>(
+                        &scalars,
+                        &bases,
+                        MemoryBudget::DEFAULT,
+                        &shared
+                    ),
+                    expected
+                );
+            });
+        });
+        assert_eq!(shared.in_use_bytes(), 0);
+        assert!(shared.peak_bytes() <= shared.limit_bytes());
+        // A zero caller cap deterministically exercises fallback without
+        // depending on unrelated process reservations made by other tests.
+        let blocked = SharedMemoryBudget::new(0);
+        pool.install(|| {
+            assert_eq!(
+                msm_complete_with_shared_budget::<C>(
+                    &scalars,
+                    &bases,
+                    MemoryBudget::DEFAULT,
+                    &blocked
+                ),
+                expected
+            );
+            assert_eq!(
+                msm_complete_unsigned::<C>(&scalars, &bases, MemoryBudget::DEFAULT, &blocked),
+                expected
+            );
+        });
+        assert_eq!(blocked.peak_bytes(), 0);
+        assert_eq!(blocked.in_use_bytes(), 0);
+        let single = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("one-worker pool");
+        let saturated = SharedMemoryBudget::new(1);
+        let held = saturated.try_reserve(1).expect("one byte of scratch");
+        // An admission wait here would deadlock: this worker cannot drop
+        // its reservation until both nested calls return.
+        let nested = || {
+            msm_complete_with_shared_budget::<C>(
+                &scalars,
+                &bases,
+                MemoryBudget::DEFAULT,
+                &saturated,
+            )
+        };
+        assert_eq!(
+            single.install(|| rayon::join(nested, nested)),
+            (expected, expected)
+        );
+        assert_eq!(saturated.in_use_bytes(), 1);
+        drop(held);
+        assert_eq!(saturated.in_use_bytes(), 0);
+    }
+
+    #[test]
+    fn complete_msm_shared_cap_and_contention_preserve_both_curves() {
+        complete_shared_budget::<Ep>(85);
+        complete_shared_budget::<Eq>(86);
     }
 
     /// Release timing of the verifier MSM against the prover-only

@@ -1,9 +1,9 @@
-//! Native-only KAGEMUSHA step relations on the PIPA-v1 engine
+//! Native-only KAGEMUSHA step relations on the PIPA-R engine
 //! ([`iroha_plonk`], `specs/plonk_ipa_v1.md`).
 //!
 //! This crate is the compilation boundary of KAGEMUSHA relations built on the
 //! native stack: it links [`iroha_pasta`], [`iroha_plonk`] and
-//! [`iroha_plonk_gadgets`] only, never the vendored halo2 stack or
+//! [`iroha_plonk_gadgets`] and [`iroha_plonk_recursion`], never the vendored halo2 stack or
 //! `iroha_core_zk`.
 //!
 //! # Status
@@ -12,17 +12,17 @@
 //! (`specs/kagemusha_single_design_proposal.md` sections 3, 3.2, 5.1 and 7)
 //! in the G1 wallet layout of `iroha_data_model`
 //! (`specs/kagemusha_wallet_wire_v1.md` sections 3.2 to 3.4): the G1
-//! Poseidon domains, the 32-element core and 13-element rest, the `Fp` head
+//! Poseidon domains, the 33-element core and 8-element rest, the `Fp` head
 //! commitment, the chain appends, the one-element Poseidon `credit_id` over
-//! the 28-element Request body (both account digests included), the
-//! 28-element statement and every enabled control: the blacklist gap
+//! the 26-element Request body (both account digests included), the
+//! 26-element statement and every enabled control: the blacklist gap
 //! opening and list age, the quota windows and usage update and the
 //! attestation lease in `sigma_send`, and the receiver's blacklist in
 //! `sigma_recv`. The shared vectors of
 //! `fixtures/kagemusha/wallet_v1_vectors.json` pin them
 //! (`tests/digest_parity.rs`). No protocol path uses them yet, and the
-//! artifact set (verifying keys, their digest rule and the frozen proof
-//! lengths) is G3 work.
+//! artifact set (verifying keys and the frozen proof lengths) remains release
+//! qualification work. Keys use V2 descriptors and the `kgwvkey1` digest.
 //!
 //! # Contents
 //!
@@ -47,6 +47,8 @@
 //! - [`proof`]: key generation, proving and verification ([`SigmaProver`],
 //!   [`SigmaVerifier`]) and the verifying-key allowlist selected by
 //!   `(operation tag, mask)` ([`SigmaAllowlist`]).
+//! - [`q_sigma`]: shared-lane recursive verification, exact proof-byte export,
+//!   witness-key allowlist binding and local sigma obligation accumulation.
 //! - [`vectors`]: deterministic sample witnesses and relation mutations.
 //!
 //! # Relation
@@ -66,12 +68,13 @@
 //! successor's accepted-time floor to `lower` and enforces each control of
 //! its mask: with a held blacklist, the receiver's account absent from the
 //! list and the maximum list age; the quota windows the interval touches,
-//! their limits and the quota-usage map update; the lease expiry.
+//! their limits and the aligned fixed64 quota-usage update, quota-share expiry
+//! and accepted-span bound; the lease expiry.
 //! `sigma_recv` matches the Request's receiver by `wallet_id`, credits the
-//! amount without overflow, checks the core mask's blacklist bit against its
-//! relation and, with that bit and a held list, the payer's account absent
-//! from the receiver's list. The public input is the digest of the
-//! 28-element G1 statement.
+//! amount without overflow and selects blacklist enforcement from the
+//! Request's recorded version, opening the payer's account against that
+//! recorded root regardless of current-list changes. The public input is the digest of the
+//! 26-element G1 statement.
 //!
 //! # Determinism
 //!
@@ -82,11 +85,15 @@
 //! proof byte (`tests/real_proofs.rs` checks 1, 2, 4 and 7 threads).
 #![forbid(unsafe_code)]
 
+pub mod a_relation;
 pub mod circuit;
 pub mod consumer;
 mod control_circuit;
 pub mod controls;
 pub mod proof;
+pub mod omega;
+pub mod q_sigma;
+pub mod operation_relation;
 mod relation;
 pub mod shape;
 pub mod tree;
@@ -108,10 +115,9 @@ pub use proof::{
     VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES, VerifyingKeyEntry, selector_for,
 };
 pub use shape::{
-    PROOF_BYTES_GATE, ProofFormat, ShapeChoice, ShapePolicy, SigmaShape, limb_bits_for,
-    select_shape,
+    PROOF_BYTES_GATE, ShapeChoice, ShapePolicy, SigmaShape, limb_bits_for, select_shape,
 };
-pub use tree::{BlacklistGap, IndexedLeaf, IndexedUpsert, QuotaWindow};
+pub use tree::{BlacklistGap, IndexedInsert, IndexedLeaf, QuotaWindow};
 pub use vectors::{Mutation, SAMPLE_RELATION_ID, sample_witness};
 pub use witness::{
     CONTROL_ATTESTATION_LEASE, CONTROL_BLACKLIST, CONTROL_QUOTAS, CONTROLS_DEFINED, Controls,

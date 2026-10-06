@@ -2376,9 +2376,8 @@ impl World {
     }
 
     /// The commit-attestation extension of replica `r` (§3.7): its machine profile's authority
-    /// (every key, none, or forging) with the ground-truth verifier. Like a KAGEMUSHA authority,
-    /// which needs `R`'s preimage, it attests only blocks the replica executed (`Pending` before,
-    /// A2).
+    /// (every key, none, or forging) with the ground-truth verifier. The fixture attests
+    /// only blocks the replica executed (`Pending` before, A2).
     pub fn attestation_for(&self, r: usize) -> Attestation {
         let rep = &self.replicas[r];
         let m = rep.machine;

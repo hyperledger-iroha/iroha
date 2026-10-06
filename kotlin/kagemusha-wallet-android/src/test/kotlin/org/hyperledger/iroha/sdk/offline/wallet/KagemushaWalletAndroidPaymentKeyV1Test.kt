@@ -37,7 +37,7 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
      * Send receipt (`fixtures/kagemusha/wallet_v1_vectors.json`): what the Rust receipt signer
      * hands to `key_sign`.
      */
-    private val message = "cef66bb0a38d8d731b651b16c61f7991647e67b59b9418827a389b2111768420"
+    private val message = "a5e8b32421e17595040cdcdeeaf46f06da85291d68cff8e05dab8bfc64a96a2d"
         .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private fun platformCode(code: Int) = KagemushaWalletAndroidUnavailableV1.platform(code)
@@ -391,10 +391,21 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertTrue(KagemushaP256Codec.verifyRawLowS(testSec1V1(entry.pair.public), message, raw))
 
         // Anything other than one 32-byte message is refused before the Keystore is reached.
-        for (length in listOf(0, 1, 31, 33, 338)) {
+        val signCalls = keyStore.signCalls
+        val keyCalls = keyStore.getKeyCalls
+        for (length in listOf(0, 1, 31, 33, 338, 1024)) {
             assertFailsWith<IllegalArgumentException>("length $length") { paymentKey.sign(slot, ByteArray(length) { 7 }) }
         }
-        assertEquals(1, keyStore.signCalls)
+        assertEquals(signCalls, keyStore.signCalls, "wrong lengths never reach the signer")
+        assertEquals(keyCalls, keyStore.getKeyCalls, "wrong lengths never load the key")
+    }
+
+    @Test fun `system signer refuses any message other than 32 bytes`() {
+        val key = keyStore.seed(alias(slot())).pair.private
+        val system = KagemushaWalletAndroidSystemKeyStoreV1()
+        for (length in listOf(0, 1, 31, 33, 338, 1024)) {
+            assertFailsWith<IllegalArgumentException>("length $length") { system.sign(key, ByteArray(length)) }
+        }
     }
 
     @Test fun `signing failures are unavailable and never touch the key`() {

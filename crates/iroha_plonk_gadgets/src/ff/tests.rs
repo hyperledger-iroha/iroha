@@ -1547,6 +1547,194 @@ fn ff_range_patterns_follow_the_block_layout() {
     }
 }
 
+/// Runs the existing fused-block attack at an explicitly chosen final row.
+/// `args = [modulus, attack, first_row]`.
+fn terminal_attack_program<F: PastaField>(
+    ff: &mut FfChip<F>,
+    glue: &mut GlueChip<F>,
+    region: &mut Region<'_, F>,
+    inputs: &[Value<[u64; 4]>],
+    args: &[u64],
+) -> Result<Vec<Word<F>>, Error> {
+    *ff = FfChip::starting_at(
+        ff.config().clone(),
+        usize::try_from(args[2]).map_err(|_| Error::Synthesis)?,
+    );
+    attack_program(ff, glue, region, inputs, args)
+}
+
+/// Runs either canonical-comparison binding at a chosen final block.
+/// `args = [modulus, mode, first_row]`.
+fn terminal_canonical_program<F: PastaField>(
+    ff: &mut FfChip<F>,
+    glue: &mut GlueChip<F>,
+    region: &mut Region<'_, F>,
+    inputs: &[Value<[u64; 4]>],
+    args: &[u64],
+) -> Result<Vec<Word<F>>, Error> {
+    *ff = FfChip::starting_at(
+        ff.config().clone(),
+        usize::try_from(args[2]).map_err(|_| Error::Synthesis)?,
+    );
+    canonical_program(ff, glue, region, inputs, args)
+}
+
+/// Checks the final `+6` lookup, arithmetic roots and comparison copies,
+/// including a one-row overflow beyond the usable domain.
+fn final_usable_row_case<F: PastaField>(modulus_index: u64, leaf: bool) {
+    let modulus = modulus_at(modulus_index).expect("modulus");
+    let m = modulus_big(modulus);
+    let mut circuit = FfCircuit::new(
+        &[modulus],
+        0,
+        terminal_attack_program::<F>,
+        vec![words_of_big(&(&m - 3_u8)), words_of_big(&(&m - 11_u8))],
+        &[modulus_index, 0, 0],
+    );
+    circuit.params.leaf = leaf;
+    let (cs, (config, _, _, audit)) = configure(&circuit).expect("configure");
+    let usable = cs.usable_rows(K).expect("usable rows");
+    // Two proper witnesses followed by a fused multiplication block.
+    circuit.args[2] = u64::try_from(usable - 3 * BLOCK_ROWS).expect("row");
+    assert_accepts(&circuit, &[], "honest product at final usable row");
+    let synthesized = synthesize(&circuit, K, Some(&[Vec::new()][..])).expect("synthesis");
+    for column in config.advice_columns() {
+        assert!(synthesized.tables.advice_assigned()[column.index()][usable - 1]);
+    }
+    if let Some(audit) = audit {
+        assert_eq!(audit.audit(&synthesized.tables), Ok(()));
+    }
+    // The overflowing quotient digit passes plain membership at the final
+    // row, but the scaled membership six rows earlier must still reject it.
+    circuit.args[1] = 4;
+    let rejected = check(&circuit, &[]);
+    assert_eq!(
+        range_rejections(&rejected),
+        Some(vec!["ff q_0 range".into()])
+    );
+    assert!(rejected.failures().iter().all(|failure| matches!(
+        failure,
+        CheckFailure::LookupInputMissing { location, .. }
+            if location.row == usable - BLOCK_ROWS
+    )));
+    circuit.args[1] = 0;
+    circuit.args[2] += 1;
+    assert!(matches!(
+        synthesize(&circuit, K, Some(&[Vec::new()][..])),
+        Err(Error::RowOutOfRange { row, usable_rows }) if row == usable && usable_rows == usable
+    ));
+
+    // Both a canonical witness and a copied proper witness bind their
+    // comparison difference to the last row's Q running sum.
+    for mode in [0, 1] {
+        let mut canonical = FfCircuit::new(
+            &[modulus],
+            3,
+            terminal_canonical_program::<F>,
+            vec![words_of_big(&(&m - 1_u8))],
+            &[
+                modulus_index,
+                mode,
+                u64::try_from(usable - BLOCK_ROWS).expect("row"),
+            ],
+        );
+        canonical.params.leaf = leaf;
+        assert_accepts(
+            &canonical,
+            &limb_fields_big::<F>(&(&m - 1_u8)),
+            "canonical comparison at final usable row",
+        );
+        canonical.inputs[0] = words_of_big(&m);
+        let rejected = check(&canonical, &limb_fields_big::<F>(&m));
+        assert_eq!(
+            range_rejections(&rejected),
+            Some(vec!["ff q_2 range".into()])
+        );
+        assert!(rejected.failures().iter().any(|failure| matches!(
+            failure,
+            CheckFailure::LookupInputMissing { location, .. } if location.row == usable - 1
+        )));
+    }
+}
+
+#[test]
+fn ff_final_usable_row_binds_fused_and_comparison_blocks() {
+    final_usable_row_case::<Fp>(FQ_INDEX, false);
+    final_usable_row_case::<Fq>(FP_INDEX, false);
+    final_usable_row_case::<Fp>(P256_P_INDEX, true);
+    final_usable_row_case::<Fq>(P256_N_INDEX, true);
+}
+
+/// Isolates all four carry range arguments from the arithmetic equations.
+/// `args = [outside, first_row]`; the valid signed carries are the two
+/// endpoints and their adjacent interior values. The invalid values sit one
+/// and two beyond either endpoint, represented after adding the offset.
+fn carry_endpoints_program<F: PastaField>(
+    ff: &mut FfChip<F>,
+    _glue: &mut GlueChip<F>,
+    region: &mut Region<'_, F>,
+    _inputs: &[Value<[u64; 4]>],
+    args: &[u64],
+) -> Result<Vec<Word<F>>, Error> {
+    *ff = FfChip::starting_at(
+        ff.config().clone(),
+        usize::try_from(args[1]).map_err(|_| Error::Synthesis)?,
+    );
+    let start = ff.block(&[Group::U])?;
+    ff.activate(region, start, Group::U)?;
+    let limit = F::from_u128(1 << (CARRY_OFFSET_BITS + 1));
+    let two = F::from(2_u64);
+    let entries = if args[0] == 0 {
+        [F::ZERO, F::ONE, limit - two, limit - F::ONE]
+    } else {
+        [-F::ONE, -two, limit, limit + F::ONE]
+    };
+    for (column, entry) in ff.config.u.iter().zip(entries) {
+        FfChip::running_sum(region, *column, start, CARRY_SUBLIMBS, Value::known(entry))?;
+    }
+    Ok(Vec::new())
+}
+
+/// Carry bounds are modulus-independent; exercise both native fields and
+/// both the private range table and the Q leaf's merged `u_0` argument.
+fn carry_endpoints_case<F: PastaField>(leaf: bool) {
+    let mut circuit = FfCircuit::new(
+        &[ForeignModulus::P256_BASE],
+        0,
+        carry_endpoints_program::<F>,
+        Vec::new(),
+        &[0, 0],
+    );
+    circuit.params.leaf = leaf;
+    let (cs, _) = configure(&circuit).expect("configure");
+    let usable = cs.usable_rows(K).expect("usable rows");
+    circuit.args[1] = u64::try_from(usable - BLOCK_ROWS).expect("row");
+    assert_accepts(&circuit, &[], "carry endpoints are inclusive");
+    circuit.args[0] = 1;
+    let rejected = check(&circuit, &[]);
+    let names = range_rejections(&rejected).expect("only carry ranges reject");
+    assert_eq!(names.len(), CARRIES);
+    for index in 0..CARRIES {
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with(&format!("ff u_{index} range")))
+        );
+    }
+    assert!(rejected.failures().iter().all(|failure| matches!(
+        failure,
+        CheckFailure::LookupInputMissing { location, .. } if location.row == usable - 1
+    )));
+}
+
+#[test]
+fn ff_carry_endpoints_are_range_checked_through_the_final_row() {
+    carry_endpoints_case::<Fp>(false);
+    carry_endpoints_case::<Fq>(false);
+    carry_endpoints_case::<Fp>(true);
+    carry_endpoints_case::<Fq>(true);
+}
+
 /// `args = [modulus, op, count]`: two proper witnesses, then `count`
 /// operations `op` (0 multiply, 1 divide, 2 assert canonical, 3 canonical
 /// witness); outputs the last result's limbs.

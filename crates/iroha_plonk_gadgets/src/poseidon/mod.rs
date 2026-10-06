@@ -18,7 +18,7 @@ pub mod sponge;
 
 pub use pow5::{
     Absorb, AbsorbInput, CELLS_PER_PERMUTATION, LANE_COLUMNS, Pow5Chip, Pow5Columns, Pow5Config,
-    Pow5State, ROWS_PER_PERMUTATION, RoundConstantColumns, permute_native,
+    Pow5State, ROWS_PER_PERMUTATION, RoundConstantColumns, SharedRoundSelectors, permute_native,
 };
 pub use sponge::{
     SpongeChip, SpongeConfig, domain_permutations, folded_state, raw_initial_state,

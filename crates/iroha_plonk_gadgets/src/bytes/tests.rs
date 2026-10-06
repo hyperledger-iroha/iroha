@@ -492,6 +492,75 @@ fn message<F: PoseidonField>(
     decode_le_element(&mut chips.uint(), region, &run, 0)
 }
 
+fn direct_message_program<F: PoseidonField>(
+    chips: &mut Chips<F>,
+    region: &mut Region<'_, F>,
+    inputs: &Inputs<F>,
+) -> Result<Vec<Word<F>>, Error> {
+    let raw: [u8; 32] = inputs
+        .bytes
+        .clone()
+        .try_into()
+        .map_err(|_| Error::Synthesis)?;
+    let raw = if inputs.known {
+        Value::known(raw)
+    } else {
+        Value::unknown()
+    };
+    let direct = LeElement::assign(&mut chips.uint(), region, raw)?;
+    let tape = message(chips, region, inputs)?;
+    let direct = [direct.lo().word(), direct.hi().word(), direct.top().word()];
+    for (direct, tape) in direct
+        .iter()
+        .zip([tape.lo().word(), tape.hi().word(), tape.top().word()])
+    {
+        GlueChip::assert_equal(region, direct, tape)?;
+    }
+    Ok(direct.into_iter().cloned().collect())
+}
+fn direct_messages<F: PoseidonField>() {
+    for bytes in [
+        vec![0; 32],
+        vec![255; 32],
+        pattern(32, 11),
+        pattern(32, 251),
+    ] {
+        let lo = u128::from_le_bytes(bytes[..16].try_into().unwrap());
+        let hi = u128::from_le_bytes(bytes[16..].try_into().unwrap()) & ((1_u128 << 127) - 1);
+        let expected = [
+            F::from_u128(lo),
+            F::from_u128(hi),
+            F::from(u64::from(bytes[31] >> 7)),
+        ];
+        let circuit = build(
+            direct_message_program,
+            Inputs::new(bytes, vec![], vec![]),
+            3,
+        );
+        assert!(accepts(&circuit, 9, &expected));
+        assert_no_undetected(&circuit, 9, &expected);
+        for index in 0..3 {
+            let mut bad = expected;
+            bad[index] += F::ONE;
+            assert!(!accepts(&circuit, 9, &bad));
+        }
+        let assigned = synthesize(&circuit, 9, Some(&[expected.to_vec()])).unwrap();
+        let unknown = synthesize(&circuit.without_witnesses(), 9, None).unwrap();
+        assert_eq!(assigned.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(assigned.tables.selectors(), unknown.tables.selectors());
+        assert_eq!(assigned.tables.permutation(), unknown.tables.permutation());
+        assert_eq!(
+            assigned.tables.advice_assigned(),
+            unknown.tables.advice_assigned()
+        );
+    }
+}
+#[test]
+fn direct_private_message_assignment_matches_tape_and_rejects_every_cell_tamper() {
+    direct_messages::<Fp>();
+    direct_messages::<Fq>();
+}
+
 /// The point link of the message with `(x, y) = fields`; mode `arg 0`:
 /// 0 hard link, 1 soft link, 2 hard decode (`y` given), 3 soft decode (no
 /// field input), 4 soft decode with the forced witness `q = arg 1`,
