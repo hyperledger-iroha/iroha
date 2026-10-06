@@ -314,6 +314,19 @@ impl ReceiveObjects {
         )
     }
 
+    // Native preparation consumes the same private Objects predicate. The complete
+    // fixed owning stage still binds this bit and proves all of its original sources.
+    pub(crate) fn derive_objects(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        input: &ContextInputs<'_>,
+    ) -> Result<Bit<Fp>, Error> {
+        self.bind_context_inputs(chip, region, plan, input)?;
+        Ok(self.valid.clone())
+    }
+
     fn bind_context_inputs(
         &self,
         chip: &mut VerifierChip<Ep>,

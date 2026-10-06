@@ -1,6 +1,6 @@
 # KAGEMUSHA verification checklist
 
-Status: working checklist, 2026-10-06, for proposal revision 2026-10-04 (split
+Status: working checklist, 2026-10-06, for proposal revision 2026-10-05 (split
 lineage). This document records useful checks for
 [the single protocol](kagemusha_single_design_proposal.md). It is not an
 approval process and does not block use, production integration or deployment.

@@ -3,7 +3,7 @@
 use ff::Field;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{GlueChip, UintChip, bytes::tape::BytesChip, p256::VerifyMode};
+use iroha_plonk_gadgets::{Bit, GlueChip, UintChip, bytes::tape::BytesChip, p256::VerifyMode};
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
 
 use super::{ReceiveSignedObjects, maps::require_task};
@@ -348,6 +348,27 @@ impl ReceiveAuthorizationObjects {
         input: &ContextInputs<'_>,
         proof: ReceiveSignatureInputs<'_>,
     ) -> Result<(), Error> {
+        let valid = self.derive_signatures(chip, region, plan, stage, input, proof)?;
+        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
+            region,
+            plan.receive_results().ok_or(Error::Synthesis)?,
+            stage,
+            ReceiveResultTag::Signatures,
+            &valid,
+        )
+    }
+
+    // Same production predicate for native witness preparation. This returns assigned
+    // cells only; the fixed owning stage still binds and proves the result.
+    pub(crate) fn derive_signatures(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+        proof: ReceiveSignatureInputs<'_>,
+    ) -> Result<Bit<Fp>, Error> {
         require_task(plan, stage, OperationTask::ReceiveSignatures)?;
         self.bind_context(region, plan, input)?;
         proof.objects.bind_context(region, plan, input)?;
@@ -411,12 +432,6 @@ impl ReceiveAuthorizationObjects {
             checks.push(self.objects[4].structural_valid().clone());
         }
         let valid = all(uint.glue(), region, &checks)?;
-        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
-            region,
-            plan.receive_results().ok_or(Error::Synthesis)?,
-            stage,
-            ReceiveResultTag::Signatures,
-            &valid,
-        )
+        Ok(valid)
     }
 }

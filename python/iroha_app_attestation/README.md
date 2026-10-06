@@ -40,8 +40,39 @@ The private Native issuer must select policy and existing account ownership, ret
 the exact E1 and originals with its audited DATA journal, and sign a compact credential using
 its actual root-delegated Enrollment-role P256 key. Python request input exposes no signing
 authority. An interrupted external attempt retrieves its original; it never resets a counter
-or repeats a consumed assertion. The old Python private worker/ZIP builder/native encoders are
-absent in current source, so these verifier components alone do not enable the Core endpoint.
+or repeats a consumed assertion. `wallet_enrollment_worker.py` implements the current private
+verification/recovery channel. Its protected SQLite journal retains exact request and result
+originals with their configuration pin; Apple assertion counter/challenge consumption and the
+recoverable evidence result commit in one FULL-synchronous transaction. An unknown attempt
+can only recover, never dispatch another verification. The inherited configuration, crypto
+original and storage identities are rechecked before exposure. These components do not alone
+enable issuance: the genuine Native issuer, audited DATA and authenticated installed runtime
+must admit and retain every original.
+
+`tools/build_wallet_e1_verifier_zipapp.py` packages an explicit current source inventory,
+including `wallet_policy.py`, into deterministic unsigned bytes. It does not authenticate a
+runtime. The private Linux owner uses OAuth13, archive15, Python16, protected directory17,
+configuration20 and OpenSSL21; requests and replies are length-framed on private standard
+input/output with schema `iroha.kagemusha.wallet-e1-verifier.v1`. It has no listener or
+issuer-key input. The separate existing Ed25519 account ownership message remains Native's.
+
+The exact configuration schema is `iroha.kagemusha.wallet-e1-verifier-config.v1`, version 1.
+Its fields are `platform`, `app_policy_hex`, `enrollment_policy_hex`, `openssl_path`,
+`openssl_sha256`, `store_directory` and `policy`, in addition to `schema` and `version`.
+Both platform policy objects contain `scheme_id_hex`, `asset_digest_hex`, `root_base64`,
+`root_sha256`, `regulatory_policy` (exactly `permitted_controls`, `blacklist_max_age_ms`,
+`time_anchor_max_response_ms`), `challenge_lifetime_ms` and `attestation_lease_lifetime_ms`.
+Apple adds `app_id`. Android adds `package_name`, `package_version`,
+`app_certificate_sha256`, `security_levels` (`[1]`, `[2]` or `[1,2]`),
+`patch_floor_yyyymm`, `google_policy_base64`, `google_policy_sha256`,
+`maximum_evidence_age_ms`, `require_play_recognized`, `require_licensed` and
+`minimum_device_integrity`. Unknown, duplicate, mistyped and noncanonical fields are rejected.
+The worker rederives current Model app/enrollment policy digests from this projection and
+matches Native's exact pins and E1; it checks the selected lifetime without refreshing it.
+The separate governed Google decoder original has its own pin and the same selected app.
+OAuth accepts only the inherited Root-owned credential original and preserves the actual
+loaded OpenSSL/TLS custody checks. Enrollment-time Google verification creates no offline
+payment prerequisite or periodic Integrity lease.
 
 ## Modules
 

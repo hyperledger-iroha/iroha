@@ -142,7 +142,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
         schedule: &[CheckpointLayout],
         manifest: &manifest::Manifest,
-    ) -> Result<(u32, [u8; 32], Option<Vec<u8>>), Error> {
+    ) -> Result<(u32, [u8; 32], Vec<Vec<u8>>), Error> {
         if usize::try_from(manifest.checkpoint_count)
             .ok()
             .is_none_or(|count| count > schedule.len())
@@ -151,7 +151,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         let c = &step.frozen.capsule;
         let mut previous = [0; 32];
-        let mut latest = None;
+        let mut originals = Vec::with_capacity(manifest.checkpoint_count as usize);
         let predecessor_fold = predecessor
             .map(KagemushaWalletFoldRecordV1::fold_digest)
             .transpose()
@@ -183,12 +183,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 return Err(Error::WitnessLost("checkpoint chain"));
             }
             previous = digest("wallet-fold-checkpoint", &bytes);
-            latest = Some(checkpoint.proof);
+            originals.push(checkpoint.proof);
         }
         if previous != manifest.checkpoint_digest {
             return Err(Error::WitnessLost("source-bound checkpoint identity"));
         }
-        Ok((manifest.checkpoint_count, previous, latest))
+        Ok((manifest.checkpoint_count, previous, originals))
     }
     /// Prove or adopt at most one persisted sub-proof. Index roots and exact Ω identity become
     /// durable under the source marker before success. Payment preemption releases workspaces.
@@ -228,7 +228,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         for layout in &schedule {
             layout.record_limit()?;
         }
-        let (ordinal, previous, checkpoint) =
+        let (ordinal, previous, checkpoints) =
             self.checkpoints(&step, predecessor.as_ref(), &schedule, &manifest)?;
         guard.token.check()?;
         // A completed but unacknowledged publication is adopted byte-for-byte, never re-proved.
@@ -259,7 +259,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             self.proofs.fold_next(
                 &step,
                 predecessor.as_ref(),
-                checkpoint.as_deref(),
+                &checkpoints,
                 &guard.token,
             )?
         };

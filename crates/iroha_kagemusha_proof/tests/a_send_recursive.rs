@@ -1667,6 +1667,145 @@ fn native_installed_send_differential(
         SourceProfile::ordinary(native::SOURCE_RANGE_BUSES)
     );
     let source = &first.source;
+    let plan = native::Plan::new(
+        source.plan.clone(),
+        0,
+        load_objects::policy(),
+        source.signature_schema.clone(),
+        source.predecessor.key.clone(),
+        source.params.clone(),
+        common::vesta_params(16),
+    )
+    .unwrap();
+    assert_eq!(plan.context().schema(), first.plan.schema());
+    // Only installed metadata is needed for source/key import. No native Inputs,
+    // Prepared operation or runtime checkpoint exists at this point.
+    let key_originals_a: [NativeSendOriginal; 5] = a
+        .iter()
+        .map(|key| NativeSendOriginal::from_key(key.as_ref()))
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap_or_else(|_| panic!("exact five A originals"));
+    let key_originals_w: [NativeSendOriginal; 4] = w
+        .iter()
+        .map(|key| NativeSendOriginal::from_key(key.as_ref()))
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap_or_else(|_| panic!("exact four W originals"));
+    let config = iroha_plonk::keys::pk::artifact::ReadConfig {
+        maximum_bytes: key_originals_a
+            .iter()
+            .chain(&key_originals_w)
+            .map(|original| original.pk.len())
+            .max()
+            .unwrap(),
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let install =
+        |plan: native::Plan, a: &[NativeSendOriginal; 5], w: &[NativeSendOriginal; 4], config| {
+            native::Prover::from_original_artifacts(
+                plan,
+                a.each_ref().map(NativeSendOriginal::borrow),
+                w.each_ref().map(NativeSendOriginal::borrow),
+                config,
+            )
+        };
+    let installed = install(plan.clone(), &key_originals_a, &key_originals_w, config).unwrap();
+    for mutation in 0..12 {
+        let mut bad_a = key_originals_a.clone();
+        let mut bad_w = key_originals_w.clone();
+        match mutation {
+            0 => bad_a.swap(0, 4),
+            1 => bad_a.swap(1, 2),
+            2 => bad_w.swap(0, 3),
+            3 => bad_a[0].vk = bad_a[4].vk.clone(),
+            4 => bad_w[0].vk = bad_w[3].vk.clone(),
+            5 => bad_a[0].pk[44 + key_originals_a[0].vk.len()] ^= 1,
+            6 => bad_a[0].pk[44 + key_originals_a[0].vk.len() + 32] ^= 1,
+            7 => bad_w[0].pk[44 + key_originals_w[0].vk.len()] ^= 1,
+            8 => bad_a[4].pk[44 + key_originals_a[4].vk.len()] ^= 1,
+            9 => bad_a[0].pk.push(0),
+            10 => {
+                bad_a[0].pk.pop();
+            }
+            _ => bad_w[0].descriptor = bad_a[0].descriptor.clone(),
+        }
+        assert!(
+            install(plan.clone(), &bad_a, &bad_w, config).is_err(),
+            "installed Send original mutation{mutation}"
+        );
+    }
+    assert!(
+        install(
+            plan.clone(),
+            &key_originals_a,
+            &key_originals_w,
+            iroha_plonk::keys::pk::artifact::ReadConfig {
+                maximum_rows: (1 << 16) - 1,
+                ..config
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        install(
+            plan.clone(),
+            &key_originals_a,
+            &key_originals_w,
+            iroha_plonk::keys::pk::artifact::ReadConfig {
+                maximum_bytes: 0,
+                ..config
+            }
+        )
+        .is_err()
+    );
+    let descriptor =
+        iroha_plonk::cs::CircuitDescriptorV2::decode(&key_originals_a[0].descriptor).unwrap();
+    for mutation in 0..5 {
+        let mut wrong = descriptor.clone();
+        match mutation {
+            0 => wrong.instance_types[0] = iroha_plonk::cs::InstanceType::Field,
+            1 => wrong.transcript = iroha_plonk::cs::TranscriptV2::KagemushaPoseidonRp57,
+            2 => wrong.instance_mode = iroha_plonk::cs::InstanceModeV1::Committed,
+            3 => wrong.proof_suffix = iroha_plonk::cs::ProofSuffixV1::None,
+            _ => wrong.instance_lengths[0] = 68,
+        }
+        let mut bad_a = key_originals_a.clone();
+        bad_a[0].descriptor = wrong.encode().unwrap();
+        assert!(
+            install(plan.clone(), &bad_a, &key_originals_w, config).is_err(),
+            "installed Send profile mutation{mutation}"
+        );
+    }
+    let changed_root = bootstrap_objects::key(19);
+    let mut changed_slots = source.signature_schema.slots().to_vec();
+    for slot in &mut changed_slots {
+        if matches!(
+            slot.key,
+            iroha_kagemusha_proof::q_signature::SignatureKey::Fixed(_)
+        ) {
+            slot.key = iroha_kagemusha_proof::q_signature::SignatureKey::Fixed(changed_root);
+        }
+    }
+    let changed_signatures =
+        iroha_kagemusha_proof::q_signature::QSignaturePlan::new(changed_slots).unwrap();
+    let changed_plan = native::Plan::new(
+        source.plan.clone(),
+        0,
+        iroha_kagemusha_proof::a_relation::own::OwnPolicy::new([1, 2], [31, 32], changed_root)
+            .unwrap(),
+        changed_signatures,
+        source.predecessor.key.clone(),
+        source.params.clone(),
+        common::vesta_params(16),
+    )
+    .unwrap();
+    assert!(
+        install(changed_plan, &key_originals_a, &key_originals_w, config).is_err(),
+        "installed root and signature-slot policy must match the original A source"
+    );
     let input = native::Inputs {
         state: native::SendState {
             before: source.maps.witness.before,
@@ -1697,31 +1836,19 @@ fn native_installed_send_differential(
             vesta: source.predecessor.vesta.to_bytes(),
         },
     };
-    let plan = native::Plan::new(
-        source.plan.clone(),
-        0,
-        load_objects::policy(),
-        source.signature_schema.clone(),
-        source.predecessor.key.clone(),
-        source.params.clone(),
-        common::vesta_params(16),
-    )
-    .unwrap();
-    assert_eq!(plan.context().schema(), first.plan.schema());
-    let installed = native::Prover::from_artifacts(
-        plan,
-        a.try_into()
-            .unwrap_or_else(|_| panic!("exact five installed A keys")),
-        w.try_into()
-            .unwrap_or_else(|_| panic!("exact four installed W keys")),
-    )
-    .unwrap();
     assert_eq!(installed.descriptors().len(), 9);
     assert!(
         native::Catalog::new(core::array::from_fn(|_| installed.clone())).is_err(),
         "eight copies of mask0 never substitute for the complete mask catalog"
     );
     let budget = MemoryBudget::DEFAULT;
+    let prepared = plan.prepare(input.clone(), budget).unwrap();
+    let (actual_first, native_first_public) = prepared
+        .first_circuit(Fp::from(122), &FoldConfig::default())
+        .unwrap();
+    // Witness construction compares exact source descriptor, fixed/selector tables
+    // and copy mapping against the originals mounted by the installed owner.
+    Witness::from_circuit(&a[0], &actual_first, &[native_first_public]).unwrap();
     let session = installed.prepare(input.clone(), budget).unwrap();
     let unrelated_session = installed.prepare(input.clone(), budget).unwrap();
     let fold = FoldConfig::default();
@@ -1853,5 +1980,28 @@ fn native_installed_send_differential(
             installed.prepare(bad, budget).is_err(),
             "original mutation{mutation}"
         );
+    }
+}
+
+#[derive(Clone)]
+struct NativeSendOriginal {
+    descriptor: Vec<u8>,
+    vk: Vec<u8>,
+    pk: Vec<u8>,
+}
+impl NativeSendOriginal {
+    fn from_key<C: iroha_pasta::PastaCurve>(key: &iroha_plonk::ProvingKey<C>) -> Self {
+        Self {
+            descriptor: key.binding().encoded().to_vec(),
+            vk: key.vk().to_bytes().to_vec(),
+            pk: key.artifact_bytes_v2().unwrap(),
+        }
+    }
+    fn borrow(&self) -> iroha_kagemusha_proof::a_relation::native::send::OriginalArtifact<'_> {
+        iroha_kagemusha_proof::a_relation::native::send::OriginalArtifact {
+            descriptor: &self.descriptor,
+            verifying_key: &self.vk,
+            proving_key: &self.pk,
+        }
     }
 }

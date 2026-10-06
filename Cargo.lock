@@ -5096,6 +5096,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_fs",
+ "iroha_kagemusha_proof",
  "iroha_pasta",
  "iroha_plonk",
  "iroha_plonk_gadgets",
@@ -5529,6 +5530,7 @@ name = "iroha_kagemusha_proof"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "ff",
+ "group",
  "iroha_pasta",
  "iroha_plonk",
  "iroha_plonk_gadgets",

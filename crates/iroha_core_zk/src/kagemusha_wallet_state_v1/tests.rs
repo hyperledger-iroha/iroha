@@ -613,6 +613,7 @@ pub(super) struct TestProofs {
     reject: bool,
     burn: bool,
     checkpoint_bytes: u32,
+    checkpoint_stages: u8,
     ledger_scope: Option<(KagemushaWalletSchemeV1, String)>,
 }
 impl NativeProofs for TestProofs {
@@ -630,14 +631,12 @@ impl NativeProofs for TestProofs {
         _witness: &ReleasedStep,
         _predecessor: Option<&KagemushaWalletFoldRecordV1>,
     ) -> Result<Vec<CheckpointLayout>, Error> {
-        Ok(vec![CheckpointLayout {
-            artifact_digest: field(99),
-            payload_bytes: if self.checkpoint_bytes == 0 {
-                3
-            } else {
-                self.checkpoint_bytes
-            },
-        }])
+        Ok((0..self.checkpoint_stages.max(1))
+            .map(|stage| CheckpointLayout {
+                artifact_digest: field(99 + stage),
+                payload_bytes: if self.checkpoint_bytes == 0 { 3 } else { self.checkpoint_bytes },
+            })
+            .collect())
     }
 
     fn verify_transition(
@@ -668,20 +667,26 @@ impl NativeProofs for TestProofs {
         &self,
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
-        checkpoint: Option<&[u8]>,
+        checkpoints: &[Vec<u8>],
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error> {
         cancellation.check()?;
         self.folds.fetch_add(1, Ordering::SeqCst);
-        let expected = if self.checkpoint_bytes == 0 {
-            vec![9, 8, 7]
-        } else {
-            vec![9; usize::try_from(self.checkpoint_bytes).expect("layout")]
+        let original = |stage: usize| {
+            if self.checkpoint_bytes == 0 {
+                vec![9, 8, 7 - u8::try_from(stage).expect("test stage")]
+            } else {
+                vec![9; usize::try_from(self.checkpoint_bytes).expect("layout")]
+            }
         };
-        if checkpoint.is_none() {
-            return Ok(FoldProgress::Checkpoint(expected));
+        let stages = usize::from(self.checkpoint_stages.max(1));
+        assert!(checkpoints.len() <= stages);
+        for (stage, original_bytes) in checkpoints.iter().enumerate() {
+            assert_eq!(original_bytes, &original(stage), "all original source checkpoints");
         }
-        assert_eq!(checkpoint, Some(expected.as_slice()));
+        if checkpoints.len() < stages {
+            return Ok(FoldProgress::Checkpoint(original(checkpoints.len())));
+        }
         let c = &witness.frozen.capsule;
         let mut tree = KagemushaWalletIndexedTreeV1::new();
         if let KagemushaWalletEffectV1::Receive { credit_id, .. } = c.statement.effect {
@@ -1248,6 +1253,26 @@ fn send_requires_recorded_predecessor_and_owner_assembles_canonical_payment() {
             .is_err(),
         "Request session bound must be enforced before signing, not during fee indexing"
     );
+}
+
+#[test]
+fn native_fold_receives_all_source_checkpoints_in_order_after_restart() {
+    // Scheduler/custody contract only: the test owner never stands in for native proofs.
+    let mut w = wallet();
+    w.proofs.checkpoint_stages = 3;
+    w.commit(bootstrap()).expect("commit");
+    w.scheduler().set_activity(true, false);
+    for ordinal in 0..3 {
+        assert_eq!(w.fold_once().expect("one stage"), FoldStatus::Checkpoint { sequence: 0, ordinal });
+        // Drop the complete coordinator between every stage, so no in-memory source history
+        // can replace the actual source-selected durable checkpoint chain.
+        let (custody, archive, proofs, scheme, wallet) =
+            (w.custody, w.archive, w.proofs, w.scheme_id, w.wallet_id);
+        w = Coordinator::new(custody, archive, proofs, scheme, wallet).expect("restart");
+        w.scheduler().set_activity(true, false);
+    }
+    assert_eq!(w.fold_once().expect("final fold"), FoldStatus::Folded(0));
+    assert_eq!(w.proofs.folds.load(Ordering::SeqCst), 4);
 }
 
 #[test]

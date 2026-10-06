@@ -1,7 +1,9 @@
-//! Original-key intake and proving for the four fixed administrative sigma leaves.
+//! Original-key intake and proving for the fixed administrative sigma leaves.
 //!
-//! The installation owner authenticates the complete original descriptor/VK/PK
-//! and selects the operation independently of wallet input. Each typed owner
+//! The installation owner independently authenticates the descriptor/VK and fixed
+//! operation selection. Strict compiled-source/commitment import and exact VK
+//! equality transitively admit original proving material; no separate PK signature
+//! is required. Each typed owner
 //! checks its existing compiled circuit, imports its original key and completely
 //! self-verifies proofs. No runtime key generation or profile fallback is used.
 //! A still authenticates objects, map effects, signatures and predecessor proofs.
@@ -23,9 +25,13 @@ use iroha_plonk::{
 };
 
 use super::{
-    BOOTSTRAP_K, BootstrapCircuit, BootstrapWitness, ConsumingWitness, LoadCircuit, LoadWitness,
-    RetiringCircuit, StateWitness, UnloadCircuit,
+    ArchiveCircuit, ArchiveWitness, BOOTSTRAP_K, BootstrapCircuit, BootstrapWitness,
+    ConsumingWitness, LoadCircuit, LoadWitness, REFRESH_K, RefreshCircuit, RefreshKind,
+    RefreshUpdateWitness, RefreshWitness, RetiringCircuit, StateWitness, UnloadCircuit,
 };
+
+// The one Refresh source is deliberately in the same measured k12 class.
+const _: () = assert!(REFRESH_K == BOOTSTRAP_K);
 
 const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
 const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
@@ -151,6 +157,33 @@ fn blank_load() -> LoadWitness {
         statement: [Fp::ZERO; 26],
     }
 }
+fn blank_archive() -> ArchiveWitness {
+    ArchiveWitness {
+        predecessor: blank_state(),
+        successor: blank_state(),
+        statement: [Fp::ZERO; 26],
+    }
+}
+fn blank_refresh() -> RefreshWitness {
+    RefreshWitness {
+        predecessor: blank_state(),
+        successor: blank_state(),
+        statement: [Fp::ZERO; 26],
+        update: RefreshUpdateWitness {
+            kind: RefreshKind::Credential,
+            digest: Fp::ZERO,
+            scheme: [Fp::ZERO; 2],
+            asset: [Fp::ZERO; 2],
+            wallet: [Fp::ZERO; 2],
+            counter: Fp::ZERO,
+            issued_at_ms: Fp::ZERO,
+            expires_at_ms: Fp::ZERO,
+            root: Fp::ZERO,
+            controls: Fp::ZERO,
+            fee_schedule: Fp::ZERO,
+        },
+    }
+}
 fn blank_consuming() -> ConsumingWitness {
     ConsumingWitness {
         predecessor: blank_state(),
@@ -168,8 +201,10 @@ macro_rules! admin_prover {
         impl $owner {
             /// Import the original key against this fixed compiled operation.
             ///
-            /// The installation owner must first authenticate the complete originals,
-            /// operation, scheme/catalog scope and resource policy. This constructor
+            /// The installation owner must independently authenticate the descriptor,
+            /// VK, operation, scheme/catalog scope and resource policy. Exact source
+            /// and commitment checks then admit the PK material under that VK; no
+            /// additional PK signature ceremony is required. This constructor
             /// supplies a proving component, not catalog admission or a wallet-open
             /// grant. Original/domain bounds do not qualify total prover memory.
             ///
@@ -255,6 +290,13 @@ admin_prover!(
     "Original imported key and fixed Load sigma proving owner."
 );
 admin_prover!(
+    ArchiveProver,
+    ArchiveCircuit,
+    ArchiveWitness,
+    blank_archive,
+    "Original imported key and fixed ArchiveSent sigma proving owner."
+);
+admin_prover!(
     UnloadProver,
     UnloadCircuit,
     ConsumingWitness,
@@ -267,6 +309,14 @@ admin_prover!(
     ConsumingWitness,
     blank_consuming,
     "Original imported key and fixed Retiring sigma proving owner."
+);
+
+admin_prover!(
+    RefreshProver,
+    RefreshCircuit,
+    RefreshWitness,
+    blank_refresh,
+    "Original imported key for one fixed RefreshPolicy sigma source covering all five kinds."
 );
 
 /// Actual self-verified sigma bytes and the digest derived from the typed witness.

@@ -44,6 +44,8 @@ test-utils = []
 zk-tests = ["test-utils"]
 
 [dependencies]
+# Genuine wallet sigma/Q/A/W producers; this crate adds the G1/native custody adapter.
+iroha_kagemusha_proof = { path = "../iroha_kagemusha_proof", default-features = false }
 iroha_plonk_gadgets = { path = "../iroha_plonk_gadgets", default-features = false }
 iroha_plonk = { path = "../iroha_plonk", default-features = false }
 iroha_plonk_recursion = { path = "../iroha_plonk_recursion", default-features = false }

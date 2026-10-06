@@ -78,6 +78,22 @@ retained; signature-role/root substitutions and dropped obligations fail.
 See `specs/kagemusha_a_split_context_v1.md`. This is operation composition,
 not final Omega/artifact, hardware, time/RSS or wallet acceptance qualification.
 
+`a_relation::native::bootstrap::Prover::from_original_artifacts` mounts the
+original A1/W0/A2 keys from the independently installed Bootstrap plan and exact
+descriptor/VK identities. Its fixed four-bus A source is reconstructed with
+unknown witnesses before transaction preparation; W0 binds the complete A1 key
+digest and A2 retains the imported W0 identity. Existing `PIPAPK01` import checks
+source tables, copy mapping, selectors and commitments, followed by exact
+installed-VK equality. These checks authenticate PK admissibility through the
+authenticated verifier identity and fixed compiled source; this component adds no
+PK signing format. The original-only constructor replaces decoded-key ingestion.
+Actual preparation still verifies and decides both Q openings, binds the original
+sigma tape and decides its part claim before producing `Prepared`. Genuine
+A1/W0/A2 proving and retained checkpoint verification use the mounted keys.
+The installation owner must still authenticate the complete scheme/Q/root/stage
+catalog independently of operation inputs; component mounting grants neither a
+`NativeProofs` owner nor wallet-open capability.
+
 ## Load components
 
 `admin_sigma::LoadCircuit` proves both state openings, exact arithmetic,
@@ -103,6 +119,18 @@ exports the distinct accumulated Pallas, current Vesta, predecessor Vesta and
 terminal-A opening obligations for final Omega. It grants no monetary head.
 The ignored `installed_native_load_proves_and_restores_all_four_stages` regression
 exercises genuine proving under fixture-installed keys and exact-original replay.
+
+`a_relation::native::load::Prover::from_original_artifacts` mounts the fixed
+A1/W0/A2/W1/A3/W2/A4 originals from independently installed metadata. Private
+circuit views reconstruct the existing four-bus relation with unknown witnesses,
+fixed predecessor/Q programs and stage-specific history lengths. Each W binds its
+preceding imported A key; each continued A binds the preceding imported W key.
+Canonical PIPAPK01 source/copy/selector/commitment validation and exact installed-VK
+equality bind PK admissibility without adding a PK signature format. Runtime
+preparation still verifies the original predecessor and three Q proofs, decides
+all carried obligations and binds the same sigma/object tapes. Existing source
+identity, restoration and terminal checks remain required. These components do
+not supply complete producer-catalog admission, NativeProofs or wallet open.
 
 TODO: mount the complete authenticated producer inventory and canonical G1
 conversion in the native wallet proof provider, then qualify the final common
@@ -158,6 +186,54 @@ Payment into a burn. Original incoming asset/recipient mismatches remain soft.
 The staged Receive context retains exact active tape commitments and typed Q
 instances, with four-bus internal A circuits and a three-bus terminal candidate;
 internal keys cannot enter the final Omega catalog.
+
+## ArchiveSent sigma
+
+`admin_sigma::ArchiveCircuit` and `native::ArchiveProver` supply the single
+`(ArchiveSent, 0)` sigma source shared by both Credited evidence forms. The k12
+circuit opens both complete G1 states, binds the tag5 statement and sequence
+advance, and preserves every core word except sequence, nonce and the committed
+pending root. All rest words, adjusted burned value and permanent credit evidence
+remain unchanged. It takes no evidence-verdict input and cannot refund value,
+restore quota or authorize deleting retained Payment bytes.
+
+Native Advance must authenticate the committed-root removal. A still binds the
+retained Request/Payment/Credited originals, verifies evidence, and proves the
+separate adjusted-lineage removal or no-op before durable cleanup. The sigma
+component does not establish that complete ArchiveSent operation. The original
+PK is admitted through the existing strict source/commitment importer against an
+independently authenticated descriptor/VK and fixed operation; this requires no
+additional PK-signature ceremony.
+
+## RefreshPolicy sigma
+
+`admin_sigma::RefreshCircuit` and `native::RefreshProver` supply one fixed k12
+source and strict original-key owner for the single `(RefreshPolicy, 0)` selector. The actual statement kind derives five
+one-hot circuit selectors, and the typed update projection is constrained to that
+kind. Both complete G1 openings, tag7 statement, sequence, nonzero nonce, selected
+field effects, monotone time floor and every unchanged field are constrained.
+Inactive projection words are zero; policy controls are intersected with the
+credential's permitted controls. All five kinds share the same source layout.
+
+The projection grants no signed-object authority. A must still authenticate the
+exact update, enforce immutable credential renewal identity, prove blacklist
+history insertion and rebuild the complete quota usage array. Native Advance
+must authenticate changed roots before persistence. A's existing five fixed
+variants and the installed sixteen-selector sigma catalog remain unchanged.
+
+The common source measured 2,499 maximum assigned advice rows at the fixed k16
+diagnostic ceiling; `REFRESH_K` selects the existing k12 administrative class for
+all five kinds. The typed owner uses the shared bounded original importer, checks
+the compiled source/commitments and exact independently installed VK, derives the
+statement instance from the typed witness, and fully verifies every produced
+proof. Selector compression follows the authenticated descriptor, as for the
+other administrative leaves; no runtime key generation or domain fallback exists.
+
+TODO: execute direct k12 layout/adversarial checks, the original-import refusals
+and genuine proofs for all five kinds under one imported key, plus shared-header
+regressions. Complete authenticated producer inventory and A composition remain
+required. This component does not establish Native wallet open or device
+qualification; wallet open continues to return ArtifactsUnavailable (-4).
 
 ## Unload and Retiring
 
@@ -238,6 +314,22 @@ they regenerate no key and reject substitutions. Default and explicit serialized
 Q profiles never fall back to another profile. Original/domain bounds do not
 qualify total synthesis or prover memory.
 
+`q_sigma::native::QSigmaSource` removes live prepared-operation input from
+original-key installation. It checks one genuine member VK per fixed slot
+against the complete independently installed plan/catalog and descriptor. The
+member supplies layout metadata only: private source construction assigns its
+key coordinates, proof tapes and modes as unknown, and preserves every fixed
+catalog entry. Installation checks the exact k16/Pallas profile, bounded original
+source/commitments and installed VK; no extra PK signature or runtime keygen is
+required. Actual `QSigmaPlan::prepare` and `QSigmaProver::prove` still verify the
+real proofs, decide required claims/folds and fully verify the produced Q proof.
+
+The source-only constructor/layout tests, existing soft-failure classifier and
+both genuine imported Q proof regressions passed: five host cases with the same
+1,748 recorded inputs unchanged throughout. Complete authenticated producer-graph
+installation and Native typed intake remain separate requirements; this component
+does not grant wallet-open capability or qualify any Android device.
+
 `q_signature::native::QSignatureProver` imports the original k16/Pallas/V2
 signature key against an independently installed immutable slot plan, descriptor,
 VK and compiled source. It derives low-S P-256 verdicts from raw signatures,
@@ -247,7 +339,7 @@ original tapes, signature roles and the global branch; this leaf does not grant
 complete producer-catalog admission, a Native wallet owner or wallet open.
 
 `admin_sigma::native` provides typed `BootstrapProver`, `LoadProver`,
-`UnloadProver` and `RetiringProver` original-key importers over the existing
+`ArchiveProver`, `RefreshProver`, `UnloadProver` and `RetiringProver` original-key importers over the existing
 administrative circuits. Each fixes Vesta/k12, the PIPA-R direct bounded statement
 profile and its compiled operation, checks original source tables and commitments,
 and requires exact agreement with the independently installed VK. Selector
@@ -314,6 +406,13 @@ composed operation or runtime qualification.
   checks cover the import boundary. Test producers generate fixture originals;
   Native imports do not. These cases do not establish a signed producer catalog,
   final Omega, Native wallet open or physical-device qualification.
+
+- `archive_sigma`: complete rehashed unchanged-field and statement/opening
+  mutations, source-layout equality, imported-key proofs for Active and Retiring
+  under the same key, full opening decisions, forged-refund rejection and
+  bidirectional administrative-key substitutions. These cases exercise sigma
+  state effects and original intake; they do not authenticate Credited evidence
+  or qualify complete ArchiveSent execution, wallet open or physical devices.
 
 - `measure`: ignored diagnostic throughput/footprint workloads. They are not
   the fresh-process qualification procedure in the design record.

@@ -12,7 +12,7 @@ use iroha_pasta::{Ep, Eq, Fp, Fq, PastaAffine, PastaField, msm::MemoryBudget};
 use iroha_plonk::{
     DescriptorBinding, KeyError, ProverConfig, ProverError, ProverRandomness, ProvingKey,
     VerifyError, VerifyingKey, Witness, create_proof_owned,
-    frontend::Error as LayoutError,
+    frontend::{Circuit, Error as LayoutError},
     keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2},
     pcs::{
         ipa::{IpaError, PinnedParams},
@@ -27,7 +27,8 @@ use iroha_plonk_recursion::{
 };
 
 use super::{
-    IncomingSigmaWitness, QSigmaCircuit, QSigmaPlan, QSigmaWitness, SigmaClass, SigmaSlotWitness,
+    FOLD_WITNESS_BYTES, IncomingSigmaWitness, QSigmaCircuit, QSigmaPlan, QSigmaWitness, SigmaClass,
+    SigmaSlotWitness,
 };
 use crate::SigmaVerifier;
 
@@ -140,8 +141,10 @@ impl SigmaClass {
         Self::new(plan, digests).map_err(QSigmaError::Layout)
     }
     fn index(&self, witness: &SigmaSlotWitness) -> Result<u8, QSigmaError> {
-        let digest = witness
-            .key
+        self.key_index(&witness.key)
+    }
+    fn key_index(&self, key: &VerifyingKey<Eq>) -> Result<u8, QSigmaError> {
+        let digest = key
             .kagemusha_digest(self.verifier.binding())
             .map_err(|_| QSigmaError::UnauthorizedKey)?;
         self.entries
@@ -325,6 +328,107 @@ impl QSigmaPlan {
     }
 }
 
+/// Source-only installation metadata for one fixed Q plan and slot schedule.
+///
+/// The installation owner independently authenticates the complete plan/catalog,
+/// profile and keys. These representative member keys supply only the witness
+/// shape of each fixed descriptor class: their values remain unknown in source
+/// synthesis, while every catalog digest remains circuit-fixed. This object
+/// contains no operation proof, accepted mode, public frame or deciding claim.
+#[derive(Clone, Debug)]
+pub struct QSigmaSource {
+    plan: QSigmaPlan,
+    own_key: VerifyingKey<Eq>,
+    incoming_key: Option<VerifyingKey<Eq>>,
+}
+impl QSigmaSource {
+    /// Check one actual installed member VK per present descriptor class.
+    ///
+    /// The complete ordered catalog is preserved. A representative key never
+    /// fixes the runtime-selected member, and construction grants no authority.
+    /// Proof-sized buffers are allocated only after the import's resource bounds.
+    ///
+    /// # Errors
+    /// Missing/extra incoming slot, foreign descriptor, noncanonical key/profile,
+    /// or a key absent from its slot's independently installed catalog.
+    pub fn new(
+        plan: QSigmaPlan,
+        own_key: VerifyingKey<Eq>,
+        incoming_key: Option<VerifyingKey<Eq>>,
+    ) -> Result<Self, QSigmaError> {
+        if plan.incoming.is_some() != incoming_key.is_some() {
+            return Err(QSigmaError::Layout(LayoutError::Synthesis));
+        }
+        let check = |class: &SigmaClass, key: VerifyingKey<Eq>| {
+            if key.descriptor_digest() != class.verifier.binding().digest() {
+                return Err(QSigmaError::UnauthorizedKey);
+            }
+            let key = VerifyingKey::<Eq>::read(&key.to_bytes(), class.verifier.binding()).map_err(
+                |error| {
+                    QSigmaError::Artifact(iroha_plonk::keys::pk::artifact::Error::Key(
+                        KeyError::VerifyingKey(error),
+                    ))
+                },
+            )?;
+            class.key_index(&key)?;
+            Ok(key)
+        };
+        let own_key = check(&plan.own, own_key)?;
+        let incoming_key = plan
+            .incoming
+            .as_ref()
+            .zip(incoming_key)
+            .map(|(class, key)| check(class, key))
+            .transpose()?;
+        Ok(Self {
+            plan,
+            own_key,
+            incoming_key,
+        })
+    }
+
+    /// The complete immutable installed source plan, without operation witnesses.
+    #[must_use]
+    pub const fn plan(&self) -> &QSigmaPlan {
+        &self.plan
+    }
+
+    // Only original intake and internal source-parity tests can build this shape.
+    // Every tape, mode, key coordinate and correction is assigned as unknown;
+    // this function never constructs or accepts a PreparedQSigma.
+    fn circuit(&self) -> Result<QSigmaCircuit, QSigmaError> {
+        let slot = |class: &SigmaClass, key: &VerifyingKey<Eq>| {
+            let length = class.verifier.proof_length();
+            let encoded_length = u32::try_from(length)
+                .map_err(|_| QSigmaError::Layout(LayoutError::BoundsFailure))?;
+            Ok::<_, QSigmaError>(SigmaSlotWitness {
+                key: key.clone(),
+                statement: Fp::ZERO,
+                proof: vec![0; length],
+                length: encoded_length,
+            })
+        };
+        let own = slot(&self.plan.own, &self.own_key)?;
+        let incoming = self
+            .plan
+            .incoming
+            .as_ref()
+            .zip(self.incoming_key.as_ref())
+            .map(|(class, key)| {
+                Ok::<_, QSigmaError>(IncomingSigmaWitness {
+                    sigma: slot(class, key)?,
+                    mode: [false; 3],
+                    corrected: self.plan.trivial,
+                    fold: [0; FOLD_WITNESS_BYTES],
+                })
+            })
+            .transpose()?;
+        QSigmaCircuit::new(self.plan.clone(), QSigmaWitness { own, incoming })
+            .map(|circuit| circuit.without_witnesses())
+            .map_err(QSigmaError::Layout)
+    }
+}
+
 /// Native outer Q key and pinned Pallas parameters. The profile and public
 /// schema are fixed; resource policy uses an on-demand coset cache.
 #[derive(Debug)]
@@ -400,9 +504,10 @@ impl QSigmaProver {
         })
     }
     /// Import original Q material for the default fixed source profile. The
-    /// installed native owner authenticates descriptor/VK/PK originals, scheme
-    /// scope and complete inventory before this call; witness input cannot select
-    /// that authority or resource policy. Import generates no key and grants no
+    /// installed native owner authenticates the descriptor/VK, complete source
+    /// plan/catalog, scheme scope and resource policy before this call. Strict
+    /// source/commitment checks transitively admit PK material under that VK;
+    /// no additional PK signature or prepared operation is required. Import generates no key and grants no
     /// NativeProofs owner, wallet-open capability or completed A/Omega relation.
     /// Original/domain bounds do not qualify total synthesis/prover memory.
     ///
@@ -410,7 +515,7 @@ impl QSigmaProver {
     /// Non-k16 parameters, wrong V2 profile/schema, substituted installed VK, or
     /// a bounded source/commitment import failure. There is no profile fallback.
     pub fn from_original_artifact(
-        prepared: &PreparedQSigma,
+        source: &QSigmaSource,
         params: PinnedParams<Ep>,
         descriptor: &[u8],
         installed_vk: &[u8],
@@ -418,20 +523,26 @@ impl QSigmaProver {
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
     ) -> Result<Self, QSigmaError> {
         Self::from_original_profile(
-            prepared, params, descriptor, installed_vk, original, config, None,
+            source,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            None,
         )
     }
 
     /// Import the independently installed shared-range serialized Q profile.
     /// The fixed bus count is selected by native installation metadata, never
     /// inferred from original/proof bytes or tried as a fallback. Descriptor,
-    /// VK and complete original PK authentication remain the installation owner's
+    /// VK and complete source/catalog selection remain the installation owner's
     /// duty, as in [`Self::from_original_artifact`]; no monetary authority is granted.
     ///
     /// # Errors
     /// Invalid fixed bus count or any default-profile import refusal above.
     pub fn from_original_artifact_serialized_foreign(
-        prepared: &PreparedQSigma,
+        source: &QSigmaSource,
         params: PinnedParams<Ep>,
         descriptor: &[u8],
         installed_vk: &[u8],
@@ -443,7 +554,7 @@ impl QSigmaProver {
             return Err(QSigmaError::Layout(LayoutError::Synthesis));
         }
         Self::from_original_profile(
-            prepared,
+            source,
             params,
             descriptor,
             installed_vk,
@@ -454,7 +565,7 @@ impl QSigmaProver {
     }
 
     fn from_original_profile(
-        prepared: &PreparedQSigma,
+        source: &QSigmaSource,
         params: PinnedParams<Ep>,
         descriptor: &[u8],
         installed_vk: &[u8],
@@ -462,23 +573,26 @@ impl QSigmaProver {
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
         serialized_buses: Option<usize>,
     ) -> Result<Self, QSigmaError> {
-        use iroha_plonk::cs::{InstanceModeV1, ProofSuffixV1, TranscriptV2};
+        use iroha_plonk::cs::{CurveV1, InstanceModeV1, ProofSuffixV1, TranscriptV2};
         use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
         if params.k() != 16 {
             return Err(QSigmaError::Parameters);
         }
         let binding = DescriptorBinding::decode_v2(descriptor).map_err(QSigmaError::Descriptor)?;
         let d = binding.descriptor();
-        let lengths = prepared.circuit.plan.instance_lengths();
+        let lengths = source.plan.instance_lengths();
         if d.k != 16
+            || d.curve != CurveV1::Pallas
             || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
             || d.instance_mode != InstanceModeV1::Direct
             || d.proof_suffix != ProofSuffixV1::FoldedGenerator
             || d.instance_types.as_deref() != Some(&QSigmaPlan::instance_types())
             || d.instance_lengths.len() != lengths.len()
-            || !d.instance_lengths.iter().zip(lengths).all(|(found, expected)| {
-                usize::try_from(*found).ok() == Some(expected)
-            })
+            || !d
+                .instance_lengths
+                .iter()
+                .zip(lengths)
+                .all(|(found, expected)| usize::try_from(*found).ok() == Some(expected))
         {
             return Err(QSigmaError::Profile);
         }
@@ -486,17 +600,17 @@ impl QSigmaProver {
         if original.len() > config.maximum_bytes || binding.n() > config.maximum_rows {
             return Err(QSigmaError::Artifact(ArtifactError::Length));
         }
-        VerifyingKey::<Ep>::read(installed_vk, &binding)
-            .map_err(|error| QSigmaError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error))))?;
+        VerifyingKey::<Ep>::read(installed_vk, &binding).map_err(|error| {
+            QSigmaError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error)))
+        })?;
+        let circuit = source.circuit()?;
         let key = if let Some(buses) = serialized_buses {
-            let circuit = prepared
-                .circuit
-                .clone()
+            let circuit = circuit
                 .with_serialized_foreign(buses)
                 .map_err(QSigmaError::Layout)?;
             ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
         } else {
-            ProvingKey::from_artifact_v2(original, &binding, &params, &prepared.circuit, config)
+            ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
         }
         .map_err(QSigmaError::Artifact)?;
         if key.vk().to_bytes() != installed_vk {
@@ -571,6 +685,187 @@ impl QSigmaProver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn source_fixture() -> (QSigmaPlan, Vec<VerifyingKey<Eq>>, PinnedParams<Eq>) {
+        use crate::admin_sigma::{
+            BOOTSTRAP_K, BootstrapCircuit, BootstrapWitness, ConsumingWitness, LoadCircuit,
+            LoadWitness, RetiringCircuit, StateWitness,
+        };
+        use std::sync::OnceLock;
+        static FIXTURE: OnceLock<(
+            Vec<VerifyingKey<Eq>>,
+            DescriptorBinding,
+            PinnedParams<Eq>,
+            PinnedParams<Eq>,
+        )> = OnceLock::new();
+        let (keys, binding, params, inner) = FIXTURE.get_or_init(|| {
+            let params = PinnedParams::<Eq>::derive(BOOTSTRAP_K).unwrap();
+            let blank = BootstrapWitness {
+                core: [Fp::ZERO; 33],
+                rest: [Fp::ZERO; 8],
+                lineage: [Fp::ZERO; 18],
+                statement: [Fp::ZERO; 26],
+            };
+            let state = StateWitness::from(&blank);
+            let load = LoadWitness {
+                predecessor: state,
+                successor: state,
+                statement: blank.statement,
+            };
+            let consuming = ConsumingWitness {
+                predecessor: state,
+                successor: state,
+                statement: blank.statement,
+            };
+            let mut config = KeygenConfigV2::pipa_r(BootstrapCircuit::instance_types().to_vec());
+            config.compress_selectors = false;
+            let first = keygen_pk_v2(
+                &params,
+                &BootstrapCircuit::new(&blank).without_witnesses(),
+                &config,
+            )
+            .unwrap();
+            let binding = first.binding().clone();
+            let keys = vec![
+                first.vk().clone(),
+                keygen_pk_v2(
+                    &params,
+                    &LoadCircuit::new(&load).without_witnesses(),
+                    &config,
+                )
+                .unwrap()
+                .vk()
+                .clone(),
+                keygen_pk_v2(
+                    &params,
+                    &RetiringCircuit::new(&consuming).without_witnesses(),
+                    &config,
+                )
+                .unwrap()
+                .vk()
+                .clone(),
+                keygen_pk_v2(
+                    &params,
+                    &BootstrapCircuit::new(&blank).without_witnesses(),
+                    &KeygenConfigV2::pipa_r(BootstrapCircuit::instance_types().to_vec()),
+                )
+                .unwrap()
+                .vk()
+                .clone(),
+            ];
+            (
+                keys,
+                binding,
+                params,
+                PinnedParams::<Eq>::derive(16).unwrap(),
+            )
+        });
+        // Exact same descriptor class, different operation keys. Retiring is not
+        // in this source catalog and is retained only for the admission refusal.
+        assert_eq!(keys[0].descriptor_digest(), keys[1].descriptor_digest());
+        let verifier = VerifierPlan::new(binding.clone(), params.clone()).unwrap();
+        let class = SigmaClass::new(
+            verifier,
+            vec![
+                (0, keys[0].kagemusha_digest(&binding).unwrap()),
+                (1, keys[1].kagemusha_digest(&binding).unwrap()),
+            ],
+        )
+        .unwrap();
+        (
+            QSigmaPlan::new(class, None, inner).unwrap(),
+            keys.clone(),
+            inner.clone(),
+        )
+    }
+
+    #[test]
+    fn installed_q_source_rejects_missing_extra_or_unauthorized_members() {
+        let (plan, keys, inner) = source_fixture();
+        assert!(QSigmaSource::new(plan.clone(), keys[0].clone(), None).is_ok());
+        assert!(QSigmaSource::new(plan.clone(), keys[0].clone(), Some(keys[1].clone())).is_err());
+        assert!(matches!(
+            QSigmaSource::new(plan.clone(), keys[2].clone(), None),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+        assert_ne!(keys[3].descriptor_digest(), keys[0].descriptor_digest());
+        assert!(matches!(
+            QSigmaSource::new(plan.clone(), keys[3].clone(), None),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+        let two = QSigmaPlan::new(plan.own.clone(), Some(plan.own.clone()), &inner).unwrap();
+        assert!(QSigmaSource::new(two.clone(), keys[0].clone(), None).is_err());
+        assert!(matches!(
+            QSigmaSource::new(two.clone(), keys[0].clone(), Some(keys[2].clone())),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+        assert!(matches!(
+            QSigmaSource::new(two.clone(), keys[0].clone(), Some(keys[3].clone())),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+        assert!(QSigmaSource::new(two, keys[0].clone(), Some(keys[1].clone())).is_ok());
+    }
+
+    #[test]
+    fn installed_q_source_layout_does_not_pin_an_allowlisted_member() {
+        use iroha_plonk::frontend::synthesize;
+        let (plan, keys, inner) = source_fixture();
+        for incoming in [false, true] {
+            let plan =
+                QSigmaPlan::new(plan.own.clone(), incoming.then(|| plan.own.clone()), &inner)
+                    .unwrap();
+            let a = QSigmaSource::new(
+                plan.clone(),
+                keys[0].clone(),
+                incoming.then(|| keys[1].clone()),
+            )
+            .unwrap();
+            let b = QSigmaSource::new(
+                plan.clone(),
+                keys[1].clone(),
+                incoming.then(|| keys[0].clone()),
+            )
+            .unwrap();
+            assert_eq!(a.plan().instance_lengths(), plan.instance_lengths());
+            let a = a.circuit().unwrap();
+            let b = b.circuit().unwrap();
+            assert!(!a.known && !b.known);
+            assert_eq!(a.params(), b.params());
+            for buses in [None, Some(2)] {
+                let synthesize_source = |c: &QSigmaCircuit| match buses {
+                    None => synthesize(c, 16, None).unwrap(),
+                    Some(buses) => {
+                        synthesize(&c.clone().with_serialized_foreign(buses).unwrap(), 16, None)
+                            .unwrap()
+                    }
+                };
+                let first = synthesize_source(&a);
+                let second = synthesize_source(&b);
+                assert_eq!(first.tables.fixed(), second.tables.fixed());
+                assert_eq!(first.tables.selectors(), second.tables.selectors());
+                assert_eq!(first.tables.permutation(), second.tables.permutation());
+                assert_eq!(
+                    first.tables.advice_assigned(),
+                    second.tables.advice_assigned()
+                );
+                assert_eq!(first.cs.instance_lengths(), second.cs.instance_lengths());
+                if !incoming && buses.is_none() {
+                    let mut changed = plan.clone();
+                    changed.own.entries.reverse();
+                    let changed = QSigmaSource::new(changed, keys[0].clone(), None)
+                        .unwrap()
+                        .circuit()
+                        .unwrap();
+                    let changed = synthesize_source(&changed);
+                    assert_ne!(
+                        first.tables.fixed(),
+                        changed.tables.fixed(),
+                        "catalog order remains fixed source metadata"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn soft_failure_classification_retains_configuration_and_resource_errors() {
         assert!(proof_failure(&VerifyError::Transcript(

@@ -69,6 +69,25 @@ pub fn constrain_nonmembership(
     input: &ContextInputs<'_>,
     opening: &OpeningCells<Fp>,
 ) -> Result<(), Error> {
+    let valid = derive_nonmembership(chip, region, plan, stage, input, opening)?;
+    input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
+        region,
+        plan.receive_results().ok_or(Error::Synthesis)?,
+        stage,
+        ReceiveResultTag::Nonmembership,
+        &valid,
+    )
+}
+
+// Same native predicate, without interpreting a proposed result as authority.
+pub(crate) fn derive_nonmembership(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    plan: &ContextPlan,
+    stage: u32,
+    input: &ContextInputs<'_>,
+    opening: &OpeningCells<Fp>,
+) -> Result<Bit<Fp>, Error> {
     require_task(plan, stage, OperationTask::ReceiveNonmembership)?;
     if input.own_statement.variant() != plan.operation().frame().variant() {
         return Err(Error::Synthesis);
@@ -87,13 +106,7 @@ pub fn constrain_nonmembership(
         &transition,
         opening,
     )?;
-    input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
-        region,
-        plan.receive_results().ok_or(Error::Synthesis)?,
-        stage,
-        ReceiveResultTag::Nonmembership,
-        &valid,
-    )
+    Ok(valid)
 }
 
 impl ReceiveSignedObjects {
@@ -116,6 +129,27 @@ impl ReceiveSignedObjects {
         input: &ContextInputs<'_>,
         opening: &OpeningCells<Fp>,
     ) -> Result<(), Error> {
+        let valid = self.derive_blacklist(chip, region, plan, stage, input, opening)?;
+        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
+            region,
+            plan.receive_results().ok_or(Error::Synthesis)?,
+            stage,
+            ReceiveResultTag::Blacklist,
+            &valid,
+        )
+    }
+
+    // Same production predicate for native witness preparation. This returns assigned
+    // cells only; the fixed owning stage still binds and proves the result.
+    pub(crate) fn derive_blacklist(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+        opening: &OpeningCells<Fp>,
+    ) -> Result<Bit<Fp>, Error> {
         require_task(plan, stage, OperationTask::ReceiveBlacklist)?;
         self.bind_context(region, plan, input)?;
         let predecessor = input.predecessor.ok_or(Error::Synthesis)?;
@@ -132,13 +166,7 @@ impl ReceiveSignedObjects {
             .ok_or(Error::Synthesis)?;
         let actual = bounded_word(chip, region, own_index)?;
         GlueChip::assert_equal(region, &actual, &selector)?;
-        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
-            region,
-            plan.receive_results().ok_or(Error::Synthesis)?,
-            stage,
-            ReceiveResultTag::Blacklist,
-            &valid,
-        )
+        Ok(valid)
     }
 }
 

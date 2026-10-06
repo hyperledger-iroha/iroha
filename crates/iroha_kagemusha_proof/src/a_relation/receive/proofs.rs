@@ -2,7 +2,7 @@
 
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
-use iroha_plonk_gadgets::GlueChip;
+use iroha_plonk_gadgets::{Bit, GlueChip};
 use iroha_plonk_recursion::verifier::{VerifierChip, VerifierKeyCells};
 
 use crate::operation_relation::incoming_statement::StatementView;
@@ -161,6 +161,29 @@ impl ReceiveProofSources {
         input: &ContextInputs<'_>,
         proof: ReceiveProofInputs<'_>,
     ) -> Result<(), Error> {
+        let (valid, omega) = self.derive_proofs(chip, region, plan, stage, input, proof)?;
+        let claims = input.receive_results.ok_or(Error::Synthesis)?;
+        bind_claim(region, claims.opening()?, &omega.opening)?;
+        claims.bind_derived(
+            region,
+            plan.receive_results().ok_or(Error::Synthesis)?,
+            stage,
+            ReceiveResultTag::Proofs,
+            &valid,
+        )
+    }
+
+    // Extract the same complete total-verifier result and original opening for native
+    // witness preparation. No proposed opening or boolean supplies the result.
+    pub(crate) fn derive_proofs(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+        proof: ReceiveProofInputs<'_>,
+    ) -> Result<(Bit<Fp>, crate::a_relation::IncomingOmegaCells), Error> {
         let result_plan = plan.receive_results().ok_or(Error::Synthesis)?;
         if stage != result_plan.owner(ReceiveResultTag::Proofs) {
             return Err(Error::Synthesis);
@@ -187,8 +210,6 @@ impl ReceiveProofSources {
         let omega = self
             .transport
             .verify(chip, region, plan.operation(), proof.omega_key)?;
-        let claims = input.receive_results.ok_or(Error::Synthesis)?;
-        bind_claim(region, claims.opening()?, &omega.opening)?;
         let bindings = [proof.own_sigma.clone(), self.sigma.clone()];
         bind_statements(region, input, &bindings)?;
         let sigma = bind_sigma(
@@ -208,6 +229,6 @@ impl ReceiveProofSources {
             &omega.valid,
             sigma.incoming_valid.as_ref().ok_or(Error::Synthesis)?,
         )?;
-        claims.bind_derived(region, result_plan, stage, ReceiveResultTag::Proofs, &valid)
+        Ok((valid, omega))
     }
 }

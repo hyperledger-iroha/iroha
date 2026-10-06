@@ -210,8 +210,11 @@ pub trait NativeProofs {
     /// Reject any invalid proof, binding, artifact or decide.
     fn verify_lineage(&self, lineage: &KagemushaWalletLineageV1) -> Result<(), Error>;
 
-    /// Compute exactly the next sub-proof of one released transition. Poll cancellation at
-    /// every parallel task boundary and release proof workspaces before returning.
+    /// Compute exactly the next sub-proof of one released transition. `checkpoints` holds
+    /// every prior original checkpoint in authenticated schedule order, after the coordinator
+    /// checked its exact layout and durable source chain. Genuine native restoration must
+    /// rederive each prior A/W source in order; the latest proof alone cannot supply that source.
+    /// Poll cancellation at every task boundary and release proof workspaces before returning.
     ///
     /// # Errors
     /// Return `Cancelled` on preemption; reject unavailable/invalid relation inputs.
@@ -219,7 +222,7 @@ pub trait NativeProofs {
         &self,
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
-        checkpoint: Option<&[u8]>,
+        checkpoints: &[Vec<u8>],
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error>;
 }

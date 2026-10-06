@@ -34704,7 +34704,31 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
                 config_path.display()
             )
         });
-    let user_config = reader
+    // This shared fixture supplies identities to the default State constructors. It is
+    // intentionally not a runnable node configuration: authentic load-publisher custody
+    // is required by the full runtime parser and is never manufactured for State tests.
+    // Read the exact checked identity literals from the final precedence cut, then still
+    // complete the ordinary user schema below. Operational startup parses its full Root
+    // and calls the constructors with that authenticated chain and network explicitly.
+    let chain = reader
+        .toml_sources()
+        .iter()
+        .rev()
+        .find_map(|source| source.fetch(&["chain"].into()))
+        .and_then(|value| value.as_str())
+        .expect("default State fixture requires an explicit chain literal")
+        .parse::<iroha_model_base::chain::ChainId>()
+        .expect("default State fixture chain literal must be canonical");
+    let network = reader
+        .toml_sources()
+        .iter()
+        .rev()
+        .find_map(|source| source.fetch(&["genesis", "expected_hash"].into()))
+        .and_then(|value| value.as_str())
+        .expect("default State fixture requires an explicit checked network literal")
+        .parse::<iroha_data_model::NetworkId>()
+        .expect("default State fixture network literal must be canonical and checked");
+    let _user_config = reader
         .read_and_complete::<user::Root>()
         .unwrap_or_else(|err| {
             panic!(
@@ -34712,17 +34736,7 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
                 config_path.display()
             )
         });
-    let config: iroha_config::parameters::actual::Root =
-        user_config.parse().unwrap_or_else(|err| {
-            panic!(
-                "failed to parse default testing config `{}`: {err}",
-                config_path.display()
-            )
-        });
-    (
-        config.common.chain,
-        iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
-    )
+    (chain, network)
 });
 static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_model_base::chain::ChainId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());

@@ -1995,21 +1995,6 @@ fn native_installed_load_differential(
         }
     );
     let source = &first.source;
-    let input = native::Inputs {
-        state: source.maps.witness,
-        sigma: source.sigma.clone(),
-        objects: source.maps.objects.each_ref().map(|o| o.bytes.clone()),
-        insertion: source.maps.insertion,
-        q: core::array::from_fn(|i| native::QInput {
-            proof: source.q_proofs[i].clone(),
-            instances: source.q_instances[i].clone(),
-        }),
-        predecessor: native::PredecessorInput {
-            proof: source.predecessor.proof.clone(),
-            pallas: source.predecessor.pallas.to_bytes(),
-            vesta: source.predecessor.vesta.to_bytes(),
-        },
-    };
     let signatures = source
         .signature_schema
         .clone()
@@ -2025,16 +2010,165 @@ fn native_installed_load_differential(
     )
     .unwrap();
     assert_eq!(plan.context().schema(), first.plan.schema());
-    let installed = native::Prover::from_artifacts(
-        plan,
-        a.try_into()
-            .unwrap_or_else(|_| panic!("exact four installed A keys")),
-        w.try_into()
-            .unwrap_or_else(|_| panic!("exact three installed W keys")),
+    // Only installed metadata is needed for source/key import. No native Inputs,
+    // Prepared operation or runtime checkpoint exists at this point.
+    let key_originals_a: [NativeLoadOriginal; 4] = a
+        .iter()
+        .map(|key| NativeLoadOriginal::from_key(key.as_ref()))
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap_or_else(|_| panic!("exact four A originals"));
+    let key_originals_w: [NativeLoadOriginal; 3] = w
+        .iter()
+        .map(|key| NativeLoadOriginal::from_key(key.as_ref()))
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap_or_else(|_| panic!("exact three W originals"));
+    let config = iroha_plonk::keys::pk::artifact::ReadConfig {
+        maximum_bytes: key_originals_a
+            .iter()
+            .chain(&key_originals_w)
+            .map(|original| original.pk.len())
+            .max()
+            .unwrap(),
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let install =
+        |plan: native::Plan, a: &[NativeLoadOriginal; 4], w: &[NativeLoadOriginal; 3], config| {
+            native::Prover::from_original_artifacts(
+                plan,
+                a.each_ref().map(NativeLoadOriginal::borrow),
+                w.each_ref().map(NativeLoadOriginal::borrow),
+                config,
+            )
+        };
+    let installed = install(plan.clone(), &key_originals_a, &key_originals_w, config).unwrap();
+    for mutation in 0..12 {
+        let mut bad_a = key_originals_a.clone();
+        let mut bad_w = key_originals_w.clone();
+        match mutation {
+            0 => bad_a.swap(0, 3),
+            1 => bad_a.swap(1, 2),
+            2 => bad_w.swap(0, 2),
+            3 => bad_a[0].vk = bad_a[3].vk.clone(),
+            4 => bad_w[0].vk = bad_w[2].vk.clone(),
+            5 => bad_a[0].pk[44 + key_originals_a[0].vk.len()] ^= 1,
+            6 => bad_a[0].pk[44 + key_originals_a[0].vk.len() + 32] ^= 1,
+            7 => bad_w[0].pk[44 + key_originals_w[0].vk.len()] ^= 1,
+            8 => bad_a[3].pk[44 + key_originals_a[3].vk.len()] ^= 1,
+            9 => bad_a[0].pk.push(0),
+            10 => {
+                bad_a[0].pk.pop();
+            }
+            _ => bad_w[0].descriptor = bad_a[0].descriptor.clone(),
+        }
+        assert!(
+            install(plan.clone(), &bad_a, &bad_w, config).is_err(),
+            "installed Load original mutation{mutation}"
+        );
+    }
+    assert!(
+        install(
+            plan.clone(),
+            &key_originals_a,
+            &key_originals_w,
+            iroha_plonk::keys::pk::artifact::ReadConfig {
+                maximum_rows: (1 << 16) - 1,
+                ..config
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        install(
+            plan.clone(),
+            &key_originals_a,
+            &key_originals_w,
+            iroha_plonk::keys::pk::artifact::ReadConfig {
+                maximum_bytes: 0,
+                ..config
+            }
+        )
+        .is_err()
+    );
+    let descriptor =
+        iroha_plonk::cs::CircuitDescriptorV2::decode(&key_originals_a[0].descriptor).unwrap();
+    for mutation in 0..5 {
+        let mut wrong = descriptor.clone();
+        match mutation {
+            0 => wrong.instance_types[0] = iroha_plonk::cs::InstanceType::Field,
+            1 => wrong.transcript = iroha_plonk::cs::TranscriptV2::KagemushaPoseidonRp57,
+            2 => wrong.instance_mode = iroha_plonk::cs::InstanceModeV1::Committed,
+            3 => wrong.proof_suffix = iroha_plonk::cs::ProofSuffixV1::None,
+            _ => wrong.instance_lengths[0] = 68,
+        }
+        let mut bad_a = key_originals_a.clone();
+        bad_a[0].descriptor = wrong.encode().unwrap();
+        assert!(
+            install(plan.clone(), &bad_a, &key_originals_w, config).is_err(),
+            "installed Load profile mutation{mutation}"
+        );
+    }
+    let changed_root = bootstrap_objects::key(19);
+    let changed_signatures = source
+        .signature_schema
+        .iter()
+        .map(|schema| {
+            let mut slots = schema.slots().to_vec();
+            for slot in &mut slots {
+                if matches!(
+                    slot.key,
+                    iroha_kagemusha_proof::q_signature::SignatureKey::Fixed(_)
+                ) {
+                    slot.key =
+                        iroha_kagemusha_proof::q_signature::SignatureKey::Fixed(changed_root);
+                }
+            }
+            iroha_kagemusha_proof::q_signature::QSignaturePlan::new(slots).unwrap()
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap_or_else(|_| panic!("exact two signature schemas"));
+    let changed_plan = native::Plan::new(
+        source.plan.clone(),
+        iroha_kagemusha_proof::a_relation::own::OwnPolicy::new([1, 2], [31, 32], changed_root)
+            .unwrap(),
+        changed_signatures,
+        source.predecessor.key.clone(),
+        source.params.clone(),
+        common::vesta_params(16),
     )
     .unwrap();
+    assert!(
+        install(changed_plan, &key_originals_a, &key_originals_w, config).is_err(),
+        "installed root and signature-slot policy must match the original A source"
+    );
+    let input = native::Inputs {
+        state: source.maps.witness,
+        sigma: source.sigma.clone(),
+        objects: source.maps.objects.each_ref().map(|o| o.bytes.clone()),
+        insertion: source.maps.insertion,
+        q: core::array::from_fn(|i| native::QInput {
+            proof: source.q_proofs[i].clone(),
+            instances: source.q_instances[i].clone(),
+        }),
+        predecessor: native::PredecessorInput {
+            proof: source.predecessor.proof.clone(),
+            pallas: source.predecessor.pallas.to_bytes(),
+            vesta: source.predecessor.vesta.to_bytes(),
+        },
+    };
     assert_eq!(installed.descriptors().len(), 7);
     let budget = MemoryBudget::DEFAULT;
+    let prepared = plan.prepare(input.clone(), budget).unwrap();
+    let (actual_first, native_first_public) = prepared
+        .first_circuit(Fp::from(122), &FoldConfig::default())
+        .unwrap();
+    // Witness construction compares exact source descriptor, fixed/selector tables
+    // and copy mapping against the same originals mounted by the installed owner.
+    Witness::from_circuit(&a[0], &actual_first, &[native_first_public]).unwrap();
     let session = installed.prepare(input.clone(), budget).unwrap();
     let unrelated_session = installed.prepare(input.clone(), budget).unwrap();
     let fold = FoldConfig::default();
@@ -2166,5 +2300,28 @@ fn native_installed_load_differential(
             installed.prepare(bad, budget).is_err(),
             "original mutation{mutation}"
         );
+    }
+}
+
+#[derive(Clone)]
+struct NativeLoadOriginal {
+    descriptor: Vec<u8>,
+    vk: Vec<u8>,
+    pk: Vec<u8>,
+}
+impl NativeLoadOriginal {
+    fn from_key<C: iroha_pasta::PastaCurve>(key: &iroha_plonk::ProvingKey<C>) -> Self {
+        Self {
+            descriptor: key.binding().encoded().to_vec(),
+            vk: key.vk().to_bytes().to_vec(),
+            pk: key.artifact_bytes_v2().unwrap(),
+        }
+    }
+    fn borrow(&self) -> iroha_kagemusha_proof::a_relation::native::load::OriginalArtifact<'_> {
+        iroha_kagemusha_proof::a_relation::native::load::OriginalArtifact {
+            descriptor: &self.descriptor,
+            verifying_key: &self.vk,
+            proving_key: &self.pk,
+        }
     }
 }

@@ -131,6 +131,8 @@ use std::{
     time::Duration,
 };
 use zeroize::{Zeroize, Zeroizing};
+#[cfg(unix)]
+mod first_device_auth_key_v1;
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
 mod committed_transaction_inclusion;

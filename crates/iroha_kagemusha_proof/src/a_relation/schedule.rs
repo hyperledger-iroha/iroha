@@ -113,6 +113,20 @@ pub enum OperationTask {
     UnloadAuthorization = 21,
     /// Unload/Retiring exact predecessor Omega and own sigma receipt binding.
     UnloadProof = 22,
+    /// Refresh blacklist history insertion or exact quota-array rebuild.
+    RefreshMaps = 23,
+    /// Refresh current credential, Enrollment certificate and own receipt.
+    RefreshAuthorization = 24,
+    /// Exact signed replacement or policy update and unchanged-field relation.
+    RefreshUpdate = 25,
+    /// ArchiveSent exact own sigma-only receipt binding.
+    ArchiveOwnProof = 26,
+    /// ArchiveSent current credential, direct Enrollment and own receipt.
+    ArchiveAuthorization = 27,
+    /// Full original Receive or Status evidence with every soft proof/signature predicate.
+    ArchiveEvidence = 28,
+    /// Exact retained Payment descriptor and both pending-map removal paths.
+    ArchiveMaps = 29,
 }
 impl OperationTask {
     /// Stable context-schema code, not an operation's wire tag.
@@ -156,6 +170,21 @@ impl OperationTask {
                 Self::RetiringState,
                 Self::UnloadAuthorization,
                 Self::UnloadProof,
+            ]),
+            Variant::RefreshCredential
+            | Variant::RefreshSchemePolicy
+            | Variant::RefreshBlacklist
+            | Variant::RefreshQuotaShare
+            | Variant::RefreshTimeAnchor => Some(&[
+                Self::RefreshMaps,
+                Self::RefreshAuthorization,
+                Self::RefreshUpdate,
+            ]),
+            Variant::ArchiveReceive | Variant::ArchiveStatus => Some(&[
+                Self::ArchiveOwnProof,
+                Self::ArchiveAuthorization,
+                Self::ArchiveEvidence,
+                Self::ArchiveMaps,
             ]),
             _ => None,
         }

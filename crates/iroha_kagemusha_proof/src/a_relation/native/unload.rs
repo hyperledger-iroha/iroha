@@ -4,6 +4,9 @@
 //! A2 proves the exact depth32 recovery insertion; A3 verifies the own Q_sigma;
 //! A4 reauthenticates the current Credential, direct Enrollment certificate and
 //! own Advance Receipt. Every stage commits identical state, object and Q tapes.
+//! Installation imports original PKs against this same compiled source using
+//! unknown optional claims, then requires exact installed VK equality. Installation
+//! views cannot construct Prepared, accepted openings or custody checkpoints.
 //! Every native source/generated proof and every carried Pasta claim is checked
 //! in full. Installed keys and profiles are fixed, never generated from inputs.
 //! The terminal A4 is an input to the final Omega producer, not a final lineage
@@ -19,8 +22,12 @@ use iroha_pasta::{
 use iroha_plonk::{
     DescriptorBinding, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey, Witness,
     create_proof_owned_with_claim,
-    cs::{Column, ConstraintSystem, Instance, InstanceType},
+    cs::{
+        Column, ConstraintSystem, CurveV1, Instance, InstanceModeV1, InstanceType, ProofSuffixV1,
+        TranscriptV2,
+    },
     frontend::{Circuit, Error as LayoutError, Layouter, Region, SimpleFloorPlanner, Value},
+    keys::pk::artifact::ReadConfig,
     pcs::ipa::PinnedParams,
     verifier::{accumulate_generator, verify_full},
 };
@@ -69,6 +76,8 @@ mod tests;
 
 /// Fixed native source profile; private inputs cannot choose another range-bus count.
 pub const SOURCE_RANGE_BUSES: usize = 4;
+const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
+const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 /// Exact source schedule has four A stages and three W continuations.
 pub const A_STAGE_COUNT: usize = 4;
 /// Uniform installed Omega transport bound after the largest accepted Send sigma.
@@ -519,6 +528,134 @@ struct First {
     fold: Vec<u8>,
     known: bool,
 }
+// Circuit-only views contain no verified native claim or Prepared authority.
+#[derive(Clone)]
+struct CircuitPredecessor {
+    key: VerifyingKey<Ep>,
+    proof: Vec<u8>,
+    pallas: Option<FoldInput<Ep>>,
+    vesta: Option<AccumulatorT<Eq>>,
+}
+#[derive(Clone)]
+struct CircuitSources {
+    maps: Maps,
+    omega: Vec<u8>,
+    sigma: Vec<u8>,
+    q_instances: Vec<Vec<Vec<Fq>>>,
+    q_proofs: Vec<Vec<u8>>,
+    signature_schema: QSignaturePlan,
+    predecessor: CircuitPredecessor,
+    params: PinnedParams<Ep>,
+    policy: OwnPolicy,
+}
+#[derive(Clone)]
+struct FirstCircuit {
+    source: Arc<CircuitSources>,
+    plan: ContextPlan,
+    fold: Vec<u8>,
+    known: bool,
+}
+impl First {
+    fn circuit(&self) -> FirstCircuit {
+        let source = &self.source;
+        FirstCircuit {
+            source: Arc::new(CircuitSources {
+                maps: source.maps.clone(),
+                omega: source.omega.clone(),
+                sigma: source.sigma.clone(),
+                q_instances: source.q_instances.clone(),
+                q_proofs: source.q_proofs.clone(),
+                signature_schema: source.signature_schema.clone(),
+                predecessor: CircuitPredecessor {
+                    key: source.predecessor.key.clone(),
+                    proof: source.predecessor.proof.clone(),
+                    pallas: Some(source.predecessor.pallas.as_input()),
+                    vesta: Some(source.predecessor.vesta.clone()),
+                },
+                params: source.params.clone(),
+                policy: source.policy,
+            }),
+            plan: self.plan.clone(),
+            fold: self.fold.clone(),
+            known: self.known,
+        }
+    }
+}
+impl FirstCircuit {
+    fn blank(plan: &Plan) -> Result<Self, Error> {
+        let operation = plan.context.operation();
+        let class = operation.sigma.class(0).ok_or(Error::Artifact)?;
+        let predecessor = operation.omega().ok_or(Error::Artifact)?;
+        let state = StateWitness {
+            core: [Fp::ZERO; 33],
+            rest: [Fp::ZERO; 8],
+            lineage: [Fp::ZERO; 18],
+        };
+        let mut q_instances = Vec::new();
+        let mut q_proofs = Vec::new();
+        for index in 0..2 {
+            let q = operation.q(index).ok_or(Error::Artifact)?;
+            q_instances.push(
+                q.verifier()
+                    .binding()
+                    .descriptor()
+                    .instance_lengths
+                    .iter()
+                    .map(|length| vec![Fq::ZERO; *length as usize])
+                    .collect(),
+            );
+            q_proofs.push(vec![0; q.verifier().proof_length()]);
+        }
+        let objects = object_kinds().map(|kind| SignedTape {
+            kind,
+            bytes: vec![0; kind.body_len() + 64],
+        });
+        let insertion = IndexedInsert {
+            leaf: crate::tree::IndexedLeaf::default(),
+            leaf_slot: 0,
+            leaf_siblings: [Fp::ZERO; 32],
+            slot: 1,
+            slot_siblings: [Fp::ZERO; 32],
+        };
+        let source = CircuitSources {
+            maps: Maps {
+                witness: ConsumingWitness {
+                    predecessor: state,
+                    successor: state,
+                    statement: [Fp::ZERO; 26],
+                },
+                insertion,
+                objects,
+                known: false,
+            },
+            omega: vec![
+                0;
+                predecessor
+                    .proof_length()
+                    .checked_add(320 + 2 * 544)
+                    .ok_or(Error::Artifact)?
+            ],
+            sigma: vec![0; class.verifier().proof_length()],
+            q_instances,
+            q_proofs,
+            signature_schema: plan.signatures.clone(),
+            predecessor: CircuitPredecessor {
+                key: plan.predecessor_key.clone(),
+                proof: vec![0; predecessor.proof_length()],
+                pallas: None,
+                vesta: None,
+            },
+            params: plan.pallas.clone(),
+            policy: plan.policy,
+        };
+        Ok(Self {
+            source: Arc::new(source),
+            plan: plan.context.clone(),
+            fold: vec![0; 1120],
+            known: false,
+        })
+    }
+}
 #[derive(Clone, Debug)]
 /// Fixed source-stage columns and range buses; all fields are native metadata.
 pub struct StageConfig {
@@ -526,7 +663,7 @@ pub struct StageConfig {
     bytes: BytesConfig,
     public: Column<Instance>,
 }
-impl First {
+impl FirstCircuit {
     fn value<T: Copy>(&self, value: T) -> Value<T> {
         if self.known {
             Value::known(value)
@@ -540,22 +677,40 @@ impl First {
         region: &mut Region<'_, Fp>,
         v: Fq,
     ) -> Result<ScalarCells<Ep>, LayoutError> {
-        let [lo, hi] = foreign_limbs(&v);
-        let lo = chip.uint().assign::<128>(region, self.value(lo))?;
-        let hi = chip.uint().assign::<127>(region, self.value(hi))?;
+        self.scalar_value(chip, region, self.value(v))
+    }
+    fn scalar_value(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        value: Value<Fq>,
+    ) -> Result<ScalarCells<Ep>, LayoutError> {
+        let lo = chip
+            .uint()
+            .assign::<128>(region, value.map(|v| foreign_limbs(&v)[0]))?;
+        let hi = chip
+            .uint()
+            .assign::<127>(region, value.map(|v| foreign_limbs(&v)[1]))?;
         ScalarCells::from_limbs(&mut chip.uint(), region, &lo, &hi)
     }
     fn pallas(
         &self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
-        input: &FoldInput<Ep>,
+        input: Option<&FoldInput<Ep>>,
     ) -> Result<FoldInputCells<Ep>, LayoutError> {
-        let g = chip.witness_point(region, self.value(Ep::from(*input.g())))?;
-        let challenges = input
-            .challenges()
-            .iter()
-            .map(|v| self.scalar(chip, region, *v))
+        let g = chip.witness_point(
+            region,
+            input.map_or(Value::unknown(), |v| self.value(Ep::from(*v.g()))),
+        )?;
+        let challenges = (0..K)
+            .map(|i| {
+                self.scalar_value(
+                    chip,
+                    region,
+                    input.map_or(Value::unknown(), |v| self.value(v.challenges()[i])),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .map_err(|_| LayoutError::Synthesis)?;
@@ -565,14 +720,30 @@ impl First {
         &self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
-        input: &AccumulatorT<Eq>,
+        input: Option<&AccumulatorT<Eq>>,
     ) -> Result<VestaClaimCells, LayoutError> {
-        let (x, y) = Option::from(input.g().coordinates()).ok_or(LayoutError::Synthesis)?;
-        let coordinates = [self.scalar(chip, region, x)?, self.scalar(chip, region, y)?];
+        let coordinates = input
+            .map(|v| Option::<(Fq, Fq)>::from(v.g().coordinates()).ok_or(LayoutError::Synthesis))
+            .transpose()?;
+        let coordinates = [
+            self.scalar_value(
+                chip,
+                region,
+                coordinates.map_or(Value::unknown(), |(x, _)| self.value(x)),
+            )?,
+            self.scalar_value(
+                chip,
+                region,
+                coordinates.map_or(Value::unknown(), |(_, y)| self.value(y)),
+            )?,
+        ];
+        let values = core::array::from_fn::<_, K, _>(|i| {
+            input.map_or(Value::unknown(), |v| self.value(v.challenges()[i]))
+        });
         let challenges = chip
             .uint()
             .glue()
-            .witnesses(region, &input.challenges().map(|v| self.value(v)))?
+            .witnesses(region, &values)?
             .try_into()
             .map_err(|_| LayoutError::Synthesis)?;
         VestaClaimCells::constrain(chip, region, 16, coordinates, challenges)
@@ -637,7 +808,7 @@ impl First {
         SigmaBindingCells::from_run(chip, region, statement, index, &run)
     }
 }
-impl Circuit<Fp> for First {
+impl Circuit<Fp> for FirstCircuit {
     type Config = StageConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
@@ -720,9 +891,13 @@ impl Circuit<Fp> for First {
                 let pp = self.pallas(
                     &mut chip,
                     &mut region,
-                    &self.source.predecessor.pallas.as_input(),
+                    self.source.predecessor.pallas.as_ref(),
                 )?;
-                let pv = self.vesta(&mut chip, &mut region, &self.source.predecessor.vesta)?;
+                let pv = self.vesta(
+                    &mut chip,
+                    &mut region,
+                    self.source.predecessor.vesta.as_ref(),
+                )?;
                 let input = ContextInputs {
                     own_statement: &statement,
                     incoming_statement: None,
@@ -870,7 +1045,50 @@ struct Continuation {
     carried: AccumulatorT<Ep>,
     history: Vec<(AccumulatorT<Ep>, AccumulatorT<Eq>)>,
 }
-impl Circuit<Fp> for Continuation {
+#[derive(Clone)]
+struct ContinuationCircuit {
+    first: FirstCircuit,
+    plan: SplitPlan,
+    wrapper: Vec<u8>,
+    vesta: Option<AccumulatorT<Eq>>,
+    fold: Vec<u8>,
+    carried: Option<FoldInput<Ep>>,
+    history: Vec<(Option<FoldInput<Ep>>, Option<AccumulatorT<Eq>>)>,
+}
+impl Continuation {
+    fn circuit(&self) -> ContinuationCircuit {
+        ContinuationCircuit {
+            first: self.first.circuit(),
+            plan: self.plan.clone(),
+            wrapper: self.wrapper.clone(),
+            vesta: Some(self.vesta.clone()),
+            fold: self.fold.clone(),
+            carried: Some(self.carried.as_input()),
+            history: self
+                .history
+                .iter()
+                .map(|(p, v)| (Some(p.as_input()), Some(v.clone())))
+                .collect(),
+        }
+    }
+}
+impl ContinuationCircuit {
+    fn blank(first: FirstCircuit, plan: SplitPlan) -> Result<Self, Error> {
+        if !(1..A_STAGE_COUNT).contains(&plan.stage()) {
+            return Err(Error::Artifact);
+        }
+        Ok(Self {
+            first,
+            wrapper: vec![0; plan.wrap().verifier().proof_length()],
+            vesta: None,
+            fold: vec![0; 1120],
+            carried: None,
+            history: vec![(None, None); plan.stage() - 1],
+            plan,
+        })
+    }
+}
+impl Circuit<Fp> for ContinuationCircuit {
     type Config = StageConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
@@ -881,7 +1099,7 @@ impl Circuit<Fp> for Continuation {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        First::configure(meta)
+        FirstCircuit::configure(meta)
     }
     fn synthesize(
         &self,
@@ -943,9 +1161,13 @@ impl Circuit<Fp> for Continuation {
                 let pp = first.pallas(
                     &mut chip,
                     &mut region,
-                    &first.source.predecessor.pallas.as_input(),
+                    first.source.predecessor.pallas.as_ref(),
                 )?;
-                let pv = first.vesta(&mut chip, &mut region, &first.source.predecessor.vesta)?;
+                let pv = first.vesta(
+                    &mut chip,
+                    &mut region,
+                    first.source.predecessor.vesta.as_ref(),
+                )?;
                 let input = ContextInputs {
                     own_statement: &statement,
                     incoming_statement: None,
@@ -967,18 +1189,18 @@ impl Circuit<Fp> for Continuation {
                     vesta_corrections: &[],
                     receive_results: None,
                 };
-                let cp = first.pallas(&mut chip, &mut region, &self.carried.as_input())?;
+                let cp = first.pallas(&mut chip, &mut region, self.carried.as_ref())?;
                 let history = self
                     .history
                     .iter()
                     .map(|(p, v)| {
                         Ok(crate::a_relation::split::ContextLinkCells {
-                            pallas: first.pallas(&mut chip, &mut region, &p.as_input())?,
-                            vesta: first.vesta(&mut chip, &mut region, v)?,
+                            pallas: first.pallas(&mut chip, &mut region, p.as_ref())?,
+                            vesta: first.vesta(&mut chip, &mut region, v.as_ref())?,
                         })
                     })
                     .collect::<Result<Vec<_>, LayoutError>>()?;
-                let cv = first.vesta(&mut chip, &mut region, &self.vesta)?;
+                let cv = first.vesta(&mut chip, &mut region, self.vesta.as_ref())?;
                 let proof = first.carrier(&mut chip, &mut bytes, &mut region, &self.wrapper)?;
                 let resumed = crate::a_relation::split::resume_context(
                     &mut chip,
@@ -1085,8 +1307,8 @@ impl Circuit<Fp> for Continuation {
 
 #[derive(Clone)]
 enum StageData {
-    First(First),
-    Continued(Continuation),
+    First(FirstCircuit),
+    Continued(ContinuationCircuit),
 }
 /// Actual fixed source A circuit. Its private stage is selected by native checkpoint order.
 #[derive(Clone)]
@@ -1106,7 +1328,7 @@ impl Circuit<Fp> for StageCircuit {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        First::configure(meta)
+        FirstCircuit::configure(meta)
     }
     fn synthesize(
         &self,
@@ -1162,11 +1384,56 @@ impl Prepared {
         let public = first_public(&first)?;
         Ok((
             StageCircuit {
-                inner: StageData::First(first),
+                inner: StageData::First(first.circuit()),
             },
             public,
         ))
     }
+}
+
+/// Borrowed original material for one independently installed A or W identity.
+/// These bytes carry no scheme/catalog authority; the installation owner pins
+/// the descriptor, VK and complete `Plan` before calling the importer.
+#[derive(Clone, Copy, Debug)]
+pub struct OriginalArtifact<'a> {
+    /// Canonical V2 descriptor authenticated by the installation owner.
+    pub descriptor: &'a [u8],
+    /// Exact independently installed canonical verifying-key bytes.
+    pub verifying_key: &'a [u8],
+    /// Original `PIPAPK01` tables and key, checked against source and installed VK.
+    pub proving_key: &'a [u8],
+}
+
+fn artifact_binding(
+    original: OriginalArtifact<'_>,
+    curve: CurveV1,
+    lengths: &[u32],
+    types: &[InstanceType],
+    config: ReadConfig,
+) -> Result<DescriptorBinding, Error> {
+    if original.descriptor.is_empty()
+        || original.descriptor.len() > DESCRIPTOR_MAX_BYTES
+        || original.verifying_key.is_empty()
+        || original.verifying_key.len() > VERIFYING_KEY_MAX_BYTES
+        || original.proving_key.is_empty()
+        || original.proving_key.len() > config.maximum_bytes
+    {
+        return Err(Error::Artifact);
+    }
+    let binding = DescriptorBinding::decode_v2(original.descriptor).map_err(|_| Error::Artifact)?;
+    let d = binding.descriptor();
+    if d.k != 16
+        || d.curve != curve
+        || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+        || d.instance_mode != InstanceModeV1::Direct
+        || d.proof_suffix != ProofSuffixV1::FoldedGenerator
+        || d.instance_lengths.as_slice() != lengths
+        || d.instance_types.as_deref() != Some(types)
+        || binding.n() > config.maximum_rows
+    {
+        return Err(Error::Artifact);
+    }
+    Ok(binding)
 }
 
 /// Already installed A1/A2/A3/A4 and W0/W1/W2 proving artifacts for this fixed profile.
@@ -1178,6 +1445,128 @@ pub struct Prover {
     wrappers: [WKey; 3],
 }
 impl Prover {
+    /// Import the fixed source A/W stages using only installed metadata.
+    ///
+    /// The native owner authenticates scheme/provider/root, predecessor and Q
+    /// keys, hard signature slots, stage schedule and each descriptor/VK before
+    /// this call. Existing PIPAPK01 source/copy/selector/commitment checks plus
+    /// exact installed VK equality bind PK admissibility transitively; no new PK
+    /// signature format, runtime key generation or alternate profile is used.
+    /// Source construction uses unknown witnesses and creates no Prepared,
+    /// verified opening or checkpoint. Bounds cover originals/domains, not total
+    /// synthesis/prover memory. This component grants no Native wallet open.
+    ///
+    /// # Errors
+    /// Invalid/bounded originals, nonuniform A/profile/curve/k, substituted VK,
+    /// wrong source/stage/previous key, or source/copy/commitment mismatch.
+    pub fn from_original_artifacts(
+        plan: Plan,
+        a: [OriginalArtifact<'_>; 3],
+        w: [OriginalArtifact<'_>; 3],
+        config: ReadConfig,
+    ) -> Result<Self, Error> {
+        let a_bindings = a
+            .iter()
+            .map(|&original| {
+                artifact_binding(
+                    original,
+                    CurveV1::Vesta,
+                    &[69],
+                    &[InstanceType::Bounded],
+                    config,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let w_bindings = w
+            .iter()
+            .map(|&original| {
+                artifact_binding(
+                    original,
+                    CurveV1::Pallas,
+                    &[1, 2, 16],
+                    &crate::omega::OmegaPlan::instance_types(),
+                    config,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (original, binding) in a.iter().zip(&a_bindings) {
+            if binding != &a_bindings[0] {
+                return Err(Error::Artifact);
+            }
+            VerifyingKey::<Eq>::read(original.verifying_key, binding)
+                .map_err(|_| Error::Artifact)?;
+        }
+        for (original, binding) in w.iter().zip(&w_bindings) {
+            VerifyingKey::<Ep>::read(original.verifying_key, binding)
+                .map_err(|_| Error::Artifact)?;
+        }
+        let first = FirstCircuit::blank(&plan)?;
+        let mut a_keys = Vec::new();
+        let mut w_keys = Vec::new();
+        let mut wrappers: Vec<WKey> = Vec::new();
+        for stage in 0..A_STAGE_COUNT {
+            let circuit = if stage == 0 {
+                StageCircuit {
+                    inner: StageData::First(first.clone()),
+                }
+            } else {
+                let split = SplitPlan::new(
+                    plan.context.clone(),
+                    stage,
+                    wrappers[stage - 1].clone(),
+                    &plan.pallas,
+                )
+                .map_err(|_| Error::Artifact)?;
+                StageCircuit {
+                    inner: StageData::Continued(ContinuationCircuit::blank(first.clone(), split)?),
+                }
+            };
+            let key = ProvingKey::from_artifact_v2(
+                a[stage].proving_key,
+                &a_bindings[stage],
+                &plan.vesta,
+                &circuit,
+                config,
+            )
+            .map_err(|_| Error::Artifact)?;
+            if key.vk().to_bytes() != a[stage].verifying_key {
+                return Err(Error::Artifact);
+            }
+            if stage + 1 < A_STAGE_COUNT {
+                let source = wrapper_source(&plan, stage, &a_bindings[stage], key.vk())?;
+                let wrapper = ProvingKey::from_artifact_v2(
+                    w[stage].proving_key,
+                    &w_bindings[stage],
+                    &plan.pallas,
+                    &source,
+                    config,
+                )
+                .map_err(|_| Error::Artifact)?;
+                if wrapper.vk().to_bytes() != w[stage].verifying_key {
+                    return Err(Error::Artifact);
+                }
+                wrappers.push(
+                    WKey::from_artifact(
+                        &plan.context,
+                        stage,
+                        w_bindings[stage].clone(),
+                        plan.pallas.clone(),
+                        wrapper.vk().clone(),
+                    )
+                    .map_err(|_| Error::Artifact)?,
+                );
+                w_keys.push(Arc::new(wrapper));
+            }
+            a_keys.push(Arc::new(key));
+        }
+        Ok(Self {
+            plan,
+            a: a_keys.try_into().map_err(|_| Error::Artifact)?,
+            w: w_keys.try_into().map_err(|_| Error::Artifact)?,
+            wrappers: wrappers.try_into().map_err(|_| Error::Artifact)?,
+        })
+    }
+
     /// Import the complete fixed typed artifact set, never generating keys from a witness.
     /// # Errors
     /// Nonuniform A descriptors, wrong k/public schema, or wrong W stage/context identity.
@@ -1243,6 +1632,34 @@ impl Prover {
     }
 }
 
+fn wrapper_source(
+    plan: &Plan,
+    stage: usize,
+    binding: &DescriptorBinding,
+    key: &VerifyingKey<Eq>,
+) -> Result<WCircuit, Error> {
+    let allowed = key.kagemusha_digest(binding).map_err(|_| Error::Artifact)?;
+    let length = iroha_plonk::Protocol::new(binding.descriptor())
+        .map_err(|_| Error::Artifact)?
+        .proof_length();
+    WCircuit::new(
+        &plan.context,
+        stage,
+        binding.clone(),
+        plan.vesta.clone(),
+        vec![allowed],
+        OmegaWitness {
+            key: key.clone(),
+            instances: vec![Fp::ZERO; 69],
+            proof: vec![0; length],
+            length: u32::try_from(length).map_err(|_| Error::Artifact)?,
+            fold: [0; 1120],
+        },
+    )
+    .map(|source| source.without_witnesses())
+    .map_err(|_| Error::Artifact)
+}
+
 /// Source-bound session over the fixed installed Unload artifacts.
 pub struct Session<'a> {
     prover: &'a Prover,
@@ -1293,7 +1710,7 @@ impl Session<'_> {
         let first = self.prepared.first(salt, fold)?;
         let public = first_public(&first)?;
         let circuit = StageCircuit {
-            inner: StageData::First(first.clone()),
+            inner: StageData::First(first.circuit()),
         };
         let (proof, opening) = prove_a(
             &self.prepared.plan,
@@ -1546,7 +1963,7 @@ impl Session<'_> {
             self.continuation(&restored, pallas.clone(), pfold.to_bytes().to_vec())?;
         let public = continuation_public(&continuation)?;
         let circuit = StageCircuit {
-            inner: StageData::Continued(continuation),
+            inner: StageData::Continued(continuation.circuit()),
         };
         let (proof, opening) = prove_a(
             &self.prepared.plan,

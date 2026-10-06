@@ -266,6 +266,9 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
         "server_name mon.taira.sora.net;", 1
     )[0]
+    # Applies before every location, including the exact signed fee-quote POST.
+    assert "proxy_request_buffering off;" in public_server.split("location ", 1)[0]
+    assert "proxy_request_buffering on;" not in public_server
     explorer_server = rendered.split("server_name taira-explorer.sora.org;", 1)[1].split(
         "server_name taira-validator-1.sora.org;", 1
     )[0]

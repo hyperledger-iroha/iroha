@@ -99,6 +99,10 @@ KAGEMUSHA_WALLET_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot",
 )
+FIRST_DEVICE_AUTH_JNI_EXPORTS = (
+    "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve",
+    "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_restore",
+)
 RETIRED_KAGEMUSHA_C_PREFIX = (
     "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
 )
@@ -140,6 +144,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         *KAGEMUSHA_WALLET_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
         *KAGEMUSHA_WALLET_JNI_EXPORTS,
+        *FIRST_DEVICE_AUTH_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",

@@ -32,6 +32,8 @@ iroha_plonk_recursion = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # `Field`/`PrimeField` traits of the iroha_pasta field types.
 ff = "0.13.1"
+# Curve::to_affine for canonical transported incoming correction points.
+group = "0.13"
 
 [dev-dependencies]
 # Deterministic recovery streams for reproducible test proofs.

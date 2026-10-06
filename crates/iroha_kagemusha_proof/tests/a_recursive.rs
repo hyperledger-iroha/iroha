@@ -1856,6 +1856,106 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             vparams.clone(),
         )
         .unwrap();
+        // Installation has no operation input: fixed source, Q/root policy and
+        // authenticated verifier identities are selected before native prepare.
+        let originals = [
+            NativeBootstrapOriginal::from_key(&a1key),
+            NativeBootstrapOriginal::from_key(&wprover),
+            NativeBootstrapOriginal::from_key(&a2key),
+        ];
+        let config = native_bootstrap_read_config(&originals);
+        let install = |plan: native::Plan, originals: &[NativeBootstrapOriginal; 3], config| {
+            native::Prover::from_original_artifacts(
+                plan,
+                originals[0].borrow(),
+                originals[1].borrow(),
+                originals[2].borrow(),
+                config,
+            )
+        };
+        let installed = install(native_plan.clone(), &originals, config).unwrap();
+        assert_eq!(
+            installed.descriptors(),
+            [a1key.binding(), wprover.binding(), a2key.binding()]
+        );
+        for mutation in 0..8 {
+            let mut bad = originals.clone();
+            match mutation {
+                0 => bad[0].vk = bad[2].vk.clone(),
+                1 => bad[0].pk[44 + originals[0].vk.len()] ^= 1, // exact copy digest
+                2 => bad[0].pk[44 + originals[0].vk.len() + 32] ^= 1, // fixed table
+                3 => bad.swap(0, 2), // same descriptor, different installed stage source
+                4 => bad[1].descriptor = bad[0].descriptor.clone(),
+                5 => bad[0].pk.push(0),
+                6 => {
+                    bad[0].pk.pop();
+                }
+                _ => bad[2].vk = bad[0].vk.clone(),
+            }
+            assert!(
+                install(native_plan.clone(), &bad, config).is_err(),
+                "installed Bootstrap original mutation{mutation}"
+            );
+        }
+        for maximum_rows in [0, (1 << 16) - 1] {
+            assert!(
+                install(
+                    native_plan.clone(),
+                    &originals,
+                    iroha_plonk::keys::pk::artifact::ReadConfig {
+                        maximum_rows,
+                        ..config
+                    }
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            install(
+                native_plan.clone(),
+                &originals,
+                iroha_plonk::keys::pk::artifact::ReadConfig {
+                    maximum_bytes: 0,
+                    ..config
+                }
+            )
+            .is_err()
+        );
+        let descriptor =
+            iroha_plonk::cs::CircuitDescriptorV2::decode(&originals[0].descriptor).unwrap();
+        for mutation in 0..5 {
+            let mut wrong = descriptor.clone();
+            match mutation {
+                0 => wrong.instance_types[0] = InstanceType::Field,
+                1 => wrong.transcript = iroha_plonk::cs::TranscriptV2::KagemushaPoseidonRp57,
+                2 => wrong.instance_mode = iroha_plonk::cs::InstanceModeV1::Committed,
+                3 => wrong.proof_suffix = iroha_plonk::cs::ProofSuffixV1::None,
+                _ => wrong.instance_lengths[0] = 68,
+            }
+            let mut bad = originals.clone();
+            bad[0].descriptor = wrong.encode().unwrap();
+            assert!(
+                install(native_plan.clone(), &bad, config).is_err(),
+                "installed Bootstrap profile mutation{mutation}"
+            );
+        }
+        let changed_policy = native::Plan::new(
+            context.plan.operation().clone(),
+            iroha_kagemusha_proof::a_relation::bootstrap::BootstrapPolicy::new(
+                [1, 2],
+                [31, 32],
+                bootstrap_objects::key(19),
+            )
+            .unwrap(),
+            signature.plan().clone(),
+            params.clone(),
+            vparams.clone(),
+        )
+        .unwrap();
+        assert!(
+            install(changed_policy, &originals, config).is_err(),
+            "installed policy constants must match A2's exact source"
+        );
         let input = native::Inputs {
             state: initial,
             sigma: first.source.sigma[4..].to_vec(),
@@ -1879,24 +1979,13 @@ pub(crate) fn authenticated_bootstrap_with_identity(
         let prepared = native_plan
             .prepare(input.clone(), MemoryBudget::DEFAULT)
             .unwrap();
+        let session = installed
+            .prepare(input.clone(), MemoryBudget::DEFAULT)
+            .unwrap();
         let actual_first = prepared.first_circuit();
-        // Import actual fixed recursive tables/VK originals, rather than regenerating a
-        // runtime key. Test key generation above is the offline artifact producer only.
-        let first_original = a1key.artifact_bytes_v2().unwrap();
-        let mounted_first = iroha_plonk::ProvingKey::from_artifact_v2(
-            &first_original,
-            a1key.binding(),
-            &vparams,
-            &actual_first,
-            iroha_plonk::keys::pk::artifact::ReadConfig {
-                maximum_bytes: first_original.len(),
-                maximum_rows: 1 << 16,
-                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
-        .unwrap();
-        assert_eq!(mounted_first.artifact_bytes_v2().unwrap(), first_original);
+        // Offline fixture keys supply independent source/copy differentials;
+        // all native proofs below use keys mounted by the original-only owner.
+        let mounted_first = &a1key;
         // Existing source artifacts must match the actual production fixed tables and copies.
         Witness::from_circuit(&a1key, &actual_first, &first_instances).unwrap();
         let first_check =
@@ -1905,50 +1994,42 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             first_check.is_satisfied(),
             "production A1 retains all original constraints"
         );
-        let native_first = prepared
-            .prove_first(
-                &mounted_first,
-                common::recovery(189),
-                ProverConfig::default(),
-            )
+        let native_first = session
+            .first(common::recovery(189), ProverConfig::default())
             .unwrap();
         let (wrapper_circuit, _, _) = prepared
             .wrapper_circuit(
                 &native_first,
-                &mounted_first,
+                mounted_first,
                 Fq::from(191),
                 &FoldConfig::default(),
             )
             .unwrap();
-        let wrapper_original = wprover.artifact_bytes_v2().unwrap();
-        let mounted_wrapper = iroha_plonk::ProvingKey::from_artifact_v2(
-            &wrapper_original,
-            wprover.binding(),
-            &params,
-            &wrapper_circuit,
-            iroha_plonk::keys::pk::artifact::ReadConfig {
-                maximum_bytes: wrapper_original.len(),
-                maximum_rows: 1 << 16,
-                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            mounted_wrapper.artifact_bytes_v2().unwrap(),
-            wrapper_original
-        );
-        let native_wrapper = prepared
-            .prove_wrapper(
+        let mounted_wrapper = &wprover;
+        let native_wrapper = session
+            .wrapper(
                 &native_first,
-                &mounted_first,
-                &mounted_wrapper,
                 Fq::from(191),
                 &FoldConfig::default(),
                 common::recovery(190),
                 ProverConfig::default(),
             )
             .unwrap();
+        let wrapper_public = vec![
+            vec![Fq::from_repr(native_wrapper.context().to_repr()).unwrap()],
+            {
+                let (x, y) =
+                    Option::<(Fq, Fq)>::from(native_wrapper.vesta().g().coordinates()).unwrap();
+                vec![x, y]
+            },
+            native_wrapper
+                .vesta()
+                .challenges()
+                .iter()
+                .map(|value| Fq::from_repr(value.to_repr()).unwrap())
+                .collect(),
+        ];
+        Witness::from_circuit(mounted_wrapper, &wrapper_circuit, &wrapper_public).unwrap();
         let imported = WKey::from_artifact(
             &context.plan,
             0,
@@ -1996,42 +2077,16 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             )
             .unwrap();
         Witness::from_circuit(&a2key, &terminal_circuit, &[terminal_instances]).unwrap();
-        let terminal_original = a2key.artifact_bytes_v2().unwrap();
-        let mounted_terminal = iroha_plonk::ProvingKey::from_artifact_v2(
-            &terminal_original,
-            a2key.binding(),
-            &vparams,
-            &terminal_circuit,
-            iroha_plonk::keys::pk::artifact::ReadConfig {
-                maximum_bytes: terminal_original.len(),
-                maximum_rows: 1 << 16,
-                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            mounted_terminal.artifact_bytes_v2().unwrap(),
-            terminal_original
-        );
-        let terminal = prepared
-            .prove_terminal(
+        let terminal = session
+            .terminal(
                 &native_wrapper,
-                &imported,
-                &mounted_terminal,
                 Fp::from(192),
                 &FoldConfig::default(),
                 common::recovery(193),
                 ProverConfig::default(),
             )
             .unwrap();
-        installed_native_source = Some((
-            native_plan.clone(),
-            input.clone(),
-            mounted_first,
-            mounted_wrapper,
-            mounted_terminal,
-        ));
+        installed_native_source = Some((installed, native_plan.clone(), input.clone()));
         terminal
             .pallas
             .decide(&params, MemoryBudget::DEFAULT)
@@ -2083,7 +2138,39 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             witness,
         )
         .unwrap();
-        let (wrong_key, _) = WKey::keygen(&wrong_w, &params).unwrap();
+        let (wrong_key, wrong_prover) = WKey::keygen(&wrong_w, &params).unwrap();
+        if let Some((_, native_plan, _)) = &installed_native_source {
+            use iroha_kagemusha_proof::a_relation::native::bootstrap::Prover;
+            let originals = [
+                NativeBootstrapOriginal::from_key(&a1key),
+                NativeBootstrapOriginal::from_key(&wrong_prover),
+                NativeBootstrapOriginal::from_key(&a2key),
+            ];
+            assert!(
+                Prover::from_original_artifacts(
+                    native_plan.clone(),
+                    originals[0].borrow(),
+                    originals[1].borrow(),
+                    originals[2].borrow(),
+                    native_bootstrap_read_config(&originals),
+                )
+                .is_err(),
+                "W0 original must retain the exact preceding A1 key digest"
+            );
+            let mut substituted_vk = originals.clone();
+            substituted_vk[1].pk = wprover.artifact_bytes_v2().unwrap();
+            assert!(
+                Prover::from_original_artifacts(
+                    native_plan.clone(),
+                    substituted_vk[0].borrow(),
+                    substituted_vk[1].borrow(),
+                    substituted_vk[2].borrow(),
+                    native_bootstrap_read_config(&substituted_vk),
+                )
+                .is_err(),
+                "W0 PK must retain the independently installed W verifying key"
+            );
+        }
         for mutation in 0..15 {
             let mut bad = last.clone();
             match mutation {
@@ -2196,25 +2283,18 @@ pub(crate) fn authenticated_bootstrap_with_identity(
         vesta_part: vout,
         state: initial,
     };
-    if let Some((plan, input, first_key, wrapper_key, terminal_key)) = installed_native_source {
-        use iroha_kagemusha_proof::a_relation::native::bootstrap::{CheckpointKind, Prover};
-        let first_key_digest = first_key
+    if let Some((prover, _, input)) = installed_native_source {
+        use iroha_kagemusha_proof::a_relation::native::bootstrap::CheckpointKind;
+        let first_key_digest = a1key
             .vk()
-            .kagemusha_digest(first_key.binding())
+            .kagemusha_digest(a1key.binding())
             .unwrap()
             .to_repr();
-        let wrapper_key_digest = wrapper_key
+        let wrapper_key_digest = wprover
             .vk()
-            .kagemusha_digest(wrapper_key.binding())
+            .kagemusha_digest(wprover.binding())
             .unwrap()
             .to_repr();
-        let prover = Prover::from_artifacts(
-            plan,
-            std::sync::Arc::new(first_key),
-            std::sync::Arc::new(wrapper_key),
-            std::sync::Arc::new(terminal_key),
-        )
-        .unwrap();
         assert_eq!(prover.descriptors().len(), 3);
         let session = prover.prepare(input, MemoryBudget::DEFAULT).unwrap();
         let first_checkpoint = session
@@ -2313,6 +2393,43 @@ pub(crate) fn authenticated_bootstrap_with_identity(
         );
     }
     output
+}
+
+#[derive(Clone)]
+struct NativeBootstrapOriginal {
+    descriptor: Vec<u8>,
+    vk: Vec<u8>,
+    pk: Vec<u8>,
+}
+impl NativeBootstrapOriginal {
+    fn from_key<C: iroha_pasta::PastaCurve>(key: &iroha_plonk::ProvingKey<C>) -> Self {
+        Self {
+            descriptor: key.binding().encoded().to_vec(),
+            vk: key.vk().to_bytes().to_vec(),
+            pk: key.artifact_bytes_v2().unwrap(),
+        }
+    }
+    fn borrow(&self) -> iroha_kagemusha_proof::a_relation::native::bootstrap::OriginalArtifact<'_> {
+        iroha_kagemusha_proof::a_relation::native::bootstrap::OriginalArtifact {
+            descriptor: &self.descriptor,
+            verifying_key: &self.vk,
+            proving_key: &self.pk,
+        }
+    }
+}
+fn native_bootstrap_read_config(
+    originals: &[NativeBootstrapOriginal; 3],
+) -> iroha_plonk::keys::pk::artifact::ReadConfig {
+    iroha_plonk::keys::pk::artifact::ReadConfig {
+        maximum_bytes: originals
+            .iter()
+            .map(|original| original.pk.len())
+            .max()
+            .unwrap(),
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    }
 }
 
 #[test]

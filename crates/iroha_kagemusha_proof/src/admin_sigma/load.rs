@@ -71,13 +71,13 @@ impl LoadCircuit {
         [InstanceType::Bounded]
     }
 }
-const BASE_HASH_ROWS: usize = (2
+pub(super) const BASE_HASH_ROWS: usize = (2
     * (domain_permutations(CORE_FIELDS + 1, true) + domain_permutations(REST_FIELDS, true))
     + domain_permutations(26, true))
     * ROWS_PER_PERMUTATION;
-const STATE_WORDS: usize = CORE_FIELDS + REST_FIELDS + 18;
+pub(super) const STATE_WORDS: usize = CORE_FIELDS + REST_FIELDS + 18;
 
-fn state(
+pub(super) fn state(
     uint: &mut UintChip<'_, Fp>,
     sponge: &mut SpongeChip<Fp>,
     region: &mut iroha_plonk::frontend::Region<'_, Fp>,
@@ -141,6 +141,7 @@ impl Transition<'_> {
     ) -> Result<(), Error> {
         let (label, hash_rows) = match self.variant {
             Variant::Load => ("Load administrative sigma", BASE_HASH_ROWS),
+            Variant::ArchiveReceive => ("ArchiveSent administrative sigma", BASE_HASH_ROWS),
             Variant::Retiring => ("Retiring administrative sigma", BASE_HASH_ROWS),
             Variant::Unload => (
                 "Unload administrative sigma",
@@ -192,22 +193,22 @@ impl Transition<'_> {
                     self.variant,
                     &core::array::from_fn(|i| words[2 * STATE_WORDS + i].clone()),
                 )?;
-                administrative::monetary(
-                    &mut uint,
-                    &mut sponge,
-                    &mut region,
-                    &MapTransition {
-                        statement: &statement,
-                        predecessor: MapState {
-                            state: &before,
-                            lineage: &previous,
-                        },
-                        successor: MapState {
-                            state: &after,
-                            lineage: &successor,
-                        },
+                let transition = MapTransition {
+                    statement: &statement,
+                    predecessor: MapState {
+                        state: &before,
+                        lineage: &previous,
                     },
-                )?;
+                    successor: MapState {
+                        state: &after,
+                        lineage: &successor,
+                    },
+                };
+                if self.variant == Variant::ArchiveReceive {
+                    administrative::archive(&mut uint, &mut region, &transition)?;
+                } else {
+                    administrative::monetary(&mut uint, &mut sponge, &mut region, &transition)?;
+                }
                 if sponge.lane().rows_used() != hash_rows {
                     return Err(Error::Synthesis);
                 }

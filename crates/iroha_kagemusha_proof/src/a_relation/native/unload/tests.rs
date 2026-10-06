@@ -274,3 +274,40 @@ fn consuming_lineage_tape_preserves_exact_public_and_both_complete_claim_origina
     bad[0] = Fp::from(2);
     assert_eq!(lineage_bytes(&bad, &proof, &p, &v), Err(Error::Input));
 }
+
+#[test]
+fn original_artifact_envelope_rejects_missing_oversized_and_noncanonical_metadata() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let oversized_descriptor = vec![0; DESCRIPTOR_MAX_BYTES + 1];
+    let oversized_vk = vec![0; VERIFYING_KEY_MAX_BYTES + 1];
+    let oversized_pk = vec![0; config.maximum_bytes + 1];
+    for (descriptor, verifying_key, proving_key) in [
+        (&[][..], &[1][..], &[1][..]),
+        (&[1][..], &[][..], &[1][..]),
+        (&[1][..], &[1][..], &[][..]),
+        (oversized_descriptor.as_slice(), &[1][..], &[1][..]),
+        (&[1][..], oversized_vk.as_slice(), &[1][..]),
+        (&[1][..], &[1][..], oversized_pk.as_slice()),
+        (&[1][..], &[1][..], &[1][..]),
+    ] {
+        assert_eq!(
+            artifact_binding(
+                OriginalArtifact {
+                    descriptor,
+                    verifying_key,
+                    proving_key
+                },
+                CurveV1::Vesta,
+                &[69],
+                &[InstanceType::Bounded],
+                config,
+            ),
+            Err(Error::Artifact)
+        );
+    }
+}
