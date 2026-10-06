@@ -32,7 +32,7 @@ use iroha_data_model::{
     sumeragi_lanes::{SumeragiLaneRecord, SumeragiLaneStatus},
 };
 use iroha_model_base::topology::LaneId;
-use iroha_sumeragi::{crypto::NoAttestation, types::Hash32};
+use iroha_sumeragi::types::Hash32;
 use parking_lot::Mutex;
 
 use super::{
@@ -503,8 +503,6 @@ impl Inner {
                     init,
                     signers: vec![Arc::new(signer)],
                     crypto: shared,
-                    attestor: Box::new(NoAttestation),
-                    verifier: Box::new(NoAttestation),
                 },
             )
             .map_err(|error| {

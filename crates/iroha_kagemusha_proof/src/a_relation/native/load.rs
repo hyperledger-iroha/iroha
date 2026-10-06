@@ -361,7 +361,6 @@ impl Plan {
             part,
             predecessor,
             params: self.pallas.clone(),
-            vparams: self.vesta.clone(),
             policy: self.policy,
         });
         Ok(Prepared {
@@ -390,7 +389,6 @@ struct Sources {
     part: FoldInput<Eq>,
     predecessor: Predecessor,
     params: PinnedParams<Ep>,
-    vparams: PinnedParams<Eq>,
     policy: OwnPolicy,
 }
 #[derive(Clone)]

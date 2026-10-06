@@ -15,7 +15,7 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Bn254;
+
     for backend in [
         "halo2/bn254",
         "halo2/bn254/vote",
@@ -33,11 +33,11 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
             "case {backend}"
         );
     }
-    let admitted = ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]);
+    let retired = ProofBox::new("halo2/ipa".to_owned(), vec![1, 2, 3, 4]);
     assert_eq!(
-        transaction.preverify_proof(&admitted, None, 0, None, None, true),
-        PreverifyResult::CurveNotAllowed,
-        "admitted Halo2/Pasta backends must still honor curve policy"
+        transaction.preverify_proof(&retired, None, 0, None, None, true),
+        PreverifyResult::UnsupportedBackend,
+        "retired generic Halo2 never enters native curve admission"
     );
 }
 #[test]
@@ -98,12 +98,12 @@ fn halo2_ipa_profile_labels_require_the_canonical_backend() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
+
     let backend = "halo2/ipa:ivm-replay-binding-v1";
     let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
     let vk_commitment = crate::zk::hash_vk(&vk);
     let envelope = OpenVerifyEnvelope {
-        backend: BackendTag::Halo2IpaPasta,
+        backend: BackendTag::NativePipaRPasta,
         circuit_id: backend.to_owned(),
         vk_hash: vk_commitment,
         public_inputs: vec![0x55; 32],

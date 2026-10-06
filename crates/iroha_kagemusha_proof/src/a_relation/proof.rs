@@ -168,6 +168,30 @@ pub struct ProofMessageCells {
     length: Uint<Fp, 32>,
 }
 impl ProofMessageCells {
+    /// Retain checked exact 256-bit messages and their actual `UInt32` length.
+    ///
+    /// This contains no separate byte-tape provenance. A consuming digest or
+    /// source export must copy-bind all three limbs to its independently
+    /// decoded original tape. Recursive continuations may retain this compact
+    /// view because the fixed source owner establishes that binding.
+    /// # Errors
+    /// Empty or overflowing fixed message schedule.
+    pub fn from_messages(
+        messages: Vec<LeElement<Fp>>,
+        length: Uint<Fp, 32>,
+    ) -> Result<Self, Error> {
+        if messages.is_empty()
+            || messages
+                .len()
+                .checked_mul(32)
+                .and_then(|n| u32::try_from(n).ok())
+                .is_none()
+        {
+            return Err(Error::Synthesis);
+        }
+        Ok(Self { messages, length })
+    }
+
     /// Decode an embedded fixed-length proof. Its enclosing transport decoder
     /// separately contributes the original outer-length verdict to `soft_ok`.
     pub(super) fn fixed_slice(
@@ -390,11 +414,19 @@ pub struct IncomingOmegaCells {
     pub(super) lineage_valid: Bit<Fp>,
     pub(super) public: [Word<Fp>; 18],
     pub(super) vesta: VestaClaimCells,
-    pub(super) proof: ProofMessageCells,
+    pub(super) proof: IncomingProofBinding,
     /// Proof, key continuity and both transported-decoder checks.
     pub valid: Bit<Fp>,
     pub(super) pallas: FoldInputCells<Ep>,
-    opening: FoldInputCells<Ep>,
+    pub(super) opening: FoldInputCells<Ep>,
+}
+
+/// Internal provenance copied into a selected incoming claim. Receive's active
+/// form is constructed only from a W-authenticated complete owner context.
+#[derive(Clone, Debug)]
+pub(super) enum IncomingProofBinding {
+    Messages(ProofMessageCells),
+    ReceiveActive([Word<Fp>; 3]),
 }
 
 /// Soft-verifies an incoming Omega under the same carried key identity.
@@ -447,7 +479,7 @@ pub fn verify_incoming(
         lineage_valid: public.valid().clone(),
         public: public.fields().clone(),
         vesta: vesta.clone(),
-        proof: proof.clone(),
+        proof: IncomingProofBinding::Messages(proof.clone()),
         valid,
         pallas: pallas.clone(),
         opening: FoldInputCells::from_claim(chip, region, &output.claim)?,

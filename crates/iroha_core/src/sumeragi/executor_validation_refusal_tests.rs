@@ -43,7 +43,6 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
             block.header().height,
             hash,
             result,
-            block.header().attest,
             crate::sumeragi::test_chain::Signers::Quorum,
         );
         let original_source = std::ptr::from_ref(block.source());
@@ -249,7 +248,6 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
             block.header().height,
             hash,
             result,
-            block.header().attest,
             crate::sumeragi::test_chain::Signers::Quorum,
         );
         let state = worker.state;
@@ -715,7 +713,6 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
                 block.header().height,
                 hash,
                 result,
-                block.header().attest,
                 crate::sumeragi::test_chain::Signers::Quorum,
             );
             assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
@@ -852,7 +849,6 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                     block.header().height,
                     hash,
                     result,
-                    block.header().attest,
                     crate::sumeragi::test_chain::Signers::Quorum,
                 );
                 assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
@@ -964,7 +960,7 @@ fn prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_his
             let Some(ExecOutcome::Valid(result)) = worker.execute(&block, hash) else {
                 panic!("the genuine successor executes under its original native parent");
             };
-            let qc = chain.commit_qc(block.header().height, hash, result, false, Signers::Quorum);
+            let qc = chain.commit_qc(block.header().height, hash, result, Signers::Quorum);
             let budget = worker.state.ivm_execution_budget();
             let epoch = crossbeam_epoch::pin();
             let reserved = budget.reserved_bytes();
@@ -1000,12 +996,8 @@ fn prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_his
                 "root selection must not consume unrelated historical result preimages"
             );
             // Genuine signed invalid certificates remain refused under this same bounded reader.
-            for (attest, signers) in [
-                (false, Signers::BelowQuorum),
-                (false, Signers::All),
-                (true, Signers::Quorum),
-            ] {
-                let invalid = chain.commit_qc(block.header().height, hash, result, attest, signers);
+            for signers in [Signers::BelowQuorum, Signers::All] {
+                let invalid = chain.commit_qc(block.header().height, hash, result, signers);
                 assert!(matches!(
                     norito::with_decode_limits_scope(limits, || {
                         worker.verify_prepared_certificate(&block, &invalid)

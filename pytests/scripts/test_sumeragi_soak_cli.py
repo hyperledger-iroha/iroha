@@ -251,7 +251,6 @@ def applied_line(ms: float, height: int, block: int) -> str:
                 "result": "ee" * 32,
                 "proposer": 0,
                 "payload_bytes": 10,
-                "attest": False,
             },
         }
     )
@@ -271,7 +270,7 @@ def durable_line(ms: float, height: int, key: str) -> str:
                 "key": key,
                 "height": height,
                 "epoch": 1,
-                "signed": "prepare:0:" + "aa" * 32 + ":" + "bb" * 32 + ":0",
+                "signed": "prepare:0:" + "aa" * 32 + ":" + "bb" * 32,
             },
         }
     )

@@ -171,9 +171,37 @@ impl RunningSumConfig {
         meta: &mut ConstraintSystem<F>,
         z: Column<Advice>,
     ) -> Self {
-        meta.enable_equality(z);
         let table = meta.lookup_table_column();
         let tag_table = meta.lookup_table_column();
+        Self::configure_tagged_on(meta, z, table, tag_table)
+    }
+
+    /// Independent exact-width tuple lookups sharing one `(width,value)`
+    /// table. Each bus authenticates one value, with its own fixed pattern.
+    /// The empty list configures no table. A nonempty bank needs at least
+    /// 65,528 usable rows, just as [`Self::configure_tagged`].
+    pub fn configure_tagged_bank<F: PastaField>(
+        meta: &mut ConstraintSystem<F>,
+        columns: &[Column<Advice>],
+    ) -> Vec<Self> {
+        if columns.is_empty() {
+            return Vec::new();
+        }
+        let table = meta.lookup_table_column();
+        let tag_table = meta.lookup_table_column();
+        columns
+            .iter()
+            .map(|z| Self::configure_tagged_on(meta, *z, table, tag_table))
+            .collect()
+    }
+
+    fn configure_tagged_on<F: PastaField>(
+        meta: &mut ConstraintSystem<F>,
+        z: Column<Advice>,
+        table: TableColumn,
+        tag_table: TableColumn,
+    ) -> Self {
+        meta.enable_equality(z);
         let shift = meta.fixed_column();
         let step = meta.fixed_column();
         let indicator = |pattern: Expression<F>, code: u64| {
@@ -441,6 +469,7 @@ pub struct RunningSumChip<F: PastaField> {
     shared_rows: Option<SharedRows>,
     certificates: Option<Rc<RefCell<RangeCertificates<F>>>>,
     banks: Option<Rc<RefCell<Vec<Self>>>>,
+    replay: Option<super::secondary::schedule::Replay<F>>,
     _marker: core::marker::PhantomData<F>,
 }
 
@@ -461,6 +490,7 @@ impl<F: PastaField> RunningSumChip<F> {
             shared_rows: None,
             certificates: None,
             banks: None,
+            replay: None,
             _marker: core::marker::PhantomData,
         }
     }
@@ -477,6 +507,7 @@ impl<F: PastaField> RunningSumChip<F> {
             shared_rows: Some(rows.clone()),
             certificates: Some(Rc::new(RefCell::new(RangeCertificates(BTreeMap::new())))),
             banks: None,
+            replay: None,
             _marker: core::marker::PhantomData,
         }
     }
@@ -493,6 +524,18 @@ impl<F: PastaField> RunningSumChip<F> {
         if configs.iter().enumerate().any(|(i, c)| {
             c.table != first.table
                 || c.limb_bits != first.limb_bits
+                || match (c.pattern, first.pattern) {
+                    (
+                        Pattern::Tagged {
+                            tag_table: left, ..
+                        },
+                        Pattern::Tagged {
+                            tag_table: right, ..
+                        },
+                    ) => left != right,
+                    (Pattern::Tagged { .. }, _) | (_, Pattern::Tagged { .. }) => true,
+                    _ => false,
+                }
                 || configs[..i].iter().any(|previous| previous.z == c.z)
         }) {
             return Err(Error::Synthesis);
@@ -503,6 +546,38 @@ impl<F: PastaField> RunningSumChip<F> {
             configs.into_iter().map(Self::new).collect(),
         )));
         Ok(out)
+    }
+
+    /// Replays a fixed secondary schedule. Each request immediately emits its
+    /// exact bound; the owner must finish the shared stream in the same region.
+    ///
+    /// # Errors
+    /// Existing banks/replay, or mismatched primary/control columns.
+    pub fn with_secondary_plan(
+        mut self,
+        secondary: super::secondary::SecondaryRangeConfig,
+        plan: super::secondary::SecondaryPlan,
+    ) -> Result<Self, Error> {
+        if self.banks.is_some() || self.replay.is_some() {
+            return Err(Error::Synthesis);
+        }
+        self.replay = Some(super::secondary::schedule::Replay::new(
+            plan,
+            secondary,
+            self.config,
+        )?);
+        Ok(self)
+    }
+
+    /// Completes all structurally enabled dummy rows and verifies that every
+    /// scheduled request was consumed. A second finish is rejected.
+    ///
+    /// # Errors
+    /// Missing events, fixed/cell conflicts, or out-of-domain assignments.
+    pub fn finish_secondary(&self, region: &mut Region<'_, F>) -> Result<(), Error> {
+        self.replay
+            .as_ref()
+            .map_or(Ok(()), |replay| replay.finish(region))
     }
 
     fn least_occupied(banks: &[Self]) -> usize {
@@ -555,6 +630,9 @@ impl<F: PastaField> RunningSumChip<F> {
     /// The first row not used yet.
     #[must_use]
     pub fn next_row(&self) -> usize {
+        if let Some(replay) = &self.replay {
+            return replay.next_row();
+        }
         if let Some(banks) = &self.banks {
             return banks.borrow().iter().map(Self::next_row).max().unwrap_or(0);
         }
@@ -648,6 +726,12 @@ impl<F: PastaField> RunningSumChip<F> {
             self.remember(word, &checked, bits);
             return Ok(checked);
         }
+        if let Some(replay) = &self.replay {
+            let checked = replay.assign(region, word.value(), bits)?;
+            region.constrain_equal(word.cell(), checked.cell())?;
+            self.remember(word, &checked, bits);
+            return Ok(checked);
+        }
         let start = self.take_rows(shape.rows)?;
         let z0 = copy_word(region, word, self.config.z, start)?;
         self.decompose(region, start, word.value(), shape)?;
@@ -671,6 +755,11 @@ impl<F: PastaField> RunningSumChip<F> {
             let mut banks = banks.borrow_mut();
             let index = Self::least_occupied(&banks);
             let checked = banks[index].witness_range_checked(region, value, bits)?;
+            self.remember(&checked, &checked, bits);
+            return Ok(checked);
+        }
+        if let Some(replay) = &self.replay {
+            let checked = replay.assign(region, value, bits)?;
             self.remember(&checked, &checked, bits);
             return Ok(checked);
         }

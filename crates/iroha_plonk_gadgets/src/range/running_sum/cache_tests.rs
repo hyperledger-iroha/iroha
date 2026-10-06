@@ -124,24 +124,51 @@ fn cell_bound_range_certificates_preserve_exact_predicate_both_fields() {
 #[derive(Clone)]
 struct Banked<F: PastaField> {
     value: Value<F>,
+    tagged: bool,
 }
 impl<F: PastaField> Circuit<F> for Banked<F> {
     type Config = (Vec<RunningSumConfig>, Column<Instance>);
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
+    type Params = bool;
+    fn params(&self) -> Self::Params {
+        self.tagged
+    }
     fn without_witnesses(&self) -> Self {
         Self {
             value: Value::unknown(),
+            tagged: self.tagged,
         }
     }
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-        let columns = [meta.advice_column(), meta.advice_column()];
-        let ranges = RunningSumConfig::configure_bank(meta, &columns, LimbBits::new(4).unwrap());
+        Self::configure_with_params(meta, false)
+    }
+    fn configure_with_params(meta: &mut ConstraintSystem<F>, tagged: bool) -> Self::Config {
+        let columns = (0..if tagged { 3 } else { 2 })
+            .map(|_| meta.advice_column())
+            .collect::<Vec<_>>();
+        let ranges = if tagged {
+            assert!(RunningSumConfig::configure_tagged_bank(meta, &[]).is_empty());
+            RunningSumConfig::configure_tagged_bank(meta, &columns)
+        } else {
+            RunningSumConfig::configure_bank(meta, &columns, LimbBits::new(4).unwrap())
+        };
         assert!(RunningSumChip::<F>::banked(Vec::new()).is_err());
         assert!(RunningSumChip::<F>::banked(vec![ranges[0], ranges[0]]).is_err());
         let mut wrong = ranges.clone();
         wrong[1].table = meta.lookup_table_column();
         assert!(RunningSumChip::<F>::banked(wrong).is_err());
+        if tagged {
+            let mut wrong = ranges.clone();
+            if let Pattern::Tagged { tag_table, .. } = &mut wrong[1].pattern {
+                *tag_table = meta.lookup_table_column();
+            }
+            assert!(RunningSumChip::<F>::banked(wrong).is_err());
+            let mut mixed = ranges.clone();
+            mixed[1].pattern = Pattern::Fixed {
+                step: meta.fixed_column(),
+            };
+            assert!(RunningSumChip::<F>::banked(mixed).is_err());
+        }
         let public = meta.instance_column(10);
         meta.enable_equality(public);
         (ranges, public)
@@ -178,36 +205,53 @@ impl<F: PastaField> Circuit<F> for Banked<F> {
         Ok(())
     }
 }
-fn exercise_banks<F: PastaField>() {
+fn exercise_banks<F: PastaField>(tagged: bool) {
+    let k = if tagged { 16 } else { 9 };
     let circuit = Banked {
         value: Value::known(F::from(7)),
+        tagged,
     };
     let public = [vec![F::from(7); 10]];
     assert!(
-        check_circuit(&circuit, 9, &public, CheckMode::Strict)
+        check_circuit(&circuit, k, &public, CheckMode::Strict)
             .unwrap()
             .is_satisfied()
     );
-    let known = synthesize(&circuit, 9, Some(&public)).unwrap();
-    let unknown = synthesize(&circuit.without_witnesses(), 9, None).unwrap();
+    let known = synthesize(&circuit, k, Some(&public)).unwrap();
+    assert_eq!(known.cs.lookups().len(), if tagged { 3 } else { 2 });
+    assert!(
+        known
+            .cs
+            .lookups()
+            .iter()
+            .all(|lookup| lookup.input_expressions().len() == if tagged { 2 } else { 1 })
+    );
+    let unknown = synthesize(&circuit.without_witnesses(), k, None).unwrap();
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.permutation(), unknown.tables.permutation());
     assert_eq!(
         known.tables.advice_assigned(),
         unknown.tables.advice_assigned()
     );
-    assert!(undetected_tampers(&circuit, 9, &public).unwrap().is_empty());
+    assert!(undetected_tampers(&circuit, k, &public).unwrap().is_empty());
     let bad = Banked {
         value: Value::known(F::from(8)),
+        tagged,
     };
     assert!(
-        !check_circuit(&bad, 9, &[vec![F::from(8); 10]], CheckMode::Strict)
+        !check_circuit(&bad, k, &[vec![F::from(8); 10]], CheckMode::Strict)
             .unwrap()
             .is_satisfied()
     );
 }
 #[test]
 fn banked_ranges_share_only_the_table_and_reservations_both_fields() {
-    exercise_banks::<Fp>();
-    exercise_banks::<Fq>();
+    exercise_banks::<Fp>(false);
+    exercise_banks::<Fq>(false);
+}
+
+#[test]
+fn tagged_banks_share_exact_tuple_table_and_cell_certificates_both_fields() {
+    exercise_banks::<Fp>(true);
+    exercise_banks::<Fq>(true);
 }

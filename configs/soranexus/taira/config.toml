@@ -306,7 +306,7 @@ max_ed25519_signature_checks_per_block = 262144
 max_bls_vote_attestations_per_transaction = 64
 max_bls_vote_attestations_per_block = 256
 
-[zk.halo2]
+[zk.pipa_r]
 enabled = true
 
 [zk.stark]

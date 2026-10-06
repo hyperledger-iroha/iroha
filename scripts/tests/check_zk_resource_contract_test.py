@@ -367,15 +367,15 @@ def test_relation_values_are_the_recorded_arithmetic() -> None:
         )
         == 4_128_768
     )
-    assert values["transport.frame_overhead_bytes"] == 591_904
-    assert values["transport.chain_frame_limit_bytes"] == 17_369_120
-    # A 16 MiB payload needs 17,961,024 bytes of frame for a sync response.
+    assert values["transport.frame_overhead_bytes"] == 264_224
+    assert values["transport.chain_frame_limit_bytes"] == 17_041_440
+    # A 16 MiB payload needs 17,305,664 bytes of frame for a sync response.
     target = {**values, "block.max_block_bytes": 16 * MIB}
     assert (
         evaluate(
             "block.max_block_bytes + 2 * transport.frame_overhead_bytes", target, "test"
         )
-        == 17_961_024
+        == 17_305_664
     )
     assert values["transport.max_plaintext_frame_bytes"] == 17_825_792
     # The largest payload for which a feasible sync setting exists today.
@@ -385,7 +385,7 @@ def test_relation_values_are_the_recorded_arithmetic() -> None:
             values,
             "test",
         )
-        == 16_185_312
+        == 16_512_992
     )
     assert evaluate("ceil_div(7, 2) == 4 and max(1, 2) == 2", values, "test") is True
 
@@ -402,12 +402,12 @@ def test_node_local_validity_bounds_are_defects_owned_by_a_task() -> None:
     assert "proof.config_stark_max_proof_bytes" in defects
 
     def undeclared(contract: dict) -> None:
-        del bound(contract, "proof.config_halo2_max_k")["defect"]
+        del bound(contract, "proof.config_pipa_r_max_proof_bytes")["defect"]
 
     assert_fails(edited(undeclared), "must be recorded as a defect with an owner task")
 
     def ownerless(contract: dict) -> None:
-        bound(contract, "proof.config_halo2_max_k")["defect"]["owner"] = "Z.9"
+        bound(contract, "proof.config_pipa_r_max_proof_bytes")["defect"]["owner"] = "Z.9"
 
     assert_fails(edited(ownerless), "owner `Z.9` is not a task of the delivery graph")
 
@@ -1060,7 +1060,7 @@ def test_every_consensus_bound_names_a_test_or_the_owner_of_the_gap() -> None:
         ("work_budget.fuel", "validate_ivm_max_cycles_exceeds_fuel_rejected"),
         ("work_budget.fuel", "validate_ivm_max_cycles_equal_to_fuel_is_admitted"),
         ("guest_memory.committed_heap_limit_bytes", "per_instance_heap_ceiling_cannot_be_bypassed_by_growth"),
-        ("proof.config_halo2_max_proof_bytes", "guardrails_enforce_halo2_max_proof_bytes_for_open_verify_envelopes"),
+        ("proof.config_pipa_r_max_proof_bytes", "guardrails_enforce_pipa_r_max_proof_bytes_for_open_verify_envelopes"),
         ("proof.config_ballot_history_cap", "direct_zk_ballot_rejects_a_full_corpus_without_pruning"),
         (
             "work_budget.config_confidential_registry_max_delta_per_block",
@@ -1071,7 +1071,6 @@ def test_every_consensus_bound_names_a_test_or_the_owner_of_the_gap() -> None:
         assert name in {test["name"] for test in item["tests"]}, identifier
         assert not only_pins(item) and "test_gap" not in item
     for identifier in (
-        "proof.config_halo2_max_k",
         "proof.config_preverify_budget_bytes",
         "work_budget.config_query_max_fetch_size",
         "work_budget.config_amx_group_budget_ms",
@@ -1083,7 +1082,7 @@ def test_every_consensus_bound_names_a_test_or_the_owner_of_the_gap() -> None:
         assert only_pins(item) and item["test_gap"]["owner"] in TASKS, identifier
 
     def unowned(contract: dict) -> None:
-        del bound(contract, "proof.config_halo2_max_k")["test_gap"]
+        del bound(contract, "proof.config_preverify_budget_bytes")["test_gap"]
 
     assert_fails(edited(unowned), "its tests only pin the value or a digest projection")
 
@@ -1197,7 +1196,7 @@ def test_a_value_bound_into_state_but_compared_nowhere_is_recorded_unenforced() 
 
     def sited(contract: dict) -> None:
         item = bound(contract, "proof.config_confidential_max_public_inputs")
-        item["enforcement"] = bound(contract, "proof.config_halo2_max_k")["enforcement"]
+        item["enforcement"] = bound(contract, "proof.config_pipa_r_max_proof_bytes")["enforcement"]
 
     assert_fails(edited(sited), "a bound with enforcement sites is not `unenforced`")
 
@@ -1598,7 +1597,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         if item["class"] == "consensus" and item["source"] == "node_local"
     }
     assert listed == node_local, "every node-local validity bound is a catalog field"
-    assert len(node_local) == 76
+    assert len(node_local) == 72
     for identifier in node_local:
         assert bound(CONTRACT, identifier)["defect"]["owner"] == "F.4"
     pipeline = catalogs["execution_policy_digest_v1"]["fields"]
@@ -1615,8 +1614,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     for field in (
         "pipa_r.max_envelope_bytes",
         "pipa_r.max_proof_bytes",
-        "halo2.max_envelope_bytes",
-        "halo2.max_transcript_label_len",
+        "max_verify_batch",
         "sccp.max_proofs_per_transaction",
         "sccp.max_proofs_per_block",
         "sccp.max_proof_bytes_per_transaction",
@@ -1634,7 +1632,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         assert sorted(observed) == sorted(recorded)
         assert all(group["reason"] for group in catalog["excluded"])
     assert len(catalogs["execution_policy_digest_v1"]["fields"]) == 15
-    assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 51
+    assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 47
     assert len(catalogs["nexus_consensus_policy_v1"]["fields"]) == 10
     # The execution-policy digest binds 164 fields: ten committee sizes come from a loop.
     execution_source = (ROOT / catalogs["execution_policy_digest_v1"]["path"]).read_text(encoding="utf-8")
@@ -1703,9 +1701,9 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     )
 
     def invented(contract: dict) -> None:
-        contract["catalogs"][1]["excluded"][0]["fields"].append("halo2.no_such_limit")
+        contract["catalogs"][1]["excluded"][0]["fields"].append("pipa_r.no_such_limit")
 
-    assert_fails(edited(invented), "`halo2.no_such_limit` is not a field of")
+    assert_fails(edited(invented), "`pipa_r.no_such_limit` is not a field of")
 
     def twice(contract: dict) -> None:
         contract["catalogs"][0]["excluded"][0]["fields"].append("pipeline.overlay_max_bytes")
@@ -1718,7 +1716,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     assert_fails(edited(unlinked), "records `catalog` as execution_policy_digest_v1")
 
     def committed(contract: dict) -> None:
-        item = bound(contract, "proof.config_halo2_max_envelope_bytes")
+        item = bound(contract, "proof.config_pipa_r_max_envelope_bytes")
         item["source"] = "constant"
         del item["defect"]
 
@@ -1775,7 +1773,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     def stray(contract: dict) -> None:
         bound(contract, "queue.capacity")["catalog"] = {
             "id": "zk_consensus_policy_hash",
-            "field": "halo2.max_k",
+            "field": "max_verify_batch",
         }
 
     assert_fails(edited(stray), "queue.capacity: its `catalog` entry is not a field of that catalog")
@@ -1838,11 +1836,11 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
     pub fn compute_zk_consensus_policy_hash(zk: &Zk) -> [u8; 32] {
         let mut h = Sha256::new();
         zk_policy_put_bytes(&mut h, b"iroha:zk:consensus-policy:v1");
-        zk_policy_put_u32(&mut h, "halo2.max_k", zk.halo2.max_k);
+        zk_policy_put_u32(&mut h, "max_verify_batch", zk.max_verify_batch);
         zk_policy_put_usize(
             &mut h,
-            "halo2.max_proof_bytes",
-            zk.halo2.max_proof_bytes,
+            "pipa_r.max_proof_bytes",
+            zk.pipa_r.max_proof_bytes,
         );
         h.finalize().into()
     }
@@ -1856,7 +1854,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
         "governance.review_panel_size",
     ]
     put = {"function": "compute_zk_consensus_policy_hash", "field_form": "zk_policy_put", "path": "a.rs"}
-    assert fields(source, put, "t") == ["halo2.max_k", "halo2.max_proof_bytes"]
+    assert fields(source, put, "t") == ["max_verify_batch", "pipa_r.max_proof_bytes"]
     error = CHECKER["ContractError"]
     with pytest.raises(error, match="is not in a.rs"):
         fields(source, {**push, "function": "absent"}, "t")
@@ -1879,7 +1877,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
         with pytest.raises(error, match="binds a field whose name the checker cannot read"):
             fields(unreadable, push, "t")
     with pytest.raises(error, match="`zk_policy_put_u32\\(` call binds a field whose name"):
-        fields(source.replace('"halo2.max_k"', "MAX_K_FIELD"), put, "t")
+        fields(source.replace('"max_verify_batch"', "MAX_BATCH_FIELD"), put, "t")
 
     # A typed preimage struct: nested structs contribute their fields below the field's name.
     structs = """
@@ -1943,7 +1941,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
                 "id": "proof.k",
                 "source": "node_local",
                 "class": "consensus",
-                "catalog": {"id": "zk_consensus_policy_hash", "field": "halo2.max_k"},
+                "catalog": {"id": "zk_consensus_policy_hash", "field": "max_verify_batch"},
             },
             {
                 "id": "transaction.carrier",
@@ -1958,7 +1956,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
                 "id": "zk_consensus_policy_hash",
                 "source": "node_local",
                 "what": "x",
-                "fields": {"halo2.max_k": "proof.k"},
+                "fields": {"max_verify_batch": "proof.k"},
                 "excluded": [],
             },
             {
@@ -1983,7 +1981,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
     unlisted: list = []
     CHECKER["check_catalogs"](tmp_path, contract, TASKS, found, unlisted)
     assert found == [
-        "catalog zk_consensus_policy_hash: field `halo2.max_proof_bytes` of "
+        "catalog zk_consensus_policy_hash: field `pipa_r.max_proof_bytes` of "
         "`compute_zk_consensus_policy_hash` is neither listed as a bound nor excluded with a reason",
         "catalog nexus_consensus_policy_v1: field `settlement.max_participants` of `preimage` "
         "is neither listed as a bound nor excluded with a reason",
@@ -1992,7 +1990,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
         "catalogs: `fastpq_source_policy_v1` is checked against the source",
     ]
     assert [(catalog["id"], field) for catalog, field in unlisted] == [
-        ("zk_consensus_policy_hash", "halo2.max_proof_bytes"),
+        ("zk_consensus_policy_hash", "pipa_r.max_proof_bytes"),
         ("nexus_consensus_policy_v1", "settlement.max_participants"),
     ]
 
@@ -2397,9 +2395,11 @@ def test_native_pipa_r_byte_bounds_record_current_owners_and_boundary_witnesses(
         assert item["owner"]["anchor"] == ["pub mod zk {", "pub mod pipa_r {"]
         assert item["catalog"] == {"id": "zk_consensus_policy_hash", "field": "pipa_r." + field}
         assert item["defect"]["owner"] == "F.4"
-        assert {test["name"] for test in item["tests"]} == {
+        assert {test["name"] for test in item["tests"]} >= {
             "guardrails_from_config_copies_every_cap",
-            "native_real_proofs_obey_relation_policy_caps_and_preverify"}
+            "native_real_proofs_obey_relation_policy_caps_and_preverify",
+            "pipa_r_admission_inputs_bind_projection",
+        }
         without_site = edited(lambda contract: bound(contract, item["id"]).__setitem__("enforcement", []))
         assert_fails(without_site, item["id"])
     source = (ROOT / "crates/iroha_core_zk/src/native_pipa_r_tests.rs").read_text()

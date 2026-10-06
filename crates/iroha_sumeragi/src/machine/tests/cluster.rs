@@ -172,7 +172,6 @@ impl Cluster {
             init,
             vec![signer],
             Box::new(self.v.crypto.clone()),
-            crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
             node.budget.clone(),
             self.now,
         )
@@ -252,7 +251,6 @@ impl Cluster {
                         req,
                         context,
                         witness: crate::types::ControlWitness::empty(),
-                        attest: false,
                     },
                 ),
                 Action::BuildPayload {
@@ -274,15 +272,7 @@ impl Cluster {
                         bytes.admit(&self.nodes[i].budget).unwrap();
                         Some(bytes)
                     };
-                    self.schedule(
-                        self.now + 1,
-                        i,
-                        Event::PayloadBuilt {
-                            req,
-                            payload,
-                            attest: false,
-                        },
-                    );
+                    self.schedule(self.now + 1, i, Event::PayloadBuilt { req, payload });
                 }
                 Action::Execute { block, req } => {
                     let bh = block.hash(&self.v.crypto);

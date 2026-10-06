@@ -89,7 +89,7 @@ Facts it records about the current tree:
   ceiling-sized proof is rejected as too large; two maximum actions per block
   do not fit any payload limit.
 - A 16 MiB payload passes the chain parameter rule but has no feasible
-  `sync_max_bytes`; the largest payload with one is 16,185,312 bytes.
+  `sync_max_bytes`; the largest payload with one is 16,512,992 bytes.
 - Transaction gossip frames are 256 KiB: a larger transaction stays with the
   node that admitted it.
 - 74 limits and gas charges that decide validity are read from node

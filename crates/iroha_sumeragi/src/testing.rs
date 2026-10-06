@@ -9,9 +9,6 @@
 //!   signature that verifies but was never produced by its key's signer is detected.
 //! - [`FakeValidators`]: a committee of harness-held keys with helpers that sign votes,
 //!   timeouts, proposals and build certificates (including deliberately malformed ones).
-//! - [`FakeAttestor`] and [`FakeVerifier`]: the commit-attestation extension (§3.7) with a keyed
-//!   MAC per member key and height standing in for the application's signature, so a forged,
-//!   stripped or replayed attestation is told apart from a genuine one.
 
 /// Explicit stationary scheduling context for protocol-unit fixtures.
 /// Rotation harnesses replace bounds and identity from their declared schedule.
@@ -88,7 +85,7 @@ use std::{
 };
 
 use crate::{
-    crypto::{AttestOutcome, Attestation, AttestationVerifier, Attestor, Crypto, Signer},
+    crypto::{Crypto, Signer},
     message::{BlockHeader, Proposal, Qc, TcEntry, TimeoutCert, TimeoutVote, Vote, VoteKind},
     preimage,
     types::{
@@ -255,173 +252,6 @@ fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
 
 const TAG_FAKE_SIG: &[u8] = b"sumeragi/fake-sig";
 const TAG_FAKE_PK: &[u8] = b"sumeragi/fake-pk";
-const TAG_FAKE_ATTEST: &[u8] = b"sumeragi/fake-attest";
-
-/// The fake attestation (§3.7) of `statement` by member `key` at `height`:
-/// `SHA-256("sumeragi/fake-attest" ‖ kb(key) ‖ be64(height) ‖ statement)`, a keyed MAC standing
-/// in for the application's signature under the member's key of that height.
-pub fn fake_attestation(
-    key: &PublicKey,
-    height: u64,
-    statement: &[u8],
-) -> crate::message::CommitAttestation {
-    let mut input = TAG_FAKE_ATTEST.to_vec();
-    preimage::put_kb(&mut input, key);
-    input.extend_from_slice(&height.to_be_bytes());
-    input.extend_from_slice(statement);
-    crate::message::CommitAttestation {
-        witness: crate::message::ResultWitness::from_untrusted(statement.to_vec())
-            .expect("nonempty bounded test statement"),
-        signature: crate::message::AttestationSignature::try_from_slice(&sha256(&input)).unwrap(),
-    }
-}
-
-/// The statements `(height, att_preimage(height, bh, R))` of the blocks a node executed to
-/// `Valid(R)`, shared between its executor and an execution-gated [`FakeAttestor`].
-/// The fixture attests only these completed executions (§3.7 A2).
-#[derive(Clone, Debug, Default)]
-pub struct Executed(Arc<Mutex<Statements>>);
-
-/// `(height, statement)` pairs of [`Executed`].
-type Statements = BTreeSet<(u64, Vec<u8>)>;
-
-impl Executed {
-    /// An empty set.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Statements> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Record execution of `bh` under its authenticated epoch to `Valid(result)`.
-    pub fn record(
-        &self,
-        instance: &Hash32,
-        epoch: &crate::types::EpochId,
-        height: u64,
-        bh: &Hash32,
-        result: &Hash32,
-    ) {
-        let statement = preimage::att_preimage(instance, epoch, height, bh, result);
-        self.lock().insert((height, statement));
-    }
-
-    /// Whether `statement` at `height` was recorded.
-    pub fn contains(&self, height: u64, statement: &[u8]) -> bool {
-        self.lock().contains(&(height, statement.to_vec()))
-    }
-
-    /// Forget the executions at heights `≤ height` (applied: no Commit vote needs them).
-    pub fn prune_through(&self, height: u64) {
-        self.lock().retain(|(h, _)| *h > height);
-    }
-
-    /// Forget every execution (the node crashed).
-    pub fn clear(&self) {
-        self.lock().clear();
-    }
-
-    /// Number of recorded executions.
-    pub fn len(&self) -> usize {
-        self.lock().len()
-    }
-
-    /// Whether nothing is recorded.
-    pub fn is_empty(&self) -> bool {
-        self.lock().is_empty()
-    }
-}
-
-/// A fake application authority (§3.7): it attests with [`fake_attestation`] for every member
-/// key except those it holds no authority for, or forges (attestations that never verify); an
-/// execution-gated one answers `Pending` for a block its node has not executed.
-#[derive(Clone, Debug, Default)]
-pub struct FakeAttestor {
-    without: BTreeSet<PublicKey>,
-    forge: bool,
-    executed: Option<Executed>,
-}
-
-impl FakeAttestor {
-    /// An authority for every key.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// An authority for every key except `keys` (`attest` answers `NoAuthority` for them).
-    pub fn without_authority(keys: impl IntoIterator<Item = PublicKey>) -> Self {
-        Self {
-            without: keys.into_iter().collect(),
-            ..Self::default()
-        }
-    }
-
-    /// A Byzantine authority whose attestations never verify.
-    pub fn forging() -> Self {
-        Self {
-            forge: true,
-            ..Self::default()
-        }
-    }
-
-    /// This authority, answering `Pending` for every statement not in `executed`.
-    #[must_use]
-    pub fn after_execution(self, executed: Executed) -> Self {
-        Self {
-            executed: Some(executed),
-            ..self
-        }
-    }
-}
-
-impl Attestor for FakeAttestor {
-    fn attest(&self, height: u64, key: &PublicKey, statement: &[u8]) -> AttestOutcome {
-        if self.without.contains(key) {
-            return AttestOutcome::NoAuthority;
-        }
-        if (self.executed.as_ref()).is_some_and(|executed| !executed.contains(height, statement)) {
-            return AttestOutcome::Pending;
-        }
-        let mut attestation = fake_attestation(key, height, statement);
-        if self.forge {
-            let mut bytes = attestation.signature.as_slice().to_vec();
-            bytes[0] ^= 0xff;
-            attestation.signature =
-                crate::message::AttestationSignature::try_from_slice(&bytes).unwrap();
-        }
-        AttestOutcome::Attested(attestation)
-    }
-}
-
-/// The fake attestation verifier (§3.7): an attestation verifies iff it is
-/// [`fake_attestation`] of the statement by the member key at the height.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct FakeVerifier;
-
-impl AttestationVerifier for FakeVerifier {
-    fn verify(
-        &self,
-        height: u64,
-        _signer: ValidatorIndex,
-        key: &PublicKey,
-        statement: &[u8],
-        witness: &crate::message::ResultWitness,
-        attestation: &[u8],
-    ) -> bool {
-        witness.as_slice() == statement
-            && fake_attestation(key, height, statement)
-                .signature
-                .as_slice()
-                == attestation
-    }
-}
-
-/// The fake commit-attestation extension: `attestor` with [`FakeVerifier`].
-pub fn fake_attestation_ext(attestor: FakeAttestor) -> Attestation {
-    Attestation::new(Box::new(attestor), Box::new(FakeVerifier))
-}
 const LIMBS: usize = SIGNATURE_LEN / 32;
 
 /// The fake signature of `key` over `msg`: limb `i` is
@@ -724,7 +554,7 @@ impl FakeValidators {
         self.signer(index).key.clone()
     }
 
-    /// A signed vote of an unflagged block.
+    /// A signed vote under the fixture committee.
     pub fn vote(
         &self,
         kind: VoteKind,
@@ -735,38 +565,12 @@ impl FakeValidators {
         block_hash: &Hash32,
         result: &Hash32,
     ) -> Vote {
-        self.vote_flagged(
-            kind, signer, instance, height, view, block_hash, result, false,
-        )
-    }
-
-    /// A signed vote with the attestation flag `attest`; a flagged Commit vote carries the
-    /// signer's genuine [`fake_attestation`] (§3.7).
-    pub fn vote_flagged(
-        &self,
-        kind: VoteKind,
-        signer: ValidatorIndex,
-        instance: &Hash32,
-        height: u64,
-        view: u64,
-        block_hash: &Hash32,
-        result: &Hash32,
-        attest: bool,
-    ) -> Vote {
         let msg = preimage::vote_preimage(
             kind,
             instance,
             &crate::testing::TEST_EPOCH.id,
             height,
             view,
-            block_hash,
-            result,
-            attest,
-        );
-        let statement = preimage::att_preimage(
-            instance,
-            &crate::testing::TEST_EPOCH.id,
-            height,
             block_hash,
             result,
         );
@@ -778,16 +582,12 @@ impl FakeValidators {
             view,
             block_hash: *block_hash,
             result: *result,
-            attest,
             signer,
             sig: self.signer(signer).sign(&msg),
-            attestation: (kind == VoteKind::Commit && attest)
-                .then(|| fake_attestation(&self.key(signer), height, &statement)),
         }
     }
 
-    /// A certificate of an unflagged block signed by exactly `signers` (any number, even below
-    /// quorum).
+    /// A certificate signed by exactly the fixture signers, including invalid quorum counts.
     pub fn qc(
         &self,
         kind: VoteKind,
@@ -798,38 +598,12 @@ impl FakeValidators {
         result: &Hash32,
         signers: &[ValidatorIndex],
     ) -> Qc {
-        self.qc_flagged(
-            kind, instance, height, view, block_hash, result, signers, false,
-        )
-    }
-
-    /// A certificate with the attestation flag `attest` signed by exactly `signers`; a flagged
-    /// `CommitQC` carries the signers' genuine [`fake_attestation`]s in signer order (§3.7 A4).
-    pub fn qc_flagged(
-        &self,
-        kind: VoteKind,
-        instance: &Hash32,
-        height: u64,
-        view: u64,
-        block_hash: &Hash32,
-        result: &Hash32,
-        signers: &[ValidatorIndex],
-        attest: bool,
-    ) -> Qc {
         let msg = preimage::vote_preimage(
             kind,
             instance,
             &crate::testing::TEST_EPOCH.id,
             height,
             view,
-            block_hash,
-            result,
-            attest,
-        );
-        let statement = preimage::att_preimage(
-            instance,
-            &crate::testing::TEST_EPOCH.id,
-            height,
             block_hash,
             result,
         );
@@ -840,17 +614,7 @@ impl FakeValidators {
             .iter()
             .map(|index| self.signer(*index).sign(&msg))
             .collect();
-        let attestations = if kind == VoteKind::Commit && attest {
-            sorted
-                .iter()
-                .map(|index| fake_attestation(&self.key(*index), height, &statement).signature)
-                .collect()
-        } else {
-            Vec::new()
-        };
         Qc {
-            attestation_witness: (kind == VoteKind::Commit && attest)
-                .then(|| crate::message::ResultWitness::from_untrusted(statement.clone()).unwrap()),
             epoch: crate::testing::TEST_EPOCH.id,
             kind,
             instance: *instance,
@@ -858,11 +622,9 @@ impl FakeValidators {
             view,
             block_hash: *block_hash,
             result: *result,
-            attest,
             signers: Bitmap::from_indices(self.committee.n(), sorted.iter().copied())
                 .unwrap_or_else(|| Bitmap::new(self.committee.n())),
             agg_sig: self.crypto.aggregate(&sigs),
-            attestations,
         }
     }
 

@@ -421,7 +421,7 @@ fn contract_argument_record_accepts_the_limit_and_rejects_one_over() {
 /// Committed chain parameters: the payload limit is validated against the chain frame limit.
 #[test]
 fn committed_block_payload_limit_accepts_the_frame_limit_and_rejects_one_over() {
-    assert_eq!(FRAME_OVERHEAD, 591_904);
+    assert_eq!(FRAME_OVERHEAD, 264_224);
     assert_eq!(
         CHAIN_TRANSPORT_FRAME_LIMIT,
         16 * MIB + u64::from(FRAME_OVERHEAD)

@@ -1,7 +1,6 @@
 //! Historical certification transcripts with genuine BLS votes and threshold pulses.
-//! These fixtures do not execute NPoS State transitions. Application attestations below exercise
-//! an explicit generic BLS verifier; the native default uses NoAttestation and rejects flagged
-//! certificates. Neither fixture establishes native State execution or monetary qualification.
+//! These fixtures verify exact BLS quorums and authenticated scheduling transitions.
+//! They do not execute NPoS State transitions or establish monetary qualification.
 
 use super::*;
 use crate::state::WorldReadOnly as _;
@@ -31,7 +30,7 @@ use iroha_sumeragi::{
     crypto::{Signer as _, form_qc},
     message::Vote,
     preimage::payload_hash,
-    types::{ChainParams, PublicKey},
+    types::ChainParams,
 };
 use std::{num::NonZeroU64, sync::OnceLock, time::Duration};
 
@@ -52,28 +51,6 @@ fn members(keys: &[KeyPair]) -> Vec<ValidatorCommitteeMemberV1> {
         .collect()
 }
 
-/// Explicit generic application-verifier fixture. It checks actual signatures over the entire
-/// epoch-bound statement; it grants no native or monetary attestation authority.
-struct TestAttestations;
-impl AttestationVerifier for TestAttestations {
-    fn verify(
-        &self,
-        _height: u64,
-        _signer: u32,
-        key: &PublicKey,
-        statement: &[u8],
-        witness: &iroha_sumeragi::message::ResultWitness,
-        attestation: &[u8],
-    ) -> bool {
-        let Ok(key) = crate::sumeragi::crypto::iroha_key(key) else {
-            return false;
-        };
-        witness.as_slice() == statement
-            && iroha_crypto::Signature::from_bytes(attestation)
-                .verify(&key, statement)
-                .is_ok()
-    }
-}
 fn certificate(keys: &[KeyPair], header: &BlockHeader, result: Hash32, last: bool) -> Qc {
     let crypto = BlsCrypto::new();
     crypto
@@ -102,24 +79,10 @@ fn certificate(keys: &[KeyPair], header: &BlockHeader, result: Hash32, last: boo
                 view: 0,
                 block_hash: header.hash(&crypto),
                 result,
-                attest: header.attest,
                 signer: index as u32,
                 sig: iroha_sumeragi::types::Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
-                attestation: None,
             };
-            if header.attest {
-                vote.attestation = Some(iroha_sumeragi::message::CommitAttestation {
-                    witness: iroha_sumeragi::message::ResultWitness::from_untrusted(
-                        vote.statement(),
-                    )
-                    .unwrap(),
-                    signature: iroha_sumeragi::message::AttestationSignature::try_from_slice(
-                        iroha_crypto::Signature::new(keys[index].private_key(), &vote.statement())
-                            .payload(),
-                    )
-                    .unwrap(),
-                });
-            }
+
             vote.sig = crate::sumeragi::crypto::KeyPairSigner::new(&keys[index])
                 .unwrap()
                 .sign(&vote.preimage());
@@ -203,9 +166,8 @@ fn transcript_proposal(
     let view = state.view();
     assert_eq!(view.canonical_history().height(), 0);
     assert!(view.native_execution_tip().is_none());
-    let reader = CertifiedChain::from_frames(view.chain_id(), view.network_id(), &hashes, history)
-        .unwrap()
-        .with_attestation_verifier(&TestAttestations);
+    let reader =
+        CertifiedChain::from_frames(view.chain_id(), view.network_id(), &hashes, history).unwrap();
     let certified = reader.certified(height - 1).unwrap();
     assert_eq!(certified.block_hash(), parent.hash());
     let effects = (height > 2).then(|| {
@@ -284,10 +246,7 @@ fn transcript_proposal(
     proposal
 }
 
-fn build_history(
-    retain: bool,
-    application_attestation: bool,
-) -> Vec<iroha_data_model::block::SharedSignedBlock> {
+fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     let original_keys = keys(false);
     let genesis_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
     let mut policy = SumeragiNposParameters::default();
@@ -513,7 +472,6 @@ fn build_history(
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: 0,
             skipped_leaders: Vec::new(),
-            attest: application_attestation && boundary.is_some(),
         };
         let budget = world.ivm_execution_budget();
         let mut backing = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
@@ -575,17 +533,11 @@ fn build_history(
 }
 fn history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
     static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
-    HISTORY.get_or_init(|| build_history(false, true)).clone()
+    HISTORY.get_or_init(|| build_history(false)).clone()
 }
 fn retained_history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
     static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
-    HISTORY.get_or_init(|| build_history(true, true)).clone()
-}
-
-/// Full native-default transcript with matching signed RS16 availability at every height.
-fn native_history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
-    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
-    HISTORY.get_or_init(|| build_history(false, false)).clone()
+    HISTORY.get_or_init(|| build_history(true)).clone()
 }
 
 #[test]
@@ -593,9 +545,7 @@ fn rotated_away_committee_verifies_from_authenticated_boundaries_with_bounded_au
     let history = history();
     let state = state_with_history(&history);
     let view = state.view();
-    let reader = CertifiedChain::new(&view)
-        .unwrap()
-        .with_attestation_verifier(&TestAttestations);
+    let reader = CertifiedChain::new(&view).unwrap();
     assert_eq!(
         reader
             .walk(1, 14)
@@ -636,9 +586,7 @@ fn retained_generation_still_binds_new_epoch_and_fresh_leader_randomness() {
     let history = retained_history();
     let state = state_with_history(&history);
     let view = state.view();
-    let reader = CertifiedChain::new(&view)
-        .unwrap()
-        .with_attestation_verifier(&TestAttestations);
+    let reader = CertifiedChain::new(&view).unwrap();
     let before = reader.certified(6).unwrap();
     let after = reader.certified(7).unwrap();
     assert_eq!(
@@ -699,10 +647,7 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
         let state = state_with_history(&corrupt);
         let view = state.view();
         assert!(matches!(
-            CertifiedChain::new(&view)
-                .unwrap()
-                .with_attestation_verifier(&TestAttestations)
-                .certified(14),
+            CertifiedChain::new(&view).unwrap().certified(14),
             Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
                 ChainReadError::Malformed { height: 6, .. }
             ))
@@ -714,10 +659,7 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
     let state = state_with_history(&missing);
     let view = state.view();
     assert!(matches!(
-        CertifiedChain::new(&view)
-            .unwrap()
-            .with_attestation_verifier(&TestAttestations)
-            .certified(14),
+        CertifiedChain::new(&view).unwrap().certified(14),
         Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::MissingCertificate { height: 6 }
         ))
@@ -738,10 +680,7 @@ fn boundary_authority_and_parent_links_cannot_self_authorize() {
         });
         let state = state_with_history(&history);
         let view = state.view();
-        let result = CertifiedChain::new(&view)
-            .unwrap()
-            .with_attestation_verifier(&TestAttestations)
-            .certified(14);
+        let result = CertifiedChain::new(&view).unwrap().certified(14);
         if kind == 1 {
             assert!(matches!(
                 result,
@@ -761,22 +700,17 @@ fn boundary_authority_and_parent_links_cannot_self_authorize() {
 }
 
 #[test]
-fn nonempty_boundary_checks_application_attestation_and_exact_fresh_pulse() {
+fn nonempty_boundary_checks_exact_fresh_pulse() {
     let original = history();
     let state = state_with_history(&original);
     let view = state.view();
-    let reader = CertifiedChain::new(&view)
-        .unwrap()
-        .with_attestation_verifier(&TestAttestations);
+    let reader = CertifiedChain::new(&view).unwrap();
     let boundary = reader.certified(6).unwrap();
     assert!(boundary.header().unwrap().payload_len > 0);
-    assert!(boundary.header().unwrap().attest);
-    for mutation in 0..4 {
+    for mutation in 1..3 {
         let mut history = original.clone();
         history[5] = with_parts(&history[5], |header, qc, bytes| {
-            if mutation == 0 {
-                header.attest = false;
-            } else if mutation < 3 {
+            {
                 let mut result = ExecutionResultCommitment::decode(bytes).unwrap();
                 let boundary = result.schedule.boundary.as_mut().unwrap();
                 if mutation == 1 {
@@ -794,42 +728,20 @@ fn nonempty_boundary_checks_application_attestation_and_exact_fresh_pulse() {
                 }
                 *bytes = result.preimage().unwrap();
             }
-            // A correctly re-signed unflagged boundary is canonical. For the flag negative,
-            // retain the original signed QC so the altered header cannot self-authorize.
-            if mutation != 0 {
-                *qc = certificate(&keys(false), header, result_of_preimage(bytes), false);
-            }
-            if mutation == 3 {
-                let mut changed = qc.attestations[0].as_slice().to_vec();
-                changed[0] ^= 1;
-                qc.attestations[0] =
-                    iroha_sumeragi::message::AttestationSignature::try_from_slice(&changed)
-                        .unwrap();
-            }
+
+            *qc = certificate(&keys(false), header, result_of_preimage(bytes), false);
         });
         let state = state_with_history(&history);
         let view = state.view();
-        let result = CertifiedChain::new(&view)
-            .unwrap()
-            .with_attestation_verifier(&TestAttestations)
-            .certified(6);
+        let result = CertifiedChain::new(&view).unwrap().certified(6);
         assert!(result.is_err(), "mutation {mutation}");
     }
 }
 
 #[test]
-fn native_boundary_accepts_exact_unflagged_quorum_and_rejects_application_attestations() {
+fn native_boundary_accepts_exact_quorum_and_rejects_changed_signature() {
     let original = history();
     let state = state_with_history(&original);
-    let view = state.view();
-    assert!(matches!(
-        CertifiedChain::new(&view).unwrap().certified(6),
-        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
-            ChainReadError::Certificate { height: 6, .. }
-        ))
-    ));
-    let unflagged = native_history();
-    let state = state_with_history(&unflagged);
     let view = state.view();
     let reader = CertifiedChain::new(&view).unwrap();
     assert_eq!(
@@ -844,14 +756,12 @@ fn native_boundary_accepts_exact_unflagged_quorum_and_rejects_application_attest
     assert_eq!(boundary.verification(), QcVerification::Verified);
     assert!(boundary.commitment().schedule.boundary.is_some());
     assert!(boundary.header().unwrap().payload_len > 0);
-    assert!(!boundary.header().unwrap().attest);
     let qc = boundary.commit_qc().unwrap();
     assert_eq!(
         qc.signers,
         iroha_sumeragi::types::Bitmap::from_indices(4, [0, 1, 2]).unwrap()
     );
-    assert!(qc.attestations.is_empty() && qc.attestation_witness.is_none());
-    let bad_signature = with_parts(&unflagged[5], |_, qc, _| qc.agg_sig.0[0] ^= 1);
+    let bad_signature = with_parts(&original[5], |_, qc, _| qc.agg_sig.0[0] ^= 1);
     assert!(matches!(
         reader.check_certificate(bad_signature, 6),
         Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -885,10 +795,7 @@ fn unsigned_genesis_result_cannot_substitute_the_signed_epoch_root() {
         "stored frames and a hash index cannot replace original execution provenance"
     );
     assert!(matches!(
-        CertifiedChain::new(&view)
-            .unwrap()
-            .with_attestation_verifier(&TestAttestations)
-            .certified(1),
+        CertifiedChain::new(&view).unwrap().certified(1),
         Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::Committee { height: 1, .. }
         ))
@@ -963,8 +870,7 @@ fn pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor
         &kura,
         &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
     )
-    .unwrap()
-    .with_attestation_verifier(&TestAttestations);
+    .unwrap();
     for (index, receipt) in reader.walk(1, 14).enumerate() {
         let receipt = receipt.unwrap();
         assert_eq!(receipt.block_hash(), hashes[index]);

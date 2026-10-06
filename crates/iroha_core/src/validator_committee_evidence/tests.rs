@@ -33,7 +33,7 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
     availability::{PayloadAuthoring, PayloadBytes},
-    crypto::{NoAttestation, Signer as _, form_qc},
+    crypto::{Signer as _, form_qc},
     message::{BlockHeader, Vote, VoteKind},
     preimage::payload_hash,
     types::{ChainParams, Hash32},
@@ -52,12 +52,11 @@ fn limits() -> NativeFinalityLimits {
         allocated_bytes: 512 * 1024 * 1024,
     }
 }
-fn verifier(journal: &NativeFinalityJournal, network: NetworkId) -> NoAttestation {
+fn validate_anchor(journal: &NativeFinalityJournal, network: NetworkId) {
     let genesis = journal.blocks[0].decode_block(limits()).unwrap();
     assert_eq!(genesis.hash(), network.into_genesis_hash());
     let instance = crate::sumeragi::node::root_instance(&genesis, &chain_id().to_string()).unwrap();
     assert_ne!(instance, Hash32::ZERO);
-    NoAttestation
 }
 fn outputs(block: &mut SignedBlock) {
     let values = (0..block.external_transactions().count())
@@ -167,10 +166,6 @@ fn offline_proposal(
 }
 
 fn certify(keys: &[KeyPair], header: &BlockHeader, bytes: &[u8]) -> iroha_sumeragi::message::Qc {
-    assert!(
-        !header.attest,
-        "the neutral application never requests an attestation"
-    );
     let crypto = BlsCrypto::new();
     let pops = keys
         .iter()
@@ -193,10 +188,8 @@ fn certify(keys: &[KeyPair], header: &BlockHeader, bytes: &[u8]) -> iroha_sumera
                 view: 0,
                 block_hash: header.hash(&crypto),
                 result: result_of_preimage(bytes),
-                attest: header.attest,
                 signer: index,
                 sig: iroha_sumeragi::types::Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
-                attestation: None,
             };
             vote.sig = KeyPairSigner::new(&keys[index as usize])
                 .unwrap()
@@ -390,7 +383,6 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             availability_digest: Hash32::ZERO,
             proposer: 0,
             skipped_leaders: Vec::new(),
-            attest: false,
             control_witness: crate::sumeragi::epoch_beacon::control::encode(pulse).unwrap(),
         };
         let config = ScheduledConfig {
@@ -528,7 +520,7 @@ fn selection_evidence_fixture() -> ValidatorCommitteeSelectionEvidenceV1 {
 }
 
 #[test]
-fn committee_boundary_requires_exact_native_quorum_without_application_attestation() {
+fn committee_boundary_requires_exact_native_quorum() {
     let evidence = evidence_fixture();
     let selecting = &evidence
         .status
@@ -544,10 +536,7 @@ fn committee_boundary_requires_exact_native_quorum_without_application_attestati
         norito::decode_canonical(certificate.commit_qc()).unwrap();
     assert_eq!(header.height, 10);
     assert!(result.schedule.boundary.is_some());
-    assert!(!header.attest);
-    assert!(!qc.attest);
-    assert!(qc.attestations.is_empty());
-    assert!(qc.attestation_witness.is_none());
+
     assert_eq!(qc.signers.count_ones(), 3);
 
     let mut keys = (1..=4_u8)
@@ -580,7 +569,7 @@ fn committee_boundary_requires_exact_native_quorum_without_application_attestati
     let epoch = schedule::core_epoch(current).unwrap();
     let verifier =
         iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee);
-    assert_eq!(verifier.verify_qc(&NoAttestation, &qc), Ok(()));
+    assert_eq!(verifier.verify_qc(&qc), Ok(()));
     let resign = |qc: &mut iroha_sumeragi::message::Qc, count: usize| {
         qc.signers =
             iroha_sumeragi::types::Bitmap::from_indices(4, (0..count).map(|index| index as u32))
@@ -604,29 +593,14 @@ fn committee_boundary_requires_exact_native_quorum_without_application_attestati
     };
     let mut insufficient = qc.clone();
     resign(&mut insufficient, 2);
-    assert!(verifier.verify_qc(&NoAttestation, &insufficient).is_err());
-    let mut flagged = qc.clone();
-    flagged.attest = true;
-    resign(&mut flagged, 3);
-    assert_eq!(verifier.verify_qc_signatures(&flagged), Ok(()));
-    assert!(verifier.verify_qc(&NoAttestation, &flagged).is_err());
-    let mut forbidden_witness = qc.clone();
-    forbidden_witness.attestation_witness = Some(
-        iroha_sumeragi::message::ResultWitness::from_untrusted(
-            certificate.result_preimage().to_vec(),
-        )
-        .unwrap(),
-    );
-    assert_eq!(verifier.verify_qc_signatures(&forbidden_witness), Ok(()));
-    assert!(
-        verifier
-            .verify_qc(&NoAttestation, &forbidden_witness)
-            .is_err()
-    );
+    assert!(verifier.verify_qc(&insufficient).is_err());
+    let mut oversized = qc.clone();
+    resign(&mut oversized, 4);
+    assert!(verifier.verify_qc(&oversized).is_err());
     let mut foreign = qc;
     foreign.instance.0[0] ^= 1;
     resign(&mut foreign, 3);
-    assert!(verifier.verify_qc(&NoAttestation, &foreign).is_err());
+    assert!(verifier.verify_qc(&foreign).is_err());
 }
 
 #[test]
@@ -728,7 +702,7 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
     let evidence = selection_evidence_fixture();
     let network = evidence.status.network_id;
     let chain_id = chain_id();
-    let verifier = verifier(&evidence.finality_journal, network);
+    validate_anchor(&evidence.finality_journal, network);
     let preparation = &evidence
         .status
         .selected
@@ -745,7 +719,6 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             2,
             attempt,
             limits(),
-            &verifier,
             &session_budget,
         )
     };
@@ -769,7 +742,6 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             2,
             attempt,
             limits(),
-            &verifier,
             &session_budget,
         )
         .is_err(),
@@ -824,7 +796,6 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             2,
             attempt,
             limits(),
-            &verifier,
             &session_budget,
         )
         .is_err()
@@ -837,7 +808,6 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             3,
             attempt,
             limits(),
-            &verifier,
             &session_budget,
         )
         .is_err()
@@ -850,7 +820,6 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             2,
             [0xEE; 32],
             limits(),
-            &verifier,
             &session_budget,
         )
         .is_err()
@@ -863,7 +832,7 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
     let evidence = evidence_fixture();
     let network = evidence.status.network_id;
     let chain_id = chain_id();
-    let verifier = verifier(&evidence.finality_journal, network);
+    validate_anchor(&evidence.finality_journal, network);
     let attempt = evidence
         .status
         .selected
@@ -881,7 +850,6 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             2,
             attempt,
             limits(),
-            &verifier,
             &session_budget,
         )
     };
@@ -985,7 +953,6 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             2,
             attempt,
             limits(),
-            &verifier,
             &session_budget,
         )
         .is_err()
@@ -998,7 +965,6 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             3,
             attempt,
             limits(),
-            &verifier,
             &session_budget,
         )
         .is_err()
@@ -1011,7 +977,6 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             2,
             [0xEE; 32],
             limits(),
-            &verifier,
             &session_budget,
         )
         .is_err()
@@ -1029,7 +994,7 @@ fn committee_custody_evidence_retains_original_session_refusal_and_retries_uncha
     let evidence = evidence_fixture();
     let network = evidence.status.network_id;
     let chain_id = chain_id();
-    let verifier = verifier(&evidence.finality_journal, network);
+    validate_anchor(&evidence.finality_journal, network);
     let attempt = evidence
         .status
         .selected
@@ -1076,7 +1041,6 @@ fn committee_custody_evidence_retains_original_session_refusal_and_retries_uncha
             2,
             attempt,
             limits(),
-            &verifier,
             &pool,
         )
     };
@@ -1144,7 +1108,6 @@ fn committee_custody_evidence_retains_original_session_refusal_and_retries_uncha
             2,
             attempt,
             limits(),
-            &verifier,
             &pool,
         ),
         Err(ValidatorCommitteeProvisioningEvidenceError::Invalid(_))
@@ -1155,13 +1118,12 @@ fn committee_custody_evidence_retains_original_session_refusal_and_retries_uncha
 #[test]
 fn status_selection_binding_uses_the_same_actual_native_boundary_as_custody() {
     let evidence = selection_evidence_fixture();
-    let verifier = verifier(&evidence.finality_journal, evidence.status.network_id);
+    validate_anchor(&evidence.finality_journal, evidence.status.network_id);
     with_verified_native_journal(
         (&evidence.finality_journal).into(),
         &chain_id(),
         &evidence.status.network_id,
         limits(),
-        &verifier,
         &AllocationBudget::new(limits().allocated_bytes),
         |reader| {
             let latest = reader.certified(14).map_err(NativeJournalError::History)?;
@@ -1247,7 +1209,7 @@ fn verified_rotation_attempt_uses_exact_native_selection_source_and_original_wid
         .unwrap()
         .transition
         .preparation;
-    let verification = verifier(&evidence.finality_journal, network);
+    validate_anchor(&evidence.finality_journal, network);
     let selected = verify_validator_committee_selection_evidence_v1(
         &evidence,
         &chain_id,
@@ -1255,7 +1217,6 @@ fn verified_rotation_attempt_uses_exact_native_selection_source_and_original_wid
         2,
         preparation.transition_id().unwrap(),
         limits(),
-        &verification,
         &budget,
     )
     .unwrap();

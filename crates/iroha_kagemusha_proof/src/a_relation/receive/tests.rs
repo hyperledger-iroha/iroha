@@ -18,6 +18,13 @@ use iroha_plonk_gadgets::{
 };
 use iroha_plonk_recursion::verifier::VerifierConfig;
 
+mod signatures;
+
+pub(super) fn recursive_program_fixture() -> (crate::a_relation::AProofPlan, OwnPolicy) {
+    let fixture = Objects::fixture().with_context();
+    (fixture.context.unwrap().operation().clone(), fixture.policy)
+}
+
 #[derive(Clone, Debug)]
 struct Config {
     verifier: VerifierConfig<Ep>,
@@ -52,6 +59,9 @@ enum BindMutation {
     Receiver,
     Header,
     ActiveLength,
+    Commitment { slot: usize, word: usize },
+    ProofProjectionOnly,
+    WrongProofProjection,
 }
 impl Circuit<Fp> for Objects {
     type Config = Config;
@@ -100,7 +110,7 @@ impl Circuit<Fp> for Objects {
                     &mut chip.uint(),
                     &mut bytes,
                     &mut region,
-                    8132,
+                    MAX_OMEGA_RAW_BYTES,
                     &raw,
                     &self.plan.active_segments()?,
                 )?;
@@ -149,7 +159,7 @@ impl Circuit<Fp> for Objects {
                     &mut chip.uint(),
                     &mut bytes,
                     &mut region,
-                    10000,
+                    MAX_SIGMA_RAW_BYTES,
                     &raw,
                     &SigmaBindingCells::incoming_segments(self.sigma_view())?,
                 )?;
@@ -221,7 +231,7 @@ impl Circuit<Fp> for Objects {
         Ok(())
     }
 }
-fn decode(hex: &str) -> Vec<u8> {
+pub(super) fn decode(hex: &str) -> Vec<u8> {
     hex.as_bytes()
         .chunks_exact(2)
         .map(|b| u8::from_str_radix(core::str::from_utf8(b).unwrap(), 16).unwrap())
@@ -235,7 +245,7 @@ fn fp(hex: &str) -> Fp {
 fn half(bytes: &[u8]) -> Fp {
     Fp::from_u128(u128::from_le_bytes(bytes.try_into().unwrap()))
 }
-fn object_digest(kind: ObjectKind, source: &[u8]) -> Fp {
+pub(super) fn object_digest(kind: ObjectKind, source: &[u8]) -> Fp {
     let body = kind.body_len();
     let mut words = vec![p_bytes_native(kind.signing_domain(), &source[..body])];
     for offset in [16, 0, 48, 32] {
@@ -391,7 +401,42 @@ impl Objects {
         } else {
             incoming.public().clone()
         };
-        let mut context = objects.context().clone();
+        let signed = |name: &str| {
+            let row = j["signatures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["object"].as_str() == Some(name))
+                .unwrap();
+            let mut raw = decode(row["transcript_hex"].as_str().unwrap());
+            raw.extend(decode(row["signature_hex"].as_str().unwrap()));
+            raw.into_iter()
+                .map(|v| {
+                    if self.known {
+                        Value::known(v)
+                    } else {
+                        Value::unknown()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let credential = signed("payer credential");
+        let certificate = signed("payer issuer certificate");
+        let receipt = signed("Receive receipt binding the Payment digest");
+        let auth = authorization::ReceiveAuthorizationObjects::decode(
+            chip,
+            bytes,
+            region,
+            Variant::Receive,
+            authorization::ReceiveAuthorizationSources {
+                current: &credential,
+                certificate: &certificate,
+                receipt: &receipt,
+                quoted: [&credential, &certificate],
+            },
+        )?;
+        let mut context = objects.context().to_vec();
+        context.extend_from_slice(auth.context());
         if matches!(self.mutation, BindMutation::ActiveLength) {
             let mut raw = self.omega.clone();
             raw.push(0);
@@ -400,7 +445,14 @@ impl Objects {
             } else {
                 Value::unknown()
             };
-            let active = ActiveBytes::assign(&mut chip.uint(), bytes, region, 8132, &raw, &[])?;
+            let active = ActiveBytes::assign(
+                &mut chip.uint(),
+                bytes,
+                region,
+                MAX_OMEGA_RAW_BYTES,
+                &raw,
+                &[],
+            )?;
             context[4] = ContextObjectCells::from_active(
                 chip,
                 region,
@@ -409,6 +461,19 @@ impl Objects {
                 &active,
             )?;
         }
+        let mut proposed = context
+            .iter()
+            .map(|object| object.commitment_words().map(|word| word.value()))
+            .collect::<Vec<_>>();
+        let mutated = match self.mutation {
+            BindMutation::Commitment { slot, word } => Some((slot, word)),
+            BindMutation::ProofProjectionOnly => Some((4, 0)),
+            _ => None,
+        };
+        if let Some((slot, word)) = mutated {
+            proposed[slot][word] = proposed[slot][word].map(|v| v + Fp::ONE);
+        }
+        let context = plan.assign_receive_object_claims(chip, region, &proposed)?;
         let plan_result = plan.receive_results().ok_or(Error::Synthesis)?;
         let mut values = [Value::known(true); 5];
         values[ReceiveResultTag::Objects as usize - 1] = if self.known {
@@ -433,7 +498,11 @@ impl Objects {
             incoming: Some(ContextIncoming {
                 public: &public,
                 pallas: incoming.pallas(),
-                proof: incoming.proof(),
+                proof: if matches!(self.mutation, BindMutation::WrongProofProjection) {
+                    crate::a_relation::context::ContextIncomingProof::Messages(incoming.proof())
+                } else {
+                    crate::a_relation::context::ContextIncomingProof::ReceiveActive
+                },
                 vesta: incoming.vesta(),
             }),
             q_instances: &instances,
@@ -443,8 +512,17 @@ impl Objects {
             vesta_corrections: &[],
             receive_results: Some(&claims),
         };
-        // This tests the Objects result's exact input links. It intentionally
-        // does not synthesize the complete context hash, stage proof or modes.
+        // This tests exact proposed commitments and their typed owners. It
+        // intentionally does not certify an A/W chain or signature semantics.
+        let proof = ReceiveProofSources::from_active(incoming, sigma)?;
+        proof.bind_context(chip, region, plan, &input)?;
+        if matches!(self.mutation, BindMutation::ProofProjectionOnly) {
+            return Ok(());
+        }
+        objects
+            .signed_sources()
+            .bind_context(region, plan, &input)?;
+        auth.bind_context(region, plan, &input)?;
         objects.bind_result(
             chip,
             region,
@@ -539,12 +617,22 @@ impl Objects {
             operation,
             vec![vec![], vec![0]],
             Some(0),
-            ReceiveObjects::context_specs(8132, 10000).unwrap().to_vec(),
+            ReceiveStagePlan::context_specs(
+                Variant::Receive,
+                MAX_OMEGA_RAW_BYTES,
+                MAX_SIGMA_RAW_BYTES,
+            )
+            .unwrap(),
         )
         .unwrap()
         .with_operation_tasks(vec![
-            OperationTask::required(Variant::Receive).unwrap().to_vec(),
-            vec![],
+            OperationTask::required(Variant::Receive)
+                .unwrap()
+                .iter()
+                .copied()
+                .filter(|task| *task != OperationTask::ReceiveEffects)
+                .collect(),
+            vec![OperationTask::ReceiveEffects],
         ])
         .unwrap();
         self.context = Some(context);
@@ -721,7 +809,13 @@ fn active_receive_object_result_binds_raw_tapes_selector_and_joint_length() {
     for (index, offset) in [(0, 66), (0, 346), (1, 130), (2, 242), (3, 2), (3, 131)] {
         let mut wrong = c.clone();
         wrong.source[index][offset] ^= 1;
-        wrong.rejects();
+        for valid in [false, true] {
+            wrong.valid = valid;
+            assert!(
+                !wrong.accepts(),
+                "content-address substitution {index}/{offset}"
+            );
+        }
     }
     let mut wrong = c.clone();
     wrong.index = 3;
@@ -730,15 +824,71 @@ fn active_receive_object_result_binds_raw_tapes_selector_and_joint_length() {
         !wrong.accepts(),
         "wrong selected key cannot manufacture burn"
     );
-    let mut wrong = c.clone();
-    wrong.own[17] += Fp::ONE;
-    wrong.rejects();
-    let mut wrong = c.clone();
-    wrong.receiver[3] += Fp::ONE;
-    wrong.rejects();
+    for index in [1, 2, 3, 4, 17, 18, 19, 20] {
+        let mut wrong = c.clone();
+        wrong.own[index] += Fp::ONE;
+        for valid in [false, true] {
+            wrong.valid = valid;
+            assert!(
+                !wrong.accepts(),
+                "own scope/effect {index} cannot manufacture burn"
+            );
+        }
+    }
+    // These fields are the already-authenticated receiver view in this
+    // component. A foreign original Request must remain a soft false input.
+    let mut foreign_receiver = c.clone();
+    foreign_receiver.receiver[6] += Fp::ONE;
+    foreign_receiver.rejects();
+    let mut foreign_asset = c.clone();
+    foreign_asset.source[0][34] ^= 1;
+    foreign_asset.rebind();
+    // Rebind the outer Request content address while leaving the original
+    // Send statement and authenticated own asset fixed.
+    let request_digest = object_digest(ObjectKind::Request, &foreign_asset.source[0]);
+    foreign_asset.source[3][2..34].copy_from_slice(&request_digest.to_repr());
+    let mut request_fields = Vec::new();
+    let mut cursor = 0;
+    for (index, width) in [
+        2, 32, 32, 32, 32, 32, 32, 16, 32, 16, 32, 16, 8, 32, 8, 8, 32, 32, 32,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bytes = &c.source[0][cursor..cursor + width];
+        if matches!(index, 1..=6 | 18) {
+            request_fields.extend([half(&bytes[..16]), half(&bytes[16..])]);
+        } else {
+            let mut repr = [0; 32];
+            repr[..width].copy_from_slice(bytes);
+            request_fields.push(Fp::from_repr(repr).unwrap());
+        }
+        cursor += width;
+    }
+    assert_eq!(cursor, ObjectKind::Request.body_len());
+    assert_eq!(request_fields.len(), 26);
+    assert_eq!(
+        hash_with_domain(u64::from_le_bytes(*b"kgwcrdt1"), &request_fields),
+        c.own[17]
+    );
+    request_fields[3] = half(&foreign_asset.source[0][34..50]);
+    request_fields[4] = half(&foreign_asset.source[0][50..66]);
+    foreign_asset.own[17] = hash_with_domain(u64::from_le_bytes(*b"kgwcrdt1"), &request_fields);
+    foreign_asset.rejects();
+    let mut wrong_scope = c.clone();
+    wrong_scope.receiver[3] += Fp::ONE;
+    for valid in [false, true] {
+        wrong_scope.valid = valid;
+        assert!(
+            !wrong_scope.accepts(),
+            "own relation is authenticated state, not a soft input"
+        );
+    }
     for delta in [0, 1] {
         let mut length = c.clone();
-        length.sigma.resize(8597 + delta - length.omega.len(), 0);
+        length
+            .sigma
+            .resize(MAX_OMEGA_RAW_BYTES + delta - length.omega.len(), 0);
         length.rebind();
         if delta == 0 {
             assert!(length.accepts(), "inclusive joint length boundary");
@@ -754,6 +904,13 @@ fn active_receive_object_result_binds_raw_tapes_selector_and_joint_length() {
     let unknown = synthesize(&c.without_witnesses(), 16, None).unwrap();
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+    let lanes = known
+        .tables
+        .advice_assigned()
+        .iter()
+        .map(|c| c.iter().rposition(|v| *v).map_or(0, |i| i + 1))
+        .collect::<Vec<_>>();
+    eprintln!("Receive active Objects component lanes={lanes:?}");
 }
 
 #[test]
@@ -778,7 +935,7 @@ fn objects_result_cannot_change_owner_or_splice_context_inputs() {
         assert!(!wrong.accepts());
     }
     let mut rejected = c.clone();
-    rejected.source[3][2] ^= 1;
+    rejected.source[3][0] ^= 1;
     rejected.valid = false;
     assert!(rejected.accepts(), "exact bound false result is permitted");
     rejected.mutation = BindMutation::Result;
@@ -787,4 +944,38 @@ fn objects_result_cannot_change_owner_or_splice_context_inputs() {
     let unknown = synthesize(&c.without_witnesses(), 16, None).unwrap();
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+}
+
+#[test]
+fn proposed_receive_object_triples_require_every_raw_owner() {
+    let c = Objects::fixture().with_context();
+    assert!(c.accepts());
+    let mut wrong_projection = c.clone();
+    wrong_projection.mutation = BindMutation::WrongProofProjection;
+    assert!(
+        !wrong_projection.accepts(),
+        "Receive requires its fixed active source schema"
+    );
+    for slot in 0..11 {
+        for word in 0..3 {
+            let mut changed = c.clone();
+            changed.mutation = BindMutation::Commitment { slot, word };
+            assert!(
+                !changed.accepts(),
+                "proposed object slot={slot} word={word}"
+            );
+        }
+    }
+    let mut isolated = c.clone();
+    isolated.mutation = BindMutation::ProofProjectionOnly;
+    assert!(
+        isolated.accepts(),
+        "Proofs alone intentionally does not authenticate the combined digest"
+    );
+    let mut complete = c;
+    complete.mutation = BindMutation::Commitment { slot: 4, word: 0 };
+    assert!(
+        !complete.accepts(),
+        "Objects must reject the same forged combined digest"
+    );
 }

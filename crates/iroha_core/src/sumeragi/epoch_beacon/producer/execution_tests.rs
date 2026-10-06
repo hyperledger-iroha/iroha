@@ -33,8 +33,7 @@ fn completed() -> (Fixture, ControlWitness) {
     }
     let witness = fixture.producers[0]
         .build(&build_context(&fixture.context, 0))
-        .unwrap()
-        .0;
+        .unwrap();
     drop(source);
     (fixture, witness)
 }

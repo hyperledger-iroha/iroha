@@ -199,15 +199,36 @@ fn exercise_omega(compact: bool) {
             public,
         ));
     }
-    let plan = OmegaPlan::new(binding.unwrap(), params, digests).unwrap();
+    let binding = binding.unwrap();
+    let forbidden_plan = OmegaPlan::new(binding.clone(), params.clone(), vec![-Fq::ONE]).unwrap();
+    let plan = OmegaPlan::new(binding, params, digests).unwrap();
+    let other_keys: Vec<_> = fixtures
+        .iter()
+        .map(|(witness, _)| witness.key.clone())
+        .collect();
     let mut fixed = None;
-    for (witness, public) in fixtures {
+    for (index, (witness, public)) in fixtures.into_iter().enumerate() {
         let circuit = OmegaCircuit::new(plan.clone(), witness.clone()).unwrap();
         if compact {
             compact_diagnostic(&circuit, &public);
             continue;
         }
         assert!(is_satisfied(&circuit, &public));
+        // Both keys belong to the same exact descriptor and allowlist. A key
+        // swap must still fail its own transcript/opening, even while the
+        // original public digest and proof are retained.
+        let mut changed_key = witness.clone();
+        changed_key.key = other_keys[(index + 1) % other_keys.len()].clone();
+        assert!(!is_satisfied(
+            &OmegaCircuit::new(plan.clone(), changed_key).unwrap(),
+            &public,
+        ));
+        // Membership is evaluated against the complete digest computed from
+        // the actual key; there is no independently supplied digest proposal.
+        assert!(!is_satisfied(
+            &OmegaCircuit::new(forbidden_plan.clone(), witness.clone()).unwrap(),
+            &public,
+        ));
         let assigned = synthesize(&circuit, 16, Some(&public)).unwrap();
         let unknown = synthesize(&circuit.without_witnesses(), 16, None).unwrap();
         let shape = (

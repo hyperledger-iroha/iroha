@@ -95,7 +95,6 @@ impl LaneStoreAuthorities for TestLaneStoreAuthorities {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         Ok(Some(LaneStoreAuthority {
             schedule: Arc::new(PinnedSchedule { instance, config }),
-            verifier: Arc::new(iroha_sumeragi::crypto::NoAttestation),
         }))
     }
 }

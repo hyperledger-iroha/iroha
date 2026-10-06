@@ -438,7 +438,6 @@ impl Chain {
                     proposer: 0,
                     skipped_leaders: vec![],
                     control_witness: ControlWitness::empty(),
-                    attest: false,
                 };
                 let keys = &chain.epochs[index].keys;
                 let parent_decision = native
@@ -469,11 +468,8 @@ impl Chain {
                     view: 0,
                     block_hash: chain_hash(&block_hash_preimage(header)),
                     result: commitment.result().unwrap(),
-                    attest: header.attest,
                     signers: Bitmap::new(keys.len()),
                     agg_sig: AggregateSignature([0; 96]),
-                    attestations: vec![],
-                    attestation_witness: None,
                 };
                 sign_qc(&mut qc, keys, &seats(0..q));
                 CommitCertificate::from_untrusted_parts(
@@ -901,13 +897,9 @@ fn epoch_boundaries_use_exact_native_quorums_without_application_seals() {
         let proof = chain.proof(height);
         let header = core(proof);
         assert!(result(proof).schedule.boundary.is_some());
-        assert!(!header.attest);
         let mut qc: Qc =
             norito::decode_canonical(block(proof).commit_certificate().unwrap().commit_qc())
                 .unwrap();
-        assert!(!qc.attest);
-        assert!(qc.attestations.is_empty());
-        assert!(qc.attestation_witness.is_none());
         let current = chain.epoch(height);
         let crypto = iroha_core::sumeragi::crypto::BlsCrypto::new();
         let credentials = validators(&current.keys);
@@ -924,16 +916,11 @@ fn epoch_boundaries_use_exact_native_quorums_without_application_seals() {
         let epoch = core_epoch(&current.context).unwrap();
         let verifier =
             iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee);
-        assert_eq!(
-            verifier.verify_qc(&iroha_sumeragi::crypto::NoAttestation, &qc),
-            Ok(())
-        );
+        assert_eq!(verifier.verify_qc(&qc), Ok(()));
         sign_qc(&mut qc, &current.keys, &seats(0..committee.q() - 1));
-        assert!(
-            verifier
-                .verify_qc(&iroha_sumeragi::crypto::NoAttestation, &qc)
-                .is_err()
-        );
+        assert!(verifier.verify_qc(&qc).is_err());
+        sign_qc(&mut qc, &current.keys, &seats(0..committee.q() + 1));
+        assert!(verifier.verify_qc(&qc).is_err());
     }
     let mut verifier = chain.verifier();
     verifier

@@ -58,7 +58,7 @@ impl GovernedKey {
         Self {
             carrier: native_pipa_r::kaigi_verifying_key(kind).expect("compiled native key"),
             circuit_id: kind.circuit_id(),
-            schema: native_pipa_r::public_schema(kind),
+            schema: native_pipa_r::public_schema(kind.into()),
             name,
         }
     }

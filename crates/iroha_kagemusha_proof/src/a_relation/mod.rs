@@ -19,6 +19,7 @@ pub mod results;
 pub mod schedule;
 pub mod send;
 pub mod split;
+pub mod unload;
 pub use incoming_lineage::IncomingLineageCells;
 mod proof;
 mod signature;

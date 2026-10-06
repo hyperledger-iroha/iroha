@@ -12,7 +12,7 @@ use crate::{
     availability::AvailableBody,
     message::{Qc, WireMessage},
     safety::SafetyRecord,
-    testing::{Executed, sha256},
+    testing::sha256,
     types::{Hash32, Millis, PublicKey},
 };
 
@@ -409,9 +409,6 @@ pub struct Executor {
     pub running: Option<(Job, Millis)>,
     /// Post-states: block hash → (height, result).
     pub cache: BTreeMap<Hash32, (u64, Hash32)>,
-    /// The statements of the `Valid` executions, shared with the node's execution-gated
-    /// attestor (§3.7 A2: `R`'s preimage comes from the node's own execution).
-    pub executed: Executed,
     /// For a host that owns its scheduling (§13.5): the block whose post-state its last
     /// `Prepare` made ready to commit. Any other executor operation drops it (the application
     /// may hold one live overlay), and a `Commit` needs it.
@@ -469,7 +466,6 @@ impl Executor {
         self.parked.clear();
         self.running = None;
         self.cache.clear();
-        self.executed.clear();
         self.prepared = None;
     }
 
@@ -486,20 +482,13 @@ pub const TX_HEADER: usize = 1 + 8 + 1 + 2;
 
 /// Transaction flag: the transaction is poison (every block holding it is `Invalid`).
 const TX_POISON: u8 = 0x01;
-/// Transaction flag: the transaction requires a test attestation, so its block is flagged (§3.7, F37).
-const TX_MINT: u8 = 0x02;
 
-/// Encode a transaction: `0x54 ‖ be64(id) ‖ flags ‖ be16(pad) ‖ pad bytes`; flag bit 0 = poison.
+/// Encode a transaction: `0x54 ‖ be64(id) ‖ flags ‖ be16(pad) ‖ pad bytes`; bit 0 means poison.
 pub fn encode_tx(id: u64, poison: bool, pad: u16) -> Vec<u8> {
-    encode_tx_flagged(id, poison, false, pad)
-}
-
-/// [`encode_tx`] with flag bit 1 = the transaction requires a test attestation (§3.7, F37).
-pub fn encode_tx_flagged(id: u64, poison: bool, mint: bool, pad: u16) -> Vec<u8> {
     let mut out = Vec::with_capacity(TX_HEADER + usize::from(pad));
     out.push(TX_TAG);
     out.extend_from_slice(&id.to_be_bytes());
-    out.push(if poison { TX_POISON } else { 0 } | if mint { TX_MINT } else { 0 });
+    out.push(if poison { TX_POISON } else { 0 });
     out.extend_from_slice(&pad.to_be_bytes());
     out.extend(std::iter::repeat_n(0xab, usize::from(pad)));
     out
@@ -525,35 +514,13 @@ pub fn decode_txs(payload: &[u8]) -> Vec<(u64, bool)> {
     out
 }
 
-/// The application's flag rule of the simulator (§3.7 A1): a block needs attestations iff its
-/// payload carries a mint transaction (`EMPTY` never does).
-pub fn payload_mints(payload: &[u8]) -> bool {
-    let mut rest = payload;
-    while rest.len() >= TX_HEADER && rest[0] == TX_TAG {
-        if rest[9] & TX_MINT != 0 {
-            return true;
-        }
-        let len = TX_HEADER + usize::from(u16::from_be_bytes([rest[10], rest[11]]));
-        let Some(tail) = rest.get(len..) else {
-            break;
-        };
-        rest = tail;
-    }
-    false
-}
-
-/// The simulator's `exec` of a block (§4.1, §4.2): `Invalid` if its header flag differs from
-/// the application's payload flag rule ([`payload_mints`]; epoch boundaries are flagged by the
-/// same rule as every other height), otherwise [`reference_exec`].
+/// Execute a block only in its exact scheduling epoch, then apply [`reference_exec`].
 pub fn block_exec(
     parent_result: &Hash32,
     block: &AvailableBody,
     epoch: &crate::types::EpochConfig,
 ) -> ExecOutcome {
-    if block.header().epoch != epoch.id
-        || !epoch.contains(block.header().height)
-        || block.header().attest != payload_mints(block.payload().as_slice())
-    {
+    if block.header().epoch != epoch.id || !epoch.contains(block.header().height) {
         return ExecOutcome::Invalid;
     }
     reference_exec(parent_result, block.payload().as_slice())
@@ -678,7 +645,6 @@ mod tests {
                 payload_len: 0,
                 proposer: 0,
                 skipped_leaders: Vec::new(),
-                attest: false,
             },
             &encode_tx(1, false, 0),
         );
@@ -766,74 +732,6 @@ mod tests {
         assert!(io.is_ready(fresh, due));
         assert_eq!(io.retry(100, 0), Some((fresh, 101)));
         assert!(!io.is_ready(fresh, 100), "a delayed attempt must yield too");
-    }
-
-    #[test]
-    fn mint_flag_rule() {
-        let mut payload = encode_tx(1, false, 2);
-        assert!(!payload_mints(&payload));
-        payload.extend(encode_tx_flagged(2, false, true, 1));
-        assert!(payload_mints(&payload));
-        assert_eq!(decode_txs(&payload), vec![(1, false), (2, false)]);
-        assert!(!payload_mints(&[]));
-        assert!(!payload_mints(&[TX_TAG, 0, 0]), "truncated");
-        let header = BlockHeader {
-            control_witness: crate::types::ControlWitness::empty(),
-            epoch: crate::testing::TEST_EPOCH.id,
-            instance: Hash32::ZERO,
-            height: 1,
-            origin_view: 0,
-            parent_hash: Hash32::ZERO,
-            parent_result: Hash32::ZERO,
-            payload_hash: Hash32::ZERO,
-            availability_digest: crate::types::Hash32::ZERO,
-            payload_len: 0,
-            proposer: 0,
-            skipped_leaders: Vec::new(),
-            attest: false,
-        };
-        let block = |attest: bool, payload: Vec<u8>| {
-            fixture_body(
-                BlockHeader {
-                    attest,
-                    ..header.clone()
-                },
-                &payload,
-            )
-        };
-        let parent = Hash32([1; 32]);
-        assert_eq!(
-            block_exec(
-                &parent,
-                &block(false, encode_tx(0, false, 0)),
-                &crate::testing::TEST_EPOCH
-            ),
-            reference_exec(&parent, &encode_tx(0, false, 0))
-        );
-        assert_eq!(
-            block_exec(
-                &parent,
-                &block(true, encode_tx(0, false, 0)),
-                &crate::testing::TEST_EPOCH
-            ),
-            ExecOutcome::Invalid
-        );
-        assert_eq!(
-            block_exec(
-                &parent,
-                &block(false, payload.clone()),
-                &crate::testing::TEST_EPOCH
-            ),
-            ExecOutcome::Invalid
-        );
-        assert_eq!(
-            block_exec(
-                &parent,
-                &block(true, payload.clone()),
-                &crate::testing::TEST_EPOCH
-            ),
-            reference_exec(&parent, &payload)
-        );
     }
 
     #[test]

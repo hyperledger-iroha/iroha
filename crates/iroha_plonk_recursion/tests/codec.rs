@@ -49,6 +49,7 @@ enum Mode {
     #[default]
     Challenge,
     Limbs,
+    Native,
     Transcript,
 }
 
@@ -58,7 +59,7 @@ impl Mode {
             Self::Scalar { .. } => 6,
             Self::Point { .. } => 7,
             Self::Challenge => 3,
-            Self::Limbs => 4,
+            Self::Limbs | Self::Native => 4,
             Self::Transcript => 8,
         }
     }
@@ -168,6 +169,18 @@ impl<C: PastaCurve> Circuit<C::Base> for Program<C> {
                     let scalar = map_challenge::<C>(&mut uint, &mut region, &word)?;
                     return Ok(vec![word.cell(), scalar.lo().cell(), scalar.hi().cell()]);
                 }
+                if self.mode == Mode::Native {
+                    let word = uint.glue().witness(&mut region, self.witness(self.word))?;
+                    let scalar = ScalarCells::<C>::from_native_word(&mut uint, &mut region, &word)?;
+                    let bounded =
+                        scalar.instance_type(&mut uint, &mut region, InstanceType::Bounded)?;
+                    return Ok(vec![
+                        word.cell(),
+                        scalar.lo().cell(),
+                        scalar.hi().cell(),
+                        bounded.cell(),
+                    ]);
+                }
                 if self.mode == Mode::Limbs {
                     let [lo, hi] = bytes_to_limbs(&self.bytes);
                     let lo = uint.assign::<128>(&mut region, self.witness(lo))?;
@@ -256,7 +269,7 @@ impl<C: PastaCurve> Circuit<C::Base> for Program<C> {
                             second.hi().cell(),
                         ]);
                     }
-                    Mode::Challenge | Mode::Limbs => return Err(Error::Synthesis),
+                    Mode::Challenge | Mode::Limbs | Mode::Native => return Err(Error::Synthesis),
                 }
                 Ok(out)
             },
@@ -421,6 +434,57 @@ fn scalar_boundaries<C: PastaCurve>() {
 fn scalar_encodings_and_typed_instances_match_native_boundaries() {
     scalar_boundaries::<Ep>();
     scalar_boundaries::<Eq>();
+}
+
+#[test]
+fn native_embedding_retains_its_hard_bound_and_all_cells_on_both_curves() {
+    fn run<C: PastaCurve>() {
+        for bytes in [
+            C::Base::ZERO.to_repr(),
+            C::Base::ONE.to_repr(),
+            (-C::Base::ONE).to_repr(),
+            (-Fp::ONE).to_repr(),
+            modulus::<Fp>(),
+            increment(modulus::<Fp>()),
+        ] {
+            let Ok(word) = native_scalar::<C::Base>(&bytes) else {
+                continue;
+            };
+            let mut circuit = Program::<C>::new(Mode::Native, [0; 32]);
+            circuit.word = word;
+            let mut public = vec![word];
+            public.extend(bytes_fields::<C::Base>(&bytes));
+            public.push(C::Base::ONE);
+            assert_eq!(
+                accepts(&circuit, public.clone()),
+                native_scalar::<C::ScalarExt>(&bytes).is_ok(),
+                "native embedding must prove both moduli, {bytes:?}",
+            );
+            if bytes != (-Fp::ONE).to_repr() {
+                continue;
+            }
+            let assigned = synthesize(&circuit, 11, Some(std::slice::from_ref(&public))).unwrap();
+            let unknown = synthesize(&circuit.without_witnesses(), 11, None).unwrap();
+            assert_eq!(assigned.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(assigned.tables.permutation(), unknown.tables.permutation());
+            assert_eq!(
+                assigned.tables.advice_assigned(),
+                unknown.tables.advice_assigned()
+            );
+            assert!(
+                undetected_tampers(&circuit, 11, std::slice::from_ref(&public))
+                    .unwrap()
+                    .is_empty()
+            );
+            for output in 0..4 {
+                let mut changed = public.clone();
+                changed[output] += C::Base::ONE;
+                assert!(!accepts(&circuit, changed));
+            }
+        }
+    }
+    run::<Ep>();
+    run::<Eq>();
 }
 
 fn challenge_boundaries<C: PastaCurve>() {

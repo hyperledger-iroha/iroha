@@ -551,15 +551,15 @@ fn digests_are_stable_across_loads_and_formatting() {
 #[test]
 fn digests_are_pinned() {
     let profile = sora();
-    // The native Sumeragi hard cut removed block/queue geometry from both the
-    // static profile and DerivedGeometryV1 (8a99f3f5ba). Pin the resulting first-
-    // release shape; retaining the removed queue fields would change semantics.
+    // The first-release native PIPA-R selector is consensus-bound static configuration.
+    // Replacing the retired backend therefore changes this digest; node-local publisher
+    // custody paths do not participate in this canonical input.
     assert_eq!(
         profile.consensus_digest(4).unwrap().to_string(),
-        "5c692bfd005ade781836bc5bd6dccbb97e6fbaacf1c0fc5cbe82d70423b67efb"
+        "04e7033fd0484e15bd5ceae5f9cef7b5633e41c7af2c98cbce82f85e626b146d"
     );
     // The retired Torii KAGEMUSHA command policy is absent from this canonical input.
-    // Its removal changes only the policy digest; consensus-bound inputs above are unchanged.
+    // Native proof-backend selection above does not change this separate policy input.
     assert_eq!(
         profile.policy_digest().unwrap().to_string(),
         "cd24824ed35812f798b8c01ed965b23fdfd535795a4c402de87d0d4fd41e47a7"

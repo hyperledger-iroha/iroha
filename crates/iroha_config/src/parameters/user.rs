@@ -1740,7 +1740,7 @@ fn parse_telemetry_signing_key(raw: &str) -> core::result::Result<[u8; 32], Stri
 /// User-level configuration container for `VerifyingKeyRef`.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct VerifyingKeyRef {
-    /// Backend identifier, e.g., "halo2/ipa" or "groth16/bn254".
+    /// Backend identifier, e.g., "pipa-r/pasta".
     #[config(env = "GOV_VK_BACKEND", default)]
     pub backend: String,
     /// Name within backend namespace, e.g., "ballot_v1".
@@ -4711,8 +4711,14 @@ mod pipeline_tests {
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Zk {
     #[config(nested)]
-    /// Halo2 circuit/runtime configuration.
-    pub halo2: Halo2,
+    /// Optional local diagnostic trace checking; never proof authority.
+    pub trace: DiagnosticTrace,
+    #[config(nested)]
+    /// Bounds for the diagnostic native polynomial-opening endpoint.
+    pub ipa_commitment: IpaCommitment,
+    /// Maximum proofs accepted by one host batch-verification syscall.
+    #[config(default = "defaults::zk::MAX_VERIFY_BATCH")]
+    pub max_verify_batch: u32,
     #[config(nested)]
     /// Native PIPA-R verification policy.
     pub pipa_r: PipaR,
@@ -4794,7 +4800,9 @@ pub struct Zk {
 impl Zk {
     fn parse(self) -> actual::Zk {
         actual::Zk {
-            halo2: self.halo2.parse(),
+            trace: self.trace.parse(),
+            ipa_commitment: self.ipa_commitment.parse(),
+            max_verify_batch: self.max_verify_batch,
             pipa_r: self.pipa_r.parse(),
             fastpq: self.fastpq.parse(),
             stark: self.stark.parse(),
@@ -5881,77 +5889,6 @@ pub struct FraudAttester {
     /// Public key used to verify signatures (hex/base64 supported by PublicKey parser).
     pub public_key: iroha_crypto::PublicKey,
 }
-/// Supported curves for Halo2 verification (user view).
-/// User-level enumeration translating `ZkCurve` settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum ZkCurve {
-    /// Uses the Pallas curve (Pasta cycle) for Halo2 circuits.
-    Pallas,
-    /// Uses the Pasta curve (Vesta/Pallas cycle) for Halo2 circuits.
-    Pasta,
-    /// Uses the Goldilocks curve for Halo2 circuits.
-    Goldilocks,
-    /// Uses the BN254 curve for Halo2 circuits.
-    Bn254,
-}
-impl ZkCurve {
-    fn into_actual(self) -> actual::ZkCurve {
-        match self {
-            ZkCurve::Pallas => actual::ZkCurve::Pallas,
-            ZkCurve::Pasta => actual::ZkCurve::Pasta,
-            ZkCurve::Goldilocks => actual::ZkCurve::Goldilocks,
-            ZkCurve::Bn254 => actual::ZkCurve::Bn254,
-        }
-    }
-}
-impl json::JsonSerialize for ZkCurve {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-}
-impl json::JsonDeserialize for ZkCurve {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let text = parser.parse_string()?;
-        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
-            field: "zk_curve".into(),
-            message: err.to_string(),
-        })
-    }
-}
-/// Transparent PCS backend kinds.
-/// User-level enumeration translating `ZkHalo2Backend` settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum ZkHalo2Backend {
-    /// Halo2 backend powered by the inner-product argument (IPA) commitment scheme.
-    Ipa,
-}
-impl ZkHalo2Backend {
-    fn into_actual(self) -> actual::Halo2Backend {
-        match self {
-            ZkHalo2Backend::Ipa => actual::Halo2Backend::Ipa,
-        }
-    }
-}
-impl json::JsonSerialize for ZkHalo2Backend {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-}
-impl json::JsonDeserialize for ZkHalo2Backend {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let text = parser.parse_string()?;
-        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
-            field: "zk_halo2_backend".into(),
-            message: err.to_string(),
-        })
-    }
-}
 /// File-only native PIPA-R verification policy.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct PipaR {
@@ -5974,120 +5911,71 @@ impl PipaR {
         }
     }
 }
-/// Halo2 transparent verification configuration (user view).
-/// User-level configuration container for `Halo2`.
+/// File-only diagnostic polynomial-opening bounds.
 #[derive(Debug, ReadConfig, Clone, Copy)]
-pub struct Halo2 {
-    /// Enable Halo2 verification in hosts.
-    #[config(env = "ZK_HALO2_ENABLED", default = "defaults::zk::halo2::ENABLED")]
-    pub enabled: bool,
-    /// Select the curve backend.
-    #[config(
-        env = "ZK_HALO2_CURVE",
-        default = "defaults::zk::halo2::CURVE.parse().unwrap()"
-    )]
-    pub curve: ZkCurve,
-    /// Select the transparent PCS backend.
-    #[config(
-        env = "ZK_HALO2_BACKEND",
-        default = "defaults::zk::halo2::BACKEND.parse().unwrap()"
-    )]
-    pub backend: ZkHalo2Backend,
-    /// Maximum circuit size exponent k (domain size N = 2^k).
-    #[config(env = "ZK_HALO2_MAX_K", default = "defaults::zk::halo2::MAX_K")]
+pub struct IpaCommitment {
+    /// Maximum domain exponent for diagnostic polynomial openings.
+    #[config(default = "defaults::zk::ipa_commitment::MAX_K")]
     pub max_k: u32,
-    /// Soft time budget for a single verification (ms).
-    #[config(
-        env = "ZK_HALO2_VERIFIER_BUDGET_MS",
-        default = "defaults::zk::halo2::VERIFIER_BUDGET_MS"
-    )]
-    pub verifier_budget_ms: u64,
-    /// Maximum proofs per batch verification.
-    #[config(
-        env = "ZK_HALO2_VERIFIER_MAX_BATCH",
-        default = "defaults::zk::halo2::VERIFIER_MAX_BATCH"
-    )]
-    pub verifier_max_batch: u32,
-    /// Number of worker threads serving ZK lane verification (0 = auto).
-    #[config(
-        env = "ZK_HALO2_VERIFIER_WORKER_THREADS",
-        default = "defaults::zk::halo2::VERIFIER_WORKER_THREADS"
-    )]
-    pub verifier_worker_threads: usize,
-    /// Capacity of the ZK lane verifier queue (0 = auto-derived).
-    #[config(
-        env = "ZK_HALO2_VERIFIER_QUEUE_CAP",
-        default = "defaults::zk::halo2::VERIFIER_QUEUE_CAP"
-    )]
-    pub verifier_queue_cap: usize,
-    /// Maximum enqueue wait for ZK lane admission under saturation (ms).
-    #[config(
-        env = "ZK_HALO2_VERIFIER_ENQUEUE_WAIT_MS",
-        default = "defaults::zk::halo2::VERIFIER_ENQUEUE_WAIT_MS"
-    )]
-    pub verifier_enqueue_wait_ms: u64,
-    /// Capacity of the in-memory retry ring used for important ZK lane tasks.
-    #[config(
-        env = "ZK_HALO2_VERIFIER_RETRY_RING_CAP",
-        default = "defaults::zk::halo2::VERIFIER_RETRY_RING_CAP"
-    )]
-    pub verifier_retry_ring_cap: usize,
-    /// Maximum retry rounds for an item in the ZK lane retry ring.
-    #[config(
-        env = "ZK_HALO2_VERIFIER_RETRY_MAX_ATTEMPTS",
-        default = "defaults::zk::halo2::VERIFIER_RETRY_MAX_ATTEMPTS"
-    )]
-    pub verifier_retry_max_attempts: u32,
-    /// Retry scheduler tick interval for the ZK lane (ms).
-    #[config(
-        env = "ZK_HALO2_VERIFIER_RETRY_TICK_MS",
-        default = "defaults::zk::halo2::VERIFIER_RETRY_TICK_MS"
-    )]
-    pub verifier_retry_tick_ms: u64,
-    /// Maximum accepted Norito envelope payload length (bytes).
-    #[config(
-        env = "ZK_HALO2_MAX_ENVELOPE_BYTES",
-        default = "defaults::zk::halo2::MAX_ENVELOPE_BYTES"
-    )]
-    pub max_envelope_bytes: usize,
-    /// Maximum accepted proof payload length (bytes).
-    #[config(
-        env = "ZK_HALO2_MAX_PROOF_BYTES",
-        default = "defaults::zk::halo2::MAX_PROOF_BYTES"
-    )]
-    pub max_proof_bytes: usize,
-    /// Maximum allowed transcript label length (bytes).
-    #[config(
-        env = "ZK_HALO2_MAX_TRANSCRIPT_LABEL_LEN",
-        default = "defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN"
-    )]
+    /// Maximum diagnostic transcript-label length in bytes.
+    #[config(default = "defaults::zk::ipa_commitment::MAX_TRANSCRIPT_LABEL_LEN")]
     pub max_transcript_label_len: usize,
-    /// Require transcript labels to be ASCII.
-    #[config(
-        env = "ZK_HALO2_ENFORCE_TRANSCRIPT_LABEL_ASCII",
-        default = "defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII"
-    )]
+    /// Maximum encoded diagnostic polynomial-opening envelope size.
+    #[config(default = "defaults::zk::ipa_commitment::MAX_ENVELOPE_BYTES")]
+    pub max_envelope_bytes: usize,
+    /// Require ASCII diagnostic transcript labels.
+    #[config(default = "defaults::zk::ipa_commitment::ENFORCE_TRANSCRIPT_LABEL_ASCII")]
     pub enforce_transcript_label_ascii: bool,
 }
-impl Halo2 {
-    fn parse(self) -> actual::Halo2 {
-        actual::Halo2 {
-            enabled: self.enabled,
-            curve: self.curve.into_actual(),
-            backend: self.backend.into_actual(),
+impl IpaCommitment {
+    fn parse(self) -> actual::IpaCommitment {
+        actual::IpaCommitment {
             max_k: self.max_k,
-            verifier_budget_ms: self.verifier_budget_ms,
-            verifier_max_batch: self.verifier_max_batch,
-            verifier_worker_threads: self.verifier_worker_threads,
-            verifier_queue_cap: self.verifier_queue_cap,
-            verifier_enqueue_wait_ms: self.verifier_enqueue_wait_ms,
-            verifier_retry_ring_cap: self.verifier_retry_ring_cap,
-            verifier_retry_max_attempts: self.verifier_retry_max_attempts,
-            verifier_retry_tick_ms: self.verifier_retry_tick_ms,
-            max_envelope_bytes: self.max_envelope_bytes,
-            max_proof_bytes: self.max_proof_bytes,
             max_transcript_label_len: self.max_transcript_label_len,
+            max_envelope_bytes: self.max_envelope_bytes,
             enforce_transcript_label_ascii: self.enforce_transcript_label_ascii,
+        }
+    }
+}
+/// File-only diagnostic trace policy; checking never grants proof authority.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct DiagnosticTrace {
+    /// Enable optional local diagnostic trace checking.
+    #[config(default = "defaults::zk::trace::ENABLED")]
+    pub enabled: bool,
+    /// Maximum diagnostic tasks dispatched in one worker batch.
+    #[config(default = "defaults::zk::trace::MAX_BATCH")]
+    pub max_batch: u32,
+    /// Diagnostic worker threads (0 selects the bounded automatic count).
+    #[config(default = "defaults::zk::trace::WORKER_THREADS")]
+    pub worker_threads: usize,
+    /// Diagnostic ingress capacity (0 derives a bounded capacity).
+    #[config(default = "defaults::zk::trace::QUEUE_CAP")]
+    pub queue_cap: usize,
+    /// Maximum diagnostic enqueue wait in milliseconds.
+    #[config(default = "defaults::zk::trace::ENQUEUE_WAIT_MS")]
+    pub enqueue_wait_ms: u64,
+    /// Capacity of the important diagnostic-task retry ring.
+    #[config(default = "defaults::zk::trace::RETRY_RING_CAP")]
+    pub retry_ring_cap: usize,
+    /// Maximum retry rounds for an important diagnostic task.
+    #[config(default = "defaults::zk::trace::RETRY_MAX_ATTEMPTS")]
+    pub retry_max_attempts: u32,
+    /// Diagnostic retry scheduler interval in milliseconds.
+    #[config(default = "defaults::zk::trace::RETRY_TICK_MS")]
+    pub retry_tick_ms: u64,
+}
+impl DiagnosticTrace {
+    fn parse(self) -> actual::DiagnosticTrace {
+        actual::DiagnosticTrace {
+            enabled: self.enabled,
+            max_batch: self.max_batch,
+            worker_threads: self.worker_threads,
+            queue_cap: self.queue_cap,
+            enqueue_wait_ms: self.enqueue_wait_ms,
+            retry_ring_cap: self.retry_ring_cap,
+            retry_max_attempts: self.retry_max_attempts,
+            retry_tick_ms: self.retry_tick_ms,
         }
     }
 }
@@ -34952,18 +34840,68 @@ mod configuration_regression_tests {
         );
     }
     #[test]
-    fn halo2_defaults_parse() {
-        let backend = ZkHalo2Backend::from_str(defaults::zk::halo2::BACKEND)
-            .expect("default backend string should parse");
-        assert_eq!(backend, ZkHalo2Backend::Ipa);
-        let curve = ZkCurve::from_str(defaults::zk::halo2::CURVE)
-            .expect("default curve string should parse");
-        assert_eq!(curve, ZkCurve::Pallas);
-        assert_eq!(curve.to_string(), defaults::zk::halo2::CURVE);
-        assert_eq!(curve.into_actual(), actual::Halo2::default().curve);
-        assert!(
-            ZkCurve::from_str("toy_p61_additive").is_err(),
-            "the retired toy-curve compatibility label must not be accepted"
+    fn diagnostic_trace_defaults_are_bounded_and_independent() {
+        let trace = actual::DiagnosticTrace::default();
+        assert!(trace.enabled);
+        assert_eq!(trace.max_batch, 16);
+        assert_eq!(trace.worker_threads, 0);
+        assert_eq!(trace.queue_cap, 0);
+        assert_eq!(trace.enqueue_wait_ms, 25);
+        assert_eq!(trace.retry_ring_cap, 2048);
+        assert_eq!(trace.retry_max_attempts, 3);
+        assert_eq!(trace.retry_tick_ms, 5);
+        assert_eq!(defaults::zk::MAX_VERIFY_BATCH, 16);
+    }
+
+    #[test]
+    fn zk_nested_diagnostic_settings_do_not_change_native_admission() {
+        use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+        let table = r#"
+            max_verify_batch = 7
+            [trace]
+            enabled = false
+            max_batch = 3
+            worker_threads = 2
+            queue_cap = 9
+            enqueue_wait_ms = 11
+            retry_ring_cap = 13
+            retry_max_attempts = 4
+            retry_tick_ms = 17
+            [ipa_commitment]
+            max_k = 12
+            max_transcript_label_len = 19
+            max_envelope_bytes = 12345
+            enforce_transcript_label_ascii = false
+        "#
+        .parse::<toml::Table>()
+        .unwrap();
+        let configured = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Zk>()
+            .unwrap()
+            .parse();
+        assert_eq!(configured.max_verify_batch, 7);
+        assert!(!configured.trace.enabled);
+        assert_eq!(configured.trace.max_batch, 3);
+        assert_eq!(configured.trace.worker_threads, 2);
+        assert_eq!(configured.trace.queue_cap, 9);
+        assert_eq!(configured.trace.enqueue_wait_ms, 11);
+        assert_eq!(configured.trace.retry_ring_cap, 13);
+        assert_eq!(configured.trace.retry_max_attempts, 4);
+        assert_eq!(configured.trace.retry_tick_ms, 17);
+        assert_eq!(configured.ipa_commitment.max_k, 12);
+        assert_eq!(configured.ipa_commitment.max_transcript_label_len, 19);
+        assert_eq!(configured.ipa_commitment.max_envelope_bytes, 12345);
+        assert!(!configured.ipa_commitment.enforce_transcript_label_ascii);
+        assert!(configured.pipa_r.enabled);
+        assert_eq!(
+            configured.pipa_r.max_proof_bytes,
+            defaults::zk::pipa_r::MAX_PROOF_BYTES
+        );
+        assert_eq!(
+            configured.pipa_r.max_envelope_bytes,
+            defaults::zk::pipa_r::MAX_ENVELOPE_BYTES
         );
     }
     #[test]

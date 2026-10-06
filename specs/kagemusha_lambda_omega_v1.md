@@ -109,7 +109,7 @@ Field placement:
         |                    F_P over {acc_P(pred), O_Ω(pred), [acc_P(in), O_Ω(in)], O_Q1..O_Qr}
         |        out: D_A (binds the public fields, vkΩ_digest and acc_P); acc_V^part;
         |             acc_V(pred), acc_V(in) with its mode
-  Fq   Ω (Pallas)            verifies A [hard, key K_A one-hot from T_A];
+  Fq   Ω (Pallas)            verifies A [hard, digest K_A belongs to T_A];
                              F_V^Ω over {acc_V^part, O_A, pred-or-TRIV, incoming-or-TRIV}
                  out: [D_A, acc_V]; transported: π_Ω ‖ acc_P ‖ acc_V
 ```
@@ -178,7 +178,7 @@ Build order: σ VKs → Q VKs → A VKs → Ω VK → `vkΩ_digest` and
 | Q → σ | Witness VK (31 points + `transcript_repr`); its `P_Fq` digest compared one-hot with the allowlist's σ digests (constants of Q). Q exports `vk_index`; A checks it against the constant (tag, mask) → index table, with a Receive mask of 1 iff its Request records a nonzero blacklist version (B6) | ≈ 32 permutations ≈ 4.7k cells |
 | A → Q | Q variants' VKs are fixed columns of each A variant | 0 |
 | A → Ω(pred), Ω_in, Ω(h), W | Witness key K. A computes `P(K)` and requires it to equal the `vkΩ_digest` field of the D_A(pred) it opens, copies that field into its own D_A, and recomputes D_A(in) with the same field. Bootstrap's A takes the field as a free witness | ≈ 23 permutations ≈ 3.4k |
-| Ω → A | Witness VK_A (≈ 54 points + repr); `P_Fq` digest compared one-hot with T_A, the constant list of A-variant digests. No lookup argument, so Ω's bytes are unaffected | ≈ 56 permutations ≈ 8.3k |
+| Ω → A | Witness VK_A (≈ 54 points + repr); the complete `P_Fq` digest is bound by the zero product of its differences from the 1..32 distinct constant digests in T_A. A pinned-key profile selects every key component with one constrained catalog selection and retains the same membership predicate. No lookup argument is added | ≈ 56 permutations ≈ 8.3k |
 | native verifiers → Ω | D_A recomputed with the artifact-set constant `vkΩ_digest` | 27 native permutations |
 
 `relation_id` is a carried value in every circuit, σ included: σ takes it as witness limbs
@@ -401,6 +401,14 @@ V = n_a + 8n_l + n_z + q_a + q_f + m + max(3n_z − 1, 0) + n_s. The Ω budget w
 largest measured revision-4 σ_send is 8,277 − 3,456 = 4,821 B (B6 adds 42 B to
 F_payment), so 32·(44 + V) + 1,088 ≤ 4,821 requires **V ≤ 72**. The baseline Ω descriptor has V = 70 [E].
 
+The current degree-nine secondary-range component has V = 69 and the exact
+PIPA count 32·(47 + V) = 3,712 proof bytes, hence **4,800 transported bytes** [M].
+The unchanged 4,821 B cap therefore requires V ≤ 69 at degree nine; the separate
+G-Ω1 bound V ≤ 72 is also retained. Actual native Bootstrap-source proofs pass
+for witnessed-key and pinned-one-key layouts. These are component results;
+full catalog and carried-key rebinding, every operation and qualification remain open.
+
+
 | Ω descriptor [E] | Transport [C] | Margin to 4,821 B |
 |---|---:|---:|
 | n_a 11, n_l 1, m 4, q_a 22, q_f 18, n_s 4 (baseline) | **4,736** | 85 |
@@ -450,7 +458,7 @@ freeze; this is not an end-to-end payment measurement.
 | Verify A, full-width challenges (n_a 32), complete arithmetic included | 265–337k |
 | Forwarded A instances (up to 66) | included |
 | F_V^Ω verify, r = 3–4 | 70–91k |
-| VK_A digest and one-hot | ≈ 8.3k |
+| VK_A digest and fixed product-of-differences membership | ≈ 8.3k |
 | **Total** | **0.36–0.46M**, capacity 0.58M (11 × 63k × 0.83) |
 
 Rows: ≈ 181–190 GLV terms × 130 rows over 10 columns (≈ 23–25k rows) plus ≈ 300
@@ -1016,7 +1024,7 @@ hard slot; MV14 skip the VK-digest equality in A; MV15 allow a Corrected slot wi
 |---|---|
 | G4.1 | Fiat–Shamir, CRT and PCD/containment memos written; PIPA-R and PIPA-AS text merged into `plonk_ipa_v1.md` with KATs |
 | G4.2 | In-circuit verify cells ≤ σ 191k; Q 297k + 0.45k per instance; A 337k; Ω 212k; PIPA-AS (r = 4) 91k |
-| G4.3 | Ω descriptor V ≤ 72 with exactly one lookup; transport ≤ 4,821 B with the measured largest σ_send of 3,456 B. The current compact descriptor computes 4,768 B; no compact proof is qualified |
+| G4.3 | Ω descriptor V ≤ 72 with exactly one lookup; transport ≤ 4,821 B with the measured largest σ_send of 3,456 B. The current degree-nine Bootstrap component produces 3,712 B proof / 4,800 B transport; the full catalog, root continuity and qualification remain open |
 | G4.4 | PIPA-AS prover ≤ 3.5 s Mac 1t, ≤ 1.2 s 4t |
 | G4.5 | `msm_complete` at 2^16 measured on 4 threads; two decides ≤ 0.35 s Mac 4t |
 | G4.6 | Measured peak RSS ≤ 0.85 GiB for the A shape under the owned-witness API |
@@ -1080,8 +1088,8 @@ Named tests:
 | # | Risk | Effect | Mitigation |
 |---|---|---|---|
 | R1 | P-256 cost: estimated 0.2–0.4M cells, measured today at 1.47M | above 0.30M Receive needs the A-split (+48–65 s Mac); above 0.40M every operation gains a Q leaf | G3.1 first; window tables; precommitted own key |
-| R2 | Current compact descriptor computes 4,768 B, leaving 53 B under the 4,821 B cap; capacity and actual proof remain unqualified | any descriptor growth beyond 53 B breaks the current Payment bound | G4.3; preserve exactly one lookup and establish actual proof bytes before artifact freeze |
-| R3 | σ_send with enabled controls grows; largest measured revision-4 proof is 3,456 B | with a 4,768 B Ω, σ_send above 3,509 B breaks R9; the threshold is always 8,277 − actual Ω bytes | B5 fixed64 usage array and measured k14 controls; remeasure every allowlisted mask and apply G-Ω2 at artifact freeze |
+| R2 | The compact Bootstrap component produces 4,800 B, leaving 21 B under the 4,821 B cap; full-catalog capacity and qualification remain open | any descriptor growth beyond 21 B breaks the current Payment bound | G4.3; preserve exactly one lookup and establish the full admitted catalog/root before artifact freeze |
+| R3 | σ_send with enabled controls grows; largest measured revision-4 proof is 3,456 B | with a 4,800 B Ω, σ_send above 3,477 B breaks R9; the threshold is always 8,277 − actual Ω bytes | B5 fixed64 usage array and measured k14 controls; remeasure every allowlisted mask and apply G-Ω2 at artifact freeze |
 | R4 | No native measurement wider than k14; quotient cost of the wide gate sets | fold times 1.5–2× the model | G3.6, G3.7, G4.7 |
 | R5 | RAM: A at 0.84 GiB under the owned-witness API, close to 0.85 | over the cap | streaming (0.64 GiB); A-split; global scratch cap |
 | R6 | Phone performance: per-core ratio 1.1–2.3, 4-core wide-circuit speedup unmeasured, thermals | Receive up to ≈ 4 min on a slow phone | G5.6; fold while charging or in the foreground; preemption |
@@ -1127,8 +1135,8 @@ last were applied to the proposal and the wire record with the third set of owne
 
 Contingent owner questions, asked only if a threshold fails:
 
-- **C-1.** A σ_send shape for an enabled control exceeds 8,277 − |Ω| (3,509 B with the
-  current 4,768 B compact descriptor), so Payment breaks R9 (proposal §8 requires a new
+- **C-1.** A σ_send shape for an enabled control exceeds 8,277 − |Ω| (3,477 B with the
+  current 4,800 B compact component), so Payment breaks R9 (proposal §8 requires a new
   owner decision). The largest measured revision-4 σ_send is 3,456 B; the joint bound
   must be rechecked against actual frozen Ω bytes (§3.5).
 - **C-2.** The Ω descriptor exceeds V = 72 after q_f sharing and dropping the suffix: approve

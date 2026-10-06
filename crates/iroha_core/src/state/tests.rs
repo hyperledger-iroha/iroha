@@ -20576,15 +20576,15 @@ state_test! { sync zk_policy_hash_ignores_operator_only_timing_and_workers
     let base = default_zk();
     let mut changed = base.clone();
     changed.verify_timeout = std::time::Duration::from_nanos(1);
-    changed.halo2.verifier_budget_ms = changed.halo2.verifier_budget_ms.saturating_add(1);
-    changed.halo2.verifier_worker_threads = changed.halo2.verifier_worker_threads.saturating_add(1);
-    changed.halo2.verifier_queue_cap = changed.halo2.verifier_queue_cap.saturating_add(1);
-    changed.halo2.verifier_enqueue_wait_ms =
-        changed.halo2.verifier_enqueue_wait_ms.saturating_add(1);
-    changed.halo2.verifier_retry_ring_cap = changed.halo2.verifier_retry_ring_cap.saturating_add(1);
-    changed.halo2.verifier_retry_max_attempts =
-        changed.halo2.verifier_retry_max_attempts.saturating_add(1);
-    changed.halo2.verifier_retry_tick_ms = changed.halo2.verifier_retry_tick_ms.saturating_add(1);
+    changed.trace.max_batch = changed.trace.max_batch.saturating_add(1);
+    changed.trace.worker_threads = changed.trace.worker_threads.saturating_add(1);
+    changed.trace.queue_cap = changed.trace.queue_cap.saturating_add(1);
+    changed.trace.enqueue_wait_ms =
+        changed.trace.enqueue_wait_ms.saturating_add(1);
+    changed.trace.retry_ring_cap = changed.trace.retry_ring_cap.saturating_add(1);
+    changed.trace.retry_max_attempts =
+        changed.trace.retry_max_attempts.saturating_add(1);
+    changed.trace.retry_tick_ms = changed.trace.retry_tick_ms.saturating_add(1);
     assert_eq!(
         compute_zk_consensus_policy_hash(&base),
         compute_zk_consensus_policy_hash(&changed)
@@ -20593,7 +20593,7 @@ state_test! { sync zk_policy_hash_ignores_operator_only_timing_and_workers
 state_test! { sync zk_policy_hash_tracks_consensus_limits
     let base = default_zk();
     let mut changed = base.clone();
-    changed.halo2.max_proof_bytes = changed.halo2.max_proof_bytes.saturating_add(1);
+    changed.pipa_r.max_proof_bytes = changed.pipa_r.max_proof_bytes.saturating_add(1);
     assert_ne!(
         compute_zk_consensus_policy_hash(&base),
         compute_zk_consensus_policy_hash(&changed)

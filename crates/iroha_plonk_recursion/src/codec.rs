@@ -126,9 +126,14 @@ impl<C: PastaCurve> ScalarCells<C> {
                 let one = uint.glue().constant(region, C::Base::ONE)?;
                 return uint.glue().assert_bool(region, &one);
             }
-            InstanceType::Bounded if native_scalar::<C>() => {
-                // This curve's scalar field is Fp itself. The retained S6
-                // certificate already proves precisely the Bounded predicate.
+            InstanceType::Bounded
+                if self
+                    .canonical
+                    .proves_less_than(CanonicalS6::<C::Base>::field_modulus::<Fp>()) =>
+            {
+                // The exact retained limbs already have a hard x<Fp proof.
+                // This includes Vesta scalars and Fp words embedded in Fq;
+                // a soft false verdict or a small witness alone proves nothing.
                 let one = uint.glue().constant(region, C::Base::ONE)?;
                 return uint.glue().assert_bool(region, &one);
             }

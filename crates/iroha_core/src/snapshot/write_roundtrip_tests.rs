@@ -259,18 +259,11 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     let mut chain = CertifiedTestChain::start(config).expect("actual signed native genesis");
     chain.commit(Vec::new());
     let native = NativeEvidence::ConflictingCertificates(
-        chain.commit_qc(
-            2,
-            Hash32([0x31; 32]),
-            Hash32([0x32; 32]),
-            false,
-            Signers::Quorum,
-        ),
+        chain.commit_qc(2, Hash32([0x31; 32]), Hash32([0x32; 32]), Signers::Quorum),
         chain.commit_qc(
             2,
             Hash32([0x33; 32]),
             Hash32([0x34; 32]),
-            false,
             Signers::LastThree,
         ),
     );

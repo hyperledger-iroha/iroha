@@ -478,7 +478,7 @@ mod tests {
                     inner.proof.pop();
                 }
                 3 => {
-                    bad.backend = BackendTag::Halo2IpaPasta;
+                    inner.proof = b"ZK1\0PROF\x00\x00\x00\x00".to_vec();
                 }
                 4 => {
                     bad.backend = BackendTag::Stark;
@@ -826,27 +826,21 @@ mod tests {
         ]);
     }
     #[test]
-    fn native_confidential_poseidon_matches_oracle_on_both_pasta_fields() {
-        use halo2_proofs::halo2curves::pasta::{Fp, Fq};
-        use snark_verifier::{
-            loader::native::LOADER,
-            util::{arithmetic::FieldExt, hash::Poseidon},
-        };
-        fn check<F, N>()
-        where
-            F: FieldExt + ff::PrimeField<Repr = [u8; 32]>,
-            N: iroha_pasta::poseidon::PoseidonField,
-        {
-            let mut fresh = Poseidon::<
-                F,
-                F,
-                { super::CONFIDENTIAL_POSEIDON_T_V3 },
-                { super::CONFIDENTIAL_POSEIDON_RATE_V3 },
-            >::new::<
-                { super::CONFIDENTIAL_POSEIDON_FULL_ROUNDS_V3 },
-                { super::CONFIDENTIAL_POSEIDON_PARTIAL_ROUNDS_V3 },
-                { super::CONFIDENTIAL_POSEIDON_SECURE_MDS_V3 },
-            >(&*LOADER);
+    fn native_confidential_poseidon_matches_captured_oracle_on_both_pasta_fields() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../fixtures/native_prover/confidential_poseidon_v1.json"
+        ))
+        .expect("captured independent oracle vectors");
+        assert_eq!(
+            fixture.get("schema").and_then(norito::json::Value::as_str),
+            Some("iroha.native_prover.confidential_poseidon.v1")
+        );
+        fn check<F: iroha_pasta::poseidon::PoseidonField>(
+            fixture: &norito::json::Value,
+            field: &str,
+        ) {
+            let outputs = fixture.get("fields").unwrap().get(field).unwrap();
+            let domain_outputs = outputs.get("domain_outputs").unwrap().as_array().unwrap();
             let uses = [
                 (super::CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, &[3, 5][..]),
                 (super::CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3, &[3, 5, 8, 13]),
@@ -859,29 +853,59 @@ mod tests {
                 (super::CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3, &[3]),
             ];
-            for (domain, input_words) in uses {
-                let inputs = input_words.iter().copied().map(F::from).collect::<Vec<_>>();
-                let mut preimage = Vec::with_capacity(inputs.len() + 2);
-                preimage.push(F::from(domain));
-                preimage.push(F::from_u128(inputs.len() as u128));
-                preimage.extend_from_slice(&inputs);
-                fresh.clear();
-                fresh.update(&preimage);
-                let expected = fresh.squeeze();
-                let native_inputs = inputs
-                    .iter()
-                    .map(|v| N::from_repr(v.to_repr()).unwrap())
-                    .collect::<Vec<_>>();
-                let native = super::confidential_poseidon_hash_v3(domain, &native_inputs);
+            let cases = fixture.get("domain_cases").unwrap().as_array().unwrap();
+            assert_eq!(cases.len(), uses.len());
+            assert_eq!(domain_outputs.len(), uses.len());
+            for (index, (domain, inputs)) in uses.into_iter().enumerate() {
                 assert_eq!(
-                    native.to_repr(),
-                    expected.to_repr(),
-                    "domain={domain:#018x}"
+                    cases[index]
+                        .get("tag")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .as_bytes(),
+                    domain.to_le_bytes()
+                );
+                assert_eq!(
+                    cases[index]
+                        .get("inputs")
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_u64().unwrap())
+                        .collect::<Vec<_>>(),
+                    inputs
+                );
+                let native = super::confidential_poseidon_hash_v3(
+                    domain,
+                    &inputs.iter().copied().map(F::from).collect::<Vec<_>>(),
+                );
+                assert_eq!(
+                    hex::encode(native.to_repr()),
+                    domain_outputs[index].as_str().unwrap(),
+                    "{field} domain={domain:#018x}"
                 );
             }
-            // Empty/even/odd framing, exact modulus boundary, and repeated
-            // independent calls must remain byte-identical to the captured oracle.
-            for len in 0..=33 {
+            let domains = [0, u64::MAX, super::CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3];
+            assert_eq!(
+                fixture
+                    .get("boundary_domains")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                domains
+            );
+            let boundary_outputs = outputs.get("boundary_outputs").unwrap().as_array().unwrap();
+            assert_eq!(boundary_outputs.len(), 34);
+            // Preserve the full pre-retirement differential corpus: all seven
+            // domains plus empty/even/odd framing and modulus-boundary inputs.
+            for (len, expected) in boundary_outputs.iter().enumerate() {
+                let expected = expected.as_array().unwrap();
+                assert_eq!(expected.len(), domains.len());
                 let inputs: Vec<_> = (0..len)
                     .map(|i| match i % 4 {
                         0 => F::ZERO,
@@ -890,26 +914,19 @@ mod tests {
                         _ => F::from(i as u64),
                     })
                     .collect();
-                for domain in [0, u64::MAX, super::CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3] {
-                    fresh.clear();
-                    fresh.update(&[F::from(domain), F::from(len as u64)]);
-                    fresh.update(&inputs);
+                for (index, domain) in domains.into_iter().enumerate() {
                     assert_eq!(
-                        super::confidential_poseidon_hash_v3(
-                            domain,
-                            &inputs
-                                .iter()
-                                .map(|v| N::from_repr(v.to_repr()).unwrap())
-                                .collect::<Vec<_>>()
-                        )
-                        .to_repr(),
-                        fresh.squeeze().to_repr()
+                        hex::encode(
+                            super::confidential_poseidon_hash_v3(domain, &inputs).to_repr()
+                        ),
+                        expected[index].as_str().unwrap(),
+                        "{field} len={len} domain={domain:#018x}"
                     );
                 }
             }
         }
-        check::<Fp, iroha_pasta::Fp>();
-        check::<Fq, iroha_pasta::Fq>();
+        check::<iroha_pasta::Fp>(&fixture, "fp");
+        check::<iroha_pasta::Fq>(&fixture, "fq");
     }
     #[test]
     fn secure_confidential_poseidon_kats_pin_both_pasta_fields_and_domains() {

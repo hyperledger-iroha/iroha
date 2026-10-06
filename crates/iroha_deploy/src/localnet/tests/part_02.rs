@@ -1687,12 +1687,12 @@ fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
         peer_cfg
             .get("zk")
             .and_then(toml::Value::as_table)
-            .and_then(|zk| zk.get("halo2"))
+            .and_then(|zk| zk.get("pipa_r"))
             .and_then(toml::Value::as_table)
-            .and_then(|halo2| halo2.get("enabled"))
+            .and_then(|pipa_r| pipa_r.get("enabled"))
             .and_then(toml::Value::as_bool),
         Some(true),
-        "generated TAIRA configs must enable Halo2 verification for shielded sends"
+        "generated TAIRA configs must enable native PIPA-R verification for shielded sends"
     );
     let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
     let raw_genesis =
@@ -1767,6 +1767,54 @@ fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
         }),
         "generated fee asset must register an active confidential unshield verifier"
     );
+}
+#[test]
+fn generated_fee_unshield_verifier_uses_canonical_native_registry_material() {
+    use iroha_core_zk::{
+        PreparedVerifyingKeyMaterialV1, native_pipa_r, validate_and_prepare_verifying_key_record_v1,
+    };
+    use iroha_data_model::zk::BackendTag;
+
+    let [(id, record)] = localnet_confidential_fee_vk_registrations().unwrap();
+    assert_eq!(id.backend, native_pipa_r::BACKEND);
+    assert_eq!(record.backend, BackendTag::NativePipaRPasta);
+    assert_eq!(record.curve, "vesta");
+    assert_eq!(
+        record.circuit_id,
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
+    );
+    let key = record.key.as_ref().expect("the generated key is inline");
+    assert_eq!(key.backend, id.backend);
+    let original_key_ptr = key.bytes.as_ptr();
+    let original_key_len = key.bytes.len();
+    let original_commitment = record.commitment;
+    let expected = Some(PreparedVerifyingKeyMaterialV1::NativePipaRPasta {
+        ipa_k: native_pipa_r::NativeRelationV1::ConfidentialFullUnshield.k(),
+    });
+    assert_eq!(
+        validate_and_prepare_verifying_key_record_v1(&id, &record).unwrap(),
+        expected
+    );
+
+    let retired_id = VerifyingKeyId::new("halo2/ipa", id.name.clone());
+    assert!(retired_id.is_portable_registry_id());
+    assert_eq!(
+        iroha_data_model::zk::verifier_backend_registry_tag_v1(&retired_id.backend),
+        None
+    );
+    assert_eq!(
+        validate_and_prepare_verifying_key_record_v1(&retired_id, &record).unwrap_err(),
+        "verifying-key record backend does not match the production registry backend"
+    );
+    assert_eq!(
+        validate_and_prepare_verifying_key_record_v1(&id, &record).unwrap(),
+        expected,
+        "retired-ID refusal must leave the same original key admissible"
+    );
+    let retry_key = record.key.as_ref().unwrap();
+    assert_eq!(retry_key.bytes.as_ptr(), original_key_ptr);
+    assert_eq!(retry_key.bytes.len(), original_key_len);
+    assert_eq!(iroha_core_zk::hash_vk(retry_key), original_commitment);
 }
 #[test]
 fn canonical_host_formats_ipv6_literals_and_urls() {

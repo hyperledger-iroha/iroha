@@ -1651,12 +1651,7 @@ fn proof_processing_context_hash(
     processing_context_put_bytes(&mut hasher, b"iroha:torii:zk-prover-retry-context:v1");
     processing_context_put_str(&mut hasher, ctx.build_identity.version());
     processing_context_put_option_str(&mut hasher, Some(ctx.build_identity.source_commit()));
-    hasher.update([
-        cfg!(feature = "zk-halo2") as u8,
-        cfg!(feature = "zk-halo2-ipa") as u8,
-        cfg!(feature = "zk-stark") as u8,
-        cfg!(feature = "circuit-params") as u8,
-    ]);
+    hasher.update([cfg!(feature = "zk-stark") as u8]);
     hasher.update(
         u64::try_from(ctx.allowed_backends.len())
             .unwrap_or(u64::MAX)
@@ -1791,10 +1786,6 @@ fn process_proof_attachment_in_view(
         terminal_error |= !retryable;
     }
     match production_verify_backend_tag(backend_str) {
-        Some(BackendTag::Halo2IpaPasta) if !cfg!(feature = "zk-halo2-ipa") => {
-            errors.push("halo2 verification is unavailable in this node build".into());
-            retryable = true;
-        }
         Some(BackendTag::Stark) if !cfg!(feature = "zk-stark") => {
             errors.push("stark verification is unavailable in this node build".into());
             retryable = true;
@@ -1804,33 +1795,6 @@ fn process_proof_attachment_in_view(
     if let Some(view) = verifier_view {
         let zk = &view.zk;
         match production_verify_backend_tag(backend_str) {
-            Some(BackendTag::Halo2IpaPasta) if !zk.halo2.enabled => {
-                errors.push("halo2 verification is disabled in node configuration".into());
-                retryable = true;
-            }
-            Some(BackendTag::Halo2IpaPasta)
-                if attachment.proof.bytes.len() > zk.halo2.max_envelope_bytes =>
-            {
-                errors.push(format!(
-                    "halo2 proof exceeds node-configured max_envelope_bytes {}",
-                    zk.halo2.max_envelope_bytes
-                ));
-                retryable = true;
-            }
-            Some(BackendTag::Halo2IpaPasta) => {
-                if let Ok(envelope) = norito::decode_canonical::<
-                    iroha_data_model::zk::OpenVerifyEnvelope,
-                >(&attachment.proof.bytes)
-                    && envelope.backend == BackendTag::Halo2IpaPasta
-                    && envelope.proof_bytes.len() > zk.halo2.max_proof_bytes
-                {
-                    errors.push(format!(
-                        "halo2 proof exceeds node-configured max_proof_bytes {}",
-                        zk.halo2.max_proof_bytes
-                    ));
-                    retryable = true;
-                }
-            }
             Some(BackendTag::NativePipaRPasta) if !zk.pipa_r.enabled => {
                 errors.push("native PIPA-R verification is disabled in node configuration".into());
                 retryable = true;

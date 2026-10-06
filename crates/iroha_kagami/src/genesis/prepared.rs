@@ -847,15 +847,17 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let reviewed = super::super::complete_test_genesis_builder_for_peers(
+        let reviewed = super::super::complete_test_genesis_builder(
             GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), ".")
                 .append_parameter(Parameter::Custom(
                     SumeragiNposParameters::default().into_custom_parameter(),
-                )),
-            validator_bindings
-                .iter()
-                .map(|binding| PeerId::new(binding.public_key.clone()))
-                .collect(),
+                ))
+                .set_topology(
+                    validator_bindings
+                        .iter()
+                        .map(|binding| PeerId::new(binding.public_key.clone()))
+                        .collect(),
+                ),
         )
         .build_raw()
         .expect("complete prepared-bundle test genesis")

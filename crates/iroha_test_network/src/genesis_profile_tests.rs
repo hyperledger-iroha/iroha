@@ -100,7 +100,6 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
                 Some(iroha_core::state::compute_genesis_confidential_policy_hash(
                     &actual.zk,
                 )),
-                None,
             );
         assert!(
             generated

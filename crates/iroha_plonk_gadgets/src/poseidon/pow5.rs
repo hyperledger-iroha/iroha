@@ -533,6 +533,7 @@ fn block_trace<F: PastaField>(
 pub struct Pow5Chip<F: PoseidonField> {
     config: Pow5Config<F>,
     next_block: usize,
+    start_row: usize,
     end_row: usize,
     constant_source: Option<crate::GlueChip<F>>,
 }
@@ -544,6 +545,7 @@ impl<F: PoseidonField> Pow5Chip<F> {
         Self {
             config,
             next_block: 0,
+            start_row: 0,
             end_row: usize::MAX,
             constant_source: None,
         }
@@ -575,8 +577,20 @@ impl<F: PoseidonField> Pow5Chip<F> {
         Ok(())
     }
 
+    /// Reserves a disjoint prefix before an otherwise empty lane.
+    ///
+    /// # Errors
+    /// A block already exists or the start exceeds the fixed end bound.
+    pub fn start_at(&mut self, start_row: usize) -> Result<(), Error> {
+        if self.next_block != 0 || start_row > self.end_row {
+            return Err(Error::Synthesis);
+        }
+        self.start_row = start_row;
+        Ok(())
+    }
+
     fn admit_block(&self, block: usize) -> Result<(), Error> {
-        Self::block_row(block)?
+        self.block_row(block)?
             .checked_add(ROWS_PER_PERMUTATION)
             .filter(|end| *end <= self.end_row)
             .ok_or(Error::BoundsFailure)?;
@@ -595,16 +609,18 @@ impl<F: PoseidonField> Pow5Chip<F> {
         self.next_block
     }
 
-    /// The rows the lane has reserved (`37` per block).
+    /// The absolute next row, including a reserved prefix (`37` per block).
     #[must_use]
     pub const fn rows_used(&self) -> usize {
-        self.next_block.saturating_mul(ROWS_PER_PERMUTATION)
+        self.start_row
+            .saturating_add(self.next_block.saturating_mul(ROWS_PER_PERMUTATION))
     }
 
     /// Row 0 of `block`.
-    fn block_row(block: usize) -> Result<usize, Error> {
+    pub(crate) fn block_row(&self, block: usize) -> Result<usize, Error> {
         block
             .checked_mul(ROWS_PER_PERMUTATION)
+            .and_then(|offset| self.start_row.checked_add(offset))
             .ok_or(Error::BoundsFailure)
     }
 
@@ -630,7 +646,7 @@ impl<F: PoseidonField> Pow5Chip<F> {
         let block = self.next_block;
         self.admit_block(block)?;
         self.next_block = block.checked_add(1).ok_or(Error::BoundsFailure)?;
-        let row = Self::block_row(block)?;
+        let row = self.block_row(block)?;
         selector.enable(region, row)?;
         for (column, value) in self.config.lane.state.into_iter().zip(initial) {
             assign_word(region, column, row, Value::known(value))?;
@@ -663,7 +679,7 @@ impl<F: PoseidonField> Pow5Chip<F> {
         self.admit_block(next)?;
         let trace = self.lay_out(region, block, value, absorb, false)?;
         self.next_block = next.checked_add(1).ok_or(Error::BoundsFailure)?;
-        let next_row = Self::block_row(next)?;
+        let next_row = self.block_row(next)?;
         let output = trace
             .as_ref()
             .map(|trace| trace.state[ROWS_PER_PERMUTATION]);
@@ -697,7 +713,8 @@ impl<F: PoseidonField> Pow5Chip<F> {
         {
             return Err(Error::Synthesis);
         }
-        let row = Self::block_row(state.block)?
+        let row = self
+            .block_row(state.block)?
             .checked_add(LAST_ROUND)
             .ok_or(Error::BoundsFailure)?;
         let next = self.permute(region, state, absorb)?;
@@ -730,7 +747,8 @@ impl<F: PoseidonField> Pow5Chip<F> {
     ) -> Result<Word<F>, Error> {
         let Pow5State { block, value } = state;
         let trace = self.lay_out(region, block, value, absorb, true)?;
-        let row = Self::block_row(block)?
+        let row = self
+            .block_row(block)?
             .checked_add(LAST_ROUND)
             .ok_or(Error::BoundsFailure)?;
         assign_word(
@@ -756,7 +774,7 @@ impl<F: PoseidonField> Pow5Chip<F> {
             return Err(Error::Synthesis);
         }
         let params = F::rp57();
-        let base = Self::block_row(block)?;
+        let base = self.block_row(block)?;
         let rows_end = base
             .checked_add(ROWS_PER_PERMUTATION)
             .ok_or(Error::BoundsFailure)?;
@@ -905,7 +923,9 @@ mod tests {
                     chip.bound_rows(ROWS_PER_PERMUTATION - 1)?;
                     assert!(chip.start(&mut region, [F::ZERO; WIDTH]).is_err());
                     assert_eq!(chip.rows_used(), 0);
-                    chip.bound_rows(ROWS_PER_PERMUTATION)?;
+                    chip.bound_rows(ROWS_PER_PERMUTATION + 16)?;
+                    chip.start_at(16)?;
+                    assert_eq!(chip.rows_used(), 16);
                     let state = chip.start(&mut region, [F::ZERO; WIDTH])?;
                     assert!(chip.bound_rows(2 * ROWS_PER_PERMUTATION).is_err());
                     // A refused continuation must reserve/assign nothing. The
@@ -916,7 +936,8 @@ mod tests {
                         value: state.value,
                     };
                     assert!(chip.permute(&mut region, state, Absorb::Nothing).is_err());
-                    assert_eq!(chip.rows_used(), ROWS_PER_PERMUTATION);
+                    assert_eq!(chip.rows_used(), ROWS_PER_PERMUTATION + 16);
+                    assert!(chip.start_at(0).is_err());
                     chip.squeeze(&mut region, original, Absorb::Nothing)
                 },
             )?;

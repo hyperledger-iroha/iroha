@@ -110,6 +110,7 @@ impl KagemushaLoadAuthorizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     use std::cell::Cell;
 
     struct Files {
@@ -243,7 +244,7 @@ mod tests {
     #[test]
     fn zero_or_excessive_runtime_limits_are_rejected() {
         for index in 0..6 {
-            let mut config = config();
+            let mut config = with_custody();
             match index {
                 0 => config.poll_interval_ms = 0,
                 1 => config.page_size = 257,
@@ -264,13 +265,29 @@ mod tests {
         }
     }
     #[test]
-    fn toml_defaults_and_explicit_fee_caps_are_canonical() {
-        use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+    fn toml_defaults_require_explicit_custody() {
         let parsed = ConfigReader::new()
             .with_toml_source(TomlSource::inline(toml::Table::new()))
             .read_and_complete::<KagemushaLoadAuthorizer>()
             .unwrap();
         assert!(parsed.keyring_file.is_none() && parsed.submitter_key_file.is_none());
+        assert!(parsed.charge_limits.is_empty());
+        assert_eq!(
+            parsed.page_size,
+            defaults::kagemusha_load_authorizer::PAGE_SIZE
+        );
+        let files = files();
+        let mut emitter = Emitter::new();
+        assert!(
+            parsed
+                .parse(&ConfigFiles::Supplied(&files), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
+        assert_eq!(files.calls.get(), 0);
+    }
+    #[test]
+    fn retired_enabled_toggle_is_rejected() {
         for enabled in [false, true] {
             let table = toml::Table::from_iter([("enabled".into(), toml::Value::Boolean(enabled))]);
             assert!(
@@ -280,11 +297,9 @@ mod tests {
                     .is_err()
             );
         }
-        assert!(parsed.charge_limits.is_empty());
-        assert_eq!(
-            parsed.page_size,
-            defaults::kagemusha_load_authorizer::PAGE_SIZE
-        );
+    }
+    #[test]
+    fn explicit_fee_caps_are_canonical_and_duplicate_caps_are_rejected() {
         let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             iroha_model_base::domain::DomainId::parse_fully_qualified("issuer.sora").unwrap(),
             "fees".parse().unwrap(),
@@ -292,10 +307,7 @@ mod tests {
         let limit = iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
             asset,
-            iroha_primitives::numeric::Quantity::from_canonical_numeric(
-                iroha_primitives::numeric::Numeric::new(10, 0),
-            )
-            .unwrap(),
+            iroha_primitives::numeric::Quantity::from(10_u32),
         );
         for limits in [vec![limit.clone()], vec![limit.clone(), limit]] {
             let valid = limits.len() == 1;
@@ -306,6 +318,7 @@ mod tests {
             let result = config.parse(&ConfigFiles::Supplied(&files), &mut emitter);
             assert_eq!(result.is_some(), valid);
             assert_eq!(emitter.into_result().is_ok(), valid);
+            assert_eq!(files.calls.get(), if valid { 2 } else { 0 });
             if let Some(result) = result {
                 assert_eq!(result.charge_limits, limits);
             }

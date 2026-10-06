@@ -19,6 +19,7 @@ pub struct SignatureProofCells {
     signature: [Word<Fp>; 4],
     valid: Bit<Fp>,
     key_policy: SignatureKey,
+    mode: VerifyMode,
 }
 impl SignatureProofCells {
     /// Canonical Fp signing-message digest, before SHA-256.
@@ -36,6 +37,10 @@ impl SignatureProofCells {
     /// The proved exact ECDSA verdict; hard slots are constrained true.
     pub const fn valid(&self) -> &Bit<Fp> {
         &self.valid
+    }
+    /// Immutable hard/soft mode of the admitted signature slot.
+    pub const fn mode(&self) -> VerifyMode {
+        self.mode
     }
     /// Immutable key policy enforced while extracting this admitted Q slot.
     /// Fixed coordinates are constrained to constants, never witness-selected.
@@ -174,6 +179,7 @@ pub fn bind_signature_q(
             signature: core::array::from_fn(|i| words[5 + i].clone()),
             valid,
             key_policy: slot.key,
+            mode: slot.mode,
         });
     }
     Ok(SignatureQCells {

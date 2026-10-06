@@ -253,12 +253,17 @@ impl PaymentCells {
     /// Decode and bind an incoming Payment without replacing malformed bytes.
     ///
     /// The digest always hashes the original transcript. A noncanonical field,
-    /// wrong SEC1 prefix, wrong version, invalid source body or mismatched binding
-    /// gives a false predicate, allowing the corrected-claim burn/no-op branch.
+    /// wrong SEC1 prefix, wrong version or invalid source body gives a false
+    /// predicate. The Request, payer credential and package content addresses
+    /// are hard-linked to the supplied component tapes: substituting a preimage
+    /// is not an incoming verification failure that can authorize a burn.
     ///
     /// # Errors
     /// Wrong fixed length/segments, a non-Send statement, wrong receipt class or
-    /// layout failure. Semantic mismatches return a constrained false verdict.
+    /// layout failure. Content-address mismatches are unsatisfiable; semantic
+    /// mismatches return a constrained false verdict. The compact transcript is
+    /// the canonical transitive projection of the Payment frame, not an
+    /// independent source of unchecked Request/package references.
     pub fn from_run<S: StatementView>(
         uint: &mut UintChip<'_, Fp>,
         hash: &mut impl WordHasher<Fp>,
@@ -293,7 +298,7 @@ impl PaymentCells {
             (&fields[3][0], inputs.payer.object().digest()),
             (&fields[4][0], &package),
         ] {
-            checks.push(uint.glue().is_equal(region, actual, expected)?);
+            GlueChip::assert_equal(region, actual, expected)?;
         }
         checks.push(equal(
             uint.glue(),

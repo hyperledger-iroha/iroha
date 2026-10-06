@@ -31,14 +31,12 @@ pub(super) fn conflict(chain: &CertifiedTestChain, height: u64) -> NativeEvidenc
             height,
             Hash32([0x31; 32]),
             Hash32([0x32; 32]),
-            false,
             Signers::Quorum,
         ),
         chain.commit_qc(
             height,
             Hash32([0x33; 32]),
             Hash32([0x34; 32]),
-            false,
             Signers::LastThree,
         ),
     )
@@ -353,10 +351,8 @@ pub(super) fn vote_pair(
             view: view_number,
             block_hash: Hash32([byte; 32]),
             result: Hash32([0x72; 32]),
-            attest: false,
             signer,
             sig: Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
-            attestation: None,
         };
         vote.sig = Signature(
             iroha_crypto::Signature::new(key.private_key(), &vote.preimage())

@@ -24,9 +24,8 @@
 //!   Hash journals and structural frame decoding alone grant no execution authority.
 //! - [`CertifiedChain::certified`]: the committed read **plus the local `CommitQC`**. The
 //!   certificate must certify exactly this header and result (kind, height, block hash, result,
-//!   attestation flag, instance) and verify under the committee of its height (see below). The
-//!   default verifier checks the exact BLS quorum and rejects flagged certificates. A caller
-//!   may explicitly supply an application attestation verifier. Native finality also requires
+//!   instance) and verify under the exact BLS quorum of the committee of its height.
+//!   Native finality also requires
 //!   the authenticated result, schedule and signed availability; signatures alone are insufficient.
 //! - [`CertifiedChain::certified_from_execution`]: the same full certificate checks
 //!   anchored through the captured original native execution tip. A bounded reverse
@@ -76,7 +75,7 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_sumeragi::{
-    crypto::{AttestationVerifier, CertError},
+    crypto::CertError,
     message::{BlockHeader, Qc, VoteKind},
     preimage::TAG_PAY,
     types::{Committee, EpochId, Hash32},
@@ -914,12 +913,10 @@ pub(crate) fn proof_source_append(previous: Hash, height: u64, length: u64, wire
 }
 
 /// One crypto context for both random pinned reads and one-pass externally streamed evidence.
-struct PrefixVerifierContext<'a> {
+struct PrefixVerifierContext {
     instance: Hash32,
-    network: NetworkId,
-    attestations: Option<&'a dyn AttestationVerifier>,
 }
-impl PrefixVerifierContext<'_> {
+impl PrefixVerifierContext {
     fn advance_prefix(
         &self,
         prefix: &mut VerifiedPrefix,
@@ -1024,7 +1021,6 @@ impl PrefixVerifierContext<'_> {
             || commit_qc.kind != VoteKind::Commit
             || commit_qc.height != height
             || commit_qc.block_hash != committed.core_hash
-            || commit_qc.attest != header.attest
         {
             return Err(ChainReadError::HeaderMismatch { height });
         }
@@ -1034,11 +1030,6 @@ impl PrefixVerifierContext<'_> {
         if header.instance != self.instance || commit_qc.instance != self.instance {
             return Err(ChainReadError::WrongInstance { height });
         }
-        // This application requests no commit attestation: without an explicit verifier, a
-        // flagged certificate is rejected rather than accepted under unchecked attestations.
-        let verifier = self
-            .attestations
-            .unwrap_or(&iroha_sumeragi::crypto::NoAttestation);
         #[cfg(test)]
         relation_counts::qc(height);
         let checked = iroha_sumeragi::crypto::Verifier::new(
@@ -1047,7 +1038,7 @@ impl PrefixVerifierContext<'_> {
             &authority.epoch,
             &authority.committee,
         )
-        .verify_qc(verifier, commit_qc);
+        .verify_qc(commit_qc);
         checked.map_err(|error| ChainReadError::Certificate { height, error })?;
         Ok(())
     }
@@ -1351,7 +1342,6 @@ impl CertifiedPrefixStep {
 /// Construction authenticates genesis header/body and its epoch only. No genesis execution
 /// receipt is exported until a real verified H2 binds its result through `parent_result`.
 pub struct CertifiedPrefix {
-    network: NetworkId,
     instance: Hash32,
     prefix: VerifiedPrefix,
 }
@@ -1383,7 +1373,6 @@ impl CertifiedPrefix {
         // finished above. Field writes only move already valid owners; none invokes a
         // destructor or allocates. Every field is initialized before exposing length one.
         unsafe {
-            std::ptr::addr_of_mut!((*pointer).network).write(network);
             std::ptr::addr_of_mut!((*pointer).instance).write(instance);
             // Transfer the already valid receipt without materializing a complete tip value
             // on this stack. The source backing and charge survive the physical transfer;
@@ -1392,6 +1381,7 @@ impl CertifiedPrefix {
             std::ptr::addr_of_mut!((*pointer).prefix.schedule).write(schedule);
             std::ptr::addr_of_mut!((*pointer).prefix.authority).write(authority);
             std::ptr::addr_of_mut!((*pointer).prefix.validation).write(validation);
+            std::ptr::addr_of_mut!((*pointer).prefix.proof_source).write(None);
             original.set_initialized_len(1);
         }
         Ok(original)
@@ -1416,7 +1406,6 @@ impl CertifiedPrefix {
         let mut validation = EpochValidationScope::new();
         let tip = read_frame_with_validation(genesis, GENESIS_HEIGHT, &mut validation)?;
         Ok(Self {
-            network,
             instance,
             prefix: make_genesis_prefix(tip, epoch, validation)?,
         })
@@ -1516,8 +1505,6 @@ impl CertifiedPrefix {
         let genesis = (self.prefix.tip.height == GENESIS_HEIGHT).then(|| self.prefix.tip.clone());
         let current = PrefixVerifierContext {
             instance: self.instance,
-            network: self.network,
-            attestations: None,
         }
         .advance_prefix(&mut self.prefix, committed, artifacts)?;
         let genesis = genesis.map(|committed| GenesisExecutionAnchor {
@@ -1781,7 +1768,6 @@ pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     genesis: iroha_data_model::block::SharedSignedBlock,
     genesis_epoch: ValidatorEpochContextV1,
     instance: Hash32,
-    attestations: Option<&'v dyn AttestationVerifier>,
     prefix: parking_lot::Mutex<Option<VerifiedPrefix>>,
     // Only the scoped portable producer enables original canonical-byte capture.
     proof_source_genesis: Option<(u64, Hash)>,
@@ -1796,7 +1782,7 @@ impl<V: StateReadOnly + ?Sized> core::fmt::Debug for CertifiedChain<'_, V> {
 }
 
 impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
-    /// A reader over `view` with exact BLS quorum checks and no application attestation.
+    /// A reader over `view` with exact BLS quorum and native source checks.
     ///
     /// # Errors
     /// The view has no genesis, or Kura's genesis is not the view's network genesis.
@@ -1822,27 +1808,14 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             genesis,
             genesis_epoch,
             instance,
-            attestations: None,
             prefix: parking_lot::Mutex::new(None),
             proof_source_genesis: None,
         })
     }
 
-    /// Verify `CommitQC`s fully with `verifier`, including the attestations of flagged blocks
-    /// (F8 rule H6 (a)). Any previously verified prefix is discarded so the next read checks
-    /// every historical certificate under this verifier too.
-    #[must_use]
-    pub fn with_attestation_verifier(mut self, verifier: &'v dyn AttestationVerifier) -> Self {
-        self.attestations = Some(verifier);
-        *self.prefix.get_mut() = None;
-        self
-    }
-
-    fn verification_context(&self) -> PrefixVerifierContext<'_> {
+    fn verification_context(&self) -> PrefixVerifierContext {
         PrefixVerifierContext {
             instance: self.instance,
-            network: *self.source.network_id(),
-            attestations: self.attestations,
         }
     }
 
@@ -2056,8 +2029,7 @@ impl<'v> CertifiedChain<'v, StateView<'v>> {
     /// another storage owner. `network` must be independently configured, never taken from the
     /// supplied journal. It pins signed genesis; `chain_id` pins every successor's instance.
     /// The supplied hash cut must be exactly coextensive with the frames. A hash alone does not
-    /// authenticate a result: consume `certified`/`walk`. The default verifier rejects flagged
-    /// certificates. An explicitly supplied application attestation verifier checks them for
+    /// authenticate a result: consume `certified`/`walk`, which check every certificate for
     /// this reader only. H1 has
     /// only signed-body authority until a genuine successor or independent local execution
     /// authenticates its result.

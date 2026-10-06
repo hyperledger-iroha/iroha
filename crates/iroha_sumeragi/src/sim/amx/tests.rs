@@ -92,7 +92,6 @@ impl Chain {
             skipped_leaders: Vec::new(),
             control_witness: ControlWitness::empty(),
             // The toy application flags nothing, epoch boundaries included (§3.7 A1).
-            attest: false,
         };
         let block_hash = header.hash(&validators.crypto);
         let preimage = preimage::vote_preimage(
@@ -103,7 +102,6 @@ impl Chain {
             0,
             &block_hash,
             &result,
-            header.attest,
         );
         let indices: Vec<ValidatorIndex> = (0..signers).collect();
         let signatures: Vec<_> = indices
@@ -118,12 +116,9 @@ impl Chain {
             view: 0,
             block_hash,
             result,
-            attest: header.attest,
             signers: Bitmap::from_indices(validators.committee.n(), indices.iter().copied())
                 .expect("signer bitmap"),
             agg_sig: validators.crypto.aggregate(&signatures),
-            attestations: Vec::new(),
-            attestation_witness: None,
         };
         RecordProof {
             header,

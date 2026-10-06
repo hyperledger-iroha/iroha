@@ -190,10 +190,8 @@ fn retained_live_actor_delivers_signed_native_ingress() {
         view: 0,
         block_hash: Hash32([0xAB; 32]),
         result: Hash32([0xBC; 32]),
-        attest: false,
         signer: config.committee.index_of(remote.public_key()).unwrap(),
         sig: Signature([0; 96]),
-        attestation: None,
     };
     vote.sig = remote.sign(&vote.preimage());
     assert!(

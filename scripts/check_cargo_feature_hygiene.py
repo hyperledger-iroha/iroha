@@ -121,23 +121,18 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "iroha_core": {"default": ("node", "simd"),
- "runtime": ("json", "bls", "proofs-halo2"),
+ "runtime": ("json", "bls", "zk-ipa-native"),
  "node": ("runtime", "proofs-stark", "app_api", "gost", "sm", "telemetry", "zk-preverify"),
- "proofs-halo2": ("zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"),
  "proofs-stark": ("zk-stark",),
- "proofs-full": ("proofs-halo2", "proofs-stark"),
+ "proofs-full": ("proofs-stark", "zk-ipa-native"),
  "app_api": (),
  "bls": ("iroha_crypto/bls", "iroha_data_model/bls"),
- "circuit-params": ("halo2_proofs/circuit-params",),
  "expensive-telemetry": ("telemetry", "iroha_telemetry/metric-instrumentation"),
  "gost": ("iroha_config/gost", "iroha_crypto/gost", "iroha_data_model/gost"),
  "json": ("iroha_crypto/json", "iroha_primitives/json"),
  "sm": ("iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"),
  "telemetry": (),
  "simd": ("iroha_primitives/simd-accel", "iroha_core_privacy/simd"),
- # Native Kaigi is mandatory; this feature retains Core's build-policy marker.
- "zk-halo2": (),
- "zk-halo2-ipa": ("zk-ipa-native",),
  "zk-ipa-native": (),
  "zk-preverify": ("iroha_core_zk/zk-preverify",),
  "zk-stark": ("iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark")},
@@ -146,7 +141,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "proofs-stark": ("zk-stark",),
         "zk-stark": ("dep:fastpq_prover",),
         "zk-preverify": (),
-        "halo2-dev-tests": (),
         "test-utils": (),
         "zk-tests": ("test-utils",),
     },
@@ -161,20 +155,17 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "push",
             "telemetry",
             "schema",
-            "circuit-params",
             "proofs-full",
             "ipa-commitment",
             "zk-verify-batch",
             "gost",
             "sm",
         ),
-        "proofs-halo2": ("zk-halo2", "zk-halo2-ipa"),
         "proofs-stark": ("zk-stark",),
-        "proofs-full": ("proofs-halo2", "proofs-stark"),
+        "proofs-full": ("proofs-stark",),
         "app_api": ("dep:kotodama_lang",),
         "app_api_https": (),
         "app_api_wss": ("dep:tokio-tungstenite",),
-        "circuit-params": ("iroha_core/circuit-params",),
         "connect": (),
         "telemetry": (
             "iroha_telemetry",
@@ -202,8 +193,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "push": ("app_api",),
         "schema": ("iroha_schema", "iroha_schema_gen"),
         "transparent_api": ("iroha_data_model/transparent_api",),
-        "zk-halo2": ("iroha_core/zk-halo2",),
-        "zk-halo2-ipa": ("iroha_core/zk-halo2-ipa",),
         "zk-stark": ("iroha_core/zk-stark",),
         "zk-verify-batch": ("dep:iroha_zkp_halo2", "app_api"),
     },
@@ -455,7 +444,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "dev-tests",
  "dev-tools",
  "fastpq-gpu",
- "halo2-dev-tests",
  "iroha-core-tests",
  "mutation-testing",
  "privacy-release-evidence",
@@ -468,13 +456,11 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "zk-proof-tags",
  "zk-tests"),
     "iroha_core_zk": (
-        "halo2-dev-tests",
         "test-utils",
         "zk-tests",
     ),
     "iroha_torii": (
         "bench",
-        "halo2-dev-tests",
         "pprof",
         "profiling",
         "test-fixtures",
@@ -853,25 +839,31 @@ def _check_mandatory_cli_runtime_dependencies(
     return errors
 
 
-def _check_mandatory_kaigi_backend(document: dict[str, Any], manifest_path: Path) -> list[str]:
-    """Keep native Kaigi on its canonical, unconditional normal dependency."""
-    dependencies = document.get("dependencies", {})
-    kaigi = dependencies.get("kaigi_zk") if isinstance(dependencies, dict) else None
-    if (not isinstance(kaigi, dict) or kaigi.get("optional", False) is not False
-            or kaigi.get("path") != "../kaigi_zk"
-            or kaigi.get("package", "kaigi_zk") != "kaigi_zk"):
-        return [f"{manifest_path}: mandatory Core backend `kaigi_zk` must retain its non-optional local owner"]
-    return []
+MANDATORY_CORE_BACKENDS: dict[str, tuple[str, ...]] = {
+    "iroha_core": ("kaigi_zk",),
+    "iroha_core_zk": ("kaigi_zk", "iroha_plonk", "iroha_plonk_gadgets", "iroha_pasta"),
+}
 
 
-def _check_mandatory_core_backends(document: dict[str, Any], manifest_path: Path) -> list[str]:
-    """Require native Kaigi and the remaining Halo2/IPA normal dependencies."""
+def _check_mandatory_core_backends(
+    document: dict[str, Any], manifest_path: Path, owners: tuple[str, ...]
+) -> list[str]:
+    """Require canonical native owners as unconditional normal dependencies."""
+
     dependencies = document.get("dependencies", {})
-    halo2 = dependencies.get("halo2_proofs") if isinstance(dependencies, dict) else None
-    errors = _check_mandatory_kaigi_backend(document, manifest_path)
-    if (not isinstance(halo2, dict) or halo2.get("optional", False) is not False
-            or halo2.get("features") != ["batch", "multicore", "circuit-params"]):
-        errors.append(f"{manifest_path}: mandatory Core backend `halo2_proofs` must retain exact batch/multicore/circuit-params features")
+    errors: list[str] = []
+    for owner in owners:
+        specification = dependencies.get(owner) if isinstance(dependencies, dict) else None
+        if (
+            not isinstance(specification, dict)
+            or specification.get("optional", False) is not False
+            or specification.get("path") != f"../{owner}"
+            or specification.get("package", owner) != owner
+        ):
+            errors.append(
+                f"{manifest_path}: mandatory Core backend `{owner}` must retain "
+                "its non-optional local owner"
+            )
     return errors
 
 
@@ -896,9 +888,9 @@ def _check_expected_features(
     if expected is None:
         return []
 
-    errors: list[str] = []
-    if package_name == "iroha_core":
-        errors.extend(_check_mandatory_kaigi_backend(document, manifest_path))
+    errors = _check_mandatory_core_backends(
+        document, manifest_path, MANDATORY_CORE_BACKENDS.get(package_name, ())
+    )
     if package_name == "irohad_lib":
         errors.extend(_check_mandatory_daemon_cuda(document, manifest_path))
     if package_name == "iroha_data_model":
@@ -906,7 +898,6 @@ def _check_expected_features(
     if package_name == "iroha_cli_lib":
         errors.extend(_check_mandatory_cli_runtime_dependencies(document, manifest_path))
     if package_name == "iroha_core_zk":
-        errors.extend(_check_mandatory_core_backends(document, manifest_path))
         dependencies = document.get("dependencies", {})
         specification = (
             dependencies.get("fastpq_prover")

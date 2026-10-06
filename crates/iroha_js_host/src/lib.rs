@@ -13483,12 +13483,12 @@ seiyaku Privacy {
             gas_policy_commitment: Hash::new(b"gas-policy"),
         };
         let attachment = ProofAttachment::new_ref(
-            "halo2/ipa".parse().expect("backend ident"),
+            "pipa-r/pasta".parse().expect("backend ident"),
             ProofBox::new(
-                "halo2/ipa".parse().expect("proof backend ident"),
+                "pipa-r/pasta".parse().expect("proof backend ident"),
                 vec![0xAA, 0xBB, 0xCC],
             ),
-            VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1"),
+            VerifyingKeyId::new("pipa-r/pasta", "ivm-exec-v1"),
         );
         let proved_json = json::to_json(&proved).expect("proved json");
         let attachment_json = json::to_json(&attachment).expect("attachment json");

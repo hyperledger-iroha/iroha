@@ -121,69 +121,85 @@ def test_client_has_no_ordinary_native_surface() -> None:
     assert "bin" not in document
 
 
-@pytest.mark.parametrize("package", ["iroha_core", "iroha_core_zk"])
-def test_native_kaigi_owner_is_mandatory_with_defaults_disabled(package: str) -> None:
-    """Neither node feature selection nor CoreZk defaults own native Kaigi."""
+NATIVE_CORE_OWNERS = (
+    ("iroha_core", "kaigi_zk"),
+    ("iroha_core_zk", "kaigi_zk"),
+    ("iroha_core_zk", "iroha_plonk"),
+    ("iroha_core_zk", "iroha_plonk_gadgets"),
+    ("iroha_core_zk", "iroha_pasta"),
+)
+
+
+@pytest.mark.parametrize("package,owner", NATIVE_CORE_OWNERS)
+def test_native_core_owner_is_mandatory_with_defaults_disabled(
+    package: str, owner: str
+) -> None:
+    """Native backend ownership is independent of Cargo feature selection."""
     document = _guarded_document(package)
     assert _guarded_errors(package, document) == []
-    assert document["dependencies"]["kaigi_zk"].get("optional", False) is False
+    assert document["dependencies"][owner].get("optional", False) is False
     changed = copy.deepcopy(document)
     changed["features"]["default"] = []
-    assert FEATURE_HYGIENE._check_mandatory_kaigi_backend(changed, _manifest_path(package)) == []
-    if package == "iroha_core":
-        assert document["features"]["zk-halo2"] == []
-        assert FEATURE_HYGIENE.EXPECTED_FEATURES[package]["zk-halo2"] == ()
+    owners = FEATURE_HYGIENE.MANDATORY_CORE_BACKENDS[package]
+    assert owner in owners
+    assert FEATURE_HYGIENE._check_mandatory_core_backends(
+        changed, _manifest_path(package), owners
+    ) == []
 
 
-@pytest.mark.parametrize("package", ["iroha_core", "iroha_core_zk"])
-@pytest.mark.parametrize("mutation", ["remove", "optional", "dev-only", "build-only", "foreign-path", "foreign-package"])
-def test_native_kaigi_owner_rejects_optional_or_replaced_dependencies(package: str, mutation: str) -> None:
-    """A stale feature-forwarder correction must not loosen backend ownership."""
+@pytest.mark.parametrize("package,owner", NATIVE_CORE_OWNERS)
+@pytest.mark.parametrize(
+    "mutation",
+    ["remove", "optional", "dev-only", "build-only", "foreign-path", "foreign-package"],
+)
+def test_native_core_owner_rejects_optional_or_replaced_dependencies(
+    package: str, owner: str, mutation: str
+) -> None:
+    """Every native backend must retain its canonical normal dependency."""
     document = _guarded_document(package)
     changed = copy.deepcopy(document)
     if mutation == "remove":
-        del changed["dependencies"]["kaigi_zk"]
+        del changed["dependencies"][owner]
     elif mutation == "optional":
-        changed["dependencies"]["kaigi_zk"]["optional"] = True
+        changed["dependencies"][owner]["optional"] = True
     elif mutation in ("dev-only", "build-only"):
         section = "dev-dependencies" if mutation == "dev-only" else "build-dependencies"
-        changed.setdefault(section, {})["kaigi_zk"] = changed["dependencies"].pop("kaigi_zk")
+        changed.setdefault(section, {})[owner] = changed["dependencies"].pop(owner)
     elif mutation == "foreign-path":
-        changed["dependencies"]["kaigi_zk"]["path"] = "../iroha_plonk"
+        changed["dependencies"][owner]["path"] = "../unreviewed-owner"
     else:
-        changed["dependencies"]["kaigi_zk"]["package"] = "foreign_kaigi"
+        changed["dependencies"][owner]["package"] = "foreign_backend"
     assert changed != document
     assert any(
-        "mandatory Core backend `kaigi_zk` must retain its non-optional local owner" in error
+        f"mandatory Core backend `{owner}` must retain its non-optional local owner"
+        in error
         for error in _guarded_errors(package, changed)
-    ), (package, mutation)
+    ), (package, owner, mutation)
 
 
-def test_node_kaigi_feature_cannot_return_as_an_optional_dependency_forwarder() -> None:
-    """Native Kaigi cannot regain a feature opt-out through the old forwarder."""
+@pytest.mark.parametrize("package,owner", NATIVE_CORE_OWNERS)
+def test_native_core_owner_accepts_explicit_canonical_package(
+    package: str, owner: str
+) -> None:
+    document = copy.deepcopy(_guarded_document(package))
+    document["dependencies"][owner]["package"] = owner
+    assert _guarded_errors(package, document) == []
+
+
+@pytest.mark.parametrize("feature", ["zk-halo2", "zk-halo2-ipa"])
+@pytest.mark.parametrize("members", [[], ["dep:kaigi_zk"], ["zk-ipa-native"]])
+def test_retired_node_backend_features_cannot_return(
+    feature: str, members: list[str]
+) -> None:
+    """Retired backend aliases and dependency forwarders are prohibited."""
     document = _guarded_document("iroha_core")
+    assert feature not in document["features"]
     changed = copy.deepcopy(document)
-    changed["features"]["zk-halo2"] = ["dep:kaigi_zk"]
+    changed["features"][feature] = members
     assert any(
-        "feature `zk-halo2` must be [], found ('dep:kaigi_zk',)" in error
+        f"Cargo feature `{feature}` is unclassified" in error
         for error in _guarded_errors("iroha_core", changed)
     )
-
-
-def test_core_backends_reject_optional_owners_and_missing_circuit_params() -> None:
-    document = _guarded_document("iroha_core_zk")
-    assert _guarded_errors("iroha_core_zk", document) == []
-    for owner, mutation in (("kaigi_zk", "remove"), ("kaigi_zk", "optional"),
-                            ("halo2_proofs", "remove"), ("halo2_proofs", "optional"),
-                            ("halo2_proofs", "missing-circuit-params")):
-        changed = copy.deepcopy(document)
-        if mutation == "remove":
-            del changed["dependencies"][owner]
-        elif mutation == "optional":
-            changed["dependencies"][owner]["optional"] = True
-        else:
-            changed["dependencies"][owner]["features"].remove("circuit-params")
-        assert any("mandatory Core backend" in error for error in _guarded_errors("iroha_core_zk", changed)), (owner, mutation)
 
 
 def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> None:
@@ -204,7 +220,7 @@ def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> N
 
 
 def test_stark_owns_optional_fastpq_dependency_and_rejects_mutations() -> None:
-    """Halo2-only callers avoid FASTPQ while STARK retains its exact shared field codec."""
+    """Native PIPA-R callers avoid FASTPQ while STARK retains its exact shared field codec."""
 
     package = "iroha_core_zk"
     document = _guarded_document(package)

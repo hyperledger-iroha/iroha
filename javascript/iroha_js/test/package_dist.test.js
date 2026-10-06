@@ -947,13 +947,13 @@ test("package declarations expose the Exact12 manifest without retired privacy t
   );
   assert.match(
     rootDeclarations,
-    /export type OpenVerifyBackendTag = "halo2-ipa-pasta" \| "stark";/u,
+    /export type OpenVerifyBackendTag = "native-pipa-r-pasta" \| "stark";/u,
   );
   assert.doesNotMatch(rootDeclarations, /halo2\/pasta\/kaigi-roster-v1/u);
   assert.doesNotMatch(rootDeclarations, /halo2\/pasta\/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1/u);
   assert.match(
     rootDeclarations,
-    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-authorization-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri\/poseidon-x7-goldilocks-6x64-v1";/u,
+    /export type ToriiVerifierBackendLabelV1 =\s*\| "pipa-r\/pasta"\s*\| "pipa-r\/pasta\/kaigi-authorization-v1"\s*\| "pipa-r\/pasta\/kaigi-usage-v1"\s*\| "pipa-r\/pasta\/confidential-transfer-v1"\s*\| "pipa-r\/pasta\/confidential-unshield-full-v1"\s*\| "pipa-r\/pasta\/confidential-unshield-change-v1"\s*\| "stark\/fri\/poseidon-x7-goldilocks-6x64-v1";/u,
   );
 });
 

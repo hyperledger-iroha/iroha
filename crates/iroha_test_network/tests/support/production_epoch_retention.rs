@@ -148,7 +148,7 @@ pub(super) async fn verify_boundary_chain(
             let cursor = NativeJournalCursor::new(client.chain().clone(), network, iroha_data_model::block::consensus::SumeragiRootScope::Global, native_finality_limits(),
 &iroha_allocation::AllocationBudget::new(native_finality_limits().allocated_bytes),
 ).map_err(|error| eyre!(error))?;
-            let proofs = with_verified_native_journal((&journal).into(), client.chain(), &network, native_finality_limits(), cursor.attestations(), cursor.allocation_budget(), |reader| reader.walk(1, height).collect::<std::result::Result<Vec<_>, _>>().map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)).map_err(|error| eyre!(error))?;
+            let proofs = with_verified_native_journal((&journal).into(), client.chain(), &network, native_finality_limits(), cursor.allocation_budget(), |reader| reader.walk(1, height).collect::<std::result::Result<Vec<_>, _>>().map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)).map_err(|error| eyre!(error))?;
             let first = proofs.first().ok_or_else(|| eyre!("missing actual signed genesis"))?;
             let context = &first.commitment().schedule.current;
             ensure!(first.block_hash() == genesis_hash && context.committee == roster && context.generation() == authority && context.authorization == initial,

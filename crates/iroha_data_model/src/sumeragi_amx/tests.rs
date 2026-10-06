@@ -215,7 +215,6 @@ fn sign(
         proposer: 0,
         skipped_leaders: vec![],
         control_witness: ControlWitness::empty(),
-        attest: false,
     };
     let mut qc = Qc {
         kind: VoteKind::Commit,
@@ -225,11 +224,8 @@ fn sign(
         view: 0,
         block_hash: header.hash(&crypto),
         result,
-        attest: false,
         signers: Bitmap::from_indices(4, 0..u32::try_from(signers).unwrap()).unwrap(),
         agg_sig: AggregateSignature([0; 96]),
-        attestations: vec![],
-        attestation_witness: None,
     };
     let everyone = key_pairs(1..=16);
     let shares: Vec<_> = context

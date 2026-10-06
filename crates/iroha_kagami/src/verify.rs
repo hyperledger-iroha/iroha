@@ -470,6 +470,7 @@ mod tests {
             manifest
         };
         manifest
+            .clear_topology()
             .into_builder()
             .next_transaction()
             .set_topology_for_test(
@@ -487,13 +488,14 @@ mod tests {
         builder: GenesisBuilder,
         peers: &[(PublicKey, Vec<u8>)],
     ) -> GenesisBuilder {
-        crate::genesis::complete_test_genesis_builder_for_peers(
-            builder,
-            peers
-                .iter()
-                .map(|(public_key, _)| PeerId::new(public_key.clone()))
-                .collect(),
-        )
+        builder
+            .set_topology(
+                peers
+                    .iter()
+                    .map(|(public_key, _)| PeerId::new(public_key.clone()))
+                    .collect(),
+            )
+            .complete_for_test()
     }
     fn generate_peer_pop() -> (PublicKey, Vec<u8>) {
         let kp = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -798,8 +800,12 @@ mod tests {
             "synthetic currency must fail the typed NPoS parameter decoder"
         );
         assert!(
-            err.to_string()
-                .contains("malformed `sumeragi_npos_parameters`"),
+            matches!(
+                err.downcast_ref::<norito::json::Error>(),
+                Some(norito::json::Error::InvalidField { field, message })
+                    if field == "SumeragiNposParameters"
+                        && message == "NPoS must use the network's canonical XOR asset, not synthetic nexus.universal/xor"
+            ),
             "unexpected error: {err}"
         );
     }

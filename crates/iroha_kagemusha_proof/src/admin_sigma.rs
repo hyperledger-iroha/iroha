@@ -1,9 +1,10 @@
 //! Administrative sigma relations over the exact G1 state and statement.
 //!
-//! Bootstrap proves the initial zero-value state, empty maps and counters,
-//! disabled controls, and the statement/head/lineage bindings. A separately
-//! authenticates its credential and administrative objects. This circuit is
-//! not a stand-alone enrollment authorization or wallet acceptance API.
+//! Bootstrap proves the initial zero-value state, empty maps and counters.
+//! Load, Unload and Retiring prove exact private state effects, checked value
+//! arithmetic and statement/head/lineage continuity. A separately authenticates
+//! their objects, map updates and predecessor proofs. These leaves are not
+//! stand-alone enrollment, monetary authorization or wallet acceptance APIs.
 
 use iroha_pasta::{Fp, poseidon::hash_with_domain};
 use iroha_plonk::{
@@ -27,6 +28,10 @@ use crate::{
 #[path = "admin_sigma/load.rs"]
 mod load;
 pub use load::{LoadCircuit, LoadWitness, StateWitness};
+
+#[path = "admin_sigma/consuming.rs"]
+mod consuming;
+pub use consuming::{ConsumingWitness, RetiringCircuit, UnloadCircuit};
 
 /// Fixed domain size of the Bootstrap sigma class.
 pub const BOOTSTRAP_K: u32 = 12;

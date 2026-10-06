@@ -67,6 +67,33 @@ def test_headroom_misses_are_borderline_and_every_block_matters():
     assert qualify.verdict(qualify.CONFIGS["q_chips-1"], rows)["status"] == "borderline"
 
 
+@pytest.mark.parametrize("name", ["q_chips-1", "q_chips-4", "a_chips-1", "a_chips-4"])
+def test_rss_headroom_uses_each_block_median_but_caps_every_process(name):
+    config = qualify.CONFIGS[name]
+    hard = int((0.75 if name.startswith("q") else 0.85) * qualify.GIB)
+    below_margin, above_margin = int(hard * 0.94), int(hard * 0.99)
+    rows = attempts(report(rss=below_margin, workers=config["workers"]))
+    for index in (2, 5, 8):
+        rows[index]["report"]["peak_rss_bytes"] = above_margin
+    result = qualify.verdict(config, rows)
+    assert result["status"] == "pass"
+    assert result["block_medians_rss_bytes"] == [below_margin] * 3
+    assert result["maximum_kernel_rss_bytes"] == above_margin
+    assert result["all_process_rss_bytes"] == [below_margin, below_margin, above_margin] * 3
+
+    # A single block without the specified headroom is borderline, even if
+    # its median remains below the hard cap and the other blocks are better.
+    rows[7]["report"]["peak_rss_bytes"] = above_margin
+    result = qualify.verdict(config, rows)
+    assert result["status"] == "borderline"
+    assert result["block_medians_rss_bytes"] == [below_margin, below_margin, above_margin]
+
+    # Restore a passing median; one hard-cap breach still fails the candidate.
+    rows[7]["report"]["peak_rss_bytes"] = below_margin
+    rows[8]["report"]["peak_rss_bytes"] = hard + 1
+    assert qualify.verdict(config, rows)["status"] == "fail"
+
+
 def test_four_worker_observed_wall_is_never_cpu_divided_by_four():
     rows = attempts(report(cpu=20, wall=10.1, workers=4))
     assert qualify.verdict(qualify.CONFIGS["q_chips-4"], rows)["status"] == "fail"

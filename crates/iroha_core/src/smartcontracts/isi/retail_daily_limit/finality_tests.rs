@@ -507,13 +507,11 @@ fn lane_certificate(
                 view: 0,
                 block_hash: body.hash(crypto),
                 result: result.hash(),
-                attest: false,
                 signer: config
                     .committee
                     .index_of(signer.public_key())
                     .expect("lane member"),
                 sig: Signature([0; SIGNATURE_LEN]),
-                attestation: None,
             };
             vote.sig = signer.sign(&vote.preimage());
             vote
@@ -580,7 +578,6 @@ fn store_lane_block(
         proposer: 0,
         skipped_leaders: Vec::new(),
         control_witness: ControlWitness::empty(),
-        attest: false,
     };
     let budget = chain.state().ivm_execution_budget();
     let mut original = iroha_allocation::ChargedBuffer::new(lane_payload.len(), &budget)

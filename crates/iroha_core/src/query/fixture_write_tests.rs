@@ -67,7 +67,7 @@ fn verifying_key_fixture_publishes_record_and_circuit_index_without_finality() {
     let mut record = VerifyingKeyRecord::new(
         1,
         "fixture-circuit",
-        BackendTag::Halo2IpaPasta,
+        BackendTag::NativePipaRPasta,
         "pallas",
         [0x11; 32],
         crate::zk::hash_vk(&key),
@@ -293,10 +293,8 @@ fn phase_vote_evidence() -> Evidence {
             view: 0,
             block_hash: Hash32([subject; 32]),
             result: Hash32([4; 32]),
-            attest: false,
             signer: 0,
             sig: NativeSignature([0; SIGNATURE_LEN]),
-            attestation: None,
         };
         vote.sig = NativeSignature(
             Signature::new(key.private_key(), &vote.preimage())

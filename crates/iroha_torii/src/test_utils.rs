@@ -1212,15 +1212,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         ),
         zk: A::Zk {
             pipa_r: iroha_config::parameters::actual::PipaR::default(),
-            halo2: A::Halo2 {
-                enabled: false,
-                curve: A::ZkCurve::Pallas,
-                backend: A::Halo2Backend::Ipa,
-                max_k: 16,
-                verifier_budget_ms: 1000,
-                verifier_max_batch: 8,
-                ..A::Halo2::default()
-            },
+            trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+        ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+            max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
             fastpq: A::Fastpq {
                 execution_mode: A::FastpqExecutionMode::Cpu,
                 poseidon_mode: A::FastpqPoseidonMode::Cpu,

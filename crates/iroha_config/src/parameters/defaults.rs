@@ -2924,7 +2924,7 @@ pub mod torii {
     /// Allowlisted backend prefixes for the background prover worker.
     #[must_use]
     pub fn zk_prover_allowed_backends() -> Vec<String> {
-        vec!["halo2/".to_string(), "pipa-r/pasta".to_string()]
+        vec!["pipa-r/pasta".to_string()]
     }
     /// Allowlisted circuit identifiers for the background prover worker.
     /// Empty list means "allow all circuits".
@@ -4157,40 +4157,37 @@ pub mod zk {
         /// Maximum canonical proof-payload size.
         pub const MAX_PROOF_BYTES: usize = 192 * 1024;
     }
-    /// Halo2 verifier configuration for host-side proof checking.
-    pub mod halo2 {
-        /// Feature toggle for Halo2 verification in hosts.
-        pub const ENABLED: bool = true;
-        /// Default curve identifier used for Halo2 verification.
-        pub const CURVE: &str = "pallas";
-        /// Backend implementation identifier (e.g., IPA).
-        pub const BACKEND: &str = "ipa";
-        /// Maximum circuit size expressed as `k` (2^k rows).
+    /// Maximum proofs accepted by one host batch-verification syscall.
+    pub const MAX_VERIFY_BATCH: u32 = 16;
+    /// Bounds for the local diagnostic polynomial-opening endpoint.
+    pub mod ipa_commitment {
+        /// Maximum domain exponent for diagnostic polynomial openings.
         pub const MAX_K: u32 = 16;
-        /// Soft wall-clock budget for verification in milliseconds (DA proof bench: 8 MiB / 128 openings about 15 ms max).
-        pub const VERIFIER_BUDGET_MS: u64 = 20; // soft budget
-        /// Maximum batch size processed in a single verification call.
-        pub const VERIFIER_MAX_BATCH: u32 = 16;
-        /// Number of ZK lane verifier worker threads (0 = bounded auto).
-        pub const VERIFIER_WORKER_THREADS: usize = 0;
-        /// Capacity of the ZK lane verifier ingress queue (0 = auto-derived).
-        pub const VERIFIER_QUEUE_CAP: usize = 0;
-        /// Maximum time spent waiting for ZK lane enqueue under saturation (ms).
-        pub const VERIFIER_ENQUEUE_WAIT_MS: u64 = 25;
-        /// Capacity of the important-task retry ring used by the ZK lane.
-        pub const VERIFIER_RETRY_RING_CAP: usize = 2048;
-        /// Maximum retry rounds for an item in the ZK lane retry ring.
-        pub const VERIFIER_RETRY_MAX_ATTEMPTS: u32 = 3;
-        /// Retry scheduler tick interval for the ZK lane (ms).
-        pub const VERIFIER_RETRY_TICK_MS: u64 = 5;
-        /// Maximum accepted Norito envelope payload length in bytes.
-        pub const MAX_ENVELOPE_BYTES: usize = super::preverify::MAX_BYTES;
-        /// Maximum accepted proof length in bytes after Norito encoding.
-        pub const MAX_PROOF_BYTES: usize = 192 * 1024;
-        /// Maximum accepted transcript label length in bytes.
+        /// Maximum diagnostic transcript-label length in bytes.
         pub const MAX_TRANSCRIPT_LABEL_LEN: usize = 64;
-        /// Whether transcript labels must be ASCII.
+        /// Maximum encoded diagnostic polynomial-opening envelope size.
+        pub const MAX_ENVELOPE_BYTES: usize = 256 * 1024;
+        /// Require ASCII diagnostic transcript labels.
         pub const ENFORCE_TRANSCRIPT_LABEL_ASCII: bool = true;
+    }
+    /// Optional local diagnostic trace worker defaults.
+    pub mod trace {
+        /// Enable optional local diagnostic trace checking.
+        pub const ENABLED: bool = true;
+        /// Maximum diagnostic tasks dispatched in one worker batch.
+        pub const MAX_BATCH: u32 = 16;
+        /// Diagnostic worker threads (0 selects the bounded automatic count).
+        pub const WORKER_THREADS: usize = 0;
+        /// Diagnostic ingress capacity (0 derives a bounded capacity).
+        pub const QUEUE_CAP: usize = 0;
+        /// Maximum diagnostic enqueue wait in milliseconds.
+        pub const ENQUEUE_WAIT_MS: u64 = 25;
+        /// Capacity of the important diagnostic-task retry ring.
+        pub const RETRY_RING_CAP: usize = 2048;
+        /// Maximum retry rounds for an important diagnostic task.
+        pub const RETRY_MAX_ATTEMPTS: u32 = 3;
+        /// Diagnostic retry scheduler interval in milliseconds.
+        pub const RETRY_TICK_MS: u64 = 5;
     }
     /// Native STARK/FRI verifier configuration defaults.
     pub mod stark {
@@ -4604,7 +4601,7 @@ pub mod confidential {
     /// Observer-only assume-valid disabled by default.
     pub const ASSUME_VALID: bool = false;
     /// Default verifier backend identifier.
-    pub const VERIFIER_BACKEND: &str = "halo2-ipa-pallas";
+    pub const VERIFIER_BACKEND: &str = "pipa-r/pasta";
     /// Maximum confidential proof size (bytes).
     pub const MAX_PROOF_SIZE_BYTES: u32 = 1_048_576;
     /// Maximum nullifiers per transaction.

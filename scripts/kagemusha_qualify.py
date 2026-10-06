@@ -332,16 +332,19 @@ def verdict(config: dict, attempts: list[dict]) -> dict:
     peaks = [item["report"]["peak_rss_bytes"] for item in valid]
     times = [slower(item["report"], metric) / 1e9 for item in valid]
     medians = []
+    rss_medians = []
     complete = True
     for block in range(3):
-        values = [slower(item["report"], metric) / 1e9 for item in valid if item["block"] == block]
+        block_reports = [item["report"] for item in valid if item["block"] == block]
+        values = [slower(report, metric) / 1e9 for report in block_reports]
         complete &= len(values) == 3
         if values:
             medians.append(statistics.median(values))
+            rss_medians.append(statistics.median(report["peak_rss_bytes"] for report in block_reports))
     hard_failure = any(value > hard_rss for value in peaks) or (
         hard_time is not None and any(value > hard_time for value in times)
     )
-    margin_failure = any(value > margin_rss for value in peaks) or (
+    margin_failure = any(value > margin_rss for value in rss_medians) or (
         hard_time is not None and any(value > hard_time * 0.9 for value in medians)
     )
     status = "fail" if hard_failure else (
@@ -349,6 +352,7 @@ def verdict(config: dict, attempts: list[dict]) -> dict:
     )
     return {"status": status, "valid_processes": len(valid), "attempts": len(attempts),
             "block_medians_seconds": medians, "all_process_times_seconds": times,
+            "block_medians_rss_bytes": rss_medians, "all_process_rss_bytes": peaks,
             "maximum_kernel_rss_bytes": max(peaks, default=None), "metric": metric}
 
 

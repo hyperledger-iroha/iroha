@@ -3,27 +3,25 @@ mod strict_verifying_key_preparation_tests {
     use super::*;
 
     #[test]
-    fn verifier_key_cache_reuses_exact_key_and_rejects_empty_substitution() {
-        let params: PastaParams = pasta_params_new(5);
-        let backend = "halo2/pasta/cache-test";
-        let circuit = pasta_tiny::Add;
-        let canonical = halo2_backend::keygen_vk(&params, &circuit).expect("canonical vk");
-        let mut bytes = zk1::wrap_start();
-        zk1::wrap_append_ipa_k(&mut bytes, 5);
-        zk1::wrap_append_vk_pasta(&mut bytes, &canonical);
-        let supplied = VerifyingKeyBox::new(backend.to_owned(), bytes);
-        let resolve = |key: &VerifyingKeyBox| {
-            resolve_vk_cached(backend, &params, key, &circuit, || {
-                halo2_backend::keygen_vk(&params, &circuit)
-            })
-        };
-        let first = resolve(&supplied).expect("first canonical key");
-        let second = resolve(&supplied).expect("reused canonical key");
-        assert!(Arc::ptr_eq(&first, &second));
-        let empty = VerifyingKeyBox::new(backend.to_owned(), Vec::new());
+    fn native_key_validation_reuses_compiled_key_and_rejects_empty_substitution() {
+        let first = native_pipa_r::kaigi_verifying_key(kaigi_zk::native::NativeRelationV1::Usage)
+            .expect("compiled native key");
+        let second = native_pipa_r::kaigi_verifying_key(kaigi_zk::native::NativeRelationV1::Usage)
+            .expect("reused compiled native key");
+        assert_eq!(first, second);
+        for key in [&first, &second] {
+            native_pipa_r::validate_key(ZK_BACKEND_NATIVE_PIPA_R, KAIGI_USAGE_CIRCUIT_ID_V1, key)
+                .expect("exact compiled key");
+        }
+        let empty = VerifyingKeyBox::new(ZK_BACKEND_NATIVE_PIPA_R.to_owned(), Vec::new());
         assert!(
-            resolve(&empty).is_err(),
-            "a cache hit must not replace absent key bytes"
+            native_pipa_r::validate_key(
+                ZK_BACKEND_NATIVE_PIPA_R,
+                KAIGI_USAGE_CIRCUIT_ID_V1,
+                &empty,
+            )
+            .is_err(),
+            "a cached key must never replace absent supplied key bytes"
         );
     }
 
@@ -95,10 +93,10 @@ mod strict_verifying_key_preparation_tests {
     }
     #[test]
     fn binding_only_ivm_verifier_records_are_not_admitted() {
-        let halo2_id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "ivm-binding");
+        let halo2_id = VerifyingKeyId::new(ZK_BACKEND_NATIVE_PIPA_R, "ivm-binding");
         let mut halo2_record = portable_off_ledger_record();
-        halo2_record.backend = iroha_data_model::zk::BackendTag::Halo2IpaPasta;
-        halo2_record.curve = "pallas".to_owned();
+        halo2_record.backend = iroha_data_model::zk::BackendTag::NativePipaRPasta;
+        halo2_record.curve = "vesta".to_owned();
         halo2_record.circuit_id = "halo2/pasta/ipa/ivm-execution-v1".to_owned();
         halo2_record.public_inputs_schema_hash = [0x22; 32];
         let halo2_error = validate_and_prepare_verifying_key_record_v1(&halo2_id, &halo2_record)
@@ -137,30 +135,30 @@ mod strict_verifying_key_preparation_tests {
         assert!(error.contains("declared"), "unexpected error: {error}");
     }
     #[test]
-    fn halo2_preparation_rejects_oversized_container_before_backend_decode() {
+    fn native_preparation_rejects_oversized_container_before_backend_decode() {
         let vk = VerifyingKeyBox::new(
-            ZK_BACKEND_HALO2_IPA.into(),
-            vec![0_u8; HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES + 1],
+            ZK_BACKEND_NATIVE_PIPA_R.into(),
+            vec![0_u8; NATIVE_PIPA_R_VERIFYING_KEY_V1_MAX_BYTES + 1],
         );
         let error = validate_and_prepare_verifying_key_material_v1(
-            ZK_BACKEND_HALO2_IPA,
-            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            ZK_BACKEND_NATIVE_PIPA_R,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            iroha_data_model::zk::BackendTag::NativePipaRPasta,
             &vk,
         )
-        .expect_err("oversized Halo2 key must fail before backend decoding");
-        assert!(error.contains("exceeds"), "unexpected error: {error}");
+        .expect_err("oversized native key must fail before backend decoding");
+        assert!(error.contains("invalid native PIPA-R key container"), "unexpected error: {error}");
     }
     #[test]
-    fn halo2_preparation_rejects_oversized_declared_tlv_from_tiny_container() {
+    fn native_preparation_rejects_retired_tlv_container() {
         let mut bytes = b"ZK1\0CID1".to_vec();
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        let vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.into(), bytes);
+        let vk = VerifyingKeyBox::new(ZK_BACKEND_NATIVE_PIPA_R.into(), bytes);
         assert!(
             validate_and_prepare_verifying_key_material_v1(
-                ZK_BACKEND_HALO2_IPA,
-                "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-                iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+                ZK_BACKEND_NATIVE_PIPA_R,
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                iroha_data_model::zk::BackendTag::NativePipaRPasta,
                 &vk,
             )
             .is_err(),

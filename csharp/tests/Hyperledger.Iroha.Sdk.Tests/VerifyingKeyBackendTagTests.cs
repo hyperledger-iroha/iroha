@@ -11,9 +11,8 @@ public sealed class VerifyingKeyBackendTagTests
     {
         var expected = new[]
         {
-            (VerifyingKeyBackendTag.Halo2IpaPasta, 0U),
             (VerifyingKeyBackendTag.Stark, 1U),
-            (VerifyingKeyBackendTag.NativePipaRPasta, 2U),
+            (VerifyingKeyBackendTag.NativePipaRPasta, 0U),
         };
 
         Assert.Equal(expected.Length, Enum.GetValues<VerifyingKeyBackendTag>().Length);
@@ -25,7 +24,6 @@ public sealed class VerifyingKeyBackendTagTests
     }
 
     [Theory]
-    [InlineData(VerifyingKeyBackendTag.Halo2IpaPasta, "halo2-ipa-pasta")]
     [InlineData(VerifyingKeyBackendTag.Stark, "stark")]
     [InlineData(VerifyingKeyBackendTag.NativePipaRPasta, "native-pipa-r-pasta")]
     public void CanonicalLabelsRoundTripExactly(
@@ -81,6 +79,7 @@ public sealed class VerifyingKeyBackendTagTests
             " ",
             "\t",
             "\n",
+            "halo2-ipa-pasta",
             " halo2-ipa-pasta",
             "halo2-ipa-pasta ",
             "HALO2-IPA-PASTA",
@@ -116,7 +115,6 @@ public sealed class VerifyingKeyBackendTagTests
     }
 
     [Theory]
-    [InlineData("halo2/ipa")]
     [InlineData("pipa-r/pasta")]
     [InlineData("pipa-r/pasta/kaigi-authorization-v1")]
     [InlineData("pipa-r/pasta/kaigi-usage-v1")]
@@ -160,6 +158,7 @@ public sealed class VerifyingKeyBackendTagTests
         string?[] labels =
         [
             null,
+            "halo2/ipa",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-authorization-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -251,9 +250,9 @@ public sealed class VerifyingKeyBackendTagTests
     {
         foreach (var label in new[]
         {
-            "halo2-ipa-pasta",
+            "native-pipa-r-pasta",
             "stark",
-            "halo2/ipa",
+            "pipa-r/pasta",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         })
         {

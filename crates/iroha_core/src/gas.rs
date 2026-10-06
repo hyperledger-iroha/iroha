@@ -2147,7 +2147,7 @@ mod native_pipa_r_gas_tests {
             envelope.public_inputs.push(0);
             assert_eq!(inspect(&envelope, backend), None);
             envelope.public_inputs.pop();
-            envelope.backend = BackendTag::Halo2IpaPasta;
+            envelope.backend = BackendTag::Stark;
             assert_eq!(inspect(&envelope, backend), None);
         }
     }

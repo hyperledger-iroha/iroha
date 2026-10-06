@@ -135,47 +135,27 @@ pub struct AccessLog {
     pub reg_tags: HashSet<usize>,
     pub state_writes: Vec<StateUpdate>,
 }
-/// Minimal Halo2 verification config enforced by the default host.
-#[derive(Clone, Copy, Debug)]
-pub struct ZkHalo2Config {
-    pub enabled: bool,
-    pub curve: ZkCurve,
-    pub backend: ZkHalo2Backend,
-    pub max_k: u32,
-    pub verifier_budget_ms: u64,
-    pub verifier_max_batch: u32,
+/// Resource limits for generic proof envelopes and verification batches.
+///
+/// Limits never select an engine or grant proof authority. The standalone host
+/// has no authenticated verifier registry and rejects every proof relation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkVerifyLimits {
+    /// Maximum envelopes in one batch syscall.
+    pub max_verify_batch: u32,
+    /// Maximum bytes in one canonical outer proof envelope.
     pub max_envelope_bytes: usize,
+    /// Maximum bytes in its inner proof payload.
     pub max_proof_bytes: usize,
-    pub max_transcript_label_len: usize,
-    pub enforce_transcript_label_ascii: bool,
 }
-impl Default for ZkHalo2Config {
+impl Default for ZkVerifyLimits {
     fn default() -> Self {
         Self {
-            enabled: true,
-            curve: ZkCurve::Pallas,
-            backend: ZkHalo2Backend::Ipa,
-            max_k: 18,
-            verifier_budget_ms: 250,
-            verifier_max_batch: 16,
+            max_verify_batch: 16,
             max_envelope_bytes: 256 * 1024,
             max_proof_bytes: 192 * 1024,
-            max_transcript_label_len: 64,
-            enforce_transcript_label_ascii: true,
         }
     }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ZkCurve {
-    Pallas,
-    Pasta,
-    Goldilocks,
-    Bn254,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ZkHalo2Backend {
-    Ipa,
-    Unsupported,
 }
 pub const ERR_DISABLED: u64 = 1;
 pub const ERR_BACKEND: u64 = 2;
@@ -1827,12 +1807,6 @@ pub trait IVMHost {
     fn finish_tx(&mut self) -> Result<AccessLog, VMError> {
         Ok(AccessLog::default())
     }
-    /// Optional: inject external verifying key bytes for a backend label.
-    /// Defaults to no-op for hosts that do not support VK injection.
-    fn set_external_vk_bytes(&mut self, backend: String, bytes: Vec<u8>) {
-        let _ = backend;
-        let _ = bytes;
-    }
     /// Optional transactional checkpoint. Transactional callers (for example the
     /// Kotodama test driver) restore this snapshot when a transaction fails so
     /// host side effects do not leak. `None` means the host cannot prove rollback.
@@ -1909,13 +1883,12 @@ pub struct DefaultHost {
     public_inputs: BTreeMap<Name, Vec<u8>>,
     state: BTreeMap<StatePath, Vec<u8>>,
     pub_output: Vec<u8>,
-    zk_cfg: ZkHalo2Config,
+    zk_cfg: ZkVerifyLimits,
     zk_gas_schedule: gas::ZkGasScheduleV1,
     zk_execution_counters: ZkExecutionCounters,
     vrf_execution_counters: VrfExecutionCounters,
     network_id: Option<iroha_data_model::NetworkId>,
     chain_id: Option<Vec<u8>>,
-    halo2_external_vks: std::collections::HashMap<String, Vec<u8>>,
     axt_state: Option<axt::HostAxtState>,
     axt_policy: std::sync::Arc<dyn axt::AxtPolicy>,
     fastpq_batch_active: bool,
@@ -1945,13 +1918,12 @@ impl DefaultHost {
             public_inputs: BTreeMap::new(),
             state: BTreeMap::new(),
             pub_output: Vec::new(),
-            zk_cfg: ZkHalo2Config::default(),
+            zk_cfg: ZkVerifyLimits::default(),
             zk_gas_schedule: gas::ZkGasScheduleV1::default(),
             zk_execution_counters: ZkExecutionCounters::default(),
             vrf_execution_counters: VrfExecutionCounters::default(),
             network_id: None,
             chain_id: None,
-            halo2_external_vks: std::collections::HashMap::new(),
             axt_state: None,
             axt_policy: std::sync::Arc::new(axt::AllowAllAxtPolicy),
             fastpq_batch_active: false,
@@ -2058,13 +2030,13 @@ impl DefaultHost {
         self.pub_output = checkpoint.pub_output;
         true
     }
-    /// Configure Halo2 verification limits for this host.
-    pub fn with_zk_halo2_config(mut self, cfg: ZkHalo2Config) -> Self {
+    /// Configure proof envelope and batch limits for this host.
+    pub fn with_zk_verify_limits(mut self, cfg: ZkVerifyLimits) -> Self {
         self.zk_cfg = cfg;
         self
     }
-    /// Replace Halo2 verification limits without discarding other host state.
-    pub fn set_zk_halo2_config(&mut self, cfg: ZkHalo2Config) {
+    /// Replace proof limits without discarding other host state.
+    pub fn set_zk_verify_limits(&mut self, cfg: ZkVerifyLimits) {
         self.zk_cfg = cfg;
     }
     /// Configure the immutable ZK syscall gas snapshot for this host.
@@ -2101,8 +2073,8 @@ impl DefaultHost {
     pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
         self.public_inputs = inputs;
     }
-    /// Expose the current Halo2 verifier config (for tests/introspection).
-    pub fn zk_config(&self) -> ZkHalo2Config {
+    /// Return the current proof envelope and batch limits.
+    pub fn zk_verify_limits(&self) -> ZkVerifyLimits {
         self.zk_cfg
     }
     /// Install an AXT policy sourced from a data-model snapshot.
@@ -2117,19 +2089,6 @@ impl DefaultHost {
     ) -> Result<Self, AxtPolicySnapshotValidationError> {
         self.axt_policy = std::sync::Arc::new(axt::SnapshotAxtPolicy::new(snapshot)?);
         Ok(self)
-    }
-    /// Convenience: select ZK curve backend from a string.
-    /// Accepts: "toy" | "pasta" | "goldilocks" | "bn254" (case-insensitive). Unknown values are ignored.
-    pub fn with_zk_curve_str(mut self, curve: &str) -> Self {
-        let c = match curve.to_ascii_lowercase().as_str() {
-            "toy" | "toy_p61" | "toy-p61" => ZkCurve::Pallas,
-            "pasta" => ZkCurve::Pasta,
-            "goldilocks" => ZkCurve::Goldilocks,
-            "bn254" | "bn-254" => ZkCurve::Bn254,
-            _ => self.zk_cfg.curve,
-        };
-        self.zk_cfg.curve = c;
-        self
     }
     /// Set the display chain label returned by `SYSVAR_CHAIN_ID`.
     pub fn with_chain_id(mut self, chain_id: Vec<u8>) -> Self {
@@ -2176,12 +2135,6 @@ impl DefaultHost {
                 ..OpenVerifyEnvelopeBounds::default()
             })
             .map_err(map_open_verify_validation_error)?;
-        if !self.zk_cfg.enabled {
-            return Err(ERR_DISABLED);
-        }
-        if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
-            return Err(ERR_BACKEND);
-        }
         // The standalone host deliberately has no chain verifier-key registry.
         // Production verification is provided only by CoreHost after binding
         // the canonical envelope to an active registered key.
@@ -4531,7 +4484,7 @@ impl IVMHost for DefaultHost {
                 }
                 let quote = quote_zk_batch_at(vm, ptr, self.zk_gas_schedule)?;
                 preflight_reserved_syscall_gas(vm, quote.gas)?;
-                let max_items = usize::try_from(self.zk_cfg.verifier_max_batch)
+                let max_items = usize::try_from(self.zk_cfg.max_verify_batch)
                     .unwrap_or(usize::MAX)
                     .min(
                         usize::try_from(self.zk_gas_schedule.max_batch_proofs)
@@ -4640,9 +4593,6 @@ impl IVMHost for DefaultHost {
     fn access_logging_supported(&self) -> bool {
         true
     }
-    fn set_external_vk_bytes(&mut self, backend: String, bytes: Vec<u8>) {
-        self.halo2_external_vks.insert(backend, bytes);
-    }
 }
 #[cfg(test)]
 mod tests {
@@ -4712,7 +4662,7 @@ mod tests {
     }
     fn dummy_zk_batch_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope::new(
-            BackendTag::Halo2IpaPasta,
+            BackendTag::NativePipaRPasta,
             "test-circuit-v1",
             [0x11; 32],
             vec![0x22; 64],

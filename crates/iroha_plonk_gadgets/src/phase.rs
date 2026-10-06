@@ -21,6 +21,7 @@ pub const MAX_COMPACT_GATE_DEGREE: usize = 9;
 pub struct PhaseColumns {
     bits: [Column<Fixed>; 2],
     payload: [Column<Fixed>; 6],
+    idle_ecc: bool,
 }
 
 impl PhaseColumns {
@@ -30,13 +31,50 @@ impl PhaseColumns {
         Self {
             bits: core::array::from_fn(|_| meta.fixed_column()),
             payload: core::array::from_fn(|_| meta.fixed_column()),
+            idle_ecc: false,
         }
+    }
+
+    /// Allocates the experimental encoding whose zero fixed bits denote ECC.
+    /// Logical phase identifiers stay unchanged; all owners translate them
+    /// through this bundle. This permits linear spare-digit enables to vanish
+    /// on the unassigned and blinding rows without another fixed column.
+    pub fn allocate_with_idle_ecc<F: PastaField>(meta: &mut ConstraintSystem<F>) -> Self {
+        Self {
+            idle_ecc: true,
+            ..Self::allocate(meta)
+        }
+    }
+
+    pub(crate) const fn has_idle_ecc(self) -> bool {
+        self.idle_ecc
+    }
+
+    const fn encoded(self, phase: u8) -> u8 {
+        phase ^ self.idle_ecc as u8
     }
 
     /// The six columns in coefficient/round-constant order.
     #[must_use]
     pub const fn coefficients(self) -> [Column<Fixed>; 6] {
         self.payload
+    }
+
+    pub(crate) const fn bits(self) -> [Column<Fixed>; 2] {
+        self.bits
+    }
+
+    pub(crate) fn expect<F: PastaField>(
+        self,
+        region: &mut Region<'_, F>,
+        row: usize,
+        phase: u8,
+    ) -> Result<(), Error> {
+        let encoded = self.encoded(phase);
+        for (index, column) in self.bits.iter().enumerate() {
+            region.expect_fixed(*column, row, F::from(u64::from((encoded >> index) & 1)))?;
+        }
+        Ok(())
     }
 
     pub(crate) const fn enable(self, phase: u8, payload: Option<(usize, u8, u8)>) -> Enable {
@@ -74,6 +112,7 @@ impl Enable {
                 phase,
                 payload,
             } => {
+                let phase = columns.encoded(phase);
                 let mut enabled = Expression::Constant(F::ONE);
                 for (index, column) in columns.bits.iter().enumerate() {
                     let bit = cells.query_fixed(*column, Rotation::cur());
@@ -113,6 +152,7 @@ impl Enable {
                 phase,
                 payload,
             } => {
+                let phase = columns.encoded(phase);
                 for (index, column) in columns.bits.iter().enumerate() {
                     region.assign_fixed(*column, row, F::from(u64::from((phase >> index) & 1)))?;
                 }

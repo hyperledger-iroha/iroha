@@ -84,7 +84,6 @@ fn available_body() -> (AvailableBody, AvailabilitySource) {
         proposer: 0,
         skipped_leaders: vec![],
         control_witness: ControlWitness::empty(),
-        attest: false,
     };
     let budget = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
     let body = author_payload(header, payload, &config, &budget, &validators, &keys[0]).body;
@@ -111,11 +110,8 @@ fn commit(body: &AvailableBody) -> Action {
             view: body.header().origin_view,
             block_hash: Hash32::ZERO,
             result: Hash32::ZERO,
-            attest: false,
             signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap(),
             agg_sig: AggregateSignature([0; 96]),
-            attestations: vec![],
-            attestation_witness: None,
         },
     }
 }

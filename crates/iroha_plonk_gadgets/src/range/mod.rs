@@ -4,6 +4,7 @@
 
 pub mod algebraic15;
 pub mod running_sum;
+pub mod secondary;
 pub mod u128;
 
 #[cfg(test)]

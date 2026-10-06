@@ -3685,12 +3685,10 @@ function encodeEnumTagValue(index, encodePayload) {
 function encodeBackendTagValue(value, context) {
   const backend = assertExactNonEmptyString(value, context);
   switch (backend) {
-    case "halo2-ipa-pasta":
-      return encodeEnumTagValue(0);
     case "stark":
       return encodeEnumTagValue(1);
     case "native-pipa-r-pasta":
-      return encodeEnumTagValue(2);
+      return encodeEnumTagValue(0);
     default:
       rejectError(`${context} uses unknown or non-canonical backend label ${backend}`);
   }
@@ -3702,11 +3700,9 @@ function decodeBackendTagValue(payload, context) {
   reader.assertEof();
   switch (tag) {
     case 0:
-      return "halo2-ipa-pasta";
+      return "native-pipa-r-pasta";
     case 1:
       return "stark";
-    case 2:
-      return "native-pipa-r-pasta";
     default:
       rejectError(`${context}${TEXT_USES_UNSUPPORTED}backend tag ${tag}`);
   }

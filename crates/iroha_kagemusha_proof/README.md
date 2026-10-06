@@ -126,6 +126,35 @@ Incoming lineage decoding now preserves the original byte source and derives
 the canonical/header/claim verdicts together. Exact active-byte ingestion
 separates a padded verifier view from the original short or overlong input;
 its total Receive composition and operation qualification remain open.
+Receive now has fixed owners for all five soft results, hard current-credential
+and receipt authorization, original signature tapes, and terminal map/mode
+constraints. Content addresses are mandatory: substituted Request, package,
+credential or certificate preimages cannot manufacture a burn. The complete
+owner-to-W-to-terminal proof chain and its capacity still need qualification.
+The own Receive credit, payer-wallet and amount are hard projections of the
+same Request; changing those generated effect fields cannot turn a valid
+Payment into a burn. Original incoming asset/recipient mismatches remain soft.
+The staged Receive context retains exact active tape commitments and typed Q
+instances, with four-bus internal A circuits and a three-bus terminal candidate;
+internal keys cannot enter the final Omega catalog.
+
+## Unload and Retiring
+
+The fixed k12 `UnloadCircuit` and `RetiringCircuit` share the administrative
+transition constraints with Load. Unload spends only the folded lineage's
+adjusted available balance, binds the scheme/wallet/redeem-ordinal nullifier,
+and checks its charge, counters and exact changed fields. Retiring permits
+only Active → Retiring and synchronizes adjusted burned/pending values without
+moving value. Both real native proofs are 3,296 bytes and verify their complete
+opening; rehashed state mutations, overflow, invalid charges, burned-value
+spending and reverse/repeated retirement reject.
+
+`a_relation::unload` assigns mandatory hard predecessor/proof-byte, current
+credential/direct Enrollment/own receipt, and recovery-map or retirement-state
+tasks. Its fixed schema rejects missing, duplicated and misplaced owners.
+TODO: execute and qualify the complete genuine Q → A → Ω chains, rebind their
+terminal keys into the common catalog, and connect the installed wallet provider.
+The leaf and task checks alone do not authorize an unload or retirement.
 
 ## Controls
 

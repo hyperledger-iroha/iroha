@@ -2442,11 +2442,11 @@ mod tests {
             proof::VerifyingKeyRecord,
             zk::BackendTag,
         };
-        let id = crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_test");
+        let id = crate::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_test");
         let mut rec = VerifyingKeyRecord::new(
             1,
             "vk_transfer",
-            BackendTag::Halo2IpaPasta,
+            BackendTag::NativePipaRPasta,
             "pallas",
             [0u8; 32],
             [0u8; 32],
@@ -2460,7 +2460,7 @@ mod tests {
             VerifyingKeyEventFilter::new().for_verifying_key(id.clone()),
         );
         assert!(ok_filter.matches(&ev));
-        let other_id = crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_other");
+        let other_id = crate::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_other");
         let bad_filter = DataEventFilter::VerifyingKey(
             VerifyingKeyEventFilter::new().for_verifying_key(other_id),
         );
@@ -2474,7 +2474,7 @@ mod tests {
         let mut h = [0u8; 32];
         h[0] = 0xAB;
         let pid = crate::proof::ProofId {
-            backend: "halo2/ipa".into(),
+            backend: "pipa-r/pasta".into(),
             proof_hash: h,
         };
         // Event: Verified with this id
@@ -2513,7 +2513,7 @@ mod tests {
         let mut h2 = [0u8; 32];
         h2[0] = 0xCD;
         let other = crate::proof::ProofId {
-            backend: "halo2/ipa".into(),
+            backend: "pipa-r/pasta".into(),
             proof_hash: h2,
         };
         let f_other = DataEventFilter::Proof(

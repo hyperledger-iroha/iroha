@@ -321,7 +321,6 @@ fn arrival_during_a_build_follows_an_empty_answer() {
             Event::PayloadBuilt {
                 req: 7,
                 payload: None,
-                attest: false,
             },
             Event::PayloadReady { req: 7 },
         ]
@@ -464,7 +463,7 @@ impl Executor for Panicking {
     fn build_control_witness(
         &mut self,
         _: &iroha_sumeragi::api::ControlWitnessContext,
-    ) -> Result<(iroha_sumeragi::types::ControlWitness, bool), PublicationError> {
+    ) -> Result<iroha_sumeragi::types::ControlWitness, PublicationError> {
         panic!("boom")
     }
     fn drive_control(
@@ -501,7 +500,7 @@ impl Executor for Panicking {
         _: u64,
         _: u32,
         _: u32,
-    ) -> Result<(Option<iroha_sumeragi::availability::PayloadBytes>, bool), PublicationError> {
+    ) -> Result<Option<iroha_sumeragi::availability::PayloadBytes>, PublicationError> {
         panic!("boom")
     }
     fn reject(&mut self, _: u64, _: u64, _: &Hash32) {}
@@ -588,8 +587,8 @@ impl Executor for Overlay {
     fn build_control_witness(
         &mut self,
         _: &iroha_sumeragi::api::ControlWitnessContext,
-    ) -> Result<(iroha_sumeragi::types::ControlWitness, bool), PublicationError> {
-        Ok((iroha_sumeragi::types::ControlWitness::empty(), false))
+    ) -> Result<iroha_sumeragi::types::ControlWitness, PublicationError> {
+        Ok(iroha_sumeragi::types::ControlWitness::empty())
     }
     fn drive_control(
         &mut self,
@@ -646,7 +645,7 @@ impl Executor for Overlay {
         view: u64,
         max_bytes: u32,
         budget: u32,
-    ) -> Result<(Option<iroha_sumeragi::availability::PayloadBytes>, bool), PublicationError> {
+    ) -> Result<Option<iroha_sumeragi::availability::PayloadBytes>, PublicationError> {
         self.other("build");
         self.inner.build(height, view, max_bytes, budget)
     }
@@ -1119,7 +1118,7 @@ fn control_build_refusal_keeps_exact_request_and_does_not_block_transaction_work
     );
     assert_eq!(sched.wakeup(), 0, "transaction work is ready immediately");
     assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 17, .. })));
-    sched.done(0, ExecDone::Built(Ok((super::payload(vec![1]), false))));
+    sched.done(0, ExecDone::Built(Ok(super::payload(vec![1]))));
     assert_eq!(
         sched.wakeup(),
         10,
@@ -1132,8 +1131,8 @@ fn control_build_refusal_keeps_exact_request_and_does_not_block_transaction_work
     );
     let witness =
         iroha_sumeragi::types::ControlWitness::try_from_slice(b"canonical pulse").unwrap();
-    sched.done(10, ExecDone::ControlWitnessBuilt(Ok((witness, true))));
-    assert!(sched.take_events().iter().any(|event| matches!(event, Event::ControlWitnessBuilt { req: 17, context: exact, witness: bytes, attest: true } if *exact == context && *bytes == witness)));
+    sched.done(10, ExecDone::ControlWitnessBuilt(Ok(witness)));
+    assert!(sched.take_events().iter().any(|event| matches!(event, Event::ControlWitnessBuilt { req: 17, context: exact, witness: bytes } if *exact == context && *bytes == witness)));
 }
 
 #[test]
@@ -1149,7 +1148,7 @@ fn control_build_view_change_cancels_queued_and_running_retry() {
         ));
         sched.retain_control_context(Some((partial_context(1), 2)));
         let done = if success {
-            Ok((iroha_sumeragi::types::ControlWitness::empty(), false))
+            Ok(iroha_sumeragi::types::ControlWitness::empty())
         } else {
             Err(PublicationError::Retryable("awaiting old shares".into()))
         };
@@ -1186,7 +1185,7 @@ fn all_validator_control_waits_for_applied_parent_and_shares_do_not_starve_work(
     );
     sched.done(0, ExecDone::ApplicationControlDriven(Ok(Some(partial(2)))));
     assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 9, .. })));
-    sched.done(0, ExecDone::Built(Ok((None, false))));
+    sched.done(0, ExecDone::Built(Ok(None)));
     let Some(ExecOp::ReceiveApplicationControl {
         occurrence,
         from,
@@ -1327,10 +1326,9 @@ fn due_control_build_progresses_under_replenished_drive_and_partial_ingress() {
                 assert_eq!(exact, context);
                 sched.done(
                     0,
-                    ExecDone::ControlWitnessBuilt(Ok((
+                    ExecDone::ControlWitnessBuilt(Ok(
                         iroha_sumeragi::types::ControlWitness::empty(),
-                        false,
-                    ))),
+                    )),
                 );
             }
             other => panic!("control class starved a ready kind: {other:?}"),
@@ -1388,7 +1386,6 @@ fn successor_build_waits_for_core_parent_activation_and_keeps_empty_readiness() 
         vec![Event::PayloadBuilt {
             req: 77,
             payload: None,
-            attest: false
         }]
     );
     rig.sched.transactions_available();
@@ -1416,7 +1413,7 @@ fn successor_build_activation_preserves_arrival_and_rejects_another_height_or_vi
         assert_eq!(sched.wakeup(), Millis::MAX);
         sched.retain_control_context(Some((partial_context(2), 4)));
         assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 78, .. })));
-        sched.done(0, ExecDone::Built(Ok((None, false))));
+        sched.done(0, ExecDone::Built(Ok(None)));
         let events = sched.take_events();
         assert_eq!(
             events
@@ -1454,7 +1451,7 @@ fn activated_build_withdrawal_cancels_original_running_and_empty_owners() {
         sched.retain_control_context(Some((partial_context(2), 4)));
         assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 80, .. })));
         if empty_completed {
-            sched.done(0, ExecDone::Built(Ok((None, false))));
+            sched.done(0, ExecDone::Built(Ok(None)));
             assert!(matches!(
                 sched.take_events().as_slice(),
                 [Event::PayloadBuilt { req: 80, .. }]
@@ -1463,7 +1460,7 @@ fn activated_build_withdrawal_cancels_original_running_and_empty_owners() {
         sched.retain_control_context(None);
         sched.retain_control_context(Some((partial_context(2), 4)));
         if !empty_completed {
-            sched.done(0, ExecDone::Built(Ok((None, false))));
+            sched.done(0, ExecDone::Built(Ok(None)));
         }
         sched.transactions_available();
         assert!(

@@ -888,7 +888,6 @@ fn finality_chain_from_proofs(
         chain_id,
         &network_id,
         limits,
-        cursor.attestations(),
         cursor.allocation_budget(),
         |reader| {
             reader
@@ -1363,7 +1362,6 @@ async fn execute_rotation_preparation(
         target_epoch,
         preparation.transition_id().map_err(|error| eyre!(error))?,
         finality_limits(),
-        proof_cursor.attestations(),
         &credential_budget,
     )
     .wrap_err("native custody evidence was not independently authorized")?;

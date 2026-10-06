@@ -312,7 +312,6 @@ fn startup_history_retains_original_cold_kura_refusal_and_exact_retry() {
         Staging::new(),
         budget.clone(),
         schedule,
-        Arc::new(iroha_sumeragi::crypto::NoAttestation),
     );
     let assemble = || {
         assemble_init(

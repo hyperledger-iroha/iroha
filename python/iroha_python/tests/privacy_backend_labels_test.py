@@ -67,7 +67,7 @@ def test_each_sdk_registry_mirror_matches_the_exact_rust_owner(
         "pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1:",
         "];",
     )
-    assert len(canonical) == 8
+    assert len(canonical) == 7
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == canonical
     expected = (
         frozenset(label for label in canonical if label.startswith("pipa-r/"))
@@ -79,7 +79,6 @@ def test_each_sdk_registry_mirror_matches_the_exact_rust_owner(
 def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
     expected = frozenset(
         {
-            "halo2/ipa",
             "pipa-r/pasta",
             "pipa-r/pasta/kaigi-authorization-v1",
             "pipa-r/pasta/kaigi-usage-v1",
@@ -89,11 +88,10 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         }
     )
-    assert len(expected) == 8
+    assert len(expected) == 7
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
     for backend in expected:
-        expected_tag = ("halo2-ipa-pasta" if backend.startswith("halo2/")
-                        else "native-pipa-r-pasta" if backend.startswith("pipa-r/") else "stark")
+        expected_tag = ("native-pipa-r-pasta" if backend.startswith("pipa-r/") else "stark")
         assert _verifier_backend_registry_tag_v1(backend) == expected_tag
         assert _is_verifier_backend_registry_label_v1(backend)
         assert (
@@ -105,6 +103,7 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
 def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() -> None:
     unsupported = (
         "",
+        "halo2/ipa",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/kaigi-authorization-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",

@@ -16,7 +16,6 @@ final class VerifyingKeyRegistryJavaConsumerTest {
   @Test
   void canonicalRegistryIsExactAndImmutable() {
     final Set<String> expected = new LinkedHashSet<>(Arrays.asList(
-        "halo2/ipa",
         "pipa-r/pasta",
         "pipa-r/pasta/kaigi-authorization-v1",
         "pipa-r/pasta/kaigi-usage-v1",
@@ -24,13 +23,11 @@ final class VerifyingKeyRegistryJavaConsumerTest {
         "pipa-r/pasta/confidential-unshield-full-v1",
         "pipa-r/pasta/confidential-unshield-change-v1",
         "stark/fri/poseidon-x7-goldilocks-6x64-v1"));
-    assertEquals(8, expected.size());
+    assertEquals(7, expected.size());
     assertEquals(expected, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1);
     for (final String label : expected) {
       assertEquals(label, VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(label));
-      assertEquals(label.startsWith("halo2/")
-              ? VerifyingKeyBackendTag.HALO2_IPA_PASTA
-              : label.startsWith("pipa-r/") ? VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA
+      assertEquals(label.startsWith("pipa-r/") ? VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA
               : VerifyingKeyBackendTag.STARK,
           VerifyingKeyBackendTag.verifierBackendRegistryTagV1(label));
     }
@@ -41,6 +38,7 @@ final class VerifyingKeyRegistryJavaConsumerTest {
   @Test
   void retiredRosterAndUnsupportedFoldCannotBecomeVerifierProfiles() {
     for (final String label : Arrays.asList(
+        "halo2/ipa",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/kaigi-authorization-v1",
         "halo2/pasta/kaigi-usage-v1",

@@ -5,13 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Final, Literal
 
-VerifierBackendTag = Literal["halo2-ipa-pasta", "stark", "native-pipa-r-pasta"]
+VerifierBackendTag = Literal["native-pipa-r-pasta", "stark"]
 
-_HALO2_IPA_PASTA_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
-    {
-        "halo2/ipa",
-    }
-)
 _PIPA_R_PASTA_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
     {
         "pipa-r/pasta",
@@ -30,7 +25,7 @@ _STARK_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
 
 # Public within the package so parity tests can compare this exact closed set.
 _VERIFIER_BACKEND_REGISTRY_LABELS_V1: Final[frozenset[str]] = (
-    _HALO2_IPA_PASTA_REGISTRY_LABELS_V1 | _STARK_REGISTRY_LABELS_V1 | _PIPA_R_PASTA_REGISTRY_LABELS_V1
+    _STARK_REGISTRY_LABELS_V1 | _PIPA_R_PASTA_REGISTRY_LABELS_V1
 )
 _STARK_FRI_PRODUCTION_BACKEND_LABELS = _STARK_REGISTRY_LABELS_V1
 
@@ -119,8 +114,6 @@ def _verifier_backend_registry_tag_v1(value: Any) -> VerifierBackendTag | None:
 
     if not isinstance(value, str):
         return None
-    if value in _HALO2_IPA_PASTA_REGISTRY_LABELS_V1:
-        return "halo2-ipa-pasta"
     if value in _PIPA_R_PASTA_REGISTRY_LABELS_V1:
         return "native-pipa-r-pasta"
     if value in _STARK_REGISTRY_LABELS_V1:

@@ -230,15 +230,15 @@ fn historical_lane_authority_retains_original_creation_bytes_and_prepaid_config_
         super::super::lanes::lane_height_config(&record).unwrap()
     );
     assert_eq!(crypto.admitted_len(), record.committee.len());
-    // The returned original authority must verify ordinary certificates and reject flagged
-    // certificates through the same installed verifier, without replacing its retained owner.
+    // The original authority verifies exact BLS quorums and rejects a changed signature
+    // without replacing its retained schedule owner.
     {
         use crate::sumeragi::crypto::KeyPairSigner;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_model_base::peer::PeerId;
         use iroha_sumeragi::{
             crypto::{CertError, Crypto, Signer, Verifier},
-            message::{AttestationSignature, Qc, ResultWitness, VoteKind},
+            message::{Qc, VoteKind},
             types::{AggregateSignature, Bitmap, SIGNATURE_LEN},
         };
         let retained = budget.reserved_bytes();
@@ -259,11 +259,8 @@ fn historical_lane_authority_retains_original_creation_bytes_and_prepaid_config_
             view: 0,
             block_hash: Hash32([0x71; 32]),
             result: original.result(),
-            attest: false,
             signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap(),
             agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
-            attestations: Vec::new(),
-            attestation_witness: None,
         };
         let sign_qc = |qc: &mut Qc| {
             qc.agg_sig = crypto.aggregate(
@@ -276,19 +273,9 @@ fn historical_lane_authority_retains_original_creation_bytes_and_prepaid_config_
         let epoch = qc.epoch;
         let verifier = Verifier::new(&*crypto, &instance, &epoch, &config.committee);
         sign_qc(&mut qc);
-        verifier.verify_qc(&*owner.verifier, &qc).unwrap();
-        qc.attest = true;
-        qc.attestations = vec![AttestationSignature::try_from_slice(&[0x42]).unwrap(); 3];
-        qc.attestation_witness = Some(
-            ResultWitness::from_untrusted(norito::encode_canonical(original.commitment()).unwrap())
-                .unwrap(),
-        );
-        sign_qc(&mut qc);
-        verifier.verify_qc_signatures(&qc).unwrap();
-        assert_eq!(
-            verifier.verify_qc(&*owner.verifier, &qc),
-            Err(CertError::BadAttestation)
-        );
+        verifier.verify_qc(&qc).unwrap();
+        qc.agg_sig.0[0] ^= 1;
+        assert_eq!(verifier.verify_qc(&qc), Err(CertError::BadSignature));
         assert_eq!(owner.schedule.height_config(1).unwrap(), Some(config));
         assert_eq!(chain.state().view().native_execution_tip(), original_tip);
         assert_eq!(budget.reserved_bytes(), retained);

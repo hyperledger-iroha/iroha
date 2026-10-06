@@ -885,10 +885,10 @@ function createLaneBlockSession(overrides = {}) {
 function sampleVerifyingKeyRegisterPayload() {
   return {
     authority: SAMPLE_ACCOUNT_ID,
-    backend: "halo2/ipa",
+    backend: "pipa-r/pasta",
     name: "vk_main",
     version: 1,
-    circuit_id: "halo2/ipa::transfer_v1",
+    circuit_id: "pipa-r/pasta::transfer_v1",
     public_inputs_schema_hash_hex: "11".repeat(32),
     gas_schedule_id: "default",
     vk_bytes: Buffer.from("abc"),
@@ -954,7 +954,7 @@ function verifyingKeyInstructionForRequest(
           namespace: "core",
           backend: request.backend.startsWith("stark/")
             ? "stark"
-            : "halo2-ipa-pasta",
+            : "native-pipa-r-pasta",
           curve: request.curve ?? "unknown",
           public_inputs_schema_hash: Array.from(
             Buffer.from(request.public_inputs_schema_hash_hex, "hex"),
