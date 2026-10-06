@@ -12248,16 +12248,6 @@ fn verify_committed_transaction_inclusion_py(
             .map_err(|error| PyValueError::new_err(error.to_string()))?,
     );
     execution_json.insert(
-        "kagemusha_top_up_root".into(),
-        json::to_value(&execution_commitment.kagemusha_top_up_root)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?,
-    );
-    execution_json.insert(
-        "kagemusha_top_up_count".into(),
-        json::to_value(&execution_commitment.kagemusha_top_up_count)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?,
-    );
-    execution_json.insert(
         "executed_block_wire_len".into(),
         json::to_value(&execution_commitment.executed_block_wire_len)
             .map_err(|error| PyValueError::new_err(error.to_string()))?,

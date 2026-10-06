@@ -171,6 +171,7 @@ struct CallbackState {
     retained: AtomicUsize,
     released: AtomicUsize,
     calls: AtomicUsize,
+    invocations: Mutex<Vec<(u32, Vec<u8>, usize)>>,
     answer: Mutex<(PlatformReply, Vec<u8>)>,
 }
 unsafe extern "C" fn retain(pointer: *mut std::ffi::c_void) {
@@ -185,10 +186,10 @@ unsafe extern "C" fn release(pointer: *mut std::ffi::c_void) {
 }
 unsafe extern "C" fn invoke(
     pointer: *mut std::ffi::c_void,
-    _: u32,
+    operation: u32,
     _: *const u8,
-    _: *const u8,
-    _: usize,
+    input: *const u8,
+    input_length: usize,
     _: u32,
     output: *mut u8,
     capacity: usize,
@@ -196,6 +197,11 @@ unsafe extern "C" fn invoke(
 ) {
     let state = unsafe { &*pointer.cast::<CallbackState>() };
     state.calls.fetch_add(1, Ordering::SeqCst);
+    state.invocations.lock().unwrap().push((
+        operation,
+        unsafe { std::slice::from_raw_parts(input, input_length) }.to_vec(),
+        capacity,
+    ));
     let answer = state.answer.lock().unwrap();
     if answer.1.len() <= capacity {
         unsafe { std::ptr::copy_nonoverlapping(answer.1.as_ptr(), output, answer.1.len()) };
@@ -285,6 +291,62 @@ fn callback_tri_state_bounds_anchor_policy_and_lifetime_are_explicit() {
     invalid.anchor_policy = 0;
     assert!(unsafe { CallbackPlatform::new(invalid) }.is_err());
     assert_eq!(state.retained.load(Ordering::SeqCst), 1);
+}
+#[test]
+fn callback_anchor_bounds_forward_canonical_max_and_reject_oversized_inputs() {
+    use advance::{
+        KAGEMUSHA_WALLET_ANCHOR_MAX_BYTES_V1 as MAX, KagemushaWalletNotPublishedV1 as NotPublished,
+        KagemushaWalletPublishOutcomeV1 as Publish,
+    };
+
+    let state = CallbackState::default();
+    let adapter = unsafe { CallbackPlatform::new(callbacks(&state)) }.unwrap();
+    let slot = advance::KagemushaWalletSlotIdV1([7; 32]);
+    let anchor = vec![0xa5; MAX];
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 0,
+            ..PlatformReply::default()
+        },
+        vec![],
+    );
+
+    assert_eq!(adapter.anchor_create(&slot, &anchor), Publish::Published);
+    assert_eq!(adapter.anchor_update(&slot, &anchor), Publish::Published);
+    assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        *state.invocations.lock().unwrap(),
+        [(5, anchor.clone(), 0), (6, anchor.clone(), 0)]
+    );
+
+    let oversized = vec![0xa5; MAX + 1];
+    let rejected = Publish::NotPublished(NotPublished::Failed(U::Platform(0)));
+    assert_eq!(adapter.anchor_create(&slot, &oversized), rejected);
+    assert_eq!(adapter.anchor_update(&slot, &oversized), rejected);
+    assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(state.invocations.lock().unwrap().len(), 2);
+
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 0,
+            length: MAX,
+            ..PlatformReply::default()
+        },
+        anchor.clone(),
+    );
+    assert_eq!(adapter.anchor_read(&slot), Probe::Present(anchor.clone()));
+    assert_eq!(state.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        state.invocations.lock().unwrap().last(),
+        Some(&(4, vec![], MAX))
+    );
+
+    state.answer.lock().unwrap().0.length = MAX + 1;
+    assert_eq!(
+        adapter.anchor_read(&slot),
+        Probe::Unavailable(U::Platform(0))
+    );
+    assert_eq!(state.calls.load(Ordering::SeqCst), 4);
 }
 #[test]
 fn foreign_open_has_no_custody_side_effect_or_proof_verdict_fallback() {

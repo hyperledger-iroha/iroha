@@ -5,6 +5,8 @@
 //! queue can expose the actual Nexus assignments instead of single-lane
 //! placeholders.
 mod payload_leases;
+mod resident_owner;
+use resident_owner::{QueueResidentLedger, QueuedTransaction};
 mod router;
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
@@ -431,14 +433,12 @@ pub struct Queue {
     /// The queue for transactions
     tx_hashes: ArrayQueue<EntrypointHash>,
     /// Accepted transactions addressed by `Hash`.
-    /// Stored behind `Arc` to avoid deep cloning heavy transactions
-    /// (including instruction payloads) during queue operations.
-    txs: DashMap<EntrypointHash, Arc<CheckedTransaction<'static>>>,
+    /// Its exact shared control is prepaid from the original State pool and retains
+    /// resident admission credit through its final original reader.
+    txs: DashMap<EntrypointHash, QueuedTransaction>,
     /// Admission keys of every queued fee-exempt SCCP transaction (`specs/sccp.md` §4.19),
     /// maintained atomically with `txs` under `push_remove_lock`.
     pending_sccp_exempt: parking_lot::Mutex<SccpPendingIndexV1>,
-    /// Cached count of transactions tracked by `txs`.
-    active_count: AtomicUsize,
     /// Authoritative cached routing plan per entrypoint hash.
     routing_plans: DashMap<EntrypointHash, RoutingPlan>,
     /// Cached encoded length per queued transaction hash.
@@ -454,8 +454,6 @@ pub struct Queue {
     queued_age_ring: parking_lot::Mutex<VecDeque<(EntrypointHash, u64)>>,
     /// Local leader sampling position. This is never part of proposal validity.
     pending_scan_cursor: parking_lot::Mutex<BoundedPendingScanCursor>,
-    /// Cached count of hashes still waiting in `tx_hashes`.
-    queued_count: AtomicUsize,
     /// Live sponsor-program capacity holds keyed by canonical entrypoint hash.
     fee_admission_reservations: parking_lot::Mutex<FeeAdmissionReservationStore>,
     /// Sticky process-lifetime fault when accepted work exposes internally inconsistent immutable
@@ -481,8 +479,11 @@ pub struct Queue {
     capacity_per_user: NonZeroUsize,
     /// Estimated maximum retained queue memory budget in bytes.
     max_retained_bytes: NonZeroU64,
-    /// Estimated retained memory for transactions currently tracked by the queue.
-    retained_bytes: AtomicU64,
+    /// Original State-funded counters retained through the last shared accepted owner.
+    resident_accounting: OnceLock<iroha_allocation::ChargedShared<QueueResidentLedger>>,
+    /// Preserve the existing test-only override before its first real State admission.
+    #[cfg(test)]
+    retained_bytes_before_admission: AtomicU64,
     /// The time source used to check transaction against
     ///
     /// A mock time source is used in tests for determinism
@@ -913,11 +914,11 @@ impl FeeAdmissionReservationStore {
 
 struct QueueAdmissionNotification {
     hash: EntrypointHash,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    _entrypoint_hash: HashOf<TransactionEntrypoint>,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
-    enqueue_timestamp_ms: u64,
-    routing_plan: RoutingPlan,
+    _enqueue_timestamp_ms: u64,
+    _routing_plan: RoutingPlan,
     signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
 }
 
@@ -1246,7 +1247,7 @@ impl Queue {
         &self,
         hash: EntrypointHash,
         telemetry: Option<&StateTelemetry>,
-    ) -> Option<Arc<CheckedTransaction<'static>>> {
+    ) -> Option<QueuedTransaction> {
         let removed = self.txs.remove(&hash).map(|(_, tx)| tx);
         if removed.is_some() {
             self.advance_pending_ownership_generation(hash);
@@ -1254,6 +1255,16 @@ impl Queue {
         self.remove_pending_sccp_exempt_locked(hash);
         self.fee_admission_reservations.lock().release(&hash);
         self.routing_plans.remove(&hash);
+        #[cfg(all(test, sumeragi_core_mutation = "HC137"))]
+        if removed.is_some()
+            && let Some(len) = self.tx_encoded_len.get(&hash)
+        {
+            self.resident_accounting
+                .get()
+                .expect("original resident owner")
+                .retained_bytes
+                .fetch_sub(Self::retained_byte_cost(*len), Ordering::Relaxed);
+        }
         self.remove_tx_encoded_len(&hash);
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
@@ -1296,29 +1307,37 @@ impl Queue {
         hashes: impl IntoIterator<Item = EntrypointHash>,
         telemetry: Option<&StateTelemetry>,
     ) -> usize {
-        let guard = self.push_remove_lock.lock();
-        let mut removed = 0;
-        for hash in hashes {
-            removed += usize::from(self.remove_pending_hash_locked(hash, telemetry).is_some());
-        }
-        if removed > 0 {
-            self.compact_hash_queue_locked();
-        }
-        drop(guard);
-        self.publish_backpressure_state(self.active_len(), telemetry);
-        removed
+        self.with_resident_refunds(
+            || {
+                let mut removed = 0;
+                for hash in hashes {
+                    removed +=
+                        usize::from(self.remove_pending_hash_locked(hash, telemetry).is_some());
+                }
+                if removed > 0 {
+                    self.compact_hash_queue_locked();
+                }
+                removed
+            },
+            |removed| {
+                self.publish_backpressure_state(self.active_len(), telemetry);
+                removed
+            },
+        )
     }
     /// Clear local pending inputs and gossip when this node stops accepting work.
     pub fn clear_all(&self) {
-        let guard = self.push_remove_lock.lock();
-        let hashes = self.txs.iter().map(|row| *row.key()).collect::<Vec<_>>();
-        for hash in hashes {
-            self.remove_pending_hash_locked(hash, None);
-        }
-        self.compact_hash_queue_locked();
-        while self.tx_gossip.pop().is_some() {}
-        drop(guard);
-        self.publish_backpressure_state(self.active_len(), None);
+        self.with_resident_refunds(
+            || {
+                let hashes = self.txs.iter().map(|row| *row.key()).collect::<Vec<_>>();
+                for hash in hashes {
+                    self.remove_pending_hash_locked(hash, None);
+                }
+                self.compact_hash_queue_locked();
+                while self.tx_gossip.pop().is_some() {}
+            },
+            |()| self.publish_backpressure_state(self.active_len(), None),
+        )
     }
 
     /// Admit an ordered batch, reporting the first failure after publishing its accepted prefix.
@@ -1345,7 +1364,9 @@ impl Queue {
     }
     /// Number of locally pending signed inputs.
     pub fn active_len(&self) -> usize {
-        self.active_count.load(Ordering::Relaxed)
+        self.resident_accounting
+            .get()
+            .map_or(0, |ledger| ledger.active_count.load(Ordering::Relaxed))
     }
     /// Whether local admission must wait for recovery of its original index owner.
     pub fn admission_faulted(&self) -> bool {
@@ -1456,36 +1477,11 @@ impl Queue {
             .unwrap_or(u64::MAX)
             .saturating_mul(TX_RETAINED_OVERHEAD_BYTES)
     }
-    fn track_retained_bytes(&self, encoded_len: usize) {
-        self.retained_bytes
-            .fetch_add(Self::retained_byte_cost(encoded_len), Ordering::Relaxed);
-    }
-    fn untrack_retained_bytes(&self, encoded_len: usize) {
-        let cost = Self::retained_byte_cost(encoded_len);
-        let mut current = self.retained_bytes.load(Ordering::Relaxed);
-        loop {
-            let next = current.saturating_sub(cost);
-            match self.retained_bytes.compare_exchange_weak(
-                current,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(observed) => current = observed,
-            }
-        }
-    }
     fn insert_tx_encoded_len(&self, hash: EntrypointHash, encoded_len: usize) {
-        if let Some(old_len) = self.tx_encoded_len.insert(hash, encoded_len) {
-            self.untrack_retained_bytes(old_len);
-        }
-        self.track_retained_bytes(encoded_len);
+        self.tx_encoded_len.insert(hash, encoded_len);
     }
     fn remove_tx_encoded_len(&self, hash: &EntrypointHash) {
-        if let Some((_, encoded_len)) = self.tx_encoded_len.remove(hash) {
-            self.untrack_retained_bytes(encoded_len);
-        }
+        self.tx_encoded_len.remove(hash);
     }
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
         tx.entrypoint_bytes()
@@ -2459,7 +2455,6 @@ impl Queue {
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
                 pending_sccp_exempt: parking_lot::Mutex::new(SccpPendingIndexV1::default()),
-                active_count: AtomicUsize::new(0),
                 txs_per_user: DashMap::new(),
                 routing_plans: DashMap::new(),
                 tx_encoded_len: DashMap::new(),
@@ -2468,7 +2463,6 @@ impl Queue {
                 queued_tx_enqueued_at_ms: DashMap::new(),
                 queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
                 pending_scan_cursor: parking_lot::Mutex::new(BoundedPendingScanCursor::default()),
-                queued_count: AtomicUsize::new(0),
                 fee_admission_reservations: parking_lot::Mutex::new(
                     FeeAdmissionReservationStore::default(),
                 ),
@@ -2482,7 +2476,9 @@ impl Queue {
                 capacity,
                 capacity_per_user,
                 max_retained_bytes,
-                retained_bytes: AtomicU64::new(0),
+                resident_accounting: OnceLock::new(),
+                #[cfg(test)]
+                retained_bytes_before_admission: AtomicU64::new(0),
                 time_source: TimeSource::new_system(),
                 tx_time_to_live: transaction_time_to_live,
                 expired_cull_interval,
@@ -2830,7 +2826,7 @@ impl Queue {
         let tracked = self
             .txs
             .iter()
-            .map(|entry| Arc::clone(entry.value()))
+            .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
         let mut pending = Vec::new();
         let mut pending_status_fault = None;
@@ -2919,7 +2915,7 @@ impl Queue {
                             tx.as_accepted().entrypoint(),
                         ),
                     )
-                    .then(|| Arc::clone(tx.value()))
+                    .then(|| tx.value().clone())
             })
             .collect::<Vec<_>>();
         cursor.next_index = start.saturating_add(remaining).min(age_ring.len());
@@ -2988,7 +2984,7 @@ impl Queue {
             let Some(hash) = self.tx_gossip.pop() else {
                 break;
             };
-            let Some(tx_arc) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
+            let Some(tx_arc) = self.txs.get(&hash).map(|entry| entry.value().clone()) else {
                 // NOTE: Transaction already in the blockchain
                 continue;
             };
@@ -3213,7 +3209,7 @@ impl Queue {
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let hash = tx.hash_as_entrypoint();
-        if let Some(tracked) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
+        if let Some(tracked) = self.txs.get(&hash).map(|entry| entry.value().clone()) {
             let exact_owner = tracked.as_accepted().entrypoint() == tx.entrypoint()
                 && tracked.as_accepted().hash_as_entrypoint() == tx.hash_as_entrypoint()
                 && crate::tx::exact_signed_transaction_hash(tracked.as_accepted().entrypoint())
@@ -3460,7 +3456,8 @@ impl Queue {
         let telemetry = Some(view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let telemetry = None;
-        match self.enqueue_prepared_admissions(vec![prepared], telemetry) {
+        match self.enqueue_prepared_admissions(vec![prepared], telemetry, &view.execution_budget())
+        {
             Ok(notifications) => {
                 self.publish_admission_notifications(&notifications);
                 Ok(route)
@@ -3929,120 +3926,160 @@ impl Queue {
         &self,
         prepared: Vec<PreparedQueueAdmission>,
         telemetry: Option<&StateTelemetry>,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Vec<QueueAdmissionNotification>, (Vec<QueueAdmissionNotification>, Failure)> {
-        let mut notifications = Vec::with_capacity(prepared.len());
-        for admission in prepared {
-            let PreparedQueueAdmission {
-                checked,
-                hash,
-                sccp_exempt,
-                routing_decision,
-                routing_plan,
-                encoded_len,
-                proposal_gas_cost,
-                enqueued_at_ms,
-                fee_reservation,
+        budget.with_deferred_refund_notifications(|_| {
+            let mut notifications = Vec::with_capacity(prepared.len());
+            for admission in prepared {
+                let PreparedQueueAdmission {
+                    checked,
+                    hash,
+                    sccp_exempt,
+                    routing_decision,
+                    routing_plan,
+                    encoded_len,
+                    proposal_gas_cost,
+                    enqueued_at_ms,
+                    fee_reservation,
+                    #[cfg(feature = "telemetry")]
+                    pending_teu,
+                } = admission;
+                let ledger = {
+                    let _initialization = self.push_remove_lock.lock();
+                    if let Err(err) = self.check_startup_admission() {
+                        return Err((
+                            notifications,
+                            Failure {
+                                tx: checked.into_accepted().into(),
+                                err,
+                            },
+                        ));
+                    }
+                    match self.resident_ledger(budget) {
+                        Ok(ledger) => ledger,
+                        Err(err) => {
+                            return Err((
+                                notifications,
+                                Failure {
+                                    tx: checked.into_accepted().into(),
+                                    err,
+                                },
+                            ));
+                        }
+                    }
+                };
+                let _resident_mutation = ledger.mutation();
+                let guard = self.push_remove_lock.lock();
+                let fail = |err| Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err,
+                };
+                if let Err(err) = self.check_startup_admission() {
+                    return Err((notifications, fail(err)));
+                }
+                if self.txs.contains_key(&hash) {
+                    return Err((notifications, fail(Error::IsInQueue)));
+                }
+                if self.is_expired(checked.as_accepted()) {
+                    return Err((notifications, fail(Error::Expired)));
+                }
+                if self.active_len() >= self.capacity.get()
+                    || self
+                        .retained_bytes()
+                        .saturating_add(Self::retained_byte_cost(encoded_len))
+                        > self.max_retained_bytes.get()
+                {
+                    return Err((notifications, fail(Error::Full)));
+                }
+                let authority = checked.as_ref().authority_opt().cloned();
+                if authority.as_ref().is_some_and(|id| {
+                    self.queued_tx_count_for_user(id) >= self.capacity_per_user.get()
+                }) {
+                    return Err((notifications, fail(Error::MaximumTransactionsPerUser)));
+                }
+                if let Some(keys) = sccp_exempt.as_ref()
+                    && let Err(error) = self.pending_sccp_exempt.lock().validate_claim(&hash, keys)
+                {
+                    return Err((notifications, fail(Self::sccp_pending_claim_error(error))));
+                }
+                if self.tx_hashes.is_full() {
+                    self.compact_hash_queue_locked();
+                }
+                if self.tx_hashes.is_full() {
+                    return Err((notifications, fail(Error::Full)));
+                }
+                let original_shell = match QueuedTransaction::reserve(ledger, encoded_len) {
+                    Ok(shell) => shell,
+                    Err(err) => {
+                        return Err((
+                            notifications,
+                            Failure {
+                                tx: checked.into_accepted().into(),
+                                err,
+                            },
+                        ));
+                    }
+                };
+                if let Some(hold) = fee_reservation
+                    && let Err(err) = self.fee_admission_reservations.lock().reserve(hash, hold)
+                {
+                    return Err((notifications, fail(err)));
+                }
+                // Every fallible policy/capacity decision precedes the original index publication.
+                if !self.push_queued_hash(hash, enqueued_at_ms) {
+                    self.fee_admission_reservations.lock().release(&hash);
+                    return Err((
+                        notifications,
+                        fail(Error::AdmissionInvariant {
+                            reason: "FIFO capacity changed under its mutation lock".to_owned(),
+                        }),
+                    ));
+                }
+                if let Some(keys) = sccp_exempt {
+                    self.pending_sccp_exempt
+                        .lock()
+                        .claim(hash, keys)
+                        .expect("exact SCCP claim validated under original mutation lock");
+                }
+                let signed_transaction_hash =
+                    crate::tx::exact_signed_transaction_hash(checked.as_accepted().entrypoint());
+                self.txs
+                    .insert(hash, QueuedTransaction::initialize(original_shell, checked));
+                self.advance_pending_ownership_generation(hash);
+                self.track_active_transaction();
+                self.routing_plans.insert(hash, routing_plan.clone());
+                self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+                self.insert_tx_encoded_len(hash, encoded_len);
+                self.tx_gas_cost.insert(hash, proposal_gas_cost);
+                self.track_expiry_hash(hash);
+                if let Some(authority) = authority {
+                    self.apply_per_user_tx_count_increments(HashMap::from([(authority, 1)]));
+                }
                 #[cfg(feature = "telemetry")]
-                pending_teu,
-            } = admission;
-            let guard = self.push_remove_lock.lock();
-            let fail = |err| Failure {
-                tx: checked.as_accepted().clone().into(),
-                err,
-            };
-            if let Err(err) = self.check_startup_admission() {
-                return Err((notifications, fail(err)));
-            }
-            if self.txs.contains_key(&hash) {
-                return Err((notifications, fail(Error::IsInQueue)));
-            }
-            if self.is_expired(checked.as_accepted()) {
-                return Err((notifications, fail(Error::Expired)));
-            }
-            if self.active_len() >= self.capacity.get()
-                || self
-                    .retained_bytes()
-                    .saturating_add(Self::retained_byte_cost(encoded_len))
-                    > self.max_retained_bytes.get()
-            {
-                return Err((notifications, fail(Error::Full)));
-            }
-            let authority = checked.as_ref().authority_opt().cloned();
-            if authority
-                .as_ref()
-                .is_some_and(|id| self.queued_tx_count_for_user(id) >= self.capacity_per_user.get())
-            {
-                return Err((notifications, fail(Error::MaximumTransactionsPerUser)));
-            }
-            if let Some(keys) = sccp_exempt.as_ref()
-                && let Err(error) = self.pending_sccp_exempt.lock().validate_claim(&hash, keys)
-            {
-                return Err((notifications, fail(Self::sccp_pending_claim_error(error))));
-            }
-            if self.tx_hashes.is_full() {
-                self.compact_hash_queue_locked();
-            }
-            if self.tx_hashes.is_full() {
-                return Err((notifications, fail(Error::Full)));
-            }
-            if let Some(hold) = fee_reservation
-                && let Err(err) = self.fee_admission_reservations.lock().reserve(hash, hold)
-            {
-                return Err((notifications, fail(err)));
-            }
-            // Every fallible policy/capacity decision precedes the original index publication.
-            if !self.push_queued_hash(hash, enqueued_at_ms) {
-                self.fee_admission_reservations.lock().release(&hash);
-                return Err((
-                    notifications,
-                    fail(Error::AdmissionInvariant {
-                        reason: "FIFO capacity changed under its mutation lock".to_owned(),
-                    }),
-                ));
-            }
-            if let Some(keys) = sccp_exempt {
-                self.pending_sccp_exempt
-                    .lock()
-                    .claim(hash, keys)
-                    .expect("exact SCCP claim validated under original mutation lock");
-            }
-            let signed_transaction_hash =
-                crate::tx::exact_signed_transaction_hash(checked.as_accepted().entrypoint());
-            self.txs.insert(hash, Arc::new(checked));
-            self.advance_pending_ownership_generation(hash);
-            self.track_active_transaction();
-            self.routing_plans.insert(hash, routing_plan.clone());
-            self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
-            self.insert_tx_encoded_len(hash, encoded_len);
-            self.tx_gas_cost.insert(hash, proposal_gas_cost);
-            self.track_expiry_hash(hash);
-            if let Some(authority) = authority {
-                self.apply_per_user_tx_count_increments(HashMap::from([(authority, 1)]));
-            }
-            #[cfg(feature = "telemetry")]
-            self.record_teu_enqueue_locked(
-                hash,
-                TxTeuInfo {
+                self.record_teu_enqueue_locked(
+                    hash,
+                    TxTeuInfo {
+                        lane_id: routing_decision.lane_id,
+                        dataspace_id: routing_decision.dataspace_id,
+                        teu: pending_teu,
+                    },
+                );
+                notifications.push(QueueAdmissionNotification {
+                    hash,
+                    _entrypoint_hash: hash,
                     lane_id: routing_decision.lane_id,
                     dataspace_id: routing_decision.dataspace_id,
-                    teu: pending_teu,
-                },
-            );
-            notifications.push(QueueAdmissionNotification {
-                hash,
-                entrypoint_hash: hash,
-                lane_id: routing_decision.lane_id,
-                dataspace_id: routing_decision.dataspace_id,
-                enqueue_timestamp_ms: enqueued_at_ms,
-                routing_plan,
-                signed_transaction_hash,
-            });
-            drop(guard);
-        }
-        #[cfg(feature = "telemetry")]
-        self.publish_teu_backlog_metrics(telemetry);
-        self.publish_backpressure_state(self.active_len(), telemetry);
-        Ok(notifications)
+                    _enqueue_timestamp_ms: enqueued_at_ms,
+                    _routing_plan: routing_plan,
+                    signed_transaction_hash,
+                });
+                drop(guard);
+            }
+            #[cfg(feature = "telemetry")]
+            self.publish_teu_backlog_metrics(telemetry);
+            self.publish_backpressure_state(self.active_len(), telemetry);
+            Ok(notifications)
+        })
     }
     fn publish_admission_notifications(&self, notifications: &[QueueAdmissionNotification]) {
         if notifications.is_empty() {
@@ -4221,29 +4258,67 @@ impl Queue {
         if self.tx_hashes.is_empty() {
             return 0;
         }
-        self.queued_count.load(Ordering::Relaxed)
+        self.resident_accounting
+            .get()
+            .map_or(0, |ledger| ledger.queued_count.load(Ordering::Relaxed))
     }
-    /// Estimated retained bytes of locally pending inputs and their indexes.
+    /// Estimated residence of original accepted owners, including detached last readers.
+    /// Nested decoded graph allocations remain a separate physical-funding boundary.
     pub fn retained_bytes(&self) -> u64 {
-        self.retained_bytes.load(Ordering::Relaxed)
+        if let Some(ledger) = self.resident_accounting.get() {
+            return ledger.retained_bytes.load(Ordering::Relaxed);
+        }
+        #[cfg(test)]
+        return self.retained_bytes_before_admission.load(Ordering::Relaxed);
+        #[cfg(not(test))]
+        0
     }
     /// Override retained-byte accounting in tests and return the resulting pressure snapshot.
     #[cfg(test)]
     pub fn set_retained_bytes_for_tests(&self, retained_bytes: u64) -> QueuePressureSnapshot {
-        self.retained_bytes.store(retained_bytes, Ordering::Relaxed);
+        if let Some(ledger) = self.resident_accounting.get() {
+            ledger
+                .retained_bytes
+                .store(retained_bytes, Ordering::Relaxed);
+        } else {
+            self.retained_bytes_before_admission
+                .store(retained_bytes, Ordering::Relaxed);
+        }
         self.pressure_snapshot()
     }
     fn track_active_transaction(&self) {
-        self.active_count.fetch_add(1, Ordering::Relaxed);
+        self.resident_accounting
+            .get()
+            .expect("admitted original resident ledger")
+            .active_count
+            .fetch_add(1, Ordering::Relaxed);
     }
     fn untrack_active_transaction(&self) {
-        Self::decrement_atomic_count(&self.active_count, "active transaction");
+        Self::decrement_atomic_count(
+            &self
+                .resident_accounting
+                .get()
+                .expect("admitted original resident ledger")
+                .active_count,
+            "active transaction",
+        );
     }
     fn track_queued_hash(&self) {
-        self.queued_count.fetch_add(1, Ordering::Relaxed);
+        self.resident_accounting
+            .get()
+            .expect("admitted original resident ledger")
+            .queued_count
+            .fetch_add(1, Ordering::Relaxed);
     }
     fn untrack_queued_hash(&self) {
-        Self::decrement_atomic_count(&self.queued_count, "queued transaction");
+        Self::decrement_atomic_count(
+            &self
+                .resident_accounting
+                .get()
+                .expect("admitted original resident ledger")
+                .queued_count,
+            "queued transaction",
+        );
     }
     #[cfg(test)]
     fn assert_pressure_counters_consistent_for_tests(&self) {
@@ -4253,7 +4328,9 @@ impl Queue {
             "active transaction counter must match tracked transactions"
         );
         assert_eq!(
-            self.queued_count.load(Ordering::Relaxed),
+            self.resident_accounting
+                .get()
+                .map_or(0, |ledger| ledger.queued_count.load(Ordering::Relaxed)),
             self.queued_tx_enqueued_at_ms.len(),
             "queued transaction counter must match queued-age index"
         );
@@ -4368,7 +4445,9 @@ impl Queue {
         self.queued_tx_enqueued_at_ms.clear();
         age_ring.clear();
         self.pending_scan_cursor.lock().next_index = 0;
-        self.queued_count.store(0, Ordering::Relaxed);
+        if let Some(ledger) = self.resident_accounting.get() {
+            ledger.queued_count.store(0, Ordering::Relaxed);
+        }
     }
     fn oldest_queued_tx_age_ms(&self) -> u64 {
         let mut ring = self.queued_age_ring.lock();
@@ -4417,7 +4496,9 @@ impl Queue {
             age_entries.push((hash, enqueued_at_ms));
         }
         age_ring.extend(age_entries);
-        self.queued_count.store(inserted, Ordering::Relaxed);
+        if let Some(ledger) = self.resident_accounting.get() {
+            ledger.queued_count.store(inserted, Ordering::Relaxed);
+        }
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = EntrypointHash>) {
@@ -4458,15 +4539,23 @@ impl Queue {
         telemetry: Option<&StateTelemetry>,
     ) -> BackpressureState {
         let snapshot = self.pressure_snapshot_with_tracked_count(tracked_tx_count);
-        let state = snapshot.into_backpressure();
-        let _ = self.backpressure_tx.send_if_modified(|current| {
-            if *current == state {
-                false
-            } else {
-                *current = state;
-                true
-            }
-        });
+        let state = if let Some(ledger) = self.resident_accounting.get() {
+            ledger
+                .faulted
+                .store(self.admission_faulted(), Ordering::Release);
+            ledger.publish_backpressure()
+        } else {
+            let state = snapshot.into_backpressure();
+            let _ = self.backpressure_tx.send_if_modified(|current| {
+                if *current == state {
+                    false
+                } else {
+                    *current = state;
+                    true
+                }
+            });
+            state
+        };
         #[cfg(feature = "telemetry")]
         if let Some(tel) = telemetry {
             crate::telemetry::record_state_tx_queue_backpressure(
@@ -4486,62 +4575,67 @@ impl Queue {
         state
     }
     fn cull_expired_entries(&self, now: Duration) -> usize {
-        let guard = self.push_remove_lock.lock();
-        let mut expired = Vec::new();
-        let mut ring = self.expiry_ring.lock();
-        let max_scan = self.expired_cull_batch.get().min(ring.len());
-        for _ in 0..max_scan {
-            let Some(hash) = ring.pop_front() else {
-                break;
-            };
-            if !self.expiry_ring_members.contains_key(&hash) {
-                continue;
-            }
-            let Some(tx) = self.txs.get(&hash) else {
-                self.expiry_ring_members.remove(&hash);
-                continue;
-            };
-            if self.is_expired_at(tx.as_accepted(), now) {
-                expired.push(hash);
-            } else {
-                ring.push_back(hash);
-            }
-        }
-        drop(ring);
-        let mut notifications = Vec::new();
-        let mut removed = 0;
-        for hash in expired {
-            let route = self
-                .routing_plans
-                .get(&hash)
-                .map(|plan| plan.coordinator_route());
-            if let Some(tx) = self.remove_pending_hash_locked(hash, None) {
-                removed += 1;
-                if let (Some(route), Some(hash)) = (
-                    route,
-                    crate::tx::exact_signed_transaction_hash(tx.as_accepted().entrypoint()),
-                ) {
-                    notifications.push(TransactionEvent {
-                        hash,
-                        block_height: None,
-                        lane_id: route.lane_id,
-                        dataspace_id: route.dataspace_id,
-                        status: TransactionStatus::Expired,
-                    });
+        self.with_resident_refunds(
+            || {
+                let mut expired = Vec::new();
+                let mut ring = self.expiry_ring.lock();
+                let max_scan = self.expired_cull_batch.get().min(ring.len());
+                for _ in 0..max_scan {
+                    let Some(hash) = ring.pop_front() else {
+                        break;
+                    };
+                    if !self.expiry_ring_members.contains_key(&hash) {
+                        continue;
+                    }
+                    let Some(tx) = self.txs.get(&hash) else {
+                        self.expiry_ring_members.remove(&hash);
+                        continue;
+                    };
+                    if self.is_expired_at(tx.as_accepted(), now) {
+                        expired.push(hash);
+                    } else {
+                        ring.push_back(hash);
+                    }
                 }
-            }
-        }
-        if removed > 0 {
-            self.compact_hash_queue_locked();
-        }
-        drop(guard);
-        for event in notifications {
-            let _ = self.events_sender.send(event.into());
-        }
-        if removed > 0 {
-            self.publish_backpressure_state(self.active_len(), None);
-        }
-        removed
+                drop(ring);
+                let mut notifications = Vec::new();
+                let mut removed = 0;
+                for hash in expired {
+                    let route = self
+                        .routing_plans
+                        .get(&hash)
+                        .map(|plan| plan.coordinator_route());
+                    if let Some(tx) = self.remove_pending_hash_locked(hash, None) {
+                        removed += 1;
+                        if let (Some(route), Some(hash)) = (
+                            route,
+                            crate::tx::exact_signed_transaction_hash(tx.as_accepted().entrypoint()),
+                        ) {
+                            notifications.push(TransactionEvent {
+                                hash,
+                                block_height: None,
+                                lane_id: route.lane_id,
+                                dataspace_id: route.dataspace_id,
+                                status: TransactionStatus::Expired,
+                            });
+                        }
+                    }
+                }
+                if removed > 0 {
+                    self.compact_hash_queue_locked();
+                }
+                (removed, notifications)
+            },
+            |(removed, notifications)| {
+                for event in notifications {
+                    let _ = self.events_sender.send(event.into());
+                }
+                if removed > 0 {
+                    self.publish_backpressure_state(self.active_len(), None);
+                }
+                removed
+            },
+        )
     }
     fn compact_hash_queue_locked(&self) -> usize {
         let mut age_ring = self.queued_age_ring.lock();
@@ -4853,66 +4947,77 @@ impl Queue {
         dataspace_catalog: &DataSpaceCatalog,
         _routing_generation_unchanged: bool,
     ) {
-        let _revalidation = self.nexus_revalidation_lock.lock();
-        let nexus = nexus_with_route_catalogs(view.nexus(), lane_catalog, dataspace_catalog);
-        let height = state_view_height_for_routing(view);
-        let tracked = self
-            .txs
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        let mut fault = None;
-        for hash in tracked {
-            let guard = self.push_remove_lock.lock();
-            let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
-                continue;
-            };
-            if tx.is_in_blockchain(view) || self.is_expired(tx.as_accepted()) {
-                self.remove_pending_hash_locked(hash, None);
-                continue;
-            }
-            match self.immutable_queued_routing_plan_in_view(
-                hash,
-                tx.as_ref(),
-                view,
-                &nexus,
-                height,
-            ) {
-                Ok(plan) => {
-                    #[cfg(feature = "telemetry")]
-                    {
-                        let route = plan.coordinator_route();
-                        self.record_teu_dequeue(&hash, None);
-                        self.record_teu_enqueue_locked(
-                            hash,
-                            TxTeuInfo {
-                                lane_id: route.lane_id,
-                                dataspace_id: route.dataspace_id,
-                                teu: Self::compute_teu_weight(tx.as_accepted()),
-                            },
-                        );
+        // Preserve Nexus-before-Queue acquisition, then retain that same Nexus
+        // guard through the after-unlock actions inside the original refund scope.
+        let revalidation = self.nexus_revalidation_lock.lock();
+        self.with_resident_refunds(
+            || {
+                let revalidation = revalidation;
+                let nexus =
+                    nexus_with_route_catalogs(view.nexus(), lane_catalog, dataspace_catalog);
+                let height = state_view_height_for_routing(view);
+                let tracked = self
+                    .txs
+                    .iter()
+                    .map(|entry| *entry.key())
+                    .collect::<Vec<_>>();
+                let mut fault = None;
+                for hash in tracked {
+                    let Some(tx) = self.txs.get(&hash).map(|entry| entry.value().clone()) else {
+                        continue;
+                    };
+                    if tx.is_in_blockchain(view) || self.is_expired(tx.as_accepted()) {
+                        self.remove_pending_hash_locked(hash, None);
+                        continue;
                     }
-                    self.routing_plans.insert(hash, plan);
+                    match self.immutable_queued_routing_plan_in_view(
+                        hash,
+                        tx.as_ref(),
+                        view,
+                        &nexus,
+                        height,
+                    ) {
+                        Ok(plan) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let route = plan.coordinator_route();
+                                self.record_teu_dequeue(&hash, None);
+                                self.record_teu_enqueue_locked(
+                                    hash,
+                                    TxTeuInfo {
+                                        lane_id: route.lane_id,
+                                        dataspace_id: route.dataspace_id,
+                                        teu: Self::compute_teu_weight(tx.as_accepted()),
+                                    },
+                                );
+                            }
+                            self.routing_plans.insert(hash, plan);
+                        }
+                        Err(
+                            RoutingResolveError::OrdinaryRouteUnavailable { .. }
+                            | RoutingResolveError::Deferred(_),
+                        ) => {}
+                        Err(error) => {
+                            fault.get_or_insert((hash, error));
+                        }
+                    }
                 }
-                Err(
-                    RoutingResolveError::OrdinaryRouteUnavailable { .. }
-                    | RoutingResolveError::Deferred(_),
-                ) => {}
-                Err(error) => {
-                    fault.get_or_insert((hash, error));
+                self.compact_hash_queue_locked();
+                (fault, revalidation)
+            },
+            |(fault, _revalidation)| {
+                if let Some((hash, reason)) = fault {
+                    self.mark_accepted_work_validation_fault(
+                        hash,
+                        "nexus_reconfiguration",
+                        &reason,
+                        None,
+                    );
                 }
-            }
-            drop(guard);
-        }
-        {
-            let _guard = self.push_remove_lock.lock();
-            self.compact_hash_queue_locked();
-        }
-        if let Some((hash, reason)) = fault {
-            self.mark_accepted_work_validation_fault(hash, "nexus_reconfiguration", &reason, None);
-        }
-        #[cfg(feature = "telemetry")]
-        self.publish_teu_backlog_metrics(Some(view.telemetry));
+                #[cfg(feature = "telemetry")]
+                self.publish_teu_backlog_metrics(Some(view.telemetry));
+            },
+        )
     }
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn revalidate_pending_transactions_with_state(
@@ -6355,7 +6460,7 @@ pub mod tests {
             original, original_input,
             "scale-out retains the original signed input"
         );
-        let original_owner = Arc::clone(queue.txs.get(&tx_hash).unwrap().value());
+        let original_owner = queue.txs.get(&tx_hash).unwrap().value().clone();
         let committed_nexus = state.nexus_snapshot();
         let expected_current = evaluate_policy_plan_with_nexus_and_world_at_block_height(
             &committed_nexus,
@@ -6399,7 +6504,7 @@ pub mod tests {
             RoutingPlan::single(RoutingDecision::default())
         );
         let retained = queue.txs.get(&tx_hash).unwrap();
-        assert!(Arc::ptr_eq(retained.value(), &original_owner));
+        assert!(QueuedTransaction::ptr_eq(retained.value(), &original_owner));
         assert_eq!(
             retained.as_accepted().entrypoint_bytes().as_slice(),
             original.as_slice()
@@ -8706,6 +8811,10 @@ pub mod tests {
         );
         assert_eq!(queue.retained_bytes(), 0);
         assert!(!queue.pressure_snapshot().saturated_by_bytes);
+    }
+    mod resident_owner_tests {
+        use super::*;
+        include!("queue/resident_owner_tests.rs");
     }
     include!("queue/current_admission_tests.rs");
     include!("queue/domain_admission_tests.rs");

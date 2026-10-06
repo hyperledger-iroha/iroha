@@ -135,7 +135,11 @@ mod tests {
         .map(|key| key[0])
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(fixed.len(), 4, "fixed-key prefix selectors must be disjoint");
+        assert_eq!(
+            fixed.len(),
+            4,
+            "fixed-key prefix selectors must be disjoint"
+        );
         assert!(!fixed.contains(&FEE_EVIDENCE_RECORD_TAG_V1));
     }
 }

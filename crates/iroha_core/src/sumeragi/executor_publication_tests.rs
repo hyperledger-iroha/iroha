@@ -72,6 +72,33 @@ pub(super) fn with_worker_chain(
         &mut tokio::sync::broadcast::Receiver<EventBox>,
     ),
 ) {
+    let mut test = Some(test);
+    with_worker_chain_erased(
+        chain,
+        consensus_mode,
+        lane_blocks,
+        &mut |chain, worker, blocks, events| {
+            test.take().expect("the fixture consumes its callback once")(
+                chain, worker, blocks, events,
+            );
+        },
+    );
+}
+
+/// Construct the same signed fixture once per binary rather than per callback type.
+/// The borrowed adapter retains each original FnOnce closure without another allocation.
+#[inline(never)]
+fn with_worker_chain_erased(
+    chain: &CertifiedTestChain,
+    consensus_mode: ConsensusMode,
+    lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
+    test: &mut dyn FnMut(
+        &CertifiedTestChain,
+        &mut Worker<'_>,
+        &KuraBlockStore,
+        &mut tokio::sync::broadcast::Receiver<EventBox>,
+    ),
+) {
     assert_eq!(chain.validators().len(), 4);
     let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
     assert!(certificate.consensus_header().is_empty());
@@ -2026,7 +2053,7 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
             height: 2,
             view: 0,
             block_hash: hash,
-            pulse_context: control::pulse_context(block.header()),
+            _pulse_context: control::pulse_context(block.header()),
         });
         worker.reject(2, 0, Hash32([201; 32]));
         assert!(
@@ -3422,4 +3449,33 @@ fn global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve() {
             assert!(queue.contains_entrypoint_hash(hash));
         },
     );
+}
+
+#[test]
+fn worker_fixture_invokes_and_consumes_one_move_only_callback_on_the_actual_chain() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CallbackOwner(Arc<AtomicUsize>);
+    impl Drop for CallbackOwner {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let calls = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let owner = CallbackOwner(Arc::clone(&drops));
+    let observed = Arc::clone(&calls);
+    with_worker(move |chain, worker, _, _| {
+        assert_eq!(observed.fetch_add(1, Ordering::SeqCst), 0);
+        assert_eq!(chain.validators().len(), 4);
+        assert!(std::ptr::eq(worker.state, &**chain.state()));
+        assert_eq!(worker.applied.0, chain.height());
+        assert_eq!(
+            worker.applied.1,
+            chain.committed(chain.height()).core_hash()
+        );
+        drop(owner);
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }

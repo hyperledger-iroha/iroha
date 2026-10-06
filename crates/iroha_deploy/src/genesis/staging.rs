@@ -778,7 +778,7 @@ fn configure_staged_genesis_state(
         state.set_fraud_monitoring(config.fraud_monitoring.clone());
         state.set_gov(config.gov.clone());
         state.content = config.content.clone();
-        state.set_settlement(config.settlement.clone());
+        state.set_settlement(config.settlement);
         state
             .set_zk(config.zk.clone())
             .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;

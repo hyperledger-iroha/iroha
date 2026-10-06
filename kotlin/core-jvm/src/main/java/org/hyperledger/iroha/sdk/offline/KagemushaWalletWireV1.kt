@@ -55,9 +55,8 @@ enum class KagemushaWalletDigestRoleV1(
     COMPLETION("completion"),
     FOLD("fold"),
     ;
-
     companion object {
-        /** Role whose label is exactly [label], or `null` for an unknown label. */
+        /** The exact retained H label, or null. Retired body/delivery roles have no alias. */
         @JvmStatic
         fun fromLabel(label: String): KagemushaWalletDigestRoleV1? = entries.firstOrNull { it.label == label }
     }

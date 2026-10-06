@@ -61,7 +61,9 @@ fn genesis_authorization(
         first_height: 1,
         last_height,
         authority_generation: generation.generation,
-        authority_id: generation.generation_id().expect("valid fixture generation"),
+        authority_id: generation
+            .generation_id()
+            .expect("valid fixture generation"),
         beacon: BeaconEpochBindingV1::Bootstrap,
         previous_authorization_id: [0; 32],
         transition_id: [0; 32],

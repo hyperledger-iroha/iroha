@@ -1,7 +1,7 @@
 //! Fixed batches of one to eight unsigned Proper foreign products.
 //!
-//! For B=2^87 and operands below2^256, S=sum(a*b)<2^515 and every supported
-//! modulus m>2^254 gives q=floor(S/m)<2^261. Four low carry equations and the
+//! For B=2^87 and operands below2^256, S=sum(a*b)<2^515 and the explicitly
+//! admitted modulus m>2^254 gives q=floor(S/m)<2^261. Four low carry equations and the
 //! native residue constrain S=c+qm with the existing87/87/82 result,3x87
 //! quotient and four105-bit offset-carry certificates. Honest low-column
 //! magnitudes are below28B^2 and carries below29B<2^92. Even adversarial
@@ -31,10 +31,12 @@ pub const MAX_PRODUCTS: usize = 8;
 pub struct UnsignedDot;
 impl UnsignedDot {
     /// Proves the sum of one to eight products modulo the common modulus.
-    /// All inputs must already have proven Proper or Canonical limb bounds.
+    /// All inputs must already have proven Proper or Canonical limb bounds,
+    /// and the modulus must be strictly greater than2^254.
     ///
     /// # Errors
-    /// Empty/oversized batch, mixed moduli, non-Proper input, or layout error.
+    /// Empty/oversized batch, modulus at most2^254, mixed moduli,
+    /// non-Proper input, or layout error.
     pub fn evaluate<F: PastaField>(
         glue: &mut GlueChip<F>,
         range: &mut RunningSumChip<F>,
@@ -67,6 +69,7 @@ pub(super) fn admitted<F: PastaField>(
 ) -> Result<ForeignModulus, Error> {
     let modulus = pairs.first().ok_or(Error::Synthesis)?.0.modulus;
     if pairs.len() > MAX_PRODUCTS
+        || !modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt()
         || pairs.iter().flat_map(|(a, b)| [a, b]).any(|v| {
             v.modulus != modulus
                 || !matches!(v.form, Form::Proper | Form::Canonical)

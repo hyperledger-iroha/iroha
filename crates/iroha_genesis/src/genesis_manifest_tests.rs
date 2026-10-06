@@ -265,7 +265,9 @@ fn genesis_signing_requires_an_exact_unique_committee_topology() {
         .build_and_sign(&checked_genesis_fixture_keypair())
         .expect_err("a non-3f+1 topology must fail before genesis is signed");
     assert!(
-        error.to_string().contains("exact Sumeragi `3f + 1` topology"),
+        error
+            .to_string()
+            .contains("exact Sumeragi `3f + 1` topology"),
         "unexpected topology error: {error:#}"
     );
 }

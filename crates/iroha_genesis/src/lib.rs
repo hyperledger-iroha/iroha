@@ -3101,8 +3101,9 @@ mod tests {
 
     fn load_genesis_source_template_for_test(relative_path: &str) -> Result<RawGenesisTransaction> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-        GenesisSourceTemplate::from_path(path)?
-            .materialize(Some(SumeragiNposParameters::default().xor_asset_definition_id))
+        GenesisSourceTemplate::from_path(path)?.materialize(Some(
+            SumeragiNposParameters::default().xor_asset_definition_id,
+        ))
     }
 
     #[test]
@@ -3122,8 +3123,7 @@ mod tests {
             Some(SumeragiNposParameters::default().xor_asset_definition_id)
         };
         assert!(template.clone().materialize(wrong).is_err());
-        let selected =
-            is_npos.then(|| SumeragiNposParameters::default().xor_asset_definition_id);
+        let selected = is_npos.then(|| SumeragiNposParameters::default().xor_asset_definition_id);
         let materialized = template.materialize(selected)?;
         assert!(materialized.consensus_fingerprint().is_some());
         Ok(())
@@ -3143,7 +3143,11 @@ mod tests {
         let error = manifest
             .build_and_sign(&genesis_key_pair)
             .expect_err("genesis signing rejects a non-3f+1 topology");
-        assert!(error.to_string().contains("exact Sumeragi `3f + 1` topology"));
+        assert!(
+            error
+                .to_string()
+                .contains("exact Sumeragi `3f + 1` topology")
+        );
     }
 
     #[test]

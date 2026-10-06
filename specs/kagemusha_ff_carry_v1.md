@@ -541,9 +541,49 @@ row counts only when recorded against their tested source.
 
 The public-input evaluator factors
 `L_i(x)=((x^n-1)/n) * omega^i/(x-omega^i)` before unsigned dot batching. It
-retains the independently constrained nonzero verdict for `x^n-1` and every
-distinct `x-omega^i`, and caches weights only by exact fixed index within
-one proof evaluation. The direct regression tests zero denominators, each
-inverse limb and verdict mutation, index-cache cell identity, and
-known/unknown shape on both curves. Factoring changes neither the native
-predicate nor its invalid-denominator behavior.
+retains an independently constrained guard `g=[x^n-1 != 0]` in the global
+verdict and caches weights only by exact fixed index within one proof
+evaluation. A narrowly scoped guarded division proves
+`(x-omega^i)*inverse = g (mod m)` using the unchanged FF division predicate,
+and constrains `(1-g)*inverse_limb=0` for all three Proper result limbs.
+When `g=1`, `omega^(i*n)=1` implies `x-omega^i != 0`, so this is the exact
+inverse. When `g=0`, all inverse limbs equal zero; the relation is total even
+at a zero denominator, while the global verdict is already false. This
+reuses the single vanishing proof rather than repeating canonical zero tests
+for each root. The generic inverse retains its original independent nonzero
+predicate and guarded-one behavior.
+
+The direct regression tests `x=1`, another nontrivial root and an ordinary
+non-root, first/last and matching/nonmatching root indices, each inverse limb
+and guard/verdict mutation, index-cache cell identity, and known/unknown
+shape on both curves. Factoring and sharing this root-specific guard change
+neither the accepted native predicate nor total malformed-proof handling.
+Large structural constants are included in unsigned batches unless their
+product has an existing cheap lowering (both constants, or zero, one, minus
+one or an unsigned constant at most128). A witness equal to one never
+acquires constant metadata. Both-field constant/witness output-limb mutations
+and known/unknown shape checks pin this distinction.
+
+The root reviewer independently read the guarded weight and its caller guard,
+including the nth-root implication, false-guard limb equalities and global
+verdict binding, and the structural constant dispatch with Proper conversion.
+That narrow source review found no gap; it is not a blanket sign-off on a new
+carry layout or complete recursion. The scoped latest recursion all-target
+strict lint passed.
+
+Staged/constant/guard source snapshot at shared HEAD
+`c2e5bd8978d4ae931b8beef54392bb10a33ad3a6` plus ongoing changes:
+
+| Source | SHA-256 |
+| --- | --- |
+| `iroha_plonk_gadgets/src/ff/mod.rs` | `6ba7cac96c404dfc04721e6c359e3c2e999a0fdbe242517e51993fe7d9022ce3` |
+| `iroha_plonk_gadgets/src/ff/rotated.rs` | `3ba5992ebd3d2f4da94401e0bc97d37c52350d40fbe30ba4aa33bc12203e4f85` |
+| `iroha_plonk_gadgets/src/ff/dot.rs` | `d2b5fc970e91a3fe11ab378c2d04b8f91c367b80d3e716e5181a2c9704592422` |
+| `iroha_plonk_gadgets/src/arith.rs` | `8f8f9b4a48c817366236aafeedbdc009abaf911096051ed6bb9928b351cebf3e` |
+| `iroha_plonk_gadgets/src/ecc/gates.rs` | `8ed1743c9873b089f321d43245648c2a09ad4f06b413ede5d728cda5e8b9ff4a` |
+| `iroha_plonk_gadgets/src/ecc/mod.rs` | `d450f5c53f3e86bcfa4c63dc43cdd6bf757e427be57b0570c728efecfebe5476` |
+| `iroha_plonk_gadgets/src/poseidon/pow5.rs` | `2c0fc66ee124ec129bf8461cc06ade94ae644ec2ccb738305786e09d1ad9009d` |
+| `iroha_plonk_recursion/src/verifier/scalar.rs` | `02a127c06fad302f1587c0fde172940ac9447aca60bb6ac0dd8c56f0c300a13f` |
+| `iroha_plonk_recursion/src/verifier/expressions.rs` | `9c728a189b5f3f83a2ba24674ffa6bda2596ca82d78d9cdf0bdbce2a47c03e65` |
+| `iroha_plonk_recursion/src/verifier/multiopen.rs` | `7c57d5608e706ec96ddd4483988b9fb1fa8574285af7eedb6ab73481d356837a` |
+| `iroha_plonk_recursion/src/verifier/compact.rs` | `fa161ae19ec1b466e0e0d5c4c105512fbe9b17146c3f81b2c47851c48bad9a14` |

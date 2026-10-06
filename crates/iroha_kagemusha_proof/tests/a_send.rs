@@ -18,7 +18,7 @@ use iroha_kagemusha_proof::{
     SigmaProver, SigmaRelation,
     a_relation::{
         LineagePublicCells, SigmaBindingCells,
-        send::{SendInputs, SendObjects},
+        send::{SendInputs, SendObjects, SendStagePaths, SendStagePlan},
     },
     admin_sigma::StateWitness,
     operation_relation::{
@@ -53,6 +53,7 @@ use iroha_plonk_recursion::{
 struct SendMaps {
     witness: send_objects::SendFixture,
     known: bool,
+    stage_plan: Option<SendStagePlan>,
 }
 #[derive(Clone, Debug)]
 struct Config {
@@ -203,7 +204,12 @@ impl Circuit<Fp> for SendMaps {
                 )?;
                 // The actual recursive Q binder derives this selector from the same
                 // state. This component only consumes the sigma's statement.
-                let index = chip.uint().glue().constant(&mut region, Fp::ZERO)?;
+                let index = iroha_kagemusha_proof::a_relation::schedule::constrain_sigma_selector(
+                    &mut chip.uint(),
+                    &mut region,
+                    3,
+                    &before.core()[21],
+                )?;
                 let sigma = SigmaBindingCells::from_statement(&statement, index, vec![]);
                 let sources = self
                     .witness
@@ -219,23 +225,43 @@ impl Circuit<Fp> for SendMaps {
                 let pending =
                     self.insertion(&mut chip.uint(), &mut region, &self.witness.pending)?;
                 let fee = self.insertion(&mut chip.uint(), &mut region, &self.witness.fee)?;
-                objects.constrain(
-                    &mut chip,
-                    &mut region,
-                    SendInputs {
-                        predecessor: MapState {
-                            state: &before,
-                            lineage: &pred,
-                        },
-                        successor: MapState {
-                            state: &after,
-                            lineage: &next,
-                        },
-                        sigma: &sigma,
+                let input = SendInputs {
+                    predecessor: MapState {
+                        state: &before,
+                        lineage: &pred,
                     },
-                    &pending,
-                    &fee,
-                )?;
+                    successor: MapState {
+                        state: &after,
+                        lineage: &next,
+                    },
+                    sigma: &sigma,
+                };
+                if let Some(plan) = &self.stage_plan {
+                    use iroha_kagemusha_proof::a_relation::schedule::OperationTask;
+                    for stage in 0..plan.context().stage_count() {
+                        let tasks = plan
+                            .context()
+                            .operation_tasks(stage)
+                            .ok_or(Error::Synthesis)?;
+                        plan.constrain_stage(
+                            &mut chip,
+                            &mut region,
+                            stage,
+                            &objects,
+                            input,
+                            SendStagePaths {
+                                pending: tasks
+                                    .contains(&OperationTask::SendPending)
+                                    .then_some(&pending),
+                                fee: tasks
+                                    .contains(&OperationTask::SendFeeAndCarry)
+                                    .then_some(&fee),
+                            },
+                        )?;
+                    }
+                } else {
+                    objects.constrain(&mut chip, &mut region, input, &pending, &fee)?;
+                }
                 Ok(objects
                     .context()
                     .iter()
@@ -255,6 +281,7 @@ fn fixture() -> SendMaps {
     SendMaps {
         witness: send_objects::from_load(&load.successor),
         known: true,
+        stage_plan: None,
     }
 }
 #[test]
@@ -333,6 +360,7 @@ fn send_held_fee_cannot_skip_or_replace_either_map_obligation() {
     let circuit = SendMaps {
         witness: send_objects::with_held_fee(&load.successor),
         known: true,
+        stage_plan: None,
     };
     assert!(
         common::check_witness(
@@ -360,4 +388,235 @@ fn send_held_fee_cannot_skip_or_replace_either_map_obligation() {
             "Send fee mutation{mutation}"
         );
     }
+}
+
+/// Actual own sigma/Q source for the subsequent rooted Send stage-chain tests.
+#[allow(dead_code)] // Retained source claims are consumed by the recursive integration next.
+pub(crate) struct SendQ {
+    pub(crate) witness: send_objects::SendFixture,
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) sigma_plan: iroha_kagemusha_proof::q_sigma::QSigmaPlan,
+    pub(crate) q: iroha_kagemusha_proof::a_relation::QProofPlan,
+    pub(crate) proof: Vec<u8>,
+    pub(crate) instances: Vec<Vec<iroha_pasta::Fq>>,
+    pub(crate) opening: iroha_plonk_recursion::FoldInput<Ep>,
+    pub(crate) part: iroha_plonk_recursion::FoldInput<Eq>,
+}
+#[allow(dead_code)] // Used by the complete Send-chain fixture after catalog rebinding.
+pub(crate) fn genuine_send_source(before: &StateWitness) -> SendQ {
+    use iroha_kagemusha_proof::{
+        a_relation::{QProofPlan, schedule::sigma_selector},
+        q_sigma::{QSigmaPlan, SigmaClass, SigmaSlotWitness, native::QSigmaProver},
+    };
+    use iroha_plonk_recursion::{FoldConfig, FoldInput, verifier::VerifierPlan};
+    let witness = send_objects::from_load(before);
+    let shape = common::pinned_shape(common::folded(SigmaRelation::SEND), (12, 1));
+    let prover = SigmaProver::<Eq>::keygen_with_params(shape, common::vesta_params(12)).unwrap();
+    let proof = prover.prove(&witness.step, common::recovery(221)).unwrap();
+    let verifier = prover.verifier();
+    let class = SigmaClass::from_verifiers(&[(sigma_selector(3, 0).unwrap(), &verifier)]).unwrap();
+    let vparams = common::vesta_params(16);
+    let params = iroha_plonk::pcs::ipa::PinnedParams::<Ep>::derive(16).unwrap();
+    let sigma_plan = QSigmaPlan::new(class, None, &vparams).unwrap();
+    let prepared = sigma_plan
+        .prepare(
+            SigmaSlotWitness {
+                key: prover.proving_key().vk().clone(),
+                statement: proof.public.instance()[0],
+                length: proof.bytes.len().try_into().unwrap(),
+                proof: proof.bytes.clone(),
+            },
+            None,
+            &vparams,
+            iroha_pasta::Fq::from(72),
+            &FoldConfig::default(),
+        )
+        .unwrap();
+    let part = prepared.part().clone();
+    let q = QSigmaProver::keygen(&prepared, params.clone()).unwrap();
+    let qproof = q
+        .prove(
+            &prepared,
+            common::recovery(222),
+            iroha_plonk::ProverConfig::default(),
+        )
+        .unwrap();
+    let claim = accumulate_generator(
+        &params,
+        q.binding(),
+        q.verifying_key(),
+        &qproof.instances,
+        &qproof.bytes,
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
+    claim.decide(&params, MemoryBudget::DEFAULT).unwrap();
+    eprintln!(
+        "actual Send mask0 sigma={}B Q={}B sourcek={}",
+        proof.bytes.len(),
+        qproof.bytes.len(),
+        part.source_k()
+    );
+    SendQ {
+        witness,
+        sigma: proof.bytes,
+        sigma_plan,
+        q: QProofPlan::new(
+            VerifierPlan::new(q.binding().clone(), params).unwrap(),
+            q.verifying_key().clone(),
+        )
+        .unwrap(),
+        proof: qproof.bytes,
+        instances: qproof.instances,
+        opening: FoldInput::from_opening(*claim.g(), claim.challenges()).unwrap(),
+        part,
+    }
+}
+#[test]
+#[ignore = "actual Send sigma/Q source plus committed fixed-stage operation plan; run optimized"]
+fn genuine_send_q_and_fixed_operation_stages_reject_drop_or_relabel() {
+    use iroha_kagemusha_proof::a_relation::{
+        AProofPlan, context::ContextPlan, schedule::OperationTask,
+    };
+    let (bootstrap, _, _) = bootstrap_objects::enrollment();
+    let (load, _, _, _) = load_objects::authorized(&bootstrap);
+    let source = genuine_send_source(&load.successor);
+    let params = iroha_plonk::pcs::ipa::PinnedParams::<Ep>::derive(16).unwrap();
+    // Only descriptor metadata is needed to exercise the operation partition.
+    // No predecessor proof is constructed or accepted in this component. The
+    // complete recursive Send test must use the catalog-bound real Omega key.
+    let predecessor = predecessor_frame_metadata(&params);
+    let operation = AProofPlan::new(
+        Variant::Send,
+        source.sigma_plan.clone(),
+        vec![source.q.clone()],
+        Some(predecessor),
+        &params,
+    )
+    .unwrap();
+    let context = ContextPlan::with_schedule(
+        operation,
+        vec![vec![], vec![], vec![], vec![0]],
+        Some(0),
+        SendObjects::context_specs().unwrap().to_vec(),
+    )
+    .unwrap();
+    assert!(
+        SendStagePlan::new(context.clone()).is_err(),
+        "frame-only metadata has no operation qualification"
+    );
+    let tasks = vec![
+        vec![OperationTask::SendObjects],
+        vec![OperationTask::SendPending],
+        vec![OperationTask::SendFeeAndCarry],
+        vec![],
+    ];
+    let complete = context.clone().with_operation_tasks(tasks.clone()).unwrap();
+    for mutation in 0..3 {
+        let mut specs = SendObjects::context_specs().unwrap().to_vec();
+        match mutation {
+            0 => specs[0].tag = 77,
+            1 => specs[1].capacity += 1,
+            _ => {
+                specs.pop();
+            }
+        }
+        let bad = ContextPlan::with_schedule(
+            context.operation().clone(),
+            vec![vec![], vec![], vec![], vec![0]],
+            Some(0),
+            specs,
+        )
+        .unwrap()
+        .with_operation_tasks(tasks.clone())
+        .unwrap();
+        assert!(
+            SendStagePlan::new(bad).is_err(),
+            "wrong same-tape schema{mutation}"
+        );
+    }
+
+    assert_ne!(complete.schema(), context.schema());
+    for omitted in 0..3 {
+        let mut drop = tasks.clone();
+        drop[omitted].clear();
+        assert!(
+            context.clone().with_operation_tasks(drop).is_err(),
+            "missing operation task{omitted}"
+        );
+        let mut doubled = tasks.clone();
+        doubled[3].push(tasks[omitted][0]);
+        assert!(
+            context.clone().with_operation_tasks(doubled).is_err(),
+            "double operation task{omitted}"
+        );
+    }
+    let mut relabelled = tasks.clone();
+    relabelled.swap(1, 2);
+    let relabelled = context.with_operation_tasks(relabelled).unwrap();
+    assert_ne!(
+        complete.schema(),
+        relabelled.schema(),
+        "operation task stage belongs to D_ctx"
+    );
+    let circuit = SendMaps {
+        witness: source.witness,
+        known: true,
+        stage_plan: Some(SendStagePlan::new(complete).unwrap()),
+    };
+    let report = check_circuit(&circuit, 16, &circuit.public(), CheckMode::Strict).unwrap();
+    assert!(report.is_satisfied(), "{report:?}");
+    let mut bad = circuit.clone();
+    bad.witness.pending.slot_siblings[31] += Fp::ONE;
+    assert!(
+        !check_circuit(&bad, 16, &bad.public(), CheckMode::Strict)
+            .unwrap()
+            .is_satisfied()
+    );
+}
+
+fn predecessor_frame_metadata(
+    params: &iroha_plonk::pcs::ipa::PinnedParams<Ep>,
+) -> iroha_plonk_recursion::verifier::VerifierPlan<Ep> {
+    use iroha_pasta::Fq;
+    use iroha_plonk::{
+        cs::{Advice, InstanceType},
+        keys::{KeygenConfigV2, keygen_pk_v2},
+    };
+    #[derive(Clone)]
+    struct FrameMetadata;
+    impl Circuit<Fq> for FrameMetadata {
+        type Config = Column<Advice>;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+        fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
+            let advice = meta.advice_column();
+            meta.create_gate("metadata-only boolean", |meta| {
+                let a = meta.query_advice(advice, iroha_plonk::cs::Rotation::cur());
+                vec![a.clone() * (a - iroha_plonk::cs::Expression::Constant(Fq::ONE))]
+            });
+            for length in [1, 2, 16] {
+                meta.instance_column(length);
+            }
+            advice
+        }
+        fn synthesize(&self, _: Self::Config, _: impl Layouter<Fq>) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+    let key = keygen_pk_v2(
+        params,
+        &FrameMetadata,
+        &KeygenConfigV2::pipa_r(vec![
+            InstanceType::Bounded,
+            InstanceType::Field,
+            InstanceType::Bounded,
+        ]),
+    )
+    .unwrap();
+    iroha_plonk_recursion::verifier::VerifierPlan::new(key.binding().clone(), params.clone())
+        .unwrap()
 }

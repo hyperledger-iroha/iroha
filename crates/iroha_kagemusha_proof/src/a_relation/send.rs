@@ -245,3 +245,104 @@ impl SendObjects {
         })
     }
 }
+
+/// Complete fixed Send task assignment; operation ownership is never a witness bit.
+#[derive(Clone, Debug)]
+pub struct SendStagePlan {
+    context: super::context::ContextPlan,
+}
+/// Only the insertion paths owned by this fixed stage.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SendStagePaths<'a> {
+    /// Present exactly in the pending insertion stage.
+    pub pending: Option<&'a InsertCells>,
+    /// Present exactly in the fee insertion/unchanged-fields stage.
+    pub fee: Option<&'a InsertCells>,
+}
+impl SendStagePlan {
+    /// Require all three Send tasks exactly once in the committed stage schema.
+    /// No local signature Q is accepted: the single Q is the own sigma relation.
+    /// # Errors
+    /// Wrong operation, task coverage or Q count.
+    pub fn new(context: super::context::ContextPlan) -> Result<Self, Error> {
+        use super::schedule::OperationTask;
+        if context.operation().frame().variant() != Variant::Send
+            || context.operation().q_count() != 1
+            || context.object_specs() != SendObjects::context_specs()?
+        {
+            return Err(Error::Synthesis);
+        }
+        let groups = (0..context.stage_count())
+            .map(|i| context.operation_tasks(i).unwrap_or_default().to_vec())
+            .collect::<Vec<_>>();
+        OperationTask::validate(Variant::Send, &groups)?;
+        Ok(Self { context })
+    }
+    /// Context whose exact task assignment is pinned in every stage key.
+    pub const fn context(&self) -> &super::context::ContextPlan {
+        &self.context
+    }
+    /// Execute the fixed stage's named constraints against the same context inputs.
+    ///
+    /// Object validity may be proved in another stage; its original byte tapes,
+    /// both state openings and the exact statement are rebound by `D_ctx` in all
+    /// stages. No individual stage establishes a complete accepted operation.
+    /// # Errors
+    /// Invalid stage/path presence or failed ownership/map constraints.
+    #[allow(clippy::too_many_arguments)] // Fixed plan and exact context-bound operation inputs.
+    pub fn constrain_stage(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        stage: usize,
+        objects: &SendObjects,
+        input: SendInputs<'_>,
+        paths: SendStagePaths<'_>,
+    ) -> Result<(), Error> {
+        use super::schedule::OperationTask;
+        let tasks = self
+            .context
+            .operation_tasks(stage)
+            .ok_or(Error::Synthesis)?;
+        if tasks.contains(&OperationTask::SendPending) != paths.pending.is_some()
+            || tasks.contains(&OperationTask::SendFeeAndCarry) != paths.fee.is_some()
+        {
+            return Err(Error::Synthesis);
+        }
+        let transition = MapTransition {
+            statement: input.sigma.hard_statement()?,
+            predecessor: input.predecessor,
+            successor: input.successor,
+        };
+        if transition.statement.variant() != Variant::Send {
+            return Err(Error::Synthesis);
+        }
+        for task in tasks {
+            match task {
+                OperationTask::SendObjects => {
+                    objects.authenticate(chip, region, input)?;
+                }
+                OperationTask::SendPending => {
+                    let lanes = chip.operation_lanes()?;
+                    MapEffectsChip::new(lanes.glue, lanes.range, lanes.hash).send_pending(
+                        region,
+                        &transition,
+                        paths.pending.ok_or(Error::Synthesis)?,
+                    )?;
+                }
+                OperationTask::SendFeeAndCarry => {
+                    let lanes = chip.operation_lanes()?;
+                    MapEffectsChip::new(lanes.glue, lanes.range, lanes.hash)
+                        .send_fee_and_unchanged(
+                            region,
+                            &transition,
+                            paths.fee.ok_or(Error::Synthesis)?,
+                            objects.objects[1].word(10)?,
+                        )?;
+                }
+                _ => return Err(Error::Synthesis),
+            }
+        }
+        Ok(())
+    }
+}

@@ -822,12 +822,6 @@ CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and r
 CORE_NATIVE_ARCHIVE_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_ARCHIVE_RECOVERY_STAGES
 
-CORE_NATIVE_RECEIPT_STAGES = (("original native receipt mailbox custody", (
-    "sumeragi::attestation::tests::mailbox_and_release_control_require_original_pool_admission_before_allocation",
-    "sumeragi::attestation::tests::mailbox_poison_is_observed_only_after_the_original_guard_releases",
-    "sumeragi::attestation::tests::actual_mailbox_contention_retains_original_receipt_and_source",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_RECEIPT_STAGES
 
 
 CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity boundary", (
@@ -1277,7 +1271,7 @@ DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", 
     "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-    "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
+    "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
     "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
     "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
     "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
@@ -1787,7 +1781,6 @@ CORE_STATE_VIEW_CONSUMER_STAGES = (("original State reader refusals through auth
     'state::authority_registry::lane_manifest_policy::tests::authority_captures_preserve_exact_state_reader_refusal',
     'state::world_projection::world_state_accumulator::world_state_snapshot::tests::snapshot_reader_refusal_preserves_original_source_and_does_not_call_consumer',
     'state::native_execution_tip::finalized_world::tests::source_bounds_corrupt_carrier_and_busy_publication_return_no_receipt',
-    'sumeragi::executor::validation_refusal_tests::prepared_certificate_busy_retries_same_execution_after_original_reader_release',
     'publication_rwlock::tests::admitted_reader_control_preserves_original_refusal_and_outlives_its_lock',
     'publication_lock::admitted_control_tests::original_fence_control_is_fallible_and_retained_by_its_release_observation',
 )), )

@@ -72,8 +72,8 @@ pub const INDEXED_LEAF_DOMAIN: u64 = u64::from_le_bytes(*b"kgwimlf1");
 pub const INDEXED_NODE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwimnd1");
 /// Depth of every indexed map tree.
 pub const INDEXED_DEPTH: usize = 32;
-/// Quota-usage value domain `kgwquse1` (G1
-/// `KAGEMUSHA_WALLET_QUOTA_USAGE_VALUE_DOMAIN_V1`).
+/// Quota-usage leaf domain `kgwquse1` (G1
+/// `KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1`).
 pub const QUOTA_USAGE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwquse1");
 
 /// Quota-usage array node domain `kgwqusn1` (B5).

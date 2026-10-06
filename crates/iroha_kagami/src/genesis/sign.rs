@@ -2379,11 +2379,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .into_builder()
             .complete_for_test()
             .build_raw()
-        .expect("complete topology-bound signing fixture")
-        .with_consensus_mode(consensus_mode)
-        .with_chain_discriminant(chain_discriminant)
-        .with_consensus_meta()
-        .expect("valid fixture consensus parameters");
+            .expect("complete topology-bound signing fixture")
+            .with_consensus_mode(consensus_mode)
+            .with_chain_discriminant(chain_discriminant)
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let manifest = with_explicit_test_xor_allocations(manifest, topology);
         fs::write(
             &path,

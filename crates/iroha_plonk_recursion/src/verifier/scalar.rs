@@ -51,6 +51,9 @@ enum Operation {
     Proper([Cell; 3]),
 }
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug)]
 pub struct Arithmetic<C: PastaCurve> {
     pub ff: FfChip<C::Base>,
@@ -331,10 +334,7 @@ impl<C: PastaCurve> Arithmetic<C> {
             let cached = self.operations.get(&Operation::Mul(left, right)).cloned();
             if let Some(product) = cached {
                 sum = self.add(uint, region, &sum, &product)?;
-            } else if self.ff.config().is_some()
-                || self.constant_value(a).is_some()
-                || self.constant_value(b).is_some()
-            {
+            } else if self.ff.config().is_some() || self.cheap_product(a, b) {
                 let product = self.mul(uint, region, a, b)?;
                 sum = self.add(uint, region, &sum, &product)?;
             } else {
@@ -347,6 +347,17 @@ impl<C: PastaCurve> Arithmetic<C> {
             sum = self.add(uint, region, &sum, &product)?;
         }
         Ok(sum)
+    }
+    // Preserve the structural constant fast paths from `mul`. A full-field
+    // coefficient with no cheap lowering belongs in the unsigned batch.
+    fn cheap_product(&self, a: &Scalar<C>, b: &Scalar<C>) -> bool {
+        let ca = self.constant_value(a);
+        let cb = self.constant_value(b);
+        (ca.is_some() && cb.is_some())
+            || ca.into_iter().chain(cb).any(|constant| {
+                let words = constant.to_canonical_limbs();
+                constant == -C::ScalarExt::ONE || (words[1..] == [0, 0, 0] && words[0] <= 128)
+            })
     }
     fn proper(
         &mut self,

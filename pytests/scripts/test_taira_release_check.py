@@ -29,8 +29,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1762 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1795 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1781 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1814 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -1769,7 +1769,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "deploy": (
                 "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
                 "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-                "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
+                "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
                 "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
                 "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",

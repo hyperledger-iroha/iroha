@@ -139,11 +139,20 @@ pub(crate) fn authenticate_successor_context(
     // Canonical committed reads exclude differences in local QC signer subsets.
     let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)
         .map_err(|error| error.map_rejection(ScheduleError::from))?;
-    let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)
-        .map_err(|error| error.map_rejection(ScheduleError::from))?;
-    let instance =
+    // The executed parent above supplies original current R. Root identity needs
+    // only this cut's independently authenticated durable signed genesis, never
+    // its unsigned result-only preimage or another full historical reverse walk.
+    #[cfg(all(test, sumeragi_core_mutation = "HC139"))]
+    let instance = {
+        let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)
+            .map_err(|error| error.map_rejection(ScheduleError::from))?;
         crate::sumeragi::node::root_instance(genesis.block(), &state.chain_id().to_string())
-            .map_err(|error| error.map_rejection(ScheduleError::Epoch))?;
+            .map_err(|error| error.map_rejection(ScheduleError::Epoch))?
+    };
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC139")))]
+    let instance = crate::sumeragi::certified_chain::CertifiedChain::new(state)
+        .map_err(|error| error.map_rejection(ScheduleError::from))?
+        .instance();
     let current = &state.world().consensus_schedule().ready(height)?.epoch;
     expected
         .validate()

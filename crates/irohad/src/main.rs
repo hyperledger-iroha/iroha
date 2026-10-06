@@ -1061,7 +1061,7 @@ fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &C
     state.set_fraud_monitoring(config.fraud_monitoring.clone());
     state.set_gov(config.gov.clone());
     state.content = config.content.clone();
-    state.set_settlement(config.settlement.clone());
+    state.set_settlement(config.settlement);
 }
 fn apply_state_geometry_config_before_kura_replay(
     state: &mut State,

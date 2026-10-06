@@ -189,15 +189,19 @@ class KagemushaWalletVectorsV1Test {
     }
 
     @Test fun `every digest vector recomputes and every role is covered`() {
+        val rows = vectors.array("digests").map { it.jsonObject }
         val seen = mutableSetOf<KagemushaWalletDigestRoleV1>()
-        for (vector in vectors.array("digests").map { it.jsonObject }) {
+        for (vector in rows) {
             val role = assertNotNull(KagemushaWalletDigestRoleV1.fromLabel(vector.text("role")))
-            seen += role
+            assertTrue(seen.add(role), "one vector per retained H role")
             val body = vector.hex("body_hex")
             val preimage = KagemushaWalletWireV1.preimage(role, body)
             assertContentEquals(vector.hex("preimage_hex"), preimage, vector.text("object"))
             assertContentEquals(vector.hex("digest_hex"), KagemushaWalletWireV1.digest(role, body), vector.text("object"))
             assertContentEquals(sha256(preimage), KagemushaWalletWireV1.digest(role, body))
+            assertFalse(KagemushaWalletWireV1.digest(role, body + byteArrayOf(0)).contentEquals(vector.hex("digest_hex")))
+            val other = if (role == KagemushaWalletDigestRoleV1.SCHEME) KagemushaWalletDigestRoleV1.RELATION else KagemushaWalletDigestRoleV1.SCHEME
+            assertFalse(KagemushaWalletWireV1.digest(other, body).contentEquals(vector.hex("digest_hex")))
         }
         assertEquals(KagemushaWalletDigestRoleV1.entries.toSet(), seen)
         // Exactly one vector per role, in the Rust declaration order.
@@ -435,7 +439,8 @@ class KagemushaWalletVectorsV1Test {
 
     @Test fun `every signature vector has its codec and verify verdicts over its 32-byte message`() {
         val signatures = vectors.array("signatures").map { it.jsonObject }
-        assertTrue(signatures.isNotEmpty())
+        assertEquals(18, signatures.size)
+        assertEquals(KagemushaWalletSigningDomainV1.entries.toSet(), signatures.map { KagemushaWalletSigningDomainV1.fromLabel(it.text("domain")) }.toSet())
         for (vector in signatures) {
             val label = vector.text("object")
             val message = vector.hex("message_hex")
@@ -2259,7 +2264,7 @@ class KagemushaWalletVectorsV1Test {
             return vector.hex("transcript_hex").also { assertEquals(signingDomain(vector).transcriptBytes, it.size) }
         }
 
-        /** The 338-byte receipt body of the signature vector [objectName]. */
+        /** The exact Receipt transcript (338 bytes). */
         fun receiptBody(objectName: String): ByteArray = signedBody(objectName).also { assertEquals(338, it.size) }
 
         /** The 32-byte receipt-body field at [offset]. */

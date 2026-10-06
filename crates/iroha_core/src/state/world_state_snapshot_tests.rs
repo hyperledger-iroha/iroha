@@ -255,14 +255,18 @@ fn complete_cold_snapshot_matches_original_accumulator_and_registry() {
             .contains(&entry.field_id.as_str())
             && (entry.kind == WorldStateElementKindV1::Table) == entry.key_hash.is_some()
     }));
-    // Untouched canonical cells must be present even when every table is empty.
+    // Untouched canonical cells retain their exact original preimage even when
+    // every table is empty; parameters is a live canonical Cell<Parameters>.
+    let original_parameters_hash = hash_value(overlay.parameters.get()).unwrap();
     assert!(
         captured
             .snapshot
             .entries
             .iter()
-            .any(|entry| entry.field_id == "world.viral_campaign_budget"
-                && entry.kind == WorldStateElementKindV1::Cell)
+            .any(|entry| entry.field_id == "world.parameters"
+                && entry.kind == WorldStateElementKindV1::Cell
+                && entry.key_hash.is_none()
+                && entry.value_hash == original_parameters_hash)
     );
     assert!(
         budget.reserved_bytes() > 0,
@@ -537,6 +541,23 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
     let budget = AllocationBudget::new(16 * 1024 * 1024);
     let state = chain.state();
     let generation = state.state_view_generation();
+    let (
+        original_definition,
+        original_incarnation_pointer,
+        original_incarnation,
+        original_parameters_hash,
+    ) = {
+        let view = state.view();
+        let world = view.world();
+        let definition = world.asset_definitions().get(&asset).unwrap();
+        let incarnation = world.axt_asset_incarnations().get(&asset).unwrap();
+        (
+            std::ptr::from_ref(definition),
+            std::ptr::from_ref(incarnation),
+            *incarnation,
+            hash_value(world.parameters()).unwrap(),
+        )
+    };
     with_asset_snapshot(
         state,
         &original_tip,
@@ -552,6 +573,9 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
                 original_tip.commitment().execution.world_state_root
             );
             assert_eq!(definition.id(), &asset);
+            assert!(std::ptr::eq(definition, original_definition));
+            assert!(std::ptr::eq(incarnation, original_incarnation_pointer));
+            assert_eq!(*incarnation, original_incarnation);
             for (field, kind, key, value) in [
                 (
                     "world.asset_definitions",
@@ -564,6 +588,12 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
                     WorldStateElementKindV1::Table,
                     Some(hash_value(&asset).unwrap()),
                     hash_value(incarnation).unwrap(),
+                ),
+                (
+                    "world.parameters",
+                    WorldStateElementKindV1::Cell,
+                    None,
+                    original_parameters_hash,
                 ),
             ] {
                 assert!(

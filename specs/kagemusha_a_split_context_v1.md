@@ -16,8 +16,14 @@ The item order is:
 1. Version `1`, operation code (one-based order of `ledger::Variant::ALL`),
    completed stage `1`, predecessor-verification stage (`0` absent, otherwise
    the one-based stage), total stage count, total Q count, object count.
-   Each stage then contributes its Q count followed by the exact ordered Q
-   indices assigned to it. Every Q index occurs once across the fixed schedule.
+   Each stage then contributes its Q count and ordered Q indices, then its
+   operation-task count and ordered task codes. Every Q index occurs once.
+   `ContextPlan::with_operation_tasks` requires the complete named task set
+   exactly once: Bootstrap state/authentication (codes1/2), Load recovery/
+   authentication (3/4), or Send objects/pending/fee-and-carry (5/6/7).
+   `LoadStagePlan` and `SendStagePlan` execute the groups assigned to their fixed
+   stage. Load authentication must share the signature-Q stage. A generic frame
+   component has empty task lists and cannot qualify an operation artifact.
 2. For each Q in descriptor order: complete base-field VK digest, descriptor
    digest low/high128 limbs, instance-column count, and each column length.
    For each object: its nonzero unique category tag and fixed byte capacity.
@@ -59,6 +65,14 @@ Transport claims and correction coordinates are checked canonical cells; a
 malformed incoming transport supplies its deterministic dummy and its decode
 bit to the complete incoming-mode predicate. The context does not replace that
 predicate or any operation, map, signature, selector or object-to-byte check.
+
+The global four-bit sigma selector is the sorted wire `(tag,mask)` table:
+Bootstrap0, Load1, Send masks0..7 at2..9, Receive masks0/1 at10/11,
+ArchiveSent12, Unload13, the shared constrained RefreshPolicy union14, and
+Retiring15. The five refresh A variants share tag7; separate unconstrained
+refresh aliases do not fit this catalog. The circuit selector constrains the
+same Send control-mask cells or Receive recorded-list predicate used by the
+operation. Earlier Load selector5 diagnostics are not the canonical catalog.
 
 `ContextPlan::with_schedule` fixes the ordered Q-index partition for each A
 stage and the unique stage owning the hard predecessor P/opening pair. A1

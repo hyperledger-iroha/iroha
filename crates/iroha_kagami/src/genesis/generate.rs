@@ -767,17 +767,15 @@ mod consensus_manifest_tests {
             });
         iroha_genesis::GenesisSourceTemplate::from_path(&path)
             .and_then(|template| {
-                template.materialize(
-                    Some(if nexus {
-                        AssetDefinitionId::derive_from_components(
-                            DomainId::parse_fully_qualified("mainnet-fixture.universal")
-                                .expect("fixture domain"),
-                            "xor".parse().expect("fixture asset"),
-                        )
-                    } else {
-                        SumeragiNposParameters::default().xor_asset_definition_id
-                    }),
-                )
+                template.materialize(Some(if nexus {
+                    AssetDefinitionId::derive_from_components(
+                        DomainId::parse_fully_qualified("mainnet-fixture.universal")
+                            .expect("fixture domain"),
+                        "xor".parse().expect("fixture asset"),
+                    )
+                } else {
+                    SumeragiNposParameters::default().xor_asset_definition_id
+                }))
             })
             .unwrap_or_else(|error| panic!("complete {} for test: {error}", path.display()))
     }

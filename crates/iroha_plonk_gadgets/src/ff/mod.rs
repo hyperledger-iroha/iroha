@@ -1582,7 +1582,7 @@ impl<F: PastaField> FfChip<F> {
     ///
     /// # Errors
     /// A fused-only profile, unconfigured or mixed modulus, non-Proper input,
-    /// batch outside1..=8, or layout error.
+    /// batch outside1..=8, modulus at most2^254, or layout error.
     pub fn dot_proper(
         &mut self,
         region: &mut Region<'_, F>,

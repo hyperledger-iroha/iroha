@@ -1231,7 +1231,7 @@ fn preexecute_genesis_on_current_thread(
         state.set_fraud_monitoring(config.fraud_monitoring.clone());
         state.set_gov(config.gov.clone());
         state.content = config.content.clone();
-        state.set_settlement(config.settlement.clone());
+        state.set_settlement(config.settlement);
     }
     if let Some(zk_config) = runtime_config.map(|config| &config.zk).or(zk_config) {
         state.set_zk(zk_config.clone()).map_err(Report::from)?;

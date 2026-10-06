@@ -2251,9 +2251,7 @@ mod tests {
         assert!(readme.contains("genesis.public_key"));
         assert!(readme.contains("genesis.expected_hash"));
         assert!(readme.contains("peer0.toml through peerN.toml"));
-        assert!(readme.contains(
-            "cargo xtask kagami-profiles --profile iroha3-dev\n"
-        ));
+        assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
     #[test]

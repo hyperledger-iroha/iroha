@@ -674,7 +674,13 @@ pub struct AcceptedTransaction<'tx> {
 impl Clone for AcceptedTransaction<'_> {
     fn clone(&self) -> Self {
         Self {
-            entrypoint: Cow::Owned(self.entrypoint().clone()),
+            // A borrowed accepted source keeps its original owner and lifetime.
+            // TODO: replace owned graph copies at their complete physical custody boundary.
+            entrypoint: if cfg!(all(test, sumeragi_core_mutation = "HC135")) {
+                Cow::Owned(self.entrypoint().clone())
+            } else {
+                self.entrypoint.clone()
+            },
             validation_time: self.validation_time,
             entrypoint_hash: clone_once_lock(&self.entrypoint_hash),
             signed_hash: clone_once_lock(&self.signed_hash),
@@ -12666,7 +12672,7 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let elastic_lane = {
+        let mut elastic_lane = {
             let mut elastic_lane = LaneConfig {
                 id: TestLaneId::new(1),
                 alias: "elastic-lane-1".to_string(),
@@ -12722,6 +12728,21 @@ pub mod tests {
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>();
         assert_eq!(peers.len(), 4);
+        crate::state::attach_autoscale_committee_for_test(&mut elastic_lane, &validators);
+        let pinned = crate::state::autoscale_lane_pinned_committee_with_pops(&elastic_lane)
+            .expect("canonical pin of the exact original four holders");
+        assert_eq!(
+            pinned
+                .iter()
+                .map(|(peer, _)| peer.clone())
+                .collect::<Vec<_>>(),
+            peers,
+        );
+        for ((peer, pop), holder) in pinned.iter().zip(&validators) {
+            assert_eq!(peer.public_key(), holder.public_key());
+            assert_eq!(pop, &bls_normal_pop_prove(holder.private_key()).unwrap());
+            assert!(iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_ok());
+        }
         for key in &validators {
             let id = AccountId::new(key.public_key().clone());
             let (id, account) = Account::new(id.clone()).build(&id).into_key_value();

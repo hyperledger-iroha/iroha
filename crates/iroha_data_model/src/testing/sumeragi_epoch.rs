@@ -137,9 +137,10 @@ mod tests {
 
     #[test]
     fn retained_history_keeps_generation_zero_and_links_each_successor() {
-        let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::new(b"fixture retained authorization history"),
-        ));
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"fixture retained authorization history",
+            )));
         let (genesis, generation) = genesis_authorization(network_id, 1, &roster());
         assert_eq!(generation.generation, 0);
         let first = successor_authorization(

@@ -401,6 +401,9 @@ _PUBLIC_BASENAMES = frozenset({
 # any other .orig/.dat filename or override material/provider/alias refusal.
 _REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
     "vendor/concread/.codespell_ignore",
+    "vendor/axum-core/Cargo.toml.orig",
+    "vendor/bytes/Cargo.toml.orig",
+    "vendor/http-body-util/Cargo.toml.orig",
     "vendor/concread/Cargo.toml.orig",
     "vendor/halo2-axiom/Cargo.toml.orig",
     "vendor/halo2curves-axiom/Cargo.toml.orig",

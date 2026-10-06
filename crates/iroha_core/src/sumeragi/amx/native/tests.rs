@@ -1440,3 +1440,6 @@ fn original_authenticated_native_amx_mv_cell_refusal_keeps_original_cut_graph_an
     assert_eq!(std::ptr::from_ref(original.canonical().unwrap()), pointer);
     assert_eq!(budget.reserved_bytes(), retained_bytes);
 }
+
+#[path = "tests/paid_borrowed_custody.rs"]
+mod paid_borrowed_custody;

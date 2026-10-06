@@ -1,6 +1,9 @@
 //! Fixed operation-task partitions and the canonical sixteen sigma selectors.
 
-use iroha_plonk::frontend::Error;
+use ff::Field;
+use iroha_pasta::Fp;
+use iroha_plonk::frontend::{Error, Region};
+use iroha_plonk_gadgets::{GlueChip, UintChip, Word};
 use iroha_plonk_recursion::obligation::ledger::Variant;
 
 /// Global sigma selector order from the wire's sorted `(operation_tag, mask)` set.
@@ -30,6 +33,35 @@ pub fn sigma_selector(operation_tag: u8, mask: u8) -> Option<u8> {
         .iter()
         .position(|pair| *pair == (operation_tag, mask))
         .and_then(|i| u8::try_from(i).ok())
+}
+
+/// Constrain the global index from the exact owning selector mask cells.
+/// Send passes its opened enabled-controls mask; Receive passes the boolean
+/// derived from the Request's recorded blacklist version. Other tags require0.
+///
+/// # Errors
+/// Undefined fixed operation tag or layout failure. Invalid masks are unsatisfiable.
+pub fn constrain_sigma_selector(
+    uint: &mut UintChip<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    operation_tag: u8,
+    mask: &Word<Fp>,
+) -> Result<Word<Fp>, Error> {
+    match operation_tag {
+        3 => {
+            uint.range_check::<3>(region, mask)?;
+            uint.glue().add_constant(region, mask, Fp::from(2))
+        }
+        4 => {
+            uint.range_check::<1>(region, mask)?;
+            uint.glue().add_constant(region, mask, Fp::from(10))
+        }
+        _ => {
+            let index = sigma_selector(operation_tag, 0).ok_or(Error::Synthesis)?;
+            GlueChip::assert_constant(region, mask, Fp::ZERO)?;
+            uint.glue().constant(region, Fp::from(u64::from(index)))
+        }
+    }
 }
 
 /// Named constraint groups assigned to fixed A stages, never private booleans.
@@ -123,6 +155,136 @@ mod tests {
                 &[vec![SendPending, SendObjects, SendFeeAndCarry]]
             )
             .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod circuit_tests {
+    use super::*;
+    use iroha_plonk::{
+        check::{CheckMode, check_circuit},
+        cs::{Column, ConstraintSystem, Instance},
+        frontend::{Circuit, Layouter, SimpleFloorPlanner, Value, synthesize},
+    };
+    use iroha_plonk_gadgets::{
+        GlueConfig,
+        range::{LimbBits, RunningSumChip, RunningSumConfig},
+        tamper::undetected_tampers,
+    };
+    #[derive(Clone)]
+    struct Selectors {
+        masks: [Fp; 16],
+        known: bool,
+    }
+    #[derive(Clone, Debug)]
+    struct Config {
+        glue: GlueConfig,
+        range: RunningSumConfig,
+        public: Column<Instance>,
+    }
+    impl Circuit<Fp> for Selectors {
+        type Config = Config;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self {
+                known: false,
+                ..self.clone()
+            }
+        }
+        fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
+            let columns = core::array::from_fn(|_| meta.advice_column());
+            let constants = meta.fixed_column();
+            let glue = GlueConfig::configure(meta, columns, constants);
+            let column = meta.advice_column();
+            let range = RunningSumConfig::configure(meta, column, LimbBits::new(4).unwrap());
+            let public = meta.instance_column(16);
+            meta.enable_equality(public);
+            Config {
+                glue,
+                range,
+                public,
+            }
+        }
+        fn synthesize(&self, config: Config, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
+            let mut glue = GlueChip::new(config.glue);
+            let mut range = RunningSumChip::new(config.range);
+            range.load_table(&mut layouter)?;
+            let out = layouter.assign_region(
+                || "canonical selector table",
+                |mut region| {
+                    let mut out = Vec::new();
+                    let mut uint = UintChip::new(&mut glue, &mut range);
+                    for ((tag, _), mask) in SIGMA_SELECTORS.iter().zip(self.masks) {
+                        let value = if self.known {
+                            Value::known(mask)
+                        } else {
+                            Value::unknown()
+                        };
+                        let mask = uint.glue().witness(&mut region, value)?;
+                        out.push(constrain_sigma_selector(
+                            &mut uint,
+                            &mut region,
+                            *tag,
+                            &mask,
+                        )?);
+                    }
+                    Ok(out)
+                },
+            )?;
+            for (i, word) in out.iter().enumerate() {
+                layouter.constrain_instance(word.cell(), config.public, i)?;
+            }
+            Ok(())
+        }
+    }
+    #[test]
+    fn canonical_selector_cells_bind_all_masks_and_reject_out_of_range_aliases() {
+        let circuit = Selectors {
+            masks: SIGMA_SELECTORS.map(|(_, mask)| Fp::from(u64::from(mask))),
+            known: true,
+        };
+        let public = (0..16).map(Fp::from).collect::<Vec<_>>();
+        assert!(
+            check_circuit(&circuit, 8, &[public.clone()], CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        for (i, value) in [
+            (0, Fp::ONE),
+            (2, Fp::from(8)),
+            (10, Fp::from(2)),
+            (14, Fp::ONE),
+            (9, -Fp::ONE),
+        ] {
+            let mut wrong = circuit.clone();
+            wrong.masks[i] = value;
+            assert!(
+                !check_circuit(&wrong, 8, &[public.clone()], CheckMode::Strict)
+                    .unwrap()
+                    .is_satisfied()
+            );
+        }
+        let mut wrong = public.clone();
+        wrong[2] = Fp::from(3);
+        assert!(
+            !check_circuit(&circuit, 8, &[wrong], CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        let known = synthesize(&circuit, 8, None).unwrap();
+        let unknown = synthesize(&circuit.without_witnesses(), 8, None).unwrap();
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+        assert_eq!(
+            known.tables.advice_assigned(),
+            unknown.tables.advice_assigned()
+        );
+        assert!(
+            undetected_tampers(&circuit, 8, &[public])
+                .unwrap()
+                .is_empty()
         );
     }
 }

@@ -7,7 +7,6 @@ mod initial_publication_admission {
         smartcontracts::isi::{
             InitialNativeInstructionAdmission, registered_native_instruction_initial_admission,
         },
-        state::WorldReadOnly as _,
         sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_config::parameters::actual::Nexus;

@@ -36,6 +36,8 @@ use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
+#[cfg(test)]
+use iroha_data_model::events::pipeline::PipelineEventBox;
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
 #[cfg(test)]
@@ -173,10 +175,6 @@ use iroha_data_model::{
     },
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
-};
-#[cfg(test)]
-use iroha_data_model::{
-    events::pipeline::PipelineEventBox, transaction::signed::TransactionResult,
 };
 #[cfg(test)]
 use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
@@ -1668,25 +1666,10 @@ type BlockHashFamily = concread::bptree::BptreeMapFamily<usize, HashOf<BlockHead
 
 /// Original physical State family; never reconstructed from portable bytes.
 #[derive(Clone)]
-pub(crate) struct NativeLaneStateOwner(BlockHashFamily);
-impl NativeLaneStateOwner {
-    pub(crate) fn matches_state(&self, state: &State) -> bool {
-        state
-            .block_hashes
-            .map()
-            .is_some_and(|map| self.0.matches(map))
-    }
-    fn same_family(&self, other: &Self) -> bool {
-        self.0.same_family(&other.0)
-    }
-}
-impl State {
-    /// Retain the actual mutable State family, refusing emergency read-only mode.
-    pub(crate) fn native_lane_state_owner(&self) -> Option<NativeLaneStateOwner> {
-        self.block_hashes
-            .map()
-            .map(|map| NativeLaneStateOwner(map.family()))
-    }
+pub(crate) struct NativeLaneStateOwner {
+    // Retain the original physical generation through publication/abort retirement.
+    // No portable identity or reconstructed family can substitute for this owner.
+    _family: BlockHashFamily,
 }
 /// The original history owner frees its exact control allocation before refund.
 type ChargedBlockHashMap =
@@ -30633,7 +30616,7 @@ impl State {
                 zk: self.zk.clone(),
                 gov: self.gov.clone(),
                 content: self.content.clone(),
-                settlement: self.settlement.clone(),
+                settlement: self.settlement,
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
@@ -33968,6 +33951,14 @@ pub(crate) fn attach_synthetic_autoscale_committee_for_test(
     lane: &mut iroha_data_model::nexus::LaneConfig,
 ) {
     let members = synthetic_autoscale_committee_keypairs_for_test();
+    attach_autoscale_committee_for_test(lane, &members);
+}
+#[cfg(test)]
+/// Pin exactly the supplied original BLS holders with canonical verified proofs.
+pub(crate) fn attach_autoscale_committee_for_test(
+    lane: &mut iroha_data_model::nexus::LaneConfig,
+    members: &[KeyPair],
+) {
     let validator_set = members
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -33976,15 +33967,15 @@ pub(crate) fn attach_synthetic_autoscale_committee_for_test(
         .iter()
         .map(|keypair| {
             iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                .expect("synthetic autoscale committee PoP")
+                .expect("original autoscale committee PoP")
         })
         .collect::<Vec<_>>();
     let committee = autoscale_lane_committee_from_validator_set(validator_set, validator_pops)
-        .expect("valid synthetic autoscale committee");
+        .expect("valid original autoscale committee");
     lane.metadata.insert(
         AUTOSCALE_META_COMMITTEE.to_owned(),
         encode_autoscale_lane_committee(&committee)
-            .expect("canonical synthetic autoscale committee"),
+            .expect("canonical original autoscale committee"),
     );
 }
 /// Legacy physical drain metadata is rejected; native lane state owns closure.
@@ -37299,7 +37290,7 @@ impl<'state> StateBlock<'state> {
             block_zk: &mut fields.zk,
             gov: fields.gov.clone(),
             content: fields.content.clone(),
-            settlement: fields.settlement.clone(),
+            settlement: fields.settlement,
             settlement_engine: fields.settlement_engine.clone(),
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,

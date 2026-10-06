@@ -11,8 +11,11 @@ Their cross-language vectors are `fixtures/kagemusha/wallet_v1_vectors.json`. Ko
 peer carriers move envelope frames, the Lineage message included (§6), and the iPhone
 and Android payment-key adapters sign exactly the 32-byte message of §1. The Durable
 State Provider binds the operation-dependent `proof_digest` (§3.2) and signs the 32-byte
-Poseidon message of §1; the protocol relations, the bridge, the ledger instructions and
-the Torii routes do not use these objects yet. The owner answers of 2026-10-05 (proposal
+Poseidon message of §1. The shared Rust state owner assembles these objects and retains
+their custody through the provider; native step relations consume the corresponding G1
+layout. The bridge carries native coordinator operations, while foreign open fails closed
+until the authenticated proof-artifact loader is connected. Ledger instructions, Torii
+routes and physical-phone qualification remain open. The owner answers of 2026-10-05 (proposal
 revision 2026-10-05) are implemented: the data model depends on `iroha_pasta` and
 computes every Poseidon value natively (`credit_id`, the state commitment, chains, map,
 blacklist, quota-window and credit-digest trees and openings, and the packed-byte

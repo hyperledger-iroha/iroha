@@ -415,6 +415,10 @@ impl ContextPlan {
             constants,
         })
     }
+    /// Fixed ordered external object categories and byte capacities.
+    pub fn object_specs(&self) -> &[ContextObjectSpec] {
+        &self.objects
+    }
     /// Fixed version/variant/partition, source key identities and object schema.
     /// These words prefix the circuit context preimage in the exact returned order.
     pub fn schema(&self) -> &[Fp] {

@@ -13,6 +13,7 @@ use std::{cell::RefCell, rc::Rc};
 #[derive(Clone)]
 struct Probe<C: PastaCurve> {
     x: C::ScalarExt,
+    index: usize,
     known: bool,
     inverse_cells: Rc<RefCell<Vec<Cell>>>,
 }
@@ -58,11 +59,18 @@ impl<C: PastaCurve> Circuit<C::Base> for Probe<C> {
                 let one = chip.constant(&mut region, C::ScalarExt::ONE)?;
                 let xn = chip.pow(&mut region, &x, 64)?;
                 let denominator = chip.sub(&mut region, &xn, &one)?;
-                let vanishing = chip.inverse(&mut region, &denominator, &mut valid)?;
+                let (vanishing, guard) = chip.arithmetic.inverse(
+                    &mut UintChip::new(&mut chip.glue, &mut chip.range),
+                    &mut region,
+                    &denominator,
+                )?;
+                chip.combine(&mut region, &mut valid, &guard)?;
                 let mut cache = std::collections::BTreeMap::new();
-                let weight = chip.lagrange_weight(&mut region, 6, 0, &x, &mut valid, &mut cache)?;
+                let weight =
+                    chip.lagrange_weight(&mut region, 6, self.index, &x, &guard, &mut cache)?;
                 let row = chip.arithmetic.ff.next_row();
-                let again = chip.lagrange_weight(&mut region, 6, 0, &x, &mut valid, &mut cache)?;
+                let again =
+                    chip.lagrange_weight(&mut region, 6, self.index, &x, &guard, &mut cache)?;
                 assert_eq!(row, chip.arithmetic.ff.next_row());
                 assert_eq!(
                     weight.limbs().each_ref().map(Word::cell),
@@ -73,7 +81,7 @@ impl<C: PastaCurve> Circuit<C::Base> for Probe<C> {
                     .iter()
                     .chain(weight.limbs())
                     .map(Word::cell)
-                    .chain([valid.cell()])
+                    .chain([guard.cell(), valid.cell()])
                     .collect();
                 let vanishing = chip.export(&mut region, &vanishing)?;
                 let weight = chip.export(&mut region, &weight)?;
@@ -93,15 +101,30 @@ impl<C: PastaCurve> Circuit<C::Base> for Probe<C> {
     }
 }
 fn cases<C: PastaCurve>() {
-    for x in [C::ScalarExt::ONE, C::ScalarExt::from(2)] {
+    let omega = iroha_plonk::protocol::omega::<C::ScalarExt>(6).unwrap();
+    for (x, index) in [
+        (C::ScalarExt::ONE, 0),
+        (C::ScalarExt::ONE, 63),
+        (C::ScalarExt::from(2), 0),
+        (C::ScalarExt::from(2), 63),
+        (omega.pow_vartime([7]), 7),
+        (omega.pow_vartime([7]), 0),
+    ] {
         let circuit = Probe::<C> {
             x,
+            index,
             known: true,
             inverse_cells: Rc::default(),
         };
         let vanishing = x.pow_vartime([64]) - C::ScalarExt::ONE;
-        let weight = x - C::ScalarExt::ONE;
-        let valid = !bool::from(vanishing.is_zero()) && !bool::from(weight.is_zero());
+        let power = omega.pow_vartime([index as u64]);
+        let denominator = x - power;
+        let valid = !bool::from(vanishing.is_zero());
+        let weight = if valid {
+            power * denominator.invert().unwrap()
+        } else {
+            C::ScalarExt::ZERO
+        };
         let limbs = |value: C::ScalarExt| {
             let words = value.to_canonical_limbs();
             [
@@ -112,7 +135,7 @@ fn cases<C: PastaCurve>() {
         let public = vec![
             limbs(vanishing.invert().unwrap_or(C::ScalarExt::ONE))
                 .into_iter()
-                .chain(limbs(weight.invert().unwrap_or(C::ScalarExt::ONE)))
+                .chain(limbs(weight))
                 .chain([C::Base::from(u64::from(valid))])
                 .collect::<Vec<_>>(),
         ];

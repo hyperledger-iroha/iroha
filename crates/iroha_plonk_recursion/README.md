@@ -84,8 +84,10 @@ descriptor result; a complete production compact proof has not been generated.
 
 The actual authenticated Bootstrap five-bus source A2 proof is 8,960 bytes.
 Its complete compact Omega predicate passes in a diagnostic larger domain but
-requires 76,577 shared rows and 148,816 range rows. Pinning its complete source
-key reduces shared rows to 73,829. **The production k16 row gates fail.** The
+requires 75,124 shared rows and 130,406 range rows after public/multiopen
+batching. Pinning its complete source key reduces shared rows to 72,376.
+The genuine five-bus Load terminal proof has the same measured occupancy.
+**The production k16 row gates fail.** The
 current catalog contains only Bootstrap; it is not the release catalog. An
 independent generic wrapper run binds the actual Omega digest before constructing
 the authenticated lineage and checks identical A2/Omega keys, but its transport

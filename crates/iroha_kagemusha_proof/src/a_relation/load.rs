@@ -252,3 +252,78 @@ impl LoadObjects {
         )
     }
 }
+
+/// Fixed Load task ownership, coupled to the same Q/key/context schema.
+#[derive(Clone, Debug)]
+pub struct LoadStagePlan {
+    context: super::context::ContextPlan,
+}
+impl LoadStagePlan {
+    /// Require recovery and authorization exactly once, with authorization
+    /// executed alongside the owning signature Q (slot1).
+    /// # Errors
+    /// Wrong variant/task set, signature-Q count or stage assignment.
+    pub fn new(context: super::context::ContextPlan) -> Result<Self, Error> {
+        use super::schedule::OperationTask;
+        if context.operation().frame().variant() != Variant::Load
+            || context.operation().q_count() != 2
+            || context.object_specs() != LoadObjects::context_specs()?
+        {
+            return Err(Error::Synthesis);
+        }
+        let groups = (0..context.stage_count())
+            .map(|i| context.operation_tasks(i).unwrap_or_default().to_vec())
+            .collect::<Vec<_>>();
+        OperationTask::validate(Variant::Load, &groups)?;
+        for (stage, tasks) in groups.iter().enumerate() {
+            if tasks.contains(&OperationTask::LoadAuthorization)
+                && !context
+                    .q_partition(stage)
+                    .ok_or(Error::Synthesis)?
+                    .contains(&1)
+            {
+                return Err(Error::Synthesis);
+            }
+        }
+        Ok(Self { context })
+    }
+    /// Context committed by every stage and its pinned W wrapper.
+    pub const fn context(&self) -> &super::context::ContextPlan {
+        &self.context
+    }
+    /// Execute precisely the fixed stage's operation tasks on context-bound cells.
+    /// # Errors
+    /// Wrong stage, missing/extraneous recovery path, or any failed constraint.
+    #[allow(clippy::too_many_arguments)] // One fixed stage and its same-cell operation inputs.
+    pub fn constrain_stage(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        stage: usize,
+        objects: &LoadObjects,
+        policy: LoadPolicy,
+        input: LoadInputs<'_>,
+        insertion: Option<&InsertCells>,
+    ) -> Result<(), Error> {
+        use super::schedule::OperationTask;
+        let tasks = self
+            .context
+            .operation_tasks(stage)
+            .ok_or(Error::Synthesis)?;
+        if tasks.contains(&OperationTask::LoadRecovery) != insertion.is_some() {
+            return Err(Error::Synthesis);
+        }
+        for task in tasks {
+            match task {
+                OperationTask::LoadRecovery => {
+                    LoadObjects::recovery(chip, region, input, insertion.ok_or(Error::Synthesis)?)?
+                }
+                OperationTask::LoadAuthorization => {
+                    objects.authenticate(chip, region, policy, input)?
+                }
+                _ => return Err(Error::Synthesis),
+            }
+        }
+        Ok(())
+    }
+}

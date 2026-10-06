@@ -353,6 +353,49 @@ fn unsigned_dot_exact_integer_bound_obligations() {
 }
 
 #[test]
+fn unsigned_dot_enforces_custom_modulus_lower_bound_both_fields_and_layouts() {
+    fn cases<F: PastaField>() {
+        for staged in [false, true] {
+            for words in [
+                [1, 0, 0, 1 << 60],
+                [u64::MAX, u64::MAX, u64::MAX, (1 << 62) - 1],
+                [1, 0, 0, 1 << 62],
+            ] {
+                let modulus = ForeignModulus::new(words).unwrap();
+                let circuit = Dot::<F> {
+                    modulus,
+                    count: 8,
+                    attack: Attack::None,
+                    maximum: true,
+                    staged,
+                    rows: None,
+                    known: true,
+                    marker: core::marker::PhantomData,
+                };
+                if modulus.nat().cmp_vartime(&Nat::pow2(254)).is_gt() {
+                    assert!(
+                        check_circuit(&circuit, 11, &[], CheckMode::Strict)
+                            .unwrap()
+                            .is_satisfied()
+                    );
+                } else {
+                    assert!(matches!(
+                        synthesize(&circuit, 11, Some(&[])),
+                        Err(Error::Synthesis)
+                    ));
+                    assert!(matches!(
+                        synthesize(&circuit.without_witnesses(), 11, None),
+                        Err(Error::Synthesis)
+                    ));
+                }
+            }
+        }
+    }
+    cases::<Fp>();
+    cases::<Fq>();
+}
+
+#[test]
 fn staged_unsigned_dot_all_fields_moduli_batches_and_cells() {
     cases::<Fp>(true);
     cases::<Fq>(true);

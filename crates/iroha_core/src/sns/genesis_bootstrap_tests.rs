@@ -8,6 +8,7 @@ use iroha_data_model::{
         SignedBlock,
         consensus::{PrivateRootFeePolicy, SumeragiGenesisContextParameters, SumeragiRootScope},
     },
+    nexus::DataSpaceCatalog,
     parameter::{Parameter, system::SumeragiConsensusMode},
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};

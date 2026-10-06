@@ -351,7 +351,9 @@ impl<C: PastaCurve> VerifierChip<C> {
         )?;
         let inverse = self.arithmetic.ff.div(region, &numerator, &denominator)?;
         for limb in inverse.limbs() {
-            let selected = self.glue.select_constant(region, vanishing_nonzero, limb, C::Base::ZERO)?;
+            let selected =
+                self.glue
+                    .select_constant(region, vanishing_nonzero, limb, C::Base::ZERO)?;
             GlueChip::assert_equal(region, limb, &selected)?;
         }
         let value = self.mul(region, &power, &inverse)?;
@@ -376,7 +378,9 @@ impl<C: PastaCurve> VerifierChip<C> {
         let one = self.constant(region, C::ScalarExt::ONE)?;
         let denominator = self.sub(region, &xn, &one)?;
         let (vanishing_inverse, vanishing_nonzero) = self.arithmetic.inverse(
-            &mut UintChip::new(&mut self.glue, &mut self.range), region, &denominator,
+            &mut UintChip::new(&mut self.glue, &mut self.range),
+            region,
+            &denominator,
         )?;
         self.combine(region, valid, &vanishing_nonzero)?;
         // L_i(x) = common * omega^i/(x-omega^i). The denominator validity
@@ -403,7 +407,14 @@ impl<C: PastaCurve> VerifierChip<C> {
                     .rem_euclid(i64::try_from(shape.n).map_err(|_| Error::BoundsFailure)?),
                 )
                 .map_err(|_| Error::BoundsFailure)?;
-                let weight = self.lagrange_weight(region, shape.k, index, &x, &vanishing_nonzero, &mut basis)?;
+                let weight = self.lagrange_weight(
+                    region,
+                    shape.k,
+                    index,
+                    &x,
+                    &vanishing_nonzero,
+                    &mut basis,
+                )?;
                 pairs.push((input.clone(), weight));
             }
             let mut value = self.constant(region, C::ScalarExt::ZERO)?;
@@ -423,12 +434,19 @@ impl<C: PastaCurve> VerifierChip<C> {
         }
         let first = self.lagrange_weight(region, shape.k, 0, &x, &vanishing_nonzero, &mut basis)?;
         let first = self.mul(region, &common, &first)?;
-        let last =
-            self.lagrange_weight(region, shape.k, shape.usable_rows, &x, &vanishing_nonzero, &mut basis)?;
+        let last = self.lagrange_weight(
+            region,
+            shape.k,
+            shape.usable_rows,
+            &x,
+            &vanishing_nonzero,
+            &mut basis,
+        )?;
         let last = self.mul(region, &common, &last)?;
         let mut blind = self.constant(region, C::ScalarExt::ZERO)?;
         for index in shape.usable_rows + 1..shape.n {
-            let value = self.lagrange_weight(region, shape.k, index, &x, &vanishing_nonzero, &mut basis)?;
+            let value =
+                self.lagrange_weight(region, shape.k, index, &x, &vanishing_nonzero, &mut basis)?;
             blind = self.add(region, &blind, &value)?;
         }
         let blind = self.mul(region, &common, &blind)?;

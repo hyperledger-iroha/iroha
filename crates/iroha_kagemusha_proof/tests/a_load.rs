@@ -185,7 +185,12 @@ impl Circuit<Fp> for LoadMaps {
                     Variant::Load,
                     &fields,
                 )?;
-                let index = chip.uint().glue().constant(&mut region, Fp::from(5))?;
+                let index = chip.uint().glue().constant(
+                    &mut region,
+                    Fp::from(u64::from(
+                        iroha_kagemusha_proof::a_relation::schedule::sigma_selector(2, 0).unwrap(),
+                    )),
+                )?;
                 let sigma = SigmaBindingCells::from_statement(&statement, index, vec![]);
                 let sources = self
                     .objects

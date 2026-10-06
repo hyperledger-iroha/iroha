@@ -71,7 +71,6 @@ use iroha_data_model::{
             TrustedBlockProofAnchor, TrustedBlockProofAnchorError, TrustedExecutionOutputAnchor,
         },
     },
-    parameter::system::ConsensusMode,
     sumeragi::epoch::ValidatorEpochContextV1,
     sumeragi_finality::EpochValidationScope,
     transaction::TransactionEntrypoint,

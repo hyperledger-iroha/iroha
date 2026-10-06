@@ -8,14 +8,12 @@
 //! TODO: compose every operation, its signature/object bindings and its
 //! exact map transitions before exposing complete lineage proving.
 
-pub mod state;
-pub mod statement;
-pub mod map_effects;
 pub mod administrative;
-
-pub mod refresh;
-pub mod quota_refresh;
-pub mod objects;
-
 /// Total incoming statement decoding and soft semantic predicates.
 pub mod incoming_statement;
+pub mod map_effects;
+pub mod objects;
+pub mod quota_refresh;
+pub mod refresh;
+pub mod state;
+pub mod statement;

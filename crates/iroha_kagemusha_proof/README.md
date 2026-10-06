@@ -87,6 +87,21 @@ root-digest rebinding and final resource qualification remain open.
 The object/map component alone uses 19,092 sponge rows and 1,986 UInt rows on
 shared A lanes, before recursive verification and signature authorization.
 
+## Send composition
+
+`a_relation::send` binds the exact payer credential, signed Request and held-fee
+slot to the same state/statement cells and depth32 pending and fee map paths.
+Zero held fees permit a total malformed dummy slot; enabled fees require the
+exact held schedule and arithmetic. The Request signature belongs to its
+receiver's obligation, so Send has no extra local signature Q.
+
+Actual mask0 sigma and object/map components pass, including missing or replaced
+map writes and cross-object substitution. The five-bus component uses35k sponge
+rows before recursive proofs. The fixed task schedule can place ownership,
+pending and fee/carry checks in separate stages and commits those assignments in
+`D_ctx`; metadata alone never proves an operation. Complete rooted Send remains
+pending the common canonical Bootstrap/Load Omega catalog and digest rebind.
+
 ## Controls
 
 Send's verifying key is selected by the opened core mask. Receive's key is

@@ -4,10 +4,10 @@
 use super::*;
 use iroha_core::release_identity::BuildIdentity;
 use iroha_core::sumeragi::native_journal::authenticate_signed_genesis;
+use iroha_data_model::NetworkId;
 use iroha_data_model::query::{
     block::prelude::FindBlocks, builder::QueryBuilderExt as _, parameters::Pagination,
 };
-use iroha_data_model::NetworkId;
 use iroha_data_model::sumeragi::epoch::{
     BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationV1,
     ValidatorEpochDecisionV1, ValidatorGenerationV1,

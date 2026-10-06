@@ -26,7 +26,8 @@ use iroha_kagemusha_proof::{
     a_relation::{
         AProofPlan, ProofMessageCells, QProofPlan, SigmaBindingCells, VestaClaimCells,
         context::{ContextInputs, ContextPlan, ContextPredecessor, ContextState},
-        load::{LoadInputs, LoadObjects},
+        load::{LoadInputs, LoadObjects, LoadStagePlan},
+        schedule::OperationTask,
         split::close_first,
         verify_predecessor, verify_sigma,
     },
@@ -100,7 +101,7 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega) -> Sources {
         SigmaClass::new(
             VerifierPlan::new(leaf_key.binding().clone(), leaf_params).unwrap(),
             vec![(
-                5,
+                iroha_kagemusha_proof::a_relation::schedule::sigma_selector(2, 0).unwrap(),
                 leaf_key.vk().kagemusha_digest(leaf_key.binding()).unwrap(),
             )],
         )
@@ -351,7 +352,12 @@ impl First {
                 .collect::<Vec<_>>(),
             &[SegmentSpec::little(0, 4)],
         )?;
-        let index = chip.uint().glue().constant(region, Fp::from(5))?;
+        let index = chip.uint().glue().constant(
+            region,
+            Fp::from(u64::from(
+                iroha_kagemusha_proof::a_relation::schedule::sigma_selector(2, 0).unwrap(),
+            )),
+        )?;
         SigmaBindingCells::from_run(chip, region, statement, index, &run)
     }
 }
@@ -426,9 +432,12 @@ impl Circuit<Fp> for First {
                     objects.each_ref().map(Vec::as_slice),
                 )?;
                 let insertion = maps.insertion(&mut chip.uint(), &mut region)?;
-                LoadObjects::recovery(
+                LoadStagePlan::new(self.plan.clone())?.constrain_stage(
                     &mut chip,
                     &mut region,
+                    0,
+                    &objects,
+                    load_objects::policy(),
                     LoadInputs {
                         predecessor: MapState {
                             state: &old,
@@ -441,7 +450,7 @@ impl Circuit<Fp> for First {
                         sigma: &sigma,
                         signatures: &[],
                     },
-                    &insertion,
+                    Some(&insertion),
                 )?;
                 let q_instances = self
                     .source
@@ -879,9 +888,11 @@ impl Circuit<Fp> for Continuation {
                             &first.source.signature_schema,
                             &q,
                         )?;
-                        objects.authenticate(
+                        LoadStagePlan::new(first.plan.clone())?.constrain_stage(
                             &mut chip,
                             &mut region,
+                            self.plan.stage(),
+                            &objects,
                             load_objects::policy(),
                             LoadInputs {
                                 predecessor: MapState {
@@ -895,6 +906,7 @@ impl Circuit<Fp> for Continuation {
                                 sigma: &sigma,
                                 signatures: &slots,
                             },
+                            None,
                         )?;
                         q
                     };
@@ -1476,6 +1488,44 @@ fn load_profiles(
                 ContextPlan::with_predecessor_first(source.plan.clone(), first_q, objects)
             }
             .unwrap();
+            let mut tasks = vec![Vec::new(); plan.stage_count()];
+            tasks[0].push(OperationTask::LoadRecovery);
+            let final_stage = tasks.len() - 1;
+            tasks[final_stage].push(OperationTask::LoadAuthorization);
+            let plan = plan.with_operation_tasks(tasks).unwrap();
+            LoadStagePlan::new(plan.clone()).unwrap();
+            if adversarial {
+                for mutation in 0..3 {
+                    let mut specs = LoadObjects::context_specs().unwrap().to_vec();
+                    match mutation {
+                        0 => specs[0].tag = 77,
+                        1 => specs[1].capacity += 1,
+                        _ => {
+                            specs.pop();
+                        }
+                    }
+                    let bad = ContextPlan::with_schedule(
+                        source.plan.clone(),
+                        (0..plan.stage_count())
+                            .map(|i| plan.q_partition(i).unwrap().to_vec())
+                            .collect(),
+                        plan.predecessor_stage(),
+                        specs,
+                    )
+                    .unwrap()
+                    .with_operation_tasks(
+                        (0..plan.stage_count())
+                            .map(|i| plan.operation_tasks(i).unwrap().to_vec())
+                            .collect(),
+                    )
+                    .unwrap();
+                    assert!(
+                        LoadStagePlan::new(bad).is_err(),
+                        "wrong Load object schema{mutation}"
+                    );
+                }
+            }
+
             let mut claims = vec![
                 source.predecessor.pallas.as_input(),
                 source.predecessor.opening.clone(),

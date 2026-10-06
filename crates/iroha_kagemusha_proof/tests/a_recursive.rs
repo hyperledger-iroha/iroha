@@ -1532,6 +1532,15 @@ pub(crate) fn authenticated_bootstrap_with_layout(
     .unwrap();
     let mut object = core::array::from_fn(|i| u8::try_from(i).unwrap());
     object[..4].copy_from_slice(&32u32.to_le_bytes());
+    let context_plan = context_plan
+        .with_operation_tasks(vec![
+            vec![],
+            vec![
+                iroha_kagemusha_proof::a_relation::schedule::OperationTask::BootstrapState,
+                iroha_kagemusha_proof::a_relation::schedule::OperationTask::BootstrapAuthorization,
+            ],
+        ])
+        .unwrap();
     let context = ContextCircuit {
         plan: context_plan,
         statement: initial.statement,
