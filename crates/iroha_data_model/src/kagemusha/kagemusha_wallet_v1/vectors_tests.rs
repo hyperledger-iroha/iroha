@@ -967,6 +967,8 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
     let receiver_challenge = f.receiver.challenge.challenge_digest();
     let payer_challenge = f.payer.challenge.challenge_digest();
     let receive_digests = w.receive.verify(receiver).expect("receive package");
+    let (new_app, new_enrollment) =
+        enrollment_policy::enrollment_policy_tests::policy_fixture(false);
 
     vec![
         digest_vector(
@@ -1016,6 +1018,20 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             f.payer.challenge.transcript(),
             false,
             Some(payer_challenge),
+        ),
+        digest_vector(
+            Role::AppPolicy,
+            "NEW unadmitted DATA app policy; public pins are placeholders, no approval",
+            new_app.transcript().expect("policy transcript"),
+            false,
+            Some(new_app.policy_digest().expect("policy digest")),
+        ),
+        digest_vector(
+            Role::EnrollmentPolicy,
+            "NEW unadmitted DATA enrollment policy; public pins are placeholders, no approval",
+            new_enrollment.transcript().expect("policy transcript"),
+            false,
+            Some(new_enrollment.policy_digest().expect("policy digest")),
         ),
         digest_vector(
             Role::EnrollmentId,

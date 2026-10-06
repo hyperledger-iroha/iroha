@@ -437,6 +437,65 @@ class FirstDeviceAuthProtocolV1Test {
     }
 
     @Test
+    fun lostPrepareRecoveryCarriesInitialBindingsWithoutAChallenge() {
+        val operation = "02".repeat(32)
+        val nonce = "03".repeat(32)
+        val initial = FirstDeviceAuthProtocolV1.googleIdTokenOriginalSha256("initial-google-original")
+        val request = FirstDeviceAuthProtocolV1.prepareRecoveryRequest(operation, nonce,
+            "original-auth-alias", initial, "fresh-google-original")
+        val obj = Json.parse(request.bodyBytes()) as JsonObject
+        assertEquals(setOf("phase", "operation_id", "client_nonce", "alias",
+            "google_token_original_sha256", "google_id_token"), obj.keys)
+        assertEquals("prepare", obj.stringOrNull("phase"))
+        assertEquals(initial, obj.stringOrNull("google_token_original_sha256"))
+        assertEquals("fresh-google-original", obj.stringOrNull("google_id_token"))
+        assertFalse(obj.containsKey("challenge_original_base64"))
+        assertEquals(operation, request.idempotencyKey)
+        assertEquals("/v1/kagemusha/hardware-evidence/first-device/recover", request.path)
+        assertNotEquals(initial, FirstDeviceAuthProtocolV1.googleIdTokenOriginalSha256("fresh-google-original"))
+        val copy = request.bodyBytes(); copy.fill(0)
+        assertEquals(obj, Json.parse(request.bodyBytes()))
+    }
+
+    @Test
+    fun recoveredPrepareMatchesInitialDataAndKeepsHistoricalTimes() {
+        val alias = "original-auth-alias"
+        val initial = FirstDeviceAuthProtocolV1.googleIdTokenOriginalSha256("initial-google-original")
+        val value = challenge(overrides = mapOf(
+            "alias_digest" to Json.of(hex(sha(alias.toByteArray(Charsets.US_ASCII)))),
+            "google_token_original_sha256" to Json.of(initial),
+        ))
+        FirstDeviceAuthProtocolV1.requirePrepareRecoveryBinding(value, value.operationId,
+            value.clientNonce, alias, initial)
+        assertEquals(BigInteger.valueOf(1000), value.issuedAtMs)
+        assertEquals(BigInteger.valueOf(2000), value.expiresAtMs)
+        for ((operation, nonce, offeredAlias, tokenDigest) in listOf(
+            listOf("09".repeat(32), value.clientNonce, alias, initial),
+            listOf(value.operationId, "09".repeat(32), alias, initial),
+            listOf(value.operationId, value.clientNonce, "other-alias", initial),
+            listOf(value.operationId, value.clientNonce, alias,
+                FirstDeviceAuthProtocolV1.googleIdTokenOriginalSha256("fresh-google-original")),
+        )) rejected { FirstDeviceAuthProtocolV1.requirePrepareRecoveryBinding(value,
+            operation, nonce, offeredAlias, tokenDigest) }
+    }
+
+    @Test
+    fun prepareRecoveryRejectsInvalidOriginalBindingsAndFreshTokens() {
+        fun request(operation: String = "02".repeat(32), nonce: String = "03".repeat(32),
+            alias: String = "original-alias", digest: String = "04".repeat(32), fresh: String = "fresh") =
+            FirstDeviceAuthProtocolV1.prepareRecoveryRequest(operation, nonce, alias, digest, fresh)
+        for (bad in listOf("00".repeat(32), "AB".repeat(32), "0a".repeat(31), "gg".repeat(32))) {
+            rejected { request(operation = bad) }; rejected { request(nonce = bad) }; rejected { request(digest = bad) }
+        }
+        for (bad in listOf("", " ", "a".repeat(257), "alias-α")) rejected { request(alias = bad) }
+        for (bad in listOf("", "token\n", "t".repeat(16385))) {
+            rejected { request(fresh = bad) }; rejected { FirstDeviceAuthProtocolV1.googleIdTokenOriginalSha256(bad) }
+        }
+        assertEquals(listOf("raw-attestation", "finish"),
+            FirstDeviceAuthProtocolV1.RecoveryPhase.values().map { it.wireName })
+    }
+
+    @Test
     fun malformedUtf8AndBoundViolationsAreRejectedBeforeDataExposure() {
         rejected { FirstDeviceAuthProtocolV1.Challenge.parse(byteArrayOf(0xff.toByte())) }
         rejected { FirstDeviceAuthProtocolV1.Challenge.parse(ByteArray(4097)) }

@@ -2,6 +2,10 @@
 
 Only synthetic public configuration and fake Cargo executables are used. These
 cases never compile native code or load/install/promote a library.
+
+Prerequisites: Python 3.11+ and executable /usr/bin/perl with its core Cwd and
+JSON::PP modules. The exact child-environment observer uses Perl because macOS
+Python startup can insert __CF_USER_TEXT_ENCODING before Python code runs.
 """
 from __future__ import annotations
 
@@ -46,6 +50,8 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
         self.cache = self.base / "private-cache"
         self.cwd.mkdir(mode=0o700)
         self.cache.mkdir(mode=0o700)
+        self.discovery = self.cwd / "Cargo.toml"
+        self.discovery.write_bytes(b"[workspace]\nmembers = []\n")
         self.target = self.root / "dist/norito-bridge-android-local/gradle-build/iroha_kotlin_sdk/client-android/native/cargo-target/armv7-diagnostic"
         self.target.mkdir(parents=True)
         self.retained = self.target / "retained-compilation"
@@ -84,6 +90,17 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
         (self.tools / "cargo").write_text(program)
         (self.tools / "cargo").chmod(0o755)
 
+    def raw_environment_cargo(self):
+        self.assertTrue(os.access("/usr/bin/perl", os.X_OK),
+                        "Exact child-environment observer requires executable /usr/bin/perl")
+        program = ("#!/usr/bin/perl -T\n"
+                   "use strict; use warnings; use Cwd qw(getcwd); use JSON::PP qw(encode_json);\n"
+                   "print encode_json({cwd => getcwd(), cache => $ENV{CARGO_HOME}, "
+                   "target => $ENV{CARGO_TARGET_DIR}, argv => \\@ARGV, "
+                   "keys => [sort keys %ENV]});\n")
+        (self.tools / "cargo").write_text(program)
+        (self.tools / "cargo").chmod(0o755)
+
     def launch(self, *, profile="android-armv7-diagnostic-cargo", cwd=True,
                arguments=None, environment=None):
         command = [str(Path(sys.executable).resolve()), "-I", "-S",
@@ -106,11 +123,13 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
             self.root, self.cache, self.cwd, local_integration=True)
 
     def test_actual_child_uses_private_cwd_cache_and_retains_same_warm_target(self):
+        self.raw_environment_cargo()
         # The account config continues to be an invalid production compiler owner.
         global_config = self.config(self.account, '[build]\nrustc-wrapper = "TEST ONLY wrapper"\n[env]\nTEST_ONLY = "synthetic"\n')
         original = global_config.read_bytes()
         accepted = self.launch()
-        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(accepted.returncode, 0,
+                         "Child observer requires Perl core Cwd and JSON::PP modules: " + accepted.stderr)
         observed = json.loads(accepted.stdout)
         self.assertEqual(observed["cwd"], str(self.cwd))
         self.assertEqual(observed["cache"], str(self.cache))
@@ -190,6 +209,106 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
         self.assertEqual(original, self.observe())
         path.write_text('[net]\noffline = true\n# changed original\n')
         self.assertNotEqual(original, self.observe())
+
+    def test_discovery_workspace_receipt_binds_bytes_identity_and_lock_absence(self):
+        original = self.observe()
+        discovery = original["discovery_workspace"]
+        self.assertEqual(discovery["manifest_path"], str(self.discovery))
+        self.assertEqual(discovery["manifest_sha256"],
+                         "01682718dc81bf6ca83b17e5a4b7fd755dc44c08357e0c817c20d66e5f474a78")
+        self.assertEqual(discovery["lock_path"], str(self.cwd / "Cargo.lock"))
+        self.assertIsNone(discovery["lock_identity"])
+        # An identical replacement remains a different authenticated original.
+        replacement = self.base / "replacement.toml"
+        replacement.write_bytes(self.discovery.read_bytes())
+        timestamp = self.discovery.stat().st_mtime_ns
+        os.utime(replacement, ns=(timestamp, timestamp))
+        replacement.replace(self.discovery)
+        self.assertNotEqual(original, self.observe())
+
+    def test_discovery_workspace_refuses_missing_or_buildable_manifests(self):
+        variants = [None, b"[workspace]\nmembers=['/some/source']\n",
+                    b"[package]\nname='injected'\nversion='0.1.0'\n",
+                    b"[workspace]\nmembers=[]\n[workspace.dependencies]\nother='1'\n",
+                    b"[workspace]\nmembers = []\n# additional content\n"]
+        for contents in variants:
+            with self.subTest(contents=contents):
+                if contents is None:
+                    self.discovery.unlink()
+                else:
+                    self.discovery.write_bytes(contents)
+                rejected = self.launch()
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertEqual(rejected.stdout, "")
+                self.assertIn("diagnostic discovery", rejected.stderr)
+                self.discovery.write_bytes(b"[workspace]\nmembers = []\n")
+
+    def test_discovery_manifest_refuses_links_nonfiles_and_writable_or_foreign_custody(self):
+        original = self.base / "original.toml"
+        self.discovery.rename(original)
+        self.discovery.symlink_to(original)
+        with self.assertRaises((ValueError, OSError)):
+            self.observe()
+        self.discovery.unlink()
+        os.link(original, self.discovery)
+        with self.assertRaisesRegex(ValueError, "non-linked bounded regular file"):
+            self.observe()
+        self.discovery.unlink()
+        self.discovery.mkdir()
+        with self.assertRaisesRegex(ValueError, "bounded regular file"):
+            self.observe()
+        self.discovery.rmdir()
+        original.rename(self.discovery)
+        self.discovery.chmod(0o666)
+        with self.assertRaisesRegex(ValueError, "owned non-linked bounded regular file"):
+            self.observe()
+        self.discovery.chmod(0o600)
+        with mock.patch.object(policy.os, "geteuid", return_value=os.geteuid() + 1):
+            with self.assertRaisesRegex(ValueError, "owned non-linked bounded regular file"):
+                policy.android_armv7_discovery_workspace(self.cwd)
+
+    def test_discovery_lock_refuses_file_and_dangling_link_before_child(self):
+        lock = self.cwd / "Cargo.lock"
+        for symbolic in (False, True):
+            with self.subTest(symbolic=symbolic):
+                if symbolic:
+                    lock.symlink_to(self.base / "missing-lock")
+                else:
+                    lock.write_text("# no packages\n")
+                rejected = self.launch()
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertEqual(rejected.stdout, "")
+                self.assertIn("discovery Cargo.lock must remain absent", rejected.stderr)
+                lock.unlink()
+
+    def test_discovery_manifest_and_lock_are_rechecked_after_real_child(self):
+        chosen = repr(str(self.discovery))
+        replacement = repr(str(self.base / "replacement.toml"))
+        lock = self.cwd / "Cargo.lock"
+        mutations = ["pathlib.Path(" + chosen + ").unlink()",
+                     "pathlib.Path(" + chosen + ").write_bytes(b'[package]\\n')",
+                     "p=pathlib.Path(" + replacement + "); p.write_bytes(pathlib.Path(" + chosen + ").read_bytes()); p.replace(" + chosen + ")",
+                     "pathlib.Path(" + repr(str(lock)) + ").write_text('# injected lock\\n')"]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.fake_cargo(mutation)
+                rejected = self.launch()
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("diagnostic", rejected.stderr)
+                self.discovery.write_bytes(b"[workspace]\nmembers = []\n")
+                lock.unlink(missing_ok=True)
+
+    def test_discovery_workspace_is_rechecked_during_source_authentication(self):
+        def fingerprint(*args):
+            (self.cwd / "Cargo.lock").write_text("# changed during seal\n")
+            return "2" * 64
+        with mock.patch.dict(os.environ, self.seal_environment()), \
+             mock.patch.object(seal, "seal_inputs", return_value=["Cargo.toml", "Cargo.lock"]), \
+             mock.patch.object(seal, "source_commit", return_value="1" * 40), \
+             mock.patch.object(seal, "status", return_value=""), \
+             mock.patch.object(seal, "fingerprint", side_effect=fingerprint):
+            with self.assertRaisesRegex(ValueError, "discovery Cargo.lock must remain absent"):
+                seal.snapshot(self.root, "android-armv7-diagnostic", self.root / "Cargo.lock")
 
     def test_each_actual_ancestor_and_cache_keeps_strict_compiler_rejections(self):
         cases = [('[env]\nTEST_ONLY = "synthetic"\n', "forbids env"),

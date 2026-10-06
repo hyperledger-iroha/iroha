@@ -64,6 +64,7 @@ use crate::nexus::AxtAssetIncarnationValidationError;
 
 mod custody;
 mod digest;
+mod enrollment_policy;
 mod frame_alignment;
 mod identity;
 mod keys;
@@ -104,6 +105,13 @@ pub use self::{
         kagemusha_wallet_freeze_signature_v1, kagemusha_wallet_is_canonical_field_v1,
         kagemusha_wallet_signed_object_digest_v1, kagemusha_wallet_signed_object_items_v1,
         kagemusha_wallet_signing_message_v1, kagemusha_wallet_verify_signature_v1,
+    },
+    enrollment_policy::{
+        KAGEMUSHA_WALLET_APP_IDENTIFIER_MAX_BYTES_V1,
+        KAGEMUSHA_WALLET_ENROLLMENT_POLICY_MAX_BYTES_V1, KagemushaWalletAndroidHardwareV1,
+        KagemushaWalletAppIdentityV1, KagemushaWalletAppPolicyV1,
+        KagemushaWalletEnrollmentPlatformV1, KagemushaWalletEnrollmentPolicyV1,
+        KagemushaWalletPlayIntegrityLevelV1,
     },
     identity::{
         KAGEMUSHA_WALLET_ANDROID_FORBIDDEN_FACTS_V1, KAGEMUSHA_WALLET_ANDROID_REQUIRED_FACTS_V1,

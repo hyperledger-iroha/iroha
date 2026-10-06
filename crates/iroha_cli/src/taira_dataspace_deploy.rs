@@ -66,6 +66,11 @@ pub(crate) fn validate_deployment_trust(
     trust.validate(network)
 }
 
+/// Reject a new deployment profile that cannot address its four validators independently.
+pub(crate) fn validate_deployment_peer_routes(trust: &DeploymentTrustV1) -> Result<()> {
+    finality::verification_origins(trust, &[]).map(|_| ())
+}
+
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const PHASES: [&str; 3] = ["catalog", "bootstrap", "aliases"];
 const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
@@ -83,6 +88,22 @@ pub(crate) enum Command {
     Status(DefinitionArgs),
 }
 
+impl Command {
+    /// Validate public read routes before opening signer credentials or an operation journal.
+    pub(crate) fn verification_origins(&self, trust: &DeploymentTrustV1) -> Result<Vec<String>> {
+        let (args, status) = match self {
+            Self::Plan(args) | Self::Apply(args) => (args, false),
+            Self::Status(args) => (args, true),
+            Self::ExportProfile(_) => eyre::bail!("profile export has no verification routes"),
+        };
+        require(
+            status || args.verification_peer_urls.is_empty(),
+            "--verification-peer-url is only available for read-only dataspace status",
+        )?;
+        finality::verification_origins(trust, &args.verification_peer_urls)
+    }
+}
+
 #[derive(Debug, clap::Args)]
 pub(crate) struct DefinitionArgs {
     /// Dataspace TOML containing only owner decisions.
@@ -93,6 +114,10 @@ pub(crate) struct DefinitionArgs {
     /// Private journal root; defaults to ~/.iroha-dataspaces across definitions.
     #[arg(long)]
     pub(crate) state: Option<PathBuf>,
+    /// Read-only status routes, one per trusted peer in profile order. Repeat exactly four times.
+    /// Signed peer identities and retained deployment intent are never changed.
+    #[arg(long = "verification-peer-url", value_name = "URL")]
+    pub(crate) verification_peer_urls: Vec<String>,
     /// Total time budget for planning, dispatch and fresh verification.
     #[arg(long, default_value_t = DEFAULT_OPERATION_TIMEOUT_MS,
           value_parser = clap::value_parser!(u64).range(1..))]
@@ -1490,6 +1515,7 @@ fn run_saved_until<C: RunContext>(
     mut preflight_proofs: Option<&mut finality::Preflight<'_>>,
     apply: bool,
     deadline: Instant,
+    verification_origins: &[String],
 ) -> Result<ReportV1> {
     require_operation_budget(deadline, "validate retained operation")?;
     operation_id(&plan.operation_id)?;
@@ -1708,7 +1734,8 @@ fn run_saved_until<C: RunContext>(
     if report.state == "applied_verification_pending" {
         eprintln!("[dataspace] starting fresh four-validator finality verification");
         let verification: Result<()> = (|| {
-            let mut completion = finality::Completion::new(plan, journal, deadline)?;
+            let mut completion =
+                finality::Completion::new(plan, journal, deadline, verification_origins)?;
             complete_until(apply, deadline, &mut report, |report| {
                 completion.complete(context, report)
             })
@@ -2695,8 +2722,16 @@ mod tests {
         let journal = Journal::open(&root.path().join(&plan.operation_id), true).unwrap();
         // No plan file exists: any attempted journal revalidation would return another error.
         for apply in [false, true] {
-            let error = run_saved_until(&NoIoContext, &journal, &plan, None, apply, Instant::now())
-                .unwrap_err();
+            let error = run_saved_until(
+                &NoIoContext,
+                &journal,
+                &plan,
+                None,
+                apply,
+                Instant::now(),
+                &[],
+            )
+            .unwrap_err();
             assert!(error.to_string().contains("deadline elapsed"));
         }
         let mut substituted = plan.clone();
@@ -2714,6 +2749,7 @@ mod tests {
             None,
             true,
             operation_deadline(60_000).unwrap(),
+            &[],
         )
         .unwrap_err();
         assert!(

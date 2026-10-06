@@ -5,7 +5,11 @@ split-lineage design ([proposal](kagemusha_single_design_proposal.md) §§3, 3.1
 4.1, 5.1, 7 and 8; §10, G1). They are implemented in
 `iroha_data_model::kagemusha::kagemusha_wallet_v1`
 (`crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1.rs` and its child files).
-Their cross-language vectors are `fixtures/kagemusha/wallet_v1_vectors.json`. Kotlin
+Their cross-language vectors are `fixtures/kagemusha/wallet_v1_vectors.json`. The NEW
+first-release typed E1 policy pair additionally uses the unadmitted DATA
+`fixtures/kagemusha/wallet_enrollment_policy_v1_vectors.json`; that pair
+adds two SHA roles to the coordinated Model/Kotlin/Swift digest inventory; typed
+foreign policy carriers and issuer ownership still require migration. Kotlin
 `org.hyperledger.iroha.sdk.offline.KagemushaWalletWireV1` (`kotlin/core-jvm`) and Swift
 `KagemushaWalletWireV1` (`IrohaSwift`) consume the vectors (§5), the Swift and Kotlin
 peer carriers move envelope frames, the Lineage message included (§6), and the iPhone
@@ -70,11 +74,12 @@ chunk boundaries, and every value (§5).
 
 - **Transcripts.** A body is a fixed-layout transcript of the object's fields in
   declaration order: fixed-width integers, raw digests, keys and signatures, and
-  enums as a one-byte tag equal to the Norito tag. Where variants differ, the tag
-  is followed by the variant's fields and zero fill to a pinned union width. Nested
+  enums as a one-byte tag equal to the Norito tag. Existing fixed-union transcripts
+  zero fill to a pinned union width. The NEW policy preimages use their exact selected
+  arm and LE32-length-prefixed exact UTF8; see their separate contract. Nested
   fixed records are inlined. A reference to a signer certificate is its 32-byte
   certificate digest, a `P` value. Only the `account`, `evidence`,
-  `verifying-key-set`, `marker`, `capsule`, `completion` and `fold` roles, the
+  `verifying-key-set`, NEW `app-policy` and `enrollment-policy`, `marker`, `capsule`, `completion` and `fold` roles, the
   certificate-set digest and the lineage digest have variable-length inputs.
 - **Signing.** Every P-256 signature of the protocol signs, as its message,
   the 32-byte canonical (little-endian, §3.2) encoding `m` of `P_bytes(d, transcript)`, where `d` is the
@@ -124,7 +129,7 @@ SHA-256 roles do not exist):
 | load voucher (§3.6) | `kgwvchr1` | 250 | LoadAuthorization | `P(kgwovch1, ·)` |
 | ledger control (§3.6) | `kgwlctl1` | 211 | payment key | none |
 
-SHA-256 role table (all 18 labels of `KagemushaWalletDigestRoleV1`). `H` remains only for
+SHA-256 role table (all 20 labels of `KagemushaWalletDigestRoleV1`). `H` remains only for
 `scheme_id`, the identities fixed at enrollment that no relation recomputes (asset scope,
 wallet, enrollment), the enrollment and renewal transcripts given to platform
 attestation, `account`, the artifact digests, the evidence digest, the output descriptor
@@ -138,6 +143,8 @@ and the local custody records (B1):
 | `asset-scope` | asset scope transcript (§3.1) | 54 | fixed identity; ledger boundary |
 | `account` | complete canonical Norito frame of the domainless `AccountId` | var | ledger boundary; the ledger derives it from the `AccountId` |
 | `enrollment-challenge` | §3.1 | 194 | platform-attestation challenge, used only by the issuer |
+| `app-policy` | NEW [typed app identity](kagemusha_wallet_enrollment_policy_v1.md) | ≤334 | fixed initial selection; no approval implied |
+| `enrollment-policy` | NEW [typed platform/regulator/lifetime policy](kagemusha_wallet_enrollment_policy_v1.md) | 183 Android, 167 Apple | selected issuer inputs; no approval implied |
 | `enrollment-id`, `enrollment-key-binding` | `challenge_digest ‖ payment_key` | 97 | enrollment transcript; App Attest client data |
 | `wallet-id` | `scheme_id ‖ asset_digest ‖ payment_key ‖ enrollment_id` | 161 | fixed identity; carried, never recomputed in a relation |
 | `artifact-manifest` | `m ‖ sig` of the signed artifact manifest | 96 | artifact digest |
@@ -949,7 +956,7 @@ paths fit), to be measured.
 ## 5. Vectors
 
 `fixtures/kagemusha/wallet_v1_vectors.json` holds the prefix and digest rule, one
-digest vector per SHA-256 role (18: body, preimage, digest), 18 signature vectors, each
+digest vector per SHA-256 role (20: body, preimage, digest), 18 signature vectors, each
 with its transcript, signing domain and 32-byte message `m`, and their high-S twins
 (`codec_ok` false, `verify_ok` true), the low-S boundary scalars (`s = floor(n/2)`
 accepted; `floor(n/2) + 1`, `r` or `s` zero or `n` rejected), nine envelope vectors
@@ -992,7 +999,8 @@ to low S; stand-ins follow the labelled rules in `stand_ins`. The Rust test
 `kagemusha_wallet_v1_vectors_file_matches_the_generated_vectors` compares the file
 byte for byte; `IROHA_UPDATE_KAGEMUSHA_WALLET_VECTORS=1` rewrites it (test-only).
 The Kotlin (`KagemushaWalletVectorsV1Test`) and Swift (`KagemushaWalletVectorsV1Tests`)
-consumers recompute the 18 SHA-256 role digests with every retired role rejected, mirror
+consumers recompute all 20 SHA-256 role digests, including the NEW policy identities,
+with every retired role rejected, and mirror
 the 17 signing domains with their transcript lengths, verify every signature vector over
 its pinned 32-byte message `m` after the low-S rule (and reject it over the transcript),
 validate envelope headers and per-kind bounds, and round-trip `kgm1:` text. They
@@ -1009,7 +1017,7 @@ and quota-window trees) and `iroha_plonk_gadgets` (`tests/statement_digest.rs`, 
 byte-linking tests of `src/bytes` for the packing, every large-input digest and every
 signing message) reproduce them natively and in circuit.
 
-**Canonical third-set coverage.** The vectors carry 18 SHA-256 role
+**Canonical third-set coverage.** The vectors carry 20 SHA-256 role
 vectors (the consumers reject the 16 deleted roles), 60 Poseidon domains (the 17 signing and 26 base domains,
 the 11 object-digest domains of §1, and `kgwcset1`, `kgwpkg_1`, `kgwopid1`, `kgwnull1`,
 `kgwqusn1` and `kgwbhst1`), every object, certificate-set, package, operation and
@@ -1158,8 +1166,7 @@ encryption and checksums never replace the wallet's verification.
 - TODO(owner), kept as is: a Send capsule retains the Request message (§8);
   `Λ_load` and `Λ_unload` do not verify ChargeQuote signatures; a Retiring wallet's
   refusal to issue Requests is wallet behaviour (TODO(G4)).
-- TODO(G5): `app_policy` and `enrollment_policy` preimages with the Torii
-  enrollment family; issuer verification of renewal evidence.
+- NEW first-release G5 preimages: [typed app/enrollment policy contract](kagemusha_wallet_enrollment_policy_v1.md). These domains and lifetime rules are new decisions, not owner-answer evidence or a mapping of existing opaque digests. Native policy approval/issuer admission and foreign policy carriers remain coordinated G5 work; issuer verification of renewal evidence remains TODO(G5).
 - TODO(G4/G6): JavaScript, Python and C# consumers when their wire copies migrate.
 - TODO(G6): the ledger instruction family; TODO(G3/G6): the release install path
   carrying the artifact manifest.

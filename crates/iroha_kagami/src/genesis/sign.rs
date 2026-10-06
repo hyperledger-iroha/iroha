@@ -2055,6 +2055,34 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let genesis = table.get_mut("genesis").unwrap().as_table_mut().unwrap();
         genesis.remove("expected_hash");
         genesis.remove("expected_hash_file");
+        // The complete parser requires both retained private inputs. These bytes satisfy
+        // parser custody only: the keyring is deliberately not a Role-keyring frame and
+        // this test never invokes LoadRoleKeyring, publisher preflight or publication.
+        let custody = path.parent().expect("private parser fixture directory");
+        let keyring = custody.join("UNADMITTED-parser-keyring-DATA");
+        crate::secure_fs::write_private_file_atomic(
+            &keyring,
+            b"UNADMITTED parser DATA; no Load role or signer authorization",
+        )
+        .unwrap();
+        let submitter = custody.join("UNADMITTED-parser-submitter-key");
+        let record = zeroize::Zeroizing::new(
+            format!("{}\n", ExposedPrivateKey(key.private_key().clone())).into_bytes(),
+        );
+        crate::secure_fs::write_private_file_atomic(&submitter, record.as_slice()).unwrap();
+        table.insert(
+            "kagemusha_load_authorizer".to_owned(),
+            toml::Value::Table(toml::Table::from_iter([
+                (
+                    "keyring_file".to_owned(),
+                    keyring.to_string_lossy().into_owned().into(),
+                ),
+                (
+                    "submitter_key_file".to_owned(),
+                    submitter.to_string_lossy().into_owned().into(),
+                ),
+            ])),
+        );
         let source = || TomlSource::new(path.clone(), table.clone());
         assert!(actual::Root::from_toml_source(source()).is_err());
         let context = actual::GenesisSigningContext::from_toml_source(source()).unwrap();

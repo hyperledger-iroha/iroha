@@ -18,13 +18,15 @@ use crate::kagemusha::kagemusha_wallet_v1::poseidon::{
 /// Payment, lineage, credit-opening, credit-status and credited digests, every signing message,
 /// the trees and the quota-usage array) is a Poseidon value, not a SHA role (owner answers Q1,
 /// Q2, Q9, A1, A3 and B1).
-const ROLE_LABELS: [&str; 18] = [
+const ROLE_LABELS: [&str; 20] = [
     "scheme",
     "relation",
     "provider-contract",
     "asset-scope",
     "account",
     "enrollment-challenge",
+    "app-policy",
+    "enrollment-policy",
     "enrollment-id",
     "enrollment-key-binding",
     "wallet-id",

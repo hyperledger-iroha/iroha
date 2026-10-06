@@ -779,3 +779,26 @@ fn source_outer_inventory(bootstrap: &bootstrap_chain::AuthenticatedBootstrap, r
     eprintln!("AUTHENTICATED_BOOTSTRAP_PINNED_KEY_CATALOG entries=1 full_catalog=false");
     compact_diagnostic(&pinned, &public);
 }
+
+#[test]
+#[ignore = "genuine Q2/tagged A3 source and strict k16 secondary replay; no outer proof"]
+fn tagged_three_bus_bootstrap_secondary_strict_and_unknown_inventory() {
+    let bootstrap = bootstrap_chain::authenticated_bootstrap_with_profile(
+        false,
+        Fp::from(91),
+        bootstrap_chain::SourceProfile::Tagged { buses: 3 },
+        Some(2),
+    );
+    let (circuit, public, _) = wrapper(&bootstrap);
+    let (spans, plan) = compact_layout(&circuit, &public, false)
+        .expect("the full authenticated source did not produce a strict k16 secondary layout");
+    assert_eq!(spans.ends()[2], 65_530);
+    assert_eq!(plan.capacity(), 65_530);
+    assert!(plan.primary_end() <= plan.capacity());
+    assert!(plan.event_count() > 0);
+    eprintln!(
+        "AUTHENTICATED_SECONDARY_STRICT_INVENTORY_PASS events={} range={} known_unknown_equal=true actual_outer_proof=false full_catalog=false lineage_rebound=false",
+        plan.event_count(),
+        plan.primary_end()
+    );
+}

@@ -285,7 +285,15 @@ fn execute_fixture_genesis(
         sumeragi::network_topology::Topology,
     };
     use iroha_data_model::{account::Account, domain::Domain};
-    let provisional = manifest.clone().build_and_sign(key).unwrap();
+    // Sign the same computed native policy as Kagami; the data-model fallback
+    // constant is not the configured Core policy used by this execution fixture.
+    let provisional = manifest
+        .clone()
+        .build_and_sign_with_confidential_policy_hash(
+            key,
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+        )
+        .unwrap();
     let authority = AccountId::new(key.public_key().clone());
     let world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],

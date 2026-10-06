@@ -239,7 +239,6 @@ object FirstDeviceAuthProtocolV1 {
 
     /** Recovery selects exact retained phase data; it never renews or re-verifies a consumed attempt. */
     enum class RecoveryPhase(val wireName: String) {
-        PREPARE("prepare"),
         RAW_ATTESTATION("raw-attestation"),
         FINISH("finish"),
     }
@@ -383,6 +382,39 @@ object FirstDeviceAuthProtocolV1 {
     fun parseFinishResponse(body: ByteArray): FinishOriginal? =
         nullableOriginal(body, "result_original_base64")?.let { FinishOriginal.parse(it) }
 
+    /** Exact initial Google token digest DATA, retained before the first prepare dispatch. */
+    @JvmStatic
+    fun googleIdTokenOriginalSha256(originalGoogleIdToken: String): String {
+        graphic(originalGoogleIdToken, 16384)
+        return sha(ascii(originalGoogleIdToken)).joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
+
+    /**
+     * Recover a lost initial prepare reply without supplying a challenge that was never received.
+     * The initial token digest remains unchanged; the fresh token only authorizes the owner query.
+     * Core reads its existing protected challenge and never creates or renews it on this route.
+     */
+    @JvmStatic
+    fun prepareRecoveryRequest(
+        operationId: String,
+        clientNonce: String,
+        alias: String,
+        initialGoogleTokenOriginalSha256: String,
+        freshGoogleIdToken: String,
+    ): HttpRequestData {
+        digest(operationId)
+        digest(clientNonce)
+        graphic(alias, 256)
+        digest(initialGoogleTokenOriginalSha256)
+        graphic(freshGoogleIdToken, 16384)
+        return request("/recover", operationId, linkedMapOf(
+            "phase" to Json.of("prepare"), "operation_id" to Json.of(operationId),
+            "client_nonce" to Json.of(clientNonce), "alias" to Json.of(alias),
+            "google_token_original_sha256" to Json.of(initialGoogleTokenOriginalSha256),
+            "google_id_token" to Json.of(freshGoogleIdToken),
+        ))
+    }
+
     /** Recovery preserves original challenge and phase while supplying fresh Google authorization. */
     @JvmStatic
     fun recoveryRequest(
@@ -419,13 +451,29 @@ object FirstDeviceAuthProtocolV1 {
         alias: String,
         originalGoogleIdToken: String,
     ) {
+        requirePrepareRecoveryBinding(challenge, operationId, clientNonce, alias,
+            googleIdTokenOriginalSha256(originalGoogleIdToken))
+    }
+
+    /**
+     * Structural recovered challenge binding to initial DATA; no fresh-token digest substitution.
+     * Matching fields supplies no Google, attestation, key-generation or wallet authority.
+     */
+    @JvmStatic
+    fun requirePrepareRecoveryBinding(
+        challenge: Challenge,
+        operationId: String,
+        clientNonce: String,
+        alias: String,
+        initialGoogleTokenOriginalSha256: String,
+    ) {
         digest(operationId)
         digest(clientNonce)
         graphic(alias, 256)
-        graphic(originalGoogleIdToken, 16384)
+        digest(initialGoogleTokenOriginalSha256)
         require(challenge.operationId == operationId && challenge.clientNonce == clientNonce &&
             digest(challenge.aliasDigest).contentEquals(sha(ascii(alias))) &&
-            digest(challenge.googleTokenOriginalSha256).contentEquals(sha(ascii(originalGoogleIdToken)))) {
+            challenge.googleTokenOriginalSha256 == initialGoogleTokenOriginalSha256) {
             "first-device auth prepare response does not match submitted data"
         }
     }

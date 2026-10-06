@@ -7,7 +7,7 @@ import XCTest
 /// `kagemusha_wallet_v1` vector test, and checks the Swift wallet wire helpers against it.
 ///
 /// Poseidon values are computed only by the native Rust core; these tests never recompute one.
-/// They check every SHA-256 role (the 18 roles, with every retired role rejected), frame,
+/// They check every SHA-256 role (the 20 roles, including NEW unsigned E1 policies, with every retired role rejected), frame,
 /// envelope and signature vector (each over its 32-byte Poseidon signing message), the σ-field
 /// element lists, the `P_bytes` packing of every large-input digest and signing message, the
 /// depth-32 indexed-tree openings, the limb-ordered blacklist and the verifying-key allowlist,
@@ -240,7 +240,7 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
 
   func testDigestVectorsRecomputeEveryRole() throws {
     let vectors = try objects(loadFixture(), "digests")
-    XCTAssertEqual(KagemushaWalletDigestRoleV1.allCases.count, 18)
+    XCTAssertEqual(KagemushaWalletDigestRoleV1.allCases.count, 20)
     // One vector per role, in the order of the Rust `KagemushaWalletDigestRoleV1::ALL`.
     XCTAssertEqual(
       try vectors.map { try string($0, "role") },

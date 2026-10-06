@@ -37988,15 +37988,59 @@ impl StateTransaction<'_, '_> {
         {
             return crate::zk::PreverifyResult::PreverifyBudgetExceeded;
         }
-        crate::zk::preverify_with_budget(
+        // Preserve the current backend, activity, budget, commitment and
+        // canonical-envelope refusal order without publishing to the block
+        // cache until the original native key has passed compiled admission.
+        // The temporary admission cache holds one key; it never clones the
+        // growing block-local cache.
+        let mut admission = crate::zk::DedupCache::new();
+        let preflight = crate::zk::preverify_with_budget(
             proof,
             vk,
-            &mut self.zk_dedup,
+            &mut admission,
             self.zk.preverify_budget_bytes,
             vk_commitment,
             expected_vk_commitment,
             vk_active,
-        )
+        );
+        if preflight != crate::zk::PreverifyResult::Accepted {
+            return preflight;
+        }
+        if !cfg!(all(test, sumeragi_core_mutation = "HC146"))
+            && crate::zk::production_verify_backend_tag(proof.backend.as_str())
+                == Some(iroha_data_model::zk::BackendTag::NativePipaRPasta)
+            && let Some(native_key) = vk
+        {
+            // Preflight already authenticated this canonical envelope and
+            // its schema/hash bindings. Also pin the bounded descriptor and
+            // processed key to the compiled relation before dedup publication;
+            // a consistently rehashed foreign key remains foreign.
+            let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+                match norito::decode_canonical(&proof.bytes) {
+                    Ok(envelope) => envelope,
+                    Err(_) => return crate::zk::PreverifyResult::MalformedProof,
+                };
+            if crate::zk::native_pipa_r::validate_key(
+                proof.backend.as_str(),
+                &envelope.circuit_id,
+                native_key,
+            )
+            .is_err()
+            {
+                return crate::zk::PreverifyResult::VerifyingKeyMismatch;
+            }
+        }
+        // Accepted preflight establishes a nonzero matching commitment: the
+        // supplied original, or the expected original when none was supplied.
+        // Publish exactly the key preimage used by the existing CoreZK owner.
+        if self
+            .zk_dedup
+            .check_and_insert_with_commitment(proof, vk_commitment.or(expected_vk_commitment))
+        {
+            crate::zk::PreverifyResult::Accepted
+        } else {
+            crate::zk::PreverifyResult::Duplicate
+        }
     }
 }
 #[cfg(test)]

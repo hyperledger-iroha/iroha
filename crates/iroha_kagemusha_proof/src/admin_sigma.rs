@@ -25,6 +25,9 @@ use crate::{
     witness::{CORE_DOMAIN, CORE_FIELDS, REST_DOMAIN, REST_FIELDS},
 };
 
+/// Original-key import and typed proving owners for the fixed administrative leaves.
+pub mod native;
+
 #[path = "admin_sigma/load.rs"]
 mod load;
 pub use load::{LoadCircuit, LoadWitness, StateWitness};

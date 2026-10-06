@@ -80,6 +80,7 @@ fn derive_profile(
         peers,
     };
     validate_deployment_trust(&profile, network)?;
+    validate_deployment_peer_routes(&profile)?;
     Ok(profile)
 }
 
@@ -441,7 +442,7 @@ mod tests {
             )
             .is_err()
         );
-        for defect in 0..5 {
+        for defect in 0..6 {
             let mut changed = trust.peers.clone();
             match defect {
                 0 => {
@@ -450,6 +451,7 @@ mod tests {
                 1 => changed[1] = changed[0].clone(),
                 2 => changed[0].node_fingerprint = Hash::new(b"wrong node"),
                 3 => changed[0].torii_origin = "https://name:password@example.com/".into(),
+                4 => changed[1].torii_origin = changed[0].torii_origin.clone(),
                 _ => {
                     let foreign =
                         KeyPair::try_from_seed(vec![99; 32], Algorithm::BlsNormal).unwrap();

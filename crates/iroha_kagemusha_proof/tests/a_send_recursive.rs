@@ -1029,10 +1029,23 @@ fn continue_schedule(
     first_proof: iroha_plonk::ProverOutput<Eq>,
     first_public: &[Vec<Fp>],
     adversarial: bool,
+    native_differential: bool,
 ) -> Option<AuthenticatedSend> {
     use iroha_kagemusha_proof::a_relation::split::{SplitPlan, WCircuit, WKey};
     let params = &first.source.params;
     let vparams = common::vesta_params(16);
+    let mut installed_a = if native_differential {
+        vec![Arc::new(first_key.clone())]
+    } else {
+        vec![]
+    };
+    let mut installed_w = vec![];
+    let mut originals_a = if native_differential {
+        vec![(first_proof.proof.clone(), first.pallas.to_bytes())]
+    } else {
+        vec![]
+    };
+    let mut originals_w = vec![];
     let mut source_key = first_key.clone();
     let mut source_proof = first_proof;
     let mut source_public = first_public.to_vec();
@@ -1094,6 +1107,9 @@ fn continue_schedule(
         )
         .unwrap();
         let (wkey, wprover) = WKey::keygen(&circuit, params).unwrap();
+        if native_differential {
+            installed_w.push(Arc::new(wprover.clone()));
+        }
         for wrong_stage in 0..=first.plan.stage_count() {
             if wrong_stage != stage {
                 assert!(
@@ -1139,6 +1155,9 @@ fn continue_schedule(
         let salt = Fp::from(124 + u64::try_from(stage).unwrap()).to_repr();
         let (fold, pallas) = create_fold(params, &claims, salt, &FoldConfig::default()).unwrap();
         pallas.decide(params, MemoryBudget::DEFAULT).unwrap();
+        if native_differential {
+            originals_w.push((wrapper.proof.clone(), vesta.to_bytes()));
+        }
         let continuation = Continuation {
             first: first.clone(),
             plan: SplitPlan::new(first.plan.clone(), stage, wkey, params).unwrap(),
@@ -1274,6 +1293,9 @@ fn continue_schedule(
         let mut cfg = KeygenConfigV2::pipa_r(vec![iroha_plonk::cs::InstanceType::Bounded]);
         cfg.compress_selectors = false;
         let key = keygen_pk_v2(&vparams, &continuation, &cfg).unwrap();
+        if native_differential {
+            installed_a.push(Arc::new(key.clone()));
+        }
         assert_eq!(key.binding().descriptor(), first_key.binding().descriptor());
         let proof = create_proof_owned_with_claim(
             &vparams,
@@ -1294,7 +1316,19 @@ fn continue_schedule(
             continuation.plan.is_terminal()
         );
         artifact_diagnostics(stage, &key, &proof.proof, first.profile.range_buses());
+        if native_differential {
+            originals_a.push((proof.proof.clone(), pallas.to_bytes()));
+        }
         if continuation.plan.is_terminal() {
+            if native_differential {
+                native_installed_send_differential(
+                    first,
+                    installed_a,
+                    installed_w,
+                    originals_a,
+                    originals_w,
+                );
+            }
             let final_digest = key.vk().kagemusha_digest(key.binding()).unwrap();
             let final_catalog = iroha_kagemusha_proof::omega::OmegaPlan::new(
                 key.binding().clone(),
@@ -1484,6 +1518,27 @@ pub(crate) fn run_send_from_load(
     profile: SourceProfile,
     q_buses: Option<usize>,
 ) -> AuthenticatedSend {
+    run_send_from_load_with_native(rooted, profile, q_buses, false)
+}
+fn run_send_schedule_with_native(
+    rooted: &load_outer::TwoTerminalLoadOmega,
+    range_buses: usize,
+    q_buses: Option<usize>,
+    native_differential: bool,
+) -> AuthenticatedSend {
+    run_send_from_load_with_native(
+        &rooted.artifact,
+        SourceProfile::ordinary(range_buses),
+        q_buses,
+        native_differential,
+    )
+}
+fn run_send_from_load_with_native(
+    rooted: &load_outer::DiagnosticLoadOmega,
+    profile: SourceProfile,
+    q_buses: Option<usize>,
+    native_differential: bool,
+) -> AuthenticatedSend {
     let source = Arc::new(sources(rooted, q_buses));
     let context = ContextPlan::with_schedule(
         source.plan.clone(),
@@ -1581,7 +1636,7 @@ pub(crate) fn run_send_from_load(
         .opening
         .decide(&params, MemoryBudget::DEFAULT)
         .unwrap();
-    let output = continue_schedule(&first, &key, proof, &public, true)
+    let output = continue_schedule(&first, &key, proof, &public, true, native_differential)
         .expect("complete Send schedule must meet k16");
     assert_eq!(output.state.core, source.maps.witness.after.core);
     assert_eq!(output.state.rest, source.maps.witness.after.rest);
@@ -1590,4 +1645,213 @@ pub(crate) fn run_send_from_load(
         "SEND_COMPLETE_TASK_COMPONENT hard_predecessor=true mandatory_own2V1F=true same_tape_full320=true all_maps=true all_openings=true full_catalog=false release_qualified=false"
     );
     output
+}
+
+#[test]
+#[ignore = "genuine common-key predecessor and fixed-artifact native Send all five stages plus restore"]
+fn installed_native_send_proves_and_restores_all_five_stages() {
+    let rooted = load_outer::two_terminal_load_omega_with_q_layout(false, 4, Some(2));
+    run_send_schedule_with_native(&rooted, 4, Some(2), true);
+}
+
+fn native_installed_send_differential(
+    first: &First,
+    a: Vec<Arc<iroha_plonk::ProvingKey<Eq>>>,
+    w: Vec<Arc<iroha_plonk::ProvingKey<Ep>>>,
+    originals_a: Vec<(Vec<u8>, [u8; 544])>,
+    originals_w: Vec<(Vec<u8>, [u8; 544])>,
+) {
+    use iroha_kagemusha_proof::a_relation::native::send as native;
+    assert_eq!(
+        first.profile,
+        SourceProfile::ordinary(native::SOURCE_RANGE_BUSES)
+    );
+    let source = &first.source;
+    let input = native::Inputs {
+        state: native::SendState {
+            before: source.maps.witness.before,
+            after: source.maps.witness.after,
+            statement: source.maps.witness.statement,
+        },
+        omega: source.omega.clone(),
+        sigma: source.sigma.clone(),
+        objects: source
+            .maps
+            .witness
+            .objects
+            .iter()
+            .cloned()
+            .chain(source.own_objects.iter().map(|o| o.bytes.clone()))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(),
+        pending: source.maps.witness.pending,
+        fee: source.maps.witness.fee,
+        q: core::array::from_fn(|i| native::QInput {
+            proof: source.q_proofs[i].clone(),
+            instances: source.q_instances[i].clone(),
+        }),
+        predecessor: native::PredecessorInput {
+            proof: source.predecessor.proof.clone(),
+            pallas: source.predecessor.pallas.to_bytes(),
+            vesta: source.predecessor.vesta.to_bytes(),
+        },
+    };
+    let plan = native::Plan::new(
+        source.plan.clone(),
+        0,
+        load_objects::policy(),
+        source.signature_schema.clone(),
+        source.predecessor.key.clone(),
+        source.params.clone(),
+        common::vesta_params(16),
+    )
+    .unwrap();
+    assert_eq!(plan.context().schema(), first.plan.schema());
+    let installed = native::Prover::from_artifacts(
+        plan,
+        a.try_into()
+            .unwrap_or_else(|_| panic!("exact five installed A keys")),
+        w.try_into()
+            .unwrap_or_else(|_| panic!("exact four installed W keys")),
+    )
+    .unwrap();
+    assert_eq!(installed.descriptors().len(), 9);
+    assert!(
+        native::Catalog::new(core::array::from_fn(|_| installed.clone())).is_err(),
+        "eight copies of mask0 never substitute for the complete mask catalog"
+    );
+    let budget = MemoryBudget::DEFAULT;
+    let session = installed.prepare(input.clone(), budget).unwrap();
+    let unrelated_session = installed.prepare(input.clone(), budget).unwrap();
+    let fold = FoldConfig::default();
+    let generated = session
+        .first(
+            Fp::from(122),
+            &fold,
+            common::recovery(211),
+            ProverConfig::default(),
+        )
+        .unwrap();
+    let mut current = session
+        .restore_first(originals_a[0].0.clone(), &originals_a[0].1, budget)
+        .unwrap();
+    assert_eq!(current.stage(), 0);
+    assert_eq!(generated.instances(), current.instances());
+    assert_eq!(generated.pallas_bytes(), current.pallas_bytes());
+    assert_eq!(current.instances(), first_public(first)[0]);
+    assert!(session.terminal(&current, budget).is_err());
+    assert!(unrelated_session.terminal(&current, budget).is_err());
+    let mut changed = originals_a[0].0.clone();
+    changed[0] ^= 1;
+    assert!(
+        session
+            .restore_first(changed, &originals_a[0].1, budget)
+            .is_err()
+    );
+    assert!(
+        session
+            .restore_first(originals_a[0].0.clone(), &originals_a[0].1[..543], budget)
+            .is_err()
+    );
+    for stage in 0..4 {
+        let generated_w = session
+            .wrapper(
+                &current,
+                Fq::from(124 + stage as u64),
+                &fold,
+                common::recovery(212 + stage as u8),
+                ProverConfig::default(),
+            )
+            .unwrap();
+        let restored_w = session
+            .restore_wrapper(
+                &current,
+                originals_w[stage].0.clone(),
+                &originals_w[stage].1,
+                budget,
+            )
+            .unwrap();
+        assert_eq!(generated_w.vesta_bytes(), restored_w.vesta_bytes());
+        assert_eq!(generated_w.stage(), stage);
+        // A's Pallas fold uses the original W opening. Replaying that W preserves every
+        // exact downstream context even when the generated W's proof randomness differs.
+        let generated_a = session
+            .advance(
+                &restored_w,
+                Fp::from(125 + stage as u64),
+                &fold,
+                common::recovery(220 + stage as u8),
+                ProverConfig::default(),
+            )
+            .unwrap();
+        let restored_a = session
+            .restore_a(
+                &restored_w,
+                originals_a[stage + 1].0.clone(),
+                &originals_a[stage + 1].1,
+                budget,
+            )
+            .unwrap();
+        assert_eq!(generated_a.instances(), restored_a.instances());
+        assert_eq!(generated_a.pallas_bytes(), restored_a.pallas_bytes());
+        assert_eq!(restored_a.stage(), stage + 1);
+        assert!(
+            unrelated_session
+                .restore_a(
+                    &restored_w,
+                    originals_a[stage + 1].0.clone(),
+                    &originals_a[stage + 1].1,
+                    budget
+                )
+                .is_err()
+        );
+        let mut wrong = originals_w[stage].0.clone();
+        wrong[0] ^= 1;
+        assert!(
+            session
+                .restore_wrapper(&current, wrong, &originals_w[stage].1, budget)
+                .is_err()
+        );
+        let mut wrong = originals_a[stage + 1].0.clone();
+        wrong[0] ^= 1;
+        assert!(
+            session
+                .restore_a(&restored_w, wrong, &originals_a[stage + 1].1, budget)
+                .is_err()
+        );
+        current = restored_a;
+    }
+    let terminal = session.terminal(&current, budget).unwrap();
+    assert_eq!(terminal.instances, current.instances());
+    assert_eq!(terminal.pallas.to_bytes(), current.pallas_bytes());
+    terminal.pallas.decide(&source.params, budget).unwrap();
+    let vparams = common::vesta_params(16);
+    terminal.vesta_part.decide(&vparams, budget).unwrap();
+    terminal.predecessor_vesta.decide(&vparams, budget).unwrap();
+    terminal.opening.decide(&vparams, budget).unwrap();
+    assert!(
+        session
+            .wrapper(
+                &current,
+                Fq::from(130),
+                &fold,
+                common::recovery(225),
+                ProverConfig::default()
+            )
+            .is_err()
+    );
+    for mutation in 0..4 {
+        let mut bad = input.clone();
+        match mutation {
+            0 => bad.sigma[0] ^= 1,
+            1 => bad.predecessor.proof[0] ^= 1,
+            2 => bad.q[1].proof[0] ^= 1,
+            _ => bad.state.before.lineage[17] += Fp::ONE,
+        }
+        assert!(
+            installed.prepare(bad, budget).is_err(),
+            "original mutation{mutation}"
+        );
+    }
 }

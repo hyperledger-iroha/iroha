@@ -14,10 +14,14 @@ from pathlib import Path
 
 from .attestation import (
     DurableAppleAssertionCounterStore, RawPlatformProof, android_patch_policy_met,
-    fixed32, require, validate_android_patch_floor,
+    require,
     verify_android_wallet_payment_key_raw, verify_apple_wallet_attestation_raw,
 )
-from .play_integrity import GooglePlayIntegrityVerifier, PlayIntegrityEnrollmentPolicy
+from .play_integrity import GooglePlayIntegrityVerifier
+from .wallet_policy import (
+    AndroidAppIdentityV1, AndroidEnrollmentPlatformV1, AppleAppIdentityV1,
+    AppleEnrollmentPlatformV1, ConfiguredWalletEnrollmentPolicyV1,
+)
 from .revocation import verify_google_chain_not_revoked
 
 _PREFIX = b"iroha:kagemusha:wallet:v1:"
@@ -56,42 +60,6 @@ class WalletEnrollmentScope:
 
 
 @dataclass(frozen=True)
-class AndroidWalletEnrollmentPolicy:
-    """Configured Google-root KeyMint/app policy; never decoded from a mobile request."""
-    package_name: str
-    package_version: int
-    app_signing_certificate_sha256: bytes
-    attestation_root_der: bytes
-    attestation_root_sha256: bytes
-    allowed_security_levels: frozenset[int]
-    patch_floor_yyyymm: int
-    play_integrity: PlayIntegrityEnrollmentPolicy
-
-    def validate(self) -> None:
-        require(type(self.attestation_root_der) is bytes
-                and hashlib.sha256(self.attestation_root_der).digest()
-                == fixed32(self.attestation_root_sha256, "configured Android root"),
-                "configured Android root differs")
-        validate_android_patch_floor(self.patch_floor_yyyymm)
-        require(type(self.play_integrity) is PlayIntegrityEnrollmentPolicy,
-                "current E1 Play Integrity enrollment policy absent")
-        self.play_integrity.validate()
-        require(self.play_integrity.package_name == self.package_name
-                and self.play_integrity.package_version == self.package_version
-                and self.play_integrity.app_signing_certificate_sha256
-                == self.app_signing_certificate_sha256,
-                "separate Google and KeyMint app selections differ")
-
-
-@dataclass(frozen=True)
-class AppleWalletEnrollmentPolicy:
-    """Configured App ID and App Attestation root for a production scheme."""
-    app_id: str
-    attestation_root_der: bytes
-    attestation_root_sha256: bytes
-
-
-@dataclass(frozen=True)
 class VerifiedWalletEnrollmentEvidence:
     """Projection plus original checked items; never an HTTP or signer capability.
 
@@ -126,8 +94,9 @@ def _trusted_time(time_ms: int) -> None:
 
 def verify_android_wallet_enrollment(
     chain_der: list[bytes], opaque_play_integrity_token: str,
-    scope: WalletEnrollmentScope, policy: AndroidWalletEnrollmentPolicy,
+    scope: WalletEnrollmentScope, policy: ConfiguredWalletEnrollmentPolicyV1,
     google: GooglePlayIntegrityVerifier, trusted_time_ms: int, openssl_path: Path,
+    *, challenge_created_at_ms: int,
 ) -> VerifiedWalletEnrollmentEvidence:
     """Independent hardware, fresh Google revocation and server-decoded PI checks.
 
@@ -136,20 +105,25 @@ def verify_android_wallet_enrollment(
     retryable VerificationUnavailable semantics; no caller verdict or software key is used.
     """
     scope.validate()
-    policy.validate()
     _trusted_time(trusted_time_ms)
+    require(type(policy) is ConfiguredWalletEnrollmentPolicyV1, "configured policy absent")
+    policy.validate_scope(scope.challenge_transcript, challenge_created_at_ms, trusted_time_ms)
+    app = policy.app.identity
+    selected = policy.enrollment.platform
+    require(type(app) is AndroidAppIdentityV1 and type(selected) is AndroidEnrollmentPlatformV1,
+            "configured Android platform absent")
     require(isinstance(google, GooglePlayIntegrityVerifier), "configured Google verifier absent")
     raw: RawPlatformProof = verify_android_wallet_payment_key_raw(
-        chain_der, scope.challenge_digest(), policy.package_name, policy.package_version,
-        policy.app_signing_certificate_sha256, policy.attestation_root_der,
-        policy.attestation_root_sha256, trusted_time_ms, openssl_path,
-        allowed_security_levels=policy.allowed_security_levels)
+        chain_der, scope.challenge_digest(), app.package_name, app.package_version,
+        app.app_signing_certificate_sha256, policy.attestation_root_der,
+        selected.attestation_root_sha256, trusted_time_ms, openssl_path,
+        allowed_security_levels=selected.allowed_security_levels())
     require(raw.attested_public_key_sec1 == scope.payment_key_sec1,
             "KeyMint attests another payment key")
     # This first producer supports configured Google roots only. Other vendor roots need
     # their actual adapter-owned revocation contract, never a fabricated Google-clear bit.
     verify_google_chain_not_revoked(chain_der)
-    integrity = google.decode(opaque_play_integrity_token, policy.play_integrity,
+    integrity = google.decode(opaque_play_integrity_token, policy.play_integrity_policy(),
                               scope.enrollment_key_binding(), trusted_time_ms)
     require(raw.android_security_level in (1, 2) and raw.android_patch_levels is not None,
             "verified Android key facts absent")
@@ -157,7 +131,7 @@ def verify_android_wallet_enrollment(
     facts = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 9) | (1 << 10)
     if raw.android_security_level == 2:
         facts |= 1 << 1
-    if android_patch_policy_met(levels, policy.patch_floor_yyyymm):
+    if android_patch_policy_met(levels, selected.patch_floor_yyyymm):
         facts |= 1 << 4
     patches = tuple(0 if level is None else level for level in
                     (levels.os_patch_level, levels.vendor_patch_level, levels.boot_patch_level))
@@ -170,8 +144,9 @@ def verify_android_wallet_enrollment(
 
 def verify_apple_wallet_enrollment(
     attestation_object: bytes, assertion_object: bytes, app_attest_key_id: bytes,
-    scope: WalletEnrollmentScope, policy: AppleWalletEnrollmentPolicy,
+    scope: WalletEnrollmentScope, policy: ConfiguredWalletEnrollmentPolicyV1,
     counters: DurableAppleAssertionCounterStore, trusted_time_ms: int, openssl_path: Path,
+    *, challenge_created_at_ms: int,
 ) -> VerifiedWalletEnrollmentEvidence:
     """Production App Attest plus fresh assertion binding the separate payment public key.
 
@@ -182,16 +157,22 @@ def verify_apple_wallet_enrollment(
     """
     scope.validate()
     _trusted_time(trusted_time_ms)
+    require(type(policy) is ConfiguredWalletEnrollmentPolicyV1, "configured policy absent")
+    policy.validate_scope(scope.challenge_transcript, challenge_created_at_ms, trusted_time_ms)
+    app = policy.app.identity
+    selected = policy.enrollment.platform
+    require(type(app) is AppleAppIdentityV1 and type(selected) is AppleEnrollmentPlatformV1,
+            "configured Apple platform absent")
     require(isinstance(counters, DurableAppleAssertionCounterStore),
             "durable configured Apple counter owner absent")
     raw = verify_apple_wallet_attestation_raw(
-        attestation_object, app_attest_key_id, policy.app_id, "production",
+        attestation_object, app_attest_key_id, app.app_id, "production",
         scope.challenge_digest(), policy.attestation_root_der,
-        policy.attestation_root_sha256, trusted_time_ms, openssl_path)
-    counters.register_verified_key(raw, policy.app_id, "production")
+        selected.attestation_root_sha256, trusted_time_ms, openssl_path)
+    counters.register_verified_key(raw, app.app_id, "production")
     assertion = counters.verify_wallet_enrollment_and_advance(
         assertion_object, scope.enrollment_key_binding(), app_attest_key_id,
-        policy.app_id, "production", openssl_path)
+        app.app_id, "production", openssl_path)
     return VerifiedWalletEnrollmentEvidence(
         3, trusted_time_ms, (1 << 6) | (1 << 7) | (1 << 8), 0, 0, 0,
         (attestation_object, assertion_object), app_attest_key_id, assertion.counter)

@@ -1,7 +1,13 @@
-"""Authenticate explicit local mobile output and private diagnostic configuration."""
+"""Authenticate explicit local mobile output and private diagnostic configuration.
+
+Requires Python 3.11+ and explicitly prepared paths; no cache or workspace is
+created. Android diagnostic cargo-ndk discovery requires the exact empty
+workspace manifest below in its private invocation directory, without a lock.
+"""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import os
 import json
@@ -82,6 +88,50 @@ def cargo_home(root: Path, path: Path, *, local_integration: bool = False) -> Pa
 
 
 ANDROID_ARMV7_CONFIGURATION_SCHEMA = "iroha.android-armv7-diagnostic-configuration.v1"
+ANDROID_ARMV7_DISCOVERY_MANIFEST = b"[workspace]\nmembers = []\n"
+
+
+def android_armv7_discovery_workspace(invocation: Path) -> dict[str, object]:
+    """Bind cargo-ndk's empty discovery workspace without admitting build inputs."""
+    manifest = invocation / "Cargo.toml"
+    lock = invocation / "Cargo.lock"
+    try:
+        descriptor = os.open(manifest, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as error:
+        raise ValueError("Android diagnostic discovery requires its exact non-symbolic Cargo.toml") from error
+    identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+        value.st_uid, value.st_gid, value.st_size, value.st_mtime_ns, value.st_ctime_ns,
+    )
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) & 0o022
+                or before.st_size != len(ANDROID_ARMV7_DISCOVERY_MANIFEST)):
+            raise ValueError("Android diagnostic discovery manifest must be an owned non-linked bounded regular file")
+        contents = os.read(descriptor, len(ANDROID_ARMV7_DISCOVERY_MANIFEST) + 1)
+        after = os.fstat(descriptor)
+        linked = manifest.lstat()
+        if (identity(before) != identity(after) or identity(after) != identity(linked)
+                or manifest.resolve(strict=True) != manifest):
+            raise ValueError("Android diagnostic discovery manifest changed during authentication")
+        if contents != ANDROID_ARMV7_DISCOVERY_MANIFEST:
+            raise ValueError("Android diagnostic discovery requires the exact empty workspace manifest")
+    finally:
+        os.close(descriptor)
+    try:
+        lock.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("Android diagnostic discovery Cargo.lock must remain absent")
+    return {
+        "manifest_path": str(manifest),
+        "manifest_identity": list(identity(after)),
+        "manifest_sha256": hashlib.sha256(contents).hexdigest(),
+        "lock_path": str(lock),
+        "lock_identity": None,
+    }
 
 
 def android_armv7_diagnostic_configuration(
@@ -113,6 +163,7 @@ def android_armv7_diagnostic_configuration(
     owner = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(owner)
     observation = owner.authenticate_cargo_invocation_directory(root, invocation)
+    discovery = android_armv7_discovery_workspace(invocation)
     configuration = owner.authenticate_build_cargo_configuration(invocation, cache)
     owner.recheck_build_cargo_configuration(configuration)
     owner.recheck_cargo_invocation_directory(root, observation)
@@ -121,6 +172,8 @@ def android_armv7_diagnostic_configuration(
                               value.st_uid, value.st_gid)
     if cache.resolve(strict=True) != cache or identity(current) != identity(metadata):
         raise ValueError("Android diagnostic Cargo home changed during authentication")
+    if android_armv7_discovery_workspace(invocation) != discovery:
+        raise ValueError("Android diagnostic discovery workspace changed during authentication")
     return {
         "schema": ANDROID_ARMV7_CONFIGURATION_SCHEMA,
         "artifact_scope": "android-local-diagnostic",
@@ -130,6 +183,7 @@ def android_armv7_diagnostic_configuration(
         "cargo_home_identity": list(identity(current)),
         "cargo_invocation_directory": str(invocation),
         "cargo_invocation_directory_identity": list(observation[1]),
+        "discovery_workspace": discovery,
         "configuration_inputs": {
             str(path): None if value is None else list(value)
             for path, value in sorted(configuration.items())

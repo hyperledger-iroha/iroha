@@ -121,13 +121,33 @@ All mutable collections and byte arrays are copied on construction and access. U
 - **Canonical wallet framing**: the reviewed wallet-local fixed-alignment source
   pins direct `u128` records/enums to 16-byte archived alignment and preserves all
   26 existing padding values through shipping compile-time assertions. Norito
-  primitives, decoders and frozen vectors are unchanged. Actual host checks are
-  running; no result is established; qualify ARMv7 compilation and identical canonical originals/exact
-  decoding on 32/64-bit Native targets. Packaging and ELF checks do not prove
+  primitives, decoders and frozen vectors were preserved by that alignment
+  change. Nine host codec cases passed in three runs with the same 3,435 inputs
+  and 33 local packages unchanged. These results describe the recorded source
+  cuts; subsequent source changes require fresh validation.
+  Qualify ARMv7 compilation and identical canonical originals/exact decoding on
+  32/64-bit Native targets. Packaging and ELF checks do not prove
   runtime parity; all required Android targets remain in scope.
 - **ARMv7 diagnostic**: from `kotlin`, use the existing owner-only local artifact
-  root, set `MOBILE_SDK_PYTHON_BINARY` to the canonical executable of Python 3.12
-  (symbolic links are rejected), and run
+  root and set `MOBILE_SDK_PYTHON_BINARY` to the canonical executable of Python
+  3.12 (symbolic links are rejected). Explicitly set and export both
+  `MOBILE_SDK_CARGO_HOME` and `MOBILE_SDK_CARGO_INVOCATION_DIR` before running the
+  task. Each must select an existing owned writable absolute canonical,
+  non-symbolic mode-0700 directory. The cache and invocation trees must be
+  disjoint from the source tree and each other in both directions. Prepare an
+  owned regular `Cargo.toml` in the invocation directory with exactly
+  `[workspace]\nmembers = []\n` bytes and keep `Cargo.lock` absent. The manifest
+  must have one hard link and no group/other write permissions; symbolic links
+  are rejected. Pinned cargo-ndk 4.1.2 first discovers metadata from its cwd,
+  so this empty workspace supplies no packages or sources. The actual build
+  still selects the authenticated repository-root manifest and lock explicitly
+  and uses the existing warm target. The diagnostic configuration receipt binds
+  the discovery manifest bytes and identity plus lock absence, and rechecks them
+  around metadata, source sealing and the child build. Authenticate
+  every effective Cargo configuration from the chosen invocation directory,
+  its ancestors and Cargo home, including absent candidates; keep global
+  configuration unmodified, strict refusals intact and production routing
+  unchanged. Reuse the same warm diagnostic target, then run
   `MOBILE_SDK_ANDROID_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/dist/norito-bridge-android-local ./gradlew :client-android:compileArmv7Diagnostic -PirohaAndroidLocalIntegration=true --console=plain`.
   This task uses the same pinned Rust, NDK, Python, locked offline Cargo and
   source-seal gates, with one `armv7-linux-androideabi` target and the fixed

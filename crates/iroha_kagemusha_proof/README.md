@@ -21,8 +21,12 @@ The implementation follows G1 revision 4 and owner decisions B1, B5–B8 in
 Wallet framing now pins direct `u128` records/enums to 16-byte archived alignment,
 with enclosing fields and inline arrays inheriting it. Shipping assertions preserve
 all 26 existing frame padding values and retained-original layouts without changing
-Norito primitives, decoders or frozen vectors. Actual host checks are running; no result is established;
-ARMv7 runtime and physical-device byte parity remain separate qualification gates.
+Norito primitives, decoders or frozen vectors as part of that alignment change.
+Nine selected host codec cases passed in three runs, each with the same 3,435
+recorded inputs and 33 local packages unchanged. These recorded source cuts
+cover the frozen/retained frames, generated vectors and existing codec checks;
+subsequent source changes require fresh validation. ARMv7 compilation, runtime
+and physical-device byte parity remain separate qualification gates.
 
 - The core has 33 fields and the rest has 8. The head is
   `P(kgwcore1, core || P(kgwrest1, rest))`; σ carries the rest digest.
@@ -124,6 +128,17 @@ and four-bus A profiles. Every source proof is 8,480 bytes; stage maxima are
 mandatory own authorization, exact consuming bytes, both maps and every
 retained opening. Its Bootstrap/Load predecessor catalog is rebuilt under the
 actual common Omega digest with identical source descriptors and terminal keys.
+`a_relation::native::send` assembles the genuine five-A/four-W source from
+exact signed objects, depth32 witnesses, the full320 consuming transcript and
+the original predecessor proof plus both claims. Fixed installed keys drive
+native proof production and source-bound restoration. Its catalog requires
+every mask0..7, with actual authorized sigma-selector digests; a repeated mask0
+pipeline never marks a partial catalog complete. The ignored fixed-artifact
+regression covers the actual mask0 source and original-proof replay. All enabled
+masks, held-policy predecessors, final Omega and device execution still require
+qualification. Native G1 pre-Advance Request/recipient-credential checks remain
+mandatory and separate from Send A's owned obligations.
+
 The Send terminal key has not yet been added and rebound into that catalog;
 all eight control masks, the final uniform catalog and production Omega
 size/row qualification remain open. Task metadata alone never proves execution.
@@ -231,6 +246,18 @@ then fully self-verifies the proof. It generates no runtime key. A still binds
 original tapes, signature roles and the global branch; this leaf does not grant
 complete producer-catalog admission, a Native wallet owner or wallet open.
 
+`admin_sigma::native` provides typed `BootstrapProver`, `LoadProver`,
+`UnloadProver` and `RetiringProver` original-key importers over the existing
+administrative circuits. Each fixes Vesta/k12, the PIPA-R direct bounded statement
+profile and its compiled operation, checks original source tables and commitments,
+and requires exact agreement with the independently installed VK. Selector
+compression remains the authenticated descriptor's choice, checked by the same
+source importer; no profile fallback or runtime key generation occurs. Proving
+derives the public statement digest from the typed witness and completes native
+verification before returning bytes. The shared descriptor does not authorize
+substitution of another operation's original key. These are proving components;
+A still authenticates objects, maps, signatures and predecessor obligations.
+
 The installation owner must authenticate the signed scheme and complete producer
 inventory before import. These constructors supply proving components only;
 they supply no `NativeProofs` owner or wallet-open grant. Freezing the production
@@ -279,6 +306,15 @@ composed operation or runtime qualification.
   zero-case attempt contributes no passes. The hard signature Q's 8,576 bytes
   qualify this local component only, with Payment/Ω and wallet/device gates open.
 
+- `admin_sigma` and `consuming_sigma`: the `installed_admin_sigma_originals_`
+  cases import all four typed administrative keys and exercise genuine proof
+  verification, complete opening decisions, changed public inputs, corrupted
+  proofs and rehashed invalid value transitions. A same-descriptor four-by-four
+  original-key substitution matrix and malformed/bounded/profile/curve/VK intake
+  checks cover the import boundary. Test producers generate fixture originals;
+  Native imports do not. These cases do not establish a signed producer catalog,
+  final Omega, Native wallet open or physical-device qualification.
+
 - `measure`: ignored diagnostic throughput/footprint workloads. They are not
   the fresh-process qualification procedure in the design record.
 
@@ -292,3 +328,29 @@ cargo test -p iroha_kagemusha_proof
 cargo test --release -p iroha_kagemusha_proof --test real_proofs -- --include-ignored
 cargo clippy -p iroha_kagemusha_proof --all-targets -- -D warnings
 ```
+
+## Unload native composition
+
+`a_relation::native::unload` prepares exact original state/object/proof inputs for
+four fixed A stages and three W continuations. A1 hard-verifies the folded
+predecessor and binds its canonical 320-byte public prefix, original proof and
+both full transported claims together with the own sigma to the signed receipt.
+A2 constrains the depth-32 redeem recovery-map insertion, A3 hard-verifies the
+Unload sigma Q under selector 13, and A4 re-verifies the current Credential,
+direct Enrollment certificate and own receipt through the hard 2V1F signature Q.
+All stages bind the same immutable source context. Preparation and checkpoint
+restoration verify actual proofs and decide every retained Pasta obligation;
+there is no witness-selected range profile or runtime artifact generation.
+
+The source profile fixes four range buses and k16 A/W artifacts. The uniform
+current Omega transport bound is 4,821 bytes; the native Plan rejects a larger
+predecessor descriptor. Its terminal A4 and distinct accumulated Pallas, current
+Vesta, predecessor Vesta and own-opening obligations are inputs to the final
+Omega producer. They do not complete a ledger payout or grant a monetary head.
+
+TODO: execute the complete genuine four-stage proof/restoration regression with
+an authenticated compact folded predecessor containing loaded funds; current
+generic predecessor rejection and genuine sigma/signature-Q tests supply no
+accepted Unload, producer-catalog or physical-device qualification. Authenticate
+and mount the complete producer inventory and canonical G1 conversion before
+integrating the native wallet operation facade.

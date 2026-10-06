@@ -55,6 +55,10 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case account = "account"
   /// Issuer enrollment challenge.
   case enrollmentChallenge = "enrollment-challenge"
+  /// NEW first-release typed app identity; unsigned selection, no approval implied.
+  case appPolicy = "app-policy"
+  /// NEW first-release typed enrollment inputs; unsigned selection, no approval implied.
+  case enrollmentPolicy = "enrollment-policy"
   /// Enrollment incarnation identity.
   case enrollmentID = "enrollment-id"
   /// App Attest enrollment assertion client data.
