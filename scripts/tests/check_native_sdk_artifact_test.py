@@ -74,7 +74,45 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
     for sdk in ("c-jni", "csharp"):
         required = MODULE.REQUIRED_SYMBOLS[sdk]
         assert RETIRED_KAGEMUSHA_C_SYMBOLS.isdisjoint(required)
-        assert not any("kagemusha" in symbol.lower() for symbol in required)
+        assert tuple(symbol for symbol in required if "kagemusha" in symbol.lower()) == MODULE.KAGEMUSHA_WALLET_C_EXPORTS
+
+
+def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
+    """Keep the independently reviewed publication and admission inventories exact."""
+    expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS
+    assert len(expected) == len(set(expected)) == 9
+    for relative, start, end in (
+        ("scripts/build_norito_xcframework.sh", '"required_symbols": [', '"forbidden_symbols": ['),
+        ("scripts/validate_norito_bridge_xcframework.py", "EXPECTED_REQUIRED_SYMBOLS = [", "EXPECTED_FORBIDDEN_SYMBOLS = ["),
+        ("scripts/check_mobile_sdk_artifacts.sh", "REQUIRED_PROTOCOL_C_SYMBOLS=(", "\n)"),
+        ("ci/check_connect_norito_bridge_header.sh", "KAGEMUSHA_WALLET_EXPORTS = {", "\n}"),
+    ):
+        source = (REPO_ROOT / relative).read_text().split(start, 1)[1].split(end, 1)[0]
+        observed = re.findall(r"connect_norito_kagemusha_[A-Za-z0-9_]+", source)
+        assert len(observed) == len(expected), relative
+        assert set(observed) == set(expected), relative
+        if not relative.startswith("ci/"):
+            assert tuple(observed) == expected, relative
+
+
+def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() -> None:
+    for sdk in ("c-jni", "csharp"):
+        MODULE.validate_retired_protocol_symbols(MODULE.KAGEMUSHA_WALLET_C_EXPORTS, sdk=sdk)
+        for symbol in (*MODULE.KAGEMUSHA_WALLET_C_EXPORTS, "connect_norito_free"):
+            assert not MODULE.is_retired_kagemusha_export(symbol)
+        for symbol in (
+            "connect_norito_kagemusha_wallet_unknown_v1",
+            "connect_norito_kagemusha_wallet_open_v2",
+            "connect_norito_kagemusha_wallet_open_v1_alias",
+            "connect_norito_kagemusha_retired_v1",
+        ):
+            assert MODULE.is_retired_kagemusha_export(symbol)
+            try:
+                MODULE.validate_retired_protocol_symbols([*MODULE.KAGEMUSHA_WALLET_C_EXPORTS, symbol], sdk=sdk)
+            except MODULE.ArtifactContractError as error:
+                assert symbol in str(error)
+            else:
+                raise AssertionError("unknown KAGEMUSHA export accepted: " + symbol)
 
 
 def test_native_privacy_inventory_requires_authoritative_capability_validator() -> None:
@@ -513,7 +551,7 @@ def test_current_inventory_is_exact_for_posix_and_windows() -> None:
             assert inventories[sdk] == MODULE.REQUIRED_SYMBOLS[sdk]
             assert len(inventories[sdk]) == len(set(inventories[sdk]))
             assert "connect_norito_domain_id_validate_v1" in inventories[sdk]
-            assert not any("kagemusha" in symbol.lower() for symbol in inventories[sdk])
+            assert tuple(symbol for symbol in inventories[sdk] if "kagemusha" in symbol.lower()) == MODULE.KAGEMUSHA_WALLET_C_EXPORTS
 
 
 def test_private_settlement_rejects_each_missing_actual_endpoint() -> None:

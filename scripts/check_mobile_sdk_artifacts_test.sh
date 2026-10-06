@@ -45,19 +45,28 @@ export MOBILE_SDK_RUSTUP_BINARY="$TEST_RUSTUP_BINARY"
 bash -n "$CHECK_SCRIPT"
 "$CHECK_SCRIPT" --help >/dev/null
 
-# Retired KAGEMUSHA exports are refused by namespace. The checker carries no
-# per-symbol KAGEMUSHA inventory, so a new retired export cannot slip past a list.
-if grep -Eq 'connect_norito_kagemusha_[A-Za-z0-9]' "$CHECK_SCRIPT"; then
-  fail "artifact checker must not enumerate retired KAGEMUSHA C exports"
-fi
+# The sole current wallet ABI is required exactly; all other KAGEMUSHA exports
+# remain refused by namespace, including previously unseen retired names.
 if grep -Eq 'Java_org_hyperledger_iroha_sdk_offline_(probe_|wallet_)?Kagemusha[A-Za-z0-9_]*_native' "$CHECK_SCRIPT"; then
   fail "artifact checker must not enumerate retired KAGEMUSHA JNI exports"
 fi
-[[ "$(grep -Fc -- "grep -Eq '^_?connect_norito_kagemusha_' <<<\"\$symbols\"" "$CHECK_SCRIPT")" == "1" ]] \
+[[ "$(grep -Fc -- "grep -E '^_?connect_norito_kagemusha_' <<<\"\$symbols\"" "$CHECK_SCRIPT")" == "1" ]] \
   || fail "artifact checker must reject the retired KAGEMUSHA C namespace exactly once"
 
+wallet_symbols=(
+  connect_norito_kagemusha_wallet_revision_v1
+  connect_norito_kagemusha_wallet_open_v1
+  connect_norito_kagemusha_wallet_close_v1
+  connect_norito_kagemusha_wallet_activity_v1
+  connect_norito_kagemusha_wallet_commit_v1
+  connect_norito_kagemusha_wallet_retry_v1
+  connect_norito_kagemusha_wallet_resume_v1
+  connect_norito_kagemusha_wallet_fold_v1
+  connect_norito_kagemusha_wallet_credit_status_v1
+)
 required_protocol_symbols=(
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
+  "${wallet_symbols[@]}"
 )
 required_protocol_block="$(sed -n '/^REQUIRED_PROTOCOL_C_SYMBOLS=(/,/^)/p' "$CHECK_SCRIPT")"
 for symbol in "${required_protocol_symbols[@]}"; do
@@ -136,6 +145,8 @@ for mode in elf apple; do
 done
 for retired in \
   "elf connect_norito_kagemusha_wallet_v1_validate" \
+  "elf connect_norito_kagemusha_wallet_unknown_v1" \
+  "apple _connect_norito_kagemusha_wallet_commit_v2" \
   "apple _connect_norito_kagemusha_core_coordinator_open_v1" \
   "elf ${retired_offline_prefix}payment_validate" \
   "apple _${retired_offline_prefix}payment_validate" \
@@ -155,6 +166,20 @@ required_fixture_symbols=("${complete_required_symbols[@]:1}")
 if run_symbol_gate elf >/dev/null; then
   fail "binary-symbol gate accepted a missing required protocol export"
 fi
+required_fixture_symbols=("${complete_required_symbols[@]}")
+for missing in "${wallet_symbols[@]}"; do
+  required_fixture_symbols=()
+  for symbol in "${complete_required_symbols[@]}"; do
+    [[ "$symbol" == "$missing" ]] || required_fixture_symbols+=("$symbol")
+  done
+  for mode in elf apple; do
+    if output="$(run_symbol_gate "$mode")"; then
+      fail "binary-symbol gate accepted missing wallet export $missing in $mode"
+    fi
+    grep -Fq "missing $missing" <<<"$output" \
+      || fail "binary-symbol gate did not identify missing wallet export $missing"
+  done
+done
 required_fixture_symbols=("${complete_required_symbols[@]}")
 
 if MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=invalid "$CHECK_SCRIPT" --android-only >/dev/null 2>&1; then

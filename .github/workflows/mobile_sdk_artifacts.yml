@@ -64,6 +64,7 @@ on:
       - "kotlin/**"
       - "java/iroha_android/**"
       - "crates/connect_norito_bridge/**"
+      - "tools/kotlin-fixture-gen/**"
       - "crates/iroha_cli/**"
       - "crates/iroha_config/**"
       - "crates/iroha_core/**"
@@ -527,7 +528,13 @@ jobs:
           echo "MOBILE_SDK_PACKAGE_OUT_DIR=$package_dir" >> "$GITHUB_ENV"
           echo "GRADLE_USER_HOME=$gradle_home" >> "$GITHUB_ENV"
       - name: Build host SoraFS reference native bridge
-        run: cargo build --locked -p connect_norito_bridge
+        run: |
+          set -euo pipefail
+          cargo build --locked -p connect_norito_bridge --lib --features privacy-production-enabled
+          cargo build --locked -p kotlin-fixture-gen --features dev-tools --bin kotlin-fixture-gen
+          fixture_generator="$CARGO_TARGET_DIR/debug/kotlin-fixture-gen"
+          [[ -f "$fixture_generator" && ! -L "$fixture_generator" && -x "$fixture_generator" ]]
+          echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$fixture_generator" >> "$GITHUB_ENV"
       - name: Make reviewed Iroha source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"
       - name: Build Android native bridge libraries
@@ -543,7 +550,7 @@ jobs:
       - name: Test, lint, publish, and build Android SDK artifacts
         working-directory: kotlin
         run: |
-          ./gradlew --no-daemon \
+          ./gradlew --no-daemon --no-build-cache --rerun-tasks \
             --no-configuration-cache \
             --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR" \
             -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR" \

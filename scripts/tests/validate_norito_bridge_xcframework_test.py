@@ -218,11 +218,17 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
             encoding="utf-8"
         )
-        # The packaging checker refuses retired KAGEMUSHA exports by namespace; the
-        # exact forbidden inventory is owned by the validator and the builder above.
+        # The packaging checker requires exactly the current wallet ABI and
+        # rejects every other KAGEMUSHA export, including unknown wallet names.
         self.assertNotIn("RETIRED_KAGEMUSHA_C_SYMBOLS", checker)
-        self.assertEqual(re.findall(r"connect_norito_kagemusha_[A-Za-z0-9_]+", checker), [])
-        self.assertEqual(checker.count("grep -Eq '^_?connect_norito_kagemusha_'"), 1)
+        self.assertEqual(
+            re.findall(r"connect_norito_kagemusha_[A-Za-z0-9_]+", checker),
+            [
+                symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                if symbol.startswith("connect_norito_kagemusha_")
+            ],
+        )
+        self.assertEqual(checker.count("grep -E '^_?connect_norito_kagemusha_'"), 1)
 
     def test_current_mobile_protocol_inventory_matches_required_bridge_exports(self) -> None:
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
@@ -290,7 +296,8 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         ]
         for mode in ("apple", "elf"):
             with self.subTest(mode=mode):
-                result = self.check_mobile_binary_symbols(current, mode)
+                exported = ["_" + symbol for symbol in current] if mode == "apple" else current
+                result = self.check_mobile_binary_symbols(exported, mode)
                 self.assertEqual(result.returncode, 0, result.stderr)
         for missing in (
             "connect_norito_bridge_abi_version",
@@ -298,13 +305,19 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "connect_norito_validation_fee_current_policy_proof_verify_v1",
             "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             "iroha_privacy_validate_exact12_capability_manifest_v1",
+            *(
+                symbol for symbol in current
+                if symbol.startswith("connect_norito_kagemusha_wallet_")
+            ),
         ):
-            with self.subTest(missing=missing):
-                result = self.check_mobile_binary_symbols(
-                    [symbol for symbol in current if symbol != missing]
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(f"missing {missing}", result.stderr)
+            for mode in ("apple", "elf"):
+                with self.subTest(missing=missing, mode=mode):
+                    exported = [symbol for symbol in current if symbol != missing]
+                    if mode == "apple":
+                        exported = ["_" + symbol for symbol in exported]
+                    result = self.check_mobile_binary_symbols(exported, mode)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"missing {missing}", result.stderr)
 
     def test_mobile_binary_guard_rejects_retired_c_and_jni_exports(self) -> None:
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
@@ -321,6 +334,8 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         for symbol in (
             *retired_c,
             "connect_norito_kagemusha_unlisted_v1",
+            "connect_norito_kagemusha_wallet_unlisted_v1",
+            "connect_norito_kagemusha_wallet_commit_v2",
             "connect_norito_offline_cash_unlisted_v1",
         ):
             for mode in ("apple", "elf"):

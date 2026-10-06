@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import struct
 import zlib
@@ -989,7 +990,11 @@ else:
         required_inventory = builder.split('"required_symbols": [', 1)[1].split(
             '"forbidden_symbols": [', 1
         )[0]
-        self.assertNotIn('"connect_norito_kagemusha_', required_inventory)
+        wallet_exports = re.findall(r'"(connect_norito_kagemusha_[A-Za-z0-9_]+)"', required_inventory)
+        self.assertEqual(wallet_exports, [
+            "connect_norito_kagemusha_wallet_" + suffix + "_v1"
+            for suffix in ("revision", "open", "close", "activity", "commit", "retry", "resume", "fold", "credit_status")
+        ])
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",
             builder,

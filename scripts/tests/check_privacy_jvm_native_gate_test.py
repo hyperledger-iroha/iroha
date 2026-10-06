@@ -52,6 +52,10 @@ def test_native_selection_preserves_old_suites_and_adds_canonical_consumers(nati
         "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteJavaConsumerTest",
         "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathJavaConsumerTest",
         "org.hyperledger.iroha.sdk.privacy.PrivacyRetiredWitnessBoundaryJavaConsumerTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.ContractLifecycleWirePayloadEncoderParityTest",
     )
     assert native_selection_guard.JVM_NATIVE_TEST_SELECTIONS == expected
     errors = []
@@ -59,7 +63,7 @@ def test_native_selection_preserves_old_suites_and_adds_canonical_consumers(nati
     assert errors == []
 
 
-@pytest.mark.parametrize("index", range(18))
+@pytest.mark.parametrize("index", range(22))
 def test_native_selection_rejects_each_omitted_old_or_new_suite(native_selection_guard, index: int) -> None:
     name = native_selection_guard.JVM_NATIVE_TEST_SELECTIONS[index]
     gate = read("ci/check_privacy_jvm_sdk.sh")
@@ -617,3 +621,120 @@ def test_javascript_post_lock_boundary_refuses_synthetic_unsupported_runtime_bef
         assert observed == [["--version"]]
         assert f"require Node 20; got v{selected_version}" in result.stderr
         assert "native-build sentinel" not in result.stderr
+
+
+def test_jvm_native_prerequisites_are_checked_before_selected_runtime(native_selection_guard) -> None:
+    errors = []
+    native_selection_guard._check_jvm_native_prerequisites(read("ci/check_privacy_jvm_sdk.sh"), errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize("before,after", (
+    ('--features privacy-production-enabled', '--features dev-tools'),
+    ('--features dev-tools --bin kotlin-fixture-gen', '--bin kotlin-fixture-gen'),
+    ('--features dev-tools --bin kotlin-fixture-gen', '--features dev-tools --bin wrong-generator'),
+    ('"${CARGO_BIN}" build --locked -p kotlin-fixture-gen', '# "${CARGO_BIN}" build --locked -p kotlin-fixture-gen'),
+    ('--target-dir "${BUILD_TARGET_DIR}"', '--target-dir "${ROOT_DIR}/target"'),
+    ('export IROHA_KOTLIN_FIXTURE_GEN_BIN="${FIXTURE_GENERATOR}"', 'export IROHA_KOTLIN_FIXTURE_GEN_BIN="${ROOT_DIR}/target/debug/kotlin-fixture-gen"'),
+    ('export IROHA_KOTLIN_FIXTURE_GEN_BIN="${FIXTURE_GENERATOR}"', '# export IROHA_KOTLIN_FIXTURE_GEN_BIN="${FIXTURE_GENERATOR}"'),
+    ('&& ! -L "${FIXTURE_GENERATOR}" && -x "${FIXTURE_GENERATOR}"', '&& -x "${FIXTURE_GENERATOR}"'),
+    ('&& ! -L "${FIXTURE_GENERATOR}" && -x "${FIXTURE_GENERATOR}"', '&& ! -L "${FIXTURE_GENERATOR}"'),
+    ('FIXTURE_GENERATOR_SHA256="$(sha256_file "${FIXTURE_GENERATOR}")"', 'FIXTURE_GENERATOR_SHA256="stale"'),
+    ('== "${FIXTURE_GENERATOR_SHA256}"', '== "${FIXTURE_GENERATOR_SHA256}" || true'),
+    ('== "${SOURCE_MANIFEST_BEFORE}"', '== "${SOURCE_MANIFEST_BEFORE}" || true'),
+    ('"${ABI25_CHECKER}" verify', '"${ABI25_CHECKER}" record'),
+    ('--source-root "${ROOT_DIR}"', '--source-root "${NATIVE_BUILD_ROOT}"'),
+    ('set -euo pipefail', 'set -uo pipefail'),
+    ('--no-build-cache --rerun-tasks', ''),
+))
+def test_jvm_native_prerequisites_reject_missing_stale_wrong_or_unexecuted_inputs(native_selection_guard, before, after) -> None:
+    gate = read("ci/check_privacy_jvm_sdk.sh")
+    assert before in gate
+    errors = []
+    native_selection_guard._check_jvm_native_prerequisites(gate.replace(before, after, 1), errors)
+    assert errors
+
+
+@pytest.mark.parametrize("mutation", ("late-export", "duplicate-build-block", "withdrawn-final-generator-check"))
+def test_jvm_native_prerequisites_reject_wrong_order_and_missing_final_fence(native_selection_guard, mutation) -> None:
+    gate = read("ci/check_privacy_jvm_sdk.sh")
+    export = 'export IROHA_NATIVE_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"\nexport IROHA_KOTLIN_FIXTURE_GEN_BIN="${FIXTURE_GENERATOR}"\n'
+    if mutation == "late-export":
+        gate = gate.replace(export, "", 1) + "\n" + export
+    elif mutation == "duplicate-build-block":
+        start = gate.index('SOURCE_MANIFEST_BEFORE=')
+        end = gate.index('\ncase "${HOST_TRIPLE}" in', start)
+        gate += "\n" + gate[start:end] + "\n"
+    else:
+        gate = gate.replace('  || fail "fixture generator was withdrawn during privacy JVM execution"', '  || true', 1)
+    errors = []
+    native_selection_guard._check_jvm_native_prerequisites(gate, errors)
+    assert errors
+
+
+@pytest.fixture
+def synthetic_jvm_native_manifest(tmp_path, monkeypatch):
+    """Counterfactual verifier model; no bridge is loaded or qualification recorded."""
+    import importlib.util
+
+    path = ROOT / "scripts/check_native_sdk_artifact.py"
+    spec = importlib.util.spec_from_file_location("jvm_native_preflight_unit_model", path)
+    assert spec is not None and spec.loader is not None
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    monkeypatch.setattr(contract, "source_state", lambda root: ("1" * 40, True))
+    monkeypatch.setattr(contract, "workspace_source_manifest_sha256", lambda root: "1" * 64)
+    artifact = tmp_path / "explicit-counterfactual-artifact"
+    artifact.write_bytes(b"counterfactual-only-native-byte-identity")
+    symbols = contract.REQUIRED_SYMBOLS["c-jni"] + contract.APPROVED_PRIVACY_C_EXPORTS
+    manifest = contract.build_manifest(
+        sdk="c-jni", target="x86_64-unknown-linux-gnu", artifact_path=artifact,
+        source_root=ROOT, probe=lambda sdk, path: 25, symbol_inventory=lambda path: symbols,
+    )
+    return contract, artifact, manifest, symbols
+
+
+@pytest.mark.parametrize("mutation,expected", (
+    ("missing-artifact", "native artifact is unavailable"),
+    ("changed-artifact", "native artifact bytes do not match"),
+    ("dirty-source", "current clean source revision"),
+    ("stale-revision", "current clean source revision"),
+    ("stale-source-bytes", "current source manifest"),
+    ("wrong-abi", "25"),
+    ("missing-privacy-export", "missing approved privacy C symbols"),
+))
+def test_jvm_native_authenticator_refuses_missing_stale_wrong_prerequisites_without_native_loading(synthetic_jvm_native_manifest, monkeypatch, mutation, expected) -> None:
+    contract, artifact, manifest, symbols = synthetic_jvm_native_manifest
+    probes = []
+    abi = 25
+    if mutation == "missing-artifact":
+        artifact.unlink()
+    elif mutation == "changed-artifact":
+        artifact.write_bytes(b"different-counterfactual-native-byte-identity")
+    elif mutation == "dirty-source":
+        monkeypatch.setattr(contract, "source_state", lambda root: ("1" * 40, False))
+    elif mutation == "stale-revision":
+        monkeypatch.setattr(contract, "source_state", lambda root: ("2" * 40, True))
+    elif mutation == "stale-source-bytes":
+        monkeypatch.setattr(contract, "workspace_source_manifest_sha256", lambda root: "2" * 64)
+    elif mutation == "wrong-abi":
+        abi = 24
+    else:
+        symbols = tuple(symbol for symbol in symbols if symbol != contract.APPROVED_PRIVACY_C_EXPORTS[0])
+    def probe(sdk, path):
+        probes.append((sdk, path))
+        return abi
+    with pytest.raises(contract.ArtifactContractError, match=expected):
+        contract.verify_manifest(manifest, artifact_path=artifact, source_root=ROOT, probe=probe, symbol_inventory=lambda path: symbols)
+    assert len(probes) == (1 if mutation in ("wrong-abi", "missing-privacy-export") else 0)
+
+
+def test_jvm_native_entrypoint_keeps_jdk8_and_offline_filters_intact() -> None:
+    gradle = read("kotlin/core-jvm/build.gradle.kts")
+    assert 'freeCompilerArgs.add("-Xjdk-release=8")' in gradle
+    assert "options.release.set(8)" in gradle
+    assert "jvmTarget.set(JvmTarget.JVM_1_8)" in gradle
+    # The authenticated entrypoint owns prerequisites; filtered offline tests
+    # retain their original Gradle Test implementation and runtime assertions.
+    assert 'System.getenv("IROHA_NATIVE_LIBRARY_PATH")' in gradle
+    assert "_check_jvm_native_prerequisites" not in gradle

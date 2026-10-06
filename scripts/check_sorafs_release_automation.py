@@ -1366,7 +1366,9 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         '- "java/iroha_android/**"',
         '- "fixtures/sorafs_manifest/governance/**"',
         "name: Build host SoraFS reference native bridge",
-        "run: cargo build --locked -p connect_norito_bridge",
+        "cargo build --locked -p connect_norito_bridge --lib --features privacy-production-enabled",
+        "cargo build --locked -p kotlin-fixture-gen --features dev-tools --bin kotlin-fixture-gen",
+        '- "tools/kotlin-fixture-gen/**"',
         "IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug",
         JAVA_GOVERNANCE_WORKFLOW_STEP_NAME,
         *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
@@ -2368,10 +2370,43 @@ def _javascript_child_controls_workflow_errors(relative: str, source: str) -> li
     return errors
 
 
+def _mobile_host_jvm_prerequisite_errors(source: str) -> list[str]:
+    """Bind the existing host native build and generator before complete JVM tests."""
+
+    job = _workflow_job(source, "android-mobile-sdk")
+    if job is None:
+        return ["mobile host JVM prerequisites require the existing android-mobile-sdk job"]
+    build = (
+        '      - name: Build host SoraFS reference native bridge\n'
+        '        run: |\n'
+        '          set -euo pipefail\n'
+        '          cargo build --locked -p connect_norito_bridge --lib --features privacy-production-enabled\n'
+        '          cargo build --locked -p kotlin-fixture-gen --features dev-tools --bin kotlin-fixture-gen\n'
+        '          fixture_generator="$CARGO_TARGET_DIR/debug/kotlin-fixture-gen"\n'
+        '          [[ -f "$fixture_generator" && ! -L "$fixture_generator" && -x "$fixture_generator" ]]\n'
+        '          echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$fixture_generator" >> "$GITHUB_ENV"\n'
+        '      - name: Make reviewed Iroha source read-only\n'
+        '        run: chmod -R a-w "$GITHUB_WORKSPACE"\n'
+    )
+    matches = list(re.finditer("^" + re.escape(build), job, re.MULTILINE))
+    runtime_prefix = (
+        "      - name: Test, lint, publish, and build Android SDK artifacts\n"
+        "        working-directory: kotlin\n"
+        "        run: |\n"
+        "          ./gradlew --no-daemon --no-build-cache --rerun-tasks \\\n"
+    )
+    runtime = list(re.finditer("^" + re.escape(runtime_prefix), job, re.MULTILINE))
+    if len(matches) != 1 or len(runtime) != 1 or matches[0].end() >= runtime[0].start():
+        return ["mobile host JVM prerequisites must build and bind the exact dev-tools executable before the complete suite"]
+    return []
+
+
 def _validate_workflow_source(relative: str, source: str) -> list[str]:
     """Return deterministic contract errors for one workflow source."""
 
     errors: list[str] = []
+    if relative == MOBILE_SDK_ARTIFACTS_WORKFLOW:
+        errors.extend(_mobile_host_jvm_prerequisite_errors(source))
     if "pull_request_target:" in source:
         errors.append(f"{relative}: pull_request_target is forbidden")
     if re.search(r"\b(?:curl|wget)\b", source):

@@ -29,8 +29,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1781 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1814 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1785 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1818 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -391,6 +391,9 @@ class BeaconGateTests(unittest.TestCase):
             listing = "\n".join(item + ": test" for item in names if item != name)
             with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
                 gate.require_tests(listing, selected)
+
+    def test_original_queue_payload_leases_are_exact_and_mandatory_in_both_scopes(self):
+        assert_native_coverage(self, ["native original Queue payload lease custody"])
 
     def test_startup_beacon_and_world_root_original_errors_remain_required(self):
         assert_native_coverage(self, [
