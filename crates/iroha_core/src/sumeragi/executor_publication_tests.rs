@@ -183,6 +183,8 @@ pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> Avail
 
 #[test]
 fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
+    use iroha_data_model::block::BlockSignatures;
+
     with_worker(|chain, worker, _blocks, events| {
         let block = proposal(chain, worker);
         let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -199,11 +201,25 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
             .iter()
             .map(core::alloc::Layout::size)
             .sum::<usize>();
+        let signature_control = BlockSignatures::allocation_layout().size();
         let mut original_decode_owner = None;
-        for limits in [
-            norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 64),
-            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, 64),
-            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+        let mut original_signature_control = None;
+        // The first field-byte refusal precedes the empty signature leaf. The
+        // allocation refusal completes that exact zero-count control, and the
+        // later depth refusal must retain it without reconstructing the leaf.
+        for (limits, signatures_completed) in [
+            (
+                norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 64),
+                false,
+            ),
+            (
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, 64),
+                true,
+            ),
+            (
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+                true,
+            ),
         ] {
             let error = norito::with_decode_limits_scope(limits, || {
                 iroha_data_model::block::decode_framed_signed_block(block.payload().as_slice())
@@ -238,8 +254,8 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
             assert_eq!(std::ptr::from_ref(block.source()), source);
             assert_eq!(block.payload().as_slice().as_ptr(), payload);
             assert!(block.admitted_to(&budget));
-            // Refusal retains the two physical canonical controls for this exact
-            // original body; retry must reuse them rather than fund substitutes.
+            // Every refusal retains both original workspace controls. Only
+            // a completed leaf owns the additional exact signature control.
             let attempt = worker.signature_decode.as_ref().unwrap();
             assert_eq!(attempt.block_hash, hash);
             assert_eq!(attempt.source, block);
@@ -253,7 +269,30 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
                 *original_decode_owner.get_or_insert(decode_owner),
                 decode_owner
             );
-            assert_eq!(budget.reserved_bytes(), retained + decoder_controls);
+            let signatures = attempt
+                .decoder
+                .retained_signatures(
+                    block
+                        .payload()
+                        .charged_source(&budget)
+                        .expect("original funded body source"),
+                )
+                .unwrap();
+            if signatures_completed {
+                let signatures =
+                    signatures.expect("this refusal follows original signature completion");
+                assert!(signatures.is_empty());
+                assert!(signatures.admitted_to(&budget));
+                let original = original_signature_control.get_or_insert_with(|| signatures.clone());
+                assert!(BlockSignatures::ptr_eq(original, signatures));
+            } else {
+                assert!(signatures.is_none());
+                assert!(original_signature_control.is_none());
+            }
+            assert_eq!(
+                budget.reserved_bytes(),
+                retained + decoder_controls + usize::from(signatures_completed) * signature_control
+            );
         }
         drop(epoch);
         assert!(matches!(

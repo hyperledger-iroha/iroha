@@ -168,6 +168,15 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     });
     let mut observer = Some(capture());
     let held_probes = capture();
+    let expected_fields =
+        crate::state::authority_registry::inventory_test_support::world_overlay_names();
+    assert_eq!(
+        held_probes
+            .fields()
+            .map(|field| field.name.to_owned())
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected_fields,
+    );
     let mut original = capture();
     let wait = Arc::new(Mutex::new(None));
     let stored = Arc::clone(&wait);
@@ -187,7 +196,10 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     }));
     assert!(result.is_err());
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
-    assert_eq!(probe_fields(held_probes, &world), [0, 307, 0]);
+    assert_eq!(
+        probe_fields(held_probes, &world),
+        [0, expected_fields.len(), 0]
+    );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.recover_original())).is_err()
     );
@@ -195,7 +207,10 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
     drop(slot);
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
-    assert_eq!(*callback.counts.lock().unwrap(), Some([307, 0, 0]));
+    assert_eq!(
+        *callback.counts.lock().unwrap(),
+        Some([expected_fields.len(), 0, 0])
+    );
     let (observation, mut registration) = wait.lock().unwrap().take().unwrap();
     assert!(
         registration

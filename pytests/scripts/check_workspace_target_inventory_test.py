@@ -597,6 +597,9 @@ def test_retired_tools_cannot_reenter_development_inventory(
         for error in errors
     )
     assert any(
-        "declared binary count 104 differs from the expected 103" in error
+        (
+            f"declared binary count {len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS) + 1} "
+            f"differs from the expected {len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS)}"
+        ) in error
         for error in errors
     )

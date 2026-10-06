@@ -1886,6 +1886,33 @@ def test_queue_cold_fence_gate_requires_actual_thread_and_original_refund():
     assert not gate.has_switch("HC138", daemon=True)
 
 
+def test_pending_payload_lease_mutations_bind_distinct_actual_original_boundaries():
+    expected = {
+        "HC140": "queue::payload_leases::tests::pending_payload_lease_retires_on_actual_certified_state_publication",
+        "HC141": "queue::payload_leases::tests::pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection",
+        "HC142": "queue::payload_leases::tests::pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue",
+        "HC143": "queue::payload_leases::tests::pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue",
+        "HC144": "queue::payload_leases::tests::pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap",
+        "HC145": "queue::payload_leases::tests::pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap",
+    }
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    source = gate.REPO / "crates/iroha_core/src/queue/payload_leases.rs"
+    text = source.read_text()
+    for identifier, name in expected.items():
+        rule = registered[identifier]
+        assert rule.tests == (name,)
+        assert not rule.scenarios
+        assert gate.has_switch(identifier, core=True)
+        assert not gate.has_switch(identifier)
+        assert not gate.has_switch(identifier, daemon=True)
+        assert 'fn ' + name.rsplit("::", 1)[-1] + '(' in text
+        assert 'all(test, sumeragi_core_mutation = "' + identifier + '")' in text
+        owners = {path.relative_to(gate.REPO / "crates/iroha_core/src").as_posix()
+                  for path in (gate.REPO / "crates/iroha_core/src").rglob("*.rs")
+                  if 'sumeragi_core_mutation = "' + identifier + '"' in path.read_text()}
+        assert owners == {"queue/payload_leases.rs"}
+
+
 def test_signed_root_gate_requires_actual_bounded_worker_and_original_parent_controls():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC139"]
     assert rule.tests == (
@@ -2290,3 +2317,23 @@ def test_mutation_cli_valid_counts_and_unique_selection_keep_exact_report(monkey
     assert [m["id"] for m in report["mutations"]]==["MS1","MS2"]
     assert report["seeds"]==seeds
     assert report["fast"] is False
+
+
+def test_state_halo2_curve_mutation_binds_exact_admitted_engine_and_original_retry():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC146"]
+    assert rule.tests == (
+        "state::state_preverify_backend_admission_tests::unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy",
+        "state::state_preverify_backend_admission_tests::canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC146", core=True)
+    assert not gate.has_switch("HC146")
+    assert not gate.has_switch("HC146", daemon=True)
+    source = (gate.REPO / "crates/iroha_core/src/state.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "HC146")' in source
+    assert 'production_verify_backend_tag(proof.backend.as_str())' in source
+    assert 'Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)' in source
+    owners = {path.relative_to(gate.REPO / "crates/iroha_core/src").as_posix()
+              for path in (gate.REPO / "crates/iroha_core/src").rglob("*.rs")
+              if 'sumeragi_core_mutation = "HC146"' in path.read_text()}
+    assert owners == {"state.rs"}

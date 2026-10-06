@@ -185,14 +185,23 @@ fn ordinary_world_capture_retains_deltas_events_catalog_and_releases_every_write
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(detached.mode(), BlockMode::Ordinary);
-    assert_eq!(detached.field_count(), 307);
+    let expected_fields =
+        crate::state::authority_registry::inventory_test_support::world_overlay_names();
+    assert_eq!(detached.field_count(), expected_fields.len());
     assert_eq!(
         detached
             .fields()
             .map(|field| field.name)
             .collect::<BTreeSet<_>>()
             .len(),
-        307
+        expected_fields.len()
+    );
+    assert_eq!(
+        detached
+            .fields()
+            .map(|field| field.name.to_owned())
+            .collect::<BTreeSet<_>>(),
+        expected_fields,
     );
     assert_eq!(
         detached

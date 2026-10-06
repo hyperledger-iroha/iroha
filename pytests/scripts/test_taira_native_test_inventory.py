@@ -63,10 +63,13 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 367)
+        self.assertEqual(len(names), 371)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
+            'native State preverify backend and curve admission': (
+                ('state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests'),
+                ('unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'halo2_ipa_profile_labels_require_the_canonical_backend', 'canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry')),
             'native original Queue payload lease custody': (
                 ('queue.rs', 'queue/payload_leases.rs', 'payload_leases', 'queue::payload_leases::tests'),
                 ('pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue', 'pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection', 'pending_payload_lease_retires_on_actual_certified_state_publication', 'pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap')),

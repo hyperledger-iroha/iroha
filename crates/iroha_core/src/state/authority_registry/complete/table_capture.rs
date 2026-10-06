@@ -1,6 +1,6 @@
 //! Exact catalog linking declared canonical tables to actual State readers.
 //!
-//! The catalog contains 211 table outputs in 210 capture groups. Complete table
+//! The catalog declares each original table output and capture group. Complete
 //! coverage admits declared schema metadata and cannot authorize finality.
 //! Even complete coverage will need one State publication cut, derived-index
 //! checks, durable Kura node custody, predecessor binding and recovery before
@@ -1058,6 +1058,7 @@ pub(in crate::state) fn catalog_table_ids() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::authority_registry::inventory_test_support;
     fn policy(tables: LeafLimits) -> TableCaptureLimits {
         TableCaptureLimits {
             musubi: crate::state::authority_registry::complete::table_capture::musubi_test_limits(),
@@ -1179,7 +1180,7 @@ mod tests {
     #[test]
     fn actual_table_catalog_admits_metadata_then_enforces_original_node_capacity() {
         let count = require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS).unwrap();
-        assert_eq!(count, 211);
+        assert_eq!(count, inventory_test_support::canonical_table_ids().len());
         assert_eq!(require_complete_inventory(STATE_FIELDS), Ok(()));
         let state = state();
         let budget = state.ivm_execution_budget();
@@ -1423,7 +1424,15 @@ mod tests {
         );
         // Every listed Single has one table; the one indivisible transaction
         // membership owner retains both current and rollback tables together.
-        assert_eq!(expected.len(), 211);
+        let fixture_tables = inventory_test_support::canonical_table_ids();
+        assert_eq!(expected.len(), fixture_tables.len());
+        assert_eq!(
+            expected
+                .iter()
+                .map(|id| (*id).to_owned())
+                .collect::<std::collections::BTreeSet<_>>(),
+            fixture_tables,
+        );
         assert_eq!(
             TABLE_MATERIALIZERS
                 .iter()
@@ -1457,9 +1466,9 @@ mod tests {
         );
         assert_eq!(
             require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS),
-            Ok(211)
+            Ok(fixture_tables.len())
         );
-        assert_eq!(TABLE_MATERIALIZERS.len(), 210);
+        assert_eq!(TABLE_MATERIALIZERS.len(), fixture_tables.len() - 1);
         assert_eq!(
             TABLE_MATERIALIZERS
                 .iter()

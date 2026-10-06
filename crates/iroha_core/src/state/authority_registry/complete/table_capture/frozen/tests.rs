@@ -1,6 +1,7 @@
 //! Real original State ownership, complete catalog dispatch and canonical encoder parity.
 
 use super::*;
+use crate::state::authority_registry::inventory_test_support;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -73,9 +74,10 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
     freeze_world(&mut block);
     assert_eq!(
         require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS),
-        Ok(211)
+        Ok(inventory_test_support::canonical_table_ids().len())
     );
     let mut raw_count = 0;
+    let mut raw_ids = std::collections::BTreeSet::new();
     for owner in TABLE_MATERIALIZERS {
         let TableMaterializer::Native {
             id, capture: live, ..
@@ -84,6 +86,10 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
             continue;
         };
         raw_count += 1;
+        assert!(
+            raw_ids.insert((*id).to_owned()),
+            "duplicate raw adapter {id}"
+        );
         let frozen = capture(&block, id);
         let control = live(&state, limits()).unwrap().unwrap();
         assert_equal(&frozen, &control);
@@ -99,7 +105,9 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
             }
         );
     }
-    assert_eq!(raw_count, 186);
+    let expected_raw = inventory_test_support::raw_native_table_ids();
+    assert_eq!(raw_count, expected_raw.len());
+    assert_eq!(raw_ids, expected_raw);
 }
 
 #[test]

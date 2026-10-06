@@ -768,6 +768,28 @@ CORE_MUTATIONS = [
       ["sumeragi::executor::validation_refusal_tests::prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_history",
        "sumeragi::executor::validation_refusal_tests::successor_context_uses_original_parent_and_bounded_signed_root_without_history_rewalk"]),
 
+    m("HC140", "Queue payload lease: permit original inputs after a different committed State generation",
+      ["queue::payload_leases::tests::pending_payload_lease_retires_on_actual_certified_state_publication"]),
+
+    m("HC141", "Queue payload lease: adopt clear/readmission during the original selection",
+      ["queue::payload_leases::tests::pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection"]),
+
+    m("HC142", "Queue payload lease: lend original selected inputs through a different Queue",
+      ["queue::payload_leases::tests::pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue"]),
+
+    m("HC143", "Queue payload lease: treat actual expired inputs as currently lendable",
+      ["queue::payload_leases::tests::pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue"]),
+
+    m("HC144", "Queue payload lease: erase original capture admission refusal as absent work",
+      ["queue::payload_leases::tests::pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap"]),
+
+    m("HC145", "Queue payload lease: wrap the original ownership generation instead of latching refusal",
+      ["queue::payload_leases::tests::pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap"]),
+
+    m("HC146", "State preverify: omit the exact admitted Halo2 curve policy before key or dedup admission",
+      ["state::state_preverify_backend_admission_tests::unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy",
+       "state::state_preverify_backend_admission_tests::canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry"]),
+
 ]
 
 

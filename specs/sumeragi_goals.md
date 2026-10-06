@@ -82,6 +82,27 @@ or ignored required controls. Derive World coverage from the current authoritati
 field inventory; never restore retired fields or pin an obsolete test count.
 Each new safety, liveness or custody rule requires its current registered named
 mutation control under spec §13.4. A prepared runner is not execution evidence.
+Regenerate State inventory with its canonical Rust generator on the candidate;
+then invoke Cargo against that generated fixture. Compare exact field and table
+identities, including new owners, while preserving writer, rollback and encoder
+parity checks. Classify record identifiers separately from State commitments.
+A successful canonical regeneration may leave an already-current fixture byte
+identical. Require the actual generator invocation, complete terminal result and
+matching fixture; permit only no change or the declared State inventory change.
+A no-op regeneration may reuse the generator's genuinely compiled Core artifact
+only when its input cut, toolchain, profile, features, executable path and bytes
+match the actual post-generation Cargo invocation. Changed compiled inputs require
+a new compilation; cached reuse does not qualify an optimized build or resources.
+Qualify the default genesis confidential-policy pin against the current ZK defaults
+and compiled SCCP profiles, then execute signed genesis in the State custody controls.
+Resource-refusal controls derive demand from the current owning record or declared
+allocation layout. Inline scalar and borrowed framing reads must not invent heap
+charges. Retained decoder controls must preserve their exact admitted allocation
+identity and original cause through refusal and retry.
+SDK accounting retains raw executed test identities and multiplicities, checks
+their actual reporter projection and filenames, and accounts for every physical
+XML report. Neither an old source census nor a report filename prefix establishes
+complete current coverage.
 Mutation campaigns require a positive worker count and a simulator seed count
 that fits a positive `u64`. Explicit mutation selections must be nonempty and
 contain unique IDs; zero-case sweeps and duplicated kill counts cannot qualify.

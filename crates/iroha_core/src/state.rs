@@ -38029,6 +38029,20 @@ impl StateTransaction<'_, '_> {
         {
             return crate::zk::PreverifyResult::PreverifyBudgetExceeded;
         }
+        // Apply the original State curve policy only to the exact admitted Halo2
+        // engine, before verifier-key admission or per-block deduplication. Native
+        // PIPA-R and STARK retain their independently pinned curve policies.
+        if !cfg!(all(test, sumeragi_core_mutation = "HC146"))
+            && crate::zk::production_verify_backend_tag(proof.backend.as_str())
+                == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+            && !matches!(
+                self.zk.halo2.curve,
+                iroha_config::parameters::actual::ZkCurve::Pallas
+                    | iroha_config::parameters::actual::ZkCurve::Pasta
+            )
+        {
+            return crate::zk::PreverifyResult::CurveNotAllowed;
+        }
         crate::zk::preverify_with_budget(
             proof,
             vk,

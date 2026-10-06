@@ -485,7 +485,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"ivm-replay-binding-v1",
             r"ivm-v1",
             r"kaigi-authorization-v1",
-            r"kaigi-roster-v1",
             r"kaigi-usage-v1",
             r"ml-kem-1024-xchacha20-poly1305-v1",
             r"ml-kem-768-xchacha20-poly1305-v1",
@@ -505,7 +504,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"pq-masp-stark-v1",
             r"privacy-exact12-catalog-v1",
             r"risk-model-v1",
-            r"schema:voting:halo2:v1",
             r"schema:voting:stark:v1",
             r"schema:voting:v1",
             r"schema:voting:v2",
@@ -1062,6 +1060,15 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"soranet.ticket.body.scope.v1",
             r"soranet.ticket.body.valid_after.v1",
             r"soranet.ticket.body.valid_until.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "Exact retired-backend aliases and an unadmitted PIPA-R vote circuit supplied only by negative world instruction controls: execution must reject these identities; this listing grants no circuit or backend admission",
+        literals: &[
+            r"confidential-transfer-v1",
+            r"halo2/pasta/ipa/confidential-transfer-v2",
+            r"pipa-r/pasta/vote-bool-commit-merkle8-v1",
         ],
     },
     OtherDomains {

@@ -48,6 +48,7 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
+    transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Bn254;
     for backend in [crate::zk::ZK_BACKEND_STARK_FRI_V1] {
         let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
         let vk_commitment = crate::zk::hash_vk(&vk);
@@ -126,4 +127,95 @@ fn halo2_ipa_profile_labels_require_the_canonical_backend() {
         PreverifyResult::UnsupportedBackend,
         "circuit identity must not be embedded in the canonical backend tag"
     );
+}
+
+#[test]
+fn canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry() {
+    use iroha_config::parameters::actual::ZkCurve;
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = crate::query::store::LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let proof = ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]);
+    let vk = VerifyingKeyBox::new(proof.backend.clone(), vec![0xA5, 0x5A, 0xC3]);
+    let commitment = crate::zk::hash_vk(&vk);
+
+    for curve in [ZkCurve::Bn254, ZkCurve::Goldilocks] {
+        transaction.zk.halo2.curve = curve;
+        assert_eq!(
+            transaction.preverify_proof(
+                &proof,
+                Some(&vk),
+                0,
+                Some(commitment),
+                Some(commitment),
+                false,
+            ),
+            PreverifyResult::CurveNotAllowed,
+            "{curve:?} must refuse before key activity or dedup admission"
+        );
+        let mut observed = transaction.zk_dedup.clone();
+        assert!(observed.check_and_insert_with_commitment(&proof, Some(commitment)));
+    }
+    for curve in [ZkCurve::Pallas, ZkCurve::Pasta] {
+        transaction.zk.halo2.curve = curve;
+        assert_eq!(
+            transaction.preverify_proof(&proof, None, 0, None, None, true),
+            PreverifyResult::VerifyingKeyMissing,
+            "{curve:?} must reach the original key admission"
+        );
+        assert_eq!(
+            transaction.preverify_proof(
+                &proof,
+                Some(&vk),
+                0,
+                Some(commitment),
+                Some(commitment),
+                false,
+            ),
+            PreverifyResult::VerifyingKeyInactive,
+            "{curve:?} must retain the original inactive-key refusal"
+        );
+        assert_eq!(
+            transaction.preverify_proof(
+                &proof,
+                Some(&vk),
+                0,
+                Some(commitment),
+                Some(commitment),
+                true,
+            ),
+            PreverifyResult::MalformedProof,
+            "allowed policy must retain canonical envelope validation"
+        );
+        let mut observed = transaction.zk_dedup.clone();
+        assert!(observed.check_and_insert_with_commitment(&proof, Some(commitment)));
+    }
+    transaction.zk.halo2.curve = ZkCurve::Bn254;
+    assert_eq!(
+        transaction.preverify_proof(
+            &proof,
+            Some(&vk),
+            0,
+            Some(commitment),
+            Some(commitment),
+            true,
+        ),
+        PreverifyResult::CurveNotAllowed,
+        "retry must recheck the original State policy without poisoning dedup"
+    );
+    for backend in [
+        crate::zk::ZK_BACKEND_NATIVE_PIPA_R,
+        crate::zk::ZK_BACKEND_STARK_FRI_V1,
+    ] {
+        let independent = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+        assert_eq!(
+            transaction.preverify_proof(&independent, None, 0, None, None, true),
+            PreverifyResult::VerifyingKeyMissing,
+            "{backend} must retain its independent curve policy"
+        );
+    }
 }

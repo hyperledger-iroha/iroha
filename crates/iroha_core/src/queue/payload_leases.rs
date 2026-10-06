@@ -70,7 +70,11 @@ impl Queue {
         if self
             .pending_ownership_generation
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
-                prior.checked_add(1)
+                if cfg!(all(test, sumeragi_core_mutation = "HC145")) {
+                    Some(prior.wrapping_add(1))
+                } else {
+                    prior.checked_add(1)
+                }
             })
             .is_err()
         {
@@ -100,12 +104,21 @@ impl Queue {
             return Ok(None);
         }
         budget.with_deferred_refund_notifications(|_| {
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC144")))]
             let mut hashes = ChargedBuffer::new(selected.len(), budget)?;
+            #[cfg(all(test, sumeragi_core_mutation = "HC144"))]
+            let mut hashes = match ChargedBuffer::new(selected.len(), budget) {
+                Ok(hashes) => hashes,
+                Err(ChargedBufferError::Admission(_)) => return Ok(None),
+                Err(error) => return Err(error),
+            };
             let guard = self.push_remove_lock.lock();
             if self.admission_faulted()
                 || selection.queue_address != std::ptr::from_ref(self).addr()
                 || selection.state_address != std::ptr::from_ref(state).addr()
-                || selection.generation != self.pending_ownership_generation.load(Ordering::Acquire)
+                || (!cfg!(all(test, sumeragi_core_mutation = "HC141"))
+                    && selection.generation
+                        != self.pending_ownership_generation.load(Ordering::Acquire))
                 || !crate::state::is_stable_state_view_generation(
                     selection.publication_generation,
                     state.state_view_generation(),
@@ -202,7 +215,8 @@ impl Queue {
         // Observe without acquiring a State lock, before probing under the Queue fence.
         let publication_release = state.view_publication_release();
         let _guard = self.push_remove_lock.lock();
-        if lease.queue_address != std::ptr::from_ref(self).addr()
+        if (!cfg!(all(test, sumeragi_core_mutation = "HC142"))
+            && lease.queue_address != std::ptr::from_ref(self).addr())
             || lease.state_address != std::ptr::from_ref(state).addr()
             || self.admission_faulted()
             || lease.generation != self.pending_ownership_generation.load(Ordering::Acquire)
@@ -210,6 +224,9 @@ impl Queue {
             return Ok(None);
         }
         let now = self.time_source.get_unix_time();
+        #[cfg(all(test, sumeragi_core_mutation = "HC143"))]
+        let remaining = lease.expires_at.saturating_sub(now);
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC143")))]
         let Some(remaining) = lease
             .expires_at
             .checked_sub(now)
@@ -221,12 +238,16 @@ impl Queue {
         if before % 2 != 0 {
             return Err(publication_release);
         }
-        if before != lease.publication_generation {
+        if before != lease.publication_generation
+            && !cfg!(all(test, sumeragi_core_mutation = "HC140"))
+        {
             return Ok(None);
         }
         let live = lease.hashes.as_slice().iter().all(|hash| {
             self.txs.get(hash).is_some_and(|tracked| {
-                !tracked.is_in_blockchain(view) && !self.is_expired_at(tracked.as_accepted(), now)
+                !tracked.is_in_blockchain(view)
+                    && (cfg!(all(test, sumeragi_core_mutation = "HC143"))
+                        || !self.is_expired_at(tracked.as_accepted(), now))
             })
         });
         let after = state.state_view_generation();

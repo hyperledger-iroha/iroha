@@ -2334,6 +2334,7 @@ const STATE_READER_TYPES: &[&str] = &[
     "DetachedStateTransactionDelta",
     "DetachedTransactionsBlock",
     "DetachedWorld",
+    "FinalizedLedger",
     "PreparedBlockHashes",
     "PreparedDetachedTransactionsBlock",
     "PreparedSet",
@@ -2376,6 +2377,7 @@ const STATE_READER_TYPES: &[&str] = &[
     "WorldStateSnapshot",
     "WorldTransaction",
     "WorldView",
+    "WsvLedger",
 ];
 
 /// Endings of a type name (before an optional `V<digits>` version) that mark a
@@ -6420,8 +6422,13 @@ fn regenerate_state_table_inventory() {
         cfg!(feature = "telemetry"),
         "regenerate with the node feature set: the tracked inventory lists state.telemetry"
     );
-    std::fs::write(repository().join(INVENTORY_PATH), generate())
-        .expect("write the tracked inventory");
+    let path = repository().join(INVENTORY_PATH);
+    let generated = generate();
+    // A canonical no-op must preserve the fixture timestamp and Cargo's input
+    // identity; only an actual inventory change needs to rewrite the fixture.
+    if std::fs::read(&path).ok().as_deref() != Some(generated.as_bytes()) {
+        std::fs::write(path, generated).expect("write the tracked inventory");
+    }
 }
 
 /// The registry is the completeness guard: it destructures every owner without `..`, so a

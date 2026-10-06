@@ -625,12 +625,17 @@ mod tests {
     fn prepared_commitment_attempt_preserves_original_generated_capacity_and_enclosing_cause_through_retry()
      {
         use iroha_allocation::{AllocationBudget, ChargedBuffer};
+        use iroha_crypto::{Hash, Signature};
         use iroha_data_model::{
             block::PreparedSignatureBlockError,
             da::commitment::{
-                DaCommitmentBundle, DaCommitmentCustodyError, PreparedDaCommitmentBundle,
+                DaCommitmentBundle, DaCommitmentCustodyError, DaCommitmentRecord, DaProofScheme,
+                PreparedDaCommitmentBundle, RetentionClass,
             },
+            da::types::{BlobDigest, StorageTicketId},
+            sorafs::pin_registry::ManifestDigest,
         };
+        use iroha_model_base::topology::LaneId;
         use norito::core::{
             DecodeAttemptErrorKind, DecodeFlagsGuard, DecodeLimits, SequenceSpan,
             with_decode_limits_scope,
@@ -685,9 +690,43 @@ mod tests {
         assert_eq!(admitted, value);
         drop(admitted);
         assert_eq!(pool.reserved_bytes(), bytes.len());
-        // The sole generated walk first reads the u16 version field. A caller
-        // total-allocation ceiling of one refuses that exact two-byte field
-        // before the empty commitment count or any ordinary owning graph.
+        // A stack scalar and borrowed empty framing consume no owning-body charge.
+        // Exercise the enclosing ceiling with a real canonical commitment element;
+        // the sole sequence walker charges its actual serialized body length.
+        let record = DaCommitmentRecord {
+            lane_id: LaneId::new(7),
+            epoch: 42,
+            sequence: 3,
+            client_blob_id: BlobDigest::new([0x11; 32]),
+            manifest_hash: ManifestDigest::new([0x22; 32]),
+            proof_scheme: DaProofScheme::MerkleSha256,
+            chunk_root: Hash::prehashed([0x33; 32]),
+            proof_digest: Some(Hash::prehashed([0x55; 32])),
+            retention_class: RetentionClass::default(),
+            storage_ticket: StorageTicketId::new([0x66; 32]),
+            acknowledgement_sig: Signature::try_from_bytes(&[0x77; 64])
+                .expect("checked canonical commitment acknowledgement fixture"),
+        };
+        let mut record_bytes = Vec::new();
+        norito::core::SerializePayload::serialize(
+            &record,
+            &mut norito::core::Encoder::for_buffer(&mut record_bytes),
+        )
+        .unwrap();
+        let record_body_charge = u64::try_from(record_bytes.len()).unwrap();
+        assert!(record_body_charge > 1);
+        let owning_value = DaCommitmentBundle::new(vec![record]);
+        let mut owning_bytes = Vec::new();
+        norito::core::SerializePayload::serialize(
+            &owning_value,
+            &mut norito::core::Encoder::for_buffer(&mut owning_bytes),
+        )
+        .unwrap();
+        let owning_pool = AllocationBudget::new(owning_bytes.len());
+        let mut owning_source = ChargedBuffer::new(owning_bytes.len(), &owning_pool).unwrap();
+        owning_source.append(&owning_bytes).unwrap();
+        let owning_pointer = owning_source.as_slice().as_ptr();
+        let owning_hash = Hash::new(owning_source.as_slice());
         let caller = DecodeLimits::new(4096, 4096, 4096, 1, 64);
         let protocol = DecodeLimits::new(4096, 4096, 4096, 4096, 64);
         let cause = with_decode_limits_scope(caller, || {
@@ -695,12 +734,12 @@ mod tests {
                 with_decode_limits_scope(
                     protocol,
                     || match PreparedDaCommitmentBundle::from_source(
-                        &source,
+                        &owning_source,
                         SequenceSpan {
                             start: 0,
-                            end: bytes.len(),
+                            end: owning_bytes.len(),
                         },
-                        &pool,
+                        &owning_pool,
                     ) {
                         Err(DaCommitmentCustodyError::Decode(original)) => {
                             Err::<(), _>(original.into_error())
@@ -722,13 +761,34 @@ mod tests {
                 .expect("actual sole Norito error")
                 .decode_resource_error(),
             Some(norito::core::DecodeResourceError::TotalAllocationExceeded {
-                attempted: std::mem::size_of::<u16>() as u64,
+                attempted: record_body_charge,
                 limit: 1,
             })
         );
         assert!(
             matches!(prepared_signature_block_attempt_error(PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Decode(cause)),|_|panic!("original caller refusal cannot invalidate commitment bytes")),ExecutionAttemptError::<String>::Deferred(reason) if reason.reason()==ExecutionDeferral::ActiveMemoryCapacity)
         );
+        assert_eq!(owning_source.as_slice().as_ptr(), owning_pointer);
+        assert_eq!(Hash::new(owning_source.as_slice()), owning_hash);
+        assert_eq!(owning_pool.reserved_bytes(), owning_bytes.len());
+        let owning_retry = with_decode_limits_scope(protocol, || {
+            PreparedDaCommitmentBundle::from_source(
+                &owning_source,
+                SequenceSpan {
+                    start: 0,
+                    end: owning_bytes.len(),
+                },
+                &owning_pool,
+            )
+        })
+        .expect("same canonical owning-body source retries after caller scope retirement");
+        assert!(owning_retry.belongs_to(&owning_pool));
+        assert_eq!(owning_source.as_slice().as_ptr(), owning_pointer);
+        assert_eq!(Hash::new(owning_source.as_slice()), owning_hash);
+        assert_eq!(owning_pool.reserved_bytes(), owning_bytes.len());
+        drop(owning_retry);
+        drop(owning_source);
+        assert_eq!(owning_pool.reserved_bytes(), 0);
         assert_eq!(source.as_slice().as_ptr(), pointer);
         assert_eq!(iroha_crypto::Hash::new(source.as_slice()), hash);
         drop(source);

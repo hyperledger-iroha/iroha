@@ -55,7 +55,7 @@ Authoritative contracts: [Sumeragi](specs/sumeragi.md),
 
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
-| N0 | Complete Sumeragi | Core/P2P/Kura | S1–S9: execute-before-vote, round overlay, signed RS16 acquisition, DS-local finality, AMX and evidence/committee scheduling; the KAGEMUSHA mint-finality authority and generic consensus attestation extension are deleted; qualify retained BLS identities, exact quorums and CommitQC safety with named mutation tests and real networks. |
+| N0 | Complete Sumeragi | Core/P2P/Kura | S1–S9: execute-before-vote, round overlay, signed RS16 acquisition, DS-local finality, AMX and evidence/committee scheduling; the KAGEMUSHA mint-finality authority is deleted. Qualify native `NoAttestation` at every height, retained generic protocol attestation controls, BLS identities, exact quorums and CommitQC safety with named mutation tests and real networks. |
 | N1 | Driver/storage closure | Driver/State/Kura/daemon | Sole driver passes conformance oracles, certified execution and retained custody; per-key safety records and remaining retired storage/SDK owner removal. |
 | N2 | Consensus qualification | Simulator/CI/operators | Nightly fault scenarios at 10,000 seeds and every mutation killed; native authority and fresh Taira four-validator readiness/write/restart. Governance owns deployment policy. |
 | N3 | Dataspace topology/SNS | Nexus/Core/deployment | Manifest-owned membership/privacy/DA/governance; additive activation preserves certified history and cold replay; prove physical server/storage isolation. |
