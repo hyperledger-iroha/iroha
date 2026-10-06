@@ -485,7 +485,7 @@ fn attack_program<F: PastaField>(
 ) -> Result<Vec<Word<F>>, Error> {
     let modulus = modulus_at(args[0])?;
     let attack = args[1];
-    let gates = *ff.config().gates(modulus)?;
+    let gates = ff.gates_of(modulus, &[])?;
     let m = modulus.limbs();
     let radix = Nat::pow2(LIMB_BITS);
     let witnesses;
@@ -669,7 +669,7 @@ fn raw_witness_program<F: PastaField>(
         modulus,
         form: Form::Proper,
     };
-    let gates = *ff.config().gates(modulus)?;
+    let gates = ff.gates_of(modulus, &[])?;
     ff.fused_mul(
         region,
         gates,
@@ -1557,7 +1557,7 @@ fn terminal_attack_program<F: PastaField>(
     args: &[u64],
 ) -> Result<Vec<Word<F>>, Error> {
     *ff = FfChip::starting_at(
-        ff.config().clone(),
+        ff.fused_config()?.clone(),
         usize::try_from(args[2]).map_err(|_| Error::Synthesis)?,
     );
     attack_program(ff, glue, region, inputs, args)
@@ -1573,7 +1573,7 @@ fn terminal_canonical_program<F: PastaField>(
     args: &[u64],
 ) -> Result<Vec<Word<F>>, Error> {
     *ff = FfChip::starting_at(
-        ff.config().clone(),
+        ff.fused_config()?.clone(),
         usize::try_from(args[2]).map_err(|_| Error::Synthesis)?,
     );
     canonical_program(ff, glue, region, inputs, args)
@@ -1677,7 +1677,7 @@ fn carry_endpoints_program<F: PastaField>(
     args: &[u64],
 ) -> Result<Vec<Word<F>>, Error> {
     *ff = FfChip::starting_at(
-        ff.config().clone(),
+        ff.fused_config()?.clone(),
         usize::try_from(args[1]).map_err(|_| Error::Synthesis)?,
     );
     let start = ff.block(&[Group::U])?;
@@ -1689,7 +1689,7 @@ fn carry_endpoints_program<F: PastaField>(
     } else {
         [-F::ONE, -two, limit, limit + F::ONE]
     };
-    for (column, entry) in ff.config.u.iter().zip(entries) {
+    for (column, entry) in ff.fused_config()?.u.iter().zip(entries) {
         FfChip::running_sum(region, *column, start, CARRY_SUBLIMBS, Value::known(entry))?;
     }
     Ok(Vec::new())

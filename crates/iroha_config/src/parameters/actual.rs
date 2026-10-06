@@ -80,6 +80,8 @@ use std::{
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
 mod sccp;
+mod kagemusha_load_authorizer;
+pub use kagemusha_load_authorizer::{KagemushaLoadAuthorizer, KagemushaLoadAuthorizerCustody};
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -133,6 +135,8 @@ pub struct Root {
     pub soracloud_runtime: SoracloudRuntime,
     /// Non-secret local custody root for the injected private Musubi publisher.
     pub musubi_publication: MusubiPublication,
+    /// Optional source-verified online load voucher publisher.
+    pub kagemusha_load_authorizer: KagemushaLoadAuthorizer,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
     /// Consensus (Sumeragi) configuration.

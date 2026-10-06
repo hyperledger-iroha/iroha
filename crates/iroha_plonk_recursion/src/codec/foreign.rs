@@ -107,7 +107,7 @@ impl VerifierChip<Ep> {
         let x3 = self.mul(region, &x2, &x)?;
         let five = self.constant(region, Fq::from(5))?;
         let rhs = self.add(region, &x3, &five)?;
-        let native = rhs.integer().map(|v| v.to_field::<Fq>());
+        let native = rhs.integer().map(iroha_plonk_gadgets::ff::Nat::to_field::<Fq>);
         let square = self
             .glue
             .boolean(region, native.map(|v| bool::from(v.sqrt().is_some())))?;

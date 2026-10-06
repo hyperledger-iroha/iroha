@@ -437,6 +437,15 @@ require_literal() {
 }
 
 REQUIRED_PROTOCOL_C_SYMBOLS=(
+  connect_norito_kagemusha_wallet_revision_v1
+  connect_norito_kagemusha_wallet_open_v1
+  connect_norito_kagemusha_wallet_close_v1
+  connect_norito_kagemusha_wallet_activity_v1
+  connect_norito_kagemusha_wallet_commit_v1
+  connect_norito_kagemusha_wallet_retry_v1
+  connect_norito_kagemusha_wallet_resume_v1
+  connect_norito_kagemusha_wallet_fold_v1
+  connect_norito_kagemusha_wallet_credit_status_v1
   connect_norito_bridge_abi_version
   connect_norito_domain_id_validate_v1
   connect_norito_free
@@ -518,7 +527,7 @@ check_binary_symbols() {
       Java_org_hyperledger_iroha_sdk_offline_probe_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_wallet_Kagemusha \
       Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_; do
-      if grep -Eq "^${retired_jni_prefix}" <<<"$symbols"; then
+      if grep -E "^${retired_jni_prefix}" <<<"$symbols" | grep -Evq '^Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_(revision|open|close|activity|call)$'; then
         fail "$label exposes a retired KAGEMUSHA JNI namespace"
       fi
     done
@@ -536,7 +545,7 @@ check_binary_symbols() {
   if grep -Eq "^_?${RETIRED_KAGEMUSHA_C_PREFIX}" <<<"$symbols"; then
     fail "$label exposes a retired KAGEMUSHA C namespace"
   fi
-  if grep -Eq '^_?connect_norito_kagemusha_' <<<"$symbols"; then
+  if grep -E '^_?connect_norito_kagemusha_' <<<"$symbols" | grep -Evq '^_?connect_norito_kagemusha_wallet_(revision|open|close|activity|commit|retry|resume|fold|credit_status)_v1$'; then
     fail "$label exposes a retired KAGEMUSHA C namespace"
   fi
 }

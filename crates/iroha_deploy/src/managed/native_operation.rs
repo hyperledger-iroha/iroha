@@ -11,7 +11,7 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetDefinitionId,
     block::BlockHeader,
-    sumeragi_finality::SumeragiFinalityCheckpoint,
+    sumeragi_finality::{EpochValidationScope, SumeragiFinalityCheckpoint},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_fs::{PrivateDirectory, PublishMode};
@@ -381,12 +381,28 @@ pub(super) fn decode_checkpoint(
     network: iroha_data_model::NetworkId,
     chain: &str,
 ) -> Result<FinalityVerifier> {
+    decode_checkpoint_with_validation(bytes, network, chain, None)
+}
+
+pub(super) fn decode_checkpoint_with_validation(
+    bytes: &[u8],
+    network: iroha_data_model::NetworkId,
+    chain: &str,
+    mut validation: Option<&mut EpochValidationScope>,
+) -> Result<FinalityVerifier> {
+    // The current outer owner wins even if this operation warmed before it was entered.
+    if norito::core::decode_limits_active() {
+        validation = None;
+    }
     if bytes.len() > MAX_CHECKPOINT_BYTES {
         return Err(invalid("native operation checkpoint exceeds bound"));
     }
-    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(bytes)
-        .map_err(|_| invalid("invalid retained native operation checkpoint"))?;
-    FinalityVerifier::from_checkpoint(checkpoint, network, chain)
+    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical_with_validation(
+        bytes,
+        validation.as_deref_mut(),
+    )
+    .map_err(|_| invalid("invalid retained native operation checkpoint"))?;
+    FinalityVerifier::from_checkpoint_with_validation(checkpoint, network, chain, validation)
         .map_err(|_| invalid("retained native operation checkpoint changed network or chain"))
 }
 
@@ -402,7 +418,7 @@ pub(crate) fn retained_carrier(
     })
 }
 
-fn retained_carrier_using(
+pub(super) fn retained_carrier_using(
     directory: &PrivateDirectory,
     transaction: &SignedTransaction,
     checkpoint: impl FnOnce(&[u8]) -> Result<FinalityVerifier>,

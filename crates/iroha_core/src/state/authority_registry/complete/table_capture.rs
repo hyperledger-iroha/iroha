@@ -1,6 +1,6 @@
 //! Exact catalog linking declared canonical tables to actual State readers.
 //!
-//! The catalog contains 217 table outputs in 216 capture groups. Complete table
+//! The catalog contains 211 table outputs in 210 capture groups. Complete table
 //! coverage admits declared schema metadata and cannot authorize finality.
 //! Even complete coverage will need one State publication cut, derived-index
 //! checks, durable Kura node custody, predecessor binding and recovery before
@@ -460,6 +460,11 @@ capture_world_table_once!(
     "world.privacy_activations"
 );
 capture_world_table_once!(
+    capture_kagemusha_wallet_ledger_once,
+    kagemusha_wallet_ledger,
+    "world.kagemusha_wallet_ledger"
+);
+capture_world_table_once!(
     capture_private_settlement_governance_once,
     private_settlement_governance,
     "world.private_settlement_governance"
@@ -853,6 +858,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_poseidon_params_once::MATERIALIZER,
     capture_runtime_upgrades_once::MATERIALIZER,
     capture_privacy_activations_once::MATERIALIZER,
+    capture_kagemusha_wallet_ledger_once::MATERIALIZER,
     capture_private_settlement_governance_once::MATERIALIZER,
     capture_private_settlement_pools_once::MATERIALIZER,
     capture_private_settlement_roots_once::MATERIALIZER,
@@ -1264,6 +1270,7 @@ mod tests {
             "world.poseidon_params",
             "world.runtime_upgrades",
             "world.privacy_activations",
+            "world.kagemusha_wallet_ledger",
             "world.private_settlement_governance",
             "world.private_settlement_pools",
             "world.private_settlement_roots",

@@ -18,6 +18,8 @@ use iroha_data_model::{
 mod account_address;
 mod committed_transaction_inclusion;
 mod confidential_prover;
+#[cfg(unix)]
+mod kagemusha_wallet_advance;
 mod gpu;
 
 include!("platform_jni/part_1.rs");

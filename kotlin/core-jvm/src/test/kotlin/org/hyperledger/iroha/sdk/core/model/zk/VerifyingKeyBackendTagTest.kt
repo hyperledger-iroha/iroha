@@ -11,8 +11,9 @@ class VerifyingKeyBackendTagTest {
 
     private val registry = linkedSetOf(
         "halo2/ipa",
-        "halo2/pasta/kaigi-authorization-v1",
-        "halo2/pasta/kaigi-usage-v1",
+        "pipa-r/pasta",
+        "pipa-r/pasta/kaigi-authorization-v1",
+        "pipa-r/pasta/kaigi-usage-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -25,6 +26,7 @@ class VerifyingKeyBackendTagTest {
             listOf(
                 VerifyingKeyBackendTag.HALO2_IPA_PASTA,
                 VerifyingKeyBackendTag.STARK,
+                VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA,
             ),
             VerifyingKeyBackendTag.entries,
         )
@@ -33,6 +35,7 @@ class VerifyingKeyBackendTagTest {
             VerifyingKeyBackendTag.parse("halo2-ipa-pasta"),
         )
         assertEquals(VerifyingKeyBackendTag.STARK, VerifyingKeyBackendTag.parse("stark"))
+        assertEquals(VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA, VerifyingKeyBackendTag.parse("native-pipa-r-pasta"))
     }
 
     @Test
@@ -64,7 +67,7 @@ class VerifyingKeyBackendTagTest {
 
     @Test
     fun `registry is the exact immutable native allowlist`() {
-        assertEquals(7, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1.size)
+        assertEquals(8, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1.size)
         assertEquals(registry, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1)
         assertFailsWith<UnsupportedOperationException> {
             @Suppress("UNCHECKED_CAST")
@@ -78,6 +81,8 @@ class VerifyingKeyBackendTagTest {
         for (label in registry) {
             val expected = if (label.startsWith("halo2/")) {
                 VerifyingKeyBackendTag.HALO2_IPA_PASTA
+            } else if (label.startsWith("pipa-r/")) {
+                VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA
             } else {
                 VerifyingKeyBackendTag.STARK
             }
@@ -104,6 +109,10 @@ class VerifyingKeyBackendTagTest {
         val rejected = listOf(
             "",
             "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/ipa/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1/",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "halo2-ipa-pasta",
@@ -272,6 +281,10 @@ class VerifyingKeyBackendTagTest {
         for (label in listOf(
             "",
             "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kaigi-authorization-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/ipa/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1/",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             " halo2/ipa",

@@ -95,18 +95,13 @@
 //! flows, exercised by crash matrices over the simulated filesystem (process crashes, power
 //! loss with exhaustive survival subsets of unsynced directory operations, lost writebacks,
 //! faults during recovery and platform faults); run them with
-//! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Platform adapters (Android
-//! Keystore and storage, iPhone Secure Enclave and keychain) and the bridge wiring are not
-//! implemented yet, and nothing here has run on a phone.
-// TODO(G2-bridge): JNI and C-vtable platform adapters and the exclusive per-process handle
-// (one provider per process; revoke the handle after an uncertain dispatch).
-// TODO(G2-S): the state owner's G1 transition owner (`assemble_output_v1`, receipt body from
-// the credential), its archive under `slots/<slot>/archive/`, the E8 activation request and
-// its acknowledgement-driven capsule collection.
-// TODO(G2-iOS): Swift adapter (canary, `kern.bootsessionuuid`, keychain anchor) and device
-// tests of keychain power-loss durability and the residual anchor window.
-// TODO(G2-fs): typed descriptor-relative primitives in `iroha_fs` replace the path-based
-// `std::fs` backend in `store`.
+//! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Shared wallet state,
+//! authenticated archive indexes and descriptor-relative filesystem custody are implemented.
+//! Mobile callback adapters live in `connect_norito_bridge`; foreign open remains gated on
+//! the unfinished authenticated operation/Λ/Ω loader. Nothing here is phone qualification.
+// TODO(G3/G4): authenticated native proof-artifact loading and E8 activation integration.
+// TODO(G2-S): acknowledgement-driven retained witness collection.
+// TODO(G2-iOS): device tests of keychain power-loss durability and residual anchor window.
 
 mod advance;
 mod anchor;
@@ -131,12 +126,16 @@ pub use self::store::{
 #[cfg(unix)]
 pub use self::store::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 pub use self::{
-    archive::{KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1, KagemushaWalletArchiveAccessV1, kagemusha_wallet_archive_checkpoint_digest_v1, kagemusha_wallet_archive_object_digest_v1},
     advance::{
         KAGEMUSHA_WALLET_CAPACITY_HEADROOM_BYTES_V1, KagemushaWalletAdvanceCapsuleV1,
         KagemushaWalletAdvanceOutcomeV1, KagemushaWalletAdvanceRequestV1,
         KagemushaWalletCapacityClassV1, KagemushaWalletExpectedHeadV1,
         KagemushaWalletNotPerformedV1, KagemushaWalletTransitionOwnerV1,
+    },
+    anchor::KAGEMUSHA_WALLET_ANCHOR_MAX_BYTES_V1,
+    archive::{
+        KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1, KagemushaWalletArchiveAccessV1,
+        kagemusha_wallet_archive_checkpoint_digest_v1, kagemusha_wallet_archive_object_digest_v1,
     },
     capsule::{KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1, KagemushaWalletFrozenFrameV1},
     completion::KagemushaWalletCompletionFrameV1,

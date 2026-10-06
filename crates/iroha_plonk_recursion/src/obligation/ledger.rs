@@ -135,8 +135,6 @@ pub enum LedgerError {
     SigmaShape,
     /// The variant and presence of an incoming sigma descriptor disagree.
     IncomingShape,
-    /// Bootstrap has exactly one Q leaf and forwards its opening.
-    BootstrapLeaves,
     /// The ordered consumer bindings differ from the fixed schedule.
     Bindings,
 }
@@ -146,7 +144,6 @@ impl fmt::Display for LedgerError {
         f.write_str(match self {
             Self::SigmaShape => "sigma source k must be 12 or 14",
             Self::IncomingShape => "incoming sigma does not match the variant",
-            Self::BootstrapLeaves => "bootstrap requires exactly one Q leaf",
             Self::Bindings => "obligation bindings do not match the fixed schedule",
         })
     }
@@ -168,8 +165,8 @@ impl Ledger {
     /// Descriptor-derived k values and Q count are fixed at key generation.
     ///
     /// # Errors
-    /// A variant/descriptor mismatch, unsupported sigma shape or wrong base
-    /// Q count. Conditional A-split contexts are deliberately separate plans.
+    /// A variant/descriptor mismatch or unsupported sigma shape.
+    /// Conditional A-split contexts are deliberately separate plans.
     pub fn new(
         variant: Variant,
         q_leaves: NonZeroU16,
@@ -193,9 +190,6 @@ impl Ledger {
             return Err(LedgerError::IncomingShape);
         }
         let base = variant == Variant::Bootstrap;
-        if base && q_leaves.get() != 1 {
-            return Err(LedgerError::BootstrapLeaves);
-        }
         let mut slots = Vec::new();
         let mut claim = |id, destination, source_k, gated| {
             slots.push(Slot {
@@ -246,7 +240,7 @@ impl Ledger {
         for index in 0..q_leaves.get() {
             claim(
                 Obligation::QOpening(index),
-                if base {
+                if base && q_leaves.get() == 1 {
                     Destination::PallasForward
                 } else {
                     Destination::PallasFold

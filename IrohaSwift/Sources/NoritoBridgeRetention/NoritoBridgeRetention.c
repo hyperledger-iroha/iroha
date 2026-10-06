@@ -35,6 +35,16 @@ typedef void (*NoritoBridgeExportReference)(void);
 // The called retention function roots the table; its relocations extract every
 // referenced archive member and retain the exports under linker dead stripping.
 static NoritoBridgeExportReference volatile required_exports[] = {
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_revision_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_open_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_close_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_activity_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_commit_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_retry_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_resume_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_fold_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_credit_status_v1,
+
     (NoritoBridgeExportReference)connect_norito_acceleration_config_get_v1,
     (NoritoBridgeExportReference)connect_norito_acceleration_config_set_v1,
     (NoritoBridgeExportReference)connect_norito_acceleration_state_get_v1,

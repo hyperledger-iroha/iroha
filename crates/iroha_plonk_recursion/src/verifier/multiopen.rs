@@ -127,10 +127,10 @@ impl<C: PastaCurve> VerifierChip<C> {
         let x4 = read.challenge(Challenge::X4)?;
         let identity = self.identity(region)?;
         let mut commitments = vec![identity; opening.sets().len()];
-        let mut set_evals: Vec<Vec<Scalar<C>>> = opening
+        let mut set_values: Vec<Vec<Vec<Scalar<C>>>> = opening
             .sets()
             .iter()
-            .map(|set| vec![zero.clone(); set.len()])
+            .map(|set| vec![Vec::new(); set.len()])
             .collect();
         // Each static set is a Horner fold in original slot order: the first
         // slot has the highest x1 exponent, exactly as the native reverse MSM.
@@ -159,11 +159,18 @@ impl<C: PastaCurve> VerifierChip<C> {
             };
             let scaled = self.scale_point(region, &commitments[slot.set], &x1)?;
             commitments[slot.set] = self.ecc.add(region, &scaled, &point)?;
-            for (value, eval) in set_evals[slot.set].iter_mut().zip(&slot_evals[index]) {
-                let scaled = self.mul(region, value, &x1)?;
-                *value = self.add(region, &scaled, eval)?;
+            for (values, evaluation) in set_values[slot.set].iter_mut().zip(&slot_evals[index]) {
+                values.push(evaluation.clone());
             }
         }
+        let set_evals = set_values
+            .iter()
+            .map(|set| {
+                set.iter()
+                    .map(|values| self.horner(region, values, &x1))
+                    .collect::<Result<Vec<_>, Error>>()
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         let mut value = zero;
         let mut q_evals = Vec::new();
         for (index, set) in opening.sets().iter().enumerate() {

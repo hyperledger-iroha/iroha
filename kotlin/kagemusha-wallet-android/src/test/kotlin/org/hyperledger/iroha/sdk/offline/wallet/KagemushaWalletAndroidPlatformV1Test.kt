@@ -162,6 +162,7 @@ class KagemushaWalletAndroidPlatformV1Test {
             "keySign" to "([B[B)L$JVM_OWNER/KagemushaWalletAndroidSignatureV1;",
             "keyDelete" to "([B)L$JVM_OWNER/KagemushaWalletAndroidRemoveV1;",
             "attestationChain" to "([B)L$JVM_OWNER/KagemushaWalletAndroidAttestationChainV1;",
+            "nativeCall" to "(I[B[BI)L$JVM_OWNER/KagemushaWalletNativeReplyV1;",
             "anchorPolicyTag" to "()I",
             "storageState" to "()L$JVM_OWNER/KagemushaWalletAndroidUnavailableV1;",
             "custodyRoot" to "()L$JVM_OWNER/KagemushaWalletAndroidCustodyRootV1;",

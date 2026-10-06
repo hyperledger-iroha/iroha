@@ -214,7 +214,7 @@ impl Attempt {
         Ok(())
     }
     fn verify_authorization(&self) -> Result<()> {
-        self.directory.revalidate()?;
+        // The canonical read begins native custody checks and rechecks optional absence.
         if read_record::<Authorization>(&self.directory, "authorization.nrt")?.as_ref()
             != Some(&self.authorization)
         {
@@ -490,7 +490,7 @@ impl History {
         retained: Option<&History>,
     ) -> Result<Self> {
         scope.validate(operation, purpose, semantic)?;
-        operation.revalidate()?;
+        // The inventory begins and ends with fresh native directory checks.
         operation_inventory(operation, purpose)?;
         require_semantic_original(operation, semantic)?;
         let retained_operation = match retained {
@@ -926,7 +926,7 @@ impl History {
         // records one at a time instead of retaining another complete directory graph.
         self.scope
             .validate_local(&self.operation, self.purpose, self.semantic)?;
-        self.operation.revalidate()?;
+        // The inventory begins and ends with fresh native directory checks.
         let operation_names = operation_inventory(&self.operation, self.purpose)?;
         require_semantic_original(&self.operation, self.semantic)?;
         self.require_metadata()?;
@@ -939,7 +939,7 @@ impl History {
                 }
             }
             Some(root) => {
-                root.revalidate()?;
+                // entries brackets its actual census with native custody checks.
                 let names = root.entries(MAX_ATTEMPTS)?;
                 if names.len() < self.attempts.len()
                     || names.len() > self.attempts.len() + usize::from(self.empty_tail)
@@ -953,7 +953,7 @@ impl History {
                     ));
                 }
                 for attempt in &self.attempts {
-                    attempt.directory.revalidate()?;
+                    // The inventory preserves both native directory fences.
                     let inventory = attempt_inventory(&attempt.directory)?;
                     attempt.validate_inventory(
                         &inventory,

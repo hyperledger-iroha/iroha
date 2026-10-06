@@ -1,7 +1,12 @@
 //! Fixed A-split context framing; every continuation input is rebound by hash.
 
-use super::{AProofPlan, LineagePublicCells, VerifiedQCells, VestaClaimCells};
-use crate::operation_relation::{state::StateCells, statement::StatementCells};
+use super::schedule::OperationTask;
+use super::{AProofPlan, LineagePublicCells, ProofMessageCells, VerifiedQCells, VestaClaimCells};
+use crate::operation_relation::{
+    incoming_statement::{IncomingStatementCells, StatementView},
+    state::StateCells,
+    statement::StatementCells,
+};
 use ff::PrimeField;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
@@ -38,9 +43,66 @@ pub struct ContextObjectCells {
     tape_digest: Word<Fp>,
 }
 impl ContextObjectCells {
+    /// Digest of the object parsed from this same committed byte tape.
+    pub const fn authenticated_digest(&self) -> &Word<Fp> {
+        &self.authenticated_digest
+    }
+    /// Commit an exact fixed-size object tape, prepending its pinned LE32 length.
+    /// This reuses the bounded semantic parser's tape instead of assigning a
+    /// second copy. It is for hard canonical own objects; variable-length soft
+    /// incoming carriers must use `from_run` with their actual length bytes.
+    ///
+    /// # Errors
+    /// Wrong fixed capacity, missing bounded segments, or layout failure.
+    pub fn from_exact_run(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        spec: ContextObjectSpec,
+        authenticated_digest: &Word<Fp>,
+        run: &ByteRun<Fp>,
+    ) -> Result<Self, Error> {
+        use iroha_plonk_gadgets::bytes::PBytes;
+        if spec.tag == 0 || usize::try_from(spec.capacity).ok() != Some(run.len()) {
+            return Err(Error::Synthesis);
+        }
+        let mut tape = PBytes::new();
+        tape.push_constant(&spec.capacity.to_le_bytes());
+        for segment in run.primary() {
+            tape.push_bounded_split(
+                &mut chip.uint(),
+                region,
+                &segment.bounded().ok_or(Error::Synthesis)?,
+            )?;
+        }
+        let length = chip
+            .uint()
+            .constant::<32>(region, u128::from(spec.capacity))?;
+        let tag = chip
+            .uint()
+            .glue()
+            .constant(region, Fp::from(u64::from(spec.tag)))?;
+        let capacity = chip
+            .uint()
+            .glue()
+            .constant(region, Fp::from(u64::from(spec.capacity)))?;
+        let mut words = vec![tag, capacity];
+        words.extend(
+            tape.chunk_words(chip.uint().glue(), region)?
+                .iter()
+                .map(|v| v.word().clone()),
+        );
+        let tape_digest = chip.hash_words(region, u64::from_le_bytes(TAPE_DOMAIN), &words)?;
+        Ok(Self {
+            spec,
+            authenticated_digest: authenticated_digest.clone(),
+            length,
+            tape_digest,
+        })
+    }
+
     /// Bind an object identity and its exact fixed carrier bytes.
     /// The operation/Q relation must authenticate `authenticated_digest` and
-    /// tie it to these bytes; the context makes that same binding cross A1/A2.
+    /// tie it to these bytes; the context retains that binding across all stages.
     /// Actual lengths above the buffer capacity remain representable for soft
     /// malformed-input verdicts. The framing itself never claims authentication.
     ///
@@ -49,7 +111,7 @@ impl ContextObjectCells {
     pub fn from_run(
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
-        spec: &ContextObjectSpec,
+        spec: ContextObjectSpec,
         authenticated_digest: &Word<Fp>,
         run: &ByteRun<Fp>,
     ) -> Result<Self, Error> {
@@ -91,7 +153,7 @@ impl ContextObjectCells {
         words.extend(run.primary().iter().map(|s| s.word().clone()));
         let tape_digest = chip.hash_words(region, u64::from_le_bytes(TAPE_DOMAIN), &words)?;
         Ok(Self {
-            spec: *spec,
+            spec,
             authenticated_digest: authenticated_digest.clone(),
             length,
             tape_digest,
@@ -106,14 +168,28 @@ pub struct ContextState<'a> {
     /// Corresponding public lineage header.
     pub public: &'a LineagePublicCells,
 }
+/// Hard predecessor context, including both deferred transport obligations.
+#[derive(Clone, Copy, Debug)]
+pub struct ContextPredecessor<'a> {
+    /// Canonical state opening used after the split.
+    pub state: &'a StateCells,
+    /// Exact predecessor lineage public fields.
+    pub public: &'a LineagePublicCells,
+    /// Original checked full-k Pallas accumulator.
+    pub pallas: &'a FoldInputCells<Ep>,
+    /// Original checked full-k Vesta accumulator.
+    pub vesta: &'a VestaClaimCells,
+}
 /// Original incoming lineage and both checked transport claims.
 #[derive(Clone, Copy, Debug)]
 pub struct ContextIncoming<'a> {
-    /// Incoming public prefix, including its carried Omega identity.
-    pub public: &'a LineagePublicCells,
+    /// Original incoming prefix and mandatory total structural validity.
+    pub public: &'a super::IncomingLineageCells,
     /// Checked original claim or its deterministic decoder dummy.
     pub pallas: &'a FoldInputCells<Ep>,
-    /// Checked original claim or its deterministic decoder dummy.
+    /// Exact original Omega message bytes and actual carrier length.
+    pub proof: &'a ProofMessageCells,
+    /// Checked original Vesta claim or its deterministic decoder dummy.
     pub vesta: &'a VestaClaimCells,
 }
 /// Every input a continuation can consume, in a circuit-fixed schema.
@@ -122,9 +198,9 @@ pub struct ContextInputs<'a> {
     /// Validated own statement, of the plan's exact variant.
     pub own_statement: &'a StatementCells,
     /// Expected Send/Receive statement, present for incoming-sigma variants.
-    pub incoming_statement: Option<&'a StatementCells>,
+    pub incoming_statement: Option<&'a IncomingStatementCells>,
     /// Absent exactly for Bootstrap.
-    pub predecessor: Option<ContextState<'a>>,
+    pub predecessor: Option<ContextPredecessor<'a>>,
     /// Current operation's state opening and public header.
     pub successor: ContextState<'a>,
     /// Original incoming lineage, only in incoming-Omega variants.
@@ -137,14 +213,17 @@ pub struct ContextInputs<'a> {
     pub modes: &'a [ModeCells<Fp>],
     /// Native corrections for incoming P and Omega opening, in that order.
     pub pallas_corrections: &'a [NonIdentityPoint<Fp>],
-    /// Canonical foreign corrections for incoming V, then incoming sigma.
+    /// Canonical foreign correction for incoming V, when present. Incoming
+    /// sigma correction coordinates belong solely to the hard Q relation.
     pub vesta_corrections: &'a [[ScalarCells<Ep>; 2]],
 }
 /// Immutable operation/partition schema committed by both split halves.
 #[derive(Clone, Debug)]
 pub struct ContextPlan {
     operation: AProofPlan,
-    first_q: usize,
+    stage_q: Vec<Vec<usize>>,
+    predecessor_stage: Option<usize>,
+    stage_tasks: Vec<Vec<OperationTask>>,
     objects: Vec<ContextObjectSpec>,
     constants: Vec<Fp>,
 }
@@ -159,7 +238,108 @@ impl ContextPlan {
         first_q: usize,
         objects: Vec<ContextObjectSpec>,
     ) -> Result<Self, Error> {
-        if first_q == 0 || first_q > operation.q_count() || objects.iter().any(|s| s.tag == 0) {
+        let total = operation.q_count();
+        if first_q > total {
+            return Err(Error::Synthesis);
+        }
+        let predecessor = operation.frame().has_predecessor().then_some(1);
+        Self::with_schedule(
+            operation,
+            vec![(0..first_q).collect(), (first_q..total).collect()],
+            predecessor,
+            objects,
+        )
+    }
+
+    /// Two stages with the hard predecessor P/opening pair assigned to A1.
+    /// An empty first Q set is allowed only because the predecessor is hard.
+    ///
+    /// # Errors
+    /// Missing predecessor, out-of-range partition or invalid object schema.
+    pub fn with_predecessor_first(
+        operation: AProofPlan,
+        first_q: usize,
+        objects: Vec<ContextObjectSpec>,
+    ) -> Result<Self, Error> {
+        let total = operation.q_count();
+        if first_q > total {
+            return Err(Error::Synthesis);
+        }
+        Self::with_schedule(
+            operation,
+            vec![(0..first_q).collect(), (first_q..total).collect()],
+            Some(0),
+            objects,
+        )
+    }
+
+    /// Pin every ordered Q partition and the hard predecessor's exact stage.
+    /// Every Q appears exactly once, and only the last stage can emit a lineage.
+    /// Stage0 needs a real Pallas obligation: Q or the hard predecessor pair.
+    /// Incoming mode-selected Pallas claims belong to the last stage.
+    ///
+    /// # Errors
+    /// Fewer than two stages, missing/duplicate/reordered Q indices, invalid
+    /// predecessor stage, empty first obligation set, or bad object schema.
+    pub fn with_schedule(
+        operation: AProofPlan,
+        stage_q: Vec<Vec<usize>>,
+        predecessor_stage: Option<usize>,
+        objects: Vec<ContextObjectSpec>,
+    ) -> Result<Self, Error> {
+        let tasks = vec![Vec::new(); stage_q.len()];
+        Self::build(operation, stage_q, predecessor_stage, objects, tasks)
+    }
+    /// Pin the exact operation task owner stage in the same context as Q keys.
+    /// Every required task must occur once. The owning circuit must execute
+    /// those constraints; metadata alone never proves an operation transition.
+    /// Generic frame component plans intentionally have empty task lists.
+    ///
+    /// # Errors
+    /// Wrong stage count, unsupported operation, missing/duplicate/relabelled
+    /// task, or noncanonical task ordering.
+    pub fn with_operation_tasks(self, tasks: Vec<Vec<OperationTask>>) -> Result<Self, Error> {
+        if tasks.len() != self.stage_count() {
+            return Err(Error::Synthesis);
+        }
+        OperationTask::validate(self.operation.frame().variant(), &tasks)?;
+        Self::build(
+            self.operation,
+            self.stage_q,
+            self.predecessor_stage,
+            self.objects,
+            tasks,
+        )
+    }
+    fn build(
+        operation: AProofPlan,
+        stage_q: Vec<Vec<usize>>,
+        predecessor_stage: Option<usize>,
+        objects: Vec<ContextObjectSpec>,
+        stage_tasks: Vec<Vec<OperationTask>>,
+    ) -> Result<Self, Error> {
+        if stage_q.len() < 2
+            || predecessor_stage.is_some() != operation.frame().has_predecessor()
+            || predecessor_stage.is_some_and(|i| i >= stage_q.len())
+            || (stage_q[0].is_empty() && predecessor_stage != Some(0))
+            || objects.iter().any(|s| s.tag == 0)
+        {
+            return Err(Error::Synthesis);
+        }
+        let mut seen = vec![false; operation.q_count()];
+        for group in &stage_q {
+            if group.windows(2).any(|w| w[0] >= w[1]) {
+                return Err(Error::Synthesis);
+            }
+            for index in group {
+                let used = seen.get_mut(*index).ok_or(Error::Synthesis)?;
+                if *used {
+                    return Err(Error::Synthesis);
+                }
+                *used = true;
+            }
+        }
+        if seen.iter().any(|used| !used) {
             return Err(Error::Synthesis);
         }
         for (i, spec) in objects.iter().enumerate() {
@@ -172,14 +352,36 @@ impl ContextPlan {
             .position(|v| *v == operation.frame().variant())
             .ok_or(Error::Synthesis)?
             + 1;
-        let mut constants = [1, variant, 1, first_q, operation.q_count(), objects.len()]
-            .into_iter()
-            .map(|v| {
-                u64::try_from(v)
-                    .map(Fp::from)
-                    .map_err(|_| Error::BoundsFailure)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut constants = [
+            1,
+            variant,
+            1,
+            predecessor_stage.map_or(0, |i| i + 1),
+            stage_q.len(),
+            operation.q_count(),
+            objects.len(),
+        ]
+        .into_iter()
+        .map(|v| {
+            u64::try_from(v)
+                .map(Fp::from)
+                .map_err(|_| Error::BoundsFailure)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        for (group, tasks) in stage_q.iter().zip(&stage_tasks) {
+            constants.push(Fp::from(
+                u64::try_from(group.len()).map_err(|_| Error::BoundsFailure)?,
+            ));
+            for index in group {
+                constants.push(Fp::from(
+                    u64::try_from(*index).map_err(|_| Error::BoundsFailure)?,
+                ));
+            }
+            constants.push(Fp::from(
+                u64::try_from(tasks.len()).map_err(|_| Error::BoundsFailure)?,
+            ));
+            constants.extend(tasks.iter().map(|task| Fp::from(u64::from(task.code()))));
+        }
         for index in 0..operation.q_count() {
             let q = operation.q(index).ok_or(Error::Synthesis)?;
             constants.push(
@@ -206,20 +408,48 @@ impl ContextPlan {
         }
         Ok(Self {
             operation,
-            first_q,
+            stage_q,
+            predecessor_stage,
+            stage_tasks,
             objects,
             constants,
         })
     }
-    /// The complete operation plan, retained across both halves.
+    /// Fixed version/variant/partition, source key identities and object schema.
+    /// These words prefix the circuit context preimage in the exact returned order.
+    pub fn schema(&self) -> &[Fp] {
+        &self.constants
+    }
+    /// The complete operation plan, retained across all stages.
     pub const fn operation(&self) -> &AProofPlan {
         &self.operation
     }
-    /// Q slots `[0, first_q_count)` belong to A1; every other slot belongs to A2.
-    pub const fn first_q_count(&self) -> usize {
-        self.first_q
+    /// Number of Q slots assigned to the initial stage.
+    pub fn first_q_count(&self) -> usize {
+        self.stage_q[0].len()
     }
-    /// Exact incoming mode count, including separate sigma and Omega obligations.
+    /// Fixed number of A stages; only the last stage can emit a lineage.
+    pub fn stage_count(&self) -> usize {
+        self.stage_q.len()
+    }
+    /// Exact ordered Q indices assigned to a stage, with no repetitions.
+    pub fn q_partition(&self, stage: usize) -> Option<&[usize]> {
+        self.stage_q.get(stage).map(Vec::as_slice)
+    }
+    /// Fixed operation tasks assigned to this stage. Empty for a frame-only
+    /// component; the task schema itself is never an authentication verdict.
+    pub fn operation_tasks(&self, stage: usize) -> Option<&[OperationTask]> {
+        self.stage_tasks.get(stage).map(Vec::as_slice)
+    }
+    /// Stage containing the hard predecessor P/opening pair; absent for Bootstrap.
+    pub const fn predecessor_stage(&self) -> Option<usize> {
+        self.predecessor_stage
+    }
+    /// Whether the predecessor pair is closed into A1's carried claim.
+    pub const fn predecessor_in_first(&self) -> bool {
+        matches!(self.predecessor_stage, Some(0))
+    }
+    /// Exact fixed global incoming-mode count in the root context.
     pub fn mode_count(&self) -> usize {
         3 * usize::from(self.operation.frame().has_incoming())
             + usize::from(self.operation.sigma.slot_count() == 2)
@@ -247,8 +477,7 @@ impl ContextPlan {
             || input.objects.len() != self.objects.len()
             || input.modes.len() != self.mode_count()
             || input.pallas_corrections.len() != 2 * usize::from(incoming_omega)
-            || input.vesta_corrections.len()
-                != usize::from(incoming_omega) + usize::from(incoming_sigma)
+            || input.vesta_corrections.len() != usize::from(incoming_omega)
         {
             return Err(Error::Synthesis);
         }
@@ -261,21 +490,45 @@ impl ContextPlan {
         if let Some(statement) = input.incoming_statement {
             words.extend(statement.fields().iter().cloned());
         }
-        for state in input.predecessor.into_iter().chain([input.successor]) {
-            state
-                .state
-                .bind_lineage(&mut chip.uint(), region, state.public)?;
-            words.extend(state.state.core().iter().cloned());
-            words.extend(state.state.rest().iter().cloned());
-            words.extend(state.public.fields().iter().cloned());
+        if let Some(pred) = input.predecessor {
+            pred.state
+                .bind_lineage(&mut chip.uint(), region, pred.public)?;
+            words.extend(pred.state.core().iter().cloned());
+            words.extend(pred.state.rest().iter().cloned());
+            words.extend(pred.public.fields().iter().cloned());
+            push_pallas(&mut words, pred.pallas)?;
+            if pred.vesta.source_k() != 16 {
+                return Err(Error::Synthesis);
+            }
+            words.extend(pred.vesta.words());
         }
+        let state = input.successor;
+        state
+            .state
+            .bind_lineage(&mut chip.uint(), region, state.public)?;
+        words.extend(state.state.core().iter().cloned());
+        words.extend(state.state.rest().iter().cloned());
+        words.extend(state.public.fields().iter().cloned());
         if let Some(incoming) = input.incoming {
             words.extend(incoming.public.fields().iter().cloned());
+            words.push(incoming.public.valid().word().clone());
             push_pallas(&mut words, incoming.pallas)?;
             if incoming.vesta.source_k() != 16 {
                 return Err(Error::Synthesis);
             }
             words.extend(incoming.vesta.words());
+            let omega = self.operation.omega().ok_or(Error::Synthesis)?;
+            if incoming.proof.messages().len().checked_mul(32) != Some(omega.proof_length()) {
+                return Err(Error::Synthesis);
+            }
+            words.push(incoming.proof.length().word().clone());
+            for message in incoming.proof.messages() {
+                words.extend([
+                    message.lo().word().clone(),
+                    message.hi().word().clone(),
+                    message.top().word().clone(),
+                ]);
+            }
         }
         for (index, columns) in input.q_instances.iter().enumerate() {
             let d = self
@@ -326,8 +579,8 @@ impl ContextPlan {
         chip.hash_words(region, u64::from_le_bytes(CONTEXT_DOMAIN), &words)
     }
     /// Copy-bind exactly one fixed Q partition to its hard verifier outputs.
-    /// A1 uses `first=true`; A2 uses `first=false`. Both halves hash all Q
-    /// instances, so neither can substitute an unverified instance column.
+    /// The stage index selects a circuit-fixed Q partition. All stages hash
+    /// every Q instance, preventing deferred-instance substitution.
     ///
     /// # Errors
     /// Missing, duplicate, reordered or wrong-shaped Q outputs; layout failure.
@@ -336,17 +589,19 @@ impl ContextPlan {
         region: &mut Region<'_, Fp>,
         input: &ContextInputs<'_>,
         verified: &[VerifiedQCells],
-        first: bool,
+        stage: usize,
     ) -> Result<(), Error> {
-        let range = if first {
-            0..self.first_q
-        } else {
-            self.first_q..self.operation.q_count()
-        };
-        if verified.len() != range.len() || input.q_instances.len() != self.operation.q_count() {
+        let indices = self.q_partition(stage).ok_or(Error::Synthesis)?;
+        if verified.len() != indices.len() || input.q_instances.len() != self.operation.q_count() {
             return Err(Error::Synthesis);
         }
-        for (expected, q) in range.zip(verified) {
+        for (expected, q) in indices.iter().copied().zip(verified) {
+            let fixed = self.operation.q(expected).ok_or(Error::Synthesis)?;
+            let digest = fixed
+                .key
+                .kagemusha_digest(fixed.verifier().binding())
+                .map_err(|_| Error::Synthesis)?;
+            GlueChip::assert_constant(region, &q.key_digest, digest)?;
             let columns = &input.q_instances[expected];
             if q.index != expected || q.instances.len() != columns.len() {
                 return Err(Error::Synthesis);

@@ -118,6 +118,7 @@ internal object VerifyingKeyDraftBinding {
                 ) {
                     VerifyingKeyBackendTag.HALO2_IPA_PASTA -> 0L
                     VerifyingKeyBackendTag.STARK -> 1L
+                    VerifyingKeyBackendTag.NATIVE_PIPA_R_PASTA -> 2L
                     null -> throw IllegalArgumentException(
                         "verifying-key draft request uses an unsupported backend",
                     )

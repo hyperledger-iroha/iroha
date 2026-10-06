@@ -53,6 +53,40 @@ with the selected incoming claim and an explicit pinned k16 trivial input.
 Public columns have explicit homogeneous PIPA-R types. These component
 constraints remain separate from final recursive artifact qualification.
 
+## Bootstrap composition
+
+`admin_sigma::BootstrapCircuit` proves the exact zero-value initial G1 state,
+empty maps/counters and statement binding at k12 with five advice columns;
+its PIPA-R proof is 3,296 bytes. A authenticates the state credential and the
+same-byte certificate/credential/receipt transcripts through the separate
+2-variable/1-fixed signature Q. `a_relation::bootstrap` pins scheme, provider
+and root policy and requires the credential, state/key and receipt bindings.
+
+The actual sigma → Q_sigma → A1 → W → A2 test fits k16 and independently
+decides every retained claim. Its context and every deferred opening are
+retained; signature-role/root substitutions and dropped obligations fail.
+See `specs/kagemusha_a_split_context_v1.md`. This is operation composition,
+not final Omega/artifact, hardware, time/RSS or wallet acceptance qualification.
+
+## Load components
+
+`admin_sigma::LoadCircuit` proves both state openings, exact arithmetic,
+continuity and unchanged fields on the five-column k12 class (3,296 bytes).
+`a_relation::load` parses one certificate/voucher/receipt tape per object,
+requires the LoadAuthorization certificate role and fixed scheme-root policy,
+and binds the finalized voucher and receipt to the same state, statement and
+sigma proof digest. Its recovery method proves the exact depth32 insertion.
+The actual two-variable/one-fixed signature Q is 7,936 bytes. These components
+are being joined to the genuine rooted Bootstrap predecessor through the fixed
+predecessor-first A context. The fixed A1→W1→A2→W2→A3 chain separates
+predecessor/recovery, Q_sigma, and signature/authorization. All three stages
+fit k16 with five shared range buses and actual 8,960-byte A proofs, retaining
+the complete original context and every P/V carry. The four-bus Q_sigma stage
+exceeds k16. A common Bootstrap/Load descriptor, complete final Omega catalog,
+root-digest rebinding and final resource qualification remain open.
+The object/map component alone uses 19,092 sponge rows and 1,986 UInt rows on
+shared A lanes, before recursive verification and signature authorization.
+
 ## Controls
 
 Send's verifying key is selected by the opened core mask. Receive's key is
@@ -112,6 +146,17 @@ integrating Λ/Ω with wallet and node paths remain separate G3–G5 work; this
 crate's σ implementation alone does not establish complete protocol readiness.
 
 ## Validation
+
+`q_signature` implements ordered hard/soft P-256 signature leaves on the
+17-advice/10-lookup Q layout. One Bounded public column contains ten words
+per slot: digest, x/y/r/s as low128/high128, then verdict. Raw 256-bit
+integers remain unreduced until the total P-256 checks. The existing SHA
+codec binds the canonical Fp digest's LE bytes. Fixed keys and slot modes
+are part of the circuit; A still binds these public words to object bytes,
+certificate purpose and the global branch rule. The 5-variable/1-fixed
+component uses 64,238 rows at k16. Signature proofs, exact-input mutations,
+raw-width boundaries and every bridge cell are tested. This is not a
+composed operation or runtime qualification.
 
 - `digest_parity`: every G1 field encoding, named controlled-state positions,
   hashes, packing domains, fixed64 usage roots/openings and in-circuit parity

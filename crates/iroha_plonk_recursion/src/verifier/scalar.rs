@@ -32,18 +32,33 @@ use crate::codec::ScalarCells;
 use core::marker::PhantomData;
 use ff::{Field, PrimeField};
 use iroha_pasta::{PastaCurve, PastaField};
-use iroha_plonk::frontend::{Error, Region};
+use iroha_plonk::frontend::{Cell, Error, Region};
 use iroha_plonk_gadgets::{
     Bit,
     ff::{FfChip, FfValue, ForeignModulus, Nat},
     range::u128::UintChip,
 };
+use std::collections::BTreeMap;
 
 pub type Scalar<C> = FfValue<<C as PastaCurve>::Base>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Operation {
+    Add([Cell; 3], [Cell; 3]),
+    Sub([Cell; 3], [Cell; 3]),
+    Neg([Cell; 3]),
+    Mul([Cell; 3], [Cell; 3]),
+    Proper([Cell; 3]),
+}
 
 #[derive(Debug)]
 pub struct Arithmetic<C: PastaCurve> {
     pub ff: FfChip<C::Base>,
+    constants: BTreeMap<C::ScalarExt, Scalar<C>>,
+    imports: BTreeMap<[Cell; 2], Scalar<C>>,
+    canonical: BTreeMap<[Cell; 3], Scalar<C>>,
+    exports: BTreeMap<[Cell; 3], ScalarCells<C>>,
+    operations: BTreeMap<Operation, Scalar<C>>,
     marker: PhantomData<C>,
 }
 
@@ -51,6 +66,11 @@ impl<C: PastaCurve> Arithmetic<C> {
     pub fn new(ff: FfChip<C::Base>) -> Self {
         Self {
             ff,
+            constants: BTreeMap::new(),
+            imports: BTreeMap::new(),
+            canonical: BTreeMap::new(),
+            exports: BTreeMap::new(),
+            operations: BTreeMap::new(),
             marker: PhantomData,
         }
     }
@@ -61,18 +81,50 @@ impl<C: PastaCurve> Arithmetic<C> {
             ForeignModulus::PASTA_FQ
         }
     }
+    fn cells(value: &Scalar<C>) -> [Cell; 3] {
+        value
+            .limbs()
+            .each_ref()
+            .map(iroha_plonk_gadgets::Word::cell)
+    }
+    fn constant_value(&self, value: &Scalar<C>) -> Option<C::ScalarExt> {
+        let key = Self::cells(value);
+        self.constants
+            .iter()
+            .find_map(|(constant, scalar)| (Self::cells(scalar) == key).then_some(*constant))
+    }
+    fn admitted(values: &[&Scalar<C>]) -> Result<(), Error> {
+        if values
+            .iter()
+            .any(|value| value.modulus() != Self::modulus())
+        {
+            Err(Error::Synthesis)
+        } else {
+            Ok(())
+        }
+    }
+    fn commutative(a: &Scalar<C>, b: &Scalar<C>) -> ([Cell; 3], [Cell; 3]) {
+        let a = Self::cells(a);
+        let b = Self::cells(b);
+        if a <= b { (a, b) } else { (b, a) }
+    }
     pub fn constant(
-        &self,
+        &mut self,
         uint: &mut UintChip<'_, C::Base>,
         region: &mut Region<'_, C::Base>,
         value: C::ScalarExt,
     ) -> Result<Scalar<C>, Error> {
-        self.ff.constant(
+        if let Some(cached) = self.constants.get(&value) {
+            return Ok(cached.clone());
+        }
+        let scalar = self.ff.constant(
             uint.glue(),
             region,
             Self::modulus(),
             &Nat::from_words(value.to_canonical_limbs()),
-        )
+        )?;
+        self.constants.insert(value, scalar.clone());
+        Ok(scalar)
     }
     pub fn import(
         &mut self,
@@ -80,7 +132,13 @@ impl<C: PastaCurve> Arithmetic<C> {
         region: &mut Region<'_, C::Base>,
         value: &ScalarCells<C>,
     ) -> Result<Scalar<C>, Error> {
-        self.ff.import_s6(uint, region, value.canonical())
+        let key = [value.lo().cell(), value.hi().cell()];
+        if let Some(cached) = self.imports.get(&key) {
+            return Ok(cached.clone());
+        }
+        let scalar = self.ff.import_s6(uint, region, value.canonical())?;
+        self.imports.insert(key, scalar.clone());
+        Ok(scalar)
     }
     pub fn export(
         &mut self,
@@ -88,8 +146,43 @@ impl<C: PastaCurve> Arithmetic<C> {
         region: &mut Region<'_, C::Base>,
         value: &Scalar<C>,
     ) -> Result<ScalarCells<C>, Error> {
-        let value = self.ff.export_s6(uint, region, value)?;
-        ScalarCells::from_canonical(uint, region, value)
+        if value.modulus() != Self::modulus() {
+            return Err(Error::Synthesis);
+        }
+        let key = value
+            .limbs()
+            .each_ref()
+            .map(iroha_plonk_gadgets::Word::cell);
+        if let Some(cached) = self.exports.get(&key) {
+            return Ok(cached.clone());
+        }
+        let value = self.canonicalize(region, value)?;
+        let value = self.ff.export_s6(uint, region, &value)?;
+        let cells = ScalarCells::from_canonical(uint, region, value)?;
+        self.exports.insert(key, cells.clone());
+        Ok(cells)
+    }
+    // Reuse is keyed by exact proving-cell identities, never by witness value.
+    // The earlier constraint stays in the same lane, so a cache hit retains
+    // its range, modulus and congruence proof in both known/unknown synthesis.
+    fn canonicalize(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        value: &Scalar<C>,
+    ) -> Result<Scalar<C>, Error> {
+        if value.modulus() != Self::modulus() {
+            return Err(Error::Synthesis);
+        }
+        let key = value
+            .limbs()
+            .each_ref()
+            .map(iroha_plonk_gadgets::Word::cell);
+        if let Some(cached) = self.canonical.get(&key) {
+            return Ok(cached.clone());
+        }
+        let normalized = self.ff.assert_canonical(region, value)?;
+        self.canonical.insert(key, normalized.clone());
+        Ok(normalized)
     }
     pub fn add(
         &mut self,
@@ -98,7 +191,26 @@ impl<C: PastaCurve> Arithmetic<C> {
         a: &Scalar<C>,
         b: &Scalar<C>,
     ) -> Result<Scalar<C>, Error> {
-        self.ff.add(uint.glue(), region, a, b)
+        Self::admitted(&[a, b])?;
+        let ca = self.constant_value(a);
+        let cb = self.constant_value(b);
+        if let (Some(a), Some(b)) = (ca, cb) {
+            return self.constant(uint, region, a + b);
+        }
+        if ca == Some(C::ScalarExt::ZERO) {
+            return Ok(b.clone());
+        }
+        if cb == Some(C::ScalarExt::ZERO) {
+            return Ok(a.clone());
+        }
+        let (a_key, b_key) = Self::commutative(a, b);
+        let key = Operation::Add(a_key, b_key);
+        if let Some(cached) = self.operations.get(&key) {
+            return Ok(cached.clone());
+        }
+        let value = self.ff.add(uint.glue(), region, a, b)?;
+        self.operations.insert(key, value.clone());
+        Ok(value)
     }
     pub fn sub(
         &mut self,
@@ -107,7 +219,28 @@ impl<C: PastaCurve> Arithmetic<C> {
         a: &Scalar<C>,
         b: &Scalar<C>,
     ) -> Result<Scalar<C>, Error> {
-        self.ff.sub(uint.glue(), region, a, b)
+        Self::admitted(&[a, b])?;
+        let ca = self.constant_value(a);
+        let cb = self.constant_value(b);
+        if let (Some(a), Some(b)) = (ca, cb) {
+            return self.constant(uint, region, a - b);
+        }
+        if Self::cells(a) == Self::cells(b) {
+            return self.constant(uint, region, C::ScalarExt::ZERO);
+        }
+        if cb == Some(C::ScalarExt::ZERO) {
+            return Ok(a.clone());
+        }
+        if ca == Some(C::ScalarExt::ZERO) {
+            return self.neg(uint, region, b);
+        }
+        let key = Operation::Sub(Self::cells(a), Self::cells(b));
+        if let Some(cached) = self.operations.get(&key) {
+            return Ok(cached.clone());
+        }
+        let value = self.ff.sub(uint.glue(), region, a, b)?;
+        self.operations.insert(key, value.clone());
+        Ok(value)
     }
     pub fn neg(
         &mut self,
@@ -115,22 +248,127 @@ impl<C: PastaCurve> Arithmetic<C> {
         region: &mut Region<'_, C::Base>,
         value: &Scalar<C>,
     ) -> Result<Scalar<C>, Error> {
-        self.ff.neg(uint.glue(), region, value)
+        Self::admitted(&[value])?;
+        if let Some(constant) = self.constant_value(value) {
+            return self.constant(uint, region, -constant);
+        }
+        let key = Operation::Neg(Self::cells(value));
+        if let Some(cached) = self.operations.get(&key) {
+            return Ok(cached.clone());
+        }
+        let value = self.ff.neg(uint.glue(), region, value)?;
+        self.operations.insert(key, value.clone());
+        Ok(value)
     }
     pub fn mul(
         &mut self,
+        uint: &mut UintChip<'_, C::Base>,
         region: &mut Region<'_, C::Base>,
         a: &Scalar<C>,
         b: &Scalar<C>,
     ) -> Result<Scalar<C>, Error> {
-        self.ff.mul(region, a, b)
+        Self::admitted(&[a, b])?;
+        let ca = self.constant_value(a);
+        let cb = self.constant_value(b);
+        if let (Some(a), Some(b)) = (ca, cb) {
+            return self.constant(uint, region, a * b);
+        }
+        if ca == Some(C::ScalarExt::ZERO) || cb == Some(C::ScalarExt::ZERO) {
+            return self.constant(uint, region, C::ScalarExt::ZERO);
+        }
+        if ca == Some(C::ScalarExt::ONE) {
+            return Ok(b.clone());
+        }
+        if cb == Some(C::ScalarExt::ONE) {
+            return Ok(a.clone());
+        }
+        if ca == Some(-C::ScalarExt::ONE) {
+            return self.neg(uint, region, b);
+        }
+        if cb == Some(-C::ScalarExt::ONE) {
+            return self.neg(uint, region, a);
+        }
+        let (a_key, b_key) = Self::commutative(a, b);
+        let key = Operation::Mul(a_key, b_key);
+        if let Some(cached) = self.operations.get(&key) {
+            return Ok(cached.clone());
+        }
+        let value = if let Some((constant, other)) = ca
+            .map(|constant| (constant, b))
+            .or_else(|| cb.map(|constant| (constant, a)))
+        {
+            let words = constant.to_canonical_limbs();
+            if words[1..] == [0, 0, 0] && words[0] <= 128 {
+                self.ff.scale(uint.glue(), region, other, words[0])?
+            } else {
+                self.ff.mul(region, a, b)?
+            }
+        } else {
+            self.ff.mul(region, a, b)?
+        };
+        self.operations.insert(key, value.clone());
+        Ok(value)
     }
-    pub fn square(
+    // An explicit shared-layout operation. Every batched input is reduced to
+    // a proven Proper representative before invoking the unsigned kernel.
+    pub fn dot(
+        &mut self,
+        uint: &mut UintChip<'_, C::Base>,
+        region: &mut Region<'_, C::Base>,
+        pairs: &[(&Scalar<C>, &Scalar<C>)],
+    ) -> Result<Scalar<C>, Error> {
+        if pairs.is_empty() || pairs.len() > 8 {
+            return Err(Error::Synthesis);
+        }
+        Self::admitted(&pairs.iter().flat_map(|(a, b)| [*a, *b]).collect::<Vec<_>>())?;
+        if let [(left, right)] = pairs {
+            return self.mul(uint, region, left, right);
+        }
+        let mut sum = self.constant(uint, region, C::ScalarExt::ZERO)?;
+        let mut products = Vec::new();
+        for (a, b) in pairs {
+            let (left, right) = Self::commutative(a, b);
+            let cached = self.operations.get(&Operation::Mul(left, right)).cloned();
+            if let Some(product) = cached {
+                sum = self.add(uint, region, &sum, &product)?;
+            } else if self.ff.config().is_some()
+                || self.constant_value(a).is_some()
+                || self.constant_value(b).is_some()
+            {
+                let product = self.mul(uint, region, a, b)?;
+                sum = self.add(uint, region, &sum, &product)?;
+            } else {
+                products.push((self.proper(region, a)?, self.proper(region, b)?));
+            }
+        }
+        if !products.is_empty() {
+            let pairs = products.iter().map(|(a, b)| (a, b)).collect::<Vec<_>>();
+            let product = self.ff.dot_proper(region, &pairs)?;
+            sum = self.add(uint, region, &sum, &product)?;
+        }
+        Ok(sum)
+    }
+    fn proper(
         &mut self,
         region: &mut Region<'_, C::Base>,
         value: &Scalar<C>,
     ) -> Result<Scalar<C>, Error> {
-        self.mul(region, value, value)
+        let key = Operation::Proper(Self::cells(value));
+        if let Some(cached) = self.operations.get(&key) {
+            return Ok(cached.clone());
+        }
+        let result = self.ff.reduce(region, value)?;
+        self.operations.insert(key, result.clone());
+        Ok(result)
+    }
+
+    pub fn square(
+        &mut self,
+        uint: &mut UintChip<'_, C::Base>,
+        region: &mut Region<'_, C::Base>,
+        value: &Scalar<C>,
+    ) -> Result<Scalar<C>, Error> {
+        self.mul(uint, region, value, value)
     }
     pub fn select(
         &self,
@@ -149,8 +387,8 @@ impl<C: PastaCurve> Arithmetic<C> {
         a: &Scalar<C>,
         b: &Scalar<C>,
     ) -> Result<Bit<C::Base>, Error> {
-        let a = self.ff.assert_canonical(region, a)?;
-        let b = self.ff.assert_canonical(region, b)?;
+        let a = self.canonicalize(region, a)?;
+        let b = self.canonicalize(region, b)?;
         let mut matches = uint.glue().is_equal(region, &a.limbs()[0], &b.limbs()[0])?;
         for (a, b) in a.limbs().iter().zip(b.limbs()).skip(1) {
             let next = uint.glue().is_equal(region, a, b)?;
@@ -174,9 +412,13 @@ impl<C: PastaCurve> Arithmetic<C> {
         region: &mut Region<'_, C::Base>,
         value: &Scalar<C>,
     ) -> Result<(Scalar<C>, Bit<C::Base>), Error> {
-        let nonzero = self.nonzero(uint, region, value)?;
+        // The zero test already requires this exact canonical representative.
+        // Reuse it for the guarded division rather than reducing the original
+        // lazy representative a second time under the divisor admission rule.
+        let value = self.canonicalize(region, value)?;
+        let nonzero = self.nonzero(uint, region, &value)?;
         let one = self.constant(uint, region, C::ScalarExt::ONE)?;
-        let safe = self.select(uint, region, &nonzero, value, &one)?;
+        let safe = self.select(uint, region, &nonzero, &value, &one)?;
         let out = self.ff.inverse(region, &safe)?;
         Ok((out, nonzero))
     }
@@ -192,11 +434,11 @@ impl<C: PastaCurve> Arithmetic<C> {
         let mut exponent = exponent;
         while exponent != 0 {
             if exponent & 1 != 0 {
-                out = self.mul(region, &out, &power)?;
+                out = self.mul(uint, region, &out, &power)?;
             }
             exponent >>= 1;
             if exponent != 0 {
-                power = self.square(region, &power)?;
+                power = self.square(uint, region, &power)?;
             }
         }
         Ok(out)

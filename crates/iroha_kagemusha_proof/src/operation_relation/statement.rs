@@ -4,7 +4,7 @@ use ff::Field;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
 use iroha_plonk_gadgets::{
-    GlueChip, SpongeChip, UintChip, Word,
+    GlueChip, UintChip, Word, WordHasher,
     statement::{STATEMENT_DOMAIN, STATEMENT_FIELDS},
 };
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
@@ -34,7 +34,7 @@ impl StatementCells {
     /// Layout failure; invalid statements have no satisfying witness.
     pub fn constrain(
         uint: &mut UintChip<'_, Fp>,
-        sponge: &mut SpongeChip<Fp>,
+        sponge: &mut impl WordHasher<Fp>,
         region: &mut Region<'_, Fp>,
         variant: Variant,
         fields: &[Word<Fp>; STATEMENT_FIELDS],
@@ -61,13 +61,14 @@ impl StatementCells {
         variant: Variant,
         fields: &[Word<Fp>; STATEMENT_FIELDS],
     ) -> Result<Self, Error> {
-        validate_fields(&mut chip.uint(), region, variant, fields)?;
-        let digest = chip.hash_words(region, STATEMENT_DOMAIN, fields)?;
-        Ok(Self {
+        let lanes = chip.operation_lanes()?;
+        Self::constrain(
+            &mut UintChip::new(lanes.glue, lanes.range),
+            lanes.hash,
+            region,
             variant,
-            fields: fields.clone(),
-            digest,
-        })
+            fields,
+        )
     }
 
     /// The immutable operation variant of this statement.

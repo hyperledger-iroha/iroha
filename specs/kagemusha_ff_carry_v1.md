@@ -269,3 +269,281 @@ rederivation matched the bounds above. The reviewed implementation hashes are:
 This closes the scoped carry/range implementation review. It is not an external
 cryptographic audit, proof-engine qualification, performance/device result or
 deployment authorization; those gates remain separate.
+
+## 12. Recursive scalar adapter and canonical S6 certificates
+
+The 2026-10-06 adapter revision keeps the seven-row fused gate, radix, quotient,
+carry ranges and its admission checks unchanged. It changes operand provenance
+and reuses already proved integer ranges. The earlier carry review does not by
+itself establish these adapter properties.
+
+Internal recursive scalar addition, subtraction and negation may retain an
+unreduced integer congruent to the scalar. For limb bounds `A_i,B_i`, addition
+tracks `A_i+B_i`. Subtraction chooses the existing fixed multiple `K=t m` with
+`K_i>=B_i`, and tracks `0<=a_i+K_i-b_i<=A_i+K_i`; negation tracks
+`0<=K_i-b_i<=K_i`. Each limb remains at most `2^94-1`, or the existing reduction
+path is used before retrying. These native-field equations therefore cannot
+wrap. Multiplication still invokes `make_admissible`, including
+`max(a) max(b)<m 2^261`, and division retains its padding/quotient admission.
+The value's native-field residue is not its foreign scalar: equality, zero
+testing, the guarded inverse's zero test, S6 export, scalar-bit transfer and
+transcript/public transfer canonicalize the integer before interpreting it.
+
+`CanonicalS6` is an opaque certificate for the same bounded cells
+`x=lo+2^128 hi<m<2^255`. It has no public unchecked constructor. Import to FF
+splits `lo=a+2^87 b0` and `hi=b1+2^46 c`, with widths `87/41/46/81`, then sets
+`b=b0+2^41 b1`. The equalities are integer equalities: their nonnegative sides
+are below `2^128`, and `b<2^87`. Export first proves the three-limb FF integer
+canonical. Since `x<m<2^255`, its nonnegative high limb satisfies `c<2^81`;
+splitting the middle limb into 41 and 46 bits yields the same integer and
+proves `lo<2^128, hi<2^127` without duplicate range lookups. Changing a
+certificate's modulus checks the narrower bound when needed; widening retains
+the original constraints. `ScalarCells` additionally requires the exact curve
+scalar modulus, so a foreign certificate cannot silently change meaning.
+
+The root implementation reviewer independently checked this import/export
+integer argument and modulus handling. Exact-cell caches live only for one
+chip/synthesis and retain the earlier constraints. Structural constant folding
+recognizes pinned constant cells, never witness values. General operation
+reuse is keyed by both operands' proving-cell identities. Fixed small-scalar
+multiplication uses the existing bounded `scale` operation and its reduction
+checks, not a wider carry envelope.
+
+Validation at this source snapshot passed:
+
+- both-direction S6 roundtrips, every assigned-cell mutation, modulus/top-bit
+  aliases, explicit widening/narrowing and known/unknown layout equality;
+- seven recursive verifier tests on both curves, including all malformed proof
+  messages, modular aliases at each semantic boundary, a nonconstant long
+  arithmetic chain, and distinguishing a witness one from a pinned constant;
+- all three uniform Omega source choices and frame/proof mutations;
+- strict gadget and recursion all-target clippy.
+
+The snapshot is based on shared checkout HEAD
+`e5c89263b05d82efdc11127f5d9418373f4f4382` plus the ongoing changes. Its SHA-256
+source bindings are:
+
+| Source | SHA-256 |
+| --- | --- |
+| `iroha_plonk_gadgets/src/ff/mod.rs` | `5d9056a03e935490f144674b2300e8e256578f787b9855cfa32c08031941aedc` |
+| `iroha_plonk_gadgets/src/ff/s6.rs` | `2769230d3c6d6749874613a2970774499ac67c7cd8f8b770d3b35e23c50a7b55` |
+| `iroha_plonk_recursion/src/verifier/scalar.rs` | `dd1c4c6f1a7d462f0942e774727a712e96e931d41796392c9794373bf9f21e56` |
+| `iroha_plonk_recursion/src/codec.rs` | `d239c30a30c84ef8776578c910ed0db765aaaa5aa1fb328bff6ce273c9516d41` |
+
+The `ff/mod.rs` change from the reviewed M3b hash adds the S6 module/export
+and an explicitly selected serialized backend; the original fused gate
+polynomials and their admission checks are unchanged. The Q-leaf source remains bound
+to the earlier `ac22585f…` hash. This scoped adapter/range review is neither
+an external audit nor a recursive release qualification. The measured generic
+Omega descriptor still exceeds the transport cap; none of these tests changes
+that verdict.
+
+
+## 13. Serialized CRT lowering and shared range certificates
+
+The explicit serialized backend retains the same result limbs (87/87/82),
+quotient limbs (87/87/87), four offset carries (105 each), division padding,
+and tracked operand admission from the fused backend. It lowers each of the
+four carry equalities and the independent native-residue equality to ordinary
+Glue rows. Intermediate field-valued partial sums are not treated as bounded
+integers: only the complete original carry residuals use the established
+non-wrapping bounds. The native-residue constraint is retained separately, so
+satisfying only the four low-radix equalities cannot accept a CRT alias.
+Canonical comparison retains its proper limbs, three 87-bit difference limbs,
+boolean borrow and both original integer comparison equalities.
+
+Every emitted result, quotient, carry and comparison difference is checked by
+the existing running-sum predicate and copied to the exact arithmetic cell.
+Independent range buses share only their fixed table. Each has its own
+activation pattern and a full scalar membership argument; a tuple is never
+interpreted as independent membership. The deterministic scheduler chooses
+the least occupied bus from structural widths and prior row counts, with ties
+resolved by fixed bus order. No witness value changes this selection.
+
+The optional range certificate map is fresh for each synthesis and keyed by
+physical advice cell (column and absolute row). It is populated only after a
+range predicate and any necessary equality copy have been emitted. A proved
+bound of `b` bits discharges a request for `b' >= b`; a narrower request emits
+new constraints. Equal witness values in distinct cells do not share a
+certificate. Cloned chips share both reservations and certificates, preserving
+the original constrained cells. The ordinary retained layout does not enable
+this optimization implicitly.
+
+Validation includes all four foreign moduli in both native fields, multiply,
+divide, zero-divisor and modulus mismatch rejection, noncanonical aliases,
+carry overflow, a low-radix-only forgery rejected by the native residue,
+every-cell mutation and known/unknown layout equality. The current FF unit
+slice passed 35 tests (three explicitly ignored exhaustive/measurement cases
+excluded). The certificate/banked-range tests passed in both fields; the full
+parallel interpreter additionally matched native verdicts with two and three
+buses, including malformed encodings and lengths. Scoped strict gadget and
+recursion all-target clippy passed. These are implementation checks; this
+section does not claim an external cryptographic sign-off. The root
+implementation reviewer separately read the serialized equations, per-bus
+range arguments, exact-cell certificates and structural scheduler. That scoped
+source review found no local range/binding gap and confirmed the original
+carry/result/quotient widths and four carry plus native-residue equalities. It
+does not establish current M3 qualification, whole-recursion soundness or
+release readiness.
+
+Serialized/range source bindings for this snapshot:
+
+| Source | SHA-256 |
+| --- | --- |
+| `iroha_plonk_gadgets/src/ff/serialized.rs` | `18cdc38ccbb796297f0e980fbc040c1df1b649451d5e1b9b401709ddeb4a040f` |
+| `iroha_plonk_gadgets/src/range/running_sum.rs` | `b6b62eea7f55a42c2275f4a57b393facfa481dcad181dcc97d273187de141906` |
+| `iroha_plonk_gadgets/src/arith.rs` | `24f870b3d4efb161e0d29355c6ad9d543665acb2f75963edb04fd186222d5c75` |
+| `iroha_plonk_gadgets/src/phase.rs` | `a7ab721dc06249afe4bffdc776e780320c2b0a8579dbfab7d13aab365f45da1a` |
+
+
+## 14. Four-row CRT placement
+
+`RotatedFfConfig` places the exact sixteen existing roots on four equality
+ports over four physical rows: three left limbs, three right limbs, three
+result limbs, three quotient limbs and four offset carries. The gate anchors
+at the second row and queries rotations `-1..2`. It invokes the original five
+fused residuals; division retains `(right,result,left,padding)`. Result bounds
+remain **87/87/82**, quotient bounds **87/87/87**, and each offset carry remains
+**105 bits**. A review message initially misstated the limb widths as 86/86/84;
+the reviewer explicitly corrected that summary. No width change was requested
+or implemented.
+
+Every result/quotient/carry root comes from its exact range certificate and is
+copied into its assigned port/rotation. The chip rejects a fused-only backend,
+wrong ports, or a different/multiple configured modulus before attaching the
+kernel. All four rows are reserved together. The selector at global row zero
+is off, so the negative rotation cannot introduce a wraparound relation.
+The last block may end at the final usable row; a block crossing into blinding
+rows is rejected by both the bounded cursor and the assembly.
+
+The shared phase layout uses ECC payload5 codes3/4 for multiplication/division;
+its guard/split indicator domain includes those codes, so ECC constraints stay
+disabled on CRT rows. The independent reviewer checked these exact root/copy,
+phase and unchanged arithmetic-bound premises. This is a scoped source review,
+not current M3 qualification or acceptance of a different integer envelope.
+
+Validation passed all four moduli in both native fields: arithmetic/reference
+parity, every-cell mutation, known/unknown shape, bad modulus/profile/ports,
+unchanged admission rejection, first/final physical blocks, every copied root
+and rotation, and final usable/blinding boundaries. The complete compact and
+parallel interpreters passed native differential tests. The actual phased
+Glue/CRT/ECC/Poseidon component passed every-cell mutations on both curves.
+At the preceding four-row snapshot, the centered compact descriptor was 4,960 transport bytes and the genuine
+pooled-source Bootstrap needs 74,597 shared rows and 152,850 range rows;
+these remain explicit failures of the 4,821-byte and k16 gates. Pinning its
+single complete source key reduces shared rows to 71,964 without changing the
+range or transport failures; the complete catalog is not yet qualified.
+
+Current rotated/pooled source bindings (shared HEAD `e5c89263b05d82efdc11127f5d9418373f4f4382`
+plus ongoing changes; prior snapshot hashes above remain historical):
+
+| Source | SHA-256 |
+| --- | --- |
+| `iroha_plonk_gadgets/src/ff/rotated.rs` | `27a117c097eae7652594d4793ac1cc4683e02024ee268029fd5f891937bbccdc` |
+| `iroha_plonk_gadgets/src/ff/serialized.rs` | `679c556a9791dba7a8a63e26e4e846b575e1d26db587734e52afcaf4b19923aa` |
+| `iroha_plonk_gadgets/src/range/running_sum.rs` | `b6b62eea7f55a42c2275f4a57b393facfa481dcad181dcc97d273187de141906` |
+| `iroha_plonk_gadgets/src/phase.rs` | `a7ab721dc06249afe4bffdc776e780320c2b0a8579dbfab7d13aab365f45da1a` |
+| `iroha_plonk_gadgets/src/arith.rs` | `5875082946b7a59ac6ed4590622fe28a0c2aafbf5e38990bd68310f6d52db560` |
+| `iroha_plonk_gadgets/src/ecc/gates.rs` | `b52d9ce6317dd7a407d15619a9bb10082f73c96f6f90cd00bd6815a0c14f7f40` |
+
+## 15. Unsigned Proper dot batches
+
+The new standalone `UnsignedDot` predicate admits a fixed batch of one to eight
+pairs, each with proven Proper or Canonical 87/87/82-bit limbs and one common
+supported modulus. It rejects signed/lazy forms, mixed moduli and counts0/9.
+Let `S=sum_t a_t b_t`, `B=2^87`, and `m` be the foreign modulus. Since each input
+is below `2^256`, `S<2^515`; every supported `m>2^254` therefore gives the honest
+quotient `q=floor(S/m)<2^261`. The result is Proper and congruent to the sum;
+canonical interpretation still requires the separate comparison.
+
+For `j=0..3`, define
+`D_j=sum_t sum_{r+s=j} a_tr b_ts - sum_{r+s=j}q_r m_s - c_j`, with `c_3=0`.
+The equations are `D_0-Bv_0=0` and `D_j+v_(j-1)-Bv_j=0`, plus the independent
+native residue of `S-c-qm`. Result, quotient and offset carry ranges are exactly
+those above. Each honest `|D_j|<28B^2`; induction gives `|v_j|<29B<2^92`, inside
+the existing signed104-bit carry interval. Even malicious105-bit offset roots
+make each local residual smaller than `2^194`, below either native prime.
+Telescoping therefore proves divisibility by `B^4`. The global residual is below
+`2^518`, whereas `B^4*p>2^602`, so the two congruences imply integer equality.
+The root reviewer independently re-derived this specific unsigned Proper
+argument. It does not cover a signed/lazy or larger batch.
+
+The component tests passed batch1..8 with zero and maximum256-bit inputs in
+both native fields for all four moduli; batch1/8 every-cell and known/unknown
+shape tests; malformed batch/form/modulus rejection; quotient/carry overflow;
+and a low-radix-only forgery rejected by the native residue. The initial
+lowering uses `20+11(n-1)` Glue rows and one set of result/quotient/carry checks
+(70 range rows at15-bit table width). The shared-profile S11 and multiopen
+Horner folds now use fixed unsigned batches; negative terms are materialized
+through the separately admitted subtraction/negation path. This does not
+extend the unsigned kernel to signed or lazy operands.
+
+## 16. Staged products, streaming dots and fixed-coefficient constants
+
+The explicit compact profile retains the same sixteen roots and the same
+four physical rows for multiplication/division. It binds the four low
+convolutions and native product on five spare advice columns, then checks
+the original carry/native residuals on the following row. Its queries use
+only rotations `-1,0,1`. Division first orders its operands as
+`(right,result,left,padding)`, including the unchanged fixed padding.
+Neither the range envelopes nor the integer argument in the earlier sections
+changes: the intermediate products are field elements, and the complete
+residuals still have the established non-wrapping bounds.
+
+For a fixed unsigned batch of `n=1..8`, the streaming version starts all five
+partial sums at constrained zero, adds each operand product, copies each sum
+to the next state, and finishes with the same result/quotient/carry residuals.
+It consumes `2n+3` arithmetic rows and one set of range certificates. Its
+admission remains exactly the Proper/Canonical, common-modulus predicate in
+§15. The explicit reference backend retains the Glue lowering.
+
+The phase coding separates every predicate: multiplication/division use ECC
+payload5 codes3/4, final residuals use payload2 code4, zero initialization
+uses payload2 code3, product steps use payload1 code3 and state carry uses
+payload3 code3. Algebraic15 uses payload0 code3. The corresponding ECC
+indicator domains include those exact extra codes, disabling ECC gates on
+these arithmetic rows. No witness value selects a phase or row span.
+
+The compact Glue profile constrains a constant with the fixed-coefficient
+equation `x-c=0`, removing its standalone equality-enabled fixed column.
+ECC coordinates and Poseidon constant inputs copy these exact constrained
+cells. Attaching this source requires matching copy ports and a shared,
+bounded cursor; unbounded, unrelated-port and ordinary fixed-column profiles
+are rejected. The shared cursor reserves constant rows with all other Glue
+and CRT rows, so these copies cannot silently collide with another phase.
+
+The root implementation reviewer read the staged operand ordering, padding,
+zero/product/carry/final equations, unchanged admissions, coefficient-only
+constant constraints and bounded cursor/port checks. That scoped source
+review found no local gap. It is not a new M3 qualification, an external
+audit or a proof of whole-recursion soundness.
+
+The staged kernels passed both native fields and all four foreign moduli,
+including all batch sizes, endpoint/admission and alias attacks, every-cell
+mutation, first/final usable and blinding-row boundaries, and known/unknown
+shape parity. The final mixed-phase component passed both fields with
+Glue, multiplication/division, an eight-pair dot, ECC, Poseidon and
+Algebraic15 together, including every-cell mutations and exact public
+binding attacks. The complete compact interpreter passed native differential
+tests, and scoped strict gadget/recursion all-target lint passed.
+
+The five-bus authenticated Bootstrap source is 8,960 proof bytes. The complete
+compact descriptor has 11 advice columns, 11 fixed queries, 26 advice queries,
+three instance queries, five permutation columns in one set, exactly one
+lookup, degree9 and five blinding factors. Its 3,680-byte proof plus the
+1,088-byte accumulator is **4,768 bytes**. This descriptor meets the byte
+formula only. At the first staged five-bus snapshot, its pinned one-key
+predicate still needed **73,829 shared rows and 148,816 range rows**, exceeding
+the 65,530 usable rows at k16; the full predicate passed only a diagnostic
+larger-domain synthesis. No complete compact proof or final catalog is
+qualified by this inventory. Later arithmetic measurements supersede these
+row counts only when recorded against their tested source.
+
+The public-input evaluator factors
+`L_i(x)=((x^n-1)/n) * omega^i/(x-omega^i)` before unsigned dot batching. It
+retains the independently constrained nonzero verdict for `x^n-1` and every
+distinct `x-omega^i`, and caches weights only by exact fixed index within
+one proof evaluation. The direct regression tests zero denominators, each
+inverse limb and verdict mutation, index-cache cell identity, and
+known/unknown shape on both curves. Factoring changes neither the native
+predicate nor its invalid-denominator behavior.

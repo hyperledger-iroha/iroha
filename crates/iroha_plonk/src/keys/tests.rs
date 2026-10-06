@@ -41,6 +41,32 @@ struct TestCircuit {
 
 const ROWS: usize = 4;
 
+#[test]
+fn verifier_only_binding_matches_full_keys_on_both_curves() {
+    fn check<C: PastaCurve>() {
+        let params = PinnedParams::<C>::derive(6).expect("parameters");
+        let config = KeygenConfigV2::pipa_r(vec![crate::cs::InstanceType::Field]);
+        let circuit = TestCircuit { rows: ROWS };
+        let (binding, key) =
+            keygen_vk_with_binding_v2(&params, &circuit, &config).expect("verifier");
+        let pk = keygen_pk_v2(&params, &circuit, &config).expect("prover");
+        assert_eq!(&binding, pk.binding());
+        assert_eq!(key.to_bytes(), pk.vk().to_bytes());
+        assert_eq!(key.descriptor_digest(), binding.digest());
+        assert_eq!(
+            keygen_vk_v2(&params, &circuit, &config)
+                .expect("key only")
+                .to_bytes(),
+            key.to_bytes()
+        );
+        let mut wrong = config;
+        wrong.instance_types.clear();
+        assert!(keygen_vk_with_binding_v2(&params, &circuit, &wrong).is_err());
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
 impl<F: PastaField> Circuit<F> for TestCircuit {
     type Config = TestConfig;
     type FloorPlanner = SimpleFloorPlanner;

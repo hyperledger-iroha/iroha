@@ -74,7 +74,8 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
     for sdk in ("c-jni", "csharp"):
         required = MODULE.REQUIRED_SYMBOLS[sdk]
         assert RETIRED_KAGEMUSHA_C_SYMBOLS.isdisjoint(required)
-        assert not any("kagemusha" in symbol.lower() for symbol in required)
+        current = set(MODULE.KAGEMUSHA_WALLET_C_EXPORTS + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS)
+        assert not any("kagemusha" in symbol.lower() for symbol in required if symbol not in current)
 
 
 def test_native_privacy_inventory_requires_authoritative_capability_validator() -> None:
@@ -513,7 +514,8 @@ def test_current_inventory_is_exact_for_posix_and_windows() -> None:
             assert inventories[sdk] == MODULE.REQUIRED_SYMBOLS[sdk]
             assert len(inventories[sdk]) == len(set(inventories[sdk]))
             assert "connect_norito_domain_id_validate_v1" in inventories[sdk]
-            assert not any("kagemusha" in symbol.lower() for symbol in inventories[sdk])
+            current = set(MODULE.KAGEMUSHA_WALLET_C_EXPORTS + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS)
+            assert not any("kagemusha" in symbol.lower() for symbol in inventories[sdk] if symbol not in current)
 
 
 def test_private_settlement_rejects_each_missing_actual_endpoint() -> None:
@@ -614,3 +616,15 @@ def test_required_prover_jni_module_is_portable_and_retired_startup_is_absent() 
     for symbol in MODULE.CONFIDENTIAL_PROVER_JNI_EXPORTS:
         assert symbol in MODULE.REQUIRED_SYMBOLS["c-jni"]
         assert re.search(r'pub\s+extern\s+"system"\s+fn\s+' + re.escape(symbol) + r'\b', wrappers)
+
+
+def test_current_wallet_allowlist_does_not_admit_unknown_or_retired_names() -> None:
+    current = (*MODULE.KAGEMUSHA_WALLET_C_EXPORTS, *MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS)
+    assert len(current) == 14
+    MODULE.validate_retired_protocol_symbols(current, sdk="c-jni")
+    for symbol in ("connect_norito_kagemusha_wallet_sign_v1", "connect_norito_kagemusha_wallet_open_v2", "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_sign", *RETIRED_KAGEMUSHA_C_SYMBOLS):
+        try:
+            MODULE.validate_retired_protocol_symbols([symbol], sdk="c-jni")
+        except MODULE.ArtifactContractError:
+            continue
+        raise AssertionError("unexpected admitted retired/unknown symbol: " + symbol)

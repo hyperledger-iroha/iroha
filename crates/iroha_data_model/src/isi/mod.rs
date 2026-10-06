@@ -126,6 +126,7 @@ macro_rules! impl_direct_instruction_box {
 }
 // Allow direct boxing of standalone instructions that are not part of a grouped enum.
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
+impl_direct_instruction_box!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyExact12QualificationV1);
@@ -1881,6 +1882,8 @@ pub mod defi;
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
+/// KAGEMUSHA wallet ledger boundary.
+pub mod kagemusha_wallet;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.

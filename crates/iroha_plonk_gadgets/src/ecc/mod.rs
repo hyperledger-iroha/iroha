@@ -296,6 +296,26 @@ impl<C: PastaCurve> EccConfig<C> {
         }
     }
 
+    /// Configures complete variable-base arithmetic in the compact fixed ECC
+    /// phase. The shared phase/payload enables raise the maximum degree to nine;
+    /// row ownership must be disjoint from other users of `phases`.
+    pub fn configure_phased(
+        meta: &mut ConstraintSystem<C::Base>,
+        advice: [Column<Advice>; ECC_ADVICE_COLUMNS],
+        phases: crate::phase::PhaseColumns,
+    ) -> Self {
+        for column in &advice[..ECC_EQUALITY_COLUMNS] {
+            meta.enable_equality(*column);
+        }
+        let selectors = gates::configure_variable_base_phased::<C>(meta, advice, phases);
+        Self {
+            advice,
+            selectors,
+            fixed_base: None,
+            _curve: PhantomData,
+        }
+    }
+
     /// [`Self::configure`] plus the fixed-base gates and their 16 fixed
     /// coefficient columns.
     pub fn configure_with_fixed_base(
@@ -326,6 +346,7 @@ pub struct EccChip<C: PastaCurve> {
     rows: RowCursor,
     /// The row whose `a2, a3` hold the last result (and nothing else).
     pending: Option<usize>,
+    constant_source: Option<crate::GlueChip<C::Base>>,
 }
 
 impl<C: PastaCurve> fmt::Debug for EccChip<C> {
@@ -334,6 +355,7 @@ impl<C: PastaCurve> fmt::Debug for EccChip<C> {
             .field("config", &self.config)
             .field("rows", &self.rows)
             .field("pending", &self.pending)
+            .field("constant_source", &self.constant_source)
             .finish()
     }
 }
@@ -349,11 +371,32 @@ impl<C: PastaCurve> EccChip<C> {
     /// users above it).
     #[must_use]
     pub const fn starting_at(config: &EccConfig<C>, row: usize) -> Self {
+        Self::with_cursor(config, RowCursor::starting_at(row))
+    }
+
+    /// Uses a caller-reserved interval disjoint from other shared-column owners.
+    #[must_use]
+    pub const fn with_cursor(config: &EccConfig<C>, rows: RowCursor) -> Self {
         Self {
             config: *config,
-            rows: RowCursor::starting_at(row),
+            rows,
             pending: None,
+            constant_source: None,
         }
+    }
+
+    /// Routes fixed points through a caller's constrained arithmetic lane.
+    /// Its shared cursor must reserve rows disjoint from the ECC lane.
+    ///
+    /// # Errors
+    /// The source is not a bounded shared coefficient-only lane on the same
+    /// four copy ports.
+    pub fn with_constant_source(mut self, source: crate::GlueChip<C::Base>) -> Result<Self, Error> {
+        if !source.coefficient_source_for(&self.config.advice[..4]) {
+            return Err(Error::Synthesis);
+        }
+        self.constant_source = Some(source);
+        Ok(self)
     }
 
     /// The configuration.
@@ -561,6 +604,14 @@ impl<C: PastaCurve> EccChip<C> {
     ) -> Result<AssignedPoint<C::Base>, Error> {
         let row = self.begin(1, None)?.0;
         let (x, y) = coordinates(point);
+        if let Some(source) = &mut self.constant_source {
+            let x = source.constant(region, x)?;
+            let y = source.constant(region, y)?;
+            return Ok(AssignedPoint::new(
+                copy_word(region, &x, self.config.advice[0], row)?,
+                copy_word(region, &y, self.config.advice[1], row)?,
+            ));
+        }
         Ok(AssignedPoint::new(
             assign_constant(region, self.config.advice[0], row, x)?,
             assign_constant(region, self.config.advice[1], row, y)?,

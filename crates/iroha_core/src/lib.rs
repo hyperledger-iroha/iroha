@@ -137,6 +137,8 @@ pub mod queue;
 pub(crate) mod receiver_snapshot;
 /// Shared compiled validator identity and signed genesis input validation.
 pub mod release_identity;
+/// Reserve-backed KAGEMUSHA wallet ledger orchestration.
+pub mod kagemusha_wallet_v1;
 /// Native monthly retail fee accounting and read APIs.
 pub mod retail_fee;
 /// Retained P2P ownership through final gossip processing.

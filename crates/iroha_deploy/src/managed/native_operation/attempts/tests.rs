@@ -1771,3 +1771,6 @@ fn explicit_owned_history_keeps_genuine_request_and_refuses_inspection_callback_
 
 #[path = "parse_digest_tests.rs"]
 pub(super) mod parse_digest_tests;
+
+#[path = "entry_fence_tests.rs"]
+mod entry_fence_tests;

@@ -16940,6 +16940,12 @@ pub mod isi {
         if let Ok(permission) = CanModifyAssetDefinitionMetadata::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
         if let Ok(permission) = CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
@@ -17250,6 +17256,18 @@ pub mod isi {
                         .into(),
                     )
                     .into());
+                }
+            }
+            for asset_definition_id in &remove_asset_definitions {
+                if crate::kagemusha_wallet_v1::custody::is_reserve_definition(
+                    state_transaction.world(),
+                    asset_definition_id,
+                )
+                .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("cannot unregister domain {domain_id}: asset definition {asset_definition_id} backs permanent KAGEMUSHA reserve custody").into(),
+                    ).into());
                 }
             }
             let remove_assets = state_transaction

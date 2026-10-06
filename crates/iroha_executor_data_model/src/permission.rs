@@ -160,6 +160,28 @@ pub mod asset_definition {
         }
     }
     permission! {
+        /// Permission to register a KAGEMUSHA scheme reserve for this asset definition.
+        /// The registering authority must also be the reserve account; this token cannot
+        /// capture another account's balance. Registration is permanent.
+        pub struct CanManageKagemushaWallet {
+            /// Exact governed asset definition.
+            pub asset_definition: AssetDefinitionId,
+        }
+    }
+    permission! {
+        /// Permission to submit load vouchers signed by one historical KAGEMUSHA issuer.
+        /// The token grants submission only; the exact role certificate, issuance body and
+        /// P-256 signature remain mandatory monetary authorization.
+        pub struct CanPublishKagemushaLoadVoucher {
+            /// Exact governed asset definition.
+            pub asset_definition: AssetDefinitionId,
+            /// Exact scheme whose issuance may be published.
+            pub scheme: [u8; 32],
+            /// Exact historical LoadAuthorization certificate digest.
+            pub authorizer_certificate: [u8; 32],
+        }
+    }
+    permission! {
         /// Permission to manage confidential policy and verifier roles for the specified asset definition.
         pub struct CanManageAssetDefinitionConfidentialPolicy {
             /// Identifier of the asset definition whose confidential policy may be changed.

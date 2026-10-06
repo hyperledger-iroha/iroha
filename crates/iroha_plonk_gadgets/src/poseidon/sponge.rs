@@ -118,6 +118,19 @@ impl<F: PoseidonField> SpongeConfig<F> {
         Self::configure_rounds(meta, lane, round_constants, folded, Some(shared))
     }
 
+    /// Configures an explicitly framed raw sponge on the compact shared
+    /// phase columns. Folded-prefix start states are not part of this layout.
+    pub fn configure_phased(
+        meta: &mut ConstraintSystem<F>,
+        lane: Pow5Columns,
+        phases: crate::phase::PhaseColumns,
+    ) -> Self {
+        Self {
+            pow5: Pow5Config::configure_phased(meta, lane, phases, raw_initial_state::<F>()),
+            folded: Vec::new(),
+        }
+    }
+
     fn configure_rounds(
         meta: &mut ConstraintSystem<F>,
         lane: Pow5Columns,

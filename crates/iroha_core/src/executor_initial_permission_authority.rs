@@ -481,6 +481,27 @@ fn initial_permission_capability_root_authority(
                 &token.asset_definition,
             )?
         }
+        "CanManageKagemushaWallet" => {
+            let token = decode!(executor_permission::asset_definition::CanManageKagemushaWallet);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanPublishKagemushaLoadVoucher" => {
+            let token =
+                decode!(executor_permission::asset_definition::CanPublishKagemushaLoadVoucher);
+            if token.scheme == [0; 32] || token.authorizer_certificate == [0; 32] {
+                return Err(invalid_initial_permission_payload(permission,
+                    "KAGEMUSHA publication scope must name nonzero scheme and certificate identities").into());
+            }
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
         "CanManageAssetDefinitionConfidentialPolicy" => {
             let token = decode!(
                 executor_permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy
@@ -2718,6 +2739,8 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanUnregisterAssetDefinition",
     "CanModifyAssetDefinitionMetadata",
     "CanManageAssetDefinitionConfidentialPolicy",
+    "CanManageKagemushaWallet",
+    "CanPublishKagemushaLoadVoucher",
     "CanRegisterAccount",
     "CanUnregisterAccount",
     "CanModifyAccountMetadata",
@@ -2816,3 +2839,125 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageTwitterBindings",
     "CanResolveEscrowDispute",
 ];
+
+#[cfg(test)]
+mod kagemusha_permission_tests {
+    use super::*;
+    use iroha_data_model::{
+        Registrable,
+        asset::{AssetBalancePolicy, AssetDefinition},
+        permission::Permissions,
+    };
+    #[test]
+    fn kagemusha_management_delegates_only_from_exact_asset_owner_or_holder() {
+        let account = |seed| {
+            AccountId::new(
+                iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            )
+        };
+        let owner = account(81);
+        let delegate = account(82);
+        let stranger = account(83);
+        let definition = |name: &str| {
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("kg", "universal").unwrap(),
+                name.parse().unwrap(),
+            )
+        };
+        let asset = definition("one");
+        let other = definition("two");
+        let mut world = crate::state::World::with_assets(
+            [],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(delegate.clone()).build(&delegate),
+                Account::new(stranger.clone()).build(&stranger),
+            ],
+            [
+                AssetDefinition::numeric(asset.clone(), "one", AssetBalancePolicy::Global, None)
+                    .build(&owner),
+                AssetDefinition::numeric(other.clone(), "two", AssetBalancePolicy::Global, None)
+                    .build(&stranger),
+            ],
+            [],
+            [],
+        );
+        let permission: Permission =
+            executor_permission::asset_definition::CanManageKagemushaWallet {
+                asset_definition: asset.clone(),
+            }
+            .into();
+        let unrelated: Permission =
+            executor_permission::asset_definition::CanManageKagemushaWallet {
+                asset_definition: other.clone(),
+            }
+            .into();
+        let publisher = executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
+            asset_definition: asset,
+            scheme: [1; 32],
+            authorizer_certificate: [2; 32],
+        };
+        let publish_permission: Permission = publisher.clone().into();
+        world.account_permissions.insert(
+            delegate.clone(),
+            Permissions::from_iter([permission.clone(), publish_permission.clone()]),
+        );
+        let state = crate::state::State::new_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            1.try_into().unwrap(),
+            None,
+            None,
+            1000,
+            0,
+        ));
+        let tx = block.transaction();
+        assert!(initial_permission_delegation_allowed(&tx, &owner, &permission).unwrap());
+        assert!(initial_permission_delegation_allowed(&tx, &delegate, &permission).unwrap());
+        assert!(!initial_permission_delegation_allowed(&tx, &stranger, &permission).unwrap());
+        assert!(!initial_permission_delegation_allowed(&tx, &delegate, &unrelated).unwrap());
+        assert!(initial_permission_revocation_allowed(&tx, &owner, &permission).unwrap());
+        assert!(initial_permission_delegation_allowed(&tx, &owner, &publish_permission).unwrap());
+        assert!(
+            initial_permission_delegation_allowed(&tx, &delegate, &publish_permission).unwrap()
+        );
+        assert!(
+            !initial_permission_delegation_allowed(&tx, &stranger, &publish_permission).unwrap()
+        );
+        assert!(initial_permission_revocation_allowed(&tx, &owner, &publish_permission).unwrap());
+        let invalid: Permission =
+            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
+                scheme: [0; 32],
+                ..publisher.clone()
+            }
+            .into();
+        assert!(initial_permission_delegation_allowed(&tx, &owner, &invalid).is_err());
+        for changed in [
+            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
+                asset_definition: other,
+                ..publisher.clone()
+            },
+            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
+                scheme: [3; 32],
+                ..publisher.clone()
+            },
+            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
+                authorizer_certificate: [4; 32],
+                ..publisher
+            },
+        ] {
+            assert!(
+                !initial_permission_delegation_allowed(&tx, &delegate, &changed.clone().into())
+                    .unwrap()
+            );
+            assert!(
+                !initial_permission_revocation_allowed(&tx, &delegate, &changed.into()).unwrap()
+            );
+        }
+    }
+}

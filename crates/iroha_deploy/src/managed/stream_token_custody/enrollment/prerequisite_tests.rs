@@ -716,3 +716,196 @@ fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
 }
+
+#[test]
+fn prerequisite_epoch_workspace_keeps_original_phase_source_refusal_and_same_source_retry() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Fixture::enrolled(4_000);
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    let deadline = fixture.options.deadline;
+    let expected = fixture
+        .owner
+        .retained_initial_prerequisite(deadline)
+        .unwrap();
+    let paths = retained_paths(&fixture);
+    let mut validation = EpochValidationScope::new();
+    let mut imports = CheckpointImports::new(&fixture.owner.authority, Some(&mut validation));
+    let configured = fixture
+        .owner
+        .read_configuration_with_imports(deadline, &mut imports)
+        .unwrap();
+    let RetainedConfiguration {
+        owner: _,
+        original,
+        signed,
+        carrier,
+        policy,
+        finalized,
+    } = configured;
+    drop((original, signed, carrier));
+    // Same retained workspace, independently selected Initial original and observed wallet.
+    // Mutation occurs after Configure succeeded, at the genuine synchronous phase boundary.
+    let (selected, interval) = fixture
+        .owner
+        .inspect_initial_selection_with_imports(&policy, &mut imports)
+        .unwrap()
+        .unwrap();
+    let directory = PrivateDirectory::open_exact(selected.directory().path()).unwrap();
+    let carrier = directory.read("carrier.nrt", MAX_CHECKPOINT_BYTES).unwrap();
+    directory
+        .write_atomic("carrier.nrt", &[0xff], PublishMode::Replace)
+        .unwrap();
+    let error = fixture
+        .owner
+        .verify_retained_enrollment_with_imports(
+            CustodyPurpose::InitialEnroll,
+            &policy,
+            Some(interval),
+            &finalized,
+            selected,
+            deadline,
+            &mut imports,
+        )
+        .err()
+        .expect("changed carrier must refuse");
+    assert!(
+        matches!(error, crate::managed::Error::Invalid(message) if message == "invalid retained native operation checkpoint")
+    );
+    directory
+        .write_atomic("carrier.nrt", &carrier, PublishMode::Replace)
+        .unwrap();
+    let restored = fixture
+        .owner
+        .initial_prerequisite_after_configuration_with_imports(
+            policy.clone(),
+            finalized,
+            deadline,
+            &mut imports,
+        )
+        .unwrap();
+    assert_eq!(restored.policy, expected.policy);
+    assert_same(&restored.enrollment, &expected.enrollment);
+
+    // The actual initial observed wallet callback cannot be skipped by a matching epoch.
+    let (path, name, maximum) = &paths[7];
+    assert_eq!(*name, "operation.json");
+    let wallet = PrivateDirectory::open_exact(path).unwrap();
+    let before = wallet.read(name, *maximum).unwrap();
+    wallet
+        .write_atomic(name, &[0xff], PublishMode::Replace)
+        .unwrap();
+    let (refused, configurations, wallets) = counted(|| {
+        fixture
+            .owner
+            .initial_prerequisite_after_configuration_with_imports(
+                policy.clone(),
+                finalized,
+                deadline,
+                &mut imports,
+            )
+    });
+    assert!(refused.is_err());
+    assert_eq!(configurations, 0);
+    assert_eq!(wallets, 1);
+    wallet
+        .write_atomic(name, &before, PublishMode::Replace)
+        .unwrap();
+    let (restored, configurations, wallets) = counted(|| {
+        fixture
+            .owner
+            .initial_prerequisite_after_configuration_with_imports(
+                policy.clone(),
+                finalized,
+                deadline,
+                &mut imports,
+            )
+    });
+    assert_eq!(configurations, 0);
+    assert_eq!(wallets, 1);
+    assert_same(&restored.unwrap().enrollment, &expected.enrollment);
+    drop(imports);
+    drop(validation);
+    let (fresh, configurations, wallets) =
+        counted(|| fixture.owner.retained_initial_prerequisite(deadline));
+    assert_eq!((configurations, wallets), (1, 1));
+    assert_same(&fresh.unwrap().enrollment, &expected.enrollment);
+    assert!(peers.requests.lock().unwrap().is_empty());
+    assert_eq!(fixture.native.chain.height(), 4);
+    peers.finish();
+}
+
+#[test]
+fn prerequisite_epoch_workspace_preserves_finite_outer_admission_and_custody_retry() {
+    use norito::core::DecodeBudgetContext;
+    fn limits(allocation: usize) -> norito::DecodeLimits {
+        norito::DecodeLimits::new(
+            1024 * 1024,
+            MAX_CHECKPOINT_BYTES,
+            8 * 1024 * 1024,
+            allocation,
+            64,
+        )
+    }
+    fn independent(
+        owner: &ManagedStreamTokenCustody,
+        deadline: Instant,
+    ) -> Result<RetainedInitialPrerequisite> {
+        // The original entry sequence, using the same canonical bodies with no borrowed scope.
+        require_deadline(deadline)?;
+        owner.authority.validate_profile()?;
+        let (policy, configured) = owner.retained_configuration(deadline)?;
+        owner.initial_prerequisite_after_configuration(policy, configured, deadline)
+    }
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Fixture::enrolled(4_000);
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    let deadline = fixture.options.deadline;
+    let warm = fixture
+        .owner
+        .retained_initial_prerequisite(deadline)
+        .unwrap();
+    let ceiling = 256 * 1024 * 1024;
+    let baseline_budget = DecodeBudgetContext::new(limits(ceiling));
+    let expected = baseline_budget
+        .with(|| independent(&fixture.owner, deadline))
+        .unwrap();
+    let charge = baseline_budget.consumed_allocated_bytes();
+    assert!(charge > 0 && charge < ceiling as u64);
+    let strict = DecodeBudgetContext::new(limits(usize::try_from(charge).unwrap()));
+    let (actual, configurations, wallets) =
+        counted(|| strict.with(|| fixture.owner.retained_initial_prerequisite(deadline)));
+    let actual = actual.unwrap();
+    assert_eq!((configurations, wallets), (1, 1));
+    assert_eq!(strict.consumed_allocated_bytes(), charge);
+    assert_eq!(actual.policy, expected.policy);
+    assert_same(&actual.enrollment, &expected.enrollment);
+    assert_same(&actual.enrollment, &warm.enrollment);
+    // These bounded caller refusals stop before any signing, effect or peer request.
+    for allocation in [0, 1] {
+        let expected_budget = DecodeBudgetContext::new(limits(allocation));
+        let expected = expected_budget
+            .with(|| independent(&fixture.owner, deadline))
+            .err()
+            .expect("original finite owner refuses")
+            .to_string();
+        let actual_budget = DecodeBudgetContext::new(limits(allocation));
+        let actual = actual_budget
+            .with(|| fixture.owner.retained_initial_prerequisite(deadline))
+            .err()
+            .expect("scoped finite owner refuses")
+            .to_string();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual_budget.consumed_allocated_bytes(),
+            expected_budget.consumed_allocated_bytes()
+        );
+        let retry = fixture
+            .owner
+            .retained_initial_prerequisite(deadline)
+            .unwrap();
+        assert_same(&retry.enrollment, &warm.enrollment);
+    }
+    assert!(peers.requests.lock().unwrap().is_empty());
+    assert_eq!(fixture.native.chain.height(), 4);
+    peers.finish();
+}

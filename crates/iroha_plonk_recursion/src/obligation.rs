@@ -40,7 +40,7 @@ impl<F: PastaField> ModeCells<F> {
         let corrected = glue.assert_bool(region, &modes[2])?;
         let first_two = glue.add(region, accept.word(), trivial.word())?;
         let sum = glue.add(region, &first_two, corrected.word())?;
-        GlueChip::assert_constant(region, &sum, F::ONE)?;
+        glue.enforce_constant(region, &sum, F::ONE)?;
         Ok(Self {
             accept,
             trivial,

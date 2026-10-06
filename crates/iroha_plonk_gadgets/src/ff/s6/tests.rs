@@ -17,6 +17,7 @@ use iroha_plonk::{
 #[derive(Clone)]
 struct Bridge<F: PastaField> {
     modulus: ForeignModulus,
+    target: Option<ForeignModulus>,
     integer: Nat,
     reverse: bool,
     known: bool,
@@ -100,6 +101,11 @@ impl<F: PastaField> Circuit<F> for Bridge<F> {
                     )?;
                     let encoded =
                         CanonicalS6::from_limbs(&mut uint, &mut region, self.modulus, &lo, &hi)?;
+                    let encoded = if let Some(target) = self.target {
+                        encoded.with_modulus(&mut uint, &mut region, target)?
+                    } else {
+                        encoded
+                    };
                     let scalar = ff.import_s6(&mut uint, &mut region, &encoded)?;
                     let exported = ff.export_s6(&mut uint, &mut region, &scalar)?;
                     GlueChip::assert_equal(&mut region, encoded.lo.word(), exported.lo.word())?;
@@ -140,6 +146,7 @@ fn boundaries<F: PastaField>() {
             ] {
                 let circuit = Bridge::<F> {
                     modulus,
+                    target: None,
                     integer,
                     reverse,
                     known: true,
@@ -167,6 +174,7 @@ fn tamper<F: PastaField>() {
     for reverse in [false, true] {
         let circuit = Bridge::<F> {
             modulus,
+            target: None,
             integer: modulus.nat().wrapping_sub(&Nat::ONE),
             reverse,
             known: true,
@@ -193,4 +201,46 @@ fn tamper<F: PastaField>() {
 fn canonical_s6_bridge_every_cell_is_bound_and_unknown_shape_matches() {
     tamper::<Fp>();
     tamper::<Fq>();
+}
+
+#[test]
+fn canonical_s6_modulus_change_proves_narrowing_and_retains_source_checks() {
+    fn run<F: PastaField>() {
+        let p = ForeignModulus::PASTA_FP;
+        let q = ForeignModulus::PASTA_FQ;
+        for (source, target, integer, accepted) in [
+            (p, q, Nat::ONE, true),
+            (q, p, p.nat().wrapping_sub(&Nat::ONE), true),
+            (q, p, p.nat(), false),
+            (p, q, p.nat(), false),
+        ] {
+            let circuit = Bridge::<F> {
+                modulus: source,
+                target: Some(target),
+                integer,
+                reverse: false,
+                known: true,
+                marker: core::marker::PhantomData,
+            };
+            let report =
+                check_circuit(&circuit, 16, &[circuit.public()], CheckMode::Strict).unwrap();
+            assert_eq!(report.is_satisfied(), accepted);
+        }
+        for target in [
+            ForeignModulus::P256_BASE,
+            ForeignModulus::new([5, 0, 0, 0x4000_0000_0000_0000]).unwrap(),
+        ] {
+            let circuit = Bridge::<F> {
+                modulus: p,
+                target: Some(target),
+                integer: Nat::ONE,
+                reverse: false,
+                known: true,
+                marker: core::marker::PhantomData,
+            };
+            assert!(check_circuit(&circuit, 16, &[circuit.public()], CheckMode::Strict).is_err());
+        }
+    }
+    run::<Fp>();
+    run::<Fq>();
 }

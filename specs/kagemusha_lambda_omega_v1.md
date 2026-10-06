@@ -221,7 +221,7 @@ the gadget does not recompute BLAKE2b. It also binds the witnessed key's
 
 - Bootstrap's A has no Ω slot. It enforces the unique zero state (proposal §3.2) and writes
   free `vkΩ_digest` and `relation_id` fields, which every native verifier pins.
-- F_P has one input, so acc_P = O_Q, passed through without a fold.
+- Bootstrap uses the complete required Q set. The current implementation separates Q_σ from a 2V/1F signature leaf, so F_P hard-folds both k16 Q openings with no predecessor input. A genuinely combined single-Q layout may forward O_Q, but only after proving all of its obligations in that leaf; the single-Q frame fixture does not establish that workload.
 - F_V^Ω folds {acc_V^part = O_σ, O_A, ACC_TRIV, ACC_TRIV}; the last two are
   the fixed absent-predecessor and absent-incoming slots of the uniform frame.
 - A forwarded `acc_V^part` is an internal checked fold input, not a transported
@@ -528,7 +528,9 @@ for the value and the leaf.
 | Credited evidence | (i) σ_recv (key by the Request's recorded blacklist version) and τ_recv soft in Q, with `proof_digest(σ_recv)` linked. (ii) Ω(h) soft in A, τ(h) soft in Q, IMT membership of `credit_id → (Payment digest, burned)` in Ω(h)'s credit-digest root (≈ 70 permutations) |
 | ArchiveSent removal | two wire §3.2 removals (core root and Λ root; the Λ one skipped on the no-op branch); each relinks the predecessor and clears the slot: 4 depth-32 traversals (256 permutations), 3 leaf hashes (6) and the 7-element pending value bound to the retained Payment's descriptor (4), ≈ 266 permutations, so ≈ 2 × 266 for both, which §5.4 counts. Core and lineage removals are separate unless their roots and descriptors coincide |
 | RefreshPolicy (Blacklist), B6 | insertion of `(list_version, entries_root)` into the rest's blacklist-history IMT (≈ 264 permutations) |
-| RefreshPolicy (QuotaShare), OQ-4 with B5 | rebuild of the 64-slot usage array: the 64 predecessor usage leaves against the core's `quota_usage_root` (318 permutations), the 64 new window leaves against the share's signed `windows_root` (318) and the 64 successor usage leaves (318), ≈ 954 permutations, plus a constrained sorted merge of the two key-sorted arrays (≈ 128 key comparisons): matching keys keep `end` and carry `used`, an absent key starts at 0 only with `start ≥` the new floor (unless no share was held), a charged key is dropped only with `end ≤` the new floor, and every window is longer than `time_anchor_max_response_ms` (B8) |
+| RefreshPolicy (QuotaShare), OQ-4 with B5 | rebuild of the 64-slot usage array: the 64 predecessor usage leaves against the core's `quota_usage_root` (318 permutations), the 64 new window leaves against the share's signed `windows_root` (318) and the 64 successor usage leaves (318), ≈ 954 permutations, plus a constrained sorted merge of the two key-sorted arrays (the current deterministic 128-entry bitonic merge uses 448 compare/swap nodes): matching keys keep `end` and carry `used`, an absent key starts at 0 only with `start ≥` the new floor (unless no share was held), a charged key is dropped only with `end ≤` the new floor, and every window is longer than `time_anchor_max_response_ms` (B8) |
+
+Current component evidence: the complete fixed64 quota rebuild plus both state openings and refresh effects fits k16 at 51,652 maximum assigned rows on the stand-alone sponge lane (36,008 range rows, 17,604 glue rows). The same constraints pass on A’s shared verifier duplex. This excludes the recursive Q/predecessor verifiers and authenticated object composition and does not qualify the earlier full-A timing/split estimates.
 
 Signed messages are `P_bytes` over the body transcript (wire §1): A links the transcript
 bytes (2–3 cells per byte, 108–476 B per body) and hashes them; Q receives m as a Bounded
@@ -591,7 +593,7 @@ wider than k14 has been timed (G3.6).
 
 | Operation | Q leaves (cells) | A cells (cap 1.67M) | Ω cells | Folds | Proofs (Q + A + Ω) | Mac 1t | Phone 4 cores, optimistic / pessimistic |
 |---|---|---:|---:|---:|---:|---:|---:|
-| Bootstrap | 1 (1.00–1.09M) | 0.31–0.40M | 0.34–0.43M | 1 | 3 | 67–94 s | 23–87 / 39–166 s |
+| Bootstrap (original combined-leaf estimate; current implementation uses at least 2 Q leaves) | 1 (1.00–1.09M) [E] | 0.31–0.40M | 0.34–0.43M | 1 | 3 | 67–94 s | 23–87 / 39–166 s |
 | Load | 2 (1.01–1.05 + 0.48–0.56M) | 0.84–1.05M | 0.36–0.45M | 2 | 4 | 92–128 s | 32–118 / 53–227 s |
 | **Send** | 1 (1.00–1.09M) | 0.67–0.81M | 0.36–0.45M | 2 | 3 | **70–97 s** | **24–89 / 41–172 s** |
 | **Receive** | 2 (1.02–1.07 + 0.83–1.05M) | **1.18–1.45M** (B6 history lookup included) | 0.37–0.46M | 3 | 4 | **96–132 s** | **33–122 / 55–234 s** |

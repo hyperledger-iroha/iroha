@@ -20,7 +20,7 @@ use iroha_plonk::{
     transcript::TranscriptRepr,
 };
 use iroha_plonk_gadgets::{
-    GlueChip, Uint, Word,
+    Uint, Word,
     bytes::element::{LeElement, assert_le_max, modulus_max},
     ecc::NonIdentityPoint,
     statement::foreign_limbs,
@@ -30,7 +30,10 @@ use iroha_plonk_recursion::{
     accumulation_circuit::{FoldInputCells, FoldPlan, FoldSource},
     codec::ScalarCells,
     obligation::ModeCells,
-    verifier::{VerificationMode, VerifierChip, VerifierConfig, VerifierPlan},
+    verifier::{
+        CompactPublicConfig, CompactSpans, PinnedKeyCatalog, VerificationMode, VerifierChip,
+        VerifierConfig, VerifierPlan,
+    },
 };
 
 /// Circuit-fixed A descriptor, admissible keys and exact four-slot fold plan.
@@ -38,6 +41,7 @@ use iroha_plonk_recursion::{
 pub struct OmegaPlan {
     verifier: VerifierPlan<Eq>,
     allowlist: Vec<Fq>,
+    catalog: Option<PinnedKeyCatalog<Eq>>,
     fold: FoldPlan<Eq>,
 }
 impl OmegaPlan {
@@ -78,8 +82,23 @@ impl OmegaPlan {
         Ok(Self {
             verifier,
             allowlist,
+            catalog: None,
             fold,
         })
+    }
+    /// Pins the complete key catalog as circuit metadata in the existing
+    /// allowlist order. This explicit profile reuses its bound complete digest;
+    /// it never falls back to witness-key hashing on a selection failure.
+    ///
+    /// # Errors
+    /// Catalog keys differ from the exact descriptor or authorized digest list.
+    pub fn with_key_catalog(mut self, keys: Vec<VerifyingKey<Eq>>) -> Result<Self, Error> {
+        let catalog = PinnedKeyCatalog::new(&self.verifier, keys)?;
+        if catalog.digests() != self.allowlist {
+            return Err(Error::Synthesis);
+        }
+        self.catalog = Some(catalog);
+        Ok(self)
     }
     /// Fixed A verifier program used by every key in the allowlist.
     pub const fn verifier(&self) -> &VerifierPlan<Eq> {
@@ -117,6 +136,7 @@ pub struct OmegaWitness {
 pub struct OmegaConfig {
     verifier: VerifierConfig<Eq>,
     public: [Column<Instance>; 3],
+    compact_public: Option<CompactPublicConfig>,
 }
 /// The one-program Omega relation. Acceptance still requires its own Pallas
 /// opening and the exported Vesta accumulator to be decided natively.
@@ -125,6 +145,7 @@ pub struct OmegaCircuit {
     pub(crate) plan: OmegaPlan,
     pub(crate) witness: OmegaWitness,
     known: bool,
+    compact: Option<CompactSpans>,
 }
 impl OmegaCircuit {
     /// Constructs the fixed wrapper; optional slot presence never changes shape.
@@ -141,8 +162,27 @@ impl OmegaCircuit {
             plan,
             witness,
             known: true,
+            compact: None,
         })
     }
+    /// Selects the explicit compact layout for artifact construction or
+    /// diagnostics. Spans remain circuit-fixed; no verification fallback exists.
+    /// The composed row and proof-size gates must pass before artifact freezing.
+    #[must_use]
+    pub const fn with_compact_layout(mut self, spans: CompactSpans) -> Self {
+        self.compact = Some(spans);
+        self
+    }
+
+    /// Selects the explicit checked key-catalog profile for this wrapper.
+    ///
+    /// # Errors
+    /// The catalog differs from the plan's exact descriptor or digest order.
+    pub fn with_key_catalog(mut self, keys: Vec<VerifyingKey<Eq>>) -> Result<Self, Error> {
+        self.plan = self.plan.with_key_catalog(keys)?;
+        Ok(self)
+    }
+
     fn value<T: Copy>(&self, value: T) -> Value<T> {
         if self.known {
             Value::known(value)
@@ -237,7 +277,10 @@ struct ProofMessages {
 impl Circuit<Fq> for OmegaCircuit {
     type Config = OmegaConfig;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
+    type Params = Option<CompactSpans>;
+    fn params(&self) -> Self::Params {
+        self.compact
+    }
     fn without_witnesses(&self) -> Self {
         Self {
             known: false,
@@ -245,13 +288,28 @@ impl Circuit<Fq> for OmegaCircuit {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
+        Self::configure_with_params(meta, None)
+    }
+    fn configure_with_params(meta: &mut ConstraintSystem<Fq>, spans: Self::Params) -> Self::Config {
+        if let Some(spans) = spans {
+            let (verifier, public) = VerifierConfig::configure_compact(meta, spans);
+            return OmegaConfig {
+                verifier,
+                public: public.columns(),
+                compact_public: Some(public),
+            };
+        }
         let verifier = VerifierConfig::configure(meta);
         let public = OmegaPlan::instance_lengths().map(|len| {
             let col = meta.instance_column(len);
             meta.enable_equality(col);
             col
         });
-        OmegaConfig { verifier, public }
+        OmegaConfig {
+            verifier,
+            public,
+            compact_public: None,
+        }
     }
     fn synthesize(
         &self,
@@ -275,21 +333,6 @@ impl Circuit<Fq> for OmegaCircuit {
                     self.witness.length,
                 )?;
                 let fold = self.messages(&mut chip, &mut region, &self.witness.fold, 1120)?;
-                let TranscriptRepr::Base(repr) = *self.witness.key.transcript_repr() else {
-                    return Err(Error::Synthesis);
-                };
-                let points = |values: &[<Eq as PastaCurve>::AffineExt]| {
-                    values
-                        .iter()
-                        .map(|p| self.value(Eq::from(*p)))
-                        .collect::<Vec<_>>()
-                };
-                let key = chip.witness_key(
-                    &mut region,
-                    self.value(repr),
-                    &points(self.witness.key.fixed_commitments()),
-                    &points(self.witness.key.permutation_commitments()),
-                )?;
                 let mut scalars = Vec::new();
                 for value in &self.witness.instances {
                     let [lo, hi] = foreign_limbs(value);
@@ -302,15 +345,58 @@ impl Circuit<Fq> for OmegaCircuit {
                         &hi,
                     )?);
                 }
-                let a = chip.verify(
-                    &mut region,
-                    &self.plan.verifier,
-                    &key,
-                    &[scalars.clone()],
-                    &proof.messages,
-                    &proof.length,
-                    VerificationMode::Hard,
-                )?;
+                let a = if let Some(catalog) = &self.plan.catalog {
+                    let digest = self
+                        .witness
+                        .key
+                        .kagemusha_digest(self.plan.verifier.binding())
+                        .map_err(|_| Error::Synthesis)?;
+                    let index = catalog
+                        .digests()
+                        .iter()
+                        .position(|v| *v == digest)
+                        .unwrap_or_else(|| catalog.digests().len());
+                    let key = chip.select_catalog_key(
+                        &mut region,
+                        &self.plan.verifier,
+                        catalog,
+                        self.value(index),
+                    )?;
+                    chip.verify_pinned(
+                        &mut region,
+                        &self.plan.verifier,
+                        &key,
+                        &[scalars.clone()],
+                        &proof.messages,
+                        &proof.length,
+                        VerificationMode::Hard,
+                    )?
+                } else {
+                    let TranscriptRepr::Base(repr) = *self.witness.key.transcript_repr() else {
+                        return Err(Error::Synthesis);
+                    };
+                    let points = |values: &[<Eq as PastaCurve>::AffineExt]| {
+                        values
+                            .iter()
+                            .map(|p| self.value(Eq::from(*p)))
+                            .collect::<Vec<_>>()
+                    };
+                    let key = chip.witness_key(
+                        &mut region,
+                        self.value(repr),
+                        &points(self.witness.key.fixed_commitments()),
+                        &points(self.witness.key.permutation_commitments()),
+                    )?;
+                    chip.verify(
+                        &mut region,
+                        &self.plan.verifier,
+                        &key,
+                        &[scalars.clone()],
+                        &proof.messages,
+                        &proof.length,
+                        VerificationMode::Hard,
+                    )?
+                };
                 let mut authorized = chip.uint().glue().constant(&mut region, Fq::ZERO)?;
                 for digest in &self.plan.allowlist {
                     let digest = chip.uint().glue().constant(&mut region, *digest)?;
@@ -323,7 +409,9 @@ impl Circuit<Fq> for OmegaCircuit {
                         .glue()
                         .add(&mut region, &authorized, equal.word())?;
                 }
-                GlueChip::assert_constant(&mut region, &authorized, Fq::ONE)?;
+                chip.uint()
+                    .glue()
+                    .enforce_constant(&mut region, &authorized, Fq::ONE)?;
                 let words = scalars
                     .iter()
                     .map(|value| value.native_word().cloned().ok_or(Error::Synthesis))
@@ -371,16 +459,22 @@ impl Circuit<Fq> for OmegaCircuit {
                     .iter()
                     .map(|value| value.native_word().cloned().ok_or(Error::Synthesis))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok([
+                let output = [
                     vec![words[0].clone()],
                     vec![output.claim.g().x().clone(), output.claim.g().y().clone()],
                     challenges,
-                ])
+                ];
+                if let Some(public) = &config.compact_public {
+                    public.assign(&mut region, output.each_ref().map(Vec::as_slice))?;
+                }
+                Ok(output)
             },
         )?;
-        for (column, words) in config.public.into_iter().zip(output) {
-            for (row, value) in words.into_iter().enumerate() {
-                layouter.constrain_instance(value.cell(), column, row)?;
+        if config.compact_public.is_none() {
+            for (column, words) in config.public.into_iter().zip(output) {
+                for (row, value) in words.into_iter().enumerate() {
+                    layouter.constrain_instance(value.cell(), column, row)?;
+                }
             }
         }
         Ok(())

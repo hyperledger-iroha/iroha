@@ -102,9 +102,12 @@
 //! witness values). Witness arithmetic uses the constant-time [`Nat`]
 //! routines; moduli and bounds are public.
 
+pub mod dot;
 pub mod mont;
 pub mod nat;
+pub mod rotated;
 mod s6;
+pub mod serialized;
 #[cfg(test)]
 mod tests;
 
@@ -121,6 +124,7 @@ pub use self::s6::CanonicalS6;
 use crate::{
     arith::GlueChip,
     cells::{Bit, RowCursor, Word, assign_constant, assign_word, copy_word},
+    range::RunningSumChip,
     table::{GuestLookup, SharedTable, TableGuest},
 };
 
@@ -606,6 +610,21 @@ struct ModulusGates {
     div: Selector,
     compare: Selector,
     canonical_witness: Selector,
+}
+
+/// An explicitly selected layout for the same admitted modulus.
+#[derive(Clone, Copy, Debug)]
+struct SelectedModulus {
+    modulus: ForeignModulus,
+    fused: Option<ModulusGates>,
+}
+
+#[derive(Clone, Debug)]
+struct SerializedState<F: PastaField> {
+    kernel: Option<rotated::RotatedFfConfig>,
+    glue: GlueChip<F>,
+    range: RunningSumChip<F>,
+    moduli: Vec<ForeignModulus>,
 }
 
 /// Columns, table, pattern columns and per-modulus selectors of the chip.
@@ -1158,7 +1177,8 @@ struct OpenBlock {
 /// allocated from its own cursor.
 #[derive(Clone, Debug)]
 pub struct FfChip<F: PastaField> {
-    config: FfConfig,
+    config: Option<FfConfig>,
+    serialized: Option<SerializedState<F>>,
     rows: RowCursor,
     open: Option<OpenBlock>,
     blocks: usize,
@@ -1182,7 +1202,8 @@ impl<F: PastaField> FfChip<F> {
     #[must_use]
     pub const fn with_cursor(config: FfConfig, rows: RowCursor) -> Self {
         Self {
-            config,
+            config: Some(config),
+            serialized: None,
             rows,
             open: None,
             blocks: 0,
@@ -1190,16 +1211,63 @@ impl<F: PastaField> FfChip<F> {
         }
     }
 
-    /// The configuration.
+    /// Uses the explicitly serialized CRT layout without configuring another
+    /// gate or table. Both chips must share their reservation cursors with the
+    /// owning interpreter; its range owner loads the table exactly once.
     #[must_use]
-    pub const fn config(&self) -> &FfConfig {
-        &self.config
+    pub fn serialized(
+        glue: GlueChip<F>,
+        range: RunningSumChip<F>,
+        moduli: &[ForeignModulus],
+    ) -> Self {
+        Self {
+            config: None,
+            serialized: Some(SerializedState {
+                kernel: None,
+                glue,
+                range,
+                moduli: moduli.to_vec(),
+            }),
+            rows: RowCursor::starting_at(0),
+            open: None,
+            blocks: 0,
+            _marker: PhantomData,
+        }
     }
 
-    /// The first row not used yet.
+    /// Uses the four-row CRT gate for this explicitly serialized profile.
+    /// The same Glue/range cursors and all original admission checks remain.
+    ///
+    /// # Errors
+    /// The profile is fused, its modulus differs, or its ports differ.
+    pub fn with_rotated_kernel(mut self, kernel: &rotated::RotatedFfConfig) -> Result<Self, Error> {
+        let state = self.serialized.as_mut().ok_or(Error::Synthesis)?;
+        if state.moduli.as_slice() != [kernel.modulus]
+            || state.glue.config().advice() != kernel.columns
+        {
+            return Err(Error::Synthesis);
+        }
+        state.kernel = Some(*kernel);
+        Ok(self)
+    }
+
+    /// Fused-layout configuration, absent for an explicit serialized layout.
     #[must_use]
-    pub const fn next_row(&self) -> usize {
-        self.rows.next_row()
+    pub const fn config(&self) -> Option<&FfConfig> {
+        self.config.as_ref()
+    }
+
+    fn fused_config(&self) -> Result<&FfConfig, Error> {
+        self.config.as_ref().ok_or(Error::Synthesis)
+    }
+
+    /// The next arithmetic row; serialized operations share the owning
+    /// interpreter's Glue cursor.
+    #[must_use]
+    pub fn next_row(&self) -> usize {
+        self.serialized
+            .as_ref()
+            .map_or_else(|| self.rows.next_row(), |state| state.glue.next_row())
     }
 
     /// The number of blocks laid out.
@@ -1217,7 +1285,10 @@ impl<F: PastaField> FfChip<F> {
     ///
     /// [`Error`] when the table does not fit the usable rows.
     pub fn load_table(&self, layouter: &mut impl Layouter<F>) -> Result<(), Error> {
-        let value = self.config.value;
+        let Some(config) = &self.config else {
+            return Ok(());
+        };
+        let value = config.value;
         layouter.assign_region(
             || "ff range table",
             |mut region| {
@@ -1257,7 +1328,7 @@ impl<F: PastaField> FfChip<F> {
         start: usize,
         group: Group,
     ) -> Result<(), Error> {
-        let [h_c, h_q, s_u, t_u] = self.config.pattern;
+        let [h_c, h_q, s_u, t_u] = self.fused_config()?.pattern;
         let top_row = start + BLOCK_ROWS - 1;
         match group {
             Group::C | Group::Q => {
@@ -1320,11 +1391,51 @@ impl<F: PastaField> FfChip<F> {
     fn fused_block(
         &mut self,
         region: &mut Region<'_, F>,
-        gates: ModulusGates,
+        gates: SelectedModulus,
         mode: Mode,
         operands: ([Slot<'_, F>; LIMBS], [Slot<'_, F>; LIMBS]),
         witness: Value<FusedWitness<F>>,
     ) -> Result<[Word<F>; LIMBS], Error> {
+        if let Some(state) = &mut self.serialized {
+            if gates.fused.is_some() {
+                return Err(Error::Synthesis);
+            }
+            let mut place = |slots: [Slot<'_, F>; LIMBS]| -> Result<[Word<F>; LIMBS], Error> {
+                slots
+                    .into_iter()
+                    .map(|slot| match slot {
+                        Slot::Copy(word) => Ok(word.clone()),
+                        Slot::Constant(value) => state.glue.constant(region, value),
+                        Slot::Free(value) => state.glue.witness(region, value),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .try_into()
+                    .map_err(|_| Error::Synthesis)
+            };
+            let left = place(operands.0)?;
+            let right = place(operands.1)?;
+            self.blocks = self.blocks.checked_add(1).ok_or(Error::BoundsFailure)?;
+            if let Some(kernel) = state.kernel {
+                return kernel.constrain(
+                    &mut state.glue,
+                    &mut state.range,
+                    region,
+                    mode,
+                    (&left, &right),
+                    witness,
+                );
+            }
+            return serialized::constrain_fused(
+                &mut state.glue,
+                &mut state.range,
+                region,
+                mode,
+                gates.modulus,
+                (&left, &right),
+                witness,
+            );
+        }
+        let gates = gates.fused.ok_or(Error::Synthesis)?;
         let start = self.block(&[Group::C, Group::Q, Group::U])?;
         for group in [Group::C, Group::Q, Group::U] {
             self.activate(region, start, group)?;
@@ -1333,13 +1444,13 @@ impl<F: PastaField> FfChip<F> {
         let root_row = start + ROOT_ROW;
         let (a, b) = operands;
         for (index, slot) in a.into_iter().enumerate() {
-            Self::place(region, self.config.c[index], operand_row, slot)?;
+            Self::place(region, self.fused_config()?.c[index], operand_row, slot)?;
         }
         for (index, slot) in b.into_iter().enumerate() {
-            Self::place(region, self.config.q[index], operand_row, slot)?;
+            Self::place(region, self.fused_config()?.q[index], operand_row, slot)?;
         }
         let mut c = Vec::with_capacity(LIMBS);
-        for (index, column) in self.config.c.iter().enumerate() {
+        for (index, column) in self.fused_config()?.c.iter().enumerate() {
             let value = witness.map(|witness| witness.c[index]);
             c.push(Self::running_sum(
                 region,
@@ -1349,11 +1460,11 @@ impl<F: PastaField> FfChip<F> {
                 value,
             )?);
         }
-        for (index, column) in self.config.q.iter().enumerate() {
+        for (index, column) in self.fused_config()?.q.iter().enumerate() {
             let value = witness.map(|witness| witness.q[index]);
             Self::running_sum(region, *column, root_row, LIMB_SUBLIMBS, value)?;
         }
-        for (index, column) in self.config.u.iter().enumerate() {
+        for (index, column) in self.fused_config()?.u.iter().enumerate() {
             let value = witness.map(|witness| witness.u[index]);
             Self::running_sum(region, *column, start, CARRY_SUBLIMBS, value)?;
         }
@@ -1370,11 +1481,25 @@ impl<F: PastaField> FfChip<F> {
         &self,
         modulus: ForeignModulus,
         others: &[&FfValue<F>],
-    ) -> Result<ModulusGates, Error> {
+    ) -> Result<SelectedModulus, Error> {
         if others.iter().any(|value| value.modulus != modulus) {
             return Err(Error::Synthesis);
         }
-        self.config.gates(modulus).copied()
+        if let Some(state) = &self.serialized {
+            if !state.moduli.contains(&modulus) {
+                return Err(Error::Synthesis);
+            }
+            Ok(SelectedModulus {
+                modulus,
+                fused: None,
+            })
+        } else {
+            let gates = self.fused_config()?.gates(modulus).copied()?;
+            Ok(SelectedModulus {
+                modulus,
+                fused: Some(gates),
+            })
+        }
     }
 
     /// Whether `a b` is a complete multiplication: operand limbs within the
@@ -1407,7 +1532,7 @@ impl<F: PastaField> FfChip<F> {
     fn fused_mul(
         &mut self,
         region: &mut Region<'_, F>,
-        gates: ModulusGates,
+        gates: SelectedModulus,
         a: Operand<'_, F>,
         b: Operand<'_, F>,
     ) -> Result<FfValue<F>, Error> {
@@ -1431,7 +1556,7 @@ impl<F: PastaField> FfChip<F> {
     fn fused_div(
         &mut self,
         region: &mut Region<'_, F>,
-        gates: ModulusGates,
+        gates: SelectedModulus,
         a: Operand<'_, F>,
         b: Operand<'_, F>,
     ) -> Result<FfValue<F>, Error> {
@@ -1450,6 +1575,28 @@ impl<F: PastaField> FfChip<F> {
             modulus,
             form: Form::Proper,
         })
+    }
+
+    /// Evaluates a fixed unsigned Proper dot batch on the explicitly shared
+    /// Glue/range profile. The result remains Proper rather than Canonical.
+    ///
+    /// # Errors
+    /// A fused-only profile, unconfigured or mixed modulus, non-Proper input,
+    /// batch outside1..=8, or layout error.
+    pub fn dot_proper(
+        &mut self,
+        region: &mut Region<'_, F>,
+        pairs: &[(&FfValue<F>, &FfValue<F>)],
+    ) -> Result<FfValue<F>, Error> {
+        let modulus = pairs.first().ok_or(Error::Synthesis)?.0.modulus;
+        self.gates_of(modulus, &[])?;
+        let state = self.serialized.as_mut().ok_or(Error::Synthesis)?;
+        if let Some(kernel) = state.kernel
+            && let Some(value) = kernel.dot(&mut state.glue, &mut state.range, region, pairs)?
+        {
+            return Ok(value);
+        }
+        dot::UnsignedDot::evaluate(&mut state.glue, &mut state.range, region, pairs)
     }
 
     /// Reduces `x` to a proper value congruent to it: one multiplication by
@@ -1613,6 +1760,9 @@ impl<F: PastaField> FfChip<F> {
         value: Value<[u64; 4]>,
     ) -> Result<FfValue<F>, Error> {
         self.gates_of(modulus, &[])?;
+        if let Some(state) = &mut self.serialized {
+            return serialized::SerializedFf::witness(&mut state.range, region, modulus, value);
+        }
         let start = self.block(&[Group::C])?;
         self.activate(region, start, Group::C)?;
         let limbs = value.map(|value| limb_fields::<F>(&Nat::from_words(value)));
@@ -1634,7 +1784,7 @@ impl<F: PastaField> FfChip<F> {
         limbs: Value<[F; LIMBS]>,
     ) -> Result<[Word<F>; LIMBS], Error> {
         let mut out = Vec::with_capacity(LIMBS);
-        for (index, column) in self.config.c.iter().enumerate() {
+        for (index, column) in self.fused_config()?.c.iter().enumerate() {
             let value = limbs.map(|limbs| limbs[index]);
             out.push(Self::running_sum(
                 region,
@@ -1655,7 +1805,7 @@ impl<F: PastaField> FfChip<F> {
         start: usize,
         difference: Value<[F; LIMBS]>,
     ) -> Result<(), Error> {
-        for (index, column) in self.config.q.iter().enumerate() {
+        for (index, column) in self.fused_config()?.q.iter().enumerate() {
             let value = difference.map(|difference| difference[index]);
             Self::running_sum(region, *column, start + ROOT_ROW, LIMB_SUBLIMBS, value)?;
         }
@@ -1676,6 +1826,17 @@ impl<F: PastaField> FfChip<F> {
         value: Value<[u64; 4]>,
     ) -> Result<FfValue<F>, Error> {
         let gates = self.gates_of(modulus, &[])?;
+        if let Some(state) = &mut self.serialized {
+            let value =
+                serialized::SerializedFf::witness(&mut state.range, region, modulus, value)?;
+            return serialized::SerializedFf::assert_canonical(
+                &mut state.glue,
+                &mut state.range,
+                region,
+                &value,
+            );
+        }
+        let gates = gates.fused.ok_or(Error::Synthesis)?;
         let start = self.block(&[Group::C, Group::Q])?;
         self.activate(region, start, Group::C)?;
         self.activate(region, start, Group::Q)?;
@@ -1715,6 +1876,15 @@ impl<F: PastaField> FfChip<F> {
         }
         let x = self.reduce(region, x)?;
         let gates = self.gates_of(x.modulus, &[])?;
+        if let Some(state) = &mut self.serialized {
+            return serialized::SerializedFf::assert_canonical(
+                &mut state.glue,
+                &mut state.range,
+                region,
+                &x,
+            );
+        }
+        let gates = gates.fused.ok_or(Error::Synthesis)?;
         let start = self.block(&[Group::Q])?;
         self.activate(region, start, Group::Q)?;
         let modulus = x.modulus;
@@ -1723,7 +1893,12 @@ impl<F: PastaField> FfChip<F> {
             .map(|limbs| compare_witness::<F>(modulus, &limbs));
         self.difference_running_sums(region, start, difference)?;
         for (index, limb) in x.limbs.iter().enumerate() {
-            copy_word(region, limb, self.config.q[index], start + OPERAND_ROW)?;
+            copy_word(
+                region,
+                limb,
+                self.fused_config()?.q[index],
+                start + OPERAND_ROW,
+            )?;
         }
         gates.compare.enable(region, start + OPERAND_ROW)?;
         Ok(FfValue {

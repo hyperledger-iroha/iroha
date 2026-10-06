@@ -35,7 +35,7 @@ pub mod vk;
 
 pub use keygen::{
     KeygenConfig, KeygenConfigV2, keygen_from_tables, keygen_from_tables_v2, keygen_pk,
-    keygen_pk_v2, keygen_vk, keygen_vk_v2, permutation_values,
+    keygen_pk_v2, keygen_vk, keygen_vk_v2, keygen_vk_with_binding_v2, permutation_values,
 };
 pub use pk::{
     CosetCachePolicy, CosetMasks, CosetPolynomial, KeyConstraintSystem, ProvingKey, QuotientDomain,

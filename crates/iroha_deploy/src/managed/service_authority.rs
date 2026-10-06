@@ -28,6 +28,7 @@ use std::{fs::File, time::Instant};
 
 #[path = "service_authority/checkpoint_cache.rs"]
 mod checkpoint_cache;
+pub(in crate::managed) use checkpoint_cache::CheckpointImports;
 
 #[path = "service_authority/inventory.rs"]
 mod inventory;

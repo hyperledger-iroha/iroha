@@ -221,8 +221,9 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         # The packaging checker refuses retired KAGEMUSHA exports by namespace; the
         # exact forbidden inventory is owned by the validator and the builder above.
         self.assertNotIn("RETIRED_KAGEMUSHA_C_SYMBOLS", checker)
-        self.assertEqual(re.findall(r"connect_norito_kagemusha_[A-Za-z0-9_]+", checker), [])
-        self.assertEqual(checker.count("grep -Eq '^_?connect_norito_kagemusha_'"), 1)
+        current = {"connect_norito_kagemusha_wallet_" + method + "_v1" for method in ("revision", "open", "close", "activity", "commit", "retry", "resume", "fold", "credit_status")}
+        self.assertEqual(set(re.findall(r"connect_norito_kagemusha_[A-Za-z0-9_]+", checker)) - {"connect_norito_kagemusha_wallet_"}, current)
+        self.assertEqual(checker.count("grep -E '^_?connect_norito_kagemusha_'"), 1)
 
     def test_current_mobile_protocol_inventory_matches_required_bridge_exports(self) -> None:
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(

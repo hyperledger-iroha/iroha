@@ -505,6 +505,22 @@ pub fn keygen_vk_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     circuit: &Ci,
     config: &KeygenConfigV2,
 ) -> Result<VerifyingKey<C>, KeyError> {
+    keygen_vk_with_binding_v2(params, circuit, config).map(|(_, key)| key)
+}
+
+/// Generates a V2 verifier's descriptor binding and verifying key together.
+///
+/// Verifier-only consumers need both values to call the native verifier. This
+/// path does not build a proving key, quotient cosets or commitment tables;
+/// its descriptor and key are identical to [`keygen_pk_v2`]'s outputs.
+///
+/// # Errors
+/// As [`keygen_pk_v2`].
+pub fn keygen_vk_with_binding_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    config: &KeygenConfigV2,
+) -> Result<(DescriptorBinding, VerifyingKey<C>), KeyError> {
     let synthesized = synthesize(circuit, params.k(), None)?;
     let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
     let prepared = prepare(
@@ -517,5 +533,6 @@ pub fn keygen_vk_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         Some(config),
     )?;
     drop(permutation);
-    verifying_key(params, &prepared, config.msm_budget)
+    let key = verifying_key(params, &prepared, config.msm_budget)?;
+    Ok((prepared.binding, key))
 }

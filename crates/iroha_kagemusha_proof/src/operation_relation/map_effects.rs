@@ -7,16 +7,19 @@
 //! cannot substitute a native boolean for that relation. These helpers do
 //! not authorize a step or implement its other state changes.
 
-use ff::Field;
+use ff::{Field, PrimeField};
 use iroha_pasta::Fp;
 use iroha_plonk::frontend::{Error, Region};
 use iroha_plonk_gadgets::{
-    Bit, GlueChip, RunningSumChip, SpongeChip, UintChip, Word,
+    Bit, GlueChip, RunningSumChip, SpongeChip, UintChip, Word, WordHasher,
     imt::{DEPTH, ImtChip, OpeningCells, PathCells},
 };
 use iroha_plonk_recursion::obligation::ledger::Variant;
 
-use super::{state::StateCells, statement::StatementCells};
+use super::{
+    state::{StateCells, rest_index as rest},
+    statement::StatementCells,
+};
 use crate::{a_relation::LineagePublicCells, witness::core_index as core};
 
 /// Domain of the seven-field pending Send descriptor.
@@ -27,6 +30,10 @@ pub const FEE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwfee_1");
 pub const CONSUMED_DOMAIN: u64 = u64::from_le_bytes(*b"kgwccrd1");
 /// Domain of the permanent `(credit, Payment digest, burned)` record.
 pub const CREDIT_DOMAIN: u64 = u64::from_le_bytes(*b"kgwcdig1");
+/// Domain of `(ordinal, voucher digest, amount)` load recovery entries.
+pub const LOAD_DOMAIN: u64 = u64::from_le_bytes(*b"kgwload1");
+/// Domain of `(ordinal, nullifier, amount, charge)` redeem recovery entries.
+pub const REDEEM_DOMAIN: u64 = u64::from_le_bytes(*b"kgwrdm_1");
 
 /// Opened state and its authenticated lineage prefix.
 #[derive(Clone, Copy, Debug)]
@@ -94,7 +101,7 @@ pub struct RemoveCells<const D: usize = DEPTH> {
     pub removed: OpeningCells<Fp, D>,
 }
 
-/// ArchiveSent's retained descriptor and separate core/lineage removal paths.
+/// `ArchiveSent`'s retained descriptor and separate core/lineage removal paths.
 #[derive(Clone, Debug)]
 pub struct ArchiveMapWitness<const D: usize = DEPTH> {
     /// Exact seven-field descriptor of the retained outgoing Payment.
@@ -106,20 +113,97 @@ pub struct ArchiveMapWitness<const D: usize = DEPTH> {
     pub lineage: RemoveCells<D>,
 }
 
+/// Domain of the permanent blacklist-version/root history value.
+pub const BLACKLIST_HISTORY_DOMAIN: u64 = u64::from_le_bytes(*b"kgwbhst1");
+
 /// Map relation sharing the caller's arithmetic, range and sponge lanes.
 #[derive(Debug)]
-pub struct MapEffectsChip<'a> {
+pub struct MapEffectsChip<'a, H: WordHasher<Fp> = SpongeChip<Fp>> {
     glue: &'a mut GlueChip<Fp>,
     range: &'a mut RunningSumChip<Fp>,
-    sponge: &'a mut SpongeChip<Fp>,
+    sponge: &'a mut H,
 }
 
-impl<'a> MapEffectsChip<'a> {
+impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
+    /// Insert the new blacklist's exact version/root in permanent history.
+    ///
+    /// Compose with `refresh::constrain` and authenticated signed-list fields;
+    /// this helper checks the hard map obligation, not issuer authorization.
+    ///
+    /// # Errors
+    /// Wrong fixed variant or layout failure. Duplicate versions, occupied
+    /// insertion slots and incorrect successor roots are unsatisfiable.
+    pub fn refresh_blacklist<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        insertion: &InsertCells<D>,
+    ) -> Result<(), Error> {
+        if transition.statement.variant() != Variant::RefreshBlacklist {
+            return Err(Error::Synthesis);
+        }
+        self.bind(region, transition)?;
+        let state = transition.successor.state;
+        let version = &state.core()[core::BLACKLIST_VERSION];
+        let root = &state.core()[core::BLACKLIST_ROOT];
+        let value = self.sponge.hash_words(
+            region,
+            BLACKLIST_HISTORY_DOMAIN,
+            &[version.clone(), root.clone()],
+        )?;
+        let new_root = ImtChip::new(self.glue, self.range, self.sponge).insert(
+            region,
+            &transition.predecessor.state.rest()[rest::BLACKLIST_HISTORY],
+            version,
+            &value,
+            &insertion.low,
+            &insertion.slot,
+        )?;
+        GlueChip::assert_equal(region, &new_root, &state.rest()[rest::BLACKLIST_HISTORY])
+    }
+
+    /// Hard-authenticate the search route for a Request's recorded list pair.
+    ///
+    /// For a nonzero recorded version, the resulting soft bit is true iff
+    /// history contains that exact version/root. A must combine it with the
+    /// Request's other verdicts. The zero-pair Receive variant omits this
+    /// lookup and separately pins both Request words to zero. Current policy
+    /// or list fields are deliberately not substituted for the Request pair.
+    ///
+    /// # Errors
+    /// Layout failure. Zero/out-of-range versions, zero roots, false search
+    /// routes and forged paths are unsatisfiable even on a burn branch.
+    pub fn recorded_blacklist<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        state: &StateCells,
+        version: &Word<Fp>,
+        entries_root: &Word<Fp>,
+        opening: &OpeningCells<Fp, D>,
+    ) -> Result<Bit<Fp>, Error> {
+        UintChip::new(self.glue, self.range).range_check::<64>(region, version)?;
+        self.glue.assert_nonzero(region, entries_root)?;
+        let absent = ImtChip::new(self.glue, self.range, self.sponge).absent(
+            region,
+            &state.rest()[rest::BLACKLIST_HISTORY],
+            version,
+            opening,
+        )?;
+        let value = self.sponge.hash_words(
+            region,
+            BLACKLIST_HISTORY_DOMAIN,
+            &[version.clone(), entries_root.clone()],
+        )?;
+        let matches = self.glue.is_equal(region, opening.leaf.value(), &value)?;
+        let present = self.glue.not(region, &absent)?;
+        self.glue.and(region, &present, &matches)
+    }
+
     /// Borrow existing chips without resetting their row cursors.
     pub const fn new(
         glue: &'a mut GlueChip<Fp>,
         range: &'a mut RunningSumChip<Fp>,
-        sponge: &'a mut SpongeChip<Fp>,
+        sponge: &'a mut H,
     ) -> Self {
         Self {
             glue,
@@ -142,6 +226,58 @@ impl<'a> MapEffectsChip<'a> {
         )
     }
 
+    /// Constrain Load/Unload arithmetic and the exact insert-only recovery
+    /// entry, with distinct `kind * 2^128 + ordinal` keys in one shared map.
+    ///
+    /// The owning A still authenticates finalized voucher/quote inputs.
+    /// Duplicate ordinals, kind substitution and nullifier or charge changes
+    /// cannot replace a prior entry or alter the committed successor root.
+    ///
+    /// # Errors
+    /// Wrong variant or layout failure; incorrect arithmetic, paths and
+    /// recovery descriptors have no satisfying witness.
+    pub fn recovery<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        witness: &InsertCells<D>,
+    ) -> Result<(), Error> {
+        let (kind, domain) = match transition.statement.variant() {
+            Variant::Load => (1_u64, LOAD_DOMAIN),
+            Variant::Unload => (2_u64, REDEEM_DOMAIN),
+            _ => return Err(Error::Synthesis),
+        };
+        super::administrative::monetary(
+            &mut UintChip::new(self.glue, self.range),
+            self.sponge,
+            region,
+            transition,
+        )?;
+        let effect = &transition.statement.fields()[17..];
+        let two_to_128 = Fp::from_u128(1_u128 << 127).double();
+        let key = self
+            .glue
+            .add_constant(region, &effect[1], Fp::from(kind) * two_to_128)?;
+        let mut preimage = vec![effect[1].clone(), effect[0].clone(), effect[2].clone()];
+        if kind == 2 {
+            preimage.push(effect[3].clone());
+        }
+        let value = self.sponge.hash_words(region, domain, &preimage)?;
+        let root = ImtChip::new(self.glue, self.range, self.sponge).insert(
+            region,
+            &transition.predecessor.state.core()[core::LOAD_REDEEM_ROOT],
+            &key,
+            &value,
+            &witness.low,
+            &witness.slot,
+        )?;
+        GlueChip::assert_equal(
+            region,
+            &root,
+            &transition.successor.state.core()[core::LOAD_REDEEM_ROOT],
+        )
+    }
+
     /// Insert the exact Send descriptor and nonzero-fee claim, and carry
     /// unaffected maps and adjusted burn/credit values.
     ///
@@ -160,13 +296,31 @@ impl<'a> MapEffectsChip<'a> {
         transition: &MapTransition<'_>,
         witness: &SendMapWitness<D>,
     ) -> Result<(), Error> {
+        self.send_pending(region, transition, &witness.pending)?;
+        self.send_fee_and_unchanged(region, transition, &witness.fee, &witness.fee_schedule)
+    }
+
+    /// Bind Send's exact pending descriptor insertion from its predecessor lineage.
+    ///
+    /// This is one part of [`Self::send`]. A fixed multi-stage program must also
+    /// constrain [`Self::send_fee_and_unchanged`] against the identical statement,
+    /// state openings and lineage prefixes retained by its context. This method
+    /// alone does not authorize a complete Send.
+    ///
+    /// # Errors
+    /// Wrong variant, layout failure, or unsatisfied statement/path/root binding.
+    pub fn send_pending<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        pending_path: &InsertCells<D>,
+    ) -> Result<(), Error> {
         if transition.statement.variant() != Variant::Send {
             return Err(Error::Synthesis);
         }
         self.bind(region, transition)?;
         let fields = transition.statement.fields();
         let credit = &fields[17];
-        let fee = &fields[22];
         let descriptor = self
             .sponge
             .hash_words(region, PENDING_DOMAIN, &fields[17..24])?;
@@ -175,35 +329,63 @@ impl<'a> MapEffectsChip<'a> {
             transition.predecessor.lineage.pending_root(),
             credit,
             &descriptor,
-            &witness.pending.low,
-            &witness.pending.slot,
+            &pending_path.low,
+            &pending_path.slot,
         )?;
+        GlueChip::assert_equal(
+            region,
+            &pending,
+            &transition.successor.state.core()[core::PENDING_OUTGOING_ROOT],
+        )?;
+        GlueChip::assert_equal(
+            region,
+            &pending,
+            transition.successor.lineage.pending_root(),
+        )
+    }
+
+    /// Bind Send's conditional fee insertion and every map/burn field it preserves.
+    ///
+    /// `fee_schedule` must come from the same authenticated Request. A fixed
+    /// multi-stage program must also constrain [`Self::send_pending`] against
+    /// the identical context-bound transition; no witness flag replaces it.
+    ///
+    /// # Errors
+    /// Wrong variant, layout failure, or unsatisfied statement/path/unchanged binding.
+    pub fn send_fee_and_unchanged<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        fee_path: &InsertCells<D>,
+        fee_schedule: &Word<Fp>,
+    ) -> Result<(), Error> {
+        if transition.statement.variant() != Variant::Send {
+            return Err(Error::Synthesis);
+        }
+        self.bind(region, transition)?;
+        let fields = transition.statement.fields();
+        let credit = &fields[17];
+        let fee = &fields[22];
         let zero_fee = self.glue.is_zero(region, fee)?;
         let has_fee = self.glue.not(region, &zero_fee)?;
         let checked_schedule =
             self.glue
-                .select_constant(region, &has_fee, &witness.fee_schedule, Fp::ONE)?;
+                .select_constant(region, &has_fee, fee_schedule, Fp::ONE)?;
         self.glue.assert_nonzero(region, &checked_schedule)?;
         let fee_value = self.sponge.hash_words(
             region,
             FEE_DOMAIN,
-            &[credit.clone(), fee.clone(), witness.fee_schedule.clone()],
+            &[credit.clone(), fee.clone(), fee_schedule.clone()],
         )?;
         let fee_root = ImtChip::new(self.glue, self.range, self.sponge).insert_if(
             region,
             &transition.predecessor.state.core()[core::FEE_CLAIM_ROOT],
             [credit, &fee_value],
-            &witness.fee.low,
-            &witness.fee.slot,
+            &fee_path.low,
+            &fee_path.slot,
             &has_fee,
         )?;
         let successor = transition.successor.state.core();
-        GlueChip::assert_equal(region, &pending, &successor[core::PENDING_OUTGOING_ROOT])?;
-        GlueChip::assert_equal(
-            region,
-            &pending,
-            transition.successor.lineage.pending_root(),
-        )?;
         GlueChip::assert_equal(region, &fee_root, &successor[core::FEE_CLAIM_ROOT])?;
         for index in [core::CONSUMED_CREDIT_ROOT, core::LOAD_REDEEM_ROOT] {
             GlueChip::assert_equal(

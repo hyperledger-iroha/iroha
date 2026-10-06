@@ -86,6 +86,7 @@
 #![forbid(unsafe_code)]
 
 pub mod a_relation;
+pub mod admin_sigma;
 pub mod circuit;
 pub mod consumer;
 mod control_circuit;
@@ -93,6 +94,7 @@ pub mod controls;
 pub mod proof;
 pub mod omega;
 pub mod q_sigma;
+pub mod q_signature;
 pub mod operation_relation;
 mod relation;
 pub mod shape;

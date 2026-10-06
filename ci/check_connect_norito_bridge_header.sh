@@ -15,6 +15,10 @@ PLATFORM_JNI_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/platform_jni.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
+  --self-test-missing-wallet-header-symbol
+  --self-test-missing-wallet-rust-symbol
+  --self-test-missing-wallet-jni-symbol
+  --self-test-unknown-wallet-sign-symbol
   --self-test-retired-kagemusha-header-symbol
   --self-test-retired-kagemusha-rust-symbol
   --self-test-retired-kagemusha-jni-symbol
@@ -386,10 +390,21 @@ native_c_exports = set(re.findall(
     r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(',
     native_rust,
 ))
+current_wallet_c = {
+    "connect_norito_kagemusha_wallet_" + method + "_v1"
+    for method in ("revision", "open", "close", "activity", "commit", "retry", "resume", "fold", "credit_status")
+}
+current_wallet_jni = {
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
+    for method in ("revision", "open", "close", "activity", "call")
+}
+exact("current Rust wallet", current_wallet_c, native_c_exports & current_wallet_c)
+exact("current C wallet", current_wallet_c, header_exports("connect_norito_kagemusha_wallet_") & current_wallet_c)
+exact("current JNI wallet", current_wallet_jni, set(re.findall(r"\b(Java_[A-Za-z0-9_]*)\s*\(", native_rust)) & current_wallet_jni)
 exact("retired Rust KAGEMUSHA", set(), {
-    name for name in native_c_exports if name.startswith("connect_norito_kagemusha_")
+    name for name in native_c_exports if name.startswith("connect_norito_kagemusha_") and name not in current_wallet_c
 })
-exact("retired C KAGEMUSHA", set(), header_exports("connect_norito_kagemusha_"))
+exact("retired C KAGEMUSHA", set(), header_exports("connect_norito_kagemusha_") - current_wallet_c)
 exact("retired Rust offline cash", set(), {
     name for name in native_c_exports if name.startswith("connect_norito_offline_cash_")
 })
@@ -405,7 +420,7 @@ exact(
     set(),
     {
         name for name in re.findall(r"\b(Java_[A-Za-z0-9_]*)\s*\(", native_rust)
-        if "kagemusha" in name.lower() or name.startswith(retired_jni_prefixes)
+        if ("kagemusha" in name.lower() or name.startswith(retired_jni_prefixes)) and name not in current_wallet_jni
     },
 )
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
@@ -641,6 +656,8 @@ make_negative_workspace() {
   cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
   cp "${PLATFORM_JNI_RUST}" "${tmp}/platform_jni.rs"
   cp -R "${PLATFORM_JNI_RUST%.rs}" "${tmp}/platform_jni"
+  cp "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs" "${tmp}/kagemusha_wallet_ffi.rs"
+  cp -R "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_ffi" "${tmp}/kagemusha_wallet_ffi"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${RETAIL_MODEL}" "${tmp}/retail_fee_model.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -700,6 +717,22 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-missing-wallet-header-symbol)
+      sed -i.bak '/int32_t connect_norito_kagemusha_wallet_commit_v1(/d' "${tmp}/connect_norito_bridge.h"
+      expected_diagnostic="current C wallet inventory mismatch"
+      ;;
+    --self-test-missing-wallet-rust-symbol)
+      sed -i.bak 's/fn connect_norito_kagemusha_wallet_commit_v1(/fn removed_wallet_commit_v1(/' "${tmp}/kagemusha_wallet_ffi/exports.rs"
+      expected_diagnostic="current Rust wallet inventory mismatch"
+      ;;
+    --self-test-missing-wallet-jni-symbol)
+      sed -i.bak 's/fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call(/fn removed_wallet_call(/' "${tmp}/platform_jni/kagemusha_wallet_advance.rs"
+      expected_diagnostic="current JNI wallet inventory mismatch"
+      ;;
+    --self-test-unknown-wallet-sign-symbol)
+      printf '\nint32_t connect_norito_kagemusha_wallet_sign_v1(void);\n' >>"${tmp}/connect_norito_bridge.h"
+      expected_diagnostic="retired C KAGEMUSHA inventory mismatch"
+      ;;
     --self-test-retired-kagemusha-header-symbol)
       printf '\nint32_t connect_norito_kagemusha_retired_v1(void);\n' >> "${tmp_header}"
       expected_diagnostic="retired C KAGEMUSHA inventory mismatch"

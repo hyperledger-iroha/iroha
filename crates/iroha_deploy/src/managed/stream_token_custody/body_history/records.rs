@@ -139,6 +139,20 @@ pub(in crate::managed::stream_token_custody) struct UnsignedEnrollment {
     pub checkpoint: Vec<u8>,
 }
 impl UnsignedEnrollment {
+    pub(in crate::managed::stream_token_custody) fn validate_with_imports<
+        P: Borrow<RetainedProviderServicePlan>,
+    >(
+        &self,
+        owner: &ManagedStreamTokenCustody,
+        purpose: CustodyPurpose,
+        provider_plan: impl FnOnce() -> Result<P>,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
+    ) -> Result<()> {
+        self.validate_using(owner, purpose, provider_plan, || {
+            imports.decode(&self.checkpoint)
+        })
+    }
+
     pub(in crate::managed::stream_token_custody) fn validate<
         P: Borrow<RetainedProviderServicePlan>,
     >(

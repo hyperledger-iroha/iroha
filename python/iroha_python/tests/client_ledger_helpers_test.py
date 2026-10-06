@@ -1925,18 +1925,20 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
     expected = frozenset(
         {
             "halo2/ipa",
-            "halo2/pasta/kaigi-authorization-v1",
-            "halo2/pasta/kaigi-usage-v1",
+            "pipa-r/pasta",
+            "pipa-r/pasta/kaigi-authorization-v1",
+            "pipa-r/pasta/kaigi-usage-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         }
     )
-    assert len(expected) == 7
+    assert len(expected) == 8
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
     for backend in expected:
-        expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
+        expected_tag = ("halo2-ipa-pasta" if backend.startswith("halo2/")
+                        else "native-pipa-r-pasta" if backend.startswith("pipa-r/") else "stark")
         assert _verifier_backend_registry_tag_v1(backend) == expected_tag
         assert _is_verifier_backend_registry_label_v1(backend)
         assert _require_verifier_backend_registry_label_v1(backend, "backend") == backend
@@ -1946,6 +1948,9 @@ def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() 
     unsupported = (
         "",
         "halo2/pasta/ivm-execution-v1",
+        "halo2/pasta/kaigi-authorization-v1",
+        "halo2/pasta/kaigi-usage-v1",
+        "pipa-r/ipa/pasta/kaigi-usage-v1",
         "halo2/pasta/kaigi-roster-v1",
         "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
         "unknown/privacy/backend",
@@ -2994,6 +2999,9 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
     for backend in (
+        "halo2/pasta/kaigi-authorization-v1",
+        "halo2/pasta/kaigi-usage-v1",
+        "pipa-r/ipa/pasta/kaigi-usage-v1",
         "halo2/pasta/kaigi-roster-v1",
         "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
         "halo2/unknown-native-v1",

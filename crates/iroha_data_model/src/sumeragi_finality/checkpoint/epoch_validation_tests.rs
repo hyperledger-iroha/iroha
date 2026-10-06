@@ -572,3 +572,416 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
     assert_eq!(validation_counts::calls() - before, 0);
     assert_eq!(fixture.genesis.encode_wire().unwrap(), original_wire);
 }
+
+#[test]
+fn operation_epoch_workspace_reuses_equal_contexts_across_distinct_canonical_imports() {
+    let fixture = Fixture::new();
+    let mut prefix = fixture.verifier();
+    prefix.verify(&fixture.first).unwrap();
+    let first = prefix.export_checkpoint(&fixture.first).unwrap();
+    prefix.verify(&fixture.second).unwrap();
+    let second = prefix.export_checkpoint(&fixture.second).unwrap();
+    let first_wire = first.encode_canonical().unwrap();
+    let second_wire = second.encode_canonical().unwrap();
+    assert_ne!(first_wire, second_wire);
+    assert_eq!(
+        first.decisions[0].schedule.current,
+        second.decisions[0].schedule.current
+    );
+    let expected_context = first.decisions[0].schedule.current.context_id().unwrap();
+    let callbacks = Cell::new(0_u32);
+    {
+        let mut validation = EpochValidationScope::new();
+        for (index, (bytes, expected)) in [
+            (&first_wire, &first),
+            (&second_wire, &second),
+            (&first_wire, &first),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let before = validation_counts::calls();
+            let decoded = SumeragiFinalityCheckpoint::decode_canonical_with_validation(
+                bytes,
+                Some(&mut validation),
+            )
+            .unwrap();
+            assert_eq!(&decoded, expected);
+            let (imported, tip) =
+                SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+                    decoded,
+                    &fixture.network,
+                    CHAIN,
+                    Some(&mut validation),
+                    |source, verifier, tip| {
+                        callbacks.set(callbacks.get().checked_add(1).unwrap());
+                        assert_eq!(&source, expected);
+                        (verifier, tip)
+                    },
+                )
+                .unwrap();
+            assert_eq!(validation_counts::calls() - before, usize::from(index == 0));
+            assert_eq!(tip.block().encode_wire().unwrap(), expected.tip.block_wire);
+            assert_eq!(tip.context_id().as_ref(), &expected_context);
+            assert_eq!(
+                imported.export_checkpoint(expected.tip()).unwrap(),
+                *expected
+            );
+        }
+        // Exporting expected values validates independently. The counter above ends before
+        // export; the further decode/import below likewise counts only its own native work.
+        let before = validation_counts::calls();
+        let decoded = SumeragiFinalityCheckpoint::decode_canonical_with_validation(
+            &second_wire,
+            Some(&mut validation),
+        )
+        .unwrap();
+        SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+            decoded,
+            &fixture.network,
+            CHAIN,
+            Some(&mut validation),
+            |_, _, tip| {
+                callbacks.set(callbacks.get().checked_add(1).unwrap());
+                assert_eq!(tip.block().encode_wire().unwrap(), second.tip.block_wire);
+            },
+        )
+        .unwrap();
+        assert_eq!(validation_counts::calls() - before, 0);
+    }
+    assert_eq!(callbacks.get(), 4);
+    // A later owner has no access to the dropped operation's entries.
+    let mut next = EpochValidationScope::new();
+    let before = validation_counts::calls();
+    let decoded =
+        SumeragiFinalityCheckpoint::decode_canonical_with_validation(&second_wire, Some(&mut next))
+            .unwrap();
+    SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        decoded,
+        &fixture.network,
+        CHAIN,
+        Some(&mut next),
+        |_, _, _| (),
+    )
+    .unwrap();
+    assert_eq!(validation_counts::calls() - before, 1);
+    assert_eq!(first.encode_canonical().unwrap(), first_wire);
+    assert_eq!(second.encode_canonical().unwrap(), second_wire);
+}
+
+#[test]
+fn operation_epoch_workspace_never_accepts_context_substitution_or_fresh_quorum_corruption() {
+    let fixture = Fixture::new();
+    let (verifier, checkpoint) = selected(&fixture);
+    let bytes = checkpoint.encode_canonical().unwrap();
+    let mut validation = EpochValidationScope::new();
+    let decoded =
+        SumeragiFinalityCheckpoint::decode_canonical_with_validation(&bytes, Some(&mut validation))
+            .unwrap();
+    SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        decoded,
+        &fixture.network,
+        CHAIN,
+        Some(&mut validation),
+        |_, _, _| (),
+    )
+    .unwrap();
+    // The epoch identity fields are untouched. A different original PoP must miss full-value
+    // equality and enter the real validator, rather than reuse a digest or epoch number.
+    let mut changed_context = checkpoint.clone();
+    changed_context.decisions[0].schedule.current.committee[0].proof_of_possession[0] ^= 1;
+    let expected = changed_context.validate_bounds().unwrap_err();
+    let before = validation_counts::calls();
+    assert_eq!(
+        changed_context
+            .validate_bounds_with_validation(Some(&mut validation))
+            .unwrap_err(),
+        expected
+    );
+    assert_eq!(validation_counts::calls() - before, 1);
+    assert_ne!(
+        changed_context.decisions[0].schedule.current,
+        checkpoint.decisions[0].schedule.current
+    );
+
+    let mut wrong_roster = checkpoint.clone();
+    wrong_roster.tip.committee[0].proof_of_possession[0] ^= 1;
+    let mut wrong_quorum = checkpoint.clone();
+    let mut block = decode_framed_signed_block(&wrong_quorum.tip.block_wire).unwrap();
+    let certificate = block.commit_certificate().unwrap();
+    let header = certificate.consensus_header().to_vec();
+    let result = certificate.result_preimage().to_vec();
+    let availability = certificate.availability().to_vec();
+    let mut quorum: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+    quorum.agg_sig.0[0] ^= 1;
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        header,
+        norito::encode_canonical(&quorum).unwrap(),
+        result,
+        availability,
+    )));
+    wrong_quorum.tip.block_wire = block.encode_wire().unwrap();
+    assert_ne!(wrong_quorum.tip.block_wire, checkpoint.tip.block_wire);
+    assert_eq!(wrong_quorum.decisions, checkpoint.decisions);
+    let callbacks = Cell::new(0_u32);
+    for changed in [&wrong_roster, &wrong_quorum] {
+        let expected = verifier
+            .verify_retained_decision(changed.tip())
+            .unwrap_err();
+        let before = validation_counts::calls();
+        let error = SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+            changed,
+            &fixture.network,
+            CHAIN,
+            Some(&mut validation),
+            |_, _, _| callbacks.set(callbacks.get() + 1),
+        )
+        .unwrap_err();
+        let FinalityReadError::Invalid(actual) = error else {
+            panic!("{error:?}")
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(validation_counts::calls() - before, 0);
+        assert_eq!(callbacks.get(), 0);
+    }
+    let before = validation_counts::calls();
+    let (_, tip) = SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        &checkpoint,
+        &fixture.network,
+        CHAIN,
+        Some(&mut validation),
+        |_, verifier, tip| {
+            callbacks.set(callbacks.get() + 1);
+            (verifier, tip)
+        },
+    )
+    .unwrap();
+    assert_eq!(validation_counts::calls() - before, 0);
+    assert_eq!(callbacks.get(), 1);
+    assert_eq!(
+        tip.block().encode_wire().unwrap(),
+        checkpoint.tip.block_wire
+    );
+    assert_eq!(checkpoint.encode_canonical().unwrap(), bytes);
+}
+
+#[test]
+fn warmed_operation_epoch_workspace_preserves_late_positive_outer_charges_and_typed_refusal() {
+    let fixture = Fixture::new();
+    let (_, checkpoint) = selected(&fixture);
+    let bytes = checkpoint.encode_canonical().unwrap();
+    let mut validation = EpochValidationScope::new();
+    let decoded =
+        SumeragiFinalityCheckpoint::decode_canonical_with_validation(&bytes, Some(&mut validation))
+            .unwrap();
+    SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        decoded,
+        &fixture.network,
+        CHAIN,
+        Some(&mut validation),
+        |_, _, _| (),
+    )
+    .unwrap();
+    // Install this finite owner AFTER warming. Include identical canonical decode and import
+    // in each measurement; encoding/export stays outside both measured regions.
+    let baseline = DecodeBudgetContext::new(caller_limits(TEST_ALLOCATION_CEILING));
+    let (expected, expected_tip) = baseline
+        .with(|| {
+            let decoded = SumeragiFinalityCheckpoint::decode_canonical(&bytes).unwrap();
+            SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+                decoded,
+                &fixture.network,
+                CHAIN,
+                |_, verifier, tip| (verifier, tip),
+            )
+        })
+        .unwrap();
+    let charge = baseline.consumed_allocated_bytes();
+    assert!(charge > 0 && charge < TEST_ALLOCATION_CEILING as u64);
+    let strict = DecodeBudgetContext::new(caller_limits(usize::try_from(charge).unwrap()));
+    let callbacks = Cell::new(0_u32);
+    let (imported, tip) = strict
+        .with(|| {
+            let decoded = SumeragiFinalityCheckpoint::decode_canonical_with_validation(
+                &bytes,
+                Some(&mut validation),
+            )
+            .unwrap();
+            SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+                decoded,
+                &fixture.network,
+                CHAIN,
+                Some(&mut validation),
+                |_, verifier, tip| {
+                    callbacks.set(callbacks.get() + 1);
+                    (verifier, tip)
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(strict.consumed_allocated_bytes(), charge);
+    assert_eq!(callbacks.get(), 1);
+    assert_eq!(tip.commitment(), expected_tip.commitment());
+    assert_eq!(
+        tip.block().encode_wire().unwrap(),
+        checkpoint.tip.block_wire
+    );
+    assert_eq!(
+        imported.export_checkpoint(checkpoint.tip()).unwrap(),
+        checkpoint
+    );
+    assert_eq!(
+        expected.export_checkpoint(checkpoint.tip()).unwrap(),
+        checkpoint
+    );
+
+    // Measure the original bounds prefix then force the genuine signed-genesis allocation
+    // refusal at a positive ceiling. Optional insertion failures are not a refusal oracle.
+    let prefix = DecodeBudgetContext::new(caller_limits(TEST_ALLOCATION_CEILING));
+    prefix.with(|| checkpoint.validate_bounds()).unwrap();
+    let cap = usize::try_from(prefix.consumed_allocated_bytes())
+        .unwrap()
+        .checked_add(1)
+        .unwrap();
+    assert!(cap > 1 && cap < TEST_ALLOCATION_CEILING);
+    let original_budget = DecodeBudgetContext::new(caller_limits(cap));
+    let original_error = original_budget
+        .with(|| {
+            SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+                &checkpoint,
+                &fixture.network,
+                CHAIN,
+                |_, _, _| (),
+            )
+        })
+        .unwrap_err();
+    let actual_budget = DecodeBudgetContext::new(caller_limits(cap));
+    let actual_error = actual_budget
+        .with(|| {
+            SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+                &checkpoint,
+                &fixture.network,
+                CHAIN,
+                Some(&mut validation),
+                |_, _, _| callbacks.set(callbacks.get() + 1),
+            )
+        })
+        .unwrap_err();
+    let (
+        FinalityReadError::DecodeResource(original_error),
+        FinalityReadError::DecodeResource(actual_error),
+    ) = (original_error, actual_error)
+    else {
+        panic!("original signed-genesis resource provenance required")
+    };
+    assert_eq!(
+        original_error.kind(),
+        DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert_eq!(actual_error.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+    assert_eq!(
+        actual_error.into_error().decode_resource_error(),
+        original_error.into_error().decode_resource_error()
+    );
+    assert_eq!(
+        actual_budget.consumed_allocated_bytes(),
+        original_budget.consumed_allocated_bytes()
+    );
+    assert!(actual_budget.consumed_allocated_bytes() > 0);
+    assert_eq!(callbacks.get(), 1);
+    let before = validation_counts::calls();
+    let decoded =
+        SumeragiFinalityCheckpoint::decode_canonical_with_validation(&bytes, Some(&mut validation))
+            .unwrap();
+    SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        decoded,
+        &fixture.network,
+        CHAIN,
+        Some(&mut validation),
+        |_, _, tip| {
+            assert_eq!(
+                tip.block().encode_wire().unwrap(),
+                checkpoint.tip.block_wire
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(validation_counts::calls() - before, 0);
+    assert_eq!(checkpoint.encode_canonical().unwrap(), bytes);
+}
+
+#[test]
+fn warmed_operation_epoch_workspace_keeps_signed_genesis_refusal_and_original_retry() {
+    use crate::block::{BlockSignature, BlockSignatures};
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+
+    let fixture = Fixture::new();
+    let (_, checkpoint) = selected(&fixture);
+    let bytes = checkpoint.encode_canonical().unwrap();
+    let mut validation = EpochValidationScope::new();
+    let decoded =
+        SumeragiFinalityCheckpoint::decode_canonical_with_validation(&bytes, Some(&mut validation))
+            .unwrap();
+    SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        decoded,
+        &fixture.network,
+        CHAIN,
+        Some(&mut validation),
+        |_, _, _| (),
+    )
+    .unwrap();
+    let mut changed = fixture.genesis.clone();
+    let wrong = KeyPair::from_seed(vec![95; 32], Algorithm::Ed25519);
+    let signature = SignatureOf::try_from_hash(wrong.private_key(), changed.hash()).unwrap();
+    changed
+        .replace_signatures(
+            BlockSignatures::try_from_iter([BlockSignature::new(0, signature)]).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(changed.hash(), fixture.genesis.hash());
+    assert_eq!(
+        genesis_registrations(&changed).unwrap(),
+        genesis_registrations(&fixture.genesis).unwrap()
+    );
+    let mut substituted = checkpoint.clone();
+    substituted.genesis_wire = changed.encode_wire().unwrap();
+    assert_eq!(substituted.decisions, checkpoint.decisions);
+    let expected =
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&substituted, &fixture.network, CHAIN)
+            .unwrap_err();
+    assert!(matches!(
+        &expected,
+        FinalityReadError::Genesis(GenesisReadError::Invalid(_))
+    ));
+    let calls = Cell::new(0_u32);
+    let before = validation_counts::calls();
+    let actual = SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        &substituted,
+        &fixture.network,
+        CHAIN,
+        Some(&mut validation),
+        |_, _, _| calls.set(calls.get() + 1),
+    )
+    .unwrap_err();
+    assert_eq!(actual.to_string(), expected.to_string());
+    assert_eq!(validation_counts::calls() - before, 0);
+    assert_eq!(calls.get(), 0);
+    let before = validation_counts::calls();
+    SumeragiFinalityVerifier::from_trusted_checkpoint_with_validation_consumer(
+        &checkpoint,
+        &fixture.network,
+        CHAIN,
+        Some(&mut validation),
+        |_, _, tip| {
+            calls.set(calls.get() + 1);
+            assert_eq!(
+                tip.block().encode_wire().unwrap(),
+                checkpoint.tip.block_wire
+            );
+        },
+    )
+    .unwrap();
+    assert_eq!(validation_counts::calls() - before, 0);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(checkpoint.encode_canonical().unwrap(), bytes);
+}

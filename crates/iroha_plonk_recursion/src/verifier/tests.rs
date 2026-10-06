@@ -64,6 +64,9 @@ struct Program<C: PastaCurve> {
     instance: C::ScalarExt,
     hard: bool,
     known: bool,
+    catalog_index: Option<usize>,
+    catalog_keys: Vec<VerifyingKey<C>>,
+    catalog_cells: std::rc::Rc<std::cell::RefCell<Vec<iroha_plonk::frontend::Cell>>>,
 }
 #[derive(Clone, Debug)]
 struct Config<C: PastaCurve> {
@@ -156,7 +159,11 @@ impl<C: PastaCurve> Circuit<C::Base> for Program<C> {
         let outputs = layouter.assign_region(
             || "PIPA-R circuit verifier",
             |mut region| {
-                let key = chip.constant_key(&mut region, &self.plan, &self.key)?;
+                let key = if self.catalog_index.is_none() {
+                    Some(chip.constant_key(&mut region, &self.plan, &self.key)?)
+                } else {
+                    None
+                };
                 let input: Vec<_> = self.proof.iter().map(|byte| self.witness(*byte)).collect();
                 let segments = vec![16; input.len() / 16];
                 let run = bytes.run(
@@ -184,19 +191,53 @@ impl<C: PastaCurve> Circuit<C::Base> for Program<C> {
                 let length = chip
                     .uint()
                     .assign::<32>(&mut region, self.witness(u128::from(self.actual_length)))?;
-                let output = chip.verify(
-                    &mut region,
-                    &self.plan,
-                    &key,
-                    &[vec![instance]],
-                    &proof,
-                    &length,
-                    if self.hard {
-                        VerificationMode::Hard
-                    } else {
-                        VerificationMode::Soft
-                    },
-                )?;
+                let mode = if self.hard {
+                    VerificationMode::Hard
+                } else {
+                    VerificationMode::Soft
+                };
+                let output = if let Some(index) = self.catalog_index {
+                    let catalog = PinnedKeyCatalog::new(
+                        &self.plan,
+                        if self.catalog_keys.is_empty() {
+                            vec![self.key.clone()]
+                        } else {
+                            self.catalog_keys.clone()
+                        },
+                    )?;
+                    let key = chip.select_catalog_key(
+                        &mut region,
+                        &self.plan,
+                        &catalog,
+                        self.witness(index),
+                    )?;
+                    *self.catalog_cells.borrow_mut() = key
+                        .key
+                        .fixed
+                        .iter()
+                        .chain(&key.key.permutation)
+                        .flat_map(|point| [point.x().cell(), point.y().cell()])
+                        .collect();
+                    chip.verify_pinned(
+                        &mut region,
+                        &self.plan,
+                        &key,
+                        &[vec![instance]],
+                        &proof,
+                        &length,
+                        mode,
+                    )?
+                } else {
+                    chip.verify(
+                        &mut region,
+                        &self.plan,
+                        key.as_ref().ok_or(Error::Synthesis)?,
+                        &[vec![instance]],
+                        &proof,
+                        &length,
+                        mode,
+                    )?
+                };
                 let mut outputs = vec![
                     output.valid.cell(),
                     output.key_digest.cell(),
@@ -217,15 +258,18 @@ impl<C: PastaCurve> Circuit<C::Base> for Program<C> {
 }
 
 fn example<C: PastaCurve>() -> Program<C> {
+    example_for::<C>(&Square)
+}
+fn example_for<C: PastaCurve>(circuit: &impl Circuit<C::ScalarExt>) -> Program<C> {
     let params = PinnedParams::<C>::derive(6).unwrap();
     let key = keygen_pk_v2(
         &params,
-        &Square,
+        circuit,
         &KeygenConfigV2::pipa_r(vec![InstanceType::Bits(4)]),
     )
     .unwrap();
     let instances = [vec![C::ScalarExt::from(9)]];
-    let witness = Witness::from_circuit(&key, &Square, &instances).unwrap();
+    let witness = Witness::from_circuit(&key, circuit, &instances).unwrap();
     let proof = create_proof_owned_with_claim(
         &params,
         &key,
@@ -244,6 +288,9 @@ fn example<C: PastaCurve>() -> Program<C> {
         instance: C::ScalarExt::from(9),
         hard: false,
         known: true,
+        catalog_index: None,
+        catalog_keys: vec![],
+        catalog_cells: std::rc::Rc::default(),
     }
 }
 fn check<C: PastaCurve>(program: &Program<C>) {
@@ -368,7 +415,17 @@ impl<C: PastaCurve> Circuit<C::Base> for ArithmeticProgram<C> {
                     let original =
                         ScalarCells::from_limbs(&mut chip.uint(), &mut region, &lo, &hi)?;
                     let imported = chip.import(&mut region, &original)?;
+                    let repeated = chip.import(&mut region, &original)?;
+                    assert_eq!(
+                        imported.limbs().each_ref().map(Word::cell),
+                        repeated.limbs().each_ref().map(Word::cell)
+                    );
                     let result = chip.export(&mut region, &imported)?;
+                    let repeated = chip.export(&mut region, &imported)?;
+                    assert_eq!(
+                        [result.lo().cell(), result.hi().cell()],
+                        [repeated.lo().cell(), repeated.hi().cell()]
+                    );
                     let (inverse, nonzero) = chip.arithmetic.inverse(
                         &mut UintChip::new(&mut chip.glue, &mut chip.range),
                         &mut region,
@@ -477,9 +534,15 @@ impl<C: PastaCurve> Circuit<C::Base> for AliasBoundary<C> {
                     Boundary::WrongModulus => {
                         let native = chip.glue.constant(&mut region, C::Base::ONE)?;
                         let certificate = iroha_plonk_gadgets::ff::CanonicalS6::from_native_word(
-                            &mut chip.uint(), &mut region, &native,
+                            &mut chip.uint(),
+                            &mut region,
+                            &native,
                         )?;
-                        let _ = ScalarCells::<C>::from_canonical(&mut chip.uint(), &mut region, certificate)?;
+                        let _ = ScalarCells::<C>::from_canonical(
+                            &mut chip.uint(),
+                            &mut region,
+                            certificate,
+                        )?;
                     }
                     Boundary::Equality => {
                         let zero = chip.constant(&mut region, C::ScalarExt::ZERO)?;
@@ -556,11 +619,15 @@ fn lazy_foreign_arithmetic_canonicalizes_every_semantic_boundary() {
 #[test]
 fn scalar_certificate_rejects_a_foreign_modulus_without_rebinding() {
     fn reject<C: PastaCurve>() {
-        let circuit = AliasBoundary::<C> { integer: iroha_plonk_gadgets::ff::Nat::ONE,
-            boundary: Boundary::WrongModulus, marker: core::marker::PhantomData };
+        let circuit = AliasBoundary::<C> {
+            integer: iroha_plonk_gadgets::ff::Nat::ONE,
+            boundary: Boundary::WrongModulus,
+            marker: core::marker::PhantomData,
+        };
         assert!(check_circuit(&circuit, 16, &[], CheckMode::Strict).is_err());
     }
-    reject::<Ep>(); reject::<Eq>();
+    reject::<Ep>();
+    reject::<Eq>();
 }
 
 #[derive(Clone)]
@@ -588,8 +655,36 @@ impl<C: PastaCurve> Circuit<C::Base> for LazyArithmeticChain<C> {
         let outputs = layouter.assign_region(
             || "tracked bounds and semantic normalization",
             |mut region| {
-                let mut value = chip.constant(&mut region, -C::ScalarExt::ONE)?;
+                let mut value = chip.arithmetic.ff.witness_canonical(
+                    &mut region,
+                    Arithmetic::<C>::modulus(),
+                    Value::known((-C::ScalarExt::ONE).to_canonical_limbs()),
+                )?;
                 let one = chip.constant(&mut region, C::ScalarExt::ONE)?;
+                let before = chip.arithmetic.ff.next_row();
+                let identity = chip.mul(&mut region, &value, &one)?;
+                assert_eq!(
+                    value.limbs().each_ref().map(Word::cell),
+                    identity.limbs().each_ref().map(Word::cell)
+                );
+                assert_eq!(before, chip.arithmetic.ff.next_row());
+                // A witness whose value happens to be one has no constant
+                // metadata and must still take the constrained product path.
+                let witness_one = chip.arithmetic.ff.witness_canonical(
+                    &mut region,
+                    Arithmetic::<C>::modulus(),
+                    Value::known(C::ScalarExt::ONE.to_canonical_limbs()),
+                )?;
+                let before = chip.arithmetic.ff.next_row();
+                let product = chip.mul(&mut region, &witness_one, &witness_one)?;
+                assert!(chip.arithmetic.ff.next_row() > before);
+                let after = chip.arithmetic.ff.next_row();
+                let repeated = chip.mul(&mut region, &witness_one, &witness_one)?;
+                assert_eq!(
+                    product.limbs().each_ref().map(Word::cell),
+                    repeated.limbs().each_ref().map(Word::cell)
+                );
+                assert_eq!(after, chip.arithmetic.ff.next_row());
                 // Repeated doubling reaches the envelope and forces the existing
                 // structural reduction path; subtraction/negation introduce
                 // noncanonical multiples of m before multiplication and export.
@@ -671,4 +766,509 @@ fn lazy_chain<C: PastaCurve>() {
 fn lazy_arithmetic_tracks_repeated_growth_and_preserves_modular_semantics() {
     lazy_chain::<Ep>();
     lazy_chain::<Eq>();
+}
+
+/// The identical interpreter on shared compact ports, using exact internal
+/// messages and direct public gates. This is a predicate test, not Omega.
+#[derive(Clone)]
+struct CompactProgram<C: PastaCurve>(Program<C>);
+impl<C: PastaCurve> CompactProgram<C> {
+    fn public(&self) -> [Vec<C::Base>; 3] {
+        let expected = self.0.expected();
+        let mut last = vec![expected[1]];
+        last.extend_from_slice(&expected[4..]);
+        last.resize(16, C::Base::ZERO);
+        [vec![expected[0]], expected[2..4].to_vec(), last]
+    }
+}
+impl<C: PastaCurve> Circuit<C::Base> for CompactProgram<C> {
+    type Config = (VerifierConfig<C>, CompactPublicConfig);
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+    fn without_witnesses(&self) -> Self {
+        Self(self.0.without_witnesses())
+    }
+    fn configure(meta: &mut ConstraintSystem<C::Base>) -> Self::Config {
+        VerifierConfig::configure_compact(meta, CompactSpans::new(5_000, 40_000, 65_530).unwrap())
+    }
+    fn synthesize(
+        &self,
+        (config, public): Self::Config,
+        mut layouter: impl Layouter<C::Base>,
+    ) -> Result<(), Error> {
+        let mut chip = VerifierChip::new(config);
+        chip.load_tables(&mut layouter)?;
+        layouter.assign_region(
+            || "complete compact interpreter",
+            |mut region| {
+                let source = &self.0;
+                let key = chip.constant_key(&mut region, &source.plan, &source.key)?;
+                let proof = source
+                    .proof
+                    .chunks_exact(32)
+                    .map(|bytes| {
+                        LeElement::assign(
+                            &mut chip.uint(),
+                            &mut region,
+                            source.witness(bytes.try_into().unwrap()),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let raw = source.instance.to_canonical_limbs();
+                let lo = chip.uint().assign::<128>(
+                    &mut region,
+                    source.witness(u128::from(raw[0]) | (u128::from(raw[1]) << 64)),
+                )?;
+                let hi = chip.uint().assign::<127>(
+                    &mut region,
+                    source.witness(u128::from(raw[2]) | (u128::from(raw[3]) << 64)),
+                )?;
+                let instance = ScalarCells::from_limbs(&mut chip.uint(), &mut region, &lo, &hi)?;
+                let length = chip.uint().assign::<32>(
+                    &mut region,
+                    source.witness(u128::from(source.actual_length)),
+                )?;
+                let result = chip.verify(
+                    &mut region,
+                    &source.plan,
+                    &key,
+                    &[vec![instance]],
+                    &proof,
+                    &length,
+                    if source.hard {
+                        VerificationMode::Hard
+                    } else {
+                        VerificationMode::Soft
+                    },
+                )?;
+                let mut last = vec![result.key_digest];
+                for scalar in result.claim.challenges() {
+                    last.extend([scalar.lo().word().clone(), scalar.hi().word().clone()]);
+                }
+                let zero = chip.uint().glue().constant(&mut region, C::Base::ZERO)?;
+                last.resize(16, zero);
+                public.assign(
+                    &mut region,
+                    [
+                        std::slice::from_ref(result.valid.word()),
+                        &[result.claim.g().x().clone(), result.claim.g().y().clone()],
+                        &last,
+                    ],
+                )
+            },
+        )
+    }
+}
+fn compact_interpreter_cases<C: PastaCurve>() {
+    let original = example::<C>();
+    for mutation in 0..4 {
+        let mut source = original.clone();
+        source.hard = false;
+        match mutation {
+            1 => source.actual_length -= 1,
+            2 => source.proof[..32].fill(0xff),
+            3 => {
+                let last = source.proof.len() - 1;
+                source.proof[last] ^= 0x80;
+            }
+            _ => {}
+        }
+        let circuit = CompactProgram(source.clone());
+        let public = circuit.public();
+        let report = check_circuit(&circuit, 16, &public, CheckMode::Strict).unwrap();
+        assert!(
+            report.is_satisfied(),
+            "mutation{mutation}: {:?}",
+            report.failures().first()
+        );
+        let mut wrong = public.clone();
+        wrong[0][0] = C::Base::ONE - wrong[0][0];
+        assert!(
+            !check_circuit(&circuit, 16, &wrong, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        if public[0][0] == C::Base::ZERO {
+            source.hard = true;
+            assert!(
+                !check_circuit(&CompactProgram(source), 16, &public, CheckMode::Strict)
+                    .unwrap()
+                    .is_satisfied()
+            );
+        }
+        if mutation == 0 {
+            let known = iroha_plonk::frontend::synthesize(&circuit, 16, Some(&public)).unwrap();
+            let unknown =
+                iroha_plonk::frontend::synthesize(&circuit.without_witnesses(), 16, None).unwrap();
+            assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+            assert_eq!(
+                known.tables.advice_assigned(),
+                unknown.tables.advice_assigned()
+            );
+        }
+    }
+}
+#[test]
+fn compact_complete_interpreter_native_differential_both_curves() {
+    compact_interpreter_cases::<Ep>();
+    compact_interpreter_cases::<Eq>();
+}
+
+#[derive(Clone)]
+struct ParallelProgram<C: PastaCurve> {
+    source: Program<C>,
+    buses: usize,
+}
+impl<C: PastaCurve> Circuit<C::Base> for ParallelProgram<C> {
+    type Config = Config<C>;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = (usize, usize);
+    fn params(&self) -> Self::Params {
+        (self.source.params(), self.buses)
+    }
+    fn without_witnesses(&self) -> Self {
+        Self {
+            source: self.source.without_witnesses(),
+            buses: self.buses,
+        }
+    }
+    fn configure(meta: &mut ConstraintSystem<C::Base>) -> Self::Config {
+        Self::configure_with_params(meta, (16, 2))
+    }
+    fn configure_with_params(
+        meta: &mut ConstraintSystem<C::Base>,
+        (outputs, buses): Self::Params,
+    ) -> Self::Config {
+        let verifier = VerifierConfig::configure_serialized_foreign(meta, buses).unwrap();
+        let primary = meta.advice_column();
+        let secondary = meta.advice_column();
+        let bytes = BytesConfig::configure(meta, primary, secondary);
+        let output = meta.instance_column(outputs);
+        meta.enable_equality(output);
+        Config {
+            verifier,
+            bytes,
+            output,
+        }
+    }
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        layouter: impl Layouter<C::Base>,
+    ) -> Result<(), Error> {
+        self.source.synthesize(config, layouter)
+    }
+}
+fn parallel_foreign_cases<C: PastaCurve>() {
+    for count in [0, 9] {
+        assert!(
+            VerifierConfig::<C>::configure_serialized_foreign(
+                &mut ConstraintSystem::default(),
+                count
+            )
+            .is_err()
+        );
+    }
+    let original = example::<C>();
+    for buses in [2, 3] {
+        for mutation in 0..3 {
+            let mut source = original.clone();
+            source.hard = false;
+            match mutation {
+                1 => source.actual_length -= 1,
+                2 => source.proof[..32].fill(0xff),
+                _ => {}
+            }
+            let public = [source.expected()];
+            let circuit = ParallelProgram {
+                source: source.clone(),
+                buses,
+            };
+            let report = check_circuit(&circuit, 16, &public, CheckMode::Strict).unwrap();
+            assert!(
+                report.is_satisfied(),
+                "buses{buses}/mutation{mutation}: {:?}",
+                report.failures().first()
+            );
+            let mut wrong = public.clone();
+            wrong[0][0] = C::Base::ONE - wrong[0][0];
+            assert!(
+                !check_circuit(&circuit, 16, &wrong, CheckMode::Strict)
+                    .unwrap()
+                    .is_satisfied()
+            );
+            if mutation == 0 {
+                let known = iroha_plonk::frontend::synthesize(&circuit, 16, Some(&public)).unwrap();
+                let unknown =
+                    iroha_plonk::frontend::synthesize(&circuit.without_witnesses(), 16, None)
+                        .unwrap();
+                assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+                assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+                assert_eq!(
+                    known.tables.advice_assigned(),
+                    unknown.tables.advice_assigned()
+                );
+            } else {
+                source.hard = true;
+                assert!(
+                    !check_circuit(
+                        &ParallelProgram { source, buses },
+                        16,
+                        &public,
+                        CheckMode::Strict
+                    )
+                    .unwrap()
+                    .is_satisfied()
+                );
+            }
+        }
+    }
+}
+#[test]
+fn parallel_foreign_interpreter_native_differential_both_curves() {
+    parallel_foreign_cases::<Ep>();
+    parallel_foreign_cases::<Eq>();
+}
+
+#[test]
+fn parallel_foreign_source_descriptor_inventory() {
+    use iroha_plonk::cs::{
+        CircuitDescriptorV1, CircuitDescriptorV2, CurveV1, DescriptorConfig, TranscriptV1,
+    };
+    for buses in [0, 2, 3, 4] {
+        let mut meta = ConstraintSystem::<iroha_pasta::Fp>::default();
+        if buses == 0 {
+            let _ = VerifierConfig::<Ep>::configure(&mut meta);
+        } else {
+            let _ = VerifierConfig::<Ep>::configure_serialized_foreign(&mut meta, buses).unwrap();
+        }
+        let a = meta.advice_column();
+        let b = meta.advice_column();
+        let _ = BytesConfig::configure(&mut meta, a, b);
+        let public = meta.instance_column(69);
+        meta.enable_equality(public);
+        let selectors = vec![vec![false; 1 << 16]; meta.num_selectors()];
+        let finalized = meta.finalize(&selectors, false).unwrap();
+        let layout = CircuitDescriptorV1::from_constraint_system(
+            &finalized,
+            DescriptorConfig {
+                curve: CurveV1::Vesta,
+                k: 16,
+                transcript: TranscriptV1::Blake2bChallenge255,
+                instance_mode: InstanceModeV1::Direct,
+                proof_suffix: ProofSuffixV1::FoldedGenerator,
+            },
+        )
+        .unwrap();
+        let descriptor = CircuitDescriptorV2::from_layout(
+            layout,
+            TranscriptV2::KagemushaPoseidonRp57Base,
+            vec![InstanceType::Bounded],
+        )
+        .unwrap();
+        let protocol = Protocol::new(&descriptor).unwrap();
+        eprintln!(
+            "PARALLEL_FOREIGN_A_DESCRIPTOR buses={buses} shape={:?} estimated_proof_bytes={} actual_proof=false",
+            protocol.shape(),
+            protocol.proof_length()
+        );
+        assert_eq!(
+            protocol.shape().num_advice,
+            if buses == 0 { 31 } else { 20 + buses }
+        );
+        assert_eq!(
+            protocol.shape().lookups,
+            if buses == 0 { 12 } else { 1 + buses }
+        );
+    }
+}
+
+fn catalog_verifier_cases<C: PastaCurve>() {
+    let original = example::<C>();
+    assert!(PinnedKeyCatalog::new(&original.plan, vec![]).is_err());
+    assert!(PinnedKeyCatalog::new(&original.plan, vec![original.key.clone(); 2]).is_err());
+    let other_params = PinnedParams::<C>::derive(7).unwrap();
+    let other_key = keygen_pk_v2(
+        &other_params,
+        &Square,
+        &KeygenConfigV2::pipa_r(vec![InstanceType::Bits(4)]),
+    )
+    .unwrap();
+    assert!(PinnedKeyCatalog::new(&original.plan, vec![other_key.vk().clone()]).is_err());
+    for mutation in 0..4 {
+        let mut circuit = original.clone();
+        circuit.catalog_index = Some(0);
+        circuit.hard = false;
+        match mutation {
+            1 => circuit.actual_length -= 1,
+            2 => circuit.proof[..32].fill(0xff),
+            3 => {
+                let i = circuit.proof.len() - 1;
+                circuit.proof[i] ^= 0x80;
+            }
+            _ => {}
+        }
+        let public = vec![circuit.expected()];
+        assert!(
+            check_circuit(&circuit, 16, &public, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        let mut changed = public.clone();
+        changed[0][1] += C::Base::ONE;
+        assert!(
+            !check_circuit(&circuit, 16, &changed, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        if mutation == 0 {
+            let known = iroha_plonk::frontend::synthesize(&circuit, 16, Some(&public)).unwrap();
+            let unknown =
+                iroha_plonk::frontend::synthesize(&circuit.without_witnesses(), 16, None).unwrap();
+            assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(known.tables.selectors(), unknown.tables.selectors());
+            assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+            assert_eq!(
+                known.tables.advice_assigned(),
+                unknown.tables.advice_assigned()
+            );
+        }
+        circuit.catalog_index = Some(1);
+        assert!(
+            !check_circuit(&circuit, 16, &public, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+    }
+}
+#[test]
+fn pinned_catalog_verifier_matches_native_both_curves() {
+    catalog_verifier_cases::<Ep>();
+    catalog_verifier_cases::<Eq>();
+}
+
+#[derive(Clone)]
+struct TaggedSquare(u64);
+impl<F: PastaField> Circuit<F> for TaggedSquare {
+    type Config = <Square as Circuit<F>>::Config;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+    fn without_witnesses(&self) -> Self {
+        self.clone()
+    }
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+        Square::configure(meta)
+    }
+    fn synthesize(
+        &self,
+        (glue, range, instance): Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        let mut glue = GlueChip::new(glue);
+        let mut range = RunningSumChip::new(range);
+        range.load_table(&mut layouter)?;
+        let output = layouter.assign_region(
+            || "same descriptor, different fixed key",
+            |mut region| {
+                let _tag = glue.constant(&mut region, F::from(self.0))?;
+                let value = glue.witness(&mut region, Value::known(F::from(3)))?;
+                range.range_check(&mut region, &value, 3)?;
+                glue.mul(&mut region, &value, &value)
+            },
+        )?;
+        layouter.constrain_instance(output.cell(), instance, 0)
+    }
+}
+fn catalog_substitution_cases<C: PastaCurve>() {
+    let first = example_for::<C>(&TaggedSquare(1));
+    let second = example_for::<C>(&TaggedSquare(2));
+    assert_eq!(first.plan.binding.digest(), second.plan.binding.digest());
+    assert_ne!(first.key.to_bytes(), second.key.to_bytes());
+    let keys = vec![first.key.clone(), second.key.clone()];
+    for (index, source) in [first, second].into_iter().enumerate() {
+        let mut circuit = source;
+        circuit.catalog_keys = keys.clone();
+        circuit.catalog_index = Some(index);
+        circuit.hard = true;
+        let public = vec![circuit.expected()];
+        assert!(
+            check_circuit(&circuit, 16, &public, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        let cells = circuit.catalog_cells.borrow().clone();
+        let native_points = |key: &VerifyingKey<C>| {
+            key.fixed_commitments()
+                .iter()
+                .chain(key.permutation_commitments())
+                .flat_map(|point| {
+                    let (x, y) = point.coordinates().unwrap();
+                    [x, y]
+                })
+                .collect::<Vec<_>>()
+        };
+        let original = native_points(&keys[index]);
+        let foreign = native_points(&keys[1 - index]);
+        let mut coordinate_changes = Vec::new();
+        for (cell, (original, foreign)) in cells.iter().zip(original.iter().zip(&foreign)) {
+            if original != foreign {
+                coordinate_changes.push(iroha_plonk_gadgets::tamper::Tamper {
+                    column: cell.column.index(),
+                    row: cell.row_offset,
+                    delta: *foreign - original,
+                });
+                if coordinate_changes.len() == 2 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            coordinate_changes.len(),
+            2,
+            "distinct complete keys have differing coordinates"
+        );
+        for mutation in &coordinate_changes {
+            assert!(
+                !iroha_plonk_gadgets::tamper::check_tampered(
+                    &circuit,
+                    16,
+                    &public,
+                    Some(*mutation)
+                )
+                .unwrap()
+                .is_satisfied()
+            );
+        }
+        assert!(
+            !iroha_plonk_gadgets::tamper::check_tampers(&circuit, 16, &public, &coordinate_changes)
+                .unwrap()
+                .is_satisfied()
+        );
+        let mut replaced = circuit.clone();
+        replaced.catalog_index = Some(1 - index);
+        assert!(
+            !check_circuit(&replaced, 16, &public, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        let mut reordered = circuit.clone();
+        reordered.catalog_keys.reverse();
+        assert!(
+            !check_circuit(&reordered, 16, &public, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        reordered.catalog_index = Some(1 - index);
+        assert!(
+            check_circuit(&reordered, 16, &public, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+    }
+}
+#[test]
+fn pinned_catalog_rejects_cross_key_substitution_both_curves() {
+    catalog_substitution_cases::<Ep>();
+    catalog_substitution_cases::<Eq>();
 }

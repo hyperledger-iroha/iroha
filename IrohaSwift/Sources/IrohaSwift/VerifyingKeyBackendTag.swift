@@ -8,6 +8,7 @@ import Foundation
 public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
     case halo2IpaPasta = 0
     case stark = 1
+    case nativePipaRPasta = 2
 
     public var noritoDiscriminant: UInt32 { rawValue }
 
@@ -17,6 +18,8 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
             return "halo2-ipa-pasta"
         case .stark:
             return "stark"
+        case .nativePipaRPasta:
+            return "native-pipa-r-pasta"
         }
     }
 
@@ -29,6 +32,8 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
             self = .halo2IpaPasta
         case "stark":
             self = .stark
+        case "native-pipa-r-pasta":
+            self = .nativePipaRPasta
         default:
             return nil
         }
@@ -52,6 +57,17 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         return backend == "halo2/ipa"
             || starkFriProductionBackends.contains(backend)
             || productionNativeHalo2PastaBackends.contains(backend)
+            || productionNativePipaRPastaBackends.contains(backend)
+    }
+
+    /// Resolve an exact registry profile to its canonical wire engine.
+    public static func registryTag(_ label: String) -> Self? {
+        if label == "halo2/ipa" || productionNativeHalo2PastaBackends.contains(label) {
+            return .halo2IpaPasta
+        }
+        if starkFriProductionBackends.contains(label) { return .stark }
+        if productionNativePipaRPastaBackends.contains(label) { return .nativePipaRPasta }
+        return nil
     }
 
     /// Requires an exact production verifier label and returns it unchanged.
@@ -80,9 +96,13 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         "stark/fri/poseidon-x7-goldilocks-6x64-v1"
     ]
 
+    private static let productionNativePipaRPastaBackends: Set<String> = [
+        "pipa-r/pasta",
+        "pipa-r/pasta/kaigi-authorization-v1",
+        "pipa-r/pasta/kaigi-usage-v1"
+    ]
+
     private static let productionNativeHalo2PastaBackends: Set<String> = [
-        "halo2/pasta/kaigi-authorization-v1",
-        "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -205,7 +225,7 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
 }
 
 /// Classification of a human-facing verifier catalog label. This type is
-/// deliberately separate from the two-case Norito engine enum.
+/// deliberately separate from the Norito engine enum.
 public enum VerifierBackendCatalogTag: Sendable, Equatable {
     case production
     case unsupported
@@ -224,8 +244,9 @@ public enum VerifierBackendCatalogTag: Sendable, Equatable {
 
     private static let productionLabels: Set<String> = [
         "halo2/ipa",
-        "halo2/pasta/kaigi-authorization-v1",
-        "halo2/pasta/kaigi-usage-v1",
+        "pipa-r/pasta",
+        "pipa-r/pasta/kaigi-authorization-v1",
+        "pipa-r/pasta/kaigi-usage-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",

@@ -66,6 +66,8 @@ use std::{
 use thiserror::Error;
 mod app_routed_read_config;
 mod musubi_publication_installation;
+mod kagemusha_load_authorizer;
+pub use kagemusha_load_authorizer::KagemushaLoadAuthorizer;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
 mod sccp;
 pub use sccp::{
@@ -956,6 +958,8 @@ pub struct Root {
     #[config(nested)]
     musubi_publication: MusubiPublication,
     #[config(nested)]
+    kagemusha_load_authorizer: KagemushaLoadAuthorizer,
+    #[config(nested)]
     sorafs: Sorafs,
     #[config(nested)]
     pipeline: Pipeline,
@@ -1091,6 +1095,9 @@ pub enum ParseError {
     /// Private Musubi publication listener settings were invalid.
     #[error("Invalid Musubi publication configuration")]
     InvalidMusubiPublicationConfig,
+    /// Online finalized-load publisher custody or finite limits were invalid.
+    #[error("Invalid KAGEMUSHA load authorizer configuration")]
+    InvalidKagemushaLoadAuthorizerConfig,
     /// Snapshot configuration contained invalid resource budgets.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
@@ -1370,6 +1377,7 @@ impl Root {
                 .parse_with_file_source(files, &mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse(&mut emitter);
         let musubi_publication = self.musubi_publication.parse(&mut emitter);
+        let kagemusha_load_authorizer = self.kagemusha_load_authorizer.parse(files, &mut emitter);
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = actual::TelemetryProfile::from(self.telemetry_profile);
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
@@ -1524,6 +1532,8 @@ impl Root {
             torii,
             soracloud_runtime,
             musubi_publication,
+            kagemusha_load_authorizer: kagemusha_load_authorizer
+                .expect("load authorizer configuration validated by emitter"),
             kura,
             sumeragi,
             block_sync,

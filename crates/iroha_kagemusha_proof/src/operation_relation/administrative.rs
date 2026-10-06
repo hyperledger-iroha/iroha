@@ -7,7 +7,7 @@
 use ff::Field;
 use iroha_pasta::Fp;
 use iroha_plonk::frontend::{Error, Region};
-use iroha_plonk_gadgets::{GlueChip, SpongeChip, UintChip};
+use iroha_plonk_gadgets::{GlueChip, UintChip, WordHasher};
 use iroha_plonk_recursion::obligation::ledger::Variant;
 
 use super::{
@@ -91,7 +91,7 @@ pub fn bootstrap(
 /// nullifiers, lifecycle changes and unrelated changes are unsatisfiable.
 pub fn monetary(
     uint: &mut UintChip<'_, Fp>,
-    sponge: &mut SpongeChip<Fp>,
+    sponge: &mut impl WordHasher<Fp>,
     region: &mut Region<'_, Fp>,
     transition: &MapTransition<'_>,
 ) -> Result<(), Error> {

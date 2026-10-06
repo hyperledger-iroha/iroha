@@ -16,6 +16,10 @@ use std::{
 
 mod platform;
 pub use platform::{CallbackPlatform, PlatformCallbacks, PlatformReply};
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+mod android;
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+pub use android::AndroidPlatform;
 mod exports;
 pub use exports::*;
 #[cfg(test)]
@@ -66,7 +70,7 @@ pub struct Failure {
     pub platform_code: i32,
 }
 impl Failure {
-    fn code(status: i32) -> Self {
+    pub(crate) fn code(status: i32) -> Self {
         Self {
             status,
             reason: -1,
@@ -133,10 +137,10 @@ pub(crate) type Result<T> = std::result::Result<T, Failure>;
 pub(crate) struct Response {
     // 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss;
     // 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 canonical CreditStatus.
-    kind: i32,
-    sequence: u128,
-    detail: u32,
-    bytes: Vec<u8>,
+    pub(crate) kind: i32,
+    pub(crate) sequence: u128,
+    pub(crate) detail: u32,
+    pub(crate) bytes: Vec<u8>,
 }
 fn completion(value: Option<state::Completion>) -> Response {
     use advance::KagemushaWalletNotPerformedV1 as N;

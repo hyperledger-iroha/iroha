@@ -28,13 +28,15 @@
 //! A check takes `L + [t < b]` rows: 10 for 128 bits at `b = 15`, 16 at
 //! `b = 9` (M8 inventory).
 
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+
 use iroha_pasta::PastaField;
 use iroha_plonk::{
     cs::{Advice, Column, ConstraintSystem, Fixed, Rotation, Selector, TableColumn},
-    frontend::{Error, Layouter, Region, Value},
+    frontend::{Cell, Error, Layouter, Region, Value},
 };
 
-use crate::cells::{RowCursor, Word, assign_word, copy_word};
+use crate::cells::{RowCursor, SharedRows, Word, assign_word, copy_word};
 
 /// The widest value a range check accepts (`2^252 < p` for both fields).
 pub const MAX_RANGE_BITS: usize = 252;
@@ -129,10 +131,20 @@ pub struct RunningSumConfig {
     z: Column<Advice>,
     table: TableColumn,
     shift: Column<Fixed>,
-    q_step: Selector,
-    q_limb: Selector,
-    q_shift: Selector,
+    pattern: Pattern,
     limb_bits: LimbBits,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pattern {
+    Selectors {
+        step: Selector,
+        limb: Selector,
+        shift: Selector,
+    },
+    Fixed {
+        step: Column<Fixed>,
+    },
 }
 
 impl RunningSumConfig {
@@ -168,10 +180,102 @@ impl RunningSumConfig {
             z,
             table,
             shift,
-            q_step,
-            q_limb,
-            q_shift,
+            pattern: Pattern::Selectors {
+                step: q_step,
+                limb: q_limb,
+                shift: q_shift,
+            },
             limb_bits,
+        }
+    }
+
+    /// Configures a dedicated range bus with two fixed pattern columns.
+    /// A ternary fixed pattern is one on running-sum steps, two on top and
+    /// shifted-top rows, and zero elsewhere. Its two indicator polynomials
+    /// enable the same step/top expressions as the ordinary layout, including
+    /// a fully disabled input on idle rows. A nonzero shift factor enables
+    /// `pattern*factor*(z - factor*z_prev)=0`, retaining both top-limb
+    /// memberships. On idle rows the factor column may carry another
+    /// circuit-fixed pattern, provided that consumer is disabled on range rows.
+    /// This replaces three selectors and a shift column without dropping any
+    /// range premise. Lookup inputs have degree three (argument degree six).
+    pub fn configure_compact<F: PastaField>(
+        meta: &mut ConstraintSystem<F>,
+        z: Column<Advice>,
+        limb_bits: LimbBits,
+    ) -> Self {
+        let table = meta.lookup_table_column();
+        Self::configure_compact_on(meta, z, limb_bits, table)
+    }
+
+    /// Independent range buses with one shared table. Each bus keeps its own
+    /// fixed activation pattern; tuple membership is never used as independent
+    /// range membership. The empty list configures no table or buses.
+    pub fn configure_bank<F: PastaField>(
+        meta: &mut ConstraintSystem<F>,
+        columns: &[Column<Advice>],
+        limb_bits: LimbBits,
+    ) -> Vec<Self> {
+        if columns.is_empty() {
+            return Vec::new();
+        }
+        let table = meta.lookup_table_column();
+        columns
+            .iter()
+            .map(|z| Self::configure_compact_on(meta, *z, limb_bits, table))
+            .collect()
+    }
+
+    fn configure_compact_on<F: PastaField>(
+        meta: &mut ConstraintSystem<F>,
+        z: Column<Advice>,
+        limb_bits: LimbBits,
+        table: TableColumn,
+    ) -> Self {
+        meta.enable_equality(z);
+        let shift = meta.fixed_column();
+        let step = meta.fixed_column();
+        let radix = F::from(1_u64 << limb_bits.get());
+        meta.lookup("compact running-sum limb", |cells| {
+            let pattern = cells.query_fixed(step, Rotation::cur());
+            let enabled = pattern.clone()
+                * (iroha_plonk::cs::Expression::Constant(F::from(2)) - pattern.clone());
+            let top = pattern.clone()
+                * (pattern - iroha_plonk::cs::Expression::Constant(F::ONE))
+                * F::TWO_INV;
+            let cur = cells.query_advice(z, Rotation::cur());
+            let next = cells.query_advice(z, Rotation::next());
+            vec![(enabled * (cur.clone() - next * radix) + top * cur, table)]
+        });
+        meta.create_gate("compact shifted top limb", |cells| {
+            let pattern = cells.query_fixed(step, Rotation::cur());
+            let factor = cells.query_fixed(shift, Rotation::cur());
+            let cur = cells.query_advice(z, Rotation::cur());
+            let prev = cells.query_advice(z, Rotation::prev());
+            vec![(
+                "pattern factor (z - z_prev factor)",
+                pattern * factor.clone() * (cur - prev * factor),
+            )]
+        });
+        Self {
+            z,
+            table,
+            shift,
+            pattern: Pattern::Fixed { step },
+            limb_bits,
+        }
+    }
+
+    /// Compact `(pattern, factor)` columns, or `None` for the selector
+    /// layout. Pattern zero fully disables the range bus; another fixed gate
+    /// may reuse the factor on those rows only. Its gate must be disabled at
+    /// both active pattern codes (one and two), and assignments must be on
+    /// disjoint rows. This does not relax any active range check.
+    #[must_use]
+    pub const fn compact_patterns(&self) -> Option<(Column<Fixed>, Column<Fixed>)> {
+        match self.pattern {
+            Pattern::Fixed { step } => Some((step, self.shift)),
+            Pattern::Selectors { .. } => None,
         }
     }
 
@@ -241,11 +345,19 @@ pub fn limbs_native<F: PastaField>(value: &F, shape: RangeShape) -> Option<Vec<u
     )
 }
 
+/// Exact cell-bound range certificates for a single synthesis. A narrower
+/// proved bound implies a wider requested bound; values never index this map.
+#[derive(Debug, Default)]
+struct RangeCertificates<F: PastaField>(BTreeMap<Cell, (usize, Word<F>)>);
+
 /// The running-sum range-check chip.
 #[derive(Clone, Debug)]
 pub struct RunningSumChip<F: PastaField> {
     config: RunningSumConfig,
     rows: RowCursor,
+    shared_rows: Option<SharedRows>,
+    certificates: Option<Rc<RefCell<RangeCertificates<F>>>>,
+    banks: Option<Rc<RefCell<Vec<Self>>>>,
     _marker: core::marker::PhantomData<F>,
 }
 
@@ -253,10 +365,101 @@ impl<F: PastaField> RunningSumChip<F> {
     /// A chip whose first row is 0.
     #[must_use]
     pub const fn new(config: RunningSumConfig) -> Self {
+        Self::with_cursor(config, RowCursor::starting_at(0))
+    }
+
+    /// Uses a caller-reserved row interval, for example after a disjoint
+    /// public-prefix pattern sharing the compact factor column.
+    #[must_use]
+    pub const fn with_cursor(config: RunningSumConfig, rows: RowCursor) -> Self {
+        Self {
+            config,
+            rows,
+            shared_rows: None,
+            certificates: None,
+            banks: None,
+            _marker: core::marker::PhantomData,
+        }
+    }
+
+    /// Shares a caller-owned reservation cursor with another user of these
+    /// same columns. Exact range certificates are shared by chip clones, so
+    /// repeated checks of the same physical cell reuse an existing narrower
+    /// bound. Construct fresh chips and cursors for each synthesis.
+    #[must_use]
+    pub fn with_shared_cursor(config: RunningSumConfig, rows: &SharedRows) -> Self {
         Self {
             config,
             rows: RowCursor::starting_at(0),
+            shared_rows: Some(rows.clone()),
+            certificates: Some(Rc::new(RefCell::new(RangeCertificates(BTreeMap::new())))),
+            banks: None,
             _marker: core::marker::PhantomData,
+        }
+    }
+
+    /// A fixed set of independent range buses, selecting the least occupied
+    /// bus by structural row counts (ties use column order). Clones share
+    /// reservations and exact-cell certificates. A fresh bank is required per
+    /// synthesis; the owner calls `load_table` once.
+    ///
+    /// # Errors
+    /// No buses, duplicate advice columns, or different table/limb metadata.
+    pub fn banked(configs: Vec<RunningSumConfig>) -> Result<Self, Error> {
+        let first = *configs.first().ok_or(Error::Synthesis)?;
+        if configs.iter().enumerate().any(|(i, c)| {
+            c.table != first.table
+                || c.limb_bits != first.limb_bits
+                || configs[..i].iter().any(|previous| previous.z == c.z)
+        }) {
+            return Err(Error::Synthesis);
+        }
+        let mut out = Self::new(first);
+        out.certificates = Some(Rc::new(RefCell::new(RangeCertificates(BTreeMap::new()))));
+        out.banks = Some(Rc::new(RefCell::new(
+            configs.into_iter().map(Self::new).collect(),
+        )));
+        Ok(out)
+    }
+
+    fn least_occupied(banks: &[Self]) -> usize {
+        banks
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, lane)| lane.next_row())
+            .map_or(0, |(i, _)| i)
+    }
+
+    fn cached(&self, word: &Word<F>, bits: usize) -> Option<Word<F>> {
+        self.certificates.as_ref().and_then(|certificates| {
+            certificates
+                .borrow()
+                .0
+                .get(&word.cell())
+                .filter(|(proved, _)| *proved <= bits)
+                .map(|(_, checked)| checked.clone())
+        })
+    }
+
+    fn remember(&self, source: &Word<F>, checked: &Word<F>, bits: usize) {
+        if let Some(certificates) = &self.certificates {
+            let mut certificates = certificates.borrow_mut();
+            for cell in [source.cell(), checked.cell()] {
+                let entry = certificates
+                    .0
+                    .entry(cell)
+                    .or_insert_with(|| (bits, checked.clone()));
+                if bits < entry.0 {
+                    *entry = (bits, checked.clone());
+                }
+            }
+        }
+    }
+
+    fn take_rows(&mut self, count: usize) -> Result<usize, Error> {
+        match &self.shared_rows {
+            Some(rows) => rows.take(count),
+            None => self.rows.take(count),
         }
     }
 
@@ -268,8 +471,13 @@ impl<F: PastaField> RunningSumChip<F> {
 
     /// The first row not used yet.
     #[must_use]
-    pub const fn next_row(&self) -> usize {
-        self.rows.next_row()
+    pub fn next_row(&self) -> usize {
+        if let Some(banks) = &self.banks {
+            return banks.borrow().iter().map(Self::next_row).max().unwrap_or(0);
+        }
+        self.shared_rows
+            .as_ref()
+            .map_or_else(|| self.rows.next_row(), SharedRows::next_row)
     }
 
     /// The shape of a `bits`-bit check.
@@ -315,9 +523,20 @@ impl<F: PastaField> RunningSumChip<F> {
         bits: usize,
     ) -> Result<Word<F>, Error> {
         let shape = self.shape(bits)?;
-        let start = self.rows.take(shape.rows)?;
+        if let Some(checked) = self.cached(word, bits) {
+            return Ok(checked);
+        }
+        if let Some(banks) = &self.banks {
+            let mut banks = banks.borrow_mut();
+            let index = Self::least_occupied(&banks);
+            let checked = banks[index].range_check(region, word, bits)?;
+            self.remember(word, &checked, bits);
+            return Ok(checked);
+        }
+        let start = self.take_rows(shape.rows)?;
         let z0 = copy_word(region, word, self.config.z, start)?;
         self.decompose(region, start, word.value(), shape)?;
+        self.remember(word, &z0, bits);
         Ok(z0)
     }
 
@@ -333,9 +552,17 @@ impl<F: PastaField> RunningSumChip<F> {
         bits: usize,
     ) -> Result<Word<F>, Error> {
         let shape = self.shape(bits)?;
-        let start = self.rows.take(shape.rows)?;
+        if let Some(banks) = &self.banks {
+            let mut banks = banks.borrow_mut();
+            let index = Self::least_occupied(&banks);
+            let checked = banks[index].witness_range_checked(region, value, bits)?;
+            self.remember(&checked, &checked, bits);
+            return Ok(checked);
+        }
+        let start = self.take_rows(shape.rows)?;
         let z0 = assign_word(region, self.config.z, start, value)?;
         self.decompose(region, start, value, shape)?;
+        self.remember(&z0, &z0, bits);
         Ok(z0)
     }
 
@@ -354,14 +581,27 @@ impl<F: PastaField> RunningSumChip<F> {
             assign_word(region, self.config.z, row, entry)?;
         }
         for limb in 0..shape.limbs - 1 {
-            self.config.q_step.enable(region, start + limb)?;
+            match self.config.pattern {
+                Pattern::Selectors { step, .. } => step.enable(region, start + limb)?,
+                Pattern::Fixed { step } => {
+                    region.assign_fixed(step, start + limb, F::ONE)?;
+                }
+            }
         }
         let top = start + shape.limbs - 1;
-        region.enable_selector(String::new, &self.config.q_limb, top)?;
+        if let Pattern::Selectors { limb, .. } = self.config.pattern {
+            region.enable_selector(String::new, &limb, top)?;
+        } else if let Pattern::Fixed { step } = self.config.pattern {
+            region.assign_fixed(step, top, F::from(2))?;
+        }
         if shape.shifted() {
             let shifted = top + 1;
-            region.enable_selector(String::new, &self.config.q_limb, shifted)?;
-            self.config.q_shift.enable(region, shifted)?;
+            if let Pattern::Selectors { limb, shift, .. } = self.config.pattern {
+                region.enable_selector(String::new, &limb, shifted)?;
+                shift.enable(region, shifted)?;
+            } else if let Pattern::Fixed { step } = self.config.pattern {
+                region.assign_fixed(step, shifted, F::from(2))?;
+            }
             let factor = F::from(1_u64 << (shape.limb_bits - shape.top_bits));
             region.assign_fixed(self.config.shift, shifted, factor)?;
         }
@@ -450,3 +690,7 @@ mod tests {
         assert_eq!(limbs[14], 0b11);
     }
 }
+
+#[cfg(test)]
+#[path = "running_sum/cache_tests.rs"]
+mod cache_tests;

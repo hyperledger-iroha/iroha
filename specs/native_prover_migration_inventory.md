@@ -1,6 +1,6 @@
 # Native prover migration inventory
 
-Status: M0 contract capture, recorded 2026-10-04. This table lists every
+Status: M0 baseline with current consumer migration results (2026-10-06). This table lists every
 workspace crate, SDK and tool that uses the vendored halo2 stack or another
 Pasta/halo2 implementation. The Iroha-native crates (`iroha_pasta`,
 `iroha_plonk`, `iroha_plonk_gadgets`, `iroha_plonk_recursion`) replace the
@@ -89,7 +89,7 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | `iroha_core` Kaigi: `isi/kaigi/privacy{,/authorization_v1,/proof_fixture_v1}.rs`, `privacy_release_evidence/kaigi.rs`, `tests/kaigi_privacy.rs` | halo2-axiom | V | Kaigi VKs are config refs (`kaigi_authorization_vk`, `kaigi_usage_vk`), unset in the Taira template. Live: unknown | M2(b) |
 | `iroha_core` vote tally and tooling: `tests/zk_vote_tally_audit.rs`, `tests/zk_testkit.rs`, `benches/zk_poseidon.rs`; feature `circuit-params = ["halo2_proofs/circuit-params"]` | halo2-axiom | P V | Test | M2(d). Remove the feature forward |
 | `kaigi_zk` (7 files; Poseidon from `poseidon-primitives` `Spec` over Pasta `Fp`) | halo2-axiom | P V H | Through `iroha_core` `zk-halo2` | M2(b). Re-key the migrated first-release consumer and regenerate its fixtures; no old-key decoder or compatibility shim. TODO: RP56 KATs |
-| `sorafs_manifest::pop_credentials::zk` (own `poseidon-primitives` Poseidon, `zk.rs:100-115`) | halo2-axiom | P V H | SoraFS PoP credentials (irohad runtime provider). Live: unknown | M2(a). TODO: PoP Poseidon KATs |
+| `sorafs_manifest::pop_credentials::zk` | `iroha_pasta`, `iroha_plonk`; retained RP56 constants from `poseidon-primitives` | P V H | SoraFS PoP credentials (irohad runtime provider). Live: unknown | M2(a) native candidate: consuming-witness PIPA-R proving/full verification and verifier-only key generation; new circuit identity/key fingerprints, no old-key path. All 37 PoP tests pass, including unchanged RP56 constants/hash vectors and coordinated nonce/empty-leaf forgeries. Generated structural SDK fixtures and signed inventory pass their guard; all-target strict Clippy passes. All 25 Node PoP consumer tests pass. Rebuilt SDK consumer qualification remains open. |
 | `iroha_js_host` (`kaigi_proof_v1.rs`, OsRng; `confidential_wallet.rs` through `iroha_core_zk`) | halo2-axiom | P | npm package | M2(b)(c), caller RNG |
 | `xtask` `vote_tally.rs` (feature `dev-vote-fixture`) | halo2-axiom | P | Fixture only | M2(d) |
 | `iroha_plonk_oracle` (imports `halo2_axiom`, not `halo2_proofs`) | halo2-axiom, halo2-base, snark-verifier (halo2-ecc transitively) | P V T H | None (test only, `publish = false`). Reads no other crate's sources: the `iroha_core_zk` KAGEMUSHA golden table is pinned in `kats_v1.json` (`golden_proofs.iroha_core_zk_kagemusha`) and carried over unchanged | Deleted M7 |
@@ -161,6 +161,10 @@ Retired formats, verifiers and compatibility paths are not retained in the relea
   constructions: the same RP57 spec and the same `[domain, len, inputs]`
   preimage, with different domains. One `iroha_pasta::poseidon` sponge serves
   both.
-- Still to capture (TODO): Kaigi and SoraFS PoP `poseidon-primitives` Poseidon
-  KATs, snark-verifier succinct challenges and BGH19 accumulators, per-family
+- SoraFS PoP RP56 constants and four boundary/domain hash vectors are pinned in
+  `pop_credentials::zk::migration_tests` against the old arithmetic baseline.
+  The migrated circuit explicitly constrains the nonce accumulator initial zero
+  and the empty revocation leaf; assigning zero as a witness alone was insufficient.
+- Still to capture (TODO): remaining Kaigi migration KAT coverage,
+  snark-verifier succinct challenges and BGH19 accumulators, per-family
   goldens and tamper corpora, x86_64 runs.

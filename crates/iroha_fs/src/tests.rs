@@ -1269,3 +1269,100 @@ fn selected_regular_file_refuses_original_mutation_replacement_and_link_substitu
         assert!(selected.read(14).is_err(), "{mutation}");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn retained_directory_edges_retry_original_after_native_refusal_and_restoration() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    for ancestor in [false, true] {
+        let (temporary, store) = store();
+        let child = store.create_child("retained").unwrap();
+        child
+            .write_atomic("record", b"original", PublishMode::CreateNew)
+            .unwrap();
+        let retained = child.retain().unwrap();
+        let original_identity = child.identity().unwrap();
+        let target = if ancestor { store.path() } else { child.path() }.to_owned();
+        child.revalidate().unwrap();
+        retained.revalidate().unwrap();
+
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            child.revalidate().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            retained.revalidate().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        child.revalidate().unwrap();
+        retained.revalidate().unwrap();
+        assert_eq!(retained.identity().unwrap(), original_identity);
+        assert_eq!(retained.read("record", 8).unwrap().as_slice(), b"original");
+
+        let displaced = temporary.path().join("original-directory");
+        fs::rename(&target, &displaced).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        let replacement_child = if ancestor {
+            let replacement_child = target.join("retained");
+            fs::create_dir(&replacement_child).unwrap();
+            fs::set_permissions(&replacement_child, fs::Permissions::from_mode(0o700)).unwrap();
+            replacement_child
+        } else {
+            target.clone()
+        };
+        fs::write(replacement_child.join("record"), b"original").unwrap();
+        fs::set_permissions(
+            replacement_child.join("record"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        // Safe permissions and equal bytes do not make a new native directory
+        // the original retained directory, whether it is the child or parent.
+        assert_eq!(
+            child.revalidate().unwrap_err().to_string(),
+            changed().to_string()
+        );
+        assert_eq!(
+            retained.revalidate().unwrap_err().to_string(),
+            changed().to_string()
+        );
+        assert!(
+            retained
+                .write_atomic("effect", b"refused", PublishMode::CreateNew)
+                .is_err()
+        );
+        assert!(!replacement_child.join("effect").exists());
+        let original_child = if ancestor {
+            displaced.join("retained")
+        } else {
+            displaced.clone()
+        };
+        assert!(!original_child.join("effect").exists());
+        assert_eq!(
+            fs::read(original_child.join("record")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(replacement_child.join("record")).unwrap(),
+            b"original"
+        );
+
+        fs::remove_dir_all(&target).unwrap();
+        symlink(&displaced, &target).unwrap();
+        assert!(child.revalidate().is_err());
+        assert!(retained.revalidate().is_err());
+        fs::remove_file(&target).unwrap();
+        fs::rename(&displaced, &target).unwrap();
+        // Restore the actual original inode and retry the same owners. A prior
+        // refusal neither poisons them nor authorizes the substituted name.
+        child.revalidate().unwrap();
+        retained.revalidate().unwrap();
+        assert_eq!(child.identity().unwrap(), original_identity);
+        assert_eq!(retained.identity().unwrap(), original_identity);
+        assert_eq!(retained.read("record", 8).unwrap().as_slice(), b"original");
+    }
+}

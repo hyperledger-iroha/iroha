@@ -236,6 +236,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>>())));
     privacy_activations: Storage< crate::privacy_state::PrivacyActivationKeyV1, iroha_data_model::privacy::PrivacyProtocolActivationRecordV1, > => ("world.privacy_activations",
         Role::Canonical(Canonical::Table { key: schema::<crate::privacy_state::PrivacyActivationKeyV1>(), value: schema::<iroha_data_model::privacy::PrivacyProtocolActivationRecordV1>() }));
+    kagemusha_wallet_ledger: Storage<crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>> => ("world.kagemusha_wallet_ledger",
+        Role::Canonical(Canonical::Table { key: schema::<crate::kagemusha_wallet_v1::LedgerKey>(), value: schema::<Vec<u8>>() }));
     private_settlement_governance: Storage<PrivateSettlementPoolKeyV1, PrivateSettlementPoolGovernanceProjectionV1> => ("world.private_settlement_governance",
         Role::Canonical(Canonical::Table { key: schema::<PrivateSettlementPoolKeyV1>(), value: schema::<PrivateSettlementPoolGovernanceProjectionV1>() }));
     private_settlement_pools: Storage<PrivateSettlementPoolKeyV1, PrivateSettlementPoolStateV1> => ("world.private_settlement_pools",

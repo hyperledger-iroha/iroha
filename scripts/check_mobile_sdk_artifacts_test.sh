@@ -45,16 +45,12 @@ export MOBILE_SDK_RUSTUP_BINARY="$TEST_RUSTUP_BINARY"
 bash -n "$CHECK_SCRIPT"
 "$CHECK_SCRIPT" --help >/dev/null
 
-# Retired KAGEMUSHA exports are refused by namespace. The checker carries no
-# per-symbol KAGEMUSHA inventory, so a new retired export cannot slip past a list.
-if grep -Eq 'connect_norito_kagemusha_[A-Za-z0-9]' "$CHECK_SCRIPT"; then
-  fail "artifact checker must not enumerate retired KAGEMUSHA C exports"
-fi
-if grep -Eq 'Java_org_hyperledger_iroha_sdk_offline_(probe_|wallet_)?Kagemusha[A-Za-z0-9_]*_native' "$CHECK_SCRIPT"; then
-  fail "artifact checker must not enumerate retired KAGEMUSHA JNI exports"
-fi
-[[ "$(grep -Fc -- "grep -Eq '^_?connect_norito_kagemusha_' <<<\"\$symbols\"" "$CHECK_SCRIPT")" == "1" ]] \
-  || fail "artifact checker must reject the retired KAGEMUSHA C namespace exactly once"
+# Retired/unknown namespaces remain refused. The only admitted names are the exact
+# current wallet owner contract; no arbitrary signer or alternative version is admitted.
+grep -Fq 'connect_norito_kagemusha_wallet_(revision|open|close|activity|commit|retry|resume|fold|credit_status)_v1$' "$CHECK_SCRIPT" \
+  || fail "current KAGEMUSHA C allowance must be exact"
+grep -Fq 'KagemushaWalletNativeV1_(revision|open|close|activity|call)$' "$CHECK_SCRIPT" \
+  || fail "current KAGEMUSHA JNI allowance must be exact"
 
 required_protocol_symbols=(
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
@@ -134,7 +130,14 @@ for mode in elf apple; do
   run_symbol_gate "$mode" >/dev/null \
     || fail "binary-symbol gate rejected the exact $mode protocol inventory"
 done
+for method in revision open close activity call; do
+  run_symbol_gate elf "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}" >/dev/null \
+    || fail "binary-symbol gate rejected current wallet JNI method $method"
+done
 for retired in \
+  "elf connect_norito_kagemusha_wallet_sign_v1" \
+  "elf connect_norito_kagemusha_wallet_open_v2" \
+  "elf Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_sign" \
   "elf connect_norito_kagemusha_wallet_v1_validate" \
   "apple _connect_norito_kagemusha_core_coordinator_open_v1" \
   "elf ${retired_offline_prefix}payment_validate" \

@@ -7,6 +7,12 @@
 //! Soft verification constrains an exact verdict and selects a fixed valid
 //! dummy claim on failure; hard verification additionally asserts the verdict.
 
+mod catalog;
+pub use catalog::{PinnedKeyCatalog, PinnedKeyCells};
+
+mod compact;
+pub use compact::{CompactPublicConfig, CompactSpans, VerifierUsage};
+
 mod expressions;
 mod multiopen;
 pub(crate) mod scalar;
@@ -31,8 +37,9 @@ use iroha_plonk::{
 use iroha_plonk_gadgets::{
     Bit, GlueChip, GlueConfig, Uint, Word,
     bytes::{element::LeElement, tape::BytesConfig},
+    cells::{RowCursor, SharedRows},
     ecc::{AssignedPoint, EccChip, EccConfig, NonIdentityPoint, ScalarLimbs},
-    ff::{FfChip, FfConfig},
+    ff::{FfChip, FfConfig, rotated::RotatedFfConfig},
     poseidon::{Pow5Columns, RoundConstantColumns},
     pow5_fq::{DuplexChip, DuplexConfig},
     range::{LimbBits, RunningSumChip, RunningSumConfig, u128::UintChip},
@@ -159,13 +166,26 @@ pub struct SuccinctOutput<C: PastaCurve> {
     pub claim: GeneratorClaimCells<C>,
 }
 
+#[derive(Clone, Debug)]
+enum ArithmeticLayout {
+    Fused(FfConfig),
+    Serialized {
+        spans: CompactSpans,
+        kernel: RotatedFfConfig,
+    },
+    ParallelSerialized {
+        ranges: Vec<RunningSumConfig>,
+        kernel: RotatedFfConfig,
+    },
+}
+
 /// Columns for one interpreter lane. Consumers may schedule multiple proofs
 /// sequentially by creating one chip and preserving its row cursors.
 #[derive(Clone, Debug)]
 pub struct VerifierConfig<C: PastaCurve> {
     glue: GlueConfig,
     range: RunningSumConfig,
-    ff: FfConfig,
+    ff: ArithmeticLayout,
     ecc: EccConfig<C>,
     ecc_start_row: usize,
     duplex: DuplexConfig<C::Base>,
@@ -188,6 +208,47 @@ impl<C: PastaCurve> VerifierConfig<C> {
         let (config, bytes) = Self::configure_lanes(meta, Some(byte_rows));
         (config, bytes.expect("requested byte tape is configured"))
     }
+    /// Keeps curve, transcript and integer lanes parallel while serializing
+    /// the unchanged FF CRT kernel onto four rows of the same Glue ports and
+    /// one fixed bank shared by integer and foreign arithmetic. The bus count
+    /// is the total number of independently constrained range lanes. This is
+    /// an explicit artifact profile; it does not change the compact one-bus goal.
+    ///
+    /// # Errors
+    /// The fixed bus count is outside `1..=8`.
+    pub fn configure_serialized_foreign(
+        meta: &mut ConstraintSystem<C::Base>,
+        range_buses: usize,
+    ) -> Result<Self, Error> {
+        if !(1..=8).contains(&range_buses) {
+            return Err(Error::Synthesis);
+        }
+        let constant = meta.fixed_column();
+        let ports = core::array::from_fn(|_| meta.advice_column());
+        let glue = GlueConfig::configure(meta, ports, constant);
+        let kernel = RotatedFfConfig::configure(meta, ports, Arithmetic::<C>::modulus());
+        let bus_columns: Vec<_> = (0..range_buses).map(|_| meta.advice_column()).collect();
+        let ranges = RunningSumConfig::configure_bank(
+            meta,
+            &bus_columns,
+            LimbBits::new(15).expect("fixed limb width"),
+        );
+        let range = ranges[0];
+        let ecc_columns = core::array::from_fn(|_| meta.advice_column());
+        let ecc = EccConfig::configure(meta, ecc_columns);
+        let columns = Pow5Columns::allocate(meta);
+        let constants = RoundConstantColumns::allocate(meta);
+        let duplex = DuplexConfig::configure(meta, columns, constants, &[]);
+        Ok(Self {
+            glue,
+            range,
+            ff: ArithmeticLayout::ParallelSerialized { ranges, kernel },
+            ecc,
+            ecc_start_row: 0,
+            duplex,
+        })
+    }
+
     fn configure_lanes(
         meta: &mut ConstraintSystem<C::Base>,
         byte_rows: Option<usize>,
@@ -216,7 +277,7 @@ impl<C: PastaCurve> VerifierConfig<C> {
             Self {
                 glue,
                 range,
-                ff,
+                ff: ArithmeticLayout::Fused(ff),
                 ecc,
                 ecc_start_row: byte_rows.unwrap_or(0),
                 duplex,
@@ -272,15 +333,42 @@ impl<C: PastaCurve> VerifierChip<C> {
     /// Creates a lane starting at row zero.
     #[must_use]
     pub fn new(config: VerifierConfig<C>) -> Self {
-        Self {
-            glue: GlueChip::new(config.glue),
-            range: RunningSumChip::new(config.range),
-            arithmetic: Arithmetic::new(FfChip::new(config.ff)),
-            ecc: EccChip::starting_at(&config.ecc, config.ecc_start_row),
-            duplex: Some(DuplexChip::new(config.duplex)),
+        match config.ff {
+            ArithmeticLayout::Fused(ff) => Self {
+                glue: GlueChip::new(config.glue),
+                range: RunningSumChip::new(config.range),
+                arithmetic: Arithmetic::new(FfChip::new(ff)),
+                ecc: EccChip::starting_at(&config.ecc, config.ecc_start_row),
+                duplex: Some(DuplexChip::new(config.duplex)),
+            },
+            ArithmeticLayout::ParallelSerialized { ranges, kernel } => {
+                let range =
+                    RunningSumChip::banked(ranges).expect("validated fixed range-bank metadata");
+                let rows = SharedRows::new(RowCursor::starting_at(0));
+                let glue = GlueChip::with_shared_cursor(config.glue, &rows);
+                let ff =
+                    FfChip::serialized(glue.clone(), range.clone(), &[Arithmetic::<C>::modulus()])
+                        .with_rotated_kernel(&kernel)
+                        .expect("matching fixed modulus and ports");
+                Self {
+                    glue,
+                    range,
+                    arithmetic: Arithmetic::new(ff),
+                    ecc: EccChip::starting_at(&config.ecc, config.ecc_start_row),
+                    duplex: Some(DuplexChip::new(config.duplex)),
+                }
+            }
+            ArithmeticLayout::Serialized { spans, kernel } => Self::new_compact(
+                config.glue,
+                config.range,
+                &config.ecc,
+                config.duplex,
+                spans,
+                &kernel,
+            ),
         }
     }
-    /// Loads both fixed range tables.
+    /// Loads the fixed range tables required by the selected explicit profile.
     ///
     /// # Errors
     /// A table does not fit the configured circuit.
@@ -462,7 +550,46 @@ impl<C: PastaCurve> VerifierChip<C> {
         a: &Scalar<C>,
         b: &Scalar<C>,
     ) -> Result<Scalar<C>, Error> {
-        self.arithmetic.mul(region, a, b)
+        self.arithmetic.mul(
+            &mut UintChip::new(&mut self.glue, &mut self.range),
+            region,
+            a,
+            b,
+        )
+    }
+    pub(crate) fn horner(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        values: &[Scalar<C>],
+        base: &Scalar<C>,
+    ) -> Result<Scalar<C>, Error> {
+        let zero = self.constant(region, C::ScalarExt::ZERO)?;
+        if self.arithmetic.ff.config().is_some() {
+            let mut out = zero;
+            for value in values {
+                out = self.mul(region, &out, base)?;
+                out = self.add(region, &out, value)?;
+            }
+            return Ok(out);
+        }
+        let mut powers = vec![self.constant(region, C::ScalarExt::ONE)?, base.clone()];
+        for i in 2..=values.len().min(8) {
+            powers.push(self.mul(region, &powers[i - 1], base)?);
+        }
+        let mut out = zero;
+        for chunk in values.chunks(8) {
+            let mut pairs = vec![(&out, &powers[chunk.len()])];
+            for (i, value) in chunk[..chunk.len() - 1].iter().enumerate() {
+                pairs.push((value, &powers[chunk.len() - 1 - i]));
+            }
+            let product = self.arithmetic.dot(
+                &mut UintChip::new(&mut self.glue, &mut self.range),
+                region,
+                &pairs,
+            )?;
+            out = self.add(region, &product, &chunk[chunk.len() - 1])?;
+        }
+        Ok(out)
     }
     pub(crate) fn pow(
         &mut self,
@@ -548,6 +675,53 @@ impl<C: PastaCurve> VerifierChip<C> {
         length: &Uint<C::Base, 32>,
         mode: VerificationMode,
     ) -> Result<SuccinctOutput<C>, Error> {
+        self.verify_inner(region, plan, key, instances, proof, length, mode, None)
+    }
+
+    /// Verifies with opaque catalog-selected key cells. The complete key digest
+    /// is already bound to every selected coordinate, so it is reused exactly.
+    /// All proof, instance, transcript and opening checks are the same as `verify`.
+    ///
+    /// # Errors
+    /// Foreign descriptor provenance, structural mismatch, or layout failure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_pinned(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        plan: &VerifierPlan<C>,
+        key: &PinnedKeyCells<C>,
+        instances: &[Vec<ScalarCells<C>>],
+        proof: &[LeElement<C::Base>],
+        length: &Uint<C::Base, 32>,
+        mode: VerificationMode,
+    ) -> Result<SuccinctOutput<C>, Error> {
+        if key.binding != *plan.binding.digest() {
+            return Err(Error::Synthesis);
+        }
+        self.verify_inner(
+            region,
+            plan,
+            &key.key,
+            instances,
+            proof,
+            length,
+            mode,
+            Some(&key.digest),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn verify_inner(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        plan: &VerifierPlan<C>,
+        key: &VerifierKeyCells<C>,
+        instances: &[Vec<ScalarCells<C>>],
+        proof: &[LeElement<C::Base>],
+        length: &Uint<C::Base, 32>,
+        mode: VerificationMode,
+        pinned_digest: Option<&Word<C::Base>>,
+    ) -> Result<SuccinctOutput<C>, Error> {
         let descriptor = plan.binding.descriptor();
         let types = descriptor.instance_types.as_ref().ok_or(Error::Synthesis)?;
         if proof.len().checked_mul(32) != Some(plan.proof_length())
@@ -577,34 +751,41 @@ impl<C: PastaCurve> VerifierChip<C> {
             instance_values.push(values);
         }
         let mut duplex = self.duplex.take().ok_or(Error::Synthesis)?;
-        duplex.absorb_constant(C::Base::from(u64::from_le_bytes(*b"kgwvkey1")));
-        let arity = 8 + 2 * (key.fixed.len() + key.permutation.len());
-        duplex.absorb_constant(C::Base::from(
-            u64::try_from(arity).map_err(|_| Error::BoundsFailure)?,
-        ));
-        for value in [
-            1,
-            match descriptor.curve {
-                iroha_plonk::cs::CurveV1::Pallas => 0,
-                iroha_plonk::cs::CurveV1::Vesta => 1,
-            },
-            u64::from(descriptor.k),
-            u64::from(descriptor.num_fixed_columns),
-            u64::try_from(key.permutation.len()).map_err(|_| Error::BoundsFailure)?,
-        ] {
-            duplex.absorb_constant(C::Base::from(value));
-        }
-        duplex.absorb(&key.representation);
-        for chunk in plan.binding.digest().chunks_exact(16) {
-            duplex.absorb_constant(C::Base::from_u128(u128::from_le_bytes(
-                chunk.try_into().map_err(|_| Error::Synthesis)?,
-            )));
-        }
-        for point in key.fixed.iter().chain(&key.permutation) {
-            duplex.absorb(point.x());
-            duplex.absorb(point.y());
-        }
-        let key_digest = duplex.squeeze_and_clear(region)?;
+        let key_digest = if let Some(digest) = pinned_digest {
+            if !duplex.is_clear() || duplex.buffered() != 0 {
+                return Err(Error::Synthesis);
+            }
+            digest.clone()
+        } else {
+            duplex.absorb_constant(C::Base::from(u64::from_le_bytes(*b"kgwvkey1")));
+            let arity = 8 + 2 * (key.fixed.len() + key.permutation.len());
+            duplex.absorb_constant(C::Base::from(
+                u64::try_from(arity).map_err(|_| Error::BoundsFailure)?,
+            ));
+            for value in [
+                1,
+                match descriptor.curve {
+                    iroha_plonk::cs::CurveV1::Pallas => 0,
+                    iroha_plonk::cs::CurveV1::Vesta => 1,
+                },
+                u64::from(descriptor.k),
+                u64::from(descriptor.num_fixed_columns),
+                u64::try_from(key.permutation.len()).map_err(|_| Error::BoundsFailure)?,
+            ] {
+                duplex.absorb_constant(C::Base::from(value));
+            }
+            duplex.absorb(&key.representation);
+            for chunk in plan.binding.digest().chunks_exact(16) {
+                duplex.absorb_constant(C::Base::from_u128(u128::from_le_bytes(
+                    chunk.try_into().map_err(|_| Error::Synthesis)?,
+                )));
+            }
+            for point in key.fixed.iter().chain(&key.permutation) {
+                duplex.absorb(point.x());
+                duplex.absorb(point.y());
+            }
+            duplex.squeeze_and_clear(region)?
+        };
         let mut transcript = TranscriptChip::from_duplex(duplex, Domain::Proof)?;
         let mut read = Read {
             scalars: vec![],
@@ -688,7 +869,8 @@ impl<C: PastaCurve> VerifierChip<C> {
             self.opening_equation(region, plan, key, &read, &evaluations, &xn, &mut valid)?;
         self.combine(region, &mut valid, &equation)?;
         if mode == VerificationMode::Hard {
-            GlueChip::assert_constant(region, valid.word(), C::Base::ONE)?;
+            self.glue
+                .enforce_constant(region, valid.word(), C::Base::ONE)?;
         }
         let suffix = read.suffix.ok_or(Error::Synthesis)?;
         let dummy = self.ecc.constant_point(region, &plan.dummy.to_curve())?;

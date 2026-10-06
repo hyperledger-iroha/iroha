@@ -892,6 +892,26 @@ struct VerifiedPrefix {
     authority: Arc<VerifiedAuthority>,
     // Bounded exact-value structural reuse ends when this cursor is reset or dropped.
     validation: EpochValidationScope,
+    // An opt-in local byte fence, never a consensus digest or wire field.
+    proof_source: Option<Hash>,
+}
+
+// This constant-size, ordered, certificate-inclusive local source fence is never
+// serialized, persisted or accepted as finality authority. The sole native verifier
+// authenticates each appended receipt; fresh source bytes only govern cursor reuse.
+/// Initial value of the local, non-wire canonical-source fence.
+pub(crate) fn proof_source_start() -> Hash {
+    Hash::new(b"native canonical proof source prefix")
+}
+
+/// Extend the local source fence with one ordered, exact canonical native frame.
+pub(crate) fn proof_source_append(previous: Hash, height: u64, length: u64, wire: Hash) -> Hash {
+    let mut fields = [0_u8; 80];
+    fields[..32].copy_from_slice(previous.as_ref());
+    fields[32..40].copy_from_slice(&height.to_le_bytes());
+    fields[40..48].copy_from_slice(&length.to_le_bytes());
+    fields[48..].copy_from_slice(wire.as_ref());
+    Hash::new(fields)
 }
 
 /// One crypto context for both random pinned reads and one-pass externally streamed evidence.
@@ -939,9 +959,20 @@ impl PrefixVerifierContext<'_> {
             .schedule
             .advanced_with_validation(&certified.commitment.schedule, &mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
+        // Fold only the genuinely admitted original receipt, after all native
+        // certificate, availability, boundary and schedule checks succeeded.
+        // A failed pure projection disables reuse; it cannot reject or authorize a block.
+        let proof_source = prefix.proof_source.and_then(|previous| {
+            certified
+                .block()
+                .canonical_wire_identity()
+                .ok()
+                .map(|(length, wire)| proof_source_append(previous, height, length, wire))
+        });
         prefix.tip = certified.committed.clone();
         prefix.schedule = schedule;
         prefix.authority = authority;
+        prefix.proof_source = proof_source;
         Ok(certified)
     }
 
@@ -1240,7 +1271,30 @@ fn make_genesis_prefix(
         schedule,
         authority,
         validation,
+        proof_source: None,
     })
+}
+
+// Keep the opt-in returned prefix owner outside the default genesis-read frame.
+#[inline(never)]
+fn make_genesis_prefix_with_source(
+    tip: CommittedBlock,
+    material: ValidatorEpochContextV1,
+    validation: EpochValidationScope,
+    expected: (u64, Hash),
+) -> Result<VerifiedPrefix, ExecutionAttemptError<ChainReadError>> {
+    let mut prefix = make_genesis_prefix(tip, material, validation)?;
+    // Join the fresh prefix to the exact constructor-authenticated signed source,
+    // including the full local result/certificate representation, before eligibility.
+    if prefix.tip.block().canonical_wire_identity().ok() == Some(expected) {
+        prefix.proof_source = Some(proof_source_append(
+            proof_source_start(),
+            GENESIS_HEIGHT,
+            expected.0,
+            expected.1,
+        ));
+    }
+    Ok(prefix)
 }
 
 /// Genesis execution authenticated by an actual verified height-two successor.
@@ -1730,6 +1784,8 @@ pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     instance: Hash32,
     attestations: Option<&'v dyn AttestationVerifier>,
     prefix: parking_lot::Mutex<Option<VerifiedPrefix>>,
+    // Only the scoped portable producer enables original canonical-byte capture.
+    proof_source_genesis: Option<(u64, Hash)>,
 }
 
 impl<V: StateReadOnly + ?Sized> core::fmt::Debug for CertifiedChain<'_, V> {
@@ -1769,6 +1825,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             instance,
             attestations: None,
             prefix: parking_lot::Mutex::new(None),
+            proof_source_genesis: None,
         })
     }
 
@@ -1888,6 +1945,20 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         })
     }
 
+    /// Enable local original-wire capture without issuing any capability.
+    /// Full native/portable authentication and a fresh byte join still precede reuse.
+    pub(crate) fn enable_proof_source_cut(&mut self) {
+        self.proof_source_genesis = self.genesis.canonical_wire_identity().ok();
+    }
+
+    /// Borrow the constant-size source fence from the genuine native prefix.
+    /// This alone conveys no portable admission or continued source availability.
+    pub(crate) fn proof_source_cut(&self) -> Option<(u64, Hash)> {
+        let cursor = self.prefix.lock();
+        let prefix = cursor.as_ref()?;
+        Some((prefix.tip.height(), prefix.proof_source?))
+    }
+
     /// Derive authority exclusively from signed genesis, then check the result graph against it.
     /// The graph's execution/parameter data is not independently final until a successor signs Rg.
     fn genesis_prefix(&self) -> Result<VerifiedPrefix, ExecutionAttemptError<ChainReadError>> {
@@ -1897,7 +1968,15 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             GENESIS_HEIGHT,
             &mut validation,
         )?;
-        make_genesis_prefix(tip, self.genesis_epoch.clone(), validation)
+        match self.proof_source_genesis {
+            Some(expected) => make_genesis_prefix_with_source(
+                tip,
+                self.genesis_epoch.clone(),
+                validation,
+                expected,
+            ),
+            None => make_genesis_prefix(tip, self.genesis_epoch.clone(), validation),
+        }
     }
 
     /// Verify the complete prefix with a bounded working set. Sequential reads reuse its

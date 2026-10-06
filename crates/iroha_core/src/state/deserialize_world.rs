@@ -8281,6 +8281,28 @@ fn decode_world_fields(
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     > = take_required(&mut map, "privacy_activations")?;
+    let kagemusha_wallet_ledger: Storage<crate::kagemusha_wallet_v1::LedgerKey, Vec<u8>> =
+        take_required(&mut map, "kagemusha_wallet_ledger")?;
+    {
+        let generation = kagemusha_wallet_ledger.view();
+        crate::kagemusha_wallet_v1::validate_snapshot(generation.iter(), |key| {
+            generation.get(key).map(Vec::as_slice)
+        })
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.kagemusha_wallet_ledger".to_owned(),
+            message: error.to_string(),
+        })?;
+    }
+    {
+        let generation = kagemusha_wallet_ledger.block_and_revert();
+        crate::kagemusha_wallet_v1::validate_snapshot(generation.iter(), |key| {
+            generation.get(key).map(Vec::as_slice)
+        })
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.kagemusha_wallet_ledger".to_owned(),
+            message: error.to_string(),
+        })?;
+    }
     let private_settlement_governance: Storage<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -8711,6 +8733,7 @@ fn decode_world_fields(
         privacy_consensus_policy,
         privacy_exact12_qualification,
         privacy_activations,
+        kagemusha_wallet_ledger,
         private_settlement_governance,
         private_settlement_pools,
         private_settlement_roots,
