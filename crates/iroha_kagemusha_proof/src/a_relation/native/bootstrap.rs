@@ -8,6 +8,10 @@
 //! catalog. Neither an intermediate W nor this terminal output is monetary
 //! completion or a transported Omega. No method generates runtime artifact keys.
 
+#[path = "bootstrap/checkpoint.rs"]
+mod checkpoint;
+pub use checkpoint::{CheckpointKind, CheckpointLayout};
+
 use core::fmt;
 use std::sync::Arc;
 

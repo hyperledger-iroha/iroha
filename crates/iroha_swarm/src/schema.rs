@@ -1,7 +1,8 @@
 //! Docker Compose schema.
 use crate::{
-    GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
-    PreparedRuntimeSource, base64_standard, path, peer,
+    GenesisArtifactSettings, ImageSettings, KAGEMUSHA_LOAD_KEYRING_TARGET,
+    KAGEMUSHA_LOAD_SUBMITTER_TARGET, PeerSettings, PreparedRuntimeConfig, PreparedRuntimeSource,
+    base64_standard, path, peer,
 };
 use norito::json::{self, Map, Value};
 use std::fmt::Write as _;
@@ -658,6 +659,40 @@ fn signed_genesis_mount(settings: &GenesisArtifactSettings) -> Value {
     mount.insert("read_only".into(), Value::Bool(true));
     Value::Object(mount)
 }
+fn private_file_mount(source: String, target: &str) -> Value {
+    let mut bind = Map::new();
+    bind.insert("create_host_path".into(), Value::Bool(false));
+    let mut mount = Map::new();
+    mount.insert("bind".into(), Value::Object(bind));
+    mount.insert("type".into(), Value::String("bind".into()));
+    mount.insert("source".into(), Value::String(source));
+    mount.insert("target".into(), Value::String(target.to_owned()));
+    mount.insert("read_only".into(), Value::Bool(true));
+    Value::Object(mount)
+}
+fn publisher_file_mounts(runtime: Option<&PreparedRuntimeConfig>, peer_index: u16) -> Vec<Value> {
+    let (keyring, submitter) = runtime.map_or_else(
+        || (
+            format!("${{IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_KEYRING_FILE:?set IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_KEYRING_FILE to this nodes existing owner-0600 publisher keyring}}"),
+            format!("${{IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_SUBMITTER_FILE:?set IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_SUBMITTER_FILE to this nodes existing owner-0600 publisher submitter key}}"),
+        ),
+        |runtime| (
+            compose_path_literal(&runtime.publisher.keyring.as_ref().display().to_string()),
+            compose_path_literal(&runtime.publisher.submitter.as_ref().display().to_string()),
+        ),
+    );
+    let mut mounts = vec![
+        private_file_mount(keyring, KAGEMUSHA_LOAD_KEYRING_TARGET),
+        private_file_mount(submitter, KAGEMUSHA_LOAD_SUBMITTER_TARGET),
+    ];
+    if runtime.is_none() {
+        mounts.push(private_file_mount(
+            format!("${{IROHA_PEER{peer_index}_CONFIG_FILE:?set IROHA_PEER{peer_index}_CONFIG_FILE to this nodes existing owner-0600 TOML naming both mounted publisher files}}"),
+            CONTAINER_PEER_CONFIG,
+        ));
+    }
+    mounts
+}
 fn prepared_storage_name(runtime: &PreparedRuntimeConfig) -> String {
     format!("{}_data", runtime.compose_name_prefix)
 }
@@ -753,7 +788,8 @@ fn lowercase_hex(bytes: &[u8]) -> String {
 fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> String {
     let launch = runtime.map_or_else(
         || {
-            "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d"
+            "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && \
+             exec iroha3d --config /config/peer.toml"
                 .to_owned()
         },
         |runtime| {
@@ -790,6 +826,21 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
             )
         },
     );
+    // Local Compose file binds retain host ownership and mode. Require originals and private
+    // projected TOML to be native owner-0600 files for the actual daemon UID; never pretend
+    // Compose secret uid/mode fields perform a cross-UID custody transfer.
+    let custody_checks = format!(
+        r#"require_publisher_file() {{
+        test -f \"$$1\" && test ! -L \"$$1\" && test -r \"$$1\" && test -s \"$$1\" &&
+        test \"$$(stat -c '%u:%a:%h' \"$$1\")\" = \"$$(id -u):600:1\" &&
+        test \"$$(wc -c < \"$$1\")\" -le \"$$2\" || {{
+            printf '%s\n' 'required publisher/config original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
+        }};
+    }} &&
+    require_publisher_file /config/peer.toml 8388608 &&
+    require_publisher_file {KAGEMUSHA_LOAD_KEYRING_TARGET} 65536 &&
+    require_publisher_file {KAGEMUSHA_LOAD_SUBMITTER_TARGET} 4096 &&"#
+    );
     format!(
         r#"/bin/sh -eu -c "
     GENESIS_PUBLIC_KEY_FILE=/run/secrets/iroha_genesis_public_key && \\
@@ -807,6 +858,7 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
     test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
     IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
     printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{{63}}[13579BDF]#[0-9A-F]{{4}}$$' && \\
+    {custody_checks}
     {launch}
 ""#
     )
@@ -823,6 +875,7 @@ where
     healthcheck: Option<Healthcheck>,
     genesis: &'a GenesisArtifactSettings,
     runtime: Option<&'a PreparedRuntimeConfig>,
+    peer_index: u16,
 }
 impl<'a, Image> Irohad<'a, Image>
 where
@@ -835,6 +888,7 @@ where
         healthcheck: bool,
         genesis: &'a GenesisArtifactSettings,
         runtime: Option<&'a PreparedRuntimeConfig>,
+        peer_index: u16,
     ) -> Self {
         Self {
             image,
@@ -846,6 +900,7 @@ where
             healthcheck: healthcheck.then_some(Healthcheck { port: port_api }),
             genesis,
             runtime,
+            peer_index,
         }
     }
     fn into_map(self) -> norito::json::Map {
@@ -865,6 +920,7 @@ where
             ),
         );
         let mut volumes = vec![signed_genesis_mount(self.genesis)];
+        volumes.extend(publisher_file_mounts(self.runtime, self.peer_index));
         if let Some(runtime) = self.runtime {
             volumes.push(prepared_storage_mount(runtime));
         }
@@ -955,6 +1011,7 @@ impl<'a> BuildOrPull<'a> {
                     topology,
                     &trusted_peers_pop,
                     primary_info,
+                    *primary_index,
                 ),
             )),
             irohads: peers
@@ -970,6 +1027,7 @@ impl<'a> BuildOrPull<'a> {
                             topology,
                             &trusted_peers_pop,
                             info,
+                            *index,
                         ),
                     )
                 })
@@ -989,6 +1047,7 @@ impl<'a> BuildOrPull<'a> {
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
         peer_info: &'a peer::PeerInfo,
+        peer_index: u16,
     ) -> Irohad<'a, Image> {
         Irohad::new(
             image,
@@ -1005,6 +1064,7 @@ impl<'a> BuildOrPull<'a> {
             healthcheck,
             genesis,
             runtime,
+            peer_index,
         )
     }
     #[expect(
@@ -1035,6 +1095,7 @@ impl<'a> BuildOrPull<'a> {
                         topology,
                         trusted_peers_pop,
                         info,
+                        *index,
                     ),
                 )
             })
@@ -1181,8 +1242,52 @@ mod tests {
         }
         iroha_config::base::env::MockEnv::with_map(vars)
     }
+    #[cfg(unix)]
     #[test]
-    fn peer_env_produces_exhaustive_config() {
+    fn peer_env_with_explicit_test_custody_produces_exhaustive_config() {
+        use std::io::Write as _;
+        use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+        struct ParserFixture(std::path::PathBuf);
+        impl Drop for ParserFixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture_root = std::env::temp_dir().join(format!(
+            "iroha-swarm-publisher-TEST-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&fixture_root)
+            .unwrap();
+        let fixture = ParserFixture(fixture_root);
+        let submitter = include_str!("../../iroha_config/tests/fixtures/base.toml")
+            .lines()
+            .find_map(|line| line.strip_prefix("private_key = "))
+            .expect("existing authentic private TEST fixture")
+            .trim_matches('"');
+        for (name, bytes) in [
+            (
+                "keyring",
+                b"UNADMITTED parser TEST bytes; not canonical Service custody".as_slice(),
+            ),
+            ("submitter", submitter.as_bytes()),
+        ] {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(fixture.0.join(name))
+                .unwrap();
+            file.write_all(bytes).unwrap();
+        }
+        let publisher_toml = "[kagemusha_load_authorizer]\nkeyring_file = \"keyring\"\nsubmitter_key_file = \"submitter\"\n";
+
         let genesis_public_key = peer::generate_key_pair(None, &[])
             .expect("random genesis key generation should succeed")
             .0;
@@ -1261,13 +1366,18 @@ mod tests {
                 ),
             );
             let mock_env = mock_env_from_value(value);
-            let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
+            let reader = iroha_config::base::read::ConfigReader::new()
+                .with_env(mock_env.clone())
+                .with_toml_source(iroha_config::base::toml::TomlSource::new(
+                    fixture.0.join("peer.toml"),
+                    publisher_toml.parse().unwrap(),
+                ));
             let config = reader
                 .read_and_complete::<iroha_config::parameters::user::Root>()
                 .expect("config in env should be exhaustive");
-            let admitted = config
-                .parse()
-                .expect("generated environment must pass canonical config admission");
+            let admitted = config.parse().expect(
+                "generated peer environment plus explicit TEST custody must pass config parsing",
+            );
             assert_eq!(
                 admitted.streaming.key_material.identity().public_key(),
                 &streaming_identity.0,

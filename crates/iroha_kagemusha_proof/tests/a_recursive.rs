@@ -2111,7 +2111,17 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
         state: initial,
     };
     if let Some((plan, input, first_key, wrapper_key, terminal_key)) = installed_native_source {
-        use iroha_kagemusha_proof::a_relation::native::bootstrap::Prover;
+        use iroha_kagemusha_proof::a_relation::native::bootstrap::{CheckpointKind, Prover};
+        let first_key_digest = first_key
+            .vk()
+            .kagemusha_digest(first_key.binding())
+            .unwrap()
+            .to_repr();
+        let wrapper_key_digest = wrapper_key
+            .vk()
+            .kagemusha_digest(wrapper_key.binding())
+            .unwrap()
+            .to_repr();
         let prover = Prover::from_artifacts(
             plan,
             std::sync::Arc::new(first_key),
@@ -2121,16 +2131,90 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
         .unwrap();
         assert_eq!(prover.descriptors().len(), 3);
         let session = prover.prepare(input, MemoryBudget::DEFAULT).unwrap();
-        session
+        let first_checkpoint = session
             .restore_first(a1.proof.clone(), MemoryBudget::DEFAULT)
             .unwrap();
-        session
+        let wrapper_checkpoint = session
             .restore_wrapper(
                 last.source.proof.clone(),
                 &output.vesta_part.to_bytes(),
                 MemoryBudget::DEFAULT,
             )
             .unwrap();
+        // These are the maintained genuine signed Bootstrap sources, original
+        // imported keys and actual A1/W proofs. No codec DATA becomes authority.
+        let layouts = prover.checkpoint_layouts().unwrap();
+        assert_eq!(layouts[0].kind(), CheckpointKind::First);
+        assert_eq!(layouts[1].kind(), CheckpointKind::Wrapper);
+        assert_eq!(layouts[0].verifying_key_digest(), &first_key_digest);
+        assert_eq!(layouts[1].verifying_key_digest(), &wrapper_key_digest);
+        assert_eq!(layouts[0].proof_bytes(), a1.proof.len());
+        assert_eq!(layouts[1].proof_bytes(), last.source.proof.len());
+        assert_eq!(
+            layouts[0].descriptor_digest(),
+            prover.descriptors()[0].digest()
+        );
+        assert_eq!(
+            layouts[1].descriptor_digest(),
+            prover.descriptors()[1].digest()
+        );
+        let first_payload = session
+            .encode_first_checkpoint(&first_checkpoint, MemoryBudget::DEFAULT)
+            .unwrap();
+        let wrapper_payload = session
+            .encode_wrapper_checkpoint(&wrapper_checkpoint, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(first_payload.len(), layouts[0].payload_bytes());
+        assert_eq!(wrapper_payload.len(), layouts[1].payload_bytes());
+        let restored_first = session
+            .restore_first_checkpoint(&first_payload, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(restored_first.proof(), first_checkpoint.proof());
+        assert_eq!(restored_first.instances(), first_checkpoint.instances());
+        assert_eq!(
+            session
+                .encode_first_checkpoint(&restored_first, MemoryBudget::DEFAULT)
+                .unwrap(),
+            first_payload
+        );
+        let restored_wrapper = session
+            .restore_wrapper_checkpoint(&wrapper_payload, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(restored_wrapper.proof(), wrapper_checkpoint.proof());
+        assert_eq!(restored_wrapper.vesta(), wrapper_checkpoint.vesta());
+        assert_eq!(restored_wrapper.context(), wrapper_checkpoint.context());
+        assert_eq!(
+            session
+                .encode_wrapper_checkpoint(&restored_wrapper, MemoryBudget::DEFAULT)
+                .unwrap(),
+            wrapper_payload
+        );
+        assert!(
+            session
+                .restore_first_checkpoint(&wrapper_payload, MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        assert!(
+            session
+                .restore_wrapper_checkpoint(&first_payload, MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        for payload in [&first_payload, &wrapper_payload] {
+            let mut extra = payload.clone();
+            extra.push(0);
+            for bad in [&[][..], &payload[..payload.len() - 1], &extra[..]] {
+                assert!(
+                    session
+                        .restore_first_checkpoint(bad, MemoryBudget::DEFAULT)
+                        .is_err()
+                );
+                assert!(
+                    session
+                        .restore_wrapper_checkpoint(bad, MemoryBudget::DEFAULT)
+                        .is_err()
+                );
+            }
+        }
         let mut wrong = a1.proof;
         wrong[96] ^= 1;
         assert!(session.restore_first(wrong, MemoryBudget::DEFAULT).is_err());

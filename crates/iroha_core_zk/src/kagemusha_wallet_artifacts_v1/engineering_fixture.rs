@@ -112,7 +112,7 @@ fn original<C: PastaCurve, const LINEAGE: bool>(
             .expect("actual original verifier key generation");
     ArtifactOriginalV1 {
         descriptor: binding.encoded().to_vec(),
-        verifying_key: key.to_bytes(),
+        verifying_key: key.to_bytes().to_vec(),
     }
 }
 

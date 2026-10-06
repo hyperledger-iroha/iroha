@@ -28,13 +28,12 @@ iroha_plonk = { workspace = true }
 iroha_plonk_gadgets = { workspace = true }
 # Descriptor-fixed recursive verifier and local accumulation lanes for Q_sigma.
 iroha_plonk_recursion = { workspace = true }
+# Canonical source-bound native checkpoint payloads and shared fixture codecs.
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # `Field`/`PrimeField` traits of the iroha_pasta field types.
 ff = "0.13.1"
 
 [dev-dependencies]
-# The shared KAGEMUSHA Poseidon vectors in `fixtures/native_prover/kats_v1.json`
-# and the G1 wallet vectors in `fixtures/kagemusha/wallet_v1_vectors.json`.
-norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # Deterministic recovery streams for reproducible test proofs.
 rand_chacha = "0.3.1"
 # Thread pools for the measurement harness and the parallel tamper sweep.
