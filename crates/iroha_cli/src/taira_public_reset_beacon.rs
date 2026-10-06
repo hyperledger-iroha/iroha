@@ -1957,27 +1957,41 @@ fn provider_projection(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
 ) -> Result<(ProviderActivationV1, Zeroizing<Vec<u8>>, PathBuf, Vec<u8>)> {
+    let release_root = provider_release_root(&admitted.inventory, validator);
+    provider_projection_at_release(admitted, validator, &release_root)
+}
+
+fn provider_projection_at_release(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+    release_root: &Path,
+) -> Result<(ProviderActivationV1, Zeroizing<Vec<u8>>, PathBuf, Vec<u8>)> {
     let inventory = &admitted.inventory;
     let root = ceremony_root(inventory);
     let source = artifact(&validator.artifacts, "config")?;
-    verify_regular_hash(Path::new(&source.remote_path), &source.sha256)?;
-    let (file, snapshot) =
-        open_pinned_regular(Path::new(&source.remote_path), "original validator config")?;
+    let source_path = provider_release_artifact_path(inventory, validator, release_root, source)?;
+    verify_regular_hash(&source_path, &source.sha256)?;
+    let (file, snapshot) = open_pinned_regular(&source_path, "original validator config")?;
     let bytes = Zeroizing::new(read_pinned_bytes(
-        Path::new(&source.remote_path),
+        &source_path,
         "original validator config",
         file,
         &snapshot,
         CONFIG_LIMIT,
     )?);
-    let daemon =
-        PathBuf::from(&artifact(&inventory.validators[0].artifacts, "iroha3d")?.remote_path);
+    if sha256_hex(&bytes) != source.sha256 {
+        return Err(eyre!("original beacon config changed during derivation"));
+    }
+    let codec = artifact(&inventory.validators[0].artifacts, "iroha3d")?;
+    let local_codec = artifact(&validator.artifacts, "iroha3d")?;
+    require_provider_codec_identity(codec, local_codec)?;
+    let daemon = provider_release_artifact_path(inventory, validator, release_root, local_codec)?;
     let native = verify_native_install(
         inventory,
         &admitted.authorization_sha256,
         &daemon,
         &root,
-        configured_beacon_credential_memory(&bytes, Path::new(&source.remote_path))?,
+        configured_beacon_credential_memory(&bytes, &source_path)?,
         admitted.action_deadline,
         &mut RealProcessRunner,
     )?;
@@ -2004,7 +2018,7 @@ fn provider_projection(
         .ok_or_else(|| eyre!("beacon public provider seat absent"))?;
     let config = derive_config(&bytes, provider)?;
     let unit = &inventory.beacon_bootstrap.final_units[role];
-    let projected = Path::new(&source.remote_path).with_file_name("beacon.toml");
+    let projected = source_path.with_file_name("beacon.toml");
     reset::validate_validator_genesis_config(
         &config,
         Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
@@ -2021,6 +2035,155 @@ fn provider_projection(
         unit_sha256: unit.sha256.clone(),
     };
     Ok((marker, config, projected, unit.bytes.clone()))
+}
+
+fn provider_release_root(inventory: &InventoryV1, validator: &ValidatorV1) -> PathBuf {
+    Path::new(&validator.service_root)
+        .join("releases")
+        .join(&inventory.revision.commit)
+}
+
+fn provider_release_artifact_path(
+    inventory: &InventoryV1,
+    validator: &ValidatorV1,
+    release_root: &Path,
+    artifact: &ArtifactV1,
+) -> Result<PathBuf> {
+    let canonical = provider_release_root(inventory, validator);
+    let quarantined = Path::new(&validator.reset_guard)
+        .join("rollback")
+        .join(&inventory.authorization_nonce)
+        .join("first-release.after");
+    if release_root != canonical && release_root != quarantined {
+        return Err(eyre!(
+            "beacon overlay inspection escaped the exact owned release"
+        ));
+    }
+    Ok(release_root.join(provider_release_artifact_relative(
+        inventory, validator, artifact,
+    )?))
+}
+
+fn provider_release_artifact_relative(
+    inventory: &InventoryV1,
+    validator: &ValidatorV1,
+    artifact: &ArtifactV1,
+) -> Result<PathBuf> {
+    let canonical = provider_release_root(inventory, validator);
+    let relative = Path::new(&artifact.remote_path)
+        .strip_prefix(&canonical)
+        .wrap_err("beacon artifact escaped the signed release")?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(eyre!(
+            "beacon artifact is not an exact release-relative file"
+        ));
+    }
+    Ok(relative.to_path_buf())
+}
+
+fn require_provider_codec_identity(expected: &ArtifactV1, selected: &ArtifactV1) -> Result<()> {
+    if selected.sha256 != expected.sha256
+        || selected.size != expected.size
+        || selected.mode != expected.mode
+    {
+        return Err(eyre!(
+            "beacon local codec differs from the signed validator-zero codec"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_provider_activation_markers(
+    root: &Path,
+    slug: &str,
+    expected: &ProviderActivationV1,
+) -> Result<()> {
+    let prepared = root.join(format!("{slug}.activation-prepared.json"));
+    let (retained, _) = read_public::<ProviderActivationV1>(&prepared, "beacon provider intent")?;
+    if &retained != expected {
+        return Err(eyre!(
+            "beacon overlay intent differs from exact native derivation"
+        ));
+    }
+    let active = root.join(format!("{slug}.active.json"));
+    match fs::symlink_metadata(&active) {
+        Ok(_) => {
+            let (retained, _) =
+                read_public::<ProviderActivationV1>(&active, "beacon active binding")?;
+            if &retained != expected {
+                return Err(eyre!(
+                    "beacon overlay active record differs from exact native derivation"
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+fn verify_provider_overlay_bytes(path: &Path, expected: &[u8], owner_uid: u32) -> Result<()> {
+    let (file, snapshot) = open_pinned_regular(path, "beacon derived config")?;
+    #[cfg(unix)]
+    if snapshot.uid != owner_uid || snapshot.mode & 0o7777 != 0o600 || snapshot.nlink != 1 {
+        return Err(eyre!(
+            "beacon derived config lost exact private owner custody"
+        ));
+    }
+    #[cfg(not(unix))]
+    return Err(eyre!(
+        "beacon derived config requires native Unix owner custody"
+    ));
+    let retained = Zeroizing::new(read_pinned_bytes(
+        path,
+        "beacon derived config",
+        file,
+        &snapshot,
+        CONFIG_LIMIT,
+    )?);
+    if retained.as_slice() != expected {
+        return Err(eyre!(
+            "beacon overlay bytes differ from exact native derivation"
+        ));
+    }
+    Ok(())
+}
+
+/// Admit only the native-derived sibling configuration of this exact release.
+/// An absent overlay retains the original release closure without starting a
+/// ceremony verifier. The same proof is rederived when inspecting quarantine.
+pub(super) fn verified_release_config_overlay(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+    release_root: &Path,
+) -> Result<Option<PathBuf>> {
+    let source = artifact(&validator.artifacts, "config")?;
+    let relative = provider_release_artifact_relative(&admitted.inventory, validator, source)?
+        .with_file_name("beacon.toml");
+    let projected = release_root.join(&relative);
+    match fs::symlink_metadata(&projected) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    let (expected, config, derived_path, _) =
+        provider_projection_at_release(admitted, validator, release_root)?;
+    if derived_path != projected {
+        return Err(eyre!(
+            "beacon overlay path differs from exact native derivation"
+        ));
+    }
+    verify_provider_activation_markers(
+        &ceremony_root(&admitted.inventory),
+        &validator.slug,
+        &expected,
+    )?;
+    verify_provider_overlay_bytes(&projected, &config, 0)?;
+    Ok(Some(relative))
 }
 
 pub(super) fn active_binding(
@@ -3292,5 +3455,202 @@ mod tests {
             .is_err()
         );
         assert_eq!(fs::read(&destination).unwrap(), b"changed after admission");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn beacon_release_overlay_maps_only_exact_owned_release_and_quarantine() {
+        let inventory = reset::sample_inventory_fixture();
+        let validator = &inventory.validators[1];
+        let canonical = provider_release_root(&inventory, validator);
+        let quarantine = Path::new(&validator.reset_guard)
+            .join("rollback")
+            .join(&inventory.authorization_nonce)
+            .join("first-release.after");
+        for role in ["config", "iroha3d", "genesis"] {
+            let selected = artifact(&validator.artifacts, role).unwrap();
+            let original =
+                provider_release_artifact_path(&inventory, validator, &canonical, selected)
+                    .unwrap();
+            assert_eq!(original, PathBuf::from(&selected.remote_path));
+            let moved =
+                provider_release_artifact_path(&inventory, validator, &quarantine, selected)
+                    .unwrap();
+            assert_eq!(
+                moved.strip_prefix(&quarantine).unwrap(),
+                original.strip_prefix(&canonical).unwrap()
+            );
+            assert!(
+                provider_release_artifact_path(
+                    &inventory,
+                    validator,
+                    &quarantine.with_file_name("other"),
+                    selected
+                )
+                .is_err()
+            );
+            let mut escaped = selected.clone();
+            escaped.remote_path = format!("{}/../foreign", canonical.display());
+            assert!(
+                provider_release_artifact_path(&inventory, validator, &canonical, &escaped)
+                    .is_err()
+            );
+        }
+        let codec = artifact(&inventory.validators[0].artifacts, "iroha3d").unwrap();
+        require_provider_codec_identity(codec, codec).unwrap();
+        for field in ["sha256", "size", "mode"] {
+            let mut different = codec.clone();
+            match field {
+                "sha256" => different.sha256 = "00".repeat(32),
+                "size" => different.size += 1,
+                _ => different.mode ^= 0o100,
+            }
+            assert!(require_provider_codec_identity(codec, &different).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn beacon_release_overlay_absence_never_starts_native_ceremony_verification() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = reset::private_custody_test_dir("beacon-overlay-absent-");
+        let mut admitted = super::super::tests::progress_admission();
+        let commit = admitted.inventory.revision.commit.clone();
+        let validator = &mut admitted.inventory.validators[0];
+        let old_root = provider_release_root(&reset::sample_inventory_fixture(), validator);
+        validator.service_root = directory.path().join("service").display().to_string();
+        let new_root = Path::new(&validator.service_root)
+            .join("releases")
+            .join(commit);
+        for selected in &mut validator.artifacts {
+            let relative = Path::new(&selected.remote_path)
+                .strip_prefix(&old_root)
+                .unwrap();
+            selected.remote_path = new_root.join(relative).display().to_string();
+        }
+        let validator = admitted.inventory.validators[0].clone();
+        // No config, codec, ceremony, bundle or native child exists in this fixture.
+        assert!(
+            verified_release_config_overlay(&admitted, &validator, &new_root)
+                .unwrap()
+                .is_none()
+        );
+        let staging = directory.path().join("fresh-staging");
+        assert!(
+            verified_release_config_overlay(&admitted, &validator, &staging)
+                .unwrap()
+                .is_none()
+        );
+        let relative = provider_release_artifact_relative(
+            &admitted.inventory,
+            &validator,
+            artifact(&validator.artifacts, "config").unwrap(),
+        )
+        .unwrap()
+        .with_file_name("beacon.toml");
+        let overlay = staging.join(relative);
+        fs::create_dir_all(overlay.parent().unwrap()).unwrap();
+        fs::set_permissions(overlay.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        reset::inputs::write_new_private(&overlay, b"unexpected overlay").unwrap();
+        assert!(verified_release_config_overlay(&admitted, &validator, &staging).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn beacon_release_overlay_requires_complete_prepared_and_optional_active_marker_equality() {
+        let directory = reset::private_custody_test_dir("beacon-overlay-markers-");
+        let expected = ProviderActivationV1 {
+            schema: "iroha.taira.public-reset.beacon-provider-active.v1".into(),
+            authorization_sha256: "11".repeat(32),
+            bundle_sha256: "22".repeat(32),
+            validator: "validator1".into(),
+            session_id: [3; 32],
+            config_sha256: "44".repeat(32),
+            unit_sha256: "55".repeat(32),
+        };
+        let prepared = directory.path().join("validator1.activation-prepared.json");
+        let active = directory.path().join("validator1.active.json");
+        assert!(
+            verify_provider_activation_markers(directory.path(), "validator1", &expected).is_err()
+        );
+        reset::inputs::write_new_private(&prepared, &json::to_vec(&expected).unwrap()).unwrap();
+        verify_provider_activation_markers(directory.path(), "validator1", &expected).unwrap();
+        reset::inputs::write_new_private(&active, &json::to_vec(&expected).unwrap()).unwrap();
+        verify_provider_activation_markers(directory.path(), "validator1", &expected).unwrap();
+        for field in [
+            "schema",
+            "authorization",
+            "bundle",
+            "validator",
+            "session",
+            "config",
+            "unit",
+        ] {
+            let mut changed = expected.clone();
+            match field {
+                "schema" => changed.schema.push('x'),
+                "authorization" => changed.authorization_sha256 = "66".repeat(32),
+                "bundle" => changed.bundle_sha256 = "77".repeat(32),
+                "validator" => changed.validator.push('x'),
+                "session" => changed.session_id[0] ^= 1,
+                "config" => changed.config_sha256 = "88".repeat(32),
+                _ => changed.unit_sha256 = "99".repeat(32),
+            }
+            fs::write(&active, json::to_vec(&changed).unwrap()).unwrap();
+            assert!(
+                verify_provider_activation_markers(directory.path(), "validator1", &expected)
+                    .is_err()
+            );
+            fs::write(&active, json::to_vec(&expected).unwrap()).unwrap();
+            fs::write(&prepared, json::to_vec(&changed).unwrap()).unwrap();
+            assert!(
+                verify_provider_activation_markers(directory.path(), "validator1", &expected)
+                    .is_err()
+            );
+            fs::write(&prepared, json::to_vec(&expected).unwrap()).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn beacon_release_overlay_checks_actual_derivation_private_bytes_mode_and_single_link() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let directory = reset::private_custody_test_dir("beacon-overlay-custody-");
+        let inventory = reset::sample_inventory_fixture();
+        let provider = ProviderV1 {
+            signer_index: 1,
+            validator: inventory.validator_clients[0].peer_id.parse().unwrap(),
+            handle: "taira-beacon-seat-1".into(),
+            revision: 3,
+            policy_digest: [7; 32],
+        };
+        let initial = b"private_key = 'fixture-only'\n[genesis]\nexpected_hash = 'unchanged'\nfile = '/original/release/genesis.signed.nrt'\n[sumeragi]\nmode = 'Npos'\n";
+        let derived = derive_config(initial, &provider).unwrap();
+        assert!(
+            std::str::from_utf8(&derived)
+                .unwrap()
+                .contains("/original/release/genesis.signed.nrt")
+        );
+        let path = directory.path().join("beacon.toml");
+        reset::inputs::write_new_private(&path, &derived).unwrap();
+        // Unit-only privilege boundary: production always passes the original root UID 0.
+        let owner_uid = rustix::process::geteuid().as_raw();
+        verify_provider_overlay_bytes(&path, &derived, owner_uid).unwrap();
+        assert!(verify_provider_overlay_bytes(&path, &derived, owner_uid.wrapping_add(1)).is_err());
+        fs::write(&path, b"different original bytes").unwrap();
+        assert!(verify_provider_overlay_bytes(&path, &derived, owner_uid).is_err());
+        fs::write(&path, &derived).unwrap();
+        for mode in [0o400, 0o640, 0o4600] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(verify_provider_overlay_bytes(&path, &derived, owner_uid).is_err());
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let linked = directory.path().join("linked");
+        fs::hard_link(&path, &linked).unwrap();
+        assert!(verify_provider_overlay_bytes(&path, &derived, owner_uid).is_err());
+        fs::remove_file(&linked).unwrap();
+        verify_provider_overlay_bytes(&path, &derived, owner_uid).unwrap();
+        fs::remove_file(&path).unwrap();
+        symlink("missing-original", &path).unwrap();
+        assert!(verify_provider_overlay_bytes(&path, &derived, owner_uid).is_err());
     }
 }

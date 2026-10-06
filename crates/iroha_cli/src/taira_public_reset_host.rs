@@ -7049,8 +7049,39 @@ fn verify_exact_release_tree(
     root: &Path,
     expected_root: &Path,
 ) -> Result<()> {
+    let overlay = match &admitted.target {
+        HostTarget::Validator(validator) => {
+            beacon::verified_release_config_overlay(admitted, validator, root)?
+        }
+        HostTarget::Edge(_) => None,
+    };
+    verify_exact_release_tree_with_overlay(admitted, root, expected_root, overlay.as_deref())
+}
+
+fn verify_exact_release_tree_with_overlay(
+    admitted: &HostAdmission,
+    root: &Path,
+    expected_root: &Path,
+    overlay: Option<&Path>,
+) -> Result<()> {
     let mut files = BTreeSet::from([PathBuf::from(".public-reset-generated-v1.json")]);
     let mut directories = BTreeSet::new();
+    if let Some(overlay) = overlay {
+        let HostTarget::Validator(validator) = &admitted.target else {
+            return Err(eyre!(
+                "a beacon release overlay requires the exact validator target"
+            ));
+        };
+        let original = Path::new(&artifact(&validator.artifacts, "config")?.remote_path)
+            .strip_prefix(expected_root)?
+            .with_file_name("beacon.toml");
+        if overlay != original.as_path() {
+            return Err(eyre!(
+                "beacon release overlay path is not the exact derived config"
+            ));
+        }
+        files.insert(original);
+    }
     for artifact in admitted.target.artifacts() {
         let relative = Path::new(&artifact.remote_path).strip_prefix(expected_root)?;
         files.insert(relative.to_path_buf());
@@ -16166,6 +16197,20 @@ pub(super) fn recovery_intent_identity_matches(
             })
 }
 
+/// Admit only the exact prepared frontier or reconciled provider continuation.
+fn require_recoverable_forward_intent(
+    actual: &RecoveryIntentV1,
+    expected: &RecoveryIntentV1,
+    step: ExecutionStep,
+) -> Result<()> {
+    if !super::recovery_has_forward_frontier(actual, step)
+        || !recovery_intent_identity_matches(actual, expected)
+    {
+        return Err(eyre!("prepared mutation intent is not exact"));
+    }
+    Ok(())
+}
+
 pub(super) fn build_recovery_intent(
     inventory: &InventoryV1,
     step: ExecutionStep,
@@ -16493,11 +16538,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         let expected = self
             .recovery_intent(inventory, step)?
             .ok_or_else(|| eyre!("step has no recoverable mutation identity"))?;
-        if !super::recovery_ready_to_continue(intent, step)
-            || !recovery_intent_identity_matches(intent, &expected)
-        {
-            return Err(eyre!("prepared mutation intent is not exact"));
-        }
+        require_recoverable_forward_intent(intent, &expected, step)?;
         let next_mutation = usize::from(intent.next_mutation);
         match step {
             ExecutionStep::Canary => {
@@ -24432,6 +24473,211 @@ time.sleep(30)
             );
         }
         assert!(build_recovery_intent(&inventory, ExecutionStep::EdgeVerify).is_none());
+    }
+
+    #[test]
+    fn recoverable_forward_intent_admits_each_submitted_beacon_provider() {
+        let inventory = super::super::sample_inventory_fixture();
+        let step = ExecutionStep::Canary;
+        let expected = build_recovery_intent(&inventory, step).expect("exact canary plan");
+        for cursor in 4..8 {
+            let mut retained = expected.clone();
+            retained.next_mutation = u16::try_from(cursor).expect("bounded provider cursor");
+            for previous in &mut retained.mutations[..cursor] {
+                previous.state = RecoveryMutationStateV1::Applied;
+            }
+            retained.mutations[cursor].state = RecoveryMutationStateV1::Submitted;
+            let before = retained.clone();
+            assert!(!super::super::recovery_ready_to_continue(&retained, step));
+            assert!(super::super::recovery_ready_to_resume_beacon_activation(
+                &retained, step,
+            ));
+            require_recoverable_forward_intent(&retained, &expected, step)
+                .expect("native transport must admit this reconciled provider continuation");
+            assert_eq!(
+                retained, before,
+                "admission cannot rewrite Submitted or its identity"
+            );
+        }
+    }
+
+    #[test]
+    fn recoverable_forward_intent_preserves_prepared_frontiers_and_rejects_submitted_ledger_work() {
+        let inventory = super::super::sample_inventory_fixture();
+        for step in [ExecutionStep::Canary, ExecutionStep::RestartProof] {
+            let expected = build_recovery_intent(&inventory, step).expect("exact recovery plan");
+            for cursor in 0..expected.mutations.len() {
+                let mut retained = expected.clone();
+                retained.next_mutation = u16::try_from(cursor).expect("bounded cursor");
+                for previous in &mut retained.mutations[..cursor] {
+                    previous.state = RecoveryMutationStateV1::Applied;
+                }
+                require_recoverable_forward_intent(&retained, &expected, step)
+                    .expect("ordinary exact Prepared frontier remains admitted");
+                retained.mutations[cursor].state = RecoveryMutationStateV1::Submitted;
+                if step == ExecutionStep::Canary && (4..8).contains(&cursor) {
+                    continue;
+                }
+                let before = retained.clone();
+                require_recoverable_forward_intent(&retained, &expected, step)
+                    .expect_err("Submitted ledger, install or restart work cannot resume forward");
+                assert_eq!(
+                    retained, before,
+                    "refusal preserves the original pending intent"
+                );
+            }
+            let mut complete = expected.clone();
+            complete.next_mutation = u16::try_from(complete.mutations.len()).unwrap();
+            for mutation in &mut complete.mutations {
+                mutation.state = RecoveryMutationStateV1::Applied;
+            }
+            assert!(require_recoverable_forward_intent(&complete, &expected, step).is_err());
+        }
+    }
+
+    #[test]
+    fn recoverable_forward_intent_rejects_changed_provider_identity_and_unapplied_predecessors() {
+        let inventory = super::super::sample_inventory_fixture();
+        let step = ExecutionStep::Canary;
+        let expected = build_recovery_intent(&inventory, step).expect("exact canary plan");
+        let mut retained = expected.clone();
+        retained.next_mutation = 7;
+        for previous in &mut retained.mutations[..7] {
+            previous.state = RecoveryMutationStateV1::Applied;
+        }
+        retained.mutations[7].state = RecoveryMutationStateV1::Submitted;
+        require_recoverable_forward_intent(&retained, &expected, step)
+            .expect("the interrupted fourth provider retains its exact continuation");
+        for field in 0..7 {
+            let mut changed = retained.clone();
+            match field {
+                0 => changed.mutations[7].kind = "beacon_provider_3".into(),
+                1 => changed.mutations[7].phase = "post_edge".into(),
+                2 => changed.mutations[7].idempotency_key = "0".repeat(64),
+                3 => changed.mutations[7].receipt_name = "different-provider.json".into(),
+                4 => changed.mutations[6].state = RecoveryMutationStateV1::Prepared,
+                5 => changed.mutations[0].idempotency_key = "1".repeat(64),
+                _ => changed.next_mutation = 8,
+            }
+            let before = changed.clone();
+            let error = require_recoverable_forward_intent(&changed, &expected, step)
+                .expect_err("continuation cannot change original identity or ordered frontier");
+            assert!(
+                error
+                    .to_string()
+                    .contains("prepared mutation intent is not exact")
+            );
+            assert_eq!(changed, before, "refusal cannot reclassify pending custody");
+        }
+        assert!(
+            require_recoverable_forward_intent(&retained, &expected, ExecutionStep::RestartProof,)
+                .is_err()
+        );
+    }
+
+    // These are filesystem-closure controls, not invented native activation proofs.
+    fn release_tree_overlay_fixture() -> (tempfile::TempDir, HostAdmission, PathBuf, PathBuf) {
+        let directory = tempfile::tempdir().expect("release namespace fixture");
+        let admitted = progress_admission();
+        let expected = Path::new(admitted.target.service_root())
+            .join("releases")
+            .join(&admitted.inventory.revision.commit);
+        let root = directory.path().join("release");
+        fs::create_dir(&root).expect("fixture release");
+        fs::write(
+            root.join(".public-reset-generated-v1.json"),
+            b"namespace-only fixture",
+        )
+        .expect("fixture release marker name");
+        for artifact in admitted.target.artifacts() {
+            let relative = Path::new(&artifact.remote_path)
+                .strip_prefix(&expected)
+                .unwrap();
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).expect("fixture artifact parent");
+            fs::write(path, b"namespace-only fixture").expect("fixture artifact name");
+        }
+        (directory, admitted, expected, root)
+    }
+
+    #[test]
+    fn release_tree_overlay_retains_original_closure_before_and_after_quarantine() {
+        let (directory, admitted, expected, root) = release_tree_overlay_fixture();
+        verify_exact_release_tree_with_overlay(&admitted, &root, &expected, None)
+            .expect("original immutable artifact namespace");
+        let overlay = Path::new("config/beacon.toml");
+        fs::write(root.join(overlay), b"namespace-only derived config")
+            .expect("fixture projected name");
+        assert!(verify_exact_release_tree_with_overlay(&admitted, &root, &expected, None).is_err());
+        verify_exact_release_tree_with_overlay(&admitted, &root, &expected, Some(overlay))
+            .expect("beacon owner-admitted exact overlay namespace");
+        let quarantine = directory.path().join("first-release.after");
+        fs::rename(&root, &quarantine).expect("retain the whole original release");
+        verify_exact_release_tree_with_overlay(&admitted, &quarantine, &expected, Some(overlay))
+            .expect("same original artifact names remain exact after whole-directory custody");
+        assert!(!root.exists());
+        assert!(quarantine.join(overlay).is_file());
+    }
+
+    #[test]
+    fn release_tree_overlay_rejects_unrelated_paths_and_missing_original_artifacts() {
+        let (_directory, admitted, expected, root) = release_tree_overlay_fixture();
+        let overlay = Path::new("config/beacon.toml");
+        fs::write(root.join(overlay), b"namespace-only derived config").unwrap();
+        assert!(
+            verify_exact_release_tree_with_overlay(
+                &admitted,
+                &root,
+                &expected,
+                Some(Path::new("config/other.toml")),
+            )
+            .is_err()
+        );
+        let unknown = root.join("config/unknown.toml");
+        fs::write(&unknown, b"unbound").unwrap();
+        assert!(
+            verify_exact_release_tree_with_overlay(&admitted, &root, &expected, Some(overlay))
+                .is_err()
+        );
+        fs::remove_file(&unknown).unwrap();
+        let unknown_dir = root.join("config/unbound");
+        fs::create_dir(&unknown_dir).unwrap();
+        assert!(
+            verify_exact_release_tree_with_overlay(&admitted, &root, &expected, Some(overlay))
+                .is_err()
+        );
+        fs::remove_dir(&unknown_dir).unwrap();
+        let original = &admitted.target.artifacts()[0];
+        fs::remove_file(
+            root.join(
+                Path::new(&original.remote_path)
+                    .strip_prefix(&expected)
+                    .unwrap(),
+            ),
+        )
+        .expect("fixture missing original artifact");
+        assert!(
+            verify_exact_release_tree_with_overlay(&admitted, &root, &expected, Some(overlay))
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_tree_overlay_rejects_symlink_even_at_the_admitted_config_name() {
+        let (_directory, admitted, expected, root) = release_tree_overlay_fixture();
+        let overlay = Path::new("config/beacon.toml");
+        std::os::unix::fs::symlink("config.toml", root.join(overlay)).unwrap();
+        let error =
+            verify_exact_release_tree_with_overlay(&admitted, &root, &expected, Some(overlay))
+                .expect_err("a derived config name cannot authorize a symlink");
+        assert!(error.to_string().contains("symlink"));
+        assert!(
+            fs::symlink_metadata(root.join(overlay))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
