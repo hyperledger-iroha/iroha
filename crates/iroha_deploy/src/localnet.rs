@@ -786,7 +786,7 @@ fn localnet_fee_sponsor_revision(
         }],
     }
 }
-const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
+const LOCALNET_FEE_ZK_VK_BACKEND: &str = iroha_core_zk::native_pipa_r::BACKEND;
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
 const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
 fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
@@ -2851,10 +2851,10 @@ fn render_peer_config(
     confidential.insert("enabled".into(), Value::Boolean(true));
     confidential.insert("assume_valid".into(), Value::Boolean(false));
     root.insert("confidential".into(), Value::Table(confidential));
-    let mut halo2 = Table::new();
-    halo2.insert("enabled".into(), Value::Boolean(true));
+    let mut pipa_r = Table::new();
+    pipa_r.insert("enabled".into(), Value::Boolean(true));
     let mut zk = Table::new();
-    zk.insert("halo2".into(), Value::Table(halo2));
+    zk.insert("pipa_r".into(), Value::Table(pipa_r));
     root.insert("zk".into(), Value::Table(zk));
     let mut genesis = Table::new();
     genesis.insert(
@@ -4883,7 +4883,7 @@ fn generated_config_parameter_name(id: &iroha_config::base::ParameterId) -> Opti
         ),
         (&["gov", "sorafs_telemetry"], &["submitters"]),
         (&["confidential"], &["enabled", "assume_valid"]),
-        (&["zk", "halo2"], &["enabled"]),
+        (&["zk", "pipa_r"], &["enabled"]),
         (
             &["genesis"],
             &["file", "public_key", "expected_hash", "expected_hash_file"],
@@ -5070,7 +5070,17 @@ mod config_error_tests {
             generated_config_error_categories(&report),
             "configuration source is invalid; configuration parameter `network.address` could not be parsed"
         );
+        let report = Report::new(read::Error::ParseParameter(
+            ["zk", "pipa_r", "enabled"].into(),
+        ))
+        .attach("private configuration value")
+        .change_context(actual::FromTomlSourceError);
+        assert_eq!(
+            generated_config_error_categories(&report),
+            "configuration parameter `zk.pipa_r.enabled` could not be parsed"
+        );
         for id in [
+            ["zk", "halo2", "enabled"].into(),
             ["network.address"].into(),
             ["private-secret-value"].into(),
             ["network", "private-secret-value"].into(),
@@ -7647,6 +7657,24 @@ mod managed_tests {
                 Some(&peer.config_path),
             )
             .unwrap();
+            assert_eq!(table["zk"]["pipa_r"]["enabled"].as_bool(), Some(true));
+            assert!(table["zk"].get("halo2").is_none());
+            assert!(config.zk.pipa_r.enabled);
+            let retired = Zeroizing::new(format!(
+                "{}\n[zk.halo2]\nenabled = true\n",
+                std::str::from_utf8(&bytes).unwrap()
+            ));
+            assert!(parse_localnet_peer_config(&retired, Some(&peer.config_path)).is_err());
+            assert_eq!(
+                parse_localnet_peer_config(
+                    std::str::from_utf8(&bytes).unwrap(),
+                    Some(&peer.config_path),
+                )
+                .map(|retry| retry.genesis.expected_hash)
+                .unwrap(),
+                config.genesis.expected_hash,
+                "the same original generated config remains admissible after retired-field refusal"
+            );
             assert!(!config.torii.sorafs_storage.stream_tokens.enabled);
             assert!(config.torii.sorafs_storage.stream_tokens.signer.is_none());
             assert!(

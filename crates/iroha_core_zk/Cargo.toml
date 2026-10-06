@@ -37,8 +37,6 @@ proofs-stark = ["zk-stark"]
 zk-stark = ["dep:fastpq_prover"]
 # Enable stateless advisory pre-verification, deduplication, and trace diagnostics.
 zk-preverify = []
-# Enable developer Halo2 test vectors (heavy tooling, opt-in only).
-halo2-dev-tests = []
 # Non-shipping helpers and fixtures for iroha_core's test builds; forbidden in
 # shipping library evidence (scripts/taira_release_check.py).
 test-utils = []
@@ -59,7 +57,6 @@ fastpq_prover = { workspace = true, optional = true }
 fastpq_isi = { path = "../fastpq_isi" }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
-halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 ff = "0.13.1"
 iroha_zkp_halo2 = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk" }
@@ -77,7 +74,5 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
 
 [dev-dependencies]
-# Temporary independent Poseidon oracle; retired with the oracle milestone.
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 iroha_zkp_poseidon = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures"] }

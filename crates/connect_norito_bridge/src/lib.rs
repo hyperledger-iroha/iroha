@@ -5150,9 +5150,9 @@ mod detached_transaction_scaffold_tests {
         .with_executable(contract)
         .with_attachments(
             ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
-                VerifyingKeyId::new("halo2/ipa", "detached-scaffold-vk"),
+                "pipa-r/pasta".into(),
+                ProofBox::new("pipa-r/pasta".into(), vec![1, 2, 3]),
+                VerifyingKeyId::new("pipa-r/pasta", "detached-scaffold-vk"),
             )])
             .expect("one attachment is a valid bounded proof list"),
         )
@@ -12955,7 +12955,7 @@ mod tests {
             &payload,
             json_object([
                 ("kind", JsonValue::from("proof")),
-                ("proof_backend", JsonValue::from("halo2/ipa")),
+                ("proof_backend", JsonValue::from("pipa-r/pasta")),
                 ("proof_b64", JsonValue::from("AQID")),
             ]),
         );
@@ -12964,7 +12964,7 @@ mod tests {
         for (path, replacement) in [
             (
                 vec!["attestation", "proof_backend"],
-                " halo2/ipa".to_owned(),
+                " pipa-r/pasta".to_owned(),
             ),
             (vec!["attestation", "proof_b64"], "AQID ".to_owned()),
             (vec!["attestation", "kind"], " proof".to_owned()),
@@ -12973,7 +12973,7 @@ mod tests {
                 &payload,
                 json_object([
                     ("kind", JsonValue::from("proof")),
-                    ("proof_backend", JsonValue::from("halo2/ipa")),
+                    ("proof_backend", JsonValue::from("pipa-r/pasta")),
                     ("proof_b64", JsonValue::from("AQID")),
                 ]),
             );

@@ -23,6 +23,7 @@ pub mod load_components;
 #[allow(dead_code)]
 mod load_objects;
 
+use bootstrap_outer::bootstrap_chain::SourceProfile;
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
     a_relation::{
@@ -284,7 +285,7 @@ fn sources(rooted: &bootstrap_outer::RootedBootstrapOmega, q_buses: Option<usize
 #[derive(Clone)]
 struct First {
     source: Arc<Sources>,
-    range_buses: usize,
+    profile: SourceProfile,
     plan: ContextPlan,
     pallas: AccumulatorT<Ep>,
     fold: Vec<u8>,
@@ -409,9 +410,9 @@ impl First {
 impl Circuit<Fp> for First {
     type Config = Config;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = usize;
-    fn params(&self) -> usize {
-        self.range_buses
+    type Params = SourceProfile;
+    fn params(&self) -> SourceProfile {
+        self.profile
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -420,14 +421,10 @@ impl Circuit<Fp> for First {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
-        Self::configure_with_params(meta, 0)
+        Self::configure_with_params(meta, SourceProfile::Generic)
     }
-    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, range_buses: usize) -> Config {
-        let verifier = if range_buses == 0 {
-            VerifierConfig::configure(meta)
-        } else {
-            VerifierConfig::configure_serialized_foreign(meta, range_buses).unwrap()
-        };
+    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, profile: SourceProfile) -> Config {
+        let verifier = profile.configure(meta);
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -795,9 +792,9 @@ struct Continuation {
 impl Circuit<Fp> for Continuation {
     type Config = Config;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = usize;
-    fn params(&self) -> usize {
-        self.first.range_buses
+    type Params = SourceProfile;
+    fn params(&self) -> SourceProfile {
+        self.first.profile
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -808,8 +805,8 @@ impl Circuit<Fp> for Continuation {
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
         First::configure(meta)
     }
-    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, range_buses: usize) -> Config {
-        First::configure_with_params(meta, range_buses)
+    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, profile: SourceProfile) -> Config {
+        First::configure_with_params(meta, profile)
     }
     fn synthesize(&self, config: Config, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
         let first = &self.first;
@@ -1298,7 +1295,7 @@ fn continue_schedule(
         eprintln!(
             "genuine Load A{} hard W+Q{indices:?}+context+fold range_buses={} lanes={lanes:?}, production_k16_fit={}",
             stage + 1,
-            first.range_buses,
+            first.profile.range_buses(),
             k == 16
         );
         if adversarial {
@@ -1395,7 +1392,7 @@ fn continue_schedule(
             proof.proof.len(),
             continuation.plan.is_terminal()
         );
-        artifact_diagnostics(stage, &key, &proof.proof, first.range_buses);
+        artifact_diagnostics(stage, &key, &proof.proof, first.profile.range_buses());
         if continuation.plan.is_terminal() {
             let final_digest = key.vk().kagemusha_digest(key.binding()).unwrap();
             let final_catalog = iroha_kagemusha_proof::omega::OmegaPlan::new(
@@ -1572,6 +1569,19 @@ pub(crate) fn authenticated_load_with_q_layout(
         .expect("candidate Load stages must fit k16")
 }
 
+/// Reuse the complete Load relation under an explicit named source profile.
+/// The same profile is used at every stage; no capacity fallback is permitted.
+#[allow(dead_code)] // Consumed by compact catalog construction.
+pub(crate) fn authenticated_load_with_profile(
+    rooted: &bootstrap_outer::RootedBootstrapOmega,
+    profile: SourceProfile,
+    q_buses: Option<usize>,
+    adversarial: bool,
+) -> AuthenticatedLoad {
+    load_source_profiles(rooted, &[profile], q_buses, adversarial, false)
+        .expect("named-profile Load stages must fit k16")
+}
+
 #[test]
 #[ignore = "genuine candidate Q2/A3 Bootstrap predecessor and complete Load stages"]
 fn reduced_q_two_bus_three_bus_load_capacity() {
@@ -1594,8 +1604,25 @@ fn load_profiles_with_q(
     adversarial: bool,
     components_only: bool,
 ) -> Option<AuthenticatedLoad> {
+    let profiles = profiles
+        .iter()
+        .copied()
+        .map(SourceProfile::ordinary)
+        .collect::<Vec<_>>();
+    load_source_profiles(rooted, &profiles, q_buses, adversarial, components_only)
+}
+
+fn load_source_profiles(
+    rooted: &bootstrap_outer::RootedBootstrapOmega,
+    profiles: &[SourceProfile],
+    q_buses: Option<usize>,
+    adversarial: bool,
+    components_only: bool,
+) -> Option<AuthenticatedLoad> {
     let source = Arc::new(sources(rooted, q_buses));
-    for range_buses in profiles.iter().copied() {
+    for profile in profiles.iter().copied() {
+        eprintln!("LOAD_SOURCE_PROFILE {profile:?} Q_buses={q_buses:?}");
+        let range_buses = profile.range_buses();
         let initial_counts: &[usize] = &[0];
         for first_q in initial_counts.iter().copied() {
             let objects = LoadObjects::context_specs().unwrap().to_vec();
@@ -1672,7 +1699,7 @@ fn load_profiles_with_q(
                 .unwrap();
             let first = First {
                 source: source.clone(),
-                range_buses,
+                profile,
                 plan,
                 pallas,
                 fold: fold.to_bytes().to_vec(),
@@ -1884,4 +1911,12 @@ fn load_profiles_with_q(
         }
     }
     None
+}
+
+#[test]
+#[ignore = "genuine explicit tagged-A3 candidate; no production cap relaxation"]
+fn reduced_q_two_bus_tagged_three_bus_load_capacity() {
+    let profile = SourceProfile::Tagged { buses: 3 };
+    let rooted = bootstrap_outer::rooted_bootstrap_omega_with_profile(false, profile, Some(2));
+    assert!(load_source_profiles(&rooted, &[profile], Some(2), false, false).is_some());
 }

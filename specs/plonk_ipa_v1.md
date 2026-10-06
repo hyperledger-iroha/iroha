@@ -33,10 +33,10 @@ Markers:
   original selectors.
 - **Names.** Params points are `g[i]`, `g_lagrange[i]`, `W` and `U`; the IPA challenges are
   `u_0..u_{k-1}`.
-- **Bounds.** `1 <= k <= 28` and `3 <= d <= 9`. The `d` bound is the format cap; new gadget chips
-  keep `d <= 6` by `iroha_plonk_gadgets` policy. Each count is at most 65,535, the descriptor
+- **Bounds.** `1 <= k <= 28` and `3 <= d <= 9`. The `d` bound is the format cap. Ordinary standalone gadget chips
+  target `d <= 6`; the explicitly measured compact recursive layout uses up to degree 9. Each count is at most 65,535, the descriptor
   frame at most 16 MiB and the expression stack at most 1,024. Node policy may be stricter but
-  never looser (for example `[zk.halo2] MAX_K = 16`). All size arithmetic is checked, and an
+  never looser; admitted native relations pin their exact domain exponent and descriptor. All size arithmetic is checked, and an
   overflow is a rejection.
 - **Scope.** A proof covers one circuit instance and one advice phase, with no challenges, using
   IPA and halo2 permuted lookups only. Unsupported: KZG, shuffle, the Keccak transcript, the

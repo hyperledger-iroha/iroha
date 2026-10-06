@@ -39,7 +39,7 @@ fn pair(words: &[Fp]) -> [u8; 32] {
 fn narrow(value: Fp) -> u64 {
     integer(value).try_into().unwrap()
 }
-fn state(w: &StateWitness) -> StateV1<Fp> {
+pub fn state(w: &StateWitness) -> StateV1<Fp> {
     let c = &w.core;
     let r = &w.rest;
     StateV1 {
@@ -93,7 +93,7 @@ fn state(w: &StateWitness) -> StateV1<Fp> {
         },
     }
 }
-fn receiver_credential() -> Signed {
+pub fn receiver_credential() -> Signed {
     let (_, _, original) = enrollment();
     let mut body = original.bytes[..ObjectKind::Credential.body_len()].to_vec();
     body[66..98].copy_from_slice(&small_id(71, 72));

@@ -1340,7 +1340,7 @@ CURRENT_CONSENSUS_STAGES = (("current nonempty consensus and bounded work wakeup
     'machine::tests::handlers::idle_payload_wait_and_payload_ready',
     'machine::tests::handlers::oversized_payload_waits_for_bounded_rebuild',
     'machine::tests::liveness::det_l13_late_views_build_nonempty_work',
-    'machine::tests::attestation::det_a7_empty_proposals_are_rejected_at_every_view',
+    'machine::tests::build_and_roles::empty_proposals_are_rejected_at_every_view',
     'machine::tests::cluster::det_l21_idle_work_wakes_without_heartbeat',
     'machine::tests::handlers::det_r4_payload_ready_moves_no_timer',
     'sim::tests::f17_far_behind_joiner',
@@ -1420,6 +1420,7 @@ DATA_MODEL_STAGES += (("portable current certificate cryptography and attestatio
     'sumeragi_finality::tests::current_proofs_roundtrip_and_verify_successful_exact_execution',
     'sumeragi_finality::tests::alternate_current_quorum_witnesses_have_one_authenticated_execution',
     'sumeragi_finality::tests::current_proof_rejects_tampered_qc_result_committee_parent_wire_and_availability',
+    'sumeragi_finality::tests::current_certificate_rejects_retired_attestation_fields',
     'sumeragi_finality::tests::current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identity',
 )),)
 TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
@@ -2088,12 +2089,12 @@ CORE_NATIVE_CONNECTION_STAGES = (
 # Proof-stack regressions run in the extracted `iroha_core_zk` library harness.
 CORE_ZK_STAGES = (
     ("bounded deterministic IPA startup parameters", (
-        'zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
-        'zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
-        'zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
-        'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
-        'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
-        'debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
+        'native_pipa_r::tests::native_compiled_key_cache_shares_exact_material_across_threads',
+        'native_pipa_r::tests::native_compiled_descriptors_bind_pinned_parameters_and_exact_domains',
+        'native_pipa_r::tests::native_parameter_admission_rejects_unadmitted_and_oversized_sources',
+        'native_pipa_r::tests::native_key_records_bind_curve_schema_relation_length_and_compiled_key',
+        'native_parameter_source_tests::production_parameter_map_matches_kaigi_circuit_constants',
+        'preverify_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
     )),
 )
 

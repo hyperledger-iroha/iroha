@@ -164,9 +164,7 @@ fn final_kaigi_rejects_retired_labels_schema_metadata_and_relabelled_keys() {
         "halo2/pasta/kaigi-roster-v1",
         "halo2/pasta/ipa/kaigi-roster-v1",
     ] {
-        assert!(!halo2_open_verify_circuit_id_is_production_v1(retired));
-        assert!(halo2_ipa_public_inputs_schema_v1(retired).is_none());
-        assert!(halo2_ipa_canonical_k_v1(retired).is_none());
+        assert!(native_pipa_r::relation(ZK_BACKEND_NATIVE_PIPA_R, retired).is_none());
         assert!(!verify_backend(
             ZK_BACKEND_NATIVE_PIPA_R,
             &mutate_outer(&proof, |outer| outer.circuit_id = retired.to_owned()),

@@ -6,11 +6,10 @@
 #[path = "common/zk_components.rs"]
 mod zk_components;
 use iroha_core::{
-    execution_attempt::ExecutionAttemptError,
     executor::Executor,
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, WorldReadOnly},
 };
 use iroha_core_zk::test_utils::{FixtureEnvelope, native_confidential_fixture_envelope};
 use iroha_data_model::{
@@ -25,15 +24,6 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use zk_components::execute_isi_component;
 
-/// Unwrap a deterministic rejection; a local retry deferral is a test failure.
-fn rejected(err: ExecutionAttemptError<ValidationFail>) -> ValidationFail {
-    match err {
-        ExecutionAttemptError::Rejected(err) => err,
-        ExecutionAttemptError::Deferred(deferred) => {
-            panic!("expected a deterministic rejection, got a local deferral: {deferred:?}")
-        }
-    }
-}
 #[path = "common/native_genesis.rs"]
 mod native_genesis;
 #[path = "common/world_fixture.rs"]
@@ -139,7 +129,6 @@ fn duplicate_proof_in_same_block_is_rejected() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     // Build a transaction with proofs carrying a single inline attachment and no instructions
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
@@ -178,8 +167,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
     .with_attachments(attachments.clone())
     .sign(&private_key);
     let mut stx1 = block.transaction();
-    exec.execute_transaction(&mut stx1, &authority, tx1, &mut ivm_cache)
-        .expect("first tx should pass pre-verify");
+    Executor::preverify_attachments(&mut stx1, &tx1).expect("first tx should pass pre-verify");
     drop(stx1);
     // Second identical transaction in the same block should hit dedup
     let tx2: SignedTransaction = TransactionBuilder::new(
@@ -193,10 +181,8 @@ fn duplicate_proof_in_same_block_is_rejected() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx2 = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx2, &authority, tx2, &mut ivm_cache)
-            .expect_err("duplicate proof should be rejected"),
-    );
+    let err = Executor::preverify_attachments(&mut stx2, &tx2)
+        .expect_err("duplicate proof should be rejected");
     match err {
         ValidationFail::NotPermitted(msg) => {
             assert!(msg.contains("duplicate proof"));
@@ -355,8 +341,7 @@ fn preverify_rejects_missing_vk_reference() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let exec = Executor::default();
+
     // Build tx with attachment referencing a non-existent VK id
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
@@ -379,10 +364,8 @@ fn preverify_rejects_missing_vk_reference() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-            .expect_err("missing vk_ref should be rejected"),
-    );
+    let err = Executor::preverify_attachments(&mut stx, &tx)
+        .expect_err("missing vk_ref should be rejected");
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("verifying key")));
 }
 #[test]
@@ -397,8 +380,7 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let exec = Executor::default();
+
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         iroha_data_model::proof::ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
@@ -409,10 +391,8 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect_err("proof backend mismatch should be rejected before registry lookup"),
-    );
+    let err = Executor::preverify_attachments(&mut stx, &tx)
+        .expect_err("proof backend mismatch should be rejected before registry lookup");
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg == "malformed proof attachment: proof.backend must match attachment backend")
     );
@@ -429,8 +409,7 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let exec = Executor::default();
+
     let fixture = bound_native_fixture();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
@@ -442,10 +421,8 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect_err("vk_ref backend mismatch should be rejected before registry lookup"),
-    );
+    let err = Executor::preverify_attachments(&mut stx, &tx)
+        .expect_err("vk_ref backend mismatch should be rejected before registry lookup");
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg == "malformed proof attachment: vk_ref.backend must match attachment backend")
     );
@@ -467,8 +444,7 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
             0,
         );
         let mut block = state.block(header);
-        let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-        let exec = Executor::default();
+
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
             backend.into(),
             iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
@@ -482,10 +458,8 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
             bounded_proof_attachments(vec![attachment]),
         );
         let mut stx = block.transaction();
-        let err = rejected(
-            exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-                .expect_err("protocol name must fail as a generic backend before registry lookup"),
-        );
+        let err = Executor::preverify_attachments(&mut stx, &tx)
+            .expect_err("protocol name must fail as a generic backend before registry lookup");
         assert!(
             matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("unsupported proof backends")),
             "unexpected preverify error for {backend}: {err:?}"
@@ -509,8 +483,7 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
             0,
         );
         let mut block = state.block(header);
-        let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-        let exec = Executor::default();
+
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
             backend.into(),
             iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
@@ -524,12 +497,15 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
             bounded_proof_attachments(vec![attachment]),
         );
         let mut stx = block.transaction();
-        let err = rejected(
-            exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-                .expect_err("production-claim attachment backend must fail before registry lookup"),
-        );
+        let err = Executor::preverify_attachments(&mut stx, &tx)
+            .expect_err("production-claim attachment backend must fail before registry lookup");
+        let expected = if iroha_data_model::proof::verifying_key_id_field_is_portable(backend) {
+            "readiness-claim proof backends"
+        } else {
+            "malformed proof attachment: vk_ref must use portable registry syntax"
+        };
         assert!(
-            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("production-claim proof backends")),
+            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains(expected)),
             "unexpected preverify error for {backend}: {err:?}"
         );
     }
@@ -546,8 +522,7 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let exec = Executor::default();
+
     let fixture = bound_native_fixture();
     let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
@@ -560,10 +535,8 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect_err("vk_commitment must not bypass the registry reference requirement"),
-    );
+    let err = Executor::preverify_attachments(&mut stx, &tx)
+        .expect_err("vk_commitment must not bypass the registry reference requirement");
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("verifying key inactive"))
     );
@@ -580,7 +553,6 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
     let authority = ALICE_ID.clone();
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_proposed");
@@ -613,10 +585,8 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-            .expect_err("inactive registered vk must not preverify"),
-    );
+    let err = Executor::preverify_attachments(&mut stx, &tx)
+        .expect_err("inactive registered vk must not preverify");
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("verifying key inactive"))
     );
@@ -630,7 +600,7 @@ fn verifyproof_requires_registered_verifying_key() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let exec = Executor::default();
+
     let fixture = bound_native_fixture();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
@@ -655,7 +625,7 @@ fn verifyproof_rejects_proof_backend_mismatch_before_lookup() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let exec = Executor::default();
+
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         iroha_data_model::proof::ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
@@ -675,7 +645,7 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let exec = Executor::default();
+
     let fixture = bound_native_fixture();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
@@ -696,7 +666,7 @@ fn verifyproof_rejects_unsupported_backend_before_lookup() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let exec = Executor::default();
+
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/unknown-native-v1".into(),
         iroha_data_model::proof::ProofBox::new("halo2/unknown-native-v1".into(), vec![1, 2, 3]),
@@ -872,7 +842,6 @@ fn preverify_rejects_empty_proof_as_malformed() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
@@ -910,10 +879,8 @@ fn preverify_rejects_empty_proof_as_malformed() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-            .expect_err("empty proof should be rejected as malformed"),
-    );
+    let err = Executor::preverify_attachments(&mut stx, &tx)
+        .expect_err("empty proof should be rejected as malformed");
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("malformed proof")));
 }
 #[test]
@@ -928,7 +895,6 @@ fn preverify_rejects_proof_too_big() {
         0,
     );
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
@@ -968,10 +934,8 @@ fn preverify_rejects_proof_too_big() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx = block.transaction();
-    let err = rejected(
-        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-            .expect_err("oversized proof should be rejected"),
-    );
+    let err = Executor::preverify_attachments(&mut stx, &tx)
+        .expect_err("oversized proof should be rejected");
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("proof too big")));
 }
 #[test]

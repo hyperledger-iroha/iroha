@@ -49,12 +49,10 @@ fn original_genesis_and_successor_have_exact_native_execution_authority() {
     );
     assert_eq!(second.header().unwrap().parent_result, first.result());
     assert_eq!(second.header().unwrap().parent_hash, first.core_hash());
-    assert!(!second.header().unwrap().attest);
+
     let (_, qc) = chain.committed_body(2).unwrap().unwrap();
     assert_eq!(qc.signers.count_ones(), 3);
-    assert!(!qc.attest);
-    assert!(qc.attestations.is_empty());
-    assert!(qc.attestation_witness.is_none());
+
     assert!(
         second
             .block()
@@ -71,18 +69,14 @@ fn foreign_execution_certificate_cannot_prepare_original_worker() {
     let mut foreign = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1000)).unwrap();
     foreign.commit_at(3000, Vec::new());
     let foreign_committed = foreign.committed(2);
-    let mut foreign_qc = foreign.commit_qc(
+    let foreign_qc = foreign.commit_qc(
         2,
         foreign_committed.core_hash(),
         foreign_committed.result(),
-        foreign_committed.header().unwrap().attest,
         Signers::Quorum,
     );
     let state = Arc::clone(source.state());
     let kura = Arc::clone(source.kura());
-    foreign_qc
-        .admit_attestation_witness(&state.ivm_execution_budget())
-        .unwrap();
     let proposal = source.proposal(Some(2000), Vec::new());
     let mut pending = source.begin_proposal(proposal, Default::default()).unwrap();
     let original_result = pending.result();

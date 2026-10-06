@@ -566,7 +566,6 @@ impl CertifiedTestChain {
             staging.clone(),
             state.ivm_execution_budget(),
             Arc::clone(&availability),
-            Arc::new(iroha_sumeragi::crypto::NoAttestation),
         );
         let (events, event_receiver) = tokio::sync::broadcast::channel(4096);
         let executor = StateExecutor::spawn(ExecutorContext {
@@ -1190,7 +1189,6 @@ impl CertifiedTestChain {
             proposer: 0,
             skipped_leaders: Vec::new(),
             // Match the production application rule at every height, including boundaries.
-            attest: false,
         };
         let block = self.author_payload(header, payload_bytes);
         let block_hash = block.hash(&*self.crypto);
@@ -1228,7 +1226,7 @@ impl CertifiedTestChain {
     }
 
     /// A `CommitQC` of `(height, block_hash, result)` signed by `signers` (view 0).
-    /// Flagged or wrong-cardinality controls produce genuinely signed invalid certificates
+    /// Wrong-cardinality controls produce genuinely signed invalid certificates
     /// for negative reads; ordinary production publication never admits them.
     #[must_use]
     pub fn commit_qc(
@@ -1236,7 +1234,6 @@ impl CertifiedTestChain {
         height: u64,
         block_hash: Hash32,
         result: Hash32,
-        attest: bool,
         signers: Signers,
     ) -> Qc {
         let context = self.certificate_context(height);
@@ -1262,12 +1259,10 @@ impl CertifiedTestChain {
                     view: 0,
                     block_hash,
                     result,
-                    attest,
                     signer,
                     sig: iroha_sumeragi::types::Signature(
                         [0; iroha_sumeragi::types::SIGNATURE_LEN],
                     ),
-                    attestation: None,
                 };
                 vote.sig = self
                     .signer_for_member(&context.committee[signer as usize].validator)
@@ -1280,11 +1275,11 @@ impl CertifiedTestChain {
         match form_qc(&*self.crypto, committee.n(), &refs) {
             Ok(qc) => qc,
             // Only explicitly malformed controls may bypass QC construction: wrong quorum
-            // cardinality, or a flagged application certificate with no attestation authority.
+            // cardinality.
             // These retain genuine BLS signatures and are never admitted by publication.
             Err(error) => {
                 assert!(
-                    attest || matches!(signers, Signers::BelowQuorum | Signers::All),
+                    matches!(signers, Signers::BelowQuorum | Signers::All),
                     "an ordinary exact-quorum native certificate must form: {error:?}"
                 );
                 let mut signers_bitmap = iroha_sumeragi::types::Bitmap::new(committee.n());
@@ -1300,11 +1295,8 @@ impl CertifiedTestChain {
                     view: 0,
                     block_hash,
                     result,
-                    attest,
                     signers: signers_bitmap,
                     agg_sig: iroha_sumeragi::crypto::Crypto::aggregate(&*self.crypto, &sigs),
-                    attestations: Vec::new(),
-                    attestation_witness: None,
                 }
             }
         }
@@ -1497,15 +1489,12 @@ impl PendingTestExecution<'_> {
                 return Err("original pending certificate cannot be replaced".into());
             }
         } else {
-            let mut qc = self.chain.commit_qc(
+            let qc = self.chain.commit_qc(
                 self.block.header().height,
                 self.block_hash,
                 self.result,
-                self.block.header().attest,
                 signers,
             );
-            qc.admit_attestation_witness(&self.chain.state.ivm_execution_budget())
-                .map_err(|error| error.to_string())?;
             self.certificate = Some((signers, qc));
         }
         let (_, qc) = self
@@ -2125,12 +2114,10 @@ mod tests {
         };
         chain.commit(Vec::new());
         let boundary = chain.committed(10);
-        assert!(!boundary.header().unwrap().attest);
+
         let (_, certificate) = chain.committed_body(10).unwrap().unwrap();
         assert_eq!(certificate.signers.count_ones(), 3);
-        assert!(!certificate.attest);
-        assert!(certificate.attestations.is_empty());
-        assert!(certificate.attestation_witness.is_none());
+
         let next = &boundary
             .commitment()
             .schedule
@@ -2650,14 +2637,12 @@ mod tests {
     }
 
     #[test]
-    fn native_exact_quorums_need_no_application_seals_and_reject_flagged_controls() {
+    fn native_exact_quorums_reject_genuine_signer_supersets() {
         let mut chain = CertifiedTestChain::from_prepared(prepared_config()).unwrap();
         chain.commit_at(20_000, Vec::new());
         let (_, qc) = chain.committed_body(2).unwrap().unwrap();
         assert_eq!(qc.signers.count_ones(), 3);
-        assert!(!qc.attest);
-        assert!(qc.attestations.is_empty());
-        assert!(qc.attestation_witness.is_none());
+
         let context = chain.certificate_context(2);
         let epoch = super::super::schedule::core_epoch(&context).unwrap().id;
         let committee = Committee::new(
@@ -2676,15 +2661,9 @@ mod tests {
             &epoch,
             &committee,
         );
-        verifier
-            .verify_qc(&iroha_sumeragi::crypto::NoAttestation, &qc)
-            .unwrap();
-        let flagged = chain.commit_qc(2, qc.block_hash, qc.result, true, Signers::Quorum);
-        assert!(
-            verifier
-                .verify_qc(&iroha_sumeragi::crypto::NoAttestation, &flagged)
-                .is_err()
-        );
+        verifier.verify_qc(&qc).unwrap();
+        let oversized = chain.commit_qc(2, qc.block_hash, qc.result, Signers::All);
+        assert!(verifier.verify_qc(&oversized).is_err());
         assert_eq!(chain.height(), 2);
     }
 

@@ -659,8 +659,6 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             }
         })?,
     );
-    // This application requests no commit attestation: certificates verify without one.
-    let availability_verifier = Arc::new(iroha_sumeragi::crypto::NoAttestation);
     let lane_authorities = Arc::new(
         super::runtime_availability::NativeLaneStoreAuthorities::new(
             Arc::clone(&state),
@@ -675,7 +673,6 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         staging.clone(),
         state.ivm_execution_budget(),
         availability,
-        availability_verifier,
     ));
     let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
         GENESIS_HEIGHT,
@@ -957,9 +954,6 @@ impl Prepared {
                     init,
                     signers: vec![Arc::new(signer)],
                     crypto: shared,
-                    // This application requests no commit attestation (§3.7 A1).
-                    attestor: Box::new(iroha_sumeragi::crypto::NoAttestation),
-                    verifier: Box::new(iroha_sumeragi::crypto::NoAttestation),
                 },
             )
             .map_err(NodeError::from)?;
@@ -2507,7 +2501,6 @@ mod tests {
             )
             .expect("availability authority bound to original applied genesis"),
         );
-        let verifier = Arc::new(iroha_sumeragi::crypto::NoAttestation);
         let staging = Staging::new();
         let blocks = KuraBlockStore::new(
             kura,
@@ -2516,7 +2509,6 @@ mod tests {
             staging.clone(),
             state.ivm_execution_budget(),
             availability,
-            verifier,
         );
         let mut executor = StateExecutor::spawn(ExecutorContext {
             state: Arc::clone(&state),
@@ -2556,10 +2548,6 @@ mod tests {
         // This negative must reach execution comparison, not fail earlier on a stale
         // signature. The original committee signs the wrong result over the real block.
         use iroha_sumeragi::crypto::{Crypto as _, Signer as _};
-        assert!(
-            !forged.attest,
-            "ordinary fixture height has no attestation obligation"
-        );
         let committee = schedule::scheduled_committee(state.view().world(), 2)
             .expect("authenticated original committee");
         let preimage = forged.preimage();

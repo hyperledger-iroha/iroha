@@ -1,6 +1,8 @@
 //! Fixed A-split context framing; every continuation input is rebound by hash.
 
-use super::results::{RECEIVE_RESULTS_DOMAIN, ReceiveResultClaims, ReceiveResultPlan};
+use super::results::{
+    RECEIVE_OPENING_DOMAIN, RECEIVE_RESULTS_DOMAIN, ReceiveResultClaims, ReceiveResultPlan,
+};
 use super::schedule::OperationTask;
 use super::{AProofPlan, LineagePublicCells, ProofMessageCells, VerifiedQCells, VestaClaimCells};
 use crate::operation_relation::{
@@ -8,9 +10,12 @@ use crate::operation_relation::{
     state::StateCells,
     statement::StatementCells,
 };
-use ff::PrimeField;
+use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Fp};
-use iroha_plonk::frontend::{Error, Region};
+use iroha_plonk::{
+    cs::InstanceType,
+    frontend::{Error, Region, Value},
+};
 use iroha_plonk_gadgets::{
     GlueChip, Uint, Word,
     bytes::{
@@ -30,6 +35,36 @@ use iroha_plonk_recursion::{
 pub const CONTEXT_DOMAIN: [u8; 8] = *b"kgwctx_1";
 const TAPE_DOMAIN: [u8; 8] = *b"kgwctap1";
 const ACTIVE_TAPE_DOMAIN: [u8; 8] = *b"kgwcact1";
+
+#[cfg(test)]
+mod tests;
+
+fn push_q_context(
+    words: &mut Vec<Word<Fp>>,
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    value: &ScalarCells<Ep>,
+    ty: InstanceType,
+    receive: bool,
+) -> Result<(), Error> {
+    if receive && matches!(ty, InstanceType::Bounded | InstanceType::Bits(0..=253)) {
+        // Fixed descriptor bounds are strict subsets of Fp. Prove the exact
+        // bound before recomposition, even before the hard Q owner executes.
+        let valid = value.instance_type(&mut chip.uint(), region, ty)?;
+        GlueChip::assert_constant(region, valid.word(), Fp::ONE)?;
+        words.push(chip.uint().glue().linear(
+            region,
+            &[
+                (Fp::ONE, value.lo().word()),
+                (Fp::from(2).pow_vartime([128]), value.hi().word()),
+            ],
+            Fp::ZERO,
+        )?);
+    } else {
+        words.extend([value.lo().word().clone(), value.hi().word().clone()]);
+    }
+    Ok(())
+}
 
 /// A circuit-fixed external object category and exact carrier capacity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +272,16 @@ pub struct ContextPredecessor<'a> {
     /// Original checked full-k Vesta accumulator.
     pub vesta: &'a VestaClaimCells,
 }
+/// Incoming proof source selected by the fixed context schema.
+#[derive(Clone, Copy, Debug)]
+pub enum ContextIncomingProof<'a> {
+    /// A frame without a fixed Receive owner retains each exact verifier message.
+    Messages(&'a ProofMessageCells),
+    /// Receive retains its exact active Omega tape in fixed object slot4.
+    /// The mandatory Proofs owner derives every verifier message from that tape;
+    /// non-owner stages neither assign nor hash a second decoded message copy.
+    ReceiveActive,
+}
 /// Original incoming lineage and both checked transport claims.
 #[derive(Clone, Copy, Debug)]
 pub struct ContextIncoming<'a> {
@@ -244,8 +289,8 @@ pub struct ContextIncoming<'a> {
     pub public: &'a super::IncomingLineageCells,
     /// Checked original claim or its deterministic decoder dummy.
     pub pallas: &'a FoldInputCells<Ep>,
-    /// Exact original Omega message bytes and actual carrier length.
-    pub proof: &'a ProofMessageCells,
+    /// Circuit-fixed original proof source representation.
+    pub proof: ContextIncomingProof<'a>,
     /// Checked original Vesta claim or its deterministic decoder dummy.
     pub vesta: &'a VestaClaimCells,
 }
@@ -289,6 +334,51 @@ pub struct ContextPlan {
     receive_results: Option<ReceiveResultPlan>,
 }
 impl ContextPlan {
+    /// Assign proposed Receive object commitments in this plan's exact order.
+    /// Each triple is `(object digest, original byte length, tape digest)`.
+    ///
+    /// These cells only retain a proposal across stages. They do not authenticate
+    /// an object, certify a parse, or supply a soft verdict. The fixed Objects,
+    /// Proofs and Authorization/Signatures owners must recompute and copy-bind
+    /// their exact tapes before the complete stage catalog can be admitted.
+    /// This avoids rehashing every unrelated tape in every continuation.
+    ///
+    /// # Errors
+    /// Not a complete Receive task plan, wrong number of commitments, or layout
+    /// failure. Lengths outside `UInt32` are unsatisfiable.
+    pub fn assign_receive_object_claims(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        values: &[[Value<Fp>; 3]],
+    ) -> Result<Vec<ContextObjectCells>, Error> {
+        if self.receive_results.is_none()
+            || self.objects.len() != 11
+            || values.len() != self.objects.len()
+        {
+            return Err(Error::Synthesis);
+        }
+        self.objects
+            .iter()
+            .zip(values)
+            .map(|(spec, values)| {
+                let [authenticated_digest, length, tape_digest] = chip
+                    .uint()
+                    .glue()
+                    .witnesses(region, values)?
+                    .try_into()
+                    .map_err(|_| Error::Synthesis)?;
+                let length = chip.uint().range_check::<32>(region, &length)?;
+                Ok(ContextObjectCells {
+                    spec: *spec,
+                    authenticated_digest,
+                    length,
+                    tape_digest,
+                })
+            })
+            .collect()
+    }
+
     /// Pin a nonempty initial Q partition and every source Q key identity.
     /// W's key is pinned only in A2: placing it in A1 would create a VK cycle.
     ///
@@ -473,12 +563,48 @@ impl ContextPlan {
         ) && stage_tasks.iter().any(|tasks| !tasks.is_empty())
         {
             let plan = ReceiveResultPlan::from_tasks(operation.frame().variant(), &stage_tasks)?;
+            // This fixed Receive schema binds original active tape slot4 once,
+            // with parsing assigned to the mandatory Proofs owner. It cannot be
+            // confused with a frame retaining explicit decoded message cells.
+            constants.extend([
+                Fp::from(u64::from_le_bytes(*b"kgwcrcv1")),
+                Fp::from(4),
+                Fp::from(3),
+                Fp::from(u64::from_le_bytes(*b"kgwcqtp1")),
+            ]);
             constants.extend([
                 Fp::from(u64::from_le_bytes(RECEIVE_RESULTS_DOMAIN)),
                 Fp::from(5),
             ]);
             for (tag, owner) in plan.schema() {
                 constants.extend([Fp::from(u64::from(tag)), Fp::from(u64::from(owner))]);
+            }
+            constants.extend([
+                Fp::from(u64::from_le_bytes(RECEIVE_OPENING_DOMAIN)),
+                Fp::from(35),
+            ]);
+            // Receive's deferred opening is interpreted only under these
+            // exact fixed proof programs; the carried key is bound by public18.
+            constants.push(Fp::from(u64::from_le_bytes(*b"kgwrcls1")));
+            for binding in std::iter::once(operation.omega().ok_or(Error::Synthesis)?.binding())
+                .chain(
+                    (0..2)
+                        .map(|slot| {
+                            operation
+                                .sigma
+                                .class(slot)
+                                .map(|class| class.verifier().binding())
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or(Error::Synthesis)?,
+                )
+            {
+                constants.push(Fp::from(u64::from(binding.descriptor().k)));
+                for limb in binding.digest().chunks_exact(16) {
+                    constants.push(Fp::from_u128(u128::from_le_bytes(
+                        limb.try_into().map_err(|_| Error::Synthesis)?,
+                    )));
+                }
             }
             Some(plan)
         } else {
@@ -606,17 +732,22 @@ impl ContextPlan {
                 return Err(Error::Synthesis);
             }
             words.extend(incoming.vesta.words());
-            let omega = self.operation.omega().ok_or(Error::Synthesis)?;
-            if incoming.proof.messages().len().checked_mul(32) != Some(omega.proof_length()) {
-                return Err(Error::Synthesis);
-            }
-            words.push(incoming.proof.length().word().clone());
-            for message in incoming.proof.messages() {
-                words.extend([
-                    message.lo().word().clone(),
-                    message.hi().word().clone(),
-                    message.top().word().clone(),
-                ]);
+            match self.incoming_proof_binding(input)? {
+                super::proof::IncomingProofBinding::Messages(proof) => {
+                    words.push(proof.length().word().clone());
+                    for message in proof.messages() {
+                        words.extend([
+                            message.lo().word().clone(),
+                            message.hi().word().clone(),
+                            message.top().word().clone(),
+                        ]);
+                    }
+                }
+                super::proof::IncomingProofBinding::ReceiveActive(_) => {
+                    // Exact original length/tape commitment is included below
+                    // in fixed slot4. The Proofs owner derives the only message
+                    // view that can supply the authenticated opening/result.
+                }
             }
         }
         for (index, columns) in input.q_instances.iter().enumerate() {
@@ -635,8 +766,21 @@ impl ContextPlan {
             {
                 return Err(Error::Synthesis);
             }
-            for value in columns.iter().flatten() {
-                words.extend([value.lo().word().clone(), value.hi().word().clone()]);
+            let types = d.instance_types.as_ref().ok_or(Error::Synthesis)?;
+            if types.len() != columns.len() {
+                return Err(Error::Synthesis);
+            }
+            for (column, ty) in columns.iter().zip(types) {
+                for value in column {
+                    push_q_context(
+                        &mut words,
+                        chip,
+                        region,
+                        value,
+                        *ty,
+                        self.receive_results.is_some(),
+                    )?;
+                }
             }
         }
         for (spec, object) in self.objects.iter().zip(input.objects) {
@@ -670,6 +814,33 @@ impl ContextPlan {
         }
         push_pallas(&mut words, carried)?;
         chip.hash_words(region, u64::from_le_bytes(CONTEXT_DOMAIN), &words)
+    }
+
+    pub(super) fn incoming_proof_binding(
+        &self,
+        input: &ContextInputs<'_>,
+    ) -> Result<super::proof::IncomingProofBinding, Error> {
+        use super::proof::IncomingProofBinding;
+        match (
+            input.incoming.ok_or(Error::Synthesis)?.proof,
+            self.receive_results,
+        ) {
+            (ContextIncomingProof::Messages(proof), None) => {
+                let omega = self.operation.omega().ok_or(Error::Synthesis)?;
+                if proof.messages().len().checked_mul(32) != Some(omega.proof_length()) {
+                    return Err(Error::Synthesis);
+                }
+                Ok(IncomingProofBinding::Messages(proof.clone()))
+            }
+            (ContextIncomingProof::ReceiveActive, Some(_))
+                if self.objects.len() == 11 && input.objects.len() == 11 =>
+            {
+                Ok(IncomingProofBinding::ReceiveActive(
+                    input.objects[4].commitment_words(),
+                ))
+            }
+            _ => Err(Error::Synthesis),
+        }
     }
     /// Copy-bind exactly one fixed Q partition to its hard verifier outputs.
     /// The stage index selects a circuit-fixed Q partition. All stages hash

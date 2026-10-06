@@ -351,7 +351,14 @@ fn portable_production_capabilities_default_to_enabled() {
 
     assert!(config.confidential.enabled);
     assert!(!config.confidential.assume_valid);
-    assert!(config.zk.halo2.enabled);
+    assert!(config.zk.pipa_r.enabled);
+    assert!(config.zk.trace.enabled);
+    assert_eq!(config.zk.trace.max_batch, 16);
+    assert_eq!(config.zk.max_verify_batch, 16);
+    assert_eq!(config.zk.ipa_commitment.max_k, 16);
+    assert_eq!(config.zk.ipa_commitment.max_transcript_label_len, 64);
+    assert_eq!(config.zk.ipa_commitment.max_envelope_bytes, 256 * 1024);
+    assert!(config.zk.ipa_commitment.enforce_transcript_label_ascii);
     assert!(config.zk.stark.enabled);
     assert!(config.gov.plain_voting_enabled);
     assert!(config.streaming.sync.enabled);

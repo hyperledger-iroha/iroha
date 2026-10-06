@@ -239,9 +239,7 @@ fn original_prepared_signature_graphs_keep_genesis_and_successor_native_finality
     let hashes = frames.iter().map(|block| block.hash()).collect::<Vec<_>>();
     let network = chain.network_id();
     let chain_id = ChainId::from("sumeragi-certified-test-chain");
-    let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &frames)
-        .unwrap()
-        .with_attestation_verifier(&NoAttestation);
+    let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &frames).unwrap();
     assert_eq!(
         reader.certified(1).unwrap().verification(),
         QcVerification::Genesis

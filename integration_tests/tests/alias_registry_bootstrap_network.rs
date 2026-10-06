@@ -38,7 +38,6 @@ use iroha_core::{
     kura::{BlockIndex, BlockStore, Kura},
     state::{AllocationBudget, derive_committee_key_id},
     sumeragi::{
-        attestation::NativePastaVerifier,
         availability_schedule::AvailabilitySchedule,
         certified_chain::CertifiedPrefix,
         crypto::BlsCrypto,
@@ -1654,7 +1653,6 @@ fn inspect_certified_bpng_lane_evidence(
             crypto.clone(),
             budget.clone(),
             Arc::clone(&schedule),
-            Arc::new(NativePastaVerifier::new(instance, network_id)),
         )?
         .poll()?;
         ensure!(

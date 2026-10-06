@@ -590,7 +590,7 @@ pub struct CoreHostImpl<QS> {
     default: ivm::host::DefaultHost,
     codec_host: IvmCodecHost,
     access_log_enabled: bool,
-    halo2_config: ivm::host::ZkHalo2Config,
+    zk_verify_limits: ivm::host::ZkVerifyLimits,
     zk_gas_schedule: ivm::gas::ZkGasScheduleV1,
     stark_config: iroha_config::parameters::actual::Stark,
     pipa_r_config: iroha_config::parameters::actual::PipaR,
@@ -2901,7 +2901,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
-            halo2_config: ivm::host::ZkHalo2Config::default(),
+            zk_verify_limits: ivm::host::ZkVerifyLimits::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             stark_config: iroha_config::parameters::actual::Stark::default(),
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
@@ -3031,7 +3031,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
-            halo2_config: ivm::host::ZkHalo2Config::default(),
+            zk_verify_limits: ivm::host::ZkVerifyLimits::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             stark_config: iroha_config::parameters::actual::Stark::default(),
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
@@ -3115,7 +3115,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
-            halo2_config: ivm::host::ZkHalo2Config::default(),
+            zk_verify_limits: ivm::host::ZkVerifyLimits::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             stark_config: iroha_config::parameters::actual::Stark::default(),
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
@@ -3997,34 +3997,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.default
             .set_sm_enabled(self.crypto.sm_helpers_enabled());
     }
-    /// Configure Halo2 verification limits for forwarded `ZK_VERIFY` syscalls
-    /// using `iroha_config.zk.halo2` values.
-    pub fn set_halo2_config(&mut self, cfg: &iroha_config::parameters::actual::Halo2) {
-        let curve = match cfg.curve {
-            iroha_config::parameters::actual::ZkCurve::Pallas => ivm::host::ZkCurve::Pallas,
-            iroha_config::parameters::actual::ZkCurve::Pasta => ivm::host::ZkCurve::Pasta,
-            iroha_config::parameters::actual::ZkCurve::Goldilocks => ivm::host::ZkCurve::Goldilocks,
-            iroha_config::parameters::actual::ZkCurve::Bn254 => ivm::host::ZkCurve::Bn254,
-        };
-        let backend = match cfg.backend {
-            iroha_config::parameters::actual::Halo2Backend::Ipa => ivm::host::ZkHalo2Backend::Ipa,
-        };
-        let new_cfg = ivm::host::ZkHalo2Config {
-            enabled: cfg.enabled,
-            curve,
-            backend,
-            max_k: cfg.max_k,
-            verifier_budget_ms: cfg.verifier_budget_ms,
-            verifier_max_batch: cfg.verifier_max_batch,
-            max_envelope_bytes: cfg.max_envelope_bytes,
-            max_proof_bytes: cfg.max_proof_bytes,
-            max_transcript_label_len: cfg.max_transcript_label_len,
-            enforce_transcript_label_ascii: cfg.enforce_transcript_label_ascii,
-        };
-        self.halo2_config = new_cfg;
-        self.default.set_zk_halo2_config(new_cfg);
-        self.notify_telemetry_halo2_config();
-    }
     /// Configure STARK verification limits for forwarded `ZK_VERIFY` syscalls.
     pub fn set_stark_config(&mut self, cfg: &iroha_config::parameters::actual::Stark) {
         self.stark_config = *cfg;
@@ -4038,7 +4010,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         );
         self.zk_gas_schedule = schedule;
         self.default.set_zk_gas_schedule(schedule);
-        self.set_halo2_config(&cfg.halo2);
+        self.zk_verify_limits = ivm::host::ZkVerifyLimits {
+            max_verify_batch: cfg.max_verify_batch,
+            max_envelope_bytes: cfg
+                .pipa_r
+                .max_envelope_bytes
+                .max(cfg.stark.max_envelope_bytes),
+            max_proof_bytes: cfg.pipa_r.max_proof_bytes.max(cfg.stark.max_proof_bytes),
+        };
+        self.default.set_zk_verify_limits(self.zk_verify_limits);
         self.set_stark_config(&cfg.stark);
         self.pipa_r_config = cfg.pipa_r;
     }
@@ -4064,20 +4044,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let _ = self;
     }
     #[cfg(feature = "telemetry")]
-    fn notify_telemetry_halo2_config(&self) {
-        if let Some(telemetry) = self.telemetry.as_ref() {
-            telemetry.set_halo2_runtime_config(self.halo2_config);
-        }
-    }
-    #[cfg(not(feature = "telemetry"))]
-    fn notify_telemetry_halo2_config(&self) {
-        let _ = self;
-    }
-    #[cfg(feature = "telemetry")]
     fn align_telemetry_snapshot(&mut self) {
         if let Some(telemetry) = self.telemetry.as_ref() {
             telemetry.set_sm_openssl_preview(self.crypto.enable_sm_openssl_preview);
-            telemetry.set_halo2_runtime_config(self.halo2_config);
         }
     }
     pub(crate) fn clear_axt_reject(&mut self) {
@@ -4518,7 +4487,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         }
         match rec.backend {
-            BackendTag::Halo2IpaPasta => "halo2/ipa",
             BackendTag::Stark => "stark",
             BackendTag::NativePipaRPasta => "pipa-r/pasta",
         }
@@ -4528,10 +4496,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         backend_label: &str,
         backend_tag: BackendTag,
     ) -> bool {
-        matches!(
-            backend_tag,
-            BackendTag::Halo2IpaPasta | BackendTag::Stark | BackendTag::NativePipaRPasta
-        ) && crate::zk::verifier_backend_registry_tag_v1(backend_label)
+        crate::zk::verifier_backend_registry_tag_v1(backend_label)
             .is_some_and(|expected| expected == backend_tag)
     }
     #[cfg(test)]
@@ -4544,17 +4509,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         payload_len: usize,
     ) -> Result<(), u64> {
         match env.backend {
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta => {
-                if payload_len > self.halo2_config.max_envelope_bytes {
-                    return Err(ivm::host::ERR_ENVELOPE_SIZE);
-                }
-                if !self.halo2_config.enabled {
-                    return Err(ivm::host::ERR_DISABLED);
-                }
-                if self.halo2_config.backend != ivm::host::ZkHalo2Backend::Ipa {
-                    return Err(ivm::host::ERR_BACKEND);
-                }
-            }
             iroha_data_model::zk::BackendTag::NativePipaRPasta => {
                 if payload_len > self.pipa_r_config.max_envelope_bytes {
                     return Err(ivm::host::ERR_ENVELOPE_SIZE);
@@ -4642,8 +4596,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if proof_len_bytes > self.pipa_r_config.max_proof_bytes {
                 return Err(ivm::host::ERR_PROOF_LEN);
             }
-        } else if proof_len_bytes > self.halo2_config.max_proof_bytes {
-            return Err(ivm::host::ERR_PROOF_LEN);
+        } else {
+            return Err(ivm::host::ERR_BACKEND);
         }
         Ok(())
     }
@@ -4659,13 +4613,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         {
             return curve_label == "vesta";
         }
-        match self.halo2_config.curve {
-            ivm::host::ZkCurve::Pallas | ivm::host::ZkCurve::Pasta => {
-                curve_label == "pallas" || curve_label == "pasta"
-            }
-            ivm::host::ZkCurve::Goldilocks => curve_label == "goldilocks",
-            ivm::host::ZkCurve::Bn254 => curve_label == "bn254",
-        }
+        false
     }
     fn enforce_zk_envelope_value_impl(
         &self,
@@ -4683,7 +4631,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let max_proof_bytes = match env.backend {
             BackendTag::Stark => self.stark_config.max_proof_bytes,
             BackendTag::NativePipaRPasta => self.pipa_r_config.max_proof_bytes,
-            _ => self.halo2_config.max_proof_bytes,
         };
         env.validate_with_bounds(OpenVerifyEnvelopeBounds {
             max_proof_bytes,
@@ -4715,16 +4662,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::host::ERR_CURVE);
         }
         if !crate::zk::is_stark_fri_v1_backend(backend_label) {
-            let Some(k) = prepared
+            let Some(_fixed_k) = prepared
                 .material
                 .as_ref()
                 .and_then(crate::zk::PreparedVerifyingKeyMaterialV1::ipa_k)
             else {
                 return Err(ivm::host::ERR_DECODE);
             };
-            if env.backend == BackendTag::Halo2IpaPasta && k > self.halo2_config.max_k {
-                return Err(ivm::host::ERR_K);
-            }
         }
         let schema_hash: [u8; 32] = Hash::new(&env.public_inputs).into();
         if schema_hash != vk_rec.public_inputs_schema_hash {
@@ -4780,9 +4724,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             pipa_r_enabled: self.pipa_r_config.enabled,
             pipa_r_max_envelope_bytes: self.pipa_r_config.max_envelope_bytes,
             pipa_r_max_proof_bytes: self.pipa_r_config.max_proof_bytes,
-            halo2_enabled: self.halo2_config.enabled,
-            halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
-            halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
+
             stark_enabled: self.stark_config.enabled,
             stark_max_envelope_bytes: self.stark_config.max_envelope_bytes,
             stark_max_proof_bytes: self.stark_config.max_proof_bytes,
@@ -11053,7 +10995,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     }
                     let quote = ivm::host::quote_zk_batch_at(vm, ptr, self.zk_gas_schedule)?;
                     ivm::host::preflight_reserved_syscall_gas(vm, quote.gas)?;
-                    let max_items = usize::try_from(self.halo2_config.verifier_max_batch)
+                    let max_items = usize::try_from(self.zk_verify_limits.max_verify_batch)
                         .unwrap_or(usize::MAX)
                         .min(
                             usize::try_from(self.zk_gas_schedule.max_batch_proofs)
@@ -25288,8 +25230,8 @@ seiyaku DurableOwner {
         );
         assert_eq!(host.zk_gas_schedule(), expected_zk_gas_schedule);
         assert_eq!(host.default.zk_gas_schedule(), expected_zk_gas_schedule);
-        let halo2 = state.view().zk.halo2.clone();
-        host.set_halo2_config(&halo2);
+        let config = state.view().zk.clone();
+        host.set_zk_config(&config);
         assert_eq!(host.zk_gas_schedule(), expected_zk_gas_schedule);
         assert_eq!(host.default.zk_gas_schedule(), expected_zk_gas_schedule);
         assert_eq!(
@@ -25990,10 +25932,10 @@ mod native_pipa_r_admission_tests {
     use iroha_test_samples::ALICE_ID;
 
     #[test]
-    fn native_policy_caps_curve_and_exact_circuit_are_independent_of_halo2() {
+    fn native_policy_caps_curve_and_exact_circuit_are_independent_of_trace() {
         let mut host = CoreHost::new(ALICE_ID.clone());
         let mut config = crate::state::default_zk_config();
-        config.halo2.enabled = false;
+        config.trace.enabled = false;
         config.pipa_r.enabled = true;
         config.pipa_r.max_envelope_bytes = 100;
         config.pipa_r.max_proof_bytes = 2;

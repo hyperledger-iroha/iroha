@@ -120,9 +120,6 @@ mod tests {
         assert_eq!(chain.committed(2).commitment().schedule.current, original);
         let (_, qc) = chain.committed_body(2).unwrap().unwrap();
         assert_eq!(qc.signers.count_ones(), 3);
-        assert!(!qc.attest);
-        assert!(qc.attestations.is_empty());
-        assert!(qc.attestation_witness.is_none());
     }
 
     #[test]

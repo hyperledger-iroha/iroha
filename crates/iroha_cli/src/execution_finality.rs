@@ -963,9 +963,7 @@ mod tests {
         let certificate = verified.block().commit_certificate().unwrap();
         let qc: iroha_sumeragi::message::Qc =
             norito::decode_canonical(certificate.commit_qc()).unwrap();
-        assert!(!qc.attest);
-        assert!(qc.attestations.is_empty());
-        assert!(qc.attestation_witness.is_none());
+        assert_eq!(qc.signers.count_ones(), 3);
         stream
             .consume(&[norito::encode_canonical(&child).unwrap()])
             .expect("authenticated epoch successor across another file boundary");

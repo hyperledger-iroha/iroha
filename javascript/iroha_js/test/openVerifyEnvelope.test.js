@@ -19,8 +19,8 @@ function envelope(backend) {
   };
 }
 
-test("OpenVerify Norito codec exposes only the exact three Rust backend tags", () => {
-  for (const backend of ["halo2-ipa-pasta", "stark", "native-pipa-r-pasta"]) {
+test("OpenVerify Norito codec exposes only the exact two Rust backend tags", () => {
+  for (const backend of ["native-pipa-r-pasta", "stark"]) {
     const encoded = noritoEncodeOpenVerifyEnvelope(envelope(backend));
     const decoded = noritoDecodeOpenVerifyEnvelope(encoded);
     assert.equal(decoded.backend, backend);
@@ -46,6 +46,7 @@ test("OpenVerify backend tags reject aliases and adversarial spellings", () => {
     "NativePipaRPasta",
     "native_pipa_r_pasta",
     "native-pipa-r-pasta ",
+    "halo2-ipa-pasta",
     "Halo2IpaPasta",
     "halo2_ipa_pasta",
     "halo2‑ipa‑pasta",

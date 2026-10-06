@@ -972,7 +972,6 @@ fn verify_pulse(
             &config.common.chain,
             &network,
             native_finality_limits(),
-            cursor.attestations(),
             cursor.allocation_budget(),
             |reader| {
                 reader

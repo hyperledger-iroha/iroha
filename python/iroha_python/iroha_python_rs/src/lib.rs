@@ -4752,22 +4752,16 @@ mod sorafs_reference_validation_py_tests {
 fn confidential_vk_registration_payload_py(
     py: Python<'_>,
     record: iroha_data_model::proof::VerifyingKeyRecord,
-    backend: &str,
     name: &str,
     label: &str,
 ) -> PyResult<Py<PyAny>> {
-    let key_bytes = record
-        .key
-        .as_ref()
-        .ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "{label} verifying-key record is missing inline key bytes"
-            ))
-        })?
-        .bytes
-        .clone();
+    let key = record.key.as_ref().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{label} verifying-key record is missing inline key bytes"
+        ))
+    })?;
     let payload = PyDict::new(py);
-    payload.set_item("backend", backend)?;
+    payload.set_item("backend", key.backend.as_str())?;
     payload.set_item("name", name)?;
     payload.set_item("version", record.version)?;
     payload.set_item("circuit_id", record.circuit_id)?;
@@ -4782,7 +4776,7 @@ fn confidential_vk_registration_payload_py(
     if let Some(gas_schedule_id) = record.gas_schedule_id {
         payload.set_item("gas_schedule_id", gas_schedule_id)?;
     }
-    payload.set_item("vk_bytes", BASE64.encode(&key_bytes))?;
+    payload.set_item("vk_bytes", BASE64.encode(&key.bytes))?;
     payload.set_item("status", "Active")?;
     Ok(payload.into_any().unbind())
 }
@@ -4803,7 +4797,6 @@ fn confidential_transfer_v2_verifying_key_registration_payload_v1_py(
     confidential_vk_registration_payload_py(
         py,
         record,
-        iroha_core_zk::ZK_BACKEND_HALO2_IPA,
         "confidential_transfer_v2",
         "confidential transfer v2",
     )
@@ -4825,7 +4818,6 @@ fn confidential_unshield_v3_verifying_key_registration_payload_v1_py(
     confidential_vk_registration_payload_py(
         py,
         record,
-        iroha_core_zk::ZK_BACKEND_HALO2_IPA,
         "confidential_unshield_v3",
         "confidential unshield v3",
     )
@@ -5106,6 +5098,55 @@ mod tests {
         static INIT: OnceCell<()> = OnceCell::new();
         INIT.get_or_init(|| {
             Python::initialize();
+        });
+    }
+    #[test]
+    fn confidential_registration_uses_exact_key_profile() {
+        ensure_python();
+        Python::attach(|py| {
+            for backend in [
+                "pipa-r/pasta/confidential-transfer-v1",
+                "pipa-r/pasta/confidential-unshield-change-v1",
+            ] {
+                let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+                    1,
+                    backend,
+                    iroha_data_model::zk::BackendTag::NativePipaRPasta,
+                    "vesta",
+                    [0x11; 32],
+                    [0x22; 32],
+                );
+                assert!(
+                    confidential_vk_registration_payload_py(py, record.clone(), "key", "fixture")
+                        .is_err()
+                );
+                record.vk_len = 3;
+                record.key = Some(iroha_data_model::proof::VerifyingKeyBox::new(
+                    backend.into(),
+                    vec![1, 2, 3],
+                ));
+                let result = confidential_vk_registration_payload_py(py, record, "key", "fixture")
+                    .expect("native registration payload");
+                let fields = result
+                    .bind(py)
+                    .cast::<PyDict>()
+                    .expect("payload dictionary");
+                for (name, expected) in [
+                    ("backend", backend),
+                    ("circuit_id", backend),
+                    ("vk_bytes", "AQID"),
+                ] {
+                    assert_eq!(
+                        fields
+                            .get_item(name)
+                            .unwrap()
+                            .unwrap()
+                            .extract::<String>()
+                            .unwrap(),
+                        expected
+                    );
+                }
+            }
         });
     }
     fn completion_authority_dict<'py>(
@@ -5725,9 +5766,9 @@ mod tests {
         .expect("builder constructs");
         let attachment = |byte| {
             ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![byte]),
-                VerifyingKeyId::new("halo2/ipa", "python-builder-vk"),
+                "pipa-r/pasta".into(),
+                ProofBox::new("pipa-r/pasta".into(), vec![byte]),
+                VerifyingKeyId::new("pipa-r/pasta", "python-builder-vk"),
             )
         };
         for byte in 0..iroha_data_model::proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1 {
@@ -5796,9 +5837,9 @@ mod tests {
         .expect("builder constructs");
         let attachment = |proof_bytes| {
             ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0_u8; proof_bytes]),
-                VerifyingKeyId::new("halo2/ipa", "python-builder-vk"),
+                "pipa-r/pasta".into(),
+                ProofBox::new("pipa-r/pasta".into(), vec![0_u8; proof_bytes]),
+                VerifyingKeyId::new("pipa-r/pasta", "python-builder-vk"),
             )
         };
         let mut low = 1_usize;
@@ -6313,17 +6354,19 @@ mod tests {
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
             let proof = PyDict::new(py);
-            proof.set_item("backend", "halo2/ipa").expect("backend");
+            proof.set_item("backend", "pipa-r/pasta").expect("backend");
             let proof_box = PyDict::new(py);
             proof_box
-                .set_item("backend", "halo2/ipa")
+                .set_item("backend", "pipa-r/pasta")
                 .expect("proof backend");
             proof_box
                 .set_item("bytes", PyBytes::new(py, b"proof"))
                 .expect("proof bytes");
             proof.set_item("proof", proof_box).expect("proof box");
             let vk_ref = PyDict::new(py);
-            vk_ref.set_item("backend", "halo2/ipa").expect("vk backend");
+            vk_ref
+                .set_item("backend", "pipa-r/pasta")
+                .expect("vk backend");
             vk_ref
                 .set_item("name", "component_verify_v1")
                 .expect("vk name");
@@ -6342,7 +6385,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<VerifyProof>()
                 .expect("expected VerifyProof");
-            assert_eq!(verify.attachment.backend.to_string(), "halo2/ipa");
+            assert_eq!(verify.attachment.backend.to_string(), "pipa-r/pasta");
             assert_eq!(verify.attachment.proof.bytes, b"proof");
             assert_eq!(verify.attachment.vk_ref.name, "component_verify_v1");
             assert_eq!(verify.attachment.vk_commitment, Some([0x44; 32]));
@@ -6359,18 +6402,20 @@ mod tests {
             let canonical = |proof_bytes: &[u8]| {
                 let attachment = PyDict::new(py);
                 attachment
-                    .set_item("backend", "halo2/ipa")
+                    .set_item("backend", "pipa-r/pasta")
                     .expect("backend");
                 let proof = PyDict::new(py);
                 proof
-                    .set_item("backend", "halo2/ipa")
+                    .set_item("backend", "pipa-r/pasta")
                     .expect("proof backend");
                 proof
                     .set_item("bytes", PyBytes::new(py, proof_bytes))
                     .expect("proof bytes");
                 attachment.set_item("proof", proof).expect("proof");
                 let vk_ref = PyDict::new(py);
-                vk_ref.set_item("backend", "halo2/ipa").expect("vk backend");
+                vk_ref
+                    .set_item("backend", "pipa-r/pasta")
+                    .expect("vk backend");
                 vk_ref.set_item("name", "vk_transfer").expect("vk name");
                 attachment.set_item("vk_ref", vk_ref).expect("vk ref");
                 attachment

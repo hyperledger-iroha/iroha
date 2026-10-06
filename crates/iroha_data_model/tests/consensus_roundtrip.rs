@@ -243,10 +243,8 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
             view,
             block_hash: Hash32([subject; 32]),
             result,
-            attest: false,
             signer: 0,
             sig: NativeSignature([0; SIGNATURE_LEN]),
-            attestation: None,
         };
         vote.sig = NativeSignature(
             iroha_crypto::Signature::new(key.private_key(), &vote.preimage())

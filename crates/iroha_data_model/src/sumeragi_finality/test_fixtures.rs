@@ -495,7 +495,6 @@ impl NativeFinalityFixture {
             proposer: 0,
             skipped_leaders: vec![],
             control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-            attest: false,
         };
         let authored = PayloadAuthoring::new(header, payload)
             .complete(self.verifier.instance(), &config, &budget, &crypto, &signer)
@@ -509,11 +508,8 @@ impl NativeFinalityFixture {
             view: header.origin_view,
             block_hash: header.hash(&crypto),
             result: result.result().unwrap(),
-            attest: false,
             signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap(),
             agg_sig: AggregateSignature([0; 96]),
-            attestations: vec![],
-            attestation_witness: None,
         };
         let shares: Vec<_> = self.keys[..3]
             .iter()

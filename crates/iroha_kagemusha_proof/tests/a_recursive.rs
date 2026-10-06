@@ -4,6 +4,7 @@
 #[path = "common/bootstrap.rs"]
 mod bootstrap;
 #[path = "common/bootstrap_objects.rs"]
+#[allow(dead_code)] // Shared payer/receiver helpers are consumed by distinct test binaries.
 mod bootstrap_objects;
 mod common;
 use ff::{Field, PrimeField};
@@ -1307,9 +1308,55 @@ enum Stage {
         vesta: Box<AccumulatorT<Eq>>,
     },
 }
+/// Explicit source-A candidate; existing helpers retain their scalar-bank profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourceProfile {
+    /// Original wide diagnostic profile.
+    #[default]
+    Generic,
+    /// Parallel serialized arithmetic with ordinary pooled range buses.
+    Serialized {
+        /// Independent pooled range lookup count.
+        buses: usize,
+    },
+    /// Parallel serialized arithmetic with exact tagged width/value range buses.
+    Tagged {
+        /// Independent pooled tagged lookup count.
+        buses: usize,
+    },
+}
+impl SourceProfile {
+    /// Preserve the existing zero=generic, positive=ordinary serialized helper contract.
+    pub const fn ordinary(buses: usize) -> Self {
+        if buses == 0 {
+            Self::Generic
+        } else {
+            Self::Serialized { buses }
+        }
+    }
+    /// Number of independent range buses, zero only for the generic profile.
+    pub const fn range_buses(self) -> usize {
+        match self {
+            Self::Generic => 0,
+            Self::Serialized { buses } | Self::Tagged { buses } => buses,
+        }
+    }
+    /// Configure the exact named artifact profile.
+    pub fn configure(self, meta: &mut ConstraintSystem<Fp>) -> VerifierConfig<Ep> {
+        match self {
+            Self::Generic => VerifierConfig::configure(meta),
+            Self::Serialized { buses } => {
+                VerifierConfig::configure_serialized_foreign(meta, buses).unwrap()
+            }
+            Self::Tagged { buses } => {
+                VerifierConfig::configure_serialized_foreign_tagged(meta, buses).unwrap()
+            }
+        }
+    }
+}
 #[derive(Clone)]
 struct StageCircuit {
-    range_buses: usize,
+    profile: SourceProfile,
     context: ContextCircuit,
     source: StageProof,
     stage: Stage,
@@ -1317,9 +1364,9 @@ struct StageCircuit {
 impl Circuit<Fp> for StageCircuit {
     type Config = Config;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = usize;
-    fn params(&self) -> usize {
-        self.range_buses
+    type Params = SourceProfile;
+    fn params(&self) -> SourceProfile {
+        self.profile
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -1328,13 +1375,13 @@ impl Circuit<Fp> for StageCircuit {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
-        Self::configure_with_params(meta, 0)
+        Self::configure_with_params(meta, SourceProfile::Generic)
     }
-    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, range_buses: usize) -> Config {
-        if range_buses == 0 {
+    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, profile: SourceProfile) -> Config {
+        if profile == SourceProfile::Generic {
             return Recursive::configure(meta);
         }
-        let verifier = VerifierConfig::configure_serialized_foreign(meta, range_buses).unwrap();
+        let verifier = profile.configure(meta);
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -1424,13 +1471,49 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
     range_buses: usize,
     q_range_buses: Option<usize>,
 ) -> AuthenticatedBootstrap {
+    authenticated_bootstrap_with_profile(
+        adversarial,
+        omega_digest,
+        SourceProfile::ordinary(range_buses),
+        q_range_buses,
+    )
+}
+
+/// Named profile experiment, used identically for A1 and terminal A2.
+pub(crate) fn authenticated_bootstrap_with_profile(
+    adversarial: bool,
+    omega_digest: Fp,
+    profile: SourceProfile,
+    q_range_buses: Option<usize>,
+) -> AuthenticatedBootstrap {
+    authenticated_bootstrap_with_identity(
+        adversarial,
+        omega_digest,
+        profile,
+        q_range_buses,
+        BootstrapIdentity::Payer,
+    )
+}
+
+/// Distinct genuine wallet identities; neither is an admitted release artifact.
+pub(crate) use bootstrap_objects::Identity as BootstrapIdentity;
+
+/// Same fixed Bootstrap relation for a separately enrolled receiver wallet.
+pub(crate) fn authenticated_bootstrap_with_identity(
+    adversarial: bool,
+    omega_digest: Fp,
+    profile: SourceProfile,
+    q_range_buses: Option<usize>,
+    identity: BootstrapIdentity,
+) -> AuthenticatedBootstrap {
     use iroha_kagemusha_proof::a_relation::{
         context::ContextPlan,
         split::{SplitPlan, WCircuit, WKey},
     };
     use iroha_kagemusha_proof::admin_sigma::{BOOTSTRAP_K, BootstrapCircuit};
     use iroha_kagemusha_proof::omega::OmegaWitness;
-    let (mut initial, certificate, credential) = bootstrap_objects::enrollment();
+    eprintln!("BOOTSTRAP_SOURCE_PROFILE {profile:?} Q_buses={q_range_buses:?}");
+    let (mut initial, certificate, credential) = bootstrap_objects::enrollment_for(identity);
     initial.lineage[17] = omega_digest;
     let sigma = BootstrapCircuit::new(&initial);
     let sigma_params = common::vesta_params(BOOTSTRAP_K);
@@ -1514,7 +1597,7 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
         q.verifying_key().clone(),
     )
     .unwrap();
-    let receipt = bootstrap_objects::receipt(&initial, &sigma_bytes);
+    let receipt = bootstrap_objects::receipt_for(&initial, &sigma_bytes, identity);
     let objects = [certificate, credential, receipt];
     let (signature, siginstances) = bootstrap_objects::signatures(&objects);
     let signature_key = keygen_pk_v2(
@@ -1599,7 +1682,7 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
         signature_order: [0, 1, 2],
     };
     let first = StageCircuit {
-        range_buses,
+        profile,
         context: context.clone(),
         source,
         stage: Stage::First,
@@ -1693,7 +1776,7 @@ pub(crate) fn authenticated_bootstrap_with_q_layout(
     .unwrap();
     let plan = SplitPlan::new(context.plan.clone(), 1, wkey, &params).unwrap();
     let last = StageCircuit {
-        range_buses,
+        profile,
         context: context.clone(),
         source: StageProof {
             length: u32::try_from(wrapped.proof.len()).unwrap(),

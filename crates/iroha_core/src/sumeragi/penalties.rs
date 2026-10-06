@@ -1390,10 +1390,8 @@ mod tests {
                 view,
                 block_hash: Hash32([seed; 32]),
                 result: Hash32([0x43; 32]),
-                attest: false,
                 signer,
                 sig: NativeSignature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
-                attestation: None,
             };
             vote.sig = NativeSignature(
                 Signature::new(keys[signer as usize].private_key(), &vote.preimage())

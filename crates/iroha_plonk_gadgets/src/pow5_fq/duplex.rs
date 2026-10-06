@@ -15,7 +15,7 @@
 //! # Layout and cost
 //!
 //! Squeezing `m` buffered words lays out `floor(m / 2) + 1` permutation
-//! blocks of [`ROWS_PER_PERMUTATION`] rows. A continuing squeeze reads its
+//! blocks of [`crate::poseidon::ROWS_PER_PERMUTATION`] rows. A continuing squeeze reads its
 //! output through a *tap*: the auxiliary cell on the last row of the last
 //! block, which the generic chip leaves free when it does not squeeze,
 //! constrained by
@@ -48,8 +48,8 @@ use crate::{
     cells::{Word, assign_word},
     phase::{Enable, PhaseColumns},
     poseidon::{
-        Absorb, AbsorbInput, Pow5Chip, Pow5Columns, Pow5State, ROWS_PER_PERMUTATION,
-        RoundConstantColumns, SpongeChip, SpongeConfig, raw_initial_state, raw_permutations,
+        Absorb, AbsorbInput, Pow5Chip, Pow5Columns, Pow5State, RoundConstantColumns, SpongeChip,
+        SpongeConfig, raw_initial_state, raw_permutations,
     },
 };
 
@@ -185,6 +185,14 @@ impl<F: PoseidonField> DuplexChip<F> {
         chip
     }
 
+    /// Starts an empty transcript after a structurally reserved prefix.
+    ///
+    /// # Errors
+    /// The lane is nonempty or the prefix exceeds its end bound.
+    pub fn start_at(&mut self, row: usize) -> Result<(), Error> {
+        self.sponge.lane_mut().start_at(row)
+    }
+
     /// Routes absorbed constants through a caller-reserved arithmetic lane.
     /// Copies bind the fixed-coefficient result to the exact transcript cell.
     ///
@@ -299,10 +307,9 @@ impl<F: PoseidonField> DuplexChip<F> {
             return lane.squeeze(region, state, Absorb::Block(final_block));
         }
         let next = lane.permute(region, state, Absorb::Block(final_block))?;
-        let row = next
-            .block()
-            .checked_mul(ROWS_PER_PERMUTATION)
-            .and_then(|row| row.checked_sub(1))
+        let row = lane
+            .block_row(next.block())?
+            .checked_sub(1)
             .ok_or(Error::BoundsFailure)?;
         self.q_tap.enable(region, row)?;
         let aux = lane.config().lane().aux;
@@ -454,5 +461,92 @@ mod tests {
         assert!(chip.sponge_mut().is_ok());
         let pending = Pending::Constant(Fq::from(6u64));
         assert!(matches!(pending.input(), AbsorbInput::Constant(v) if v == Fq::from(6u64)));
+    }
+    #[derive(Clone)]
+    struct OffsetDuplex<F: PoseidonField> {
+        offset: usize,
+        marker: core::marker::PhantomData<F>,
+    }
+    impl<F: PoseidonField> iroha_plonk::frontend::Circuit<F> for OffsetDuplex<F> {
+        type Config = (
+            DuplexConfig<F>,
+            iroha_plonk::cs::Column<iroha_plonk::cs::Instance>,
+        );
+        type FloorPlanner = iroha_plonk::frontend::SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+        fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+            let lane = Pow5Columns::allocate(meta);
+            let constants = RoundConstantColumns::allocate(meta);
+            let constant = meta.fixed_column();
+            meta.enable_constant(constant);
+            let config = DuplexConfig::configure(meta, lane, constants, &[]);
+            let public = meta.instance_column(3);
+            meta.enable_equality(public);
+            (config, public)
+        }
+        fn synthesize(
+            &self,
+            (config, public): Self::Config,
+            mut layouter: impl iroha_plonk::frontend::Layouter<F>,
+        ) -> Result<(), Error> {
+            let mut chip = DuplexChip::bounded(config, 1020);
+            chip.start_at(self.offset)?;
+            let outputs = layouter.assign_region(
+                || "offset continuing duplex",
+                |mut region| {
+                    let mut out = Vec::new();
+                    for words in [vec![F::from(3)], vec![], vec![F::from(5), F::from(7)]] {
+                        for word in words {
+                            chip.absorb_constant(word);
+                        }
+                        out.push(chip.squeeze(&mut region)?);
+                    }
+                    assert!(chip.start_at(0).is_err());
+                    Ok(out)
+                },
+            )?;
+            for (index, word) in outputs.iter().enumerate() {
+                layouter.constrain_instance(word.cell(), public, index)?;
+            }
+            Ok(())
+        }
+    }
+    fn offset_case<F: PoseidonField>() {
+        use iroha_plonk::frontend::{Circuit, synthesize};
+        let public = [duplex_native(&[
+            vec![F::from(3)],
+            vec![],
+            vec![F::from(5), F::from(7)],
+        ])];
+        for offset in [0, 16, 37] {
+            let circuit = OffsetDuplex::<F> {
+                offset,
+                marker: core::marker::PhantomData,
+            };
+            let report = iroha_plonk::check::check_circuit(
+                &circuit,
+                10,
+                &public,
+                iroha_plonk::check::CheckMode::Strict,
+            )
+            .unwrap();
+            assert!(report.is_satisfied(), "{:?}", report.failures().first());
+            let known = synthesize(&circuit, 10, Some(&public)).unwrap();
+            let unknown = synthesize(&circuit.without_witnesses(), 10, None).unwrap();
+            assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+            assert_eq!(
+                known.tables.advice_assigned(),
+                unknown.tables.advice_assigned()
+            );
+        }
+    }
+    #[test]
+    fn offset_duplex_continuing_taps_match_native_both_fields() {
+        offset_case::<Fp>();
+        offset_case::<Fq>();
     }
 }

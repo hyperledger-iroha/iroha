@@ -30,7 +30,6 @@ use iroha_data_model::{
     sumeragi::finality::{NativeFinalityJournal, NativeFinalityLimits},
 };
 use iroha_model_base::chain::ChainId;
-use iroha_sumeragi::crypto::AttestationVerifier;
 use norito::{NoritoDeserialize, NoritoSerialize};
 
 /// Join an observed transition to the exact independently certified native selecting boundary.
@@ -140,7 +139,6 @@ pub fn verify_validator_committee_selection_evidence_v1(
     target_epoch: u64,
     transition_id: [u8; 32],
     limits: NativeFinalityLimits,
-    attestations: &dyn AttestationVerifier,
     budget: &AllocationBudget,
 ) -> Result<VerifiedValidatorCommitteeSelectionV1, NativeJournalError> {
     check_evidence_size(evidence, limits)?;
@@ -149,7 +147,6 @@ pub fn verify_validator_committee_selection_evidence_v1(
         chain_id,
         &network,
         limits,
-        attestations,
         budget,
         |reader| {
             verify_selection_observation(
@@ -354,7 +351,6 @@ pub fn verify_validator_committee_provisioning_evidence_v1(
     target_epoch: u64,
     transition_id: [u8; 32],
     limits: NativeFinalityLimits,
-    attestations: &dyn AttestationVerifier,
     session_budget: &AllocationBudget,
 ) -> Result<VerifiedValidatorCommitteeProvisioningV1, ValidatorCommitteeProvisioningEvidenceError> {
     check_evidence_size(evidence, limits)?;
@@ -365,7 +361,6 @@ pub fn verify_validator_committee_provisioning_evidence_v1(
         chain_id,
         &network,
         limits,
-        attestations,
         session_budget,
         |reader| {
             Ok(

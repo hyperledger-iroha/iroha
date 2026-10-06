@@ -4734,14 +4734,8 @@ const CARRIERS: &[Carrier] = &[
             ),
             ("VoteKind", "enumeration without a hash payload"),
             ("Signature", "signature"),
-            (
-                "CommitAttestation",
-                "commit attestation: the canonical preimage of R and an application signature over it",
-            ),
             ("Bitmap", "signer bitmap"),
             ("AggregateSignature", "aggregate signature"),
-            ("AttestationSignature", "application signature bytes"),
-            ("ResultWitness", "the canonical preimage of R"),
             (
                 "AvailabilityFrame",
                 "signed availability metadata of the payload rows; the header binds it through availability_digest",

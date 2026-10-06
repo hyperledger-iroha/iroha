@@ -121,20 +121,19 @@ def test_client_has_no_ordinary_native_surface() -> None:
     assert "bin" not in document
 
 
-def test_core_backends_reject_optional_owners_and_missing_circuit_params() -> None:
+def test_core_backends_reject_optional_or_missing_native_owners() -> None:
     document = _guarded_document("iroha_core_zk")
     assert _guarded_errors("iroha_core_zk", document) == []
-    for owner, mutation in (("kaigi_zk", "remove"), ("kaigi_zk", "optional"),
-                            ("halo2_proofs", "remove"), ("halo2_proofs", "optional"),
-                            ("halo2_proofs", "missing-circuit-params")):
-        changed = copy.deepcopy(document)
-        if mutation == "remove":
-            del changed["dependencies"][owner]
-        elif mutation == "optional":
-            changed["dependencies"][owner]["optional"] = True
-        else:
-            changed["dependencies"][owner]["features"].remove("circuit-params")
-        assert any("mandatory Core backend" in error for error in _guarded_errors("iroha_core_zk", changed)), (owner, mutation)
+    for owner in ("kaigi_zk", "iroha_plonk", "iroha_plonk_gadgets", "iroha_pasta"):
+        for mutation in ("remove", "optional", "foreign-path"):
+            changed = copy.deepcopy(document)
+            if mutation == "remove":
+                del changed["dependencies"][owner]
+            elif mutation == "optional":
+                changed["dependencies"][owner]["optional"] = True
+            else:
+                changed["dependencies"][owner]["path"] = "../unreviewed-owner"
+            assert any("mandatory Core backend" in error for error in _guarded_errors("iroha_core_zk", changed)), (owner, mutation)
 
 
 def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> None:
@@ -155,7 +154,7 @@ def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> N
 
 
 def test_stark_owns_optional_fastpq_dependency_and_rejects_mutations() -> None:
-    """Halo2-only callers avoid FASTPQ while STARK retains its exact shared field codec."""
+    """Native PIPA-R callers avoid FASTPQ while STARK retains its exact shared field codec."""
 
     package = "iroha_core_zk"
     document = _guarded_document(package)

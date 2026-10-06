@@ -111,13 +111,20 @@ compact measurement uses only a Bootstrap terminal key; it is not the release
 catalog. A separate generic Bootstrap/Load two-terminal diagnostic binds the
 actual common Omega digest before constructing both lineages and checks exact
 initial/rebound terminal keys. Its uncompressed outer proof is10,272 bytes plus
-1,088 bytes of accumulator, and remains over the cap. Genuine corrected Load
-with Q2 and three source range buses exceeds the k16 range budget, so a uniform
-three-bus source catalog is also unqualified.
+1,088 bytes of accumulator, and remains over the cap. The ordinary scalar-table Q2/A3 Load candidate still exceeds k16 at 68,760
+range rows. The explicit tagged-table A3 candidate now completes all four
+genuine corrected Load stages, whose maximum rows are 55,611 / 61,808 /
+57,646 / 58,164. Every actual source proof is 7,744 bytes. The matching
+Bootstrap compact diagnostic uses 62,849 shared / 94,033 range rows with a
+4,768-byte descriptor transport estimate. It still fails the range limit by
+28,503 rows. This is source feasibility for Bootstrap/Load, with the full
+catalog rebind, Send and final compact proof remaining open.
 
 The explicit parallel serialized-FF profile keeps the verifier lanes parallel.
-Its fixed bank gives each range bus an independent scalar lookup against one
-shared table; tuple membership is never substituted for independent membership.
+Its fixed bank gives each range bus an independent lookup against one
+shared table. The named tagged profile uses exact `(width, value)` tuples
+within each independent argument; it does not combine independent values
+into one tuple membership claim.
 Placement depends only on structural row counts. Same-cell range certificates
 reuse a proven narrower bound only within one synthesis. Native differential
 tests cover both curves, honest and malformed proofs, total soft verdicts,

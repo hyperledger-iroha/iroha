@@ -102,7 +102,7 @@ Verification status
 - Stateless ZK pre‑verification and non‑forking diagnostic consistency checks of traces are implemented and gated by config/feature flags. Background proving and attachments remain out‑of‑pipeline and are optional.
 
 Acceptance (ZK verification)
-- Feature gates: `zk-preverify` (compile‑time) controls diagnostic trace checks, while `zk.halo2.enabled` (runtime) controls cryptographic pre‑verification. Hosts additionally gate by `zk.halo2.max_k` and allowed curves.
+- Native PIPA-R and STARK admission use their exact compiled relations and `zk.pipa_r` / `zk.stark` bounds. `zk-preverify` controls advisory pre-verification; `zk.trace` independently controls local diagnostic trace scheduling. Diagnostics never grant ledger authority.
 - Authority boundary: pre‑verification and deduplication are advisory diagnostics only. Their results cannot be installed into execution state or substitute for the normal guarded cryptographic verifier.
 - Determinism: ordering and proposal selection remain unaffected; pre‑verification failures do not reorder transactions. Diagnostic trace checks report via Pipeline warnings and do not persist artifacts in block sidecars.
 - Safety: proofs and envelopes are bounded (size, k) and verified deterministically; accelerators must produce bit‑exact results to scalar.
@@ -580,27 +580,14 @@ ZK verification placement
 
 Implementation notes (current)
 - Executor performs stateless pre‑verification for `SignedTransaction::WithProofs` attachments: backend tag sanity, and per‑block dedup by `(proof hash, vk_commitment?)` when `vk_commitment` is present in the attachment or `vk_ref` resolves a registry commitment; falls back to `(proof hash, backend)`.
-- Stateful path provides `VerifyProof` ISI that records verification outcome into WSV (`proofs` storage). The real Halo2 backend is always linked; proofs are verified using `plonk::verify_proof` with the appropriate `Params<C>` and verifying key derived from the backend tag’s `<circuit-id>`.
-  - Transparent Halo2 (IPA over Pasta): proofs are verified using `plonk::verify_proof` with IPA PCS and `Params::<EqAffine>` derived transparently.
-    - VK/Params encoding (ZK1):
-      - Production `ZK1` envelopes contain exactly `IPAK(k)`, `CID1`, and
-        `H2VK` (Halo2 verifying key bytes), in that order.
-    - Proof encoding (ZK1):
-      - `ZK1` contains `PROF` (raw transcript) followed by optional instance
-        columns `I10P` (Pasta Fp).
-    - `VerifyingKeyBox.bytes`: canonical production key envelope above.
-    - `ProofBox.bytes`: canonical proof envelope above.
-    - Built‑in circuit ids:
-      - `tiny-add-v1`: enforces 2 + 2 = 4
-      - `tiny-mul-v1`: enforces 3 × 2 = 6
-      Example backend tags: `halo2/pasta/tiny-add-v1`, `halo2/pasta/tiny-mul-v1`.
-  - Helpers (for producers/tests):
-    - `zk1::wrap_start()` → begin a ZK1 buffer; `zk1::wrap_append_proof(..)`; `zk1::wrap_append_instances_pasta_fp(..)`.
-
-  - BN254 KZG verifier support has been removed; only transparent Pasta/IPA backends remain.
-    - Proof encoding (ZK1 preferred): `ZK1` with `PROF` and instance columns `I10P` (Pasta Fp).
-    - Built‑in circuit ids include tiny smoke circuits used in tests: `tiny-add-v1`, `tiny-add-2rows-v1`, `tiny-add-public-v1`, `tiny-id-public-v1`.
-    - See `specs/zk1_envelope.md` for the canonical ZK1 TLV layout and safety bounds.
+- `VerifyProof` records the outcome of the exact native PIPA-R or STARK
+  relation in WSV. Native PIPA-R verifies the five compiled Kaigi/confidential
+  relations against their canonical descriptor and processed key, using
+  transparently derived pinned Pasta parameters. The data-model
+  `OpenVerifyEnvelope` contains a Norito `NativePipaRProofV1` with one ordered
+  public column and exact proof bytes. Unqualified demo, governance and IVM
+  execution relations are rejected. See `specs/zk_envelopes.md` for current
+  proof/key framing; the retired ZK1 decoder and helper APIs are deleted.
 - VK lifecycle and registry are managed via `RegisterVerifyingKey`, `UpdateVerifyingKey`, and `DeprecateVerifyingKey` ISIs. Proof attachments reference registered VK records by `vk_ref`; verifying-key bytes are stored only in registry/external records and are not carried inline.
 
 DoS hardening

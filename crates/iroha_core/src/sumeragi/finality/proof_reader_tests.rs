@@ -83,10 +83,9 @@ fn check_original_sequence(chain: &CertifiedTestChain) {
 fn check_native_boundary(view: &impl StateReadOnly) {
     let native = CertifiedChain::new(view).unwrap().certified(10).unwrap();
     assert!(native.commitment().schedule.boundary.is_some());
-    assert!(!native.header().unwrap().attest);
+
     let qc = native.commit_qc().unwrap();
     assert_eq!(qc.signers.count_ones(), 3);
-    assert!(!qc.attest && qc.attestations.is_empty() && qc.attestation_witness.is_none());
 }
 
 #[test]

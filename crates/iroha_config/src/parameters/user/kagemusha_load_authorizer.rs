@@ -299,14 +299,11 @@ mod tests {
             iroha_model_base::domain::DomainId::parse_fully_qualified("issuer.sora").unwrap(),
             "fees".parse().unwrap(),
         );
-        let limit = iroha_data_model::transaction::FeeChargeLimit {
-            kind: iroha_data_model::transaction::FeeChargeKind::Nexus,
-            asset_definition_id: asset,
-            max_amount: iroha_primitives::numeric::Quantity::from_canonical_numeric(
-                iroha_primitives::numeric::Numeric::new(10, 0),
-            )
-            .unwrap(),
-        };
+        let limit = iroha_data_model::transaction::FeeChargeLimit::new(
+            iroha_data_model::transaction::FeeChargeKind::Nexus,
+            asset,
+            iroha_primitives::numeric::Quantity::from(10_u32),
+        );
         for limits in [vec![limit.clone()], vec![limit.clone(), limit]] {
             let valid = limits.len() == 1;
             let mut config = config();

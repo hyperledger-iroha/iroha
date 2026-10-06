@@ -5,7 +5,6 @@ use crate::sumeragi::runtime_availability::history::payload_error;
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_sumeragi::{
     api::CommittedTip,
-    crypto::NoAttestation,
     evidence::{EvidenceContext, verify_evidence},
     message::Evidence,
     types::Hash32,
@@ -191,7 +190,7 @@ impl LaneProofRead {
             let original = self.ready.as_ref().expect("original complete body custody");
             // Every frame above the interval is authenticated too; a file QC cannot select a branch.
             self.cursor
-                .advance(&self.crypto, &NoAttestation, &original.body, &original.qc)
+                .advance(&self.crypto, &original.body, &original.qc)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             self.frame = None;
             let original = self.ready.take().expect("validated same original frame");
@@ -242,7 +241,7 @@ impl LaneProofRead {
             demotion_window: self.cursor.configuration_owner().demotion_window(),
             demotion_headers: self.headers.as_slice(),
         };
-        let attribution = verify_evidence(&self.crypto, &NoAttestation, &context, evidence)?;
+        let attribution = verify_evidence(&self.crypto, &context, evidence)?;
         let row = self
             .payload
             .custody_record(&self.scope.incarnation)

@@ -149,7 +149,7 @@ pub enum ExecDone {
     /// `Commit`: the original atomic epoch/configuration output, or a local failure.
     Committed(Result<Box<AppliedConfig>, PublicationError>),
     /// Independent exact control response; no empty fallback on local failure.
-    ControlWitnessBuilt(Result<(ControlWitness, bool), PublicationError>),
+    ControlWitnessBuilt(Result<ControlWitness, PublicationError>),
     /// At most one source-bound own partial from the sole producer.
     ApplicationControlDriven(Result<Option<ApplicationControl>, PublicationError>),
     /// The application accepted/rejected one peer partial.
@@ -164,7 +164,7 @@ pub enum ExecDone {
         result: Result<(), PublicationError>,
     },
     /// Exact admitted payload, genuine absence, or a retained local failure.
-    Built(Result<(Option<PayloadBytes>, bool), PublicationError>),
+    Built(Result<Option<PayloadBytes>, PublicationError>),
     /// `Reject` done.
     Rejected,
 }
@@ -1357,13 +1357,12 @@ impl ExecSched {
                         self.require_recovery(build.context.height, &reason)
                     }
                     _ if !current => {}
-                    Ok((witness, attest)) => {
+                    Ok(witness) => {
                         self.witness_retry.reset();
                         self.events.push(Event::ControlWitnessBuilt {
                             req: build.req,
                             context: build.context,
                             witness,
-                            attest,
                         });
                     }
                     Err(error) => {
@@ -1445,7 +1444,7 @@ impl ExecSched {
                 }
                 if !cancelled && self.active_build == Some(build) {
                     match result {
-                        Ok((payload, attest)) => {
+                        Ok(payload) => {
                             self.active_build = None;
                             self.payload_retry.reset();
                             let empty = payload.is_none();
@@ -1454,7 +1453,6 @@ impl ExecSched {
                             self.events.push(Event::PayloadBuilt {
                                 req: build.req,
                                 payload,
-                                attest,
                             });
                             if !empty || arrived {
                                 self.events.push(Event::PayloadReady { req: build.req });

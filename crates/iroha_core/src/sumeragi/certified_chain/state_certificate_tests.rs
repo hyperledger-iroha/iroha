@@ -127,7 +127,6 @@ fn ascending_native_continuation_refuses_same_proposal_changed_result_before_fir
             4,
             qc.block_hash,
             result_of_preimage(preimage),
-            qc.attest,
             Signers::Quorum,
         );
     });
@@ -380,7 +379,7 @@ fn state_certificate_checks_quorum_and_signed_availability_after_execution_authe
     let (_, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();
     for signers in [Signers::BelowQuorum, Signers::All] {
         let changed = with_parts(&original, |_, target, _| {
-            *target = chain.commit_qc(4, qc.block_hash, qc.result, qc.attest, signers);
+            *target = chain.commit_qc(4, qc.block_hash, qc.result, signers);
         });
         assert!(
             reader
@@ -434,7 +433,7 @@ fn state_certificate_verifies_actual_native_npos_boundary() {
     let result = reader
         .certified_from_execution(NonZeroUsize::new(10).unwrap(), |_, _| Ok(()))
         .unwrap();
-    assert!(!result.header().unwrap().attest);
+
     assert!(result.commitment().schedule.boundary.is_some());
     assert_eq!(result.id(), reader.certified(10).unwrap().id());
     let quorum = result.commit_qc().unwrap();
@@ -442,7 +441,7 @@ fn state_certificate_verifies_actual_native_npos_boundary() {
         quorum.signers,
         iroha_sumeragi::types::Bitmap::from_indices(4, [0, 1, 2]).unwrap()
     );
-    assert!(quorum.attestations.is_empty() && quorum.attestation_witness.is_none());
+
     let original = frame(&chain, 10);
     let parent = chain.committed(9);
     for (signers, expected) in [
@@ -450,7 +449,7 @@ fn state_certificate_verifies_actual_native_npos_boundary() {
         (Signers::All, CertError::TooManySigners),
     ] {
         let changed = with_parts(&original, |_, qc, _| {
-            *qc = chain.commit_qc(10, qc.block_hash, qc.result, false, signers);
+            *qc = chain.commit_qc(10, qc.block_hash, qc.result, signers);
         });
         assert!(matches!(
             reader.verify_executed_successor(&parent, read_frame(changed, 10).unwrap()),
@@ -466,56 +465,6 @@ fn state_certificate_verifies_actual_native_npos_boundary() {
         Err(VerificationReadError::Source(ChainReadError::Certificate {
             height: 10,
             error: CertError::BadSignature,
-        }))
-    ));
-    // Re-sign the exact changed header and flag with the actual incumbent quorum. The
-    // signature-only relation is genuine; native NoAttestation still rejects its shape.
-    let flagged = with_parts(&original, |header, qc, _| {
-        header.attest = true;
-        *qc = chain.commit_qc(
-            10,
-            header.hash(&BlsCrypto::new()),
-            qc.result,
-            true,
-            Signers::Quorum,
-        );
-    });
-    let (_, flagged_quorum) = decode_certificate(flagged.commit_certificate().unwrap()).unwrap();
-    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
-        panic!("original parent authorizes the boundary");
-    };
-    let authority = VerifiedAuthority::new(
-        scheduled.epoch.clone(),
-        10,
-        &mut EpochValidationScope::new(),
-    )
-    .unwrap();
-    iroha_sumeragi::crypto::Verifier::new(
-        &authority.crypto,
-        &chain.instance(),
-        &authority.epoch,
-        &authority.committee,
-    )
-    .verify_qc_signatures(&flagged_quorum)
-    .unwrap();
-    assert!(matches!(
-        reader.verify_executed_successor(&parent, read_frame(flagged, 10).unwrap()),
-        Err(VerificationReadError::Source(ChainReadError::Certificate {
-            height: 10,
-            error: CertError::AttestationShape,
-        }))
-    ));
-    // A complete real result preimage cannot grant an unflagged native QC an application
-    // witness either. No application signature or retired monetary proof is fabricated.
-    let witnessed = with_parts(&original, |_, qc, preimage| {
-        qc.attestation_witness =
-            Some(iroha_sumeragi::message::ResultWitness::from_untrusted(preimage.clone()).unwrap());
-    });
-    assert!(matches!(
-        reader.verify_executed_successor(&parent, read_frame(witnessed, 10).unwrap()),
-        Err(VerificationReadError::Source(ChainReadError::Certificate {
-            height: 10,
-            error: CertError::AttestationShape,
         }))
     ));
     let current = chain.committed(10);
@@ -1013,7 +962,6 @@ fn parent_service_common_proposal_is_independent_of_local_certificate_subset() {
         5,
         source_qc.block_hash,
         source_qc.result,
-        source_qc.attest,
         Signers::LastThree,
     );
     assert_ne!(source_qc.signers, other_qc.signers);
@@ -1085,7 +1033,7 @@ fn parent_service_proof_requires_exact_native_quorum_and_complete_subject() {
             1 => changed.height -= 1,
             2 => changed.block_hash = Hash32([0x27; 32]),
             3 => changed.result = Hash32([0x37; 32]),
-            4 => changed.attest = !changed.attest,
+            4 => changed.result.0[0] ^= 1,
             5 => changed.epoch.epoch += 1,
             6 => changed.agg_sig.0[5] ^= 1,
             _ => unreachable!(),
@@ -1094,8 +1042,7 @@ fn parent_service_proof_requires_exact_native_quorum_and_complete_subject() {
     }
     for signers in [Signers::BelowQuorum, Signers::All] {
         cases.push(
-            norito::to_bytes(&chain.commit_qc(5, qc.block_hash, qc.result, qc.attest, signers))
-                .unwrap(),
+            norito::to_bytes(&chain.commit_qc(5, qc.block_hash, qc.result, signers)).unwrap(),
         );
     }
     cases.push(Vec::new());

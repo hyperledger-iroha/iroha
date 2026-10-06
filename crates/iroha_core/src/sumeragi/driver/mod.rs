@@ -84,7 +84,7 @@ use iroha_sumeragi::{
         Action, CommittedTip, ConfigError, CoreStatus, Event, HaltReason, Init, LocalFault,
         LocalParams,
     },
-    crypto::{Attestation, AttestationVerifier, Attestor, Crypto, Signer},
+    crypto::{Crypto, Signer},
     message::{ByteAdmissionError, Evidence, TrafficClass, WireMessage},
     pacemaker::FRAME_OVERHEAD,
     safety::RecordState,
@@ -241,8 +241,6 @@ pub struct KernelStart {
     pub crypto: Box<dyn Crypto>,
     /// The kernel's hashing (block hashes of stored and executed bodies).
     pub hasher: Box<dyn Crypto>,
-    /// The commit-attestation extension (§3.7).
-    pub attestation: Attestation,
     /// Local time of the start.
     pub now: Millis,
     /// The ingress queues (shared with the handle that fills them).
@@ -362,7 +360,6 @@ impl Kernel {
             start.init,
             start.signers,
             start.crypto,
-            start.attestation,
             start.allocation_budget,
             start.now,
         )?;
@@ -915,7 +912,7 @@ impl Crypto for CryptoRef {
 pub struct DriverStart {
     /// Node-wide storage gate; every production instance shares its Kura owner’s gate.
     pub node_gate: Arc<NodeGate>,
-    /// Exact original State resource pool used to admit retained result witnesses.
+    /// Exact original State resource pool used to admit retained availability tables and rows.
     pub allocation_budget: iroha_allocation::AllocationBudget,
     /// Local parameters.
     pub local: LocalParams,
@@ -925,10 +922,6 @@ pub struct DriverStart {
     pub signers: Vec<Arc<dyn Signer>>,
     /// Cryptography.
     pub crypto: SharedCrypto,
-    /// The node's commit-attestation authority (§3.7).
-    pub attestor: Box<dyn Attestor + Send>,
-    /// The commit-attestation verifier.
-    pub verifier: Box<dyn AttestationVerifier + Send>,
 }
 
 enum Input {
@@ -1687,7 +1680,6 @@ where
                         signers: start.signers,
                         crypto: Box::new(CryptoRef(Arc::clone(&start.crypto))),
                         hasher: Box::new(CryptoRef(start.crypto)),
-                        attestation: Attestation::new(start.attestor, start.verifier),
                         now: clock.now(),
                         ingress,
                         config,

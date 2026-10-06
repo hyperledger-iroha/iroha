@@ -245,11 +245,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
             producer.accept(&source, applied, key, message).unwrap();
         }
     }
-    let (witness, attest) = observer.build(&build_context(&fixture.context, 0)).unwrap();
-    assert!(
-        !attest,
-        "Permissioned Parliament pulse is not an epoch boundary"
-    );
+    let witness = observer.build(&build_context(&fixture.context, 0)).unwrap();
     assert!(!witness.is_empty());
     assert!(witness.len() < iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES);
     let pulse = control::decode(&witness).unwrap().unwrap();
@@ -262,8 +258,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
     assert_eq!(
         restarted
             .build(&build_context(&fixture.context, 38))
-            .unwrap()
-            .0,
+            .unwrap(),
         witness,
         "a restarted reducer and a different valid threshold subset produce the exact same pulse"
     );
@@ -312,7 +307,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
             producer
                 .build(&build_context(&fixture.context, 37))
                 .unwrap(),
-            (witness, false)
+            witness
         );
         assert_eq!(
             producer.drive(&source, &fixture.context, applied).unwrap(),
@@ -551,9 +546,8 @@ fn explicitly_anchored_no_demand_needs_neither_session_nor_fake_observer_key() {
             .unwrap()
             .is_none()
     );
-    let (witness, attest) = observer.build(&build_context(&context, 5)).unwrap();
+    let witness = observer.build(&build_context(&context, 5)).unwrap();
     assert!(witness.is_empty());
-    assert!(!attest);
     assert_eq!(control::decode(&witness).unwrap(), None);
     control::verify_result(&witness, None).unwrap();
     let current = &source.world().consensus_schedule().ready(9).unwrap().epoch;
@@ -746,7 +740,7 @@ fn native_transient_signer_refusal_retains_remote_progress_and_exact_retry_paylo
     let finalized = fixture.producers[0]
         .build(&build_context(&fixture.context, 0))
         .unwrap();
-    assert!(!finalized.0.is_empty());
+    assert!(!finalized.is_empty());
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
     assert_eq!(
         fixture.producers[0]

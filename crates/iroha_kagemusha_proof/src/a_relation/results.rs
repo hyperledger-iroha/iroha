@@ -2,20 +2,25 @@
 //!
 //! A result plan describes which stage must derive each predicate. Its five
 //! boolean claims and fixed owner schema enter the original context, but this
-//! does not certify execution and exposes no acceptance verdict. The Objects
-//! producer binds its derived predicate and exact context inputs. TODO: compose
-//! the remaining typed owners and consume all five in the terminal iff rule
-//! before admitting a Receive terminal key.
+//! does not certify execution and exposes no acceptance verdict. Typed owners
+//! bind their derived predicates and exact context inputs; the terminal map
+//! relation consumes all five in its iff rule. TODO: prove and qualify the
+//! complete owner/continuation chain before admitting a Receive terminal key.
 
-use iroha_pasta::Fp;
+use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
 use iroha_plonk_gadgets::{Bit, GlueChip, Word};
-use iroha_plonk_recursion::obligation::ledger::Variant;
+use iroha_plonk_recursion::{
+    accumulation_circuit::{FoldInputCells, FoldSource},
+    obligation::ledger::Variant,
+};
 
 use super::{context::ContextPlan, schedule::OperationTask};
 
 /// Namespace framing the fixed Receive result count, tags, owners and values.
 pub const RECEIVE_RESULTS_DOMAIN: [u8; 8] = *b"kgwrslt1";
+/// Separate context role for the original incoming Omega verifier opening.
+pub const RECEIVE_OPENING_DOMAIN: [u8; 8] = *b"kgwrpop1";
 
 /// Exactly one of Receive's five required total predicate groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -93,6 +98,12 @@ impl ReceiveResultPlan {
             return Err(Error::Synthesis);
         }
         OperationTask::validate(variant, groups)?;
+        let last = groups.last().ok_or(Error::Synthesis)?;
+        if !last.contains(&OperationTask::ReceiveEffects)
+            || last.contains(&OperationTask::ReceiveProofs)
+        {
+            return Err(Error::Synthesis);
+        }
         let mut owners = [0; 5];
         for (owner, tag) in owners.iter_mut().zip(ReceiveResultTag::ALL) {
             *owner = u32::try_from(
@@ -130,6 +141,7 @@ impl ReceiveResultPlan {
 pub struct ReceiveResultClaims {
     plan: ReceiveResultPlan,
     values: [Bit<Fp>; 5],
+    opening: Option<FoldInputCells<Ep>>,
 }
 impl ReceiveResultClaims {
     pub(super) fn bind_derived(
@@ -160,14 +172,54 @@ impl ReceiveResultClaims {
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .map_err(|_| Error::Synthesis)?;
-        Ok(Self { plan, values })
+        Ok(Self {
+            plan,
+            values,
+            opening: None,
+        })
     }
 
-    pub(super) fn context_words(&self, plan: ReceiveResultPlan) -> Result<[Word<Fp>; 5], Error> {
+    pub(super) fn values(&self, plan: ReceiveResultPlan) -> Result<&[Bit<Fp>; 5], Error> {
         if self.plan != plan {
             return Err(Error::Synthesis);
         }
-        Ok(self.values.each_ref().map(|value| value.word().clone()))
+        Ok(&self.values)
+    }
+
+    /// Commit the proposed original soft Omega opening, including its decoder dummy.
+    /// The fixed Proofs owner must equate every cell to the actual circuit
+    /// verifier output, even when its validity bit is false. This constructor
+    /// alone does not certify that equality or decide the pending claim.
+    /// # Errors
+    /// Anything except a checked finite canonical full-k16 original claim.
+    pub fn with_opening(mut self, opening: &FoldInputCells<Ep>) -> Result<Self, Error> {
+        if opening.source() != FoldSource::Fixed(16) {
+            return Err(Error::Synthesis);
+        }
+        self.opening = Some(opening.clone());
+        Ok(self)
+    }
+
+    pub(super) fn opening(&self) -> Result<&FoldInputCells<Ep>, Error> {
+        self.opening.as_ref().ok_or(Error::Synthesis)
+    }
+
+    pub(super) fn context_words(&self, plan: ReceiveResultPlan) -> Result<Vec<Word<Fp>>, Error> {
+        let mut words = self
+            .values(plan)?
+            .iter()
+            .map(|v| v.word().clone())
+            .collect::<Vec<_>>();
+        let opening = self.opening()?;
+        words.extend([
+            opening.source_k().clone(),
+            opening.g().x().clone(),
+            opening.g().y().clone(),
+        ]);
+        for challenge in opening.challenges() {
+            words.extend([challenge.lo().word().clone(), challenge.hi().word().clone()]);
+        }
+        Ok(words)
     }
 }
 
@@ -234,7 +286,11 @@ mod tests {
                     } else {
                         plan
                     };
-                    claims.context_words(expected)
+                    Ok(claims
+                        .values(expected)?
+                        .iter()
+                        .map(|v| v.word().clone())
+                        .collect::<Vec<_>>())
                 },
             )?;
             for (i, word) in out.iter().enumerate() {
@@ -350,5 +406,235 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[derive(Clone)]
+    #[allow(
+        clippy::struct_excessive_bools,
+        reason = "independent adversarial witness and layout axes"
+    )]
+    struct OpeningExport {
+        scalar_mutation: Option<usize>,
+        point_mutation: bool,
+        omit: bool,
+        source_k: u32,
+        soft: bool,
+        known: bool,
+    }
+    #[derive(Clone, Debug)]
+    struct OpeningConfig {
+        verifier: iroha_plonk_recursion::verifier::VerifierConfig<Ep>,
+        public: Column<Instance>,
+    }
+    impl Circuit<Fp> for OpeningExport {
+        type Config = OpeningConfig;
+        type Params = ();
+        type FloorPlanner = SimpleFloorPlanner;
+        fn without_witnesses(&self) -> Self {
+            Self {
+                known: false,
+                ..self.clone()
+            }
+        }
+        fn configure(meta: &mut ConstraintSystem<Fp>) -> OpeningConfig {
+            let verifier =
+                iroha_plonk_recursion::verifier::VerifierConfig::configure_serialized_foreign(
+                    meta, 4,
+                )
+                .unwrap();
+            let public = meta.instance_column(5);
+            meta.enable_equality(public);
+            OpeningConfig { verifier, public }
+        }
+        fn synthesize(
+            &self,
+            config: OpeningConfig,
+            mut layouter: impl Layouter<Fp>,
+        ) -> Result<(), Error> {
+            use iroha_pasta::PastaCurve;
+            fn generator<C: PastaCurve>() -> C {
+                C::generator()
+            }
+            use iroha_plonk_recursion::{codec::ScalarCells, verifier::VerifierChip};
+            let mut chip = VerifierChip::new(config.verifier);
+            chip.load_tables(&mut layouter)?;
+            let output = layouter.assign_region(
+                || "committed original Omega opening",
+                |mut region| {
+                    let plan = ReceiveResultPlan::from_tasks(Variant::Receive, &groups())?;
+                    let value = if self.known {
+                        Value::known(self.soft)
+                    } else {
+                        Value::unknown()
+                    };
+                    let claims = ReceiveResultClaims::assign(
+                        chip.uint().glue(),
+                        &mut region,
+                        plan,
+                        [value; 5],
+                    )?;
+                    let expected_g = chip.constant_point(&mut region, &generator::<Ep>())?;
+                    let point = if self.point_mutation {
+                        -generator::<Ep>()
+                    } else {
+                        generator::<Ep>()
+                    };
+                    let actual_g = chip.constant_point(&mut region, &point)?;
+                    let mut expected = Vec::new();
+                    let mut actual = Vec::new();
+                    for i in 0..16 {
+                        let lo = chip.uint().constant::<128>(&mut region, 1)?;
+                        let hi = chip.uint().constant::<127>(&mut region, 0)?;
+                        expected.push(ScalarCells::from_limbs(
+                            &mut chip.uint(),
+                            &mut region,
+                            &lo,
+                            &hi,
+                        )?);
+                        let low = if self.source_k < 16 && i == 0 {
+                            0
+                        } else {
+                            1 + u128::from(self.scalar_mutation == Some(2 * i))
+                        };
+                        let high = u128::from(self.scalar_mutation == Some(2 * i + 1));
+                        let lo = chip.uint().assign::<128>(
+                            &mut region,
+                            if self.known {
+                                Value::known(low)
+                            } else {
+                                Value::unknown()
+                            },
+                        )?;
+                        let hi = chip.uint().assign::<127>(
+                            &mut region,
+                            if self.known {
+                                Value::known(high)
+                            } else {
+                                Value::unknown()
+                            },
+                        )?;
+                        actual.push(ScalarCells::from_limbs(
+                            &mut chip.uint(),
+                            &mut region,
+                            &lo,
+                            &hi,
+                        )?);
+                    }
+                    let expected = FoldInputCells::from_normalized(
+                        &mut chip,
+                        &mut region,
+                        16,
+                        expected_g,
+                        expected.try_into().map_err(|_| Error::Synthesis)?,
+                    )?;
+                    let actual = FoldInputCells::from_normalized(
+                        &mut chip,
+                        &mut region,
+                        self.source_k,
+                        actual_g,
+                        actual.try_into().map_err(|_| Error::Synthesis)?,
+                    )?;
+                    let claims = if self.omit {
+                        claims
+                    } else {
+                        claims.with_opening(&actual)?
+                    };
+                    let words = claims.context_words(plan)?;
+                    assert_eq!(words.len(), 40);
+                    // The same unconditional equality is used by the real Proofs
+                    // owner against its actual soft verifier output. No verdict
+                    // gates a coordinate or challenge, including on failure.
+                    crate::a_relation::split::bind_claim(
+                        &mut region,
+                        claims.opening()?,
+                        &expected,
+                    )?;
+                    Ok(words[..5].to_vec())
+                },
+            )?;
+            for (i, word) in output.iter().enumerate() {
+                layouter.constrain_instance(word.cell(), config.public, i)?;
+            }
+            Ok(())
+        }
+    }
+    impl OpeningExport {
+        fn accepts(&self) -> bool {
+            check_circuit(
+                self,
+                16,
+                &[vec![Fp::from(u64::from(self.soft)); 5]],
+                CheckMode::Strict,
+            )
+            .is_ok_and(|r| r.is_satisfied())
+        }
+    }
+    #[test]
+    fn incoming_opening_exports_bind_every_cell_even_for_false_proofs() {
+        let c = OpeningExport {
+            scalar_mutation: None,
+            point_mutation: false,
+            omit: false,
+            source_k: 16,
+            soft: false,
+            known: true,
+        };
+        assert!(c.accepts());
+        for soft in [false, true] {
+            let c = OpeningExport { soft, ..c.clone() };
+            assert!(c.accepts());
+            for i in 0..32 {
+                assert!(
+                    !OpeningExport {
+                        scalar_mutation: Some(i),
+                        ..c.clone()
+                    }
+                    .accepts(),
+                    "challenge limb{i} soft={soft}"
+                );
+            }
+            assert!(
+                !OpeningExport {
+                    point_mutation: true,
+                    ..c.clone()
+                }
+                .accepts()
+            );
+            assert!(
+                !OpeningExport {
+                    source_k: 15,
+                    ..c.clone()
+                }
+                .accepts()
+            );
+            assert!(
+                !OpeningExport {
+                    omit: true,
+                    ..c.clone()
+                }
+                .accepts()
+            );
+        }
+        let known = synthesize(&c, 16, None).unwrap();
+        let unknown = synthesize(&c.without_witnesses(), 16, None).unwrap();
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+    }
+
+    #[test]
+    fn proof_owner_must_precede_terminal_effects() {
+        let mut wrong = groups();
+        wrong[1].clear();
+        wrong.last_mut().unwrap().push(OperationTask::ReceiveProofs);
+        wrong.last_mut().unwrap().sort_unstable();
+        assert!(ReceiveResultPlan::from_tasks(Variant::Receive, &wrong).is_err());
+        let mut wrong = groups();
+        wrong
+            .last_mut()
+            .unwrap()
+            .retain(|task| *task != OperationTask::ReceiveEffects);
+        wrong[0].push(OperationTask::ReceiveEffects);
+        wrong[0].sort_unstable();
+        assert!(ReceiveResultPlan::from_tasks(Variant::Receive, &wrong).is_err());
     }
 }

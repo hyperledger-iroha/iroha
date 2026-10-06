@@ -132,8 +132,8 @@ fn smart_contract_heap_limit(state: &impl StateReadOnly) -> u64 {
     state.world().parameters().smart_contract().memory().get()
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
-fn configure_zk_lane_trace_collection(vm: &mut ivm::IVM, halo2_enabled: bool) {
-    vm.set_zk_trace_enabled(halo2_enabled && vm.zk_mode_enabled());
+fn configure_zk_lane_trace_collection(vm: &mut ivm::IVM, trace_enabled: bool) {
+    vm.set_zk_trace_enabled(trace_enabled && vm.zk_mode_enabled());
 }
 fn validate_overlay_contract_runtime_context(
     world: &impl WorldReadOnly,
@@ -2381,7 +2381,7 @@ where
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
-            if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
+            if wants_zk && !(state_ro.zk().pipa_r.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
@@ -2471,7 +2471,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().trace.enabled);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -2482,7 +2482,7 @@ where
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
-            if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
+            if state_ro.zk().pipa_r.enabled && vm.zk_mode_enabled() {
                 let _ = crate::pipeline::zk_lane::capture_and_submit(
                     &vm,
                     state_ro.prepared_contract_cache().execution_budget(),
@@ -2519,7 +2519,7 @@ where
                         ivm_cache,
                         state_ro.accounts_snapshot(),
                         resolve_streaming_metadata(state_ro, tx.authority()),
-                        state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled,
+                        state_ro.zk().pipa_r.enabled || state_ro.zk().stark.enabled,
                         None,
                         false,
                     )?;
@@ -2531,7 +2531,7 @@ where
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             // ABI gating is handled in validate_header_policy (v1-only release).
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
-            if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
+            if wants_zk && !(state_ro.zk().pipa_r.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
@@ -2644,7 +2644,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
-            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().trace.enabled);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -2656,7 +2656,7 @@ where
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
             // Emit a ZK-lane job with the formal trace (non-forking background verification)
-            if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
+            if state_ro.zk().pipa_r.enabled && vm.zk_mode_enabled() {
                 let _ = crate::pipeline::zk_lane::capture_and_submit(
                     &vm,
                     state_ro.prepared_contract_cache().execution_budget(),
@@ -3012,7 +3012,7 @@ where
             }
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().trace.enabled);
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_host_hydrate", host_hydrate_start);
             #[cfg(feature = "telemetry")]
@@ -3030,7 +3030,7 @@ where
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
-            if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
+            if state_ro.zk().pipa_r.enabled && vm.zk_mode_enabled() {
                 let _ = crate::pipeline::zk_lane::capture_and_submit(
                     &vm,
                     state_ro.prepared_contract_cache().execution_budget(),
@@ -3205,7 +3205,7 @@ where
             begin_overlay_access_log(&mut host, capture_access_log)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
-            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().trace.enabled);
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_host_hydrate", host_hydrate_start);
             #[cfg(feature = "telemetry")]
@@ -3223,7 +3223,7 @@ where
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
-            if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
+            if state_ro.zk().pipa_r.enabled && vm.zk_mode_enabled() {
                 let _ = crate::pipeline::zk_lane::capture_and_submit(
                     &vm,
                     state_ro.prepared_contract_cache().execution_budget(),
@@ -6807,7 +6807,7 @@ mod tests {
         KeyPair::try_random().expect("overlay fixture key generation should succeed")
     }
     #[test]
-    fn zk_lane_trace_collection_requires_halo2_and_zk_mode() {
+    fn zk_lane_trace_collection_requires_trace_and_zk_mode() {
         let mut vm = ivm::IVM::new(u64::MAX);
 
         configure_zk_lane_trace_collection(&mut vm, true);
@@ -7149,7 +7149,7 @@ seiyaku ProtectedProved {
             world,
             ChainId::from("protected-proved-overlay"),
         );
-        state.zk.halo2.enabled = true;
+        state.zk.pipa_r.enabled = true;
         let mut metadata = Metadata::default();
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
@@ -7507,7 +7507,7 @@ seiyaku AliasBoundArguments {
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
         let mut state = test_support::state_after_genesis(world);
-        state.zk.halo2.enabled = true;
+        state.zk.pipa_r.enabled = true;
         let summary = IvmCache::new()
             .summarize_program(bytecode.as_ref())
             .expect("program summary");

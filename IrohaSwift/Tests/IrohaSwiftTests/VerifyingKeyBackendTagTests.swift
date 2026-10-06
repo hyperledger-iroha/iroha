@@ -4,12 +4,12 @@ import XCTest
 final class VerifyingKeyBackendTagTests: XCTestCase {
     func testNoritoDiscriminantsMatchRustExactly() {
         let expected: [(VerifyingKeyBackendTag, UInt32)] = [
-            (.halo2IpaPasta, 0),
             (.stark, 1),
-            (.nativePipaRPasta, 2)
+            (.nativePipaRPasta, 0)
         ]
 
         XCTAssertEqual(VerifyingKeyBackendTag.allCases.count, expected.count)
+        XCTAssertNil(VerifyingKeyBackendTag(rawValue: 2))
         for (backend, discriminant) in expected {
             XCTAssertEqual(backend.noritoDiscriminant, discriminant)
             XCTAssertEqual(VerifyingKeyBackendTag(rawValue: discriminant), backend)
@@ -28,7 +28,6 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
 
     func testCanonicalLabelsRoundTripExactly() {
         let expected: [(VerifyingKeyBackendTag, String)] = [
-            (.halo2IpaPasta, "halo2-ipa-pasta"),
             (.stark, "stark"),
             (.nativePipaRPasta, "native-pipa-r-pasta")
         ]
@@ -45,6 +44,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             " ",
             "\t",
             "\n",
+            "halo2-ipa-pasta",
             " halo2-ipa-pasta",
             "halo2-ipa-pasta ",
             "HALO2-IPA-PASTA",
@@ -80,7 +80,6 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
 
     func testVerifierRegistryAcceptsOnlyPinnedRustProfiles() throws {
         let supported = [
-            "halo2/ipa",
             "pipa-r/pasta",
             "pipa-r/pasta/kaigi-authorization-v1",
             "pipa-r/pasta/kaigi-usage-v1",
@@ -104,6 +103,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     func testVerifierRegistryRejectsAliasesRetiredProfilesAndConfusables() {
         let rejected: [String?] = [
             nil,
+            "halo2/ipa",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-authorization-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -195,9 +195,9 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
 
     func testCatalogClassifierAcceptsOnlyExactProductionLabels() {
         for label in [
-            "halo2-ipa-pasta",
+            "native-pipa-r-pasta",
             "stark",
-            "halo2/ipa",
+            "pipa-r/pasta",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         ] {
             XCTAssertEqual(VerifierBackendCatalogTag(catalogLabel: label), .production)

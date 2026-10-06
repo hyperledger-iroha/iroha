@@ -20,7 +20,7 @@ use iroha_plonk::{
     transcript::TranscriptRepr,
 };
 use iroha_plonk_gadgets::{
-    Uint, Word,
+    GlueChip, Uint, Word,
     bytes::element::{LeElement, assert_le_max, modulus_max},
     ecc::NonIdentityPoint,
     statement::foreign_limbs,
@@ -35,6 +35,38 @@ use iroha_plonk_recursion::{
         VerifierConfig, VerifierPlan,
     },
 };
+
+fn valid_allowlist(digests: &[Fq]) -> bool {
+    !digests.is_empty()
+        && digests.len() <= 32
+        && !digests
+            .iter()
+            .enumerate()
+            .any(|(index, value)| digests[..index].contains(value))
+}
+
+// Fq is a field: this product vanishes exactly when one fixed allowed digest
+// equals the computed complete VK digest. Every factor is assigned by a fixed
+// coefficient gate; no witness selector or supplied digest can choose a key.
+fn constrain_allowed_key(
+    glue: &mut GlueChip<Fq>,
+    region: &mut Region<'_, Fq>,
+    actual: &Word<Fq>,
+    digests: &[Fq],
+) -> Result<(), Error> {
+    if !valid_allowlist(digests) {
+        return Err(Error::Synthesis);
+    }
+    if digests.len() == 1 {
+        return glue.enforce_constant(region, actual, digests[0]);
+    }
+    let mut product = glue.linear(region, &[(Fq::ONE, actual)], -digests[0])?;
+    for digest in &digests[1..] {
+        let factor = glue.linear(region, &[(Fq::ONE, actual)], -*digest)?;
+        product = glue.mul(region, &product, &factor)?;
+    }
+    glue.enforce_constant(region, &product, Fq::ZERO)
+}
 
 /// Circuit-fixed A descriptor, admissible keys and exact four-slot fold plan.
 #[derive(Clone, Debug)]
@@ -59,12 +91,7 @@ impl OmegaPlan {
         if d.k != 16
             || d.instance_lengths != [69]
             || d.instance_types.as_deref() != Some(&[InstanceType::Bounded])
-            || allowlist.is_empty()
-            || allowlist.len() > 32
-            || allowlist
-                .iter()
-                .enumerate()
-                .any(|(i, value)| allowlist[..i].contains(value))
+            || !valid_allowlist(&allowlist)
         {
             return Err(Error::Synthesis);
         }
@@ -146,6 +173,7 @@ pub struct OmegaCircuit {
     pub(crate) witness: OmegaWitness,
     known: bool,
     compact: Option<CompactSpans>,
+    secondary: Option<iroha_plonk_gadgets::range::secondary::SecondaryPlan>,
 }
 impl OmegaCircuit {
     /// Constructs the fixed wrapper; optional slot presence never changes shape.
@@ -163,14 +191,29 @@ impl OmegaCircuit {
             witness,
             known: true,
             compact: None,
+            secondary: None,
         })
     }
     /// Selects the explicit compact layout for artifact construction or
     /// diagnostics. Spans remain circuit-fixed; no verification fallback exists.
     /// The composed row and proof-size gates must pass before artifact freezing.
     #[must_use]
-    pub const fn with_compact_layout(mut self, spans: CompactSpans) -> Self {
+    pub fn with_compact_layout(mut self, spans: CompactSpans) -> Self {
         self.compact = Some(spans);
+        self.secondary = None;
+        self
+    }
+
+    /// Selects the guarded fixed secondary range program with a reserved
+    /// public-prefix gap. Artifact qualification remains mandatory.
+    #[must_use]
+    pub fn with_secondary_layout(
+        mut self,
+        spans: CompactSpans,
+        plan: iroha_plonk_gadgets::range::secondary::SecondaryPlan,
+    ) -> Self {
+        self.compact = Some(spans);
+        self.secondary = Some(plan);
         self
     }
 
@@ -277,9 +320,12 @@ struct ProofMessages {
 impl Circuit<Fq> for OmegaCircuit {
     type Config = OmegaConfig;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = Option<CompactSpans>;
+    type Params = (
+        Option<CompactSpans>,
+        Option<iroha_plonk_gadgets::range::secondary::SecondaryPlan>,
+    );
     fn params(&self) -> Self::Params {
-        self.compact
+        (self.compact, self.secondary.clone())
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -288,11 +334,19 @@ impl Circuit<Fq> for OmegaCircuit {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
-        Self::configure_with_params(meta, None)
+        Self::configure_with_params(meta, (None, None))
     }
-    fn configure_with_params(meta: &mut ConstraintSystem<Fq>, spans: Self::Params) -> Self::Config {
+    fn configure_with_params(
+        meta: &mut ConstraintSystem<Fq>,
+        (spans, secondary): Self::Params,
+    ) -> Self::Config {
         if let Some(spans) = spans {
-            let (verifier, public) = VerifierConfig::configure_compact(meta, spans);
+            let (verifier, public) = if let Some(plan) = secondary {
+                VerifierConfig::configure_compact_secondary(meta, spans, plan)
+                    .expect("fixed valid secondary plan")
+            } else {
+                VerifierConfig::configure_compact(meta, spans)
+            };
             return OmegaConfig {
                 verifier,
                 public: public.columns(),
@@ -397,21 +451,12 @@ impl Circuit<Fq> for OmegaCircuit {
                         VerificationMode::Hard,
                     )?
                 };
-                let mut authorized = chip.uint().glue().constant(&mut region, Fq::ZERO)?;
-                for digest in &self.plan.allowlist {
-                    let digest = chip.uint().glue().constant(&mut region, *digest)?;
-                    let equal = chip
-                        .uint()
-                        .glue()
-                        .is_equal(&mut region, &a.key_digest, &digest)?;
-                    authorized = chip
-                        .uint()
-                        .glue()
-                        .add(&mut region, &authorized, equal.word())?;
-                }
-                chip.uint()
-                    .glue()
-                    .enforce_constant(&mut region, &authorized, Fq::ONE)?;
+                constrain_allowed_key(
+                    chip.uint().glue(),
+                    &mut region,
+                    &a.key_digest,
+                    &self.plan.allowlist,
+                )?;
                 let words = scalars
                     .iter()
                     .map(|value| value.native_word().cloned().ok_or(Error::Synthesis))
@@ -445,10 +490,11 @@ impl Circuit<Fq> for OmegaCircuit {
                     &corrected,
                     &modes,
                 )?;
+                let inputs = vec![part, a_claim, predecessor, selected];
                 let output = chip.verify_fold(
                     &mut region,
                     &self.plan.fold,
-                    &[part, a_claim, predecessor, selected],
+                    &inputs,
                     &fold.messages,
                     &fold.length,
                     VerificationMode::Hard,
@@ -464,6 +510,7 @@ impl Circuit<Fq> for OmegaCircuit {
                     vec![output.claim.g().x().clone(), output.claim.g().y().clone()],
                     challenges,
                 ];
+                chip.finish_compact(&mut region)?;
                 if let Some(public) = &config.compact_public {
                     public.assign(&mut region, output.each_ref().map(Vec::as_slice))?;
                 }
@@ -480,3 +527,7 @@ impl Circuit<Fq> for OmegaCircuit {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "omega/membership_tests.rs"]
+mod membership_tests;

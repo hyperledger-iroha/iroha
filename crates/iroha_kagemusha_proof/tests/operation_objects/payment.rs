@@ -1,4 +1,4 @@
-//! Exact native Payment/package digest composition and total altered transcripts.
+//! Mandatory Payment content addresses and total bound incoming predicates.
 
 use super::{
     semantics::{credential, parse},
@@ -211,6 +211,22 @@ impl Payment {
         assert!(self.accepts(), "total {reason}");
         self.valid = true;
         assert!(!self.accepts(), "forged {reason}");
+    }
+    fn reject_substitution(mut self, original: &Self, reason: &str) {
+        assert_eq!(
+            self.transcript, original.transcript,
+            "fixed Payment: {reason}"
+        );
+        for valid in [false, true] {
+            self.valid = valid;
+            assert!(!self.accepts(), "hard preimage binding ({valid}): {reason}");
+        }
+    }
+    fn rebind_components(&mut self) {
+        self.transcript[2..34].copy_from_slice(&self.request.public(Fp::ZERO)[1].to_repr());
+        self.transcript[99..131].copy_from_slice(&self.payer.public(Fp::ZERO)[1].to_repr());
+        let package = self.public()[1];
+        self.transcript[131..163].copy_from_slice(&package.to_repr());
     }
 }
 fn base() -> Payment {
@@ -556,33 +572,40 @@ fn native_payment_transcript_binds_every_byte_and_each_nested_component() {
     for i in 0..PaymentCells::BYTES {
         let mut wrong = c.clone();
         wrong.transcript[i] ^= 1;
-        wrong.reject(&format!("Payment byte{i}"));
+        if (2..34).contains(&i) || (99..163).contains(&i) {
+            for valid in [false, true] {
+                wrong.valid = valid;
+                assert!(!wrong.accepts(), "content address byte{i}, verdict{valid}");
+            }
+        } else {
+            wrong.reject(&format!("Payment byte{i}"));
+        }
     }
     for i in [
         2, 34, 66, 98, 130, 162, 194, 210, 242, 258, 290, 306, 314, 346, 354, 362, 394, 426, 458,
     ] {
         let mut wrong = c.clone();
         wrong.request.bytes[i] ^= 1;
-        wrong.reject("nested Request");
+        wrong.reject_substitution(&c, "nested Request");
     }
     for i in [2, 34, 66, 98, 130, 195, 227, 260, 300, 350, 444, 476] {
         let mut wrong = c.clone();
         wrong.payer.bytes[i] ^= 1;
-        wrong.reject("nested payer credential");
+        wrong.reject_substitution(&c, "nested payer credential");
     }
     for i in [0, 2, 34, 66, 98, 114, 146, 178, 210, 242, 274, 306, 338] {
         let mut wrong = c.clone();
         wrong.receipt.bytes[i] ^= 1;
-        wrong.reject("nested receipt");
+        wrong.reject_substitution(&c, "nested receipt");
     }
     for i in 0..26 {
         let mut wrong = c.clone();
         wrong.statement[i] = -Fp::ONE;
-        wrong.reject("nested incoming statement");
+        wrong.reject_substitution(&c, "nested incoming statement");
     }
     let mut wrong = c.clone();
     wrong.proof += Fp::ONE;
-    wrong.reject("different proof tape digest");
+    wrong.reject_substitution(&c, "different proof tape digest");
     for i in 0..2 {
         let mut wrong = c.clone();
         wrong.provider[i] += Fp::ONE;
@@ -592,4 +615,26 @@ fn native_payment_transcript_binds_every_byte_and_each_nested_component() {
     let unknown = synthesize(&c.without_witnesses(), 13, None).expect("unknown");
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+}
+
+#[test]
+fn committed_malformed_components_remain_total_after_exact_content_rebinding() {
+    let c = base();
+    // These are genuinely different, committed Payments. Their bad original
+    // payloads stay total; an arbitrary alternative preimage of c cannot burn.
+    for object in 0..3 {
+        let mut malformed = c.clone();
+        match object {
+            0 => malformed.request.bytes[0] ^= 1,
+            1 => malformed.payer.bytes[0] ^= 1,
+            _ => malformed.receipt.bytes[0] ^= 1,
+        }
+        malformed.rebind_components();
+        assert_ne!(malformed.transcript, c.transcript);
+        malformed.reject("committed wrong object version");
+    }
+    let mut malformed = c.clone();
+    malformed.statement[24] = -Fp::ONE;
+    malformed.rebind_statement();
+    malformed.reject("committed oversized incoming statement");
 }

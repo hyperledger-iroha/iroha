@@ -110,6 +110,17 @@ Incoming lineage decoding now preserves the original byte source and derives
 the canonical/header/claim verdicts together. Exact active-byte ingestion
 separates a padded verifier view from the original short or overlong input;
 its total Receive composition and operation qualification remain open.
+Receive now has fixed owners for all five soft results, hard current-credential
+and receipt authorization, original signature tapes, and terminal map/mode
+constraints. Content addresses are mandatory: substituted Request, package,
+credential or certificate preimages cannot manufacture a burn. The complete
+owner-to-W-to-terminal proof chain and its capacity still need qualification.
+The own Receive credit, payer-wallet and amount are hard projections of the
+same Request; changing those generated effect fields cannot turn a valid
+Payment into a burn. Original incoming asset/recipient mismatches remain soft.
+The staged Receive context retains exact active tape commitments and typed Q
+instances, with four-bus internal A circuits and a three-bus terminal candidate;
+internal keys cannot enter the final Omega catalog.
 
 ## Controls
 

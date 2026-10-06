@@ -12,6 +12,15 @@
       "qualification_report_sha256": "09a4e00904221b60417dee8e03d195c0a852177738356113a9faf2fd73121bd7",
       "scope": "Only the two named owner directions were recaptured for the current first-release DTO; preceding top-level capture provenance describes the unchanged historical owners. Standalone and enclosing Status wire frames were regenerated with the actual compiled codec.",
       "source_sha256": "dfbe6c44b5fb2b661e92c2968f41f5ac02d1cd24f0daf57c37ce9af6bc0e2b6f"
+    },
+    {
+      "capture_log_sha256": "ed0d32c4a95ec74b4d9768cace684d4fac1e88a7bcc2557c0c057e393483b559",
+      "capture_source_sha256": "3a59ae057245bf6c6f3aba8b45a9a8bcd66c39e829b2ec98fb40e332df124d50",
+      "codec_fixture_sha256": "3cfc3bde0818275fd8b7e92bc4f2f7fddaff24985ac96034be762a6e19bc38b3",
+      "compiled_capture_binary_sha256": "6f31f0ec522037a47cc25785f960b69bc729384cd9d27aa50c2724f2c558e895",
+      "owner": "iroha_torii_shared::status::common::DiagnosticTraceStatus",
+      "scope": "The two DiagnosticTraceStatus directions replace the retired Halo2Status owner. Actual compiled Rust codecs regenerated DiagnosticTraceStatus, CryptoStatus and the enclosing Status frames; earlier capture provenance remains historical for unchanged owners. This is codec evidence, not SDK artifact or protocol qualification.",
+      "source_sha256": "dfecabfe48ee5dd15229cc39d6929142432d99b3aefff9d2690d28e7bac1606d"
     }
   ],
   "features": [
@@ -4052,23 +4061,22 @@
       "source_sha256": "ab3725698dd4483ac123dc2395625c0bf806ffd7503b8a409e5e889b9d48542d"
     },
     {
-      "column": 5,
+      "column": 1,
       "direction": "deserialize",
-      "explicit_root": true,
+      "explicit_root": false,
       "file": "crates/iroha_torii_shared/src/status/common.rs",
-      "identifier": "Halo2Status",
-      "item_end": 5672,
-      "item_sha256": "d00ae8c27f76a32afb4c2f6e14fd9e96fc27ee8fe3c06a0a5fbec359520607e4",
-      "item_start": 5014,
+      "identifier": "DiagnosticTraceStatus",
+      "item_end": 5466,
+      "item_sha256": "c378edd2cdeb58c5dd6cfc7b1e1a10e629faedfde5258d10471c04615e47eb17",
+      "item_start": 4638,
       "kind": "capture",
-      "line": 140,
+      "line": 134,
       "module": "iroha_torii_shared::status::common",
-      "nominal": "iroha_torii_shared::status::common::Halo2Status",
-      "original_source_sha256": "7a943b8a31061c82eb595ac899a32112e1d1f11b0ec69f033f80fa58db6a0c83",
-      "root_hint": "iroha_telemetry::metrics::Halo2Status",
+      "nominal": "iroha_torii_shared::status::common::DiagnosticTraceStatus",
+      "root_hint": "iroha_torii_shared::status::common::DiagnosticTraceStatus",
       "root_matches": true,
-      "schema_hash": "66918794eeb3ec94f242e94f41254c2b",
-      "source_sha256": "ab3725698dd4483ac123dc2395625c0bf806ffd7503b8a409e5e889b9d48542d"
+      "schema_hash": "1669aa172867ee304aecf5730f74786a",
+      "source_sha256": "dfecabfe48ee5dd15229cc39d6929142432d99b3aefff9d2690d28e7bac1606d"
     },
     {
       "column": 5,
@@ -4147,23 +4155,22 @@
       "source_sha256": "ab3725698dd4483ac123dc2395625c0bf806ffd7503b8a409e5e889b9d48542d"
     },
     {
-      "column": 5,
+      "column": 1,
       "direction": "serialize",
-      "explicit_root": true,
+      "explicit_root": false,
       "file": "crates/iroha_torii_shared/src/status/common.rs",
-      "identifier": "Halo2Status",
-      "item_end": 5672,
-      "item_sha256": "d00ae8c27f76a32afb4c2f6e14fd9e96fc27ee8fe3c06a0a5fbec359520607e4",
-      "item_start": 5014,
+      "identifier": "DiagnosticTraceStatus",
+      "item_end": 5466,
+      "item_sha256": "c378edd2cdeb58c5dd6cfc7b1e1a10e629faedfde5258d10471c04615e47eb17",
+      "item_start": 4638,
       "kind": "capture",
-      "line": 139,
+      "line": 134,
       "module": "iroha_torii_shared::status::common",
-      "nominal": "iroha_torii_shared::status::common::Halo2Status",
-      "original_source_sha256": "7a943b8a31061c82eb595ac899a32112e1d1f11b0ec69f033f80fa58db6a0c83",
-      "root_hint": "iroha_telemetry::metrics::Halo2Status",
+      "nominal": "iroha_torii_shared::status::common::DiagnosticTraceStatus",
+      "root_hint": "iroha_torii_shared::status::common::DiagnosticTraceStatus",
       "root_matches": true,
-      "schema_hash": "66918794eeb3ec94f242e94f41254c2b",
-      "source_sha256": "ab3725698dd4483ac123dc2395625c0bf806ffd7503b8a409e5e889b9d48542d"
+      "schema_hash": "1669aa172867ee304aecf5730f74786a",
+      "source_sha256": "dfecabfe48ee5dd15229cc39d6929142432d99b3aefff9d2690d28e7bac1606d"
     },
     {
       "column": 5,

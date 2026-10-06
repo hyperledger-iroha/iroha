@@ -227,8 +227,8 @@ fn register_zk_asset_rejects_noncanonical_unshield_verifier() {
     let error = execute_isi_component(&mut stx, &owner, registration.into())
         .expect_err("a transfer circuit cannot define unshield tree semantics");
     assert!(
-        error.to_string().contains("vk_unshield"),
-        "unexpected verifier-binding error: {error}"
+        format!("{error:?}").contains("vk_unshield"),
+        "unexpected verifier-binding error: {error:?}"
     );
     assert!(
         stx.world.zk_assets().get(&asset_def_id).is_none(),
@@ -617,15 +617,9 @@ fn zk_roots_are_bounded_in_world_state() {
     state
         .set_zk(cfg::Zk {
             pipa_r: iroha_config::parameters::actual::PipaR::default(),
-            halo2: cfg::Halo2 {
-                enabled: defaults::zk::halo2::ENABLED,
-                curve: cfg::ZkCurve::Pallas,
-                backend: cfg::Halo2Backend::Ipa,
-                max_k: defaults::zk::halo2::MAX_K,
-                verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
-                verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
-                ..cfg::Halo2::default()
-            },
+            trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+            ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+            max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
             fastpq: cfg::Fastpq {
                 execution_mode: cfg::FastpqExecutionMode::Cpu,
                 poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
@@ -694,7 +688,7 @@ fn zk_roots_are_bounded_in_world_state() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    // Setup domain/account/asset and mint
+    // Set up policy state only; the root-history fixture moves no value.
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -712,7 +706,6 @@ fn zk_roots_are_bounded_in_world_state() {
             None,
         ))
         .into(),
-        Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy (Hybrid; allow shield)
         iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
     ] {
@@ -763,15 +756,9 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
     state
         .set_zk(cfg::Zk {
             pipa_r: iroha_config::parameters::actual::PipaR::default(),
-            halo2: cfg::Halo2 {
-                enabled: defaults::zk::halo2::ENABLED,
-                curve: cfg::ZkCurve::Pallas,
-                backend: cfg::Halo2Backend::Ipa,
-                max_k: defaults::zk::halo2::MAX_K,
-                verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
-                verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
-                ..cfg::Halo2::default()
-            },
+            trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+            ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+            max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
             fastpq: cfg::Fastpq {
                 execution_mode: cfg::FastpqExecutionMode::Cpu,
                 poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
@@ -857,8 +844,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 None,
             ))
             .into(),
-            Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone()))
-                .into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
         ] {
             execute_isi_component(&mut stx, &owner, instr).unwrap();

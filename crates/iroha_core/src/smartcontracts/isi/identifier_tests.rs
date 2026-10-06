@@ -392,9 +392,7 @@ fn identifier_receipt_checks_policy_and_commitment_backends_before_decode() {
                     pipa_r_enabled: true,
                     pipa_r_max_envelope_bytes: usize::MAX,
                     pipa_r_max_proof_bytes: usize::MAX,
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1,
-                    halo2_max_proof_bytes: 1,
+
                     stark_enabled: true,
                     stark_max_envelope_bytes: 1,
                     stark_max_proof_bytes: 1,

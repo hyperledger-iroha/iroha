@@ -14,9 +14,8 @@ const VERIFYING_KEY_STATUS_VALUES = new Set([
   "Active",
   "Withdrawn",
 ]);
-const VERIFYING_KEY_ENGINE_LABELS_V1 = new Set(["halo2-ipa-pasta", "stark", "native-pipa-r-pasta"]);
+const VERIFYING_KEY_ENGINE_LABELS_V1 = new Set(["native-pipa-r-pasta", "stark"]);
 const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "halo2/ipa",
   "pipa-r/pasta",
   "pipa-r/pasta/kaigi-authorization-v1",
   "pipa-r/pasta/kaigi-usage-v1",
@@ -24,14 +23,6 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "pipa-r/pasta/confidential-unshield-full-v1",
   "pipa-r/pasta/confidential-unshield-change-v1",
   "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-]);
-const PIPA_R_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "pipa-r/pasta",
-  "pipa-r/pasta/kaigi-authorization-v1",
-  "pipa-r/pasta/kaigi-usage-v1",
-  "pipa-r/pasta/confidential-transfer-v1",
-  "pipa-r/pasta/confidential-unshield-full-v1",
-  "pipa-r/pasta/confidential-unshield-change-v1",
 ]);
 const STARK_VERIFY_BACKEND_LABELS_V1 = new Set([
   "stark/fri/poseidon-x7-goldilocks-6x64-v1",
@@ -401,7 +392,7 @@ export function createVerifyingKeyClient(
   function normalizeVerifyingKeyEngineLabel(value, context) {
     const backend = requireExactNonEmptyString(value, context);
     if (!VERIFYING_KEY_ENGINE_LABELS_V1.has(backend)) {
-      throw new TypeError(`${context} must be halo2-ipa-pasta, stark, or native-pipa-r-pasta`);
+      throw new TypeError(`${context} must be native-pipa-r-pasta or stark`);
     }
     return backend;
   }
@@ -612,9 +603,7 @@ export function createVerifyingKeyClient(
       namespace: "core",
       backend: STARK_VERIFY_BACKEND_LABELS_V1.has(request.backend)
         ? "stark"
-        : PIPA_R_VERIFY_BACKEND_LABELS_V1.has(request.backend)
-          ? "native-pipa-r-pasta"
-          : "halo2-ipa-pasta",
+        : "native-pipa-r-pasta",
       curve: request.curve ?? "unknown",
       public_inputs_schema_hash: Array.from(
         Buffer.from(request.public_inputs_schema_hash_hex, "hex"),

@@ -112,7 +112,6 @@ impl Worker<'_> {
         }
         let budget = self.state.ivm_execution_budget();
         require_body_admission(block, &budget)?;
-        require_qc_witness_admission(qc, &budget)?;
         if let Some(completed) = &self.completed_replay
             && completed.tip.height() == block.header().height
         {

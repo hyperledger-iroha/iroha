@@ -10,9 +10,6 @@ fn policy() -> ZkVerifyGuardrails {
         pipa_r_enabled: true,
         pipa_r_max_envelope_bytes: 128 * 1024,
         pipa_r_max_proof_bytes: 128 * 1024,
-        halo2_enabled: false,
-        halo2_max_envelope_bytes: 0,
-        halo2_max_proof_bytes: 0,
         stark_enabled: false,
         stark_max_envelope_bytes: 0,
         stark_max_proof_bytes: 0,
@@ -246,5 +243,111 @@ fn native_framing_fixture_has_exact_schema_but_cannot_verify() {
             &ProofBox::new(BACKEND.into(), fixture.proof_bytes),
             Some(&key)
         ));
+    }
+}
+
+#[test]
+fn native_compiled_key_cache_shares_exact_material_across_threads() {
+    use std::sync::{Arc, Barrier};
+    const WORKERS: usize = 8;
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let results = std::thread::scope(|scope| {
+        (0..WORKERS)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    NativeRelationV1::ALL.map(|kind| compiled_key(kind).unwrap())
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|worker| worker.join().expect("compiled key worker"))
+            .collect::<Vec<_>>()
+    });
+    for keys in &results {
+        for (index, kind) in NativeRelationV1::ALL.into_iter().enumerate() {
+            assert!(std::ptr::eq(keys[index], results[0][index]));
+            assert!(std::ptr::eq(keys[index], compiled_key(kind).unwrap()));
+            assert!(!keys[index].is_empty());
+            assert!(keys[index].len() <= MAX_KEY_BYTES);
+        }
+    }
+}
+
+#[test]
+fn native_compiled_descriptors_bind_pinned_parameters_and_exact_domains() {
+    use iroha_plonk::cs::{CircuitDescriptorV2, CurveV1, descriptor::pinned_params_digest};
+    let mut identities = std::collections::BTreeSet::new();
+    for kind in NativeRelationV1::ALL {
+        assert!(identities.insert(kind.circuit_id()));
+        let bytes = compiled_key(kind).unwrap();
+        let carrier: CompiledVerifyingKeyV1 = norito::decode_canonical(bytes).unwrap();
+        let descriptor = CircuitDescriptorV2::decode(&carrier.descriptor).unwrap();
+        assert_eq!(descriptor.curve, CurveV1::Vesta);
+        assert_eq!(u32::from(descriptor.k), kind.k());
+        assert!(matches!(kind.k(), 12 | 13));
+        assert_eq!(
+            Some(descriptor.params_digest),
+            pinned_params_digest(descriptor.curve, kind.k())
+        );
+        assert_eq!(
+            descriptor.instance_lengths,
+            [u32::try_from(kind.instance_rows()).unwrap()]
+        );
+        assert_eq!(descriptor.encode().unwrap(), carrier.descriptor);
+        assert_eq!(norito::encode_canonical(&carrier).unwrap(), bytes);
+        for changed in [
+            CircuitDescriptorV2 {
+                k: 31,
+                ..descriptor.clone()
+            },
+            CircuitDescriptorV2 {
+                params_digest: [0; 32],
+                ..descriptor
+            },
+        ] {
+            let foreign = CompiledVerifyingKeyV1 {
+                descriptor: changed.encode().unwrap(),
+                key: carrier.key.clone(),
+            };
+            let key =
+                VerifyingKeyBox::new(BACKEND.into(), norito::encode_canonical(&foreign).unwrap());
+            assert_eq!(
+                validate_key(BACKEND, kind.circuit_id(), &key).unwrap_err(),
+                "native PIPA-R key differs from the compiled relation"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_parameter_admission_rejects_unadmitted_and_oversized_sources() {
+    let key = VerifyingKeyBox::new(BACKEND.into(), Vec::new());
+    for circuit in [
+        "",
+        "pipa-r/pasta/unreviewed",
+        "halo2/pasta/ipa/kaigi-roster-v1",
+    ] {
+        assert_eq!(relation(BACKEND, circuit), None);
+        assert_eq!(
+            validate_key(BACKEND, circuit, &key).unwrap_err(),
+            "unadmitted native PIPA-R key relation"
+        );
+    }
+    for kind in NativeRelationV1::ALL {
+        for backend in ["PIPA-R/PASTA", "pipa-r/pasta ", "halo2/ipa", "stark/fri"] {
+            assert_eq!(relation(backend, kind.circuit_id()), None);
+            let foreign = VerifyingKeyBox::new(backend.into(), Vec::new());
+            assert_eq!(
+                validate_key(backend, kind.circuit_id(), &foreign).unwrap_err(),
+                "unadmitted native PIPA-R key relation"
+            );
+        }
+        let oversized = VerifyingKeyBox::new(BACKEND.into(), vec![0; MAX_KEY_BYTES + 1]);
+        assert_eq!(
+            validate_key(BACKEND, kind.circuit_id(), &oversized).unwrap_err(),
+            "invalid native PIPA-R key container"
+        );
     }
 }

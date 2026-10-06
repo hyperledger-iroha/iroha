@@ -2696,7 +2696,7 @@ fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
         .map_err(ValidationFail::IvmAdmission)?;
     if zk_availability == PreparedIvmZkAvailability::RequireLocalBackend
         && metadata.mode & ivm::ivm_mode::ZK != 0
-        && !(state.zk().halo2.enabled || state.zk().stark.enabled)
+        && !(state.zk().pipa_r.enabled || state.zk().stark.enabled)
     {
         return Err(ValidationFail::IvmAdmission(
             iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
@@ -6539,6 +6539,190 @@ impl Executor {
         }
         Ok(())
     }
+    /// Check bounded proof attachments against native registry metadata and block dedup state.
+    ///
+    /// This performs the same preliminary check used by transaction execution. It neither
+    /// verifies a complete operation relation nor grants execution or publication authority.
+    ///
+    /// # Errors
+    /// Returns the original structural, registry, activity, namespace, budget or duplicate error.
+    #[cfg(feature = "zk-preverify")]
+    pub fn preverify_attachments(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+    ) -> Result<(), ValidationFail> {
+        let md = transaction.metadata();
+        use iroha_data_model::proof::ProofAttachment;
+        let namespace_hint = md
+            .get("contract_alias")
+            .and_then(|value| value.try_into_any_norito::<String>().ok())
+            .and_then(|raw| {
+                raw.trim()
+                    .parse::<iroha_data_model::smart_contract::ContractAlias>()
+                    .ok()
+            })
+            .map(|alias| alias.dataspace_segment().to_owned())
+            .or_else(|| {
+                md.get("contract_address")
+                    .and_then(|value| value.try_into_any_norito::<String>().ok())
+                    .and_then(|raw| {
+                        raw.trim()
+                            .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                            .ok()
+                    })
+                    .and_then(|contract_address| contract_address.dataspace_id().ok())
+                    .and_then(|dataspace_id| {
+                        state_transaction
+                            .nexus
+                            .dataspace_catalog
+                            .by_id(dataspace_id)
+                            .map(|entry| entry.alias.clone())
+                    })
+            });
+        // Process the signed transaction's bounded ZK attachments.
+        if let Some(attachments) = transaction.attachments() {
+            // Canonicalize verification order for determinism
+            let mut list_sorted = attachments.as_slice().to_vec();
+            list_sorted.sort_by(|a, b| {
+                let ah = crate::zk::hash_proof(&a.proof);
+                let bh = crate::zk::hash_proof(&b.proof);
+                (a.backend.as_str(), ah).cmp(&(b.backend.as_str(), bh))
+            });
+            for attachment in list_sorted.into_iter() {
+                if let Some((field, message)) = attachment.structural_error() {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "malformed proof attachment: {field} {message}"
+                    )));
+                }
+                let ProofAttachment {
+                    backend,
+                    proof,
+                    vk_ref,
+                    vk_commitment,
+                    ..
+                } = attachment;
+                // Sanity: proof.backend should match attachment backend
+                if proof.backend != backend {
+                    return Err(ValidationFail::NotPermitted(
+                        "proof backend mismatch".to_owned(),
+                    ));
+                }
+                if vk_ref.backend != backend {
+                    return Err(ValidationFail::NotPermitted(
+                        "verifying key backend mismatch".to_owned(),
+                    ));
+                }
+                if crate::zk::is_production_claim_backend_label(backend.as_str()) {
+                    return Err(ValidationFail::NotPermitted(
+                        "readiness-claim proof backends are not supported".to_owned(),
+                    ));
+                }
+                if crate::zk::is_trusted_setup_backend_label(backend.as_str()) {
+                    return Err(ValidationFail::NotPermitted(
+                        "trusted-setup proof backends are not supported".to_owned(),
+                    ));
+                }
+                if crate::zk::is_developer_only_backend_label(backend.as_str()) {
+                    return Err(ValidationFail::NotPermitted(
+                        "developer-only proof backends are not supported".to_owned(),
+                    ));
+                }
+                if !crate::zk::is_verifier_backend_registry_label_v1(backend.as_str()) {
+                    return Err(ValidationFail::NotPermitted(
+                        "unsupported proof backends are not supported".to_owned(),
+                    ));
+                }
+                // If a VK reference is provided without a commitment, check existence in
+                // WSV. If a commitment is provided, skip the lookup to keep pre-verify
+                // stateless and cheap.
+                if vk_commitment.is_none()
+                    && state_transaction
+                        .world
+                        .verifying_keys
+                        .get(&vk_ref)
+                        .is_none()
+                {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "referenced verifying key missing: {}::{}",
+                        vk_ref.backend, vk_ref.name
+                    )));
+                }
+                // Perform lightweight pre-verify (dedup + tag sanity).
+                let block_height = state_transaction.block_height();
+                let (expected_commitment, vk_active) =
+                    if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
+                        if let Some(ns_hint) = namespace_hint.as_deref() {
+                            if !rec.namespace.is_empty() && rec.namespace != ns_hint {
+                                return Err(ValidationFail::NotPermitted(
+                                    "verifying key namespace/manifest mismatch".to_owned(),
+                                ));
+                            }
+                        }
+                        (Some(rec.commitment), rec.is_active_at(block_height))
+                    } else {
+                        (vk_commitment, false)
+                    };
+                let res = state_transaction.preverify_proof(
+                    &proof,
+                    None,
+                    state_transaction.zk.preverify_budget_bytes,
+                    vk_commitment,
+                    expected_commitment,
+                    vk_active,
+                );
+                match res {
+                    PreverifyResult::Accepted => {}
+                    PreverifyResult::Duplicate => {
+                        return Err(ValidationFail::NotPermitted(
+                            "duplicate proof in block".to_owned(),
+                        ));
+                    }
+                    PreverifyResult::UnsupportedBackend => {
+                        return Err(ValidationFail::NotPermitted(
+                            "unsupported proof backend".to_owned(),
+                        ));
+                    }
+                    PreverifyResult::CurveNotAllowed => {
+                        return Err(ValidationFail::NotPermitted("curve not allowed".to_owned()));
+                    }
+                    PreverifyResult::ProofTooBig => {
+                        return Err(ValidationFail::NotPermitted("proof too big".to_owned()));
+                    }
+                    PreverifyResult::MalformedProof => {
+                        return Err(ValidationFail::NotPermitted("malformed proof".to_owned()));
+                    }
+                    PreverifyResult::PreverifyBudgetExceeded => {
+                        return Err(ValidationFail::NotPermitted(
+                            "pre-verify budget exceeded".to_owned(),
+                        ));
+                    }
+                    PreverifyResult::VerifyingKeyMissing => {
+                        return Err(ValidationFail::NotPermitted(
+                            "verifying key missing".to_owned(),
+                        ));
+                    }
+                    PreverifyResult::VerifyingKeyMismatch => {
+                        return Err(ValidationFail::NotPermitted(
+                            "verifying key mismatch".to_owned(),
+                        ));
+                    }
+                    PreverifyResult::NamespaceMismatch => {
+                        return Err(ValidationFail::NotPermitted(
+                            "verifying key namespace/manifest mismatch".to_owned(),
+                        ));
+                    }
+                    PreverifyResult::VerifyingKeyInactive => {
+                        return Err(ValidationFail::NotPermitted(
+                            "verifying key inactive".to_owned(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute [`SignedTransaction`].
     /// # Errors
     /// Returns an error when IVM preparation or execution fails, or the executor denies the operation.
@@ -6728,177 +6912,7 @@ impl Executor {
         )
         .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
         #[cfg(feature = "zk-preverify")]
-        {
-            use iroha_data_model::proof::ProofAttachment;
-            let namespace_hint = md
-                .get("contract_alias")
-                .and_then(|value| value.try_into_any_norito::<String>().ok())
-                .and_then(|raw| {
-                    raw.trim()
-                        .parse::<iroha_data_model::smart_contract::ContractAlias>()
-                        .ok()
-                })
-                .map(|alias| alias.dataspace_segment().to_owned())
-                .or_else(|| {
-                    md.get("contract_address")
-                        .and_then(|value| value.try_into_any_norito::<String>().ok())
-                        .and_then(|raw| {
-                            raw.trim()
-                                .parse::<iroha_data_model::smart_contract::ContractAddress>()
-                                .ok()
-                        })
-                        .and_then(|contract_address| contract_address.dataspace_id().ok())
-                        .and_then(|dataspace_id| {
-                            state_transaction
-                                .nexus
-                                .dataspace_catalog
-                                .by_id(dataspace_id)
-                                .map(|entry| entry.alias.clone())
-                        })
-                });
-            // Process ZK attachments embedded in V2 transactions.
-            if let Some(attachments) = transaction.attachments() {
-                // Canonicalize verification order for determinism
-                let mut list_sorted = attachments.as_slice().to_vec();
-                list_sorted.sort_by(|a, b| {
-                    let ah = crate::zk::hash_proof(&a.proof);
-                    let bh = crate::zk::hash_proof(&b.proof);
-                    (a.backend.as_str(), ah).cmp(&(b.backend.as_str(), bh))
-                });
-                for attachment in list_sorted.into_iter() {
-                    if let Some((field, message)) = attachment.structural_error() {
-                        return Err(ValidationFail::NotPermitted(format!(
-                            "malformed proof attachment: {field} {message}"
-                        )));
-                    }
-                    let ProofAttachment {
-                        backend,
-                        proof,
-                        vk_ref,
-                        vk_commitment,
-                        ..
-                    } = attachment;
-                    // Sanity: proof.backend should match attachment backend
-                    if proof.backend != backend {
-                        return Err(ValidationFail::NotPermitted(
-                            "proof backend mismatch".to_owned(),
-                        ));
-                    }
-                    if vk_ref.backend != backend {
-                        return Err(ValidationFail::NotPermitted(
-                            "verifying key backend mismatch".to_owned(),
-                        ));
-                    }
-                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
-                        return Err(ValidationFail::NotPermitted(
-                            "readiness-claim proof backends are not supported".to_owned(),
-                        ));
-                    }
-                    if crate::zk::is_trusted_setup_backend_label(backend.as_str()) {
-                        return Err(ValidationFail::NotPermitted(
-                            "trusted-setup proof backends are not supported".to_owned(),
-                        ));
-                    }
-                    if crate::zk::is_developer_only_backend_label(backend.as_str()) {
-                        return Err(ValidationFail::NotPermitted(
-                            "developer-only proof backends are not supported".to_owned(),
-                        ));
-                    }
-                    if !crate::zk::is_verifier_backend_registry_label_v1(backend.as_str()) {
-                        return Err(ValidationFail::NotPermitted(
-                            "unsupported proof backends are not supported".to_owned(),
-                        ));
-                    }
-                    // If a VK reference is provided without a commitment, check existence in
-                    // WSV. If a commitment is provided, skip the lookup to keep pre-verify
-                    // stateless and cheap.
-                    if vk_commitment.is_none()
-                        && state_transaction
-                            .world
-                            .verifying_keys
-                            .get(&vk_ref)
-                            .is_none()
-                    {
-                        return Err(ValidationFail::NotPermitted(format!(
-                            "referenced verifying key missing: {}::{}",
-                            vk_ref.backend, vk_ref.name
-                        )));
-                    }
-                    // Perform lightweight pre-verify (dedup + tag sanity).
-                    let block_height = state_transaction.block_height();
-                    let (expected_commitment, vk_active) =
-                        if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
-                            if let Some(ns_hint) = namespace_hint.as_deref() {
-                                if !rec.namespace.is_empty() && rec.namespace != ns_hint {
-                                    return Err(ValidationFail::NotPermitted(
-                                        "verifying key namespace/manifest mismatch".to_owned(),
-                                    ));
-                                }
-                            }
-                            (Some(rec.commitment), rec.is_active_at(block_height))
-                        } else {
-                            (vk_commitment, false)
-                        };
-                    let res = state_transaction.preverify_proof(
-                        &proof,
-                        None,
-                        state_transaction.zk.preverify_budget_bytes,
-                        vk_commitment,
-                        expected_commitment,
-                        vk_active,
-                    );
-                    match res {
-                        PreverifyResult::Accepted => {}
-                        PreverifyResult::Duplicate => {
-                            return Err(ValidationFail::NotPermitted(
-                                "duplicate proof in block".to_owned(),
-                            ));
-                        }
-                        PreverifyResult::UnsupportedBackend => {
-                            return Err(ValidationFail::NotPermitted(
-                                "unsupported proof backend".to_owned(),
-                            ));
-                        }
-                        PreverifyResult::CurveNotAllowed => {
-                            return Err(ValidationFail::NotPermitted(
-                                "curve not allowed".to_owned(),
-                            ));
-                        }
-                        PreverifyResult::ProofTooBig => {
-                            return Err(ValidationFail::NotPermitted("proof too big".to_owned()));
-                        }
-                        PreverifyResult::MalformedProof => {
-                            return Err(ValidationFail::NotPermitted("malformed proof".to_owned()));
-                        }
-                        PreverifyResult::PreverifyBudgetExceeded => {
-                            return Err(ValidationFail::NotPermitted(
-                                "pre-verify budget exceeded".to_owned(),
-                            ));
-                        }
-                        PreverifyResult::VerifyingKeyMissing => {
-                            return Err(ValidationFail::NotPermitted(
-                                "verifying key missing".to_owned(),
-                            ));
-                        }
-                        PreverifyResult::VerifyingKeyMismatch => {
-                            return Err(ValidationFail::NotPermitted(
-                                "verifying key mismatch".to_owned(),
-                            ));
-                        }
-                        PreverifyResult::NamespaceMismatch => {
-                            return Err(ValidationFail::NotPermitted(
-                                "verifying key namespace/manifest mismatch".to_owned(),
-                            ));
-                        }
-                        PreverifyResult::VerifyingKeyInactive => {
-                            return Err(ValidationFail::NotPermitted(
-                                "verifying key inactive".to_owned(),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        Self::preverify_attachments(state_transaction, &transaction)?;
         let mut proved_contract_runtime_context = None;
         let mut proved_entrypoint_authorization = None;
         // Full verification for proof-carrying IVM executables must run before we move the
@@ -11897,7 +11911,7 @@ mod tests {
         let record = VerifyingKeyRecord::new(
             1,
             "genesis-vk-circuit",
-            BackendTag::Halo2IpaPasta,
+            BackendTag::NativePipaRPasta,
             "pallas",
             [0x11; 32],
             [0x22; 32],

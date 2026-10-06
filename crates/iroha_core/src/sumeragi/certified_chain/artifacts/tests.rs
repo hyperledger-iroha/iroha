@@ -8,7 +8,6 @@ use crate::sumeragi::{
 };
 use iroha_data_model::{block::CommitCertificate, sumeragi_finality::EpochValidationScope};
 use iroha_model_base::chain::ChainId;
-use iroha_sumeragi::message::ResultWitness;
 use std::num::NonZeroUsize;
 
 fn chain() -> CertifiedTestChain {
@@ -96,18 +95,15 @@ fn assert_prefix_artifacts_keep_exact_source_and_all_bulk_owners_in_original_poo
 }
 
 #[test]
-fn prefix_artifacts_refusal_keeps_table_witness_and_completed_projection() {
-    with_prefix_chain(assert_prefix_artifacts_refusal_keeps_table_witness_and_completed_projection);
+fn prefix_artifacts_refusal_keeps_table_and_completed_projection() {
+    with_prefix_chain(assert_prefix_artifacts_refusal_keeps_table_and_completed_projection);
 }
 
 #[inline(never)]
-fn assert_prefix_artifacts_refusal_keeps_table_witness_and_completed_projection(
+fn assert_prefix_artifacts_refusal_keeps_table_and_completed_projection(
     chain: &CertifiedTestChain,
 ) {
-    // Parser-only candidate; independent prefix verification must still reject this invented witness.
-    let source = changed_qc(&frame(chain, 2), |qc| {
-        qc.attestation_witness = Some(ResultWitness::from_untrusted(vec![7; 4096]).unwrap());
-    });
+    let source = frame(chain, 2);
     let measure = AllocationBudget::new(1 << 26);
     let decoded = CertificateRead::new(Clone::clone(&source), measure.clone())
         .complete(&measure)
@@ -150,14 +146,6 @@ fn assert_prefix_artifacts_refusal_keeps_table_witness_and_completed_projection(
         panic!("payload backing refused")
     };
     let table = partial.source().availability.as_slice().as_ptr();
-    let witness = partial
-        .source()
-        .commit_qc
-        .attestation_witness
-        .as_ref()
-        .unwrap()
-        .as_slice()
-        .as_ptr();
     assert_eq!(Some(table), originals.1);
     assert_eq!(budget.reserved_bytes(), certificate_bytes);
 
@@ -176,26 +164,6 @@ fn assert_prefix_artifacts_refusal_keeps_table_witness_and_completed_projection(
         &source
     ));
     assert_eq!(owner.decoded.availability.as_slice().as_ptr(), table);
-    assert_eq!(
-        owner
-            .decoded
-            .commit_qc
-            .attestation_witness
-            .as_ref()
-            .unwrap()
-            .as_slice()
-            .as_ptr(),
-        witness
-    );
-    assert!(
-        owner
-            .decoded
-            .commit_qc
-            .attestation_witness
-            .as_ref()
-            .unwrap()
-            .admitted_to(&budget)
-    );
     assert_eq!(budget.reserved_bytes(), full_bytes);
     drop(owner);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -365,18 +333,7 @@ fn assert_funded_boundary_keeps_original_certificate_without_application_seals_u
     }
     assert_eq!(budget.reserved_bytes(), 0);
     let original = frame(chain, 10);
-    let tampered = changed_qc(&original, |qc| {
-        qc.attestation_witness = Some(
-            ResultWitness::from_untrusted(
-                original
-                    .commit_certificate()
-                    .unwrap()
-                    .result_preimage()
-                    .to_vec(),
-            )
-            .unwrap(),
-        );
-    });
+    let tampered = changed_qc(&original, |qc| qc.agg_sig.0[0] ^= 1);
     assert!(matches!(
         prefix.push_prepared(read(tampered, &budget)),
         Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -389,10 +346,8 @@ fn assert_funded_boundary_keeps_original_certificate_without_application_seals_u
     let (receipt, _) = prefix.push_prepared(artifacts).unwrap().into_parts();
     let qc = receipt.commit_qc().unwrap();
     assert_eq!(qc.signers.count_ones(), 3);
-    assert!(!qc.attest);
-    assert!(qc.attestations.is_empty());
-    assert!(qc.attestation_witness.is_none());
-    // The unflagged receipt retains independently decoded QC metadata. Its transient
+
+    // The receipt retains independently decoded QC metadata. Its transient
     // original-funded table and proposal retire after full availability verification.
     assert_eq!(budget.reserved_bytes(), 0);
     drop(receipt);
@@ -461,7 +416,7 @@ fn assert_funded_original_boundary_result_graph_is_borrowed_without_redecoding(
     let artifacts = read(Clone::clone(&original), &budget);
     let original_bitmap = artifacts.decoded.commit_qc.signers.as_bytes().as_ptr();
     let original_signature = artifacts.decoded.commit_qc.agg_sig;
-    assert!(artifacts.decoded.commit_qc.attestation_witness.is_none());
+
     let retained = budget.reserved_bytes();
     assert!(retained > 0);
 
@@ -499,9 +454,8 @@ fn assert_funded_original_boundary_result_graph_is_borrowed_without_redecoding(
     let qc = certified.commit_qc().unwrap();
     assert_eq!(qc.signers.as_bytes().as_ptr(), original_bitmap);
     assert_eq!(qc.agg_sig, original_signature);
-    assert!(qc.attestations.is_empty());
-    assert!(qc.attestation_witness.is_none());
-    // The unflagged receipt retains independently decoded QC metadata. Its transient
+
+    // The receipt retains independently decoded QC metadata. Its transient
     // original-funded table and proposal retire after full availability verification.
     assert_eq!(budget.reserved_bytes(), 0);
     assert!(budget.reserved_bytes() <= retained);
@@ -510,14 +464,14 @@ fn assert_funded_original_boundary_result_graph_is_borrowed_without_redecoding(
 }
 
 #[test]
-fn native_certificate_rejects_foreign_canonical_attachment_before_borrowing_graph() {
+fn native_certificate_rejects_foreign_signature_before_borrowing_graph() {
     with_funded_original_boundary(
-        assert_native_certificate_rejects_foreign_canonical_attachment_before_borrowing_graph,
+        assert_native_certificate_rejects_foreign_signature_before_borrowing_graph,
     );
 }
 
 #[inline(never)]
-fn assert_native_certificate_rejects_foreign_canonical_attachment_before_borrowing_graph(
+fn assert_native_certificate_rejects_foreign_signature_before_borrowing_graph(
     chain: &CertifiedTestChain,
 ) {
     use crate::sumeragi::certified_chain::{CertifiedChain, VerifiedAuthority, read_frame};
@@ -527,17 +481,9 @@ fn assert_native_certificate_rejects_foreign_canonical_attachment_before_borrowi
     let reader = CertifiedChain::new(&view).unwrap();
     let original = frame(chain, 10);
     let older = frame(chain, 9);
-    let foreign_bytes = older.commit_certificate().unwrap().result_preimage();
-    // Genuine canonical bytes from another original execution, not an invented graph.
-    crate::sumeragi::commitment::ExecutionResultCommitment::decode(foreign_bytes).unwrap();
-    assert_ne!(
-        foreign_bytes,
-        original.commit_certificate().unwrap().result_preimage()
-    );
-    let changed = changed_qc(&original, |qc| {
-        qc.attestation_witness =
-            Some(ResultWitness::from_untrusted(foreign_bytes.to_vec()).unwrap());
-    });
+    let foreign_qc: Qc =
+        norito::decode_canonical(older.commit_certificate().unwrap().commit_qc()).unwrap();
+    let changed = changed_qc(&original, |qc| qc.agg_sig = foreign_qc.agg_sig);
     let parent = chain.committed(9);
     let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
         panic!("authenticated predecessor authorizes H10");
@@ -564,12 +510,12 @@ fn assert_native_certificate_rejects_foreign_canonical_attachment_before_borrowi
                 crate::sumeragi::certified_chain::VerificationReadError::Source(
                     ChainReadError::Certificate {
                         height: 10,
-                        error: iroha_sumeragi::crypto::CertError::AttestationShape
+                        error: iroha_sumeragi::crypto::CertError::BadSignature
                     }
                 )
             )
         ),
-        "foreign witness cannot authorize the already-decoded original graph"
+        "foreign signature cannot authorize the already-decoded original graph"
     );
     assert_eq!(
         budget.reserved_bytes(),
@@ -591,19 +537,15 @@ fn assert_native_certificate_rejects_foreign_canonical_attachment_before_borrowi
         receipt.block(),
         &original
     ));
-    assert!(receipt.commit_qc().unwrap().attestation_witness.is_none());
-    assert!(receipt.commit_qc().unwrap().attestations.is_empty());
+
     drop(receipt);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]
-fn native_boundary_quorums_bind_every_signed_field_and_refuse_application_seals() {
+fn native_boundary_quorums_bind_every_signed_field() {
     use crate::sumeragi::{certified_chain::read_frame, crypto::BlsCrypto, schedule};
-    use iroha_sumeragi::{
-        crypto::{CertError, NoAttestation, Verifier},
-        message::AttestationSignature,
-    };
+    use iroha_sumeragi::crypto::Verifier;
     let mut chain = CertifiedTestChain::npos_boundary_fixture();
     chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
     let original = frame(&chain, 10);
@@ -626,19 +568,13 @@ fn native_boundary_quorums_bind_every_signed_field_and_refuse_application_seals(
     let verifier = Verifier::new(&crypto, &instance, &config.epoch.id, &config.committee);
     let actual: Qc =
         norito::decode_canonical(original.commit_certificate().unwrap().commit_qc()).unwrap();
-    let alternative = chain.commit_qc(
-        10,
-        current.core_hash(),
-        current.result(),
-        false,
-        Signers::Quorum,
-    );
+    let alternative = chain.commit_qc(10, current.core_hash(), current.result(), Signers::Quorum);
     assert_ne!(actual.signers, alternative.signers);
     for qc in [&actual, &alternative] {
-        verifier.verify_qc(&NoAttestation, qc).unwrap();
+        verifier.verify_qc(qc).unwrap();
         assert_eq!(qc.signers.count_ones(), 3);
-        assert!(!qc.attest && qc.attestations.is_empty() && qc.attestation_witness.is_none());
-        let changes: [fn(&mut Qc); 9] = [
+
+        let changes: [fn(&mut Qc); 8] = [
             |qc| qc.instance.0[0] ^= 1,
             |qc| qc.epoch.epoch += 1,
             |qc| qc.epoch.context.0[31] ^= 1,
@@ -646,45 +582,14 @@ fn native_boundary_quorums_bind_every_signed_field_and_refuse_application_seals(
             |qc| qc.view += 1,
             |qc| qc.block_hash.0[0] ^= 1,
             |qc| qc.result.0[0] ^= 1,
-            |qc| qc.attest = true,
             |qc| qc.agg_sig.0[0] ^= 1,
         ];
         for change in changes {
             let mut changed = qc.clone();
             change(&mut changed);
-            assert!(verifier.verify_qc(&NoAttestation, &changed).is_err());
+            assert!(verifier.verify_qc(&changed).is_err());
         }
     }
-    // The flag is genuinely signed by the incumbent. Application attachments remain
-    // adversarial data and cannot grant native authority, even with correct shape/bytes.
-    let mut flagged = chain.commit_qc(
-        10,
-        current.core_hash(),
-        current.result(),
-        true,
-        Signers::Quorum,
-    );
-    verifier.verify_qc_signatures(&flagged).unwrap();
-    assert_eq!(
-        verifier.verify_qc(&NoAttestation, &flagged),
-        Err(CertError::AttestationShape)
-    );
-    flagged.attestation_witness = Some(
-        ResultWitness::from_untrusted(
-            original
-                .commit_certificate()
-                .unwrap()
-                .result_preimage()
-                .to_vec(),
-        )
-        .unwrap(),
-    );
-    flagged.attestations = vec![AttestationSignature::try_from_slice(&[0; 1]).unwrap(); 3];
-    verifier.verify_qc_signatures(&flagged).unwrap();
-    assert_eq!(
-        verifier.verify_qc(&NoAttestation, &flagged),
-        Err(CertError::BadAttestation)
-    );
     assert_eq!(chain.height(), 10);
     assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
         &frame(&chain, 10),

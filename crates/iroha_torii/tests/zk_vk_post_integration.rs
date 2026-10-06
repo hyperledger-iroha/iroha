@@ -90,7 +90,10 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
         iroha_torii::json_entry("backend", "pipa-r/pasta"),
         iroha_torii::json_entry("name", "vk_add"),
         iroha_torii::json_entry("version", 1u64),
-        iroha_torii::json_entry("circuit_id", "circuit_alpha"),
+        iroha_torii::json_entry(
+            "circuit_id",
+            iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        ),
         iroha_torii::json_entry(
             "public_inputs_schema_hash_hex",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -99,7 +102,7 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
         iroha_torii::json_entry("vk_len", 1024u64),
         iroha_torii::json_entry(
             "commitment_hex",
-            "0000000000000000000000000000000000000000000000000000000000000000",
+            "1111111111111111111111111111111111111111111111111111111111111111",
         ),
     ]);
     let body_reg = json::to_json(&body_reg_value).unwrap();
@@ -149,7 +152,10 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
         iroha_torii::json_entry("backend", "pipa-r/pasta"),
         iroha_torii::json_entry("name", "vk_add"),
         iroha_torii::json_entry("version", 2u64),
-        iroha_torii::json_entry("circuit_id", "circuit_alpha"),
+        iroha_torii::json_entry(
+            "circuit_id",
+            iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        ),
         iroha_torii::json_entry(
             "public_inputs_schema_hash_hex",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -208,7 +214,10 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
         iroha_torii::json_entry("backend", "pipa-r/pasta"),
         iroha_torii::json_entry("name", "legacy"),
         iroha_torii::json_entry("version", 1_u64),
-        iroha_torii::json_entry("circuit_id", "circuit_alpha"),
+        iroha_torii::json_entry(
+            "circuit_id",
+            iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        ),
         iroha_torii::json_entry(
             "public_inputs_schema_hash_hex",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -217,7 +226,7 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
         iroha_torii::json_entry("vk_len", 1024_u64),
         iroha_torii::json_entry(
             "commitment_hex",
-            "0000000000000000000000000000000000000000000000000000000000000000",
+            "1111111111111111111111111111111111111111111111111111111111111111",
         ),
     ]))
     .expect("encode legacy private-key request");

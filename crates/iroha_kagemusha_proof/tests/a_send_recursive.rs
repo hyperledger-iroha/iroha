@@ -14,6 +14,7 @@ mod load_objects;
 /// Genuine common-key Bootstrap/Load predecessor builder.
 #[path = "load_omega.rs"]
 pub mod load_outer;
+use load_outer::load_chain::bootstrap_outer::bootstrap_chain::SourceProfile;
 /// Genuine Send sigma/Q and same-cell state/map components.
 #[path = "a_send.rs"]
 pub mod send_components;
@@ -119,10 +120,9 @@ fn frame(bytes: &[u8]) -> Vec<u8> {
     out.extend(bytes);
     out
 }
-fn sources(rooted: &load_outer::TwoTerminalLoadOmega, q_buses: Option<usize>) -> Sources {
+fn sources(artifact: &load_outer::DiagnosticLoadOmega, q_buses: Option<usize>) -> Sources {
     use iroha_kagemusha_proof::operation_relation::objects::ObjectKind;
     use iroha_plonk_gadgets::bytes::p_bytes_native;
-    let artifact = &rooted.artifact;
     assert_eq!(
         artifact.source.state.lineage[17],
         artifact.key.kagemusha_digest(&artifact.binding).unwrap()
@@ -232,7 +232,7 @@ fn sources(rooted: &load_outer::TwoTerminalLoadOmega, q_buses: Option<usize>) ->
 #[derive(Clone)]
 struct First {
     source: Arc<Sources>,
-    range_buses: usize,
+    profile: SourceProfile,
     plan: ContextPlan,
     pallas: AccumulatorT<Ep>,
     fold: Vec<u8>,
@@ -397,9 +397,9 @@ impl First {
 impl Circuit<Fp> for First {
     type Config = Config;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = usize;
-    fn params(&self) -> usize {
-        self.range_buses
+    type Params = SourceProfile;
+    fn params(&self) -> SourceProfile {
+        self.profile
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -408,14 +408,10 @@ impl Circuit<Fp> for First {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
-        Self::configure_with_params(meta, 0)
+        Self::configure_with_params(meta, SourceProfile::Generic)
     }
-    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, range_buses: usize) -> Config {
-        let verifier = if range_buses == 0 {
-            VerifierConfig::configure(meta)
-        } else {
-            VerifierConfig::configure_serialized_foreign(meta, range_buses).unwrap()
-        };
+    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, profile: SourceProfile) -> Config {
+        let verifier = profile.configure(meta);
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -637,9 +633,9 @@ struct Continuation {
 impl Circuit<Fp> for Continuation {
     type Config = Config;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = usize;
-    fn params(&self) -> usize {
-        self.first.range_buses
+    type Params = SourceProfile;
+    fn params(&self) -> SourceProfile {
+        self.first.profile
     }
     fn without_witnesses(&self) -> Self {
         Self {
@@ -650,8 +646,8 @@ impl Circuit<Fp> for Continuation {
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
         First::configure(meta)
     }
-    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, range_buses: usize) -> Config {
-        First::configure_with_params(meta, range_buses)
+    fn configure_with_params(meta: &mut ConstraintSystem<Fp>, profile: SourceProfile) -> Config {
+        First::configure_with_params(meta, profile)
     }
     fn synthesize(&self, config: Config, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
         let first = &self.first;
@@ -1183,7 +1179,7 @@ fn continue_schedule(
         eprintln!(
             "genuine Send A{} hard W+Q{indices:?}+context+fold range_buses={} lanes={lanes:?}, production_k16_fit={}",
             stage + 1,
-            first.range_buses,
+            first.profile.range_buses(),
             k == 16
         );
         if adversarial {
@@ -1297,7 +1293,7 @@ fn continue_schedule(
             proof.proof.len(),
             continuation.plan.is_terminal()
         );
-        artifact_diagnostics(stage, &key, &proof.proof, first.range_buses);
+        artifact_diagnostics(stage, &key, &proof.proof, first.profile.range_buses());
         if continuation.plan.is_terminal() {
             let final_digest = key.vk().kagemusha_digest(key.binding()).unwrap();
             let final_catalog = iroha_kagemusha_proof::omega::OmegaPlan::new(
@@ -1466,6 +1462,28 @@ pub(crate) fn run_send_schedule(
     range_buses: usize,
     q_buses: Option<usize>,
 ) -> AuthenticatedSend {
+    run_send_schedule_with_profile(rooted, SourceProfile::ordinary(range_buses), q_buses)
+}
+
+/// Complete controls-off Send with a fixed named profile at all A stages.
+/// Catalog construction must rebind the resulting terminal before admission.
+#[allow(dead_code)] // Consumed by compact catalog construction.
+pub(crate) fn run_send_schedule_with_profile(
+    rooted: &load_outer::TwoTerminalLoadOmega,
+    profile: SourceProfile,
+    q_buses: Option<usize>,
+) -> AuthenticatedSend {
+    run_send_from_load(&rooted.artifact, profile, q_buses)
+}
+
+/// Complete controls-off Send from a Load artifact with its actual carried key.
+/// The caller retains the exact catalog; no two-terminal metadata is inferred.
+#[allow(dead_code)] // Consumed by compact catalog construction.
+pub(crate) fn run_send_from_load(
+    rooted: &load_outer::DiagnosticLoadOmega,
+    profile: SourceProfile,
+    q_buses: Option<usize>,
+) -> AuthenticatedSend {
     let source = Arc::new(sources(rooted, q_buses));
     let context = ContextPlan::with_schedule(
         source.plan.clone(),
@@ -1499,7 +1517,7 @@ pub(crate) fn run_send_schedule(
         .unwrap();
     let first = First {
         source: source.clone(),
-        range_buses,
+        profile,
         plan: context,
         pallas,
         fold: fold.to_bytes().to_vec(),

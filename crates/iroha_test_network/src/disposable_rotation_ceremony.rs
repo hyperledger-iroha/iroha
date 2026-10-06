@@ -235,7 +235,6 @@ fn verify_input(
         input.target_epoch,
         input.transition_id.into(),
         input.finality_limits,
-        verifier.attestations(),
         verifier.allocation_budget(),
     )
     .wrap_err("rotation selection evidence verification failed")?;
@@ -1623,14 +1622,6 @@ pub async fn prepare_disposable_pending_custody(
         .map_err(|error| eyre!("invalid chain identifier: {error}"))?;
     let credential_budget =
         iroha_allocation::AllocationBudget::new(input.credential_max_memory_bytes.get());
-    let cursor = NativeJournalCursor::new(
-        chain_id.clone(),
-        input.network_id,
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        input.finality_limits,
-        &credential_budget,
-    )
-    .map_err(|error| eyre!(error))?;
     let verified = verify_validator_committee_provisioning_evidence_v1(
         evidence,
         &chain_id,
@@ -1638,7 +1629,6 @@ pub async fn prepare_disposable_pending_custody(
         input.target_epoch,
         input.transition_id.into(),
         input.finality_limits,
-        cursor.attestations(),
         &credential_budget,
     )
     .wrap_err("pending custody evidence is invalid")?;

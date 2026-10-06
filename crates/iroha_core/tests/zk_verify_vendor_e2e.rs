@@ -10,10 +10,7 @@
 #[path = "common/native_genesis.rs"]
 mod native_genesis;
 use iroha_core::smartcontracts::Execute;
-use iroha_core::{
-    smartcontracts::ivm::host::CoreHost,
-    state::{StateReadOnly, WorldReadOnly},
-};
+use iroha_core::{smartcontracts::ivm::host::CoreHost, state::WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::Account,
@@ -226,7 +223,7 @@ seiyaku VendorBridgeGate {
             options: 2,
             eligible_root: root_bytes,
             start_ts: 0,
-            end_ts: 0,
+            end_ts: 10_000,
             finalized: false,
             tally: vec![0, 0],
             accepted_ballots: Vec::new(),

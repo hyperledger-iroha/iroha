@@ -1,7 +1,9 @@
 //! Shared canonical S6 certificates and injective 128/127 ↔ 87-bit bridges.
 //!
 //! Every constructor proves an integer in `[0,m)`, with `m<2^255`, and retains
-//! the same constrained cells. The modulus is part of the opaque certificate.
+//! the same constrained cells. The declared modulus and smallest hard-proved
+//! upper bound are private parts of the certificate. Widening the declared
+//! modulus never discards a tighter bound or consults the witness value.
 //! Import splits `lo=a+2^87*b0`, `hi=b1+2^46*c` with widths87/41/46/81,
 //! then sets `b=b0+2^41*b1`. Export reverses those equalities, range-checking
 //! only b0 and b1: canonical FF limbs already prove the other bounds.
@@ -26,6 +28,10 @@ pub struct CanonicalS6<F: PastaField> {
     lo: U128<F>,
     hi: Uint<F, 127>,
     modulus: ForeignModulus,
+    // Strict integer bound established by a hard constraint on these exact
+    // limbs. It may be tighter than the declared arithmetic modulus after
+    // widening. A selected value needs a bound valid for both possible arms.
+    proved_upper_bound: ForeignModulus,
 }
 impl<F: PastaField> CanonicalS6<F> {
     /// The modulus of a Pasta field, represented as an FF modulus.
@@ -69,6 +75,7 @@ impl<F: PastaField> CanonicalS6<F> {
             lo: lo.clone(),
             hi: hi.clone(),
             modulus,
+            proved_upper_bound: modulus,
         })
     }
     /// Canonically decomposes one native word and retains that modulus proof.
@@ -85,10 +92,12 @@ impl<F: PastaField> CanonicalS6<F> {
             lo: limbs.lo().clone(),
             hi: limbs.hi().clone(),
             modulus: Self::field_modulus::<F>(),
+            proved_upper_bound: Self::field_modulus::<F>(),
         })
     }
-    /// Changes the checked modulus. Enlarging the bound needs no new check;
-    /// narrowing proves the same retained limb integer below the new modulus.
+    /// Changes the declared modulus while retaining the tightest hard-proved
+    /// bound. A smaller modulus adds a comparison only when the retained proof
+    /// does not already imply it. The exact constrained limb cells are retained.
     ///
     /// # Errors
     /// As [`Self::from_limbs`]. No modular reduction is performed.
@@ -99,7 +108,7 @@ impl<F: PastaField> CanonicalS6<F> {
         modulus: ForeignModulus,
     ) -> Result<Self, Error> {
         Self::supported(modulus)?;
-        if self.modulus.nat().cmp_vartime(&modulus.nat()).is_le() {
+        if self.proves_less_than(modulus) {
             Ok(Self { modulus, ..self })
         } else {
             Self::from_limbs(uint, region, modulus, &self.lo, &self.hi)
@@ -119,6 +128,7 @@ impl<F: PastaField> CanonicalS6<F> {
             lo: element.lo().clone(),
             hi: element.hi().clone(),
             modulus: Self::field_modulus::<G>(),
+            proved_upper_bound: Self::field_modulus::<G>(),
         })
     }
     /// Total-decodes a scalar; invalid bytes select the fixed zero integer.
@@ -144,6 +154,10 @@ impl<F: PastaField> CanonicalS6<F> {
                 lo: Uint::new(lo),
                 hi: Uint::new(hi),
                 modulus: Self::field_modulus::<G>(),
+                // Both branches satisfy this bound: the valid original is
+                // canonical in G and the invalid branch is the fixed zero.
+                // Never strengthen it merely because the witness is invalid.
+                proved_upper_bound: Self::field_modulus::<G>(),
             },
             valid,
         ))
@@ -162,6 +176,17 @@ impl<F: PastaField> CanonicalS6<F> {
     #[must_use]
     pub const fn modulus(&self) -> ForeignModulus {
         self.modulus
+    }
+
+    /// Whether retained hard constraints already prove this exact limb integer
+    /// is strictly below `bound`. This uses only opaque structural metadata,
+    /// never limb witness values or a soft decoder's validity bit.
+    #[must_use]
+    pub fn proves_less_than(&self, bound: ForeignModulus) -> bool {
+        self.proved_upper_bound
+            .nat()
+            .cmp_vartime(&bound.nat())
+            .is_le()
     }
 }
 
@@ -244,6 +269,7 @@ impl<F: PastaField> FfChip<F> {
             lo: Uint::new(lo),
             hi: Uint::new(hi),
             modulus: value.modulus,
+            proved_upper_bound: value.modulus,
         })
     }
 }

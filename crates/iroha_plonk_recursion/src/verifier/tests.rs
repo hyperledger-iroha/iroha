@@ -950,28 +950,35 @@ fn compact_complete_interpreter_native_differential_both_curves() {
 struct ParallelProgram<C: PastaCurve> {
     source: Program<C>,
     buses: usize,
+    tagged: bool,
 }
 impl<C: PastaCurve> Circuit<C::Base> for ParallelProgram<C> {
     type Config = Config<C>;
     type FloorPlanner = SimpleFloorPlanner;
-    type Params = (usize, usize);
+    type Params = (usize, usize, bool);
     fn params(&self) -> Self::Params {
-        (self.source.params(), self.buses)
+        (self.source.params(), self.buses, self.tagged)
     }
     fn without_witnesses(&self) -> Self {
         Self {
             source: self.source.without_witnesses(),
             buses: self.buses,
+            tagged: self.tagged,
         }
     }
     fn configure(meta: &mut ConstraintSystem<C::Base>) -> Self::Config {
-        Self::configure_with_params(meta, (16, 2))
+        Self::configure_with_params(meta, (16, 2, false))
     }
     fn configure_with_params(
         meta: &mut ConstraintSystem<C::Base>,
-        (outputs, buses): Self::Params,
+        (outputs, buses, tagged): Self::Params,
     ) -> Self::Config {
-        let verifier = VerifierConfig::configure_serialized_foreign(meta, buses).unwrap();
+        let verifier = if tagged {
+            VerifierConfig::configure_serialized_foreign_tagged(meta, buses)
+        } else {
+            VerifierConfig::configure_serialized_foreign(meta, buses)
+        }
+        .unwrap();
         let primary = meta.advice_column();
         let secondary = meta.advice_column();
         let bytes = BytesConfig::configure(meta, primary, secondary);
@@ -991,10 +998,17 @@ impl<C: PastaCurve> Circuit<C::Base> for ParallelProgram<C> {
         self.source.synthesize(config, layouter)
     }
 }
-fn parallel_foreign_cases<C: PastaCurve>() {
+fn parallel_foreign_cases<C: PastaCurve>(tagged: bool) {
     for count in [0, 9] {
         assert!(
             VerifierConfig::<C>::configure_serialized_foreign(
+                &mut ConstraintSystem::default(),
+                count
+            )
+            .is_err()
+        );
+        assert!(
+            VerifierConfig::<C>::configure_serialized_foreign_tagged(
                 &mut ConstraintSystem::default(),
                 count
             )
@@ -1015,6 +1029,7 @@ fn parallel_foreign_cases<C: PastaCurve>() {
             let circuit = ParallelProgram {
                 source: source.clone(),
                 buses,
+                tagged,
             };
             let report = check_circuit(&circuit, 16, &public, CheckMode::Strict).unwrap();
             assert!(
@@ -1044,7 +1059,11 @@ fn parallel_foreign_cases<C: PastaCurve>() {
                 source.hard = true;
                 assert!(
                     !check_circuit(
-                        &ParallelProgram { source, buses },
+                        &ParallelProgram {
+                            source,
+                            buses,
+                            tagged
+                        },
                         16,
                         &public,
                         CheckMode::Strict
@@ -1058,8 +1077,14 @@ fn parallel_foreign_cases<C: PastaCurve>() {
 }
 #[test]
 fn parallel_foreign_interpreter_native_differential_both_curves() {
-    parallel_foreign_cases::<Ep>();
-    parallel_foreign_cases::<Eq>();
+    parallel_foreign_cases::<Ep>(false);
+    parallel_foreign_cases::<Eq>(false);
+}
+
+#[test]
+fn tagged_parallel_foreign_interpreter_native_differential_both_curves() {
+    parallel_foreign_cases::<Ep>(true);
+    parallel_foreign_cases::<Eq>(true);
 }
 
 #[test]
@@ -1067,10 +1092,21 @@ fn parallel_foreign_source_descriptor_inventory() {
     use iroha_plonk::cs::{
         CircuitDescriptorV1, CircuitDescriptorV2, CurveV1, DescriptorConfig, TranscriptV1,
     };
-    for buses in [0, 2, 3, 4] {
+    for (buses, tagged) in [
+        (0, false),
+        (2, false),
+        (3, false),
+        (4, false),
+        (2, true),
+        (3, true),
+        (4, true),
+    ] {
         let mut meta = ConstraintSystem::<iroha_pasta::Fp>::default();
         if buses == 0 {
             let _ = VerifierConfig::<Ep>::configure(&mut meta);
+        } else if tagged {
+            let _ = VerifierConfig::<Ep>::configure_serialized_foreign_tagged(&mut meta, buses)
+                .unwrap();
         } else {
             let _ = VerifierConfig::<Ep>::configure_serialized_foreign(&mut meta, buses).unwrap();
         }
@@ -1100,7 +1136,7 @@ fn parallel_foreign_source_descriptor_inventory() {
         .unwrap();
         let protocol = Protocol::new(&descriptor).unwrap();
         eprintln!(
-            "PARALLEL_FOREIGN_A_DESCRIPTOR buses={buses} shape={:?} estimated_proof_bytes={} actual_proof=false",
+            "PARALLEL_FOREIGN_A_DESCRIPTOR buses={buses} tagged={tagged} shape={:?} estimated_proof_bytes={} actual_proof=false",
             protocol.shape(),
             protocol.proof_length()
         );

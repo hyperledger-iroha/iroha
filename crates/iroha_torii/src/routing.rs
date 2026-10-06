@@ -7557,10 +7557,8 @@ mod evidence_list_query_contract_tests {
                 view: 0,
                 block_hash: Hash32([hash; 32]),
                 result: Hash32([3; 32]),
-                attest: false,
                 signer: 0,
                 sig: Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
-                attestation: None,
             };
             vote.sig = Signature(
                 iroha_crypto::Signature::new(key.private_key(), &vote.preimage())
@@ -16273,7 +16271,7 @@ fn execute_contract_view(
     // FastPQ entry, or completed AXT artifact. Reject before those containers grow.
     host.restrict_output_limits(iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(0, 0));
     host.set_crypto_config(Arc::clone(&query_view.crypto));
-    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_zk_config(&query_view.zk);
     host.set_chain_id(&query_view.chain_id);
     host.hydrate_axt_state(&query_view)
         .map_err(|error| ContractViewExecutionError {
@@ -16484,7 +16482,7 @@ fn execute_contract_call_simulation(
         ),
     );
     host.set_crypto_config(Arc::clone(&query_view.crypto));
-    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_zk_config(&query_view.zk);
     host.set_chain_id(&query_view.chain_id);
     host.hydrate_axt_state(&query_view)
         .map_err(|error| ContractCallSimulationError {

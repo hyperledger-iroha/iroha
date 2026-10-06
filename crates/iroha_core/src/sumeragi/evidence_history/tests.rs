@@ -15,14 +15,12 @@ fn conflict(chain: &CertifiedTestChain, height: u64) -> Evidence {
             height,
             Hash32([0x31; 32]),
             Hash32([0x32; 32]),
-            false,
             Signers::Quorum,
         ),
         chain.commit_qc(
             height,
             Hash32([0x33; 32]),
             Hash32([0x34; 32]),
-            false,
             Signers::LastThree,
         ),
     )
@@ -212,7 +210,6 @@ fn below_quorum_and_identical_certificate_values_are_rejected() {
         2,
         Hash32([0x31; 32]),
         Hash32([0x32; 32]),
-        false,
         Signers::BelowQuorum,
     );
     assert!(matches!(
@@ -236,8 +233,8 @@ fn original_history_rejects_flagged_parent_authority_without_erasing_signed_safe
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_model_base::peer::PeerId;
     use iroha_sumeragi::{
-        crypto::{CertError, Crypto, Signer, Verifier},
-        message::{AttestationSignature, BlockHeader, Defect, Proposal, Qc, ResultWitness},
+        crypto::{Crypto, Signer, Verifier},
+        message::{BlockHeader, Defect, Proposal, Qc},
         topology::Topology,
         types::{ControlWitness, SIGNATURE_LEN, Signature},
     };
@@ -312,7 +309,6 @@ fn original_history_rejects_flagged_parent_authority_without_erasing_signed_safe
                 proposer: leader,
                 skipped_leaders: topology.skipped_leader_keys(&config.committee, 0),
                 control_witness: ControlWitness::empty(),
-                attest: false,
             },
             justify: None,
             parent_qc: Some(qc),
@@ -326,16 +322,10 @@ fn original_history_rejects_flagged_parent_authority_without_erasing_signed_safe
             defect,
         }
     };
-    let ordinary = chain.commit_qc(
-        2,
-        parent.core_hash(),
-        parent.result(),
-        false,
-        Signers::Quorum,
-    );
+    let ordinary = chain.commit_qc(2, parent.core_hash(), parent.result(), Signers::Quorum);
     let parent_epoch = ordinary.epoch;
     let verifier = Verifier::new(&crypto, &instance, &parent_epoch, &parent_config.committee);
-    verifier.verify_qc(&NoAttestation, &ordinary).unwrap();
+    verifier.verify_qc(&ordinary).unwrap();
     assert!(matches!(
         verify_from_state(
             &view,
@@ -345,49 +335,10 @@ fn original_history_rejects_flagged_parent_authority_without_erasing_signed_safe
         Err(NativeEvidenceError::Proof(EvidenceError::DefectMismatch))
     ));
 
-    // Exact BLS quorum and canonical original result witness pass shape/signature checks.
-    // Native application policy still accepts no attached commit attestation.
-    let mut flagged = ordinary;
-    flagged.attest = true;
-    flagged.attestation_witness = Some(
-        ResultWitness::from_untrusted(norito::encode_canonical(parent.commitment()).unwrap())
-            .unwrap(),
-    );
-    assert_eq!(
-        crate::sumeragi::commitment::result_of_preimage(
-            flagged.attestation_witness.as_ref().unwrap().as_slice()
-        ),
-        parent.result()
-    );
-    flagged.attestations = vec![AttestationSignature::try_from_slice(&[0x42]).unwrap(); 3];
-    sign_qc(&mut flagged);
-    verifier.verify_qc_signatures(&flagged).unwrap();
-    assert_eq!(
-        verifier.verify_qc(&NoAttestation, &flagged),
-        Err(CertError::BadAttestation)
-    );
-    let verified = verify_from_state(
-        &view,
-        &report(flagged.clone(), Defect::InvalidParentQc),
-        |_, _| Ok(()),
-    )
-    .unwrap();
-    assert!(!verified.safety_violation());
-    assert_eq!(verified.offenders()[0].signer, leader);
-    assert_eq!(verified.offenders().len(), 1);
-    assert_eq!(verified.tip(), original_tip);
-    assert!(matches!(
-        verify_from_state(&view, &report(flagged, Defect::HeaderHeight), |_, _| Ok(())),
-        Err(NativeEvidenceError::Proof(EvidenceError::DefectMismatch))
-    ));
-
-    // The safety monitor deliberately needs quorum signatures only, even when an
-    // application attachment is unavailable. Retiring that attachment cannot erase a conflict.
+    // Genuine conflicting exact quorums remain attributable independent of application state.
     let Evidence::ConflictingCertificates(mut first, mut second) = conflict(&chain, 3) else {
         unreachable!()
     };
-    first.attest = true;
-    second.attest = true;
     sign_qc(&mut first);
     sign_qc(&mut second);
     let verified = verify_from_state(

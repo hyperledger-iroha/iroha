@@ -217,7 +217,7 @@ impl NativeBeaconProducer {
     pub(crate) fn build(
         &self,
         context: &ControlWitnessContext,
-    ) -> Result<(ControlWitness, bool), NativeBeaconError> {
+    ) -> Result<ControlWitness, NativeBeaconError> {
         let source = ApplicationControlContext {
             instance: self.instance,
             epoch: context.epoch,
@@ -234,8 +234,7 @@ impl NativeBeaconProducer {
                 height: context.height,
             })?),
         };
-        // This application requests no commit attestation (`specs/sumeragi.md` §3.7 A1).
-        Ok((control::encode(pulse)?, false))
+        control::encode(pulse).map_err(NativeBeaconError::from)
     }
 
     /// Bind only the current parent to the opaque authority retained by this State

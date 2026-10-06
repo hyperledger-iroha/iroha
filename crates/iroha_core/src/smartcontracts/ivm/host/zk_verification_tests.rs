@@ -417,7 +417,7 @@ fn zk_verify_batch_rejects_configured_count_cap_after_metered_prepare() {
     let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(10, pointer);
     let mut host = CoreHost::new(fixture_account("alice"));
-    host.halo2_config.verifier_max_batch = 1;
+    host.zk_verify_limits.max_verify_batch = 1;
     let quote = host
         .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm)
         .expect("count rejection must still reserve gas");

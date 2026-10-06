@@ -68,13 +68,14 @@ signing inputs; local build or component results cannot stand in for live qualif
 
 ### Current validation contract (2026-10-06)
 
-Validate the current implementation and its surviving requirements. The native
-application uses `NoAttestation` at every height, including committee boundaries
-(spec §3.7 A1, E64). Its controls must prove unflagged progress, rejection of
-application-attestation payloads and original execution custody through refusal
-and publication. Retired mint-finality/Pasta tests are not prerequisites. Generic
-protocol attestation tests and their registered mutations remain required while
-that protocol surface exists.
+Validate the current implementation and its surviving requirements. Generic
+consensus attestation, its flag/attachments and its dedicated mutations are
+removed from the first-release protocol. Controls must prove exact BLS quorums,
+progress through committee boundaries, rejection of retired wire fields, and
+original execution custody through refusal and publication. Challenge-bound
+node finality evidence remains a separate authenticated service. Retired
+mint-finality/Pasta and generic-attestation tests are not prerequisites; the
+remaining safety, custody and liveness controls are mandatory.
 
 Discover test names and ignores from the actual built executable. Match libtest's
 substring filter semantics, account for every selected test, and reject missing
