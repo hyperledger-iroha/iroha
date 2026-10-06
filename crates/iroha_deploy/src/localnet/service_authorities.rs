@@ -969,22 +969,35 @@ impl GeneratedAuthorities {
         ]);
         let genesis = append_localnet_service_accounts(genesis, &accounts)?;
         let mut builder = genesis.into_builder();
-        let funded = self
-            .authorities
-            .iter()
-            .map(|(_, identity)| &identity.account_id)
-            .chain(self.providers.iter().flat_map(|provider| {
-                provider
-                    .authorities
-                    .iter()
-                    .filter(|(role, _)| role.transacts())
-                    .map(|(_, identity)| &identity.account_id)
-            }));
-        for account in funded {
+        for (_, identity) in &self.authorities {
             builder = builder.append_instruction(Mint::asset_quantity(
                 LOCALNET_ALIAS_SETUP_PAYER_BALANCE,
-                AssetId::new(localnet_xor_asset_definition_id(), account.clone()),
+                AssetId::new(
+                    localnet_xor_asset_definition_id(),
+                    identity.account_id.clone(),
+                ),
             ));
+        }
+        for provider in &self.providers {
+            let issuer_endowment = provider
+                .provider
+                .initial_issuer_endowment(&self.network.pricing)?;
+            for (role, identity) in &provider.authorities {
+                if role.transacts() {
+                    let amount = if *role == StreamTokenAuthorityRole::IssuerOperator {
+                        issuer_endowment.clone()
+                    } else {
+                        Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE)
+                    };
+                    builder = builder.append_instruction(Mint::asset_quantity(
+                        amount,
+                        AssetId::new(
+                            localnet_xor_asset_definition_id(),
+                            identity.account_id.clone(),
+                        ),
+                    ));
+                }
+            }
         }
         for (account, permission) in grants(manager, &network, &providers)? {
             builder = builder.append_instruction(Grant::account_permission(permission, account));
@@ -1441,6 +1454,38 @@ pub(crate) fn count_profile_validations<T>(action: impl FnOnce() -> T) -> (T, us
     capture::count_semantic_validations(action)
 }
 
+// Exact original role allocation: one canonical XOR mint of the owner-derived quantity.
+// Requiring a matching mint alone would permit a second oversized mint to hide the mismatch.
+fn validate_genesis_funding<'a>(
+    expected: &std::collections::BTreeMap<AccountId, Quantity>,
+    reserves: &StreamTokenReserveAccounts,
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+) -> crate::managed::Result<()> {
+    let invalid = || Error::Invalid("invalid original service genesis funding".into());
+    let mut funded = BTreeSet::new();
+    for instruction in instructions {
+        if let Some(MintBox::Asset(mint)) = instruction.as_any().downcast_ref::<MintBox>() {
+            let account = mint.destination().account();
+            if account == &reserves.custody || account == &reserves.treasury {
+                return Err(invalid());
+            }
+            if let Some(amount) = expected.get(account) {
+                if mint.destination()
+                    != &AssetId::new(localnet_xor_asset_definition_id(), account.clone())
+                    || mint.object() != amount
+                    || !funded.insert(account.clone())
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+    }
+    if funded.len() != expected.len() {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_retained(
     prepared: &PreparedLocalnet,
 ) -> crate::managed::Result<Option<StreamTokenAuthorityManifest>> {
@@ -1553,7 +1598,7 @@ pub(crate) fn capture_retained(
             return Err(invalid());
         }
     }
-    let mut expected_funding = BTreeSet::new();
+    let mut expected_funding = std::collections::BTreeMap::new();
     for role in NETWORK_ROLES {
         let authority = manifest.network.authority(role)?;
         if !unique_accounts.insert(authority.account.clone())
@@ -1569,7 +1614,10 @@ pub(crate) fn capture_retained(
             return Err(invalid());
         }
         read_network_role_key(network_directory, authority)?;
-        expected_funding.insert(authority.account.clone());
+        expected_funding.insert(
+            authority.account.clone(),
+            Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+        );
     }
     network
         .validate_keys(network_directory, &mut keys)
@@ -1596,7 +1644,10 @@ pub(crate) fn capture_retained(
             }
             read_role_key(directory, authority)?;
             if role.transacts() {
-                expected_funding.insert(authority.account.clone());
+                expected_funding.insert(
+                    authority.account.clone(),
+                    Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+                );
             }
         }
         if provider_scope(
@@ -1611,7 +1662,7 @@ pub(crate) fn capture_retained(
         {
             return Err(invalid());
         }
-        provider_material::validate_retained(
+        let issuer_endowment = provider_material::validate_retained(
             directory,
             provider,
             &network,
@@ -1619,6 +1670,13 @@ pub(crate) fn capture_retained(
             &mut tls_keys,
         )
         .map_err(|_| invalid())?;
+        expected_funding.insert(
+            provider
+                .authority(StreamTokenAuthorityRole::IssuerOperator)?
+                .account
+                .clone(),
+            issuer_endowment,
+        );
         compliance_material::validate_retained(
             directory,
             &manifest,
@@ -1642,7 +1700,6 @@ pub(crate) fn capture_retained(
     let mut accounts = BTreeSet::new();
     let mut remaining =
         grants(&manifest.manager, &manifest.network, &manifest.providers).map_err(|_| invalid())?;
-    let mut funded = BTreeSet::new();
     for transaction in block.external_transactions() {
         for instruction in transaction.instructions().explicit_instructions() {
             if let Some(RegisterBox::Account(register)) =
@@ -1663,20 +1720,17 @@ pub(crate) fn capture_retained(
                     return Err(invalid());
                 }
             }
-            if let Some(MintBox::Asset(mint)) = instruction.as_any().downcast_ref::<MintBox>() {
-                for account in &expected_funding {
-                    if mint.destination()
-                        == &AssetId::new(localnet_xor_asset_definition_id(), account.clone())
-                        && mint.object() == &Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE)
-                    {
-                        funded.insert(account.clone());
-                    }
-                }
-            }
         }
     }
-    if !remaining.is_empty() || !unique_accounts.is_subset(&accounts) || expected_funding != funded
-    {
+    validate_genesis_funding(
+        &expected_funding,
+        &manifest.network.reserve_accounts,
+        block
+            .external_transactions()
+            .flat_map(|transaction| transaction.instructions().explicit_instructions()),
+    )
+    .map_err(|_| invalid())?;
+    if !remaining.is_empty() || !unique_accounts.is_subset(&accounts) {
         return Err(invalid());
     }
     let owners = manifest
@@ -1897,6 +1951,8 @@ mod tests;
 #[cfg(test)]
 mod credentials_tests;
 
+#[cfg(test)]
+mod funding_tests;
 #[cfg(test)]
 mod native_roles_tests;
 

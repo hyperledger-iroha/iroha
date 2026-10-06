@@ -29,20 +29,19 @@ pub enum CheckpointReadError {
 }
 
 /// Reusable native HTTP context containing no ledger signer or response-selected authority.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CheckpointTransport {
     client: PublicHttpClient,
 }
 
 impl CheckpointTransport {
-    /// Construct the native SDK's credential-free HTTPS transport.
-    ///
-    /// # Errors
-    /// Native transport construction failed.
-    pub fn new() -> Result<Self, CheckpointReadError> {
-        Ok(Self {
-            client: PublicHttpClient::new()?,
-        })
+    /// Retain the native SDK's credential-free lazy HTTPS transport.
+    /// Native transport construction occurs during retrieval and can fail there.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            client: PublicHttpClient::new(),
+        }
     }
 
     /// Use an explicitly injected SDK public-read owner; installation trust remains separate.

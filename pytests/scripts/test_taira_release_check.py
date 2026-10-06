@@ -29,8 +29,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1774 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1807 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1781 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1814 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -342,7 +342,7 @@ class BeaconGateTests(unittest.TestCase):
 
     def test_current_runner_and_monetary_repairs_are_required_in_all_scopes(self):
         assert_native_coverage(self, ["native publication custody", "native durable archive recovery"])
-        required = {'core-zk': ('kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals', 'kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons'), 'data-model': ('sumeragi::epoch::authorization::tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema', 'sumeragi::epoch::authorization::tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json', 'sumeragi::epoch::authorization::tests::epoch_authorization_binding_keeps_fixed_width_identity', 'nexus::staking::monetary_codec_tests::monetary_variants_roundtrip_canonical_binary_and_tagged_json', 'nexus::staking::monetary_codec_tests::monetary_schema_names_every_variant_and_distinct_named_payload')}
+        required = {'data-model': ('sumeragi::epoch::authorization::tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema', 'sumeragi::epoch::authorization::tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json', 'sumeragi::epoch::authorization::tests::epoch_authorization_binding_keeps_fixed_width_identity', 'nexus::staking::monetary_codec_tests::monetary_variants_roundtrip_canonical_binary_and_tagged_json', 'nexus::staking::monetary_codec_tests::monetary_schema_names_every_variant_and_distinct_named_payload')}
         for scope in gate.QUALIFICATION_SCOPES:
             for harness, cases in required.items():
                 stages = gate.qualification_stages(scope)[harness]
@@ -728,7 +728,7 @@ class BeaconGateTests(unittest.TestCase):
         exact_height = "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip"
         launch_controls = (
             "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
-            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
+            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_binds_the_broker",
         )
         seam = "taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs"
         fixture_root = SCRIPT.resolve().parents[1] / "crates/iroha_test_network/tests"
@@ -1769,9 +1769,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "deploy": (
                 "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
                 "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-                "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
+                "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
-                "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
+                "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
                 "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
                 "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
             ),

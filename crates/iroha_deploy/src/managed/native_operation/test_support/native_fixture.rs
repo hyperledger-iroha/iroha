@@ -81,11 +81,50 @@ pub(in crate::managed) struct NativeFixture {
     pub(in crate::managed) chain: CertifiedTestChain,
     validators: Vec<(KeyPair, Hash)>,
 }
+// Exact prepared inputs cross the phase boundary; parsed configuration temporaries do not.
+struct PreparedNativeFixture {
+    chain: PreparedTestChainConfig,
+    validators: Vec<(KeyPair, Hash)>,
+    signed: zeroize::Zeroizing<Vec<u8>>,
+    _discriminant: iroha_data_model::account::address::ChainDiscriminantGuard,
+    _root: PrivateDirectory,
+}
+
 impl NativeFixture {
     pub(in crate::managed) fn from_generated(
         prepared: &PreparedLocalnet,
         authority: &ServiceAuthority,
     ) -> Self {
+        let prepared = Self::prepare_generated(prepared, authority);
+        let chain = CertifiedTestChain::from_prepared(prepared.chain).unwrap();
+        assert_eq!(
+            chain.genesis().encode_wire().unwrap().as_slice(),
+            prepared.signed.as_slice()
+        );
+        assert_eq!(chain.network_id(), authority.config.network_id);
+        assert_eq!(chain.state().chain_id_ref(), &authority.config.chain);
+        assert!(
+            !chain
+                .state()
+                .view()
+                .nexus()
+                .fees
+                .per_instruction_fee
+                .is_zero(),
+            "retain the actual charged generated policy"
+        );
+        Self {
+            chain,
+            validators: prepared.validators,
+        }
+    }
+    // End canonical configuration/state preparation before genesis executes. The returned
+    // owner retains every chain input and the original directory custody across that execution.
+    #[inline(never)]
+    fn prepare_generated(
+        prepared: &PreparedLocalnet,
+        authority: &ServiceAuthority,
+    ) -> PreparedNativeFixture {
         let root =
             PrivateDirectory::open_exact(prepared.context.client_config.parent().unwrap()).unwrap();
         let manifest_bytes = root
@@ -131,25 +170,18 @@ impl NativeFixture {
                 config.genesis.expected_hash,
                 authority.genesis.genesis.hash()
             );
-            let secrets = root
+            let node = root
                 .open_child("nodes")
                 .unwrap()
                 .open_child(format!("peer{index}"))
-                .unwrap()
-                .open_child("secrets")
                 .unwrap();
-            let seed = secrets.read("mint_finality.seed", 32).unwrap();
-            let seed = zeroize::Zeroizing::new(<[u8; 32]>::try_from(seed.as_slice()).unwrap());
-            peers.push((
-                config.common.key_pair.clone(),
-                seed,
-                Hash::new(bytes.as_slice()),
-            ));
+            node.revalidate().unwrap();
+            peers.push((config.common.key_pair.clone(), Hash::new(bytes.as_slice())));
             if selected_config.is_none() {
                 selected_config = Some(config);
             }
         }
-        peers.sort_by_key(|(key, _, _)| PeerId::new(key.public_key().clone()));
+        peers.sort_by_key(|(key, _)| PeerId::new(key.public_key().clone()));
         let config = selected_config.unwrap();
         let genesis = iroha_genesis::validate_prepared_genesis_bundle(
             &signed,
@@ -167,38 +199,25 @@ impl NativeFixture {
         .unwrap();
         let validators = peers
             .iter()
-            .map(|(key, _, fingerprint)| (key.clone(), *fingerprint))
+            .map(|(key, fingerprint)| (key.clone(), *fingerprint))
             .collect();
-        let (keys, seeds): (Vec<_>, Vec<_>) =
-            peers.into_iter().map(|(key, seed, _)| (key, seed)).unzip();
-        let chain = CertifiedTestChain::from_prepared(PreparedTestChainConfig {
+        let keys = peers.into_iter().map(|(key, _)| key).collect();
+        let chain = PreparedTestChainConfig {
             genesis,
             manifest,
             state: Arc::new(state),
             kura,
             validator_keys: keys,
-            pasta_seeds: seeds,
             clock: authority.config.key_pair.clone(),
             lane_blocks: Arc::new(NoLanes),
-        })
-        .unwrap();
-        assert_eq!(
-            chain.genesis().encode_wire().unwrap().as_slice(),
-            signed.as_slice()
-        );
-        assert_eq!(chain.network_id(), authority.config.network_id);
-        assert_eq!(chain.state().chain_id_ref(), &authority.config.chain);
-        assert!(
-            !chain
-                .state()
-                .view()
-                .nexus()
-                .fees
-                .per_instruction_fee
-                .is_zero(),
-            "retain the actual charged generated policy"
-        );
-        Self { chain, validators }
+        };
+        PreparedNativeFixture {
+            chain,
+            validators,
+            signed,
+            _discriminant,
+            _root: root,
+        }
     }
     pub(in crate::managed) fn observe(&self, authority: &ServiceAuthority) -> FinalityVerifier {
         let genesis = self.finality_proof(NonZeroU64::new(1).unwrap()).unwrap();

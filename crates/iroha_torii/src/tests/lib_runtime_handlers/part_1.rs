@@ -288,7 +288,6 @@ impl ReadinessNode {
             key_pair: node_key.clone(),
             genesis: Some(genesis),
             beacon_signer: None,
-            mint_finality_authority: None,
             genesis_account,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode::Permissioned,
             config: NodeConfig {

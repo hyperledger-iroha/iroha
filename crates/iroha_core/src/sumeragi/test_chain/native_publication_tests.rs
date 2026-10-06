@@ -1,4 +1,4 @@
-// Former shared publication controls exercised through native genesis and original Worker.
+// Native signed-genesis, exact-quorum publication and original Worker custody controls.
 
 #[test]
 fn original_genesis_and_successor_have_exact_native_execution_authority() {
@@ -13,8 +13,12 @@ fn original_genesis_and_successor_have_exact_native_execution_authority() {
             .output_results()
             .all(|result| result.as_ref().is_ok())
     );
-    assert_eq!(first.commitment().execution.kagemusha_top_up_count, 0);
-    assert_eq!(first.commitment().execution.kagemusha_top_up_root, None);
+    let initial = &first.commitment().schedule.current;
+    assert_eq!(initial.authorization.authority_generation, 0);
+    assert_eq!(
+        initial.generation().generation_id().unwrap(),
+        initial.authorization.authority_id
+    );
     assert!(
         startup::apply_genesis(
             &state,
@@ -45,8 +49,12 @@ fn original_genesis_and_successor_have_exact_native_execution_authority() {
     );
     assert_eq!(second.header().unwrap().parent_result, first.result());
     assert_eq!(second.header().unwrap().parent_hash, first.core_hash());
-    assert_eq!(second.commitment().execution.kagemusha_top_up_count, 0);
-    assert_eq!(second.commitment().execution.kagemusha_top_up_root, None);
+    assert!(!second.header().unwrap().attest);
+    let (_, qc) = chain.committed_body(2).unwrap().unwrap();
+    assert_eq!(qc.signers.count_ones(), 3);
+    assert!(!qc.attest);
+    assert!(qc.attestations.is_empty());
+    assert!(qc.attestation_witness.is_none());
     assert!(
         second
             .block()
@@ -226,9 +234,6 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         state: Arc::clone(&state),
         kura: Arc::clone(&kura),
         validator_keys: fixture_keys(),
-        pasta_seeds: (0..4)
-            .map(|seat| zeroize::Zeroizing::new([0xA0 + seat; 32]))
-            .collect(),
         clock: key,
         lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
     })

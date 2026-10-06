@@ -183,7 +183,8 @@ pub(crate) fn capture(
     };
     if !record.is_active_at(height)
         || record.session.adaptive_dkg.finalized_at_height > parent
-        || record.session.adaptive_dkg.session.authority_generation != current.authority.generation
+        || record.session.adaptive_dkg.session.authority_generation
+            != current.authorization.authority_generation
         || (current.authorization.beacon != BeaconEpochBindingV1::Bootstrap
             && current.authorization.beacon != BeaconEpochBindingV1::Installed(installed))
     {

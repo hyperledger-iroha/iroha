@@ -528,7 +528,13 @@ impl WithdrawalLifecycle {
         {
             verify_equal_vote_context(block, expected)?;
             ensure!(
-                block.commitment().schedule.current.authority.generation == 2,
+                block
+                    .commitment()
+                    .schedule
+                    .current
+                    .authorization
+                    .authority_generation
+                    == 2,
                 "custody-release progress must retain the authenticated four-seat generation"
             );
         }

@@ -30,30 +30,62 @@ exec(compile(UNIT_RENDERER_PATH.read_bytes(), str(UNIT_RENDERER_PATH), "exec"), 
 OPERATOR_PUBLIC_KEY = "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
 
 
-class ContinuityGenesisAuthorityTests(unittest.TestCase):
-    def test_exact_generation_zero_authority_peers(self):
-        authority = {
-            "version": 1,
-            "generation": 0,
-            "validators": [{"validator": f"peer-{index}"} for index in range(4)],
-        }
-        manifest = {"kagemusha_mint_finality": {"authority_generation": authority}}
-        self.assertEqual(retry._continuity_mint_finality_peers(manifest),
-                         [f"peer-{index}" for index in range(4)])
-
+class ContinuityTopologyTests(unittest.TestCase):
+    def test_exact_four_native_topology_peers(self):
+        peers = [f"peer-{index}" for index in range(4)]
+        manifest = {"transactions": [
+            {"topology": [{"peer": peer} for peer in peers[:2]]},
+            {"instructions": []},
+            {"topology": [{"peer": peer} for peer in peers[2:]]},
+        ]}
+        self.assertEqual(retry._continuity_topology_peers(manifest), peers)
         for altered in (
-            {"kagemusha_mint_finality": {"epoch_roster": authority}},
-            {"kagemusha_mint_finality": {"authority_generation":
-                dict(authority, generation=1)}},
-            {"kagemusha_mint_finality": {"authority_generation":
-                dict(authority, generation=False)}},
-            {"kagemusha_mint_finality": {"authority_generation":
-                dict(authority, version=2)}},
-            {"kagemusha_mint_finality": {"authority_generation":
-                dict(authority, validators=[{"validator": "peer-0"}] * 4)}},
+            {}, {"transactions": None}, {"transactions": [None]},
+            {"transactions": [{"topology": None}]},
+            {"transactions": [{"topology": [{"peer": peer} for peer in peers[:3]]}]},
+            {"transactions": [{"topology": [{"peer": "peer-0"}] * 4}]},
+            {"transactions": [{"topology": [{"validator": peer} for peer in peers]}]},
+            {"transactions": [{"topology": [{"peer": ""}] * 4}]},
         ):
             with self.subTest(altered=altered), self.assertRaises(RuntimeError):
-                retry._continuity_mint_finality_peers(altered)
+                retry._continuity_topology_peers(altered)
+
+
+class ContinuitySignerCustodyTests(unittest.TestCase):
+    def test_initial_unit_has_exact_runtime_signer_and_no_beacon_credential(self):
+        role = "taira-validator-1"
+        raw = UNIT_RENDERER["render"](role, "/private/runtime.key").encode()
+        fields = retry._continuity_unit_sources(raw, role, UNIT_RENDERER)
+        self.assertEqual(fields["runtime_key"], "/private/runtime.key")
+        self.assertIsNone(fields["global_beacon_credential"])
+        self.assertEqual(fields["cmd"][2], f"/srv/taira/{role}/current/config/config.toml")
+        for altered in (
+            UNIT_RENDERER["render"](role, "/private/runtime.key", "/private/beacon.norito").encode(),
+            UNIT_RENDERER["render"](role, "/private/runtime.key", config_file="beacon.toml").encode(),
+            raw.replace(b"Type=exec", b"Type=simple"),
+        ):
+            with self.subTest(altered=altered), self.assertRaises(RuntimeError):
+                retry._continuity_unit_sources(altered, role, UNIT_RENDERER)
+
+    def test_retained_runtime_signer_metadata_never_reads_key_bytes(self):
+        info = SimpleNamespace(st_dev=1, st_ino=2, st_size=71, st_mtime_ns=3,
+                               st_ctime_ns=4, st_uid=0, st_mode=stat.S_IFREG | 0o600,
+                               st_nlink=1)
+        with mock.patch.object(retry, "_continuity_open_direct", return_value=123) as opened, \
+             mock.patch.object(retry.os, "fstat", return_value=info), \
+             mock.patch.object(retry.os, "close") as closed, \
+             mock.patch.object(retry.os, "read", side_effect=AssertionError("private key read")):
+            result = retry._continuity_signer_metadata("/private/runtime.key")
+            self.assertEqual(result, retry._continuity_stamp(info))
+            opened.assert_called_once_with("/private/runtime.key", metadata_only=True)
+            closed.assert_called_once_with(123)
+            for field, value in (("st_size", 32), ("st_mode", stat.S_IFREG | 0o644),
+                                 ("st_uid", 1000), ("st_nlink", 2)):
+                original = getattr(info, field)
+                setattr(info, field, value)
+                with self.subTest(field=field), self.assertRaises(RuntimeError):
+                    retry._continuity_signer_metadata("/private/runtime.key")
+                setattr(info, field, original)
 
 
 def beacon_input_fixture(draft):
@@ -286,26 +318,6 @@ def derived_capacity(inputs=None, runtime=None, build=None):
         backing_path="/approved/vm",
     )
 
-
-class MintFinalityContinuityTests(unittest.TestCase):
-    def test_capture_reads_only_generation_zero_authority(self):
-        rows = [{"validator": f"peer-{i}"} for i in range(4)]
-        manifest = {"kagemusha_mint_finality": {"authority_generation": {
-            "version": 1, "generation": 0, "validators": rows,
-        }}}
-        self.assertEqual(retry._continuity_mint_finality_peers(manifest),
-                         [row["validator"] for row in rows])
-        for altered in (
-            {"kagemusha_mint_finality": {"epoch_roster": {"validators": rows}}},
-            {"kagemusha_mint_finality": {"authority_generation": {
-                "version": 1, "generation": 1, "validators": rows,
-            }}},
-            {"kagemusha_mint_finality": {"authority_generation": {
-                "version": 1, "generation": 0, "validators": rows[:3] + [rows[0]],
-            }}},
-        ):
-            with self.assertRaises(RuntimeError):
-                retry._continuity_mint_finality_peers(altered)
 
 
 class RetryTests(unittest.TestCase):
@@ -906,10 +918,10 @@ class RetryTests(unittest.TestCase):
 
     def test_public_validation_requires_ready_source_network_and_mcp_without_doctor(self):
         _, binary, _ = artifact_receipts()
-        seed = self.root / "seed"
-        seed.mkdir()
+        signer = self.root / "signer"
+        signer.mkdir()
         retry.write_public(
-            seed / "seed-authority-receipt.json", {"network_id": "native-network"}
+            signer / "signer-authority-receipt.json", {"network_id": "native-network"}
         )
         for variant in ("valid", "full", "not-ready", "wrong-source", "wrong-target",
                         "empty-tip", "wrong-network", "mcp-error"):
@@ -966,7 +978,7 @@ class RetryTests(unittest.TestCase):
                     self.assertEqual(body["params"]["arguments"], {})
 
             with (
-                mock.patch.object(retry, "CONTINUITY_OUT", seed),
+                mock.patch.object(retry, "CONTINUITY_OUT", signer),
                 mock.patch.object(retry, "run_native", side_effect=native),
                 mock.patch.object(
                     retry,
@@ -1167,12 +1179,12 @@ class RetryTests(unittest.TestCase):
         with mock.patch.object(retry, "emit"):
             self.assertEqual(retry.call_phase("retire", lambda: 7, self.root), 7)
             with self.assertRaises(ZeroDivisionError):
-                retry.call_phase("seed-post", lambda: 1 / 0, self.root)
+                retry.call_phase("signer-post", lambda: 1 / 0, self.root)
         self.assertTrue(
             json.loads((self.root / "retire-phase.json").read_bytes())["passed"]
         )
         self.assertFalse(
-            json.loads((self.root / "seed-post-phase.json").read_bytes())["passed"]
+            json.loads((self.root / "signer-post-phase.json").read_bytes())["passed"]
         )
 
 
@@ -1376,7 +1388,7 @@ class BeaconArgumentTests(unittest.TestCase):
         for index in range(1, 5):
             role = f"taira-validator-{index}"
             path = self.root / ("iroha3d-" + role + ".service")
-            raw = UNIT_RENDERER["render"](role, f"/unread/{index}.key", f"/unread/{index}.seed").encode()
+            raw = UNIT_RENDERER["render"](role, f"/unread/{index}.key").encode()
             path.write_bytes(raw)
             path.chmod(0o644)
             self.arguments["--validator-unit"].append(str(path))
@@ -1418,7 +1430,7 @@ class BeaconArgumentTests(unittest.TestCase):
         paths = derived[derived.index("--beacon-validator-unit") + 1:]
         self.assertEqual(len(paths), 4)
         for index, (path, row) in enumerate(zip(paths, value["final_units"]), 1):
-            expected = UNIT_RENDERER["render"](row["validator"], f"/unread/{index}.key", f"/unread/{index}.seed", row["credential_path"], config_file="beacon.toml")
+            expected = UNIT_RENDERER["render"](row["validator"], f"/unread/{index}.key", row["credential_path"], config_file="beacon.toml")
             self.assertEqual(Path(path).read_text(), expected)
             self.assertEqual(Path(path).stat().st_mode & 0o777, 0o644)
         self.assertEqual(set(self.reads), {self.renderer, assembly / "beacon-inputs.json", *(Path(p) for p in self.arguments["--validator-unit"])})
@@ -1488,8 +1500,8 @@ class BeaconCompletionTests(unittest.TestCase):
             self.inventory["validator_clients"].append({"slug": role, "peer_id": f"peer-{index}"})
             self.inventory["beacon_bootstrap"]["final_units"].append({"validator": role, "sha256": "d" * 64})
             self.before["nodes"].append({"peer_id": f"peer-{index}", "systemd_unit": unit,
-                "unit_sha256": "e" * 64, "config_sha256": "c" * 64, "seed_file": {"inode": index},
-                "seed_fd": 199, "node_fingerprint": f"node-{index}",
+                "unit_sha256": "e" * 64, "config_sha256": "c" * 64, "signer_file": {"inode": index},
+                "signer_fd": 198, "node_fingerprint": f"node-{index}",
                 "binding": {"config_path": original, "config_sha256": "c" * 64,
                             "config_files": [{"path": original, "sha256": "c" * 64}], "argv": argv}})
             self.markers[role] = {"schema": "iroha.taira.public-reset.beacon-provider-active.v1",
@@ -1514,8 +1526,8 @@ class BeaconCompletionTests(unittest.TestCase):
         self.completed.assert_called_once_with({"runtime_root": "/runtime"}, self.assembly.parent, required=True)
         self.assertEqual(self.before, original)
         for old, row in zip(original["nodes"], rows):
-            self.assertEqual(row["seed_file"], old["seed_file"])
-            self.assertEqual(row["seed_fd"], 199)
+            self.assertEqual(row["signer_file"], old["signer_file"])
+            self.assertEqual(row["signer_fd"], 198)
             self.assertEqual(row["node_fingerprint"], old["node_fingerprint"])
             self.assertEqual(row["unit_sha256"], "d" * 64)
             self.assertEqual(row["config_sha256"], "9" * 64)
@@ -1716,7 +1728,7 @@ class WorkflowTests(unittest.TestCase):
                 paths = []
                 for row in self.inventory["validators"]:
                     path = unit_root / row["systemd_unit"]
-                    unit = UNIT_RENDERER["render"](row["slug"], "/private-fixture/" + row["slug"] + ".key", "/private-fixture/" + row["slug"] + ".seed").encode()
+                    unit = UNIT_RENDERER["render"](row["slug"], "/private-fixture/" + row["slug"] + ".key").encode()
                     path.write_bytes(unit)
                     row["systemd_unit_sha256"] = retry.hashlib.sha256(unit).hexdigest()
                     paths.append(str(path))
@@ -1796,11 +1808,11 @@ class WorkflowTests(unittest.TestCase):
             mock.patch.object(retry, "authorize_native", side_effect=self.authorize)
         )
         self.stack.enter_context(
-            mock.patch.object(retry, "_continuity_capture", side_effect=self.seed_pre)
+            mock.patch.object(retry, "_continuity_capture", side_effect=self.signer_pre)
         )
         self.stack.enter_context(
             mock.patch.object(
-                retry, "_continuity_reconcile", side_effect=self.seed_post
+                retry, "_continuity_reconcile", side_effect=self.signer_post
             )
         )
         self.stack.enter_context(
@@ -1929,14 +1941,14 @@ class WorkflowTests(unittest.TestCase):
             assembly / "authorization.json", {"public_signature_fixture": True}
         )
 
-    def seed_pre(self, args):
+    def signer_pre(self, args):
         retry.CONTINUITY_OUT.mkdir(mode=0o700)
         retry.write_public(
             retry.CONTINUITY_OUT / "prestart.json", {"public_fixture": True}
         )
 
-    def seed_post(self, args):
-        if self.fail_phase == "seed-post":
+    def signer_post(self, args):
+        if self.fail_phase == "signer-post":
             self.fail_phase = None
             retry.write_public(
                 retry.CONTINUITY_OUT / "startup-evidence.json",
@@ -1944,7 +1956,7 @@ class WorkflowTests(unittest.TestCase):
             )
             raise retry.RetryError("injected postcondition failure")
         retry.write_public(
-            retry.CONTINUITY_OUT / "seed-authority-receipt.json",
+            retry.CONTINUITY_OUT / "signer-authority-receipt.json",
             {"public_fixture": True},
         )
 
@@ -2060,7 +2072,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.calls.count("apply"), 1)
 
     def test_completed_scope_cannot_be_upgraded_during_recovery(self):
-        self.fail_phase = "seed-post"
+        self.fail_phase = "signer-post"
         with self.assertRaises(retry.RetryError):
             retry.guest_locked(self.request, self.capacity, self.attempts)
         target = self.root / "journal-v1/completed" / ("9" * 64 + ".json")
@@ -2088,7 +2100,7 @@ class WorkflowTests(unittest.TestCase):
     def test_completed_apply_resumes_postconditions_without_new_nonce_or_native_calls(
         self,
     ):
-        self.fail_phase = "seed-post"
+        self.fail_phase = "signer-post"
         with self.assertRaises(retry.RetryError):
             retry.guest_locked(self.request, self.capacity, self.attempts)
         pointer = json.loads((self.attempts / "latest.json").read_bytes())
@@ -2105,10 +2117,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.calls, native_calls)
         self.assertEqual(retry._retire_apply.call_count, 1)
         self.assertEqual(len(list(attempt.glob("postcondition-evidence-*"))), 1)
-        self.assertTrue((attempt / "seed-continuity/prestart.json").exists())
+        self.assertTrue((attempt / "signer-continuity/prestart.json").exists())
 
     def test_completed_receipt_mismatch_blocks_postcondition_capacity_exemption(self):
-        self.fail_phase = "seed-post"
+        self.fail_phase = "signer-post"
         with self.assertRaises(retry.RetryError):
             retry.guest_locked(self.request, self.capacity, self.attempts)
         target = self.root / "journal-v1/completed" / ("9" * 64 + ".json")

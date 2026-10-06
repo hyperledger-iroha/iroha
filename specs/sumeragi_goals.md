@@ -34,8 +34,8 @@ the cutover.
 | S3 | Execution and storage binding | Implemented with the E51 result commitment (complete World roots, ordered events and witnessed writes): State executor on one live overlay, Kura frames with commit certificates, file record/body stores, genesis result-only certificate, replay checked against each certified result; 4 in-process validators commit, restart and reject a forged result. | Define `R` (post-state root, transaction-outcome root, event root, scheduled committee); speculative execution chained on certified parents; apply reuses cached post-states; Kura stores blocks with CommitQCs; per-key safety-record files with the installation log and store id (spec §7.4). |
 | S4 | Cutover and deletion | Done (2026-09-29). irohad starts only Sumeragi (`node::prepare` then `start_on_network`); four `iroha3d` peers over P2P commit transactions, restart one and all, and replace a crashed leader (`integration_tests/tests/sumeragi.rs`). Application readers of committed blocks read Kura's certified frames through the certified-chain reader (spec §12.7, Appendix E, E57). `kagami localnet` passes `--sumeragi-assert-fresh-key` on a peer's first boot; the SoraFS provider-ingest and reputation finalized archives are captured by the native executor (`sumeragi::executor::FinalizedArchives`); bridge finality proofs, bundles and challenge-bound attestations are built from commit certificates (`iroha_core::sumeragi::finality`). The v2 runtime and everything that existed only for it are deleted (inventory below). Accelerated snapshot restoration moved to S9. | Swap at `SumeragiStartArgs::start` (`crates/iroha_core/src/sumeragi/mod.rs`, started from `crates/irohad/src/main.rs`); P2P control/bulk traffic classes; config surface reduced to spec §12.4; status endpoint from `Core::status`. Then delete the v2 runtime and everything that exists only for it (inventory below). |
 | S5 | Dataspace and lane instances | Lanes implemented ([specs/sumeragi_lanes.md](sumeragi_lanes.md)): every lane incarnation is a core instance with a pinned committee, the global chain merges certified lane blocks by reference, and autoscale opens, closes and retires elastic lanes; tested in-process with 4 validators and over P2P (`integration_tests/tests/sumeragi_lanes.rs`). Open: hosting dataspace instances with their own state (needed by S6). | Several cores per node, instance-id derivation, per-instance committees and records, O9 isolation (one stalled instance never delays another). |
-| S6 | AMX two-phase commit | In progress. `G` side in the node: the `sumeragi_amx` World cell, `RegisterAmxDataspaceV1`, `BeginAmxV1`, `RelayAmxPreparedV1`, `RelayAmxHandoffV1` and the deadline step (`crates/iroha_core/src/sumeragi/amx/`); records are World writes proved against the witnessed-write root of `R`; foreign-committee trackers advance one epoch per handoff proof; the dataspace participant (prepare, escrow, settle) is a component over an escrow interface; the simulator runs `G` with two or three dataspaces under the O-AMX oracle (F31, mutations MX1–MX12 killed). Open: hosting dataspace instances with their own state (TODO(S6), Appendix E, E58). | Begin, prepare/escrow, relay, decision by deadline, settle; foreign-committee tracking and handoff proofs (spec §11); O-AMX oracle in the simulator. |
-| S7 | Taira reset and qualification | In progress. Runbook [specs/runbooks/sumeragi_taira_reset.md](runbooks/sumeragi_taira_reset.md); the four-validator C2 rollout is observed ready at height 8, with a paid public write and exact funding readback; broader qualification remains open. `scripts/sumeragi_soak.py`, `integration_tests/tests/sumeragi_lanes_soak.rs` and `.github/workflows/nightly_sumeragi_soak.yml` provide optional engineering diagnostics with O-AGR, O-SIGN, O-LIVE and O-PERF computed from node logs. | Fresh genesis and operator runbook (spec §14.5); authenticated native control authority, genesis and committee, safety-record custody, and live four-validator readiness/write/restart evidence. Deployment policy belongs to on-chain governance for Taira and production. No fixed fault-test duration or soak verdict authorizes or blocks deployment. |
+| S6 | AMX two-phase commit | In progress. The global instructions and deadline step, native transfer prepare/escrow/settle instructions, signed independent-root binding and historical record-proof construction are implemented in `crates/iroha_core/src/sumeragi/amx/`. Records bind the witnessed-write root of `R`; foreign authority advances through authenticated handoffs. Current-source native monetary qualification remains open. The daemon still needs independent State/archive supervision and validator payload relayers for pending proofs (TODO(S6), Appendix E, E58); lane instances alone do not establish dataspace isolation. | Begin, prepare/escrow, relay, decision by deadline, settle; authenticated persisted record proofs and foreign-committee handoffs (spec §11); O-AMX simulator coverage plus real independent-dataspace commit, abort, deadline and restart. |
+| S7 | Taira reset and qualification | Open project gate owned by the deployment owner, outside this coding task. The [reset runbook](runbooks/sumeragi_taira_reset.md) defines cutover; [status.md](../status.md#deployment-state) records deployment observations. Earlier deployment evidence does not qualify a new source candidate. `scripts/sumeragi_soak.py`, `integration_tests/tests/sumeragi_lanes_soak.rs` and `.github/workflows/nightly_sumeragi_soak.yml` provide optional engineering diagnostics. | Fresh genesis and operator runbook (spec §14.5); authenticated native control authority, genesis and committee, safety-record custody, and live four-validator readiness/write/restart evidence. Deployment policy belongs to on-chain governance for Taira and production. No fixed fault-test duration or soak verdict authorizes or blocks deployment. |
 | S8 | Evidence and committee scheduling | Open; complete historical key/PoP records and prefix verifier implemented, Core qualification pending | Evidence → penalties; authenticated E+2 elections, a complete E+1 preparation interval and atomic activation/retention under the validator staking requirements below. Qualify every historical `CommitQC` against the genesis-anchored authority prefix (spec §12.7), including rotated-away and revoked keys, without a local-trust fallback. |
 | S9 | Full state root in `R` | World part implemented; the complete State root is open. E51 binds parent/post-execution World roots from an incremental LtHash16 accumulator and ordered event roots; publication incorporates deterministic tail writes and startup checks certified replay against a cold World capture. Canonical State-level fields (transaction membership, commit topologies, the canonical runtime, chain and network identity, lane manifests and compliance, node-configured policy cells) affect no certified root, and the multiset root has no inclusion, absence or range witness ([`state_table_inventory.json`](state_table_inventory.json), open defects G1-D1 to G1-D3). The keyed State commitment that closes this is specified in spec §16 and built by ZK delivery plan task G.3. Current-candidate qualification and authenticated accelerated snapshot restoration remain open. | Qualify exhaustive canonical World coverage, incremental/cold equivalence, rollback, event ordering and restart against certified results. Accelerated restoration additionally authenticates the complete restored State and retained native tip/history; a matching World root alone is insufficient. |
 
@@ -66,6 +66,49 @@ evidence, and implementation coverage alone does not close its network or releas
 All six gates remain open. H6 uses the reset runbook's deployment authority and runtime-only
 signing inputs; local build or component results cannot stand in for live qualification.
 
+### Current validation contract (2026-10-06)
+
+Validate the current implementation and its surviving requirements. The native
+application uses `NoAttestation` at every height, including committee boundaries
+(spec §3.7 A1, E64). Its controls must prove unflagged progress, rejection of
+application-attestation payloads and original execution custody through refusal
+and publication. Retired mint-finality/Pasta tests are not prerequisites. Generic
+protocol attestation tests and their registered mutations remain required while
+that protocol surface exists.
+
+Discover test names and ignores from the actual built executable. Match libtest's
+substring filter semantics, account for every selected test, and reject missing
+or ignored required controls. Derive World coverage from the current authoritative
+field inventory; never restore retired fields or pin an obsolete test count.
+Each new safety, liveness or custody rule requires its current registered named
+mutation control under spec §13.4. A prepared runner is not execution evidence.
+
+Record source inputs, features, toolchain, artifact identity, invocation, results
+and elapsed time. Changed inputs require affected checks to run again; staging
+unchanged bytes is metadata, not a source change. Final H5 qualification still
+requires one source candidate across the full required checks. Preserve earlier
+receipts with their original outcome and scope.
+
+Functional compilation and runtime correctness are separate from compiler-resource
+qualification. A successfully built executable can expose and verify bugs even
+when its build misses the 20-minute optimization target; that target remains open.
+Ordinary crate suites use the normal test profile, including its debug-only
+test counters. The Core nightly mutation job explicitly uses `--core-profile test`
+for both the baseline and every mutant, preserving dependency decode counters and
+debug-only controls; protocol and daemon mutations retain their release profile.
+Production optimized artifacts receive separate qualification.
+Production resource qualification still requires the unchanged optimized compiler
+invocation and kernel-measured 13-GiB ceiling from roadmap A5. Focused mutation
+build/test/scenario deadlines retain the defaults in `sumeragi_mutation_gate.py`;
+they do not impose a 15-minute limit on an unfiltered crate or workspace suite.
+The baseline runs each distinct registered named-selector tuple separately, and
+baseline and mutant runs give each distinct simulator scenario its own original
+deadline. Discovery and execution share that deadline; any incomplete or late
+step fails aggregation. This prospective schedule does not reclassify old runs.
+Full-suite schedules allow the several hours described in `AGENTS.md` and record
+their prospective timeout before launch. Network and ceremony deadlines are
+recorded separately and remain part of their own liveness acceptance.
+
 **Snapshot contract.** The node publishes signed local snapshot exports only after
 original genesis execution and certified journal replay finish and the native driver
 starts. A native halt or worker failure revokes the writer gate; orderly shutdown
@@ -89,7 +132,7 @@ close those outcomes.
   at the end of E and E+1 reserved for keys and beacon DKG. The lag-2 storage window
   is not a substitute for this full-epoch preparation policy. Registration adds
   candidates only; exact voting geometry alone does not authenticate a transition.
-- Activation publishes the complete ordered committee, Pasta authority and beacon
+- Activation publishes the complete ordered committee and beacon
   session together after every target seat proves custody and the current exact
   quorum certifies the boundary. Failed preparation requires certified retention
   of the current generation and cancellation of that attempt. It cannot shrink or

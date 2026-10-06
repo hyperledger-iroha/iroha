@@ -219,8 +219,6 @@ impl Worker<'_> {
         let qc = Hash::new(certificate.commit_qc());
         let availability = Hash::new(certificate.availability());
         let payload = Hash::new(block.payload().as_slice());
-        self.clear_local_attestation()
-            .map_err(PublicationError::RecoveryRequired)?;
         let live = self.live.take().expect("same serialized published owner");
         self.completed_replay = Some(CompletedReplay {
             source: ReplaySource::capture(&live.source),

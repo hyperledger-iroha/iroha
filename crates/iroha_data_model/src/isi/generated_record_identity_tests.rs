@@ -85,7 +85,6 @@ pub fn staking_monetary_fixture_rows() -> Vec<Value> {
 fn missing_record_values() -> Vec<Value> {
     let mut records = values::values();
     records.extend(super::musubi::generated_identity_values::values());
-    records.extend(super::kagemusha_v1::generated_identity_values::values());
     records.extend(super::private_settlement::generated_identity_values::values());
     records.push(capture(
         super::privacy::RegisterPrivacyExact12QualificationV1::new(
@@ -94,14 +93,14 @@ fn missing_record_values() -> Vec<Value> {
     ));
     assert_eq!(
         records.len(),
-        52,
+        50,
         "complete missing record fixture inventory"
     );
     let names: std::collections::BTreeSet<_> = records
         .iter()
         .map(|row| row.get("nominal").and_then(Value::as_str).expect("nominal"))
         .collect();
-    assert_eq!(names.len(), 52, "one populated value per missing record");
+    assert_eq!(names.len(), 50, "one populated value per missing record");
     records.sort_by(|a, b| {
         a.get("nominal")
             .and_then(Value::as_str)
@@ -121,13 +120,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "fda9d3efe685fda3f368d5858fa80c6e00b2098965ead928a5446a5f84d81373",
+                "b1cba6845e40c2f545c957dfb5ebd0f67ef21d4907a5315cfea4c0c5d2330954",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 332, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 330, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -145,12 +144,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 375, "complete populated record case inventory");
+            assert_eq!(case_count, 373, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 332, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 330, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));

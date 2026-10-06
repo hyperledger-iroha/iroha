@@ -1,7 +1,7 @@
 {
   "artifact_retained_path": "/Users/takemiyamakoto/dev/iroha/target/architecture-redesign/norito-identity-cutover/torii-shared-reference-capture/executables/capture-build-1/iroha_torii_shared-f6b4d0aeef0b621e",
   "artifact_sha256": "3b898185b144dc7dc36d03e86f557cc0ee6200e8249ef7591c2c095891039cc2",
-  "automatic_directions": 318,
+  "automatic_directions": 316,
   "build_report_sha256": "59eba87ce5e6758e8ecfc2c1e53f6e6de09f0d41b65e34cbeabc94db7a63c95c",
   "build_warnings": 0,
   "current_recaptures": [
@@ -287,7 +287,7 @@
       "wire_hex": "4e525430000070dc2d72af2b1c7616f4915c08a0630f00380000000000000072749145f70daa5c0201010100160114136d657461646174615f6b65792d73616d706c651c01000000000000001312616c6c6f7765645f6964732d73616d706c65"
     }
   ],
-  "production_owners": 171,
+  "production_owners": 170,
   "records": [
     {
       "column": 37,
@@ -2112,44 +2112,6 @@
       "root_matches": true,
       "schema_hash": "260c9e58e2e8f18d11b438fc069aee11",
       "source_sha256": "9d2deed9fa9fbaa965c9f3892a6c4512fdc510622e05f3c30c411bf74f6155b2"
-    },
-    {
-      "column": 66,
-      "direction": "deserialize",
-      "explicit_root": true,
-      "file": "crates/iroha_torii_shared/src/kagemusha_api.rs",
-      "identifier": "KagemushaReadinessV1",
-      "item_end": 6019,
-      "item_sha256": "bb9c703f8a76685f1e9839ada0264b5e027856d9691e5dd50780b92d082c5f21",
-      "item_start": 5411,
-      "kind": "capture",
-      "line": 93,
-      "module": "iroha_torii_shared::kagemusha_api",
-      "nominal": "iroha_torii_shared::kagemusha_api::KagemushaReadinessV1",
-      "original_source_sha256": "c5c2056b029621fadfe31bc1c8ac422a39b5acdbf586436a9d7cc1bb3b3e1302",
-      "root_hint": "iroha.torii.v1.kagemusha.readiness.response",
-      "root_matches": true,
-      "schema_hash": "0cd4da41fc89f5c0f2ef82e7cc593e6d",
-      "source_sha256": "c5c2056b029621fadfe31bc1c8ac422a39b5acdbf586436a9d7cc1bb3b3e1302"
-    },
-    {
-      "column": 85,
-      "direction": "serialize",
-      "explicit_root": true,
-      "file": "crates/iroha_torii_shared/src/kagemusha_api.rs",
-      "identifier": "KagemushaReadinessV1",
-      "item_end": 6019,
-      "item_sha256": "bb9c703f8a76685f1e9839ada0264b5e027856d9691e5dd50780b92d082c5f21",
-      "item_start": 5411,
-      "kind": "capture",
-      "line": 93,
-      "module": "iroha_torii_shared::kagemusha_api",
-      "nominal": "iroha_torii_shared::kagemusha_api::KagemushaReadinessV1",
-      "original_source_sha256": "c5c2056b029621fadfe31bc1c8ac422a39b5acdbf586436a9d7cc1bb3b3e1302",
-      "root_hint": "iroha.torii.v1.kagemusha.readiness.response",
-      "root_matches": true,
-      "schema_hash": "0cd4da41fc89f5c0f2ef82e7cc593e6d",
-      "source_sha256": "c5c2056b029621fadfe31bc1c8ac422a39b5acdbf586436a9d7cc1bb3b3e1302"
     },
     {
       "column": 66,
@@ -6320,9 +6282,15 @@
       "source_sha256": "e1012ceed776658761ebbe9474af5ca8b4e5935cd7f32f59e54918fd9fca6e90"
     }
   ],
+  "retired_owners": [
+    {
+      "owner": "iroha_torii_shared::kagemusha_api::KagemushaReadinessV1",
+      "scope": "Both directions were removed with the retired KAGEMUSHA V1 Torii API; the preceding top-level capture provenance still describes the original capture of the remaining owners."
+    }
+  ],
   "runtime_log_sha256": "ba866bbfe1f42932e5368215f94a0555e33a1792f606205d6b45116c4316b96c",
   "runtime_report_sha256": "01a2dc6b402f8c8a4accf6529f8aad799308ae529d226abfaa3b8fadf12f5c18",
-  "scope": "Actual compiler identities for 171 production Torii owners, with existing golden root frames and Option/Vec observations for 12 handwritten wrappers. Migration evidence only; no release or workspace closure claim.",
+  "scope": "Actual compiler identities for 170 production Torii owners, with existing golden root frames and Option/Vec observations for 12 handwritten wrappers. Migration evidence only; no release or workspace closure claim.",
   "selected_tests": 321,
   "source_fingerprint": {
     "bytes": 493489824,

@@ -558,9 +558,11 @@ fn digests_are_pinned() {
         profile.consensus_digest(4).unwrap().to_string(),
         "5c692bfd005ade781836bc5bd6dccbb97e6fbaacf1c0fc5cbe82d70423b67efb"
     );
+    // The retired Torii KAGEMUSHA command policy is absent from this canonical input.
+    // Its removal changes only the policy digest; consensus-bound inputs above are unchanged.
     assert_eq!(
         profile.policy_digest().unwrap().to_string(),
-        "8c4ccda4944019c394c4439feb06516aaf16f3dfb1cffdb07c0dd2b850f9d023"
+        "cd24824ed35812f798b8c01ed965b23fdfd535795a4c402de87d0d4fd41e47a7"
     );
 }
 

@@ -12672,7 +12672,7 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let elastic_lane = {
+        let mut elastic_lane = {
             let mut elastic_lane = LaneConfig {
                 id: TestLaneId::new(1),
                 alias: "elastic-lane-1".to_string(),
@@ -12728,6 +12728,21 @@ pub mod tests {
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>();
         assert_eq!(peers.len(), 4);
+        crate::state::attach_autoscale_committee_for_test(&mut elastic_lane, &validators);
+        let pinned = crate::state::autoscale_lane_pinned_committee_with_pops(&elastic_lane)
+            .expect("canonical pin of the exact original four holders");
+        assert_eq!(
+            pinned
+                .iter()
+                .map(|(peer, _)| peer.clone())
+                .collect::<Vec<_>>(),
+            peers,
+        );
+        for ((peer, pop), holder) in pinned.iter().zip(&validators) {
+            assert_eq!(peer.public_key(), holder.public_key());
+            assert_eq!(pop, &bls_normal_pop_prove(holder.private_key()).unwrap());
+            assert!(iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_ok());
+        }
         for key in &validators {
             let id = AccountId::new(key.public_key().clone());
             let (id, account) = Account::new(id.clone()).build(&id).into_key_value();
@@ -13543,7 +13558,6 @@ pub mod tests {
             norito::json::to_value(state.as_ref()).expect("serialize marker-bearing state");
         assert!(matches!(
             crate::state::deserialize::KuraSeed {
-                operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
                 execution_budget: iroha_allocation::AllocationBudget::new(
                     iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ),

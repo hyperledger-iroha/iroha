@@ -1049,7 +1049,6 @@ fn validate_runtime_projection_policy(
         source.sumeragi.local == projected.sumeragi.local
             && source.sumeragi.keys == projected.sumeragi.keys
             && source.sumeragi.retired_keys == projected.sumeragi.retired_keys
-            && source.sumeragi.mint_finality_seed_fd == projected.sumeragi.mint_finality_seed_fd
             && source.sumeragi.global_beacon_partial_signer_provider_handle
                 == projected
                     .sumeragi

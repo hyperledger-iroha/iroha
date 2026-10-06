@@ -822,12 +822,6 @@ CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and r
 CORE_NATIVE_ARCHIVE_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_ARCHIVE_RECOVERY_STAGES
 
-CORE_NATIVE_RECEIPT_STAGES = (("original native receipt mailbox custody", (
-    "sumeragi::attestation::tests::mailbox_and_release_control_require_original_pool_admission_before_allocation",
-    "sumeragi::attestation::tests::mailbox_poison_is_observed_only_after_the_original_guard_releases",
-    "sumeragi::attestation::tests::actual_mailbox_contention_retains_original_receipt_and_source",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_RECEIPT_STAGES
 
 
 CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity boundary", (
@@ -1024,7 +1018,7 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
     "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
 )), ("native beacon configuration and original signing custody", (
     "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
-    "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
+    "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_binds_the_broker",
 )),)
 # Every platform qualifies retained authority generations against the same four
 # independent genesis-anchored chains and full application workload.
@@ -1277,12 +1271,12 @@ DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", 
     "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-    "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
+    "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
     "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
     "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
     "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
     "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
-    "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
+    "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
     "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
     "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
 )), )
@@ -1473,7 +1467,7 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'taira_runtime_signer::tests::registry_allows_bootstrap_without_beacon_and_rejects_extra_or_duplicate_slots',
     'taira_runtime_signer::tests::registry_resolves_exact_configured_beacon_and_preserves_soracloud_binding',
     'taira_runtime_signer::tests::offline_introspection_never_requires_the_runtime_signer',
-    'taira_runtime_signer::tests::mint_seed_loader_consumes_exact_private_record_and_preserves_restart_source',
+    'taira_runtime_signer::tests::consumption_preserves_restart_source_and_starves_child_descriptor',
     'taira_runtime_signer::tests::descriptor_loader_accepts_only_canonical_owner_only_ed25519',
     'beacon_bootstrap::tests::each_seat_credential_binds_exact_public_session_and_private_share',
     'beacon_bootstrap::tests::genesis_session_rejects_mutated_identity_under_same_attempt',
@@ -2078,11 +2072,6 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
         'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
     )),
-    ('scoped original World storage publication', (
-        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_foreign_owned_scope_before_writers',
-        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publish',
-        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values',
-    )),
     ('retained candidate descriptors and exact marker custody', (
     )),
     ('original service Queue retirement publication', (
@@ -2105,14 +2094,6 @@ CORE_ZK_STAGES = (
         'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
         'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
         'debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
-    )),
-    ('authenticated indexed polynomial key ownership', (
-        'kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
-        'kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
-    )),
-    ('Native process publication and bootstrap isolation', (
-        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
-        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
     )),
 )
 

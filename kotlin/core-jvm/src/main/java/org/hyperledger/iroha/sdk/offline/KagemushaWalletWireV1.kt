@@ -11,8 +11,26 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.Varint
 
-/** The 34 retained H(role, body) labels, in the canonical native Rust order. */
-enum class KagemushaWalletDigestRoleV1(@JvmField val label: String) {
+/**
+ * Exact role label of one domain-separated KAGEMUSHA wallet V1 digest `H(role, body)`.
+ *
+ * Mirrors Rust `iroha_data_model::kagemusha::KagemushaWalletDigestRoleV1::ALL` (18 roles) in
+ * declaration order. `H` remains only for values no relation recomputes: fixed identities,
+ * ledger, platform-attestation and artifact boundaries, output descriptors and local custody
+ * records (wire record section 1). Only the artifact manifest hashes `m || signature`; other signed-object digests
+ * are Poseidon values computed by the native core.
+ *
+ * `credit_id`, `proof_digest`, the Payment, lineage, credit-opening, credit-status and credited
+ * digests, every signing message, map values, leaves and roots, chains, the state commitment, the
+ * σ statement digest and the blacklist, quota-window and credit-digest trees are not SHA-256 roles:
+ * they are Poseidon values over the σ field that the native Rust core computes (wire record
+ * sections 1 and 3.2). Kotlin carries them as opaque canonical field values
+ * ([KagemushaWalletWireV1.isCanonicalFieldValue]) and never recomputes them.
+ */
+enum class KagemushaWalletDigestRoleV1(
+    /** Exact ASCII role label hashed after [KagemushaWalletWireV1.DIGEST_PREFIX]. */
+    @JvmField val label: String,
+) {
     SCHEME("scheme"),
     RELATION("relation"),
     PROVIDER_CONTRACT("provider-contract"),
@@ -22,31 +40,20 @@ enum class KagemushaWalletDigestRoleV1(@JvmField val label: String) {
     ENROLLMENT_ID("enrollment-id"),
     ENROLLMENT_KEY_BINDING("enrollment-key-binding"),
     WALLET_ID("wallet-id"),
-    CERTIFICATE("certificate"),
-    CERTIFICATE_SET("certificate-set"),
-    CREDENTIAL("credential"),
-    SCHEME_POLICY("scheme-policy"),
-    FEE_SCHEDULE("fee-schedule"),
-    BLACKLIST("blacklist"),
-    QUOTA_SHARE("quota-share"),
-    TIME_ANCHOR("time-anchor"),
-    REQUEST("request"),
-    STATEMENT("statement"),
-    RECEIPT("receipt"),
-    PACKAGE("package"),
-    OPERATION_ID("operation-id"),
+    ARTIFACT_MANIFEST("artifact-manifest"),
+    EVIDENCE("evidence"),
+    RENEWAL_ASSERTION("renewal-assertion"),
+    /**
+     * σ verifying-key allowlist transcript: `LE16 version || LE32 n || n × (tag kind ||
+     * LE32 enabled_controls || verifying_key_digest || LE32 proof_bytes) ||
+     * lineage_verifying_key_digest || LE32 lineage_proof_bytes`.
+     */
+    VERIFYING_KEY_SET("verifying-key-set"),
     OUTPUT("output"),
-    CAPSULE("capsule"),
     MARKER("marker"),
+    CAPSULE("capsule"),
     COMPLETION("completion"),
     FOLD("fold"),
-    VOUCHER("voucher"),
-    UNLOAD_NULLIFIER("unload-nullifier"),
-    RENEWAL_ASSERTION("renewal-assertion"),
-    ARTIFACT_MANIFEST("artifact-manifest"),
-    VERIFYING_KEY_SET("verifying-key-set"),
-    CHARGE_QUOTE("charge-quote"),
-    EVIDENCE("evidence"),
     ;
     companion object {
         /** The exact retained H label, or null. Retired body/delivery roles have no alias. */
@@ -55,50 +62,47 @@ enum class KagemushaWalletDigestRoleV1(@JvmField val label: String) {
     }
 }
 
-/** Native P_bytes signing domains; the label is non-wire signing context, never a byte prefix. */
+/**
+ * Signing domain of one signed KAGEMUSHA wallet V1 body (wire record section 1, owner answer A1).
+ *
+ * Mirrors Rust `KagemushaWalletSigningDomainV1::ALL` (17 domains) in declaration order. Every
+ * P-256 signature of the protocol signs, as its message, the 32-byte canonical encoding `m` of
+ * the Poseidon value `P_bytes(d, transcript)` with standard ECDSA-P256-SHA256 (the ECDSA hash is
+ * `SHA-256(m)`): Android KeyMint through a `DIGEST_SHA256` key and `SHA256withECDSA`, the Secure
+ * Enclave through `kSecKeyAlgorithmECDSASignatureMessageX962SHA256`, and issuer, policy, ledger
+ * and artifact signers with the same algorithm. No-digest modes are never used. The native core
+ * computes `m`; Kotlin treats it as an opaque canonical σ-field value.
+ */
 enum class KagemushaWalletSigningDomainV1(
+    /** The 8 ASCII bytes of the Poseidon domain word, for example `kgwcert1`. */
     @JvmField val label: String,
+    /** Exact byte length of the signed transcript. */
     @JvmField val transcriptBytes: Int,
-    @JvmField val signedObjectRole: KagemushaWalletDigestRoleV1?,
 ) {
-    CERTIFICATE("kgwcert1", 108, KagemushaWalletDigestRoleV1.CERTIFICATE),
-    CREDENTIAL("kgwcred1", 476, KagemushaWalletDigestRoleV1.CREDENTIAL),
-    RENEWAL_CHALLENGE("kgwrnch1", 130, null),
-    RENEWAL_KEY_BINDING("kgwrnkb1", 163, null),
-    ARTIFACT_MANIFEST("kgwartf1", 290, KagemushaWalletDigestRoleV1.ARTIFACT_MANIFEST),
-    RECEIPT("kgwrcpt1", 338, KagemushaWalletDigestRoleV1.RECEIPT),
-    SCHEME_POLICY("kgwspol1", 142, KagemushaWalletDigestRoleV1.SCHEME_POLICY),
-    FEE_SCHEDULE("kgwfsch1", 191, KagemushaWalletDigestRoleV1.FEE_SCHEDULE),
-    BLACKLIST("kgwblst1", 118, KagemushaWalletDigestRoleV1.BLACKLIST),
-    QUOTA_SHARE("kgwqshr1", 190, KagemushaWalletDigestRoleV1.QUOTA_SHARE),
-    TIME_ANCHOR("kgwtanc1", 138, KagemushaWalletDigestRoleV1.TIME_ANCHOR),
-    CHARGE_QUOTE("kgwchgq1", 219, KagemushaWalletDigestRoleV1.CHARGE_QUOTE),
-    OFFER("kgwoffr1", 194, null),
-    SESSION_CONTROL("kgwsctl1", 197, null),
-    REQUEST("kgwrqst1", 418, KagemushaWalletDigestRoleV1.REQUEST),
-    VOUCHER("kgwvchr1", 250, KagemushaWalletDigestRoleV1.VOUCHER),
-    LEDGER_CONTROL("kgwlctl1", 211, null),
+    CERTIFICATE("kgwcert1", 108),
+    CREDENTIAL("kgwcred1", 476),
+    RENEWAL_CHALLENGE("kgwrnch1", 130),
+    RENEWAL_KEY_BINDING("kgwrnkb1", 163),
+    ARTIFACT_MANIFEST("kgwartf1", 290),
+    RECEIPT("kgwrcpt1", 338),
+    SCHEME_POLICY("kgwspol1", 142),
+    FEE_SCHEDULE("kgwfsch1", 191),
+    BLACKLIST("kgwblst1", 118),
+    QUOTA_SHARE("kgwqshr1", 190),
+    TIME_ANCHOR("kgwtanc1", 138),
+    CHARGE_QUOTE("kgwchgq1", 219),
+    OFFER("kgwoffr1", 194),
+    SESSION_CONTROL("kgwsctl1", 197),
+    REQUEST("kgwrqst1", 458),
+    VOUCHER("kgwvchr1", 250),
+    LEDGER_CONTROL("kgwlctl1", 211),
     ;
+
     companion object {
-        /** The exact signing-domain label, or null. */
+        /** Domain whose label is exactly [label], or `null` for an unknown label. */
         @JvmStatic
         fun fromLabel(label: String): KagemushaWalletSigningDomainV1? = entries.firstOrNull { it.label == label }
     }
-}
-
-/**
- * An exactly 32-byte canonical field message supplied by the native wallet core with its domain.
- * This checks encoding only; it does not compute Poseidon or authenticate monetary authority.
- * Domain is caller context: hardware signs the message bytes with ordinary SHA256withECDSA.
- */
-class KagemushaWalletSigningMessageV1(
-    @JvmField val domain: KagemushaWalletSigningDomainV1,
-    message: ByteArray,
-) {
-    private val messageBytes: ByteArray = KagemushaWalletWireV1.requireCanonicalFieldValue(message)
-
-    /** The exact native message; a defensive copy. */
-    fun bytes(): ByteArray = messageBytes.copyOf()
 }
 
 /** Peer message kind carried by a KAGEMUSHA wallet V1 envelope; its tag selects the frame bound. */
@@ -244,32 +248,59 @@ object KagemushaWalletWireV1 {
      * Maximum complete envelope frame for Request, Payment, Credited, PolicyData and Lineage.
      *
      * σ and Ω byte caps are the exact proof lengths of the frozen σ verifying-key allowlist
-     * (owner answer Q6), with Ω plus the largest σ_send at most [PAYMENT_PROOF_BUDGET_BYTES].
-     * Until the artifacts freeze (TODO(G3)) only the carrying frame bounds them, which is all a
-     * structural carrier check enforces.
+     * (owner answer Q6), with Ω plus the largest σ_send at most [PAYMENT_PROOF_BUDGET_BYTES] and
+     * Ω at most [LINEAGE_PROOF_CAP_BYTES]. Until the artifacts freeze (TODO(G3)) only the carrying
+     * frame bounds them, which is all a structural carrier check enforces.
      */
     const val MESSAGE_MAX_BYTES: Int = 10_000
 
     /** `F_payment`: the bytes of a Payment envelope frame other than its Ω and σ_send proofs. */
-    const val PAYMENT_FIXED_BYTES: Int = 1_681
+    const val PAYMENT_FIXED_BYTES: Int = 1_723
 
     /** Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`. */
     const val PAYMENT_PROOF_BUDGET_BYTES: Int = MESSAGE_MAX_BYTES - PAYMENT_FIXED_BYTES
 
     /**
-     * Maximum σ entries of the verifying-key allowlist: one per operation other than Send and one
-     * per supported Send enabled-controls mask.
+     * `F_status`: the bytes of a Credited::Status envelope frame other than its Ω(h) transport
+     * proof, with the fixed 32-sibling credit opening.
      */
-    const val VERIFYING_KEY_ENTRIES_MAX: Int = 15
+    const val CREDITED_STATUS_FIXED_BYTES: Int = 2_188
+
+    /** Cap of the Ω transport proof so that Credited::Status fits: `10,000 − F_status`. */
+    const val LINEAGE_PROOF_CAP_BYTES: Int = MESSAGE_MAX_BYTES - CREDITED_STATUS_FIXED_BYTES
+
+    /**
+     * Maximum σ entries of the verifying-key allowlist: one per operation, Send also once per
+     * supported enabled-controls mask, and Receive also once with the blacklist bit.
+     */
+    const val VERIFYING_KEY_ENTRIES_MAX: Int = 16
 
     /** Maximum standalone canonical frame of the σ verifying-key allowlist. */
     const val VERIFYING_KEY_ALLOWLIST_MAX_BYTES: Int = 2_048
 
-    /** Exact siblings of a depth-32 indexed credit-digest opening; no bitmap compression. */
-    const val CREDIT_OPENING_SIBLING_COUNT: Int = 32
+    /**
+     * Depth of every Poseidon indexed map tree and of the credit-digest tree (owner answer A2):
+     * every opening carries exactly this many siblings.
+     */
+    const val INDEXED_TREE_DEPTH: Int = 32
+
+    /** Depth of the quota-window and aligned quota-usage arrays. */
+    const val QUOTA_TREE_DEPTH: Int = 6
+
+    /** Exact number of slots in each quota-usage array. */
+    const val QUOTA_USAGE_SLOTS: Int = 1 shl QUOTA_TREE_DEPTH
+
+    /**
+     * Exact credit-opening transcript of a CreditStatus: `credit_id || payment_digest || u8 burned
+     * || next_key || LE32 slot || 32 siblings`.
+     */
+    const val CREDIT_OPENING_BYTES: Int = 3 * 32 + 1 + 4 + INDEXED_TREE_DEPTH * 32
 
     /** Length of one canonical little-endian σ-field value (Pasta `Fp`). */
     const val FIELD_VALUE_BYTES: Int = 32
+
+    /** Length of a signing message `m`: one canonical σ-field value (wire record section 1). */
+    const val SIGNING_MESSAGE_BYTES: Int = FIELD_VALUE_BYTES
 
     /** Maximum complete `kgm1:` text for a session-bounded envelope. */
     const val SESSION_TEXT_MAX_BYTES: Int = 2_736
@@ -308,7 +339,7 @@ object KagemushaWalletWireV1 {
     private const val REQUEST_FIELDS: Int = 5
     private const val REQUEST_BODY_FIELD: Int = 0
     private const val REQUEST_SIGNATURE_FIELD: Int = 4
-    private const val REQUEST_BODY_FIELDS: Int = 17
+    private const val REQUEST_BODY_FIELDS: Int = 19
     private const val REQUEST_BODY_SCHEME_FIELD: Int = 1
     private const val PAYMENT_FIELDS: Int = 5
     private const val PAYMENT_REQUEST_FIELD: Int = 1
@@ -338,9 +369,10 @@ object KagemushaWalletWireV1 {
      * Whether [value] is one canonical σ-field value: exactly [FIELD_VALUE_BYTES] bytes whose
      * little-endian integer is below `p`.
      *
-     * Every Poseidon value of the protocol (`credit_id`, `proof_digest`, the Payment digest, the
-     * state commitment, chains, map, blacklist, quota-window and credit-digest roots and their
-     * opening siblings) is computed by the native Rust core; Kotlin checks only this encoding and
+     * Every Poseidon value of the protocol (`credit_id`, `proof_digest`, the Payment, lineage,
+     * credit-opening, credit-status and credited digests, every signing message, the state
+     * commitment, chains, map, blacklist, quota-window and credit-digest roots and their opening
+     * siblings) is computed by the native Rust core; Kotlin checks only this encoding and
      * otherwise treats the value as opaque.
      */
     @JvmStatic
@@ -377,11 +409,12 @@ object KagemushaWalletWireV1 {
     }
 
     /**
-     * Exact SHA-256 digest preimage of retained `H(role, body)`; never a signing message:
-     * `prefix || role || 0x00 || LE64(len(body)) || body`.
+     * Exact SHA-256 preimage of `H(role, body)`: `prefix || role || 0x00 || LE64(len(body)) ||
+     * body`. It is never a signed message; signatures sign the Poseidon message `m` of their
+     * [KagemushaWalletSigningDomainV1].
      */
     @JvmStatic
-    fun digestPreimage(role: KagemushaWalletDigestRoleV1, body: ByteArray): ByteArray {
+    fun preimage(role: KagemushaWalletDigestRoleV1, body: ByteArray): ByteArray {
         val label = role.label.toByteArray(Charsets.US_ASCII)
         val out = ByteArray(DIGEST_PREFIX_BYTES.size + label.size + 1 + 8 + body.size)
         var cursor = 0
@@ -400,30 +433,48 @@ object KagemushaWalletWireV1 {
         return out
     }
 
-    /** Domain-separated digest `H(role, body) = SHA-256(digestPreimage(role, body))`. */
+    /** Domain-separated digest `H(role, body) = SHA-256(preimage(role, body))`. */
     @JvmStatic
     fun digest(role: KagemushaWalletDigestRoleV1, body: ByteArray): ByteArray =
-        MessageDigest.getInstance("SHA-256").digest(digestPreimage(role, body))
+        MessageDigest.getInstance("SHA-256").digest(preimage(role, body))
 
-    /** H(role, m || signature), using the exact native message m and canonical low-S signature. */
+    /**
+     * Artifact manifest digest, `H(artifact-manifest, m || signature)`, where `m` is its
+     * 32-byte Poseidon signing message and the signature is the canonical 64-byte low-S
+     * `r || s`.
+     *
+     * @throws IllegalArgumentException for a message that is not a canonical σ-field value or a
+     * non-canonical signature.
+     */
     @JvmStatic
-    fun signedObjectDigest(
-        role: KagemushaWalletDigestRoleV1,
-        signingMessage: KagemushaWalletSigningMessageV1,
+    fun artifactManifestDigest(
+        message: ByteArray,
         rawSignature: ByteArray,
     ): ByteArray {
-        require(signingMessage.domain.signedObjectRole == role) { "signed object has another signing domain" }
+        require(message.size == SIGNING_MESSAGE_BYTES && isCanonicalFieldValue(message)) {
+            "KAGEMUSHA wallet V1 signing message must be one canonical $SIGNING_MESSAGE_BYTES-byte field value"
+        }
         val signature = KagemushaP256Codec.requireRawLowSSignature(rawSignature)
-        return digest(role, signingMessage.bytes() + signature)
+        return digest(KagemushaWalletDigestRoleV1.ARTIFACT_MANIFEST, message + signature)
     }
 
-    /** Verify low-S ECDSA-P256-SHA256 over exactly the native 32-byte message m. */
+    /**
+     * Verify one received low-S ECDSA-P256-SHA256 signature over the 32-byte signing message
+     * [message] (wire record section 1): the ECDSA hash is `SHA-256(message)`.
+     *
+     * The message must be one canonical σ-field value, the Poseidon `P_bytes(d, transcript)` that
+     * the native core computed for the body's [KagemushaWalletSigningDomainV1]; the signature
+     * then passes [KagemushaP256Codec.verifyRawLowS], which rejects high S before JCA. Received
+     * bytes are never normalized.
+     *
+     * Returns `false` for another message length, a non-canonical message, key or signature, and
+     * a signature that does not verify.
+     */
     @JvmStatic
-    fun verifySignature(
-        publicKey: ByteArray,
-        signingMessage: KagemushaWalletSigningMessageV1,
-        rawSignature: ByteArray,
-    ): Boolean = KagemushaP256Codec.verifyRawLowS(publicKey, signingMessage.bytes(), rawSignature)
+    fun verifySignature(publicKeySec1: ByteArray, message: ByteArray, rawSignature: ByteArray): Boolean =
+        message.size == SIGNING_MESSAGE_BYTES &&
+            isCanonicalFieldValue(message) &&
+            KagemushaP256Codec.verifyRawLowS(publicKeySec1, message, rawSignature)
 
     /**
      * Encode one canonical frame as `kgm1:` and unpadded base64url.
@@ -546,7 +597,7 @@ object KagemushaWalletWireV1 {
      *
      * Each frame is first checked by [inspectEnvelope], must have the kind of its parameter and
      * must split into exactly the record fields of its message (wire record section 3.4: Request
-     * `{body, receiver_credential, fee_schedule, certificates, signature}` with a 17-field body,
+     * `{body, receiver_credential, fee_schedule, certificates, signature}` with a 19-field body,
      * compact Payment `{version, request: {body, signature}, payer_payment_key,
      * payer_credential_digest, send}`, Credited `{version, scheme_id, evidence}`). The comparisons
      * are over exact canonical field bytes: the Payment's signed Request body and signature are
@@ -567,6 +618,7 @@ object KagemushaWalletWireV1 {
     @JvmOverloads
     fun requireExchangeBinding(request: ByteArray, payment: ByteArray, credited: ByteArray? = null) {
         val requestFields = messageFields(request, KagemushaWalletMessageKindV1.REQUEST, REQUEST_FIELDS)
+        val requestBody = recordFields(requestFields[REQUEST_BODY_FIELD], REQUEST_BODY_FIELDS, "Request body")
         val paymentFields = messageFields(payment, KagemushaWalletMessageKindV1.PAYMENT, PAYMENT_FIELDS)
         val signedRequest = recordFields(
             paymentFields[PAYMENT_REQUEST_FIELD],
@@ -581,7 +633,6 @@ object KagemushaWalletWireV1 {
         ) { "KAGEMUSHA wallet V1 Payment does not carry this Request" }
         if (credited != null) {
             val creditedFields = messageFields(credited, KagemushaWalletMessageKindV1.CREDITED, CREDITED_FIELDS)
-            val requestBody = recordFields(requestFields[REQUEST_BODY_FIELD], REQUEST_BODY_FIELDS, "Request body")
             require(creditedFields[CREDITED_SCHEME_FIELD].contentEquals(requestBody[REQUEST_BODY_SCHEME_FIELD])) {
                 "KAGEMUSHA wallet V1 Credited does not name this Request's scheme"
             }

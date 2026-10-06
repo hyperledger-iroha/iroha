@@ -130,6 +130,24 @@ impl EpochValidationScope {
     ) -> Result<EpochConfig, ScheduleError> {
         self.validated_epoch(context).map_err(ScheduleError::Epoch)
     }
+    // The signed-genesis producer already authenticated and reconstructed this value.
+    // Reuse only an exact previously validated context. A miss performs its original
+    // validation-only work: no context hash, canonical admission or optional insertion.
+    pub(super) fn validate_known_or_fresh(
+        &self,
+        context: &ValidatorEpochContextV1,
+    ) -> Result<(), String> {
+        if self
+            .entries
+            .iter()
+            .flatten()
+            .any(|entry| entry.context == *context)
+        {
+            Ok(())
+        } else {
+            context.validate()
+        }
+    }
     fn validated_epoch(
         &mut self,
         context: &ValidatorEpochContextV1,
@@ -142,7 +160,7 @@ impl EpochValidationScope {
         {
             return Ok(entry.core);
         }
-        // context_id validates every original BLS proof and paired-Pasta key before hashing.
+        // context_id validates every original BLS proof and the authorized generation first.
         // Invalid inputs never enter retained ownership. A native roundtrip admits the exact
         // frame and every decoded allocation under the caller's original cumulative context;
         // an ordinary graph clone would allocate outside that owner.
@@ -153,7 +171,7 @@ impl EpochValidationScope {
                 epoch: context.authorization.epoch,
                 context: Hash32(context_id),
             },
-            // Full context validation already proved this exact authority commitment.
+            // Full context validation already proved this exact validator generation identity.
             authority_generation: Hash32(context.authorization.authority_id),
             first_height: context.authorization.first_height,
             last_height: context.authorization.last_height,
@@ -398,7 +416,14 @@ impl ScheduleOutcome {
     /// # Errors
     /// A height gap, changed incumbent, changed lag-two parameters or misplaced boundary.
     pub fn validate_successor(&self, next: &Self) -> Result<(), ScheduleError> {
-        let validation = &mut EpochValidationScope::new();
+        self.validate_successor_with_validation(next, &mut EpochValidationScope::new())
+    }
+
+    pub(super) fn validate_successor_with_validation(
+        &self,
+        next: &Self,
+        validation: &mut EpochValidationScope,
+    ) -> Result<(), ScheduleError> {
         self.validate_with_validation(validation)?;
         next.validate_with_validation(validation)?;
         let ScheduledSlot::Ready(incumbent) = &self.next else {
@@ -642,8 +667,7 @@ impl ConsensusSchedule {
                         config.epoch.authorization.decision,
                         crate::sumeragi::epoch::ValidatorEpochDecisionV1::Retain
                             | crate::sumeragi::epoch::ValidatorEpochDecisionV1::RetainAndCancel
-                    ) && (config.epoch.authority != first.epoch.authority
-                        || config.epoch.committee != first.epoch.committee)
+                    ) && config.epoch.committee != first.epoch.committee
                     {
                         return Err(ScheduleError::Epoch(
                             "retained window replaces original authority credentials".into(),

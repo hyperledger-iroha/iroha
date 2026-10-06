@@ -1,29 +1,12 @@
 fn complete_test_builder(builder: GenesisBuilder) -> GenesisBuilder {
-    builder
-        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-        .with_kagemusha_mint_finality_genesis_parameters(
-            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-        )
-}
-
-fn complete_test_builder_for_peers(
-    builder: GenesisBuilder,
-    peers: Vec<iroha_model_base::peer::PeerId>,
-) -> GenesisBuilder {
-    builder
-        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-        .with_kagemusha_mint_finality_genesis_parameters(
-            deterministic_test_kagemusha_mint_finality_genesis_parameters_for(peers),
-        )
+    builder.with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
 }
 
 fn load_default_genesis_source_template_for_test() -> Result<RawGenesisTransaction> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../defaults/genesis.template.json");
-    GenesisSourceTemplate::from_path(path)?.materialize(
-        &deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-        Some(SumeragiNposParameters::default().xor_asset_definition_id),
-    )
+    GenesisSourceTemplate::from_path(path)?
+        .materialize(Some(SumeragiNposParameters::default().xor_asset_definition_id))
 }
 
 #[test]
@@ -254,11 +237,9 @@ fn prepared_proposal_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, 
             GenesisTopologyEntry::new(PeerId::new(key_pair.public_key().clone()), pop)
         })
         .collect::<Vec<_>>();
-    let mint_finality_peers = topology.iter().map(|entry| entry.peer.clone()).collect();
-    let manifest = complete_test_builder_for_peers(
+    let manifest = complete_test_builder(
         GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-fixture"), ".")
             .set_topology(topology),
-        mint_finality_peers,
     )
     .build_raw()
     .expect("complete prepared-verifier fixture genesis")
@@ -535,11 +516,9 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
         })
         .collect::<Vec<_>>();
     bad_entries[0].pop_hex = Some(hex::encode([0_u8; 8]));
-    let mint_finality_peers = bad_entries.iter().map(|entry| entry.peer.clone()).collect();
-    let bad_manifest = complete_test_builder_for_peers(
+    let bad_manifest = complete_test_builder(
         GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-bad-pop"), ".")
             .set_topology(bad_entries),
-        mint_finality_peers,
     )
     .build_raw()
     .expect("complete bad-PoP verifier fixture genesis")

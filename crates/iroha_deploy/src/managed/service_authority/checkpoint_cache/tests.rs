@@ -99,7 +99,18 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
     assert_eq!(returned, original);
     assert_eq!(attempts(&authority), 1);
     for _ in 0..3 {
-        assert_eq!(authority.decode_checkpoint(&bytes).unwrap(), original);
+        let reused = authority.decode_checkpoint(&bytes).unwrap();
+        assert_eq!(reused, original);
+        assert!(std::ptr::eq(reused.checkpoint(), returned.checkpoint()));
+        let no_allocation = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let borrowed =
+            norito::with_decode_limits_scope(no_allocation, || reused.verified_tip_ref())
+                .expect("the same genuinely imported immutable native tip needs no owned copy");
+        assert!(std::ptr::eq(borrowed, returned.verified_tip_ref().unwrap()));
+        borrowed
+            .verify_global_scope(authority.config.network_id, authority.config.chain.as_str())
+            .unwrap();
+        assert_eq!(checkpoint_bytes(&reused).unwrap(), bytes);
     }
     assert_eq!(attempts(&authority), 1);
     assert_entry(&authority, &bytes);
@@ -131,7 +142,12 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
     assert_refused(&authority, &vec![0; MAX_CHECKPOINT_BYTES + 1]);
 
     // A caller's genuine fresh observation advances only its returned verifier.
-    authority.decode_checkpoint(&bytes).unwrap();
+    let original_selected = authority.decode_checkpoint(&bytes).unwrap();
+    let observing_original = returned.clone();
+    assert!(std::ptr::eq(
+        returned.checkpoint(),
+        observing_original.checkpoint()
+    ));
     let next = quote_instructions(
         &native,
         &authority.config,
@@ -143,9 +159,27 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
     assert_eq!(native.chain.commit(vec![next]), vec![true]);
     assert_eq!(returned.observe(&native, &[17; 32]).unwrap().verified(), 4);
     assert_eq!(returned.checkpoint().height(), 3);
+    assert!(!std::ptr::eq(
+        returned.verified_tip_ref().unwrap(),
+        observing_original.verified_tip_ref().unwrap()
+    ));
+    assert!(!std::ptr::eq(
+        returned.checkpoint(),
+        observing_original.checkpoint()
+    ));
+    assert_eq!(checkpoint_bytes(&observing_original).unwrap(), bytes);
     assert_eq!(original.checkpoint().height(), 2);
     let before = attempts(&authority);
-    assert_eq!(authority.decode_checkpoint(&bytes).unwrap(), original);
+    let still_original = authority.decode_checkpoint(&bytes).unwrap();
+    assert_eq!(still_original, original);
+    assert!(std::ptr::eq(
+        still_original.checkpoint(),
+        original_selected.checkpoint()
+    ));
+    assert!(std::ptr::eq(
+        still_original.verified_tip_ref().unwrap(),
+        original_selected.verified_tip_ref().unwrap()
+    ));
     assert_eq!(attempts(&authority), before);
     assert_entry(&authority, &bytes);
     let successor = checkpoint_bytes(&returned).unwrap();

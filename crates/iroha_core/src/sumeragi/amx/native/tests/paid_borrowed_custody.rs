@@ -25,7 +25,11 @@ const GLOBAL_INITIAL: u32 = 1_000_000;
 
 fn paid_global_config() -> TestChainConfig {
     let mut config = global_config();
-    let domain = DomainId::try_new("fees", "amx-clone-custody").unwrap();
+    let domain = DomainId::try_new(
+        "fees",
+        iroha_config::parameters::defaults::nexus::DEFAULT_DATASPACE_ALIAS,
+    )
+    .unwrap();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
     nexus.fees.fee_asset_id = fee_asset().canonical_address();
@@ -145,6 +149,28 @@ fn global_paid_images(chain: &CertifiedTestChain, paid_inputs: u32) {
 #[inline(never)]
 fn paid_roots() -> Roots {
     let mut global = CertifiedTestChain::start(paid_global_config()).unwrap();
+    {
+        let view = global.state().view();
+        let definition = view.world().asset_definition(&fee_asset()).unwrap();
+        assert_eq!(
+            definition.balance_scope_policy(),
+            AssetBalancePolicy::Global
+        );
+        let home = definition
+            .owning_domain()
+            .as_ref()
+            .expect("signed fee asset home");
+        assert_eq!(
+            crate::sns::resolve_active_dataspace_id_by_alias(
+                view.world(),
+                &view.nexus().dataspace_catalog,
+                home.dataspace().as_ref(),
+                global.committed(1).block_time_ms(),
+            )
+            .expect("the actual signed catalog authenticates the fee asset home"),
+            DataSpaceId::UNIVERSAL,
+        );
+    }
     assert_eq!(
         global.validators().len(),
         4,
@@ -387,14 +413,18 @@ fn commit_original_relay(roots: &mut Roots, accepted: AcceptedTransaction<'stati
 
 #[test]
 fn native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime() {
-    let (mut roots, accepted, original, tx) = paid_original_relay();
-    let original_wire = accepted.entrypoint_bytes();
-    let original_hash = accepted.hash_as_entrypoint();
-    let entrypoint = accepted.into_entrypoint();
-    let source_pointer = std::ptr::from_ref(&entrypoint);
-    let borrowed = {
-        let view = roots.global.state().view();
-        AcceptedTransaction::accept_borrowed_entrypoint_at_time(
+    // This fixture executes three actual native roots; use the node's existing
+    // configured execution thread, with no stack override or changed resource limit.
+    fn original_paid_control() {
+        let (mut roots, accepted, original, tx) = paid_original_relay();
+        let original_wire = accepted.entrypoint_bytes();
+        let original_hash = accepted.hash_as_entrypoint();
+        let entrypoint = accepted.into_entrypoint();
+        let source_pointer = std::ptr::from_ref(&entrypoint);
+        let borrowed =
+            {
+                let view = roots.global.state().view();
+                AcceptedTransaction::accept_borrowed_entrypoint_at_time(
             &entrypoint,
             &roots.global.network_id(),
             Duration::from_secs(1),
@@ -403,57 +433,57 @@ fn native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_grap
             Duration::from_millis(5_000),
         )
         .expect("the original paid source passes actual borrowed envelope/signature/TTL admission")
-    };
-    assert_eq!(std::ptr::from_ref(borrowed.entrypoint()), source_pointer);
-    assert_eq!(proof_pointers(retained_relay(&borrowed)), original);
-    assert_eq!(borrowed.hash_as_entrypoint(), original_hash);
-    assert_eq!(
-        borrowed.validation_time(),
-        Some(Duration::from_millis(5_000))
-    );
-    let source_wire = borrowed.entrypoint_bytes();
-    assert_eq!(source_wire.as_slice(), original_wire.as_slice());
-    let clone = borrowed.clone();
-    assert_eq!(clone.hash_as_entrypoint(), original_hash);
-    assert_eq!(clone.entrypoint(), borrowed.entrypoint());
-    assert_eq!(
-        norito::encode_canonical(clone.entrypoint()).unwrap(),
-        source_wire.as_slice()
-    );
-    assert!(
-        Arc::ptr_eq(&clone.entrypoint_bytes(), &source_wire),
-        "the borrowed source's wire cache remains its genuine original"
-    );
-    assert_eq!(clone.validation_time(), borrowed.validation_time());
-    assert_eq!(
-        std::ptr::from_ref(clone.entrypoint()),
-        source_pointer,
-        "cloning a borrowed accepted source must preserve its original owner and lifetime",
-    );
-    assert_eq!(
-        proof_pointers(retained_relay(&clone)),
-        original,
-        "borrowed AcceptedTransaction clone detached the genuine persisted Prepared proof allocations",
-    );
-    drop(borrowed);
-    assert_eq!(std::ptr::from_ref(clone.entrypoint()), source_pointer);
-    assert_eq!(
-        proof_pointers(retained_relay(&clone)),
-        original,
-        "the remaining borrow keeps the original graph while its source owner remains live"
-    );
-    assert_eq!(clone.hash_as_entrypoint(), original_hash);
-    assert_eq!(
-        clone.entrypoint_bytes().as_slice(),
-        original_wire.as_slice()
-    );
-    global_paid_images(&roots.global, 4);
-    // End every borrowed wrapper before moving the exact source into owned admission.
-    // No into_owned conversion of a borrow, replacement decoder or proof clone is used.
-    drop(clone);
-    let owned = {
-        let view = roots.global.state().view();
-        AcceptedTransaction::accept_entrypoint_at_time(
+            };
+        assert_eq!(std::ptr::from_ref(borrowed.entrypoint()), source_pointer);
+        assert_eq!(proof_pointers(retained_relay(&borrowed)), original);
+        assert_eq!(borrowed.hash_as_entrypoint(), original_hash);
+        assert_eq!(
+            borrowed.validation_time(),
+            Some(Duration::from_millis(5_000))
+        );
+        let source_wire = borrowed.entrypoint_bytes();
+        assert_eq!(source_wire.as_slice(), original_wire.as_slice());
+        let clone = borrowed.clone();
+        assert_eq!(clone.hash_as_entrypoint(), original_hash);
+        assert_eq!(clone.entrypoint(), borrowed.entrypoint());
+        assert_eq!(
+            norito::encode_canonical(clone.entrypoint()).unwrap(),
+            source_wire.as_slice()
+        );
+        assert!(
+            Arc::ptr_eq(&clone.entrypoint_bytes(), &source_wire),
+            "the borrowed source's wire cache remains its genuine original"
+        );
+        assert_eq!(clone.validation_time(), borrowed.validation_time());
+        assert_eq!(
+            std::ptr::from_ref(clone.entrypoint()),
+            source_pointer,
+            "cloning a borrowed accepted source must preserve its original owner and lifetime",
+        );
+        assert_eq!(
+            proof_pointers(retained_relay(&clone)),
+            original,
+            "borrowed AcceptedTransaction clone detached the genuine persisted Prepared proof allocations",
+        );
+        drop(borrowed);
+        assert_eq!(std::ptr::from_ref(clone.entrypoint()), source_pointer);
+        assert_eq!(
+            proof_pointers(retained_relay(&clone)),
+            original,
+            "the remaining borrow keeps the original graph while its source owner remains live"
+        );
+        assert_eq!(clone.hash_as_entrypoint(), original_hash);
+        assert_eq!(
+            clone.entrypoint_bytes().as_slice(),
+            original_wire.as_slice()
+        );
+        global_paid_images(&roots.global, 4);
+        // End every borrowed wrapper before moving the exact source into owned admission.
+        // No into_owned conversion of a borrow, replacement decoder or proof clone is used.
+        drop(clone);
+        let owned = {
+            let view = roots.global.state().view();
+            AcceptedTransaction::accept_entrypoint_at_time(
             entrypoint,
             &roots.global.network_id(),
             Duration::from_secs(1),
@@ -464,12 +494,20 @@ fn native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_grap
         .expect(
             "the exact original paid owner passes actual owned envelope/signature/TTL admission",
         )
-    };
-    assert_eq!(owned.hash_as_entrypoint(), original_hash);
-    assert_eq!(
-        owned.entrypoint_bytes().as_slice(),
-        original_wire.as_slice()
-    );
-    assert_eq!(proof_pointers(retained_relay(&owned)), original);
-    commit_original_relay(&mut roots, owned, tx);
+        };
+        assert_eq!(owned.hash_as_entrypoint(), original_hash);
+        assert_eq!(
+            owned.entrypoint_bytes().as_slice(),
+            original_wire.as_slice()
+        );
+        assert_eq!(proof_pointers(retained_relay(&owned)), original);
+        commit_original_relay(&mut roots, owned, tx);
+    }
+    let thread =
+        crate::sumeragi::threads::sumeragi_thread_builder("sumeragi-paid-amx-custody-test")
+            .spawn(original_paid_control)
+            .expect("spawn paid AMX on the configured native execution thread");
+    if let Err(original) = thread.join() {
+        std::panic::resume_unwind(original);
+    }
 }

@@ -313,10 +313,6 @@ _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS = frozenset({
 # excepted for these exact files; every other operational/material gate remains.
 _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS = frozenset({
     "crates/iroha_core/src/sumeragi/certified_chain/artifacts/tests.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_capture.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_capture_tests.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key_tests.rs",
     "crates/iroha_p2p/src/peer/run/admission_class_tests.rs",
     "crates/iroha_p2p/src/peer/run/granted.rs",
     "crates/iroha_p2p/src/peer/run/payload_codec_tests.rs",

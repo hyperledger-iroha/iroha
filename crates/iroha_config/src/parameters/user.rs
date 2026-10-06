@@ -6297,9 +6297,6 @@ pub struct Sumeragi {
     /// Node-local participation role.
     #[config(default = "NodeRole::Validator")]
     pub role: NodeRole,
-    /// Fixed inherited private descriptor holding this peer's 32-byte Pasta seed.
-    /// Only descriptor 199 is accepted; the launch copy is consumed before node start.
-    pub mint_finality_seed_fd: Option<u16>,
     /// Credential-free deployment handle for the global beacon share signer.
     pub global_beacon_partial_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision for the global beacon share signer.
@@ -6551,7 +6548,6 @@ impl Sumeragi {
     ) -> Option<actual::Sumeragi> {
         let Self {
             role,
-            mint_finality_seed_fd,
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest_hex,
@@ -6573,21 +6569,6 @@ impl Sumeragi {
             retired_keys,
         } = self;
         let mut valid = true;
-        if mint_finality_seed_fd.is_some_and(|fd| fd != 199) {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.mint_finality_seed_fd must be the fixed private descriptor 199",
-                ),
-            );
-            valid = false;
-        }
-        if mint_finality_seed_fd.is_some() && role != NodeRole::Validator {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("an observer must not configure a mint-finality seed descriptor"),
-            );
-            valid = false;
-        }
         let local = match Self::parse_local_overrides(
             view_timeout_base_ms,
             view_timeout_max_ms,
@@ -6674,7 +6655,6 @@ impl Sumeragi {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
             },
-            mint_finality_seed_fd,
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest,
@@ -8796,7 +8776,6 @@ impl Queue {
         }
     }
 }
-/// Confidential asset and verifier configuration.
 /// User-level configuration container for `Settlement`.
 #[derive(Debug, ReadConfig, Clone, Copy, Default)]
 pub struct Settlement {
@@ -9826,9 +9805,6 @@ pub struct NexusStorage {
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
     pub max_wsv_memory_bytes: Bytes,
-    /// Original allocation pool shared by the four fixed KAGEMUSHA indexes.
-    #[config(default = "defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES")]
-    pub kagemusha_operation_index_bytes: Bytes,
     /// Finite shared carrier-shell and descriptor pool, excluding nested payload allocations.
     /// Zero is a closed pool, never an unlimited setting.
     #[config(default = "defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES")]
@@ -9849,7 +9825,6 @@ impl_default!(NexusStorage {
     local_budget_bytes: None,
     budget_enforce_interval_blocks: defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
     max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
-    kagemusha_operation_index_bytes: defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
     retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
     consensus_evidence_preparation_bytes:
         defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
@@ -9859,14 +9834,6 @@ impl_default!(NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
-        if self.kagemusha_operation_index_bytes.get() == 0
-            || usize::try_from(self.kagemusha_operation_index_bytes.get()).is_err()
-        {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.storage.kagemusha_operation_index_bytes must be positive and fit this platform's allocation address space",
-            ));
-            return None;
-        }
         if self
             .local_budget_bytes
             .is_some_and(|budget| budget.get() == 0)
@@ -9924,7 +9891,6 @@ impl NexusStorage {
             effective_local_budget_bytes: local_budget_bytes,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
-            kagemusha_operation_index_bytes: self.kagemusha_operation_index_bytes,
             retained_carrier_shell_bytes: self.retained_carrier_shell_bytes,
             consensus_evidence_preparation_bytes: self.consensus_evidence_preparation_bytes,
             consensus_stake_index_bytes: self.consensus_stake_index_bytes,

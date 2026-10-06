@@ -221,6 +221,9 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
     val generated = ArrayList<KagemushaWalletAndroidKeySpecV1>()
     var deleteCalls = 0
     var signCalls = 0
+
+    /** Exact messages handed to [sign], in call order. */
+    val signedMessages = ArrayList<ByteArray>()
     var getKeyCalls = 0
 
     var strongBoxAvailable = true
@@ -295,9 +298,10 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
 
     override fun sign(key: PrivateKey, message: ByteArray): ByteArray {
         signCalls += 1
+        signedMessages += message.copyOf()
         signFailure?.let { throw it }
         val delegate = (key as TestNonExportableKeyV1).delegate
-        return Signature.getInstance("SHA256withECDSA").run {
+        return Signature.getInstance(KAGEMUSHA_WALLET_ANDROID_SIGNATURE_ALGORITHM_V1).run {
             initSign(delegate)
             update(message)
             sign()

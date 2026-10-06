@@ -414,6 +414,10 @@ pub enum DescriptorRule {
     BlindingFactors,
     /// Rule 4: an instance length exceeds the usable rows.
     InstanceLength,
+    /// Rule 4: V2 instance types are missing or invalid.
+    InstanceType,
+    /// Rule 2: the transcript profile requires different instance or suffix modes.
+    TranscriptProfile,
     /// Rule 5: a query names a missing column.
     QueryColumn,
     /// Rule 5: a `(column, rotation)` query repeats.
@@ -446,9 +450,9 @@ impl DescriptorRule {
     pub const fn rule_number(self) -> u8 {
         match self {
             Self::Decode | Self::FrameTooLarge | Self::Bounds => 1,
-            Self::Version | Self::Moduli | Self::ParamsDigest => 2,
+            Self::Version | Self::Moduli | Self::ParamsDigest | Self::TranscriptProfile => 2,
             Self::Degree => 3,
-            Self::BlindingFactors | Self::InstanceLength => 4,
+            Self::BlindingFactors | Self::InstanceLength | Self::InstanceType => 4,
             Self::QueryColumn | Self::DuplicateQuery | Self::RotationCollision => 5,
             Self::Expression | Self::ExpressionDegree | Self::EmptyGate | Self::Lookup => 6,
             Self::Permutation => 7,

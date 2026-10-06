@@ -174,6 +174,36 @@ impl RoundConstantColumns {
     }
 }
 
+/// Four round selectors that aligned Pow5 lanes may share.
+///
+/// Every participating lane must enable absorption, full rounds, paired
+/// partial rounds and single partial rounds on the same rows. In particular,
+/// the lanes need matching permutation spans, absorption modes and
+/// squeeze/continuation boundaries. Sharing activates every lane's round
+/// constraints wherever any participant enables the selector; it does not
+/// pad missing work. Start-state and squeeze selectors remain lane-local.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SharedRoundSelectors {
+    absorb: Selector,
+    full: Selector,
+    pair: Selector,
+    partial: Selector,
+}
+
+impl SharedRoundSelectors {
+    /// Allocates one set of round selectors in the participating lanes'
+    /// constraint system. Reusing this bundle is an explicit opt-in to the
+    /// common row schedule documented on [`Self`].
+    pub fn allocate<F: PastaField>(meta: &mut ConstraintSystem<F>) -> Self {
+        Self {
+            absorb: meta.selector(),
+            full: meta.selector(),
+            pair: meta.selector(),
+            partial: meta.selector(),
+        }
+    }
+}
+
 /// A start gate: its selector and the state it pins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Start<F> {
@@ -205,11 +235,37 @@ impl<F: PoseidonField> Pow5Config<F> {
         initial_states: &[[F; WIDTH]],
     ) -> Self {
         meta.enable_equality(lane.aux);
+        let shared = SharedRoundSelectors::allocate(meta);
+        Self::configure_with_shared_round_selectors(
+            meta,
+            lane,
+            round_constants,
+            initial_states,
+            shared,
+        )
+    }
+
+    /// Configures a lane using four explicitly shared round selectors.
+    ///
+    /// All lanes receiving `shared` must have the common row schedule
+    /// documented on [`SharedRoundSelectors`]. Each lane keeps its own
+    /// squeeze and start-state selectors, constraints and witnesses. Use
+    /// [`Self::configure`] when lane schedules may differ.
+    pub fn configure_with_shared_round_selectors(
+        meta: &mut ConstraintSystem<F>,
+        lane: Pow5Columns,
+        round_constants: RoundConstantColumns,
+        initial_states: &[[F; WIDTH]],
+        shared: SharedRoundSelectors,
+    ) -> Self {
+        meta.enable_equality(lane.aux);
         let mds = *F::rp57().mds();
-        let q_absorb = meta.selector();
-        let q_full = meta.selector();
-        let q_pair = meta.selector();
-        let q_partial = meta.selector();
+        let SharedRoundSelectors {
+            absorb: q_absorb,
+            full: q_full,
+            pair: q_pair,
+            partial: q_partial,
+        } = shared;
         let q_squeeze = meta.selector();
         let Pow5Columns { state, aux } = lane;
         let RoundConstantColumns { a: rc_a, b: rc_b } = round_constants;

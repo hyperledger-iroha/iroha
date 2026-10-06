@@ -5,6 +5,7 @@
 //! authorization can replace an expired body whose complete dispatch history is proven unsigned.
 
 use super::*;
+use crate::localnet::service_authorities::RetainedProviderServicePlan;
 use crate::managed::native_operation::{
     attempts::{
         BodyDispatchScope, BodyReplacementTarget, EnrollmentScopeBinding, EnrollmentScopeEvidence,
@@ -48,24 +49,35 @@ struct RecordSnapshot {
     directory: Arc<PrivateDirectory>,
     name: String,
     maximum: usize,
-    length: usize,
-    digest: [u8; 32],
+    observed: Option<(usize, [u8; 32])>,
 }
 impl RecordSnapshot {
-    fn new(directory: Arc<PrivateDirectory>, name: &str, maximum: usize) -> Result<Self> {
-        let bytes = directory.read(name, maximum)?;
-        Ok(Self {
+    // Bind the bytes actually consumed by the sole decoder, including observed absence.
+    // A second read here could silently attach a replacement file to an older decoded value.
+    fn from_read(
+        directory: Arc<PrivateDirectory>,
+        name: &str,
+        maximum: usize,
+        bytes: Option<&[u8]>,
+    ) -> Self {
+        Self {
             directory,
             name: name.to_owned(),
             maximum,
-            length: bytes.len(),
-            digest: *Hash::new(&bytes).as_ref(),
-        })
+            observed: bytes.map(|bytes| (bytes.len(), *Hash::new(bytes).as_ref())),
+        }
     }
     fn revalidate(&self) -> Result<()> {
         self.directory.revalidate()?;
-        let bytes = self.directory.read(&self.name, self.maximum)?;
-        if bytes.len() != self.length || *Hash::new(&bytes).as_ref() != self.digest {
+        let bytes = if self.observed.is_some() {
+            Some(self.directory.read(&self.name, self.maximum)?)
+        } else {
+            read_optional(&self.directory, &self.name, self.maximum)?.map(zeroize::Zeroizing::new)
+        };
+        let observed = bytes
+            .as_ref()
+            .map(|bytes| (bytes.len(), *Hash::new(bytes).as_ref()));
+        if observed != self.observed {
             return Err(invalid("retained enrollment body material changed"));
         }
         Ok(())
@@ -78,13 +90,16 @@ struct NamesSnapshot {
     names: Vec<std::ffi::OsString>,
 }
 impl NamesSnapshot {
-    fn capture(directory: Arc<PrivateDirectory>, maximum: usize) -> Result<Self> {
-        let names = directory.entries(maximum)?;
-        Ok(Self {
+    fn from_read(
+        directory: Arc<PrivateDirectory>,
+        maximum: usize,
+        names: Vec<std::ffi::OsString>,
+    ) -> Self {
+        Self {
             directory,
             maximum,
             names,
-        })
+        }
     }
     fn revalidate(&self) -> Result<()> {
         self.directory.revalidate()?;
@@ -287,14 +302,48 @@ fn read<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
 ) -> Result<T> {
     decode(&directory.read(name, maximum)?, maximum)
 }
-fn optional<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
-    directory: &PrivateDirectory,
+fn read_observed<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
+    directory: &Arc<PrivateDirectory>,
     name: &str,
     maximum: usize,
-) -> Result<Option<T>> {
-    read_optional(directory, name, maximum)?
-        .map(|bytes| decode(&bytes, maximum))
-        .transpose()
+) -> Result<(T, RecordSnapshot)> {
+    let bytes = directory.read(name, maximum)?;
+    let value = decode(&bytes, maximum)?;
+    let snapshot = RecordSnapshot::from_read(Arc::clone(directory), name, maximum, Some(&bytes));
+    Ok((value, snapshot))
+}
+fn optional_observed<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
+    directory: &Arc<PrivateDirectory>,
+    name: &str,
+    maximum: usize,
+) -> Result<(Option<T>, RecordSnapshot)> {
+    let bytes = read_optional(directory, name, maximum)?;
+    let value = bytes
+        .as_ref()
+        .map(|bytes| decode(bytes, maximum))
+        .transpose()?;
+    let snapshot = RecordSnapshot::from_read(
+        Arc::clone(directory),
+        name,
+        maximum,
+        bytes.as_ref().map(|bytes| bytes.as_slice()),
+    );
+    Ok((value, snapshot))
+}
+fn read_reference(
+    owner: &ManagedStreamTokenCustody,
+    purpose: CustodyPurpose,
+) -> Result<(Option<Reference>, RecordSnapshot)> {
+    owner.authority.directory.revalidate()?;
+    let directory = owner.authority.directory.retain()?;
+    if directory.identity()? != owner.authority.directory.identity()? {
+        return Err(invalid("enrollment authority custody changed"));
+    }
+    optional_observed(
+        &Arc::new(directory),
+        &reference_name(purpose)?,
+        MAX_SELECTION_BYTES,
+    )
 }
 fn private_parent(directory: &PrivateDirectory) -> Result<OwnerDirectory> {
     directory.revalidate()?;
@@ -304,7 +353,11 @@ fn private_parent(directory: &PrivateDirectory) -> Result<OwnerDirectory> {
     }
     Ok(parent)
 }
-fn check_names(directory: &PrivateDirectory, allowed: &[&str], bound: usize) -> Result<()> {
+fn checked_names(
+    directory: &PrivateDirectory,
+    allowed: &[&str],
+    bound: usize,
+) -> Result<Vec<std::ffi::OsString>> {
     let names = directory.entries(bound)?;
     if names
         .iter()
@@ -312,7 +365,10 @@ fn check_names(directory: &PrivateDirectory, allowed: &[&str], bound: usize) -> 
     {
         return Err(invalid("enrollment body contains unknown material"));
     }
-    Ok(())
+    Ok(names)
+}
+fn check_names(directory: &PrivateDirectory, allowed: &[&str], bound: usize) -> Result<()> {
+    checked_names(directory, allowed, bound).map(|_| ())
 }
 fn same<T: norito::NoritoSerialize>(left: &T, right: &T, bound: usize) -> Result<bool> {
     Ok(encode(left, bound)? == encode(right, bound)?)
@@ -347,27 +403,30 @@ impl BodyHistory {
         sequence(purpose)?;
         owner.authority.directory.revalidate()?;
         let name = purpose.directory_name()?;
-        let reference: Option<Reference> = optional(
-            &owner.authority.directory,
-            &reference_name(purpose)?,
-            MAX_SELECTION_BYTES,
-        )?;
+        let (reference, reference_snapshot) = read_reference(owner, purpose)?;
         let root = match owner.authority.directory.open_child(&name) {
             Ok(value) => Arc::new(value),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && reference.is_none() => {
+                reference_snapshot.revalidate()?;
                 return Ok(None);
             }
             Err(error) => return require_retained_material(Err(error.into())),
         };
-        owner.authority.validate_profile()?;
-        require_retained_material(Self::read(owner, purpose, root, reference, None)).map(Some)
+        let plan = owner.authority.provider_plan()?;
+        require_retained_material(Self::read(
+            owner,
+            purpose,
+            root,
+            (reference, reference_snapshot),
+            None,
+            plan,
+        ))
+        .map(Some)
     }
 
     // Consuming transitions keep all original Files live until the same parser has rebuilt
     // and authenticated fresh metadata. Only previously absent paths are opened anew.
     pub(super) fn reopen(self, owner: &ManagedStreamTokenCustody) -> Result<Self> {
-        #[cfg(test)]
-        let _timing = crate::custody_timing::Span::enter(crate::custody_timing::Category::Reopen);
         self.read_current(owner)
     }
 
@@ -383,18 +442,15 @@ impl BodyHistory {
         {
             return Err(invalid("retained enrollment belongs to another authority"));
         }
-        let reference = optional(
-            &owner.authority.directory,
-            &reference_name(self.purpose)?,
-            MAX_SELECTION_BYTES,
-        )?;
-        owner.authority.validate_profile()?;
+        let reference = read_reference(owner, self.purpose)?;
+        let plan = owner.authority.provider_plan()?;
         let current = require_retained_material(Self::read(
             owner,
             self.purpose,
             Arc::clone(&self.root),
             reference,
             Some(self),
+            plan,
         ))?;
         require_retained_material(self.revalidate_handles())?;
         require_retained_material(self.require_retained_prefix(&current))?;
@@ -480,20 +536,28 @@ impl BodyHistory {
         owner: &ManagedStreamTokenCustody,
         purpose: CustodyPurpose,
         root: Arc<PrivateDirectory>,
-        reference: Option<Reference>,
+        reference: (Option<Reference>, RecordSnapshot),
         retained: Option<&Self>,
+        plan: RetainedProviderServicePlan,
     ) -> Result<Self> {
-        #[cfg(test)]
-        let _timing = crate::custody_timing::Span::enter(crate::custody_timing::Category::Read);
-        check_names(
+        let (reference, reference_snapshot) = reference;
+        let root_names = checked_names(
             &root,
             &["original.nrt", "anchor.nrt", "bodies", "epochs"],
             4,
         )?;
-        let selection: Selection = read(&root, "original.nrt", MAX_SELECTION_BYTES)?;
-        selection.validate(owner, purpose)?;
+        // This inventory fences this parse only: later authorized epochs/body publication is legal.
+        let root_names = NamesSnapshot::from_read(Arc::clone(&root), 4, root_names);
+        let (selection, selection_snapshot): (Selection, _) =
+            read_observed(&root, "original.nrt", MAX_SELECTION_BYTES)?;
+        // The entry owner just authenticated this complete original profile. Share it only
+        // for pure comparisons, never retain it in History or carry it across a callback.
+        selection.validate(owner, purpose, &plan)?;
         let outer = selection.digest()?;
-        let anchor: Anchor = read(&root, "anchor.nrt", MAX_BODY_BYTES)?;
+        let (anchor, anchor_snapshot): (Anchor, _) =
+            read_observed(&root, "anchor.nrt", MAX_BODY_BYTES)?;
+        #[cfg(test)]
+        parser_snapshot_tests::hit(parser_snapshot_tests::Point::AnchorDecoded, root.path())?;
         if anchor.completed == Some([0; 32])
             || anchor.active.is_none() && anchor.completed.is_some()
             || anchor.outer != outer
@@ -528,22 +592,7 @@ impl BodyHistory {
                 return Err(invalid("enrollment lost its original operation reference"));
             }
         }
-        let mut root_records = vec![
-            RecordSnapshot::new(Arc::clone(&root), "original.nrt", MAX_SELECTION_BYTES)?,
-            RecordSnapshot::new(Arc::clone(&root), "anchor.nrt", MAX_BODY_BYTES)?,
-        ];
-        if reference.is_some() {
-            owner.authority.directory.revalidate()?;
-            let authority_root = owner.authority.directory.retain()?;
-            if authority_root.identity()? != owner.authority.directory.identity()? {
-                return Err(invalid("enrollment authority custody changed"));
-            }
-            root_records.push(RecordSnapshot::new(
-                Arc::new(authority_root),
-                &reference_name(purpose)?,
-                MAX_SELECTION_BYTES,
-            )?);
-        }
+        let root_records = vec![selection_snapshot, anchor_snapshot, reference_snapshot];
         let root_snapshots = Arc::new(Snapshot {
             previous: None,
             records: root_records,
@@ -583,9 +632,29 @@ impl BodyHistory {
                 ));
             }
         }
+        #[cfg(test)]
+        parser_snapshot_tests::hit(
+            parser_snapshot_tests::Point::ContainerNamesValidated,
+            root.path(),
+        )?;
         let mut retained_bytes = 0usize;
         let mut bodies: Vec<Body> = Vec::new();
-        let mut snapshots = Arc::clone(&root_snapshots);
+        let mut snapshots = Arc::new(Snapshot {
+            previous: Some(Arc::clone(&root_snapshots)),
+            records: vec![],
+            names: body_root
+                .as_ref()
+                .map(|container| {
+                    NamesSnapshot::from_read(
+                        Arc::clone(container),
+                        usize::from(MAX_BODIES) * 3,
+                        names.clone(),
+                    )
+                })
+                .into_iter()
+                .collect(),
+            root: None,
+        });
         for ordinal in 1..=anchor.highest {
             let name = body_name(ordinal)?;
             let directory =
@@ -613,7 +682,7 @@ impl BodyHistory {
                 }
                 Err(error) => return Err(error.into()),
             };
-            check_names(
+            let body_names = checked_names(
                 &directory,
                 &[
                     "reserved.nrt",
@@ -628,8 +697,16 @@ impl BodyHistory {
             let raw = directory.read("reserved.nrt", MAX_BODY_BYTES)?;
             add_bytes(&mut retained_bytes, raw.len())?;
             let reservation: Reservation = decode(&raw, MAX_BODY_BYTES)?;
+            let reservation_snapshot = RecordSnapshot::from_read(
+                Arc::clone(&directory),
+                "reserved.nrt",
+                MAX_BODY_BYTES,
+                Some(&raw),
+            );
             drop(raw);
-            reservation.unsigned.validate(owner, purpose)?;
+            reservation
+                .unsigned
+                .validate(owner, purpose, || Ok(&plan))?;
             selection.matches_unsigned(&reservation.unsigned)?;
             let previous = bodies.last();
             if reservation.ordinal != ordinal
@@ -653,10 +730,10 @@ impl BodyHistory {
                 .ok_or_else(|| invalid("body container absent"))?;
             let activation_name = format!("{name}-activation.nrt");
             let unused_name = format!("{name}-unused.nrt");
-            let activation: Option<Activation> =
-                optional(container, &activation_name, MAX_SELECTION_BYTES)?;
-            let unused: Option<UnusedClosure> =
-                optional(container, &unused_name, MAX_SELECTION_BYTES)?;
+            let (activation, activation_snapshot): (Option<Activation>, _) =
+                optional_observed(container, &activation_name, MAX_SELECTION_BYTES)?;
+            let (unused, unused_snapshot): (Option<UnusedClosure>, _) =
+                optional_observed(container, &unused_name, MAX_SELECTION_BYTES)?;
             let reservation_digest = reservation.digest()?;
             if activation
                 .as_ref()
@@ -668,6 +745,13 @@ impl BodyHistory {
                 return Err(invalid("active enrollment body lost its activation"));
             }
             let original = journal::read_body_intent(&directory)?;
+            let original_snapshot = RecordSnapshot::from_read(
+                Arc::clone(&directory),
+                "original.nrt",
+                journal::MAX_ORIGINAL_BYTES,
+                original.as_ref().map(|(_, bytes)| bytes.as_slice()),
+            );
+            let original = original.map(|(value, _bytes)| value);
             if let Some(original) = &original {
                 add_bytes(
                     &mut retained_bytes,
@@ -697,39 +781,21 @@ impl BodyHistory {
                     check_names(&directory, &["reserved.nrt", "original.nrt"], 2)?;
                 }
             }
-            let mut records = vec![RecordSnapshot::new(
-                Arc::clone(&directory),
-                "reserved.nrt",
-                MAX_BODY_BYTES,
-            )?];
-            if original.is_some() {
-                records.push(RecordSnapshot::new(
+            let records = vec![
+                reservation_snapshot,
+                original_snapshot,
+                activation_snapshot,
+                unused_snapshot,
+            ];
+            let names = if original.is_none() {
+                vec![NamesSnapshot::from_read(
                     Arc::clone(&directory),
-                    "original.nrt",
-                    journal::MAX_ORIGINAL_BYTES,
-                )?);
-            }
-            if activation.is_some() {
-                records.push(RecordSnapshot::new(
-                    Arc::clone(container),
-                    &activation_name,
-                    MAX_SELECTION_BYTES,
-                )?);
-            }
-            if unused.is_some() {
-                records.push(RecordSnapshot::new(
-                    Arc::clone(container),
-                    &unused_name,
-                    MAX_SELECTION_BYTES,
-                )?);
-            }
-            let mut names = vec![NamesSnapshot::capture(
-                Arc::clone(container),
-                usize::from(MAX_BODIES) * 3,
-            )?];
-            if original.is_none() {
-                names.push(NamesSnapshot::capture(Arc::clone(&directory), 1)?);
-            }
+                    1,
+                    body_names,
+                )]
+            } else {
+                vec![]
+            };
             snapshots = Arc::new(Snapshot {
                 previous: Some(snapshots),
                 records,
@@ -755,7 +821,7 @@ impl BodyHistory {
             {
                 return Err(invalid("enrollment body prefix has a gap"));
             }
-            pending.unsigned.validate(owner, purpose)?;
+            pending.unsigned.validate(owner, purpose, || Ok(&plan))?;
             selection.matches_unsigned(&pending.unsigned)?;
             if pending.outer != outer
                 || pending.previous_body
@@ -789,8 +855,9 @@ impl BodyHistory {
             reference_present: reference.is_some(),
             purpose,
         };
+        let mut epochs = crate::managed::native_operation::authorization::EpochReader::default();
         if let CustodyPurpose::Renewal(sequence) = purpose {
-            crate::managed::native_operation::authorization::validate_retained(
+            epochs.validate_retained(
                 &value.root,
                 value.selection.digest()?,
                 &value.selection.fees,
@@ -800,8 +867,20 @@ impl BodyHistory {
                 },
             )?;
         }
-        value.verify_histories(owner, retained)?;
-        value.root_snapshots.revalidate()?;
+        drop(plan);
+        value.verify_histories(owner, retained, &mut epochs)?;
+        #[cfg(test)]
+        parser_snapshot_tests::hit(
+            parser_snapshot_tests::Point::HistoriesVerified,
+            value.root.path(),
+        )?;
+        // The final tail includes unsigned bodies, all optional absences and the inventory
+        // actually validated. Mutation-time root fences intentionally remain separate.
+        snapshots.revalidate()?;
+        root_names.revalidate()?;
+        // Recheck the complete original image after all record and wallet inspection, before
+        // this local historical result can leave the parser. It grants no current authority.
+        owner.authority.validate_profile()?;
         Ok(value)
     }
 }
@@ -849,6 +928,7 @@ impl BodyHistory {
         &mut self,
         owner: &ManagedStreamTokenCustody,
         retained: Option<&Self>,
+        epochs: &mut crate::managed::native_operation::authorization::EpochReader,
     ) -> Result<()> {
         let retained_graph = retained.and_then(|prior| {
             prior
@@ -862,9 +942,13 @@ impl BodyHistory {
                         .map(VerifiedUnsignedClosure::retained_history)
                 })
         });
-        let account = owner.wallet()?;
+        // Most body reads precede a wallet observation. Construct its HTTP transports only
+        // when the canonical History asks to inspect one, sharing it across this read's bodies.
+        let mut account = None;
         let mut preceding: Option<VerifiedUnsignedClosure> = None;
         let mut previous_retirement = None;
+        #[cfg(test)]
+        let parser_root = self.root.path().to_path_buf();
         for index in 0..self.bodies.len() {
             let body = &self.bodies[index];
             if let Some(activation) = &body.activation {
@@ -955,7 +1039,7 @@ impl BodyHistory {
             };
             history.require_fees(&self.selection.fees)?;
             if let CustodyPurpose::Renewal(sequence) = self.purpose {
-                crate::managed::native_operation::authorization::validate_references(
+                epochs.validate_references(
                     &self.root,
                     self.selection.digest()?,
                     &self.selection.fees,
@@ -967,9 +1051,19 @@ impl BodyHistory {
                 )?;
             }
             let inspect = |attempt: &attempts::Attempt| {
-                original
+                let account = match &mut account {
+                    Some(account) => account,
+                    empty => empty.insert(owner.wallet()?),
+                };
+                let preparation = original
                     .request(attempt.terms(), attempt.observation()?, Instant::now())?
-                    .inspect(&account, &attempt.wallet_path())
+                    .inspect(account, &attempt.wallet_path())?;
+                #[cfg(test)]
+                parser_snapshot_tests::hit(
+                    parser_snapshot_tests::Point::WalletInspected,
+                    &parser_root,
+                )?;
+                Ok(preparation)
             };
             if let Some(successor) = successor {
                 match history.verify_unsigned_closure(&successor, inspect)? {
@@ -1010,6 +1104,7 @@ impl BodyHistory {
         &self,
         owner: &ManagedStreamTokenCustody,
         deadline: Instant,
+        prerequisite: impl FnOnce() -> Result<enrollment::RetainedInitialPrerequisite>,
     ) -> Result<()> {
         if !matches!(self.purpose, CustodyPurpose::Renewal(_)) {
             return Err(invalid("renewal context used for another purpose"));
@@ -1021,7 +1116,7 @@ impl BodyHistory {
             .map(|r| &r.unsigned)
             .or_else(|| self.bodies.last().map(|b| &b.reservation.unsigned))
             .ok_or_else(|| invalid("renewal unsigned selection absent"))?;
-        owner.validate_unsigned_renewal_context(unsigned, deadline)
+        owner.validate_unsigned_renewal_context_using(unsigned, deadline, prerequisite)
     }
     /// Paid payload/signature phases retain their original recovery path even after body expiry.
     /// This result comes from the sole canonical wallet inspector after the complete history read.
@@ -1207,9 +1302,6 @@ impl BodyHistory {
         turn: &SigningTurn<'_>,
         deadline: Instant,
     ) -> Result<Self> {
-        #[cfg(test)]
-        let _timing =
-            crate::custody_timing::Span::enter(crate::custody_timing::Category::Initialize);
         if Self::open(owner, purpose)?.is_some() {
             return Err(invalid("enrollment operation already selected"));
         }
@@ -1316,11 +1408,9 @@ impl BodyHistory {
         &self,
         owner: &ManagedStreamTokenCustody,
         current: &VerifiedStreamTokenCustodyStateV1,
-    ) -> Result<()> {
-        #[cfg(test)]
-        let _timing =
-            crate::custody_timing::Span::enter(crate::custody_timing::Category::FreshPredecessor);
-        self.selection.validate(owner, self.purpose)?;
+    ) -> Result<RetainedProviderServicePlan> {
+        let plan = owner.authority.provider_plan()?;
+        self.selection.validate(owner, self.purpose, &plan)?;
         let selected = owner.selection(&self.selection.predecessor.binding, current)?;
         if !same(&selected, &self.selection.predecessor, 64 * 1024)? {
             return Err(ManagedBootstrapFailure::EnrollmentPredecessorChanged.into());
@@ -1334,7 +1424,7 @@ impl BodyHistory {
         {
             return Err(ManagedBootstrapFailure::ProfileExpired.into());
         }
-        Ok(())
+        Ok(plan)
     }
     /// Retain exactly one successor after live native qualification and complete unsigned inspection.
     pub(super) fn reserve_successor(
@@ -1349,8 +1439,9 @@ impl BodyHistory {
             return Err(ManagedBootstrapFailure::TransitionPending.into());
         }
         authorization.check(self.selection.purpose, deadline)?;
-        self.verify_fresh_predecessor(owner, current)?;
-        unsigned.validate(owner, self.purpose)?;
+        let plan = self.verify_fresh_predecessor(owner, current)?;
+        unsigned.validate(owner, self.purpose, || Ok(&plan))?;
+        drop(plan);
         self.selection.matches_unsigned(&unsigned)?;
         let last = self
             .bodies
@@ -1457,8 +1548,6 @@ impl BodyHistory {
         deadline: Instant,
         reads: &impl EnrollmentReads,
     ) -> Result<Self> {
-        #[cfg(test)]
-        let _timing = crate::custody_timing::Span::enter(crate::custody_timing::Category::Finish);
         turn.check(&self.selection, deadline)?;
         self.verify_fresh_predecessor(owner, current)?;
         if !self.reference_present {
@@ -1624,8 +1713,6 @@ impl BodyHistory {
         deadline: Instant,
         reads: &impl EnrollmentReads,
     ) -> Result<Self> {
-        #[cfg(test)]
-        let _timing = crate::custody_timing::Span::enter(crate::custody_timing::Category::Sign);
         if matches!(turn, SigningTurn::RenewalSelection(_)) {
             return Err(invalid("renewal selection does not grant attester signing"));
         }
@@ -1651,8 +1738,11 @@ impl BodyHistory {
             }
             return Ok(self);
         }
-        self.verify_fresh_predecessor(owner, current)?;
-        body.reservation.unsigned.validate(owner, self.purpose)?;
+        let plan = self.verify_fresh_predecessor(owner, current)?;
+        body.reservation
+            .unsigned
+            .validate(owner, self.purpose, || Ok(&plan))?;
+        drop(plan);
         let unsigned = &body.reservation.unsigned;
         let checkpoint = owner.authority.decode_checkpoint(&unsigned.checkpoint)?;
         let historical = reads.historical(
@@ -1766,3 +1856,11 @@ mod initial_tests;
 #[cfg(test)]
 #[path = "body_history/deep_history_tests.rs"]
 mod deep_history_tests;
+
+#[cfg(test)]
+#[path = "body_history/profile_plan_tests.rs"]
+mod profile_plan_tests;
+
+#[cfg(test)]
+#[path = "body_history/parser_snapshot_tests.rs"]
+mod parser_snapshot_tests;

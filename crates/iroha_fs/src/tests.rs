@@ -227,6 +227,27 @@ fn atomic_staging_cleanup_refuses_links_modes_and_replaced_ancestors() {
 fn complete_private_directory_publication_never_exposes_partial_destination() {
     let (temporary, _) = store();
     let parent = OwnerDirectory::open(temporary.path()).unwrap();
+    let single = parent
+        .publish_private_child("single", &[("record", b"complete")])
+        .unwrap();
+    let single_identity = single.identity().unwrap();
+    assert_eq!(
+        single.entries(1).unwrap(),
+        vec![std::ffi::OsString::from("record")]
+    );
+    assert_eq!(single.read("record", 16).unwrap().as_slice(), b"complete");
+    // The published owner supplies canonical spelling even when the OS temporary root
+    // uses an alias such as macOS /var. Exact reopen must use that retained native path.
+    let reopened = PrivateDirectory::open_exact(single.path()).unwrap();
+    assert_eq!(reopened.identity().unwrap(), single_identity);
+    assert_eq!(reopened.read("record", 16).unwrap().as_slice(), b"complete");
+    assert!(
+        parent
+            .publish_private_child("single", &[("record", b"replacement")])
+            .is_err()
+    );
+    assert_eq!(single.identity().unwrap(), single_identity);
+    assert_eq!(single.read("record", 16).unwrap().as_slice(), b"complete");
     // A crash before rename leaves only an unpublished private sibling. A retry can still
     // publish the complete destination; no caller has to delete ambiguous operation evidence.
     let interrupted = parent.create_private_child("unpublished").unwrap();
@@ -236,6 +257,14 @@ fn complete_private_directory_publication_never_exposes_partial_destination() {
     let published = parent
         .publish_private_child("ready", &[("lock", b""), ("record", b"original")])
         .unwrap();
+    assert_eq!(
+        published.entries(2).unwrap(),
+        vec![
+            std::ffi::OsString::from("lock"),
+            std::ffi::OsString::from("record")
+        ]
+    );
+    assert!(published.read("lock", 1).unwrap().is_empty());
     assert_eq!(
         published.read("record", 16).unwrap().as_slice(),
         b"original"
@@ -251,10 +280,16 @@ fn complete_private_directory_publication_never_exposes_partial_destination() {
         published.read("record", 16).unwrap().as_slice(),
         b"original"
     );
+    let oversized_names: Vec<_> = (0..129).map(|index| format!("entry-{index}")).collect();
+    let oversized_files: Vec<_> = oversized_names
+        .iter()
+        .map(|name| (name.as_str(), b"x".as_slice()))
+        .collect();
     for files in [
         vec![],
         vec![("same", b"a".as_slice()), ("same", b"b".as_slice())],
         vec![("../escape", b"a".as_slice())],
+        oversized_files,
     ] {
         assert!(parent.publish_private_child("absent", &files).is_err());
         assert!(!temporary.path().join("absent").exists());
@@ -551,6 +586,40 @@ fn directory_publication_preserves_exact_tree_and_never_replaces() {
             .rename_to_sibling("src", PublishMode::Replace)
             .is_err()
     );
+}
+
+#[test]
+fn published_directory_keeps_original_identity_and_allows_independent_readers() {
+    let (_temporary, parent) = store();
+    let staging = parent.create_child("staged-readers").unwrap();
+    staging
+        .write_atomic("original", b"complete", PublishMode::CreateNew)
+        .unwrap();
+    let identity = staging.identity().unwrap();
+    let published = staging
+        .rename_to_sibling("published-readers", PublishMode::CreateNew)
+        .unwrap();
+    // Keep the returned publication owner alive while unrelated reader owners traverse it.
+    // A Windows DELETE publication handle must not escape into this ordinary read phase.
+    let reopened = PrivateDirectory::open_exact(published.path()).unwrap();
+    assert_eq!(reopened.identity().unwrap(), identity);
+    // Publication returns a normal owner: metadata durability and later writes remain usable.
+    // On Windows that requires WRITE_ATTRIBUTES without retaining DELETE authority.
+    published.sync().unwrap();
+    published
+        .write_atomic("later", b"retained", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(reopened.read("later", 8).unwrap().as_slice(), b"retained");
+    let namespace = ReaderDirectory::open(published.path()).unwrap();
+    let before = namespace.snapshot().unwrap();
+    let mut original = RetainedFile::open_private(published.path().join("original")).unwrap();
+    let mut bytes = Vec::new();
+    original.file_mut().read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"complete");
+    original.revalidate().unwrap();
+    assert_eq!(namespace.snapshot().unwrap(), before);
+    assert_eq!(published.identity().unwrap(), identity);
+    published.revalidate().unwrap();
 }
 
 #[test]
@@ -1075,4 +1144,128 @@ fn retained_child_readers_refuse_replaced_ancestor_and_foreign_child() {
     assert!(reader.open_retained_private("record").is_err());
     assert!(child.open_retained_private("record").is_err());
     assert_eq!(fs::read(child.path().join("record")).unwrap(), b"foreign");
+}
+
+#[test]
+fn reader_children_share_native_ancestors_and_preserve_exact_original_files() {
+    let (_temporary, store) = store();
+    for index in 0..32 {
+        let child = store.create_child(format!("child-{index}")).unwrap();
+        child
+            .write_atomic("source", b"original", PublishMode::CreateNew)
+            .unwrap();
+    }
+    let reader = ReaderDirectory::open(store.path()).unwrap();
+    let mut children = Vec::new();
+    let mut sources = Vec::new();
+    for index in 0..32 {
+        let child = reader.open_child(format!("child-{index}")).unwrap();
+        let source = child.open_retained_regular("source").unwrap();
+        let mut bytes = [0_u8; 8];
+        assert_eq!(read_at(source.file(), &mut bytes, 0).unwrap(), 8);
+        assert_eq!(&bytes, b"original");
+        sources.push((source, child.snapshot().unwrap()));
+        children.push(child);
+    }
+    for (child, (source, snapshot)) in children.iter().zip(&sources) {
+        child.revalidate().unwrap();
+        assert_eq!(child.snapshot().unwrap(), *snapshot);
+        source.revalidate().unwrap();
+    }
+    for invalid in ["", ".", "..", "child-0/source"] {
+        assert!(reader.open_child(invalid).is_err());
+    }
+    assert!(reader.open_child("absent").is_err());
+    assert!(!reader.path().join("absent").exists());
+    reader.revalidate().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_reader_children_refuse_link_substitution_and_changed_ancestors() {
+    let (temporary, store) = store();
+    let original = store.create_child("original").unwrap();
+    original
+        .write_atomic("source", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let reader = ReaderDirectory::open(store.path()).unwrap();
+    std::os::unix::fs::symlink("original", store.path().join("indirect")).unwrap();
+    assert!(reader.open_child("indirect").is_err());
+    assert!(reader.open_child("original/source").is_err());
+    let child = reader.open_child("original").unwrap();
+    let source = child.open_retained_regular("source").unwrap();
+    let saved = temporary.path().join("original-child");
+    fs::rename(original.path(), &saved).unwrap();
+    store
+        .create_child("original")
+        .unwrap()
+        .write_atomic("source", b"original", PublishMode::CreateNew)
+        .unwrap();
+    assert!(child.revalidate().is_err());
+    assert!(source.revalidate().is_err());
+    let renamed_store = temporary.path().join("renamed-store");
+    fs::rename(store.path(), &renamed_store).unwrap();
+    assert!(reader.open_child("original").is_err());
+}
+
+#[test]
+fn selected_regular_file_keeps_native_identity_bounds_and_independent_read_offsets() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = temporary.path().join("nested");
+    fs::create_dir(&parent).unwrap();
+    let path = temporary.path().join("source");
+    fs::write(&path, b"original bytes").unwrap();
+    let selected = SelectedRegularFile::capture(parent.join("../source")).unwrap();
+    assert_eq!(
+        selected.path(),
+        temporary.path().canonicalize().unwrap().join("source")
+    );
+    assert_eq!(selected.len().unwrap(), 14);
+    assert!(!selected.is_empty().unwrap());
+    assert_eq!(selected.read(14).unwrap(), b"original bytes");
+    assert_eq!(selected.read(14).unwrap(), b"original bytes");
+    assert_eq!(
+        selected.read(13).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| selected.read(14).unwrap());
+        let second = scope.spawn(|| selected.read(14).unwrap());
+        assert_eq!(first.join().unwrap(), b"original bytes");
+        assert_eq!(second.join().unwrap(), b"original bytes");
+    });
+    selected.revalidate().unwrap();
+    let empty = temporary.path().join("empty");
+    fs::write(&empty, []).unwrap();
+    let empty = SelectedRegularFile::capture(&empty).unwrap();
+    assert!(empty.is_empty().unwrap());
+    assert!(empty.read(0).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_regular_file_refuses_original_mutation_replacement_and_link_substitution() {
+    use std::os::unix::fs::symlink;
+    let temporary = tempfile::tempdir().unwrap();
+    for mutation in ["edit", "replace", "link"] {
+        let path = temporary.path().join(mutation);
+        fs::write(&path, b"original bytes").unwrap();
+        let selected = SelectedRegularFile::capture(&path).unwrap();
+        match mutation {
+            "edit" => fs::write(&path, b"changed bytes").unwrap(),
+            "replace" => {
+                fs::rename(&path, temporary.path().join("retired-replace")).unwrap();
+                fs::write(&path, b"original bytes").unwrap();
+            }
+            "link" => {
+                fs::rename(&path, temporary.path().join("retired-link")).unwrap();
+                let target = temporary.path().join("link-target");
+                fs::write(&target, b"original bytes").unwrap();
+                symlink(&target, &path).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(selected.revalidate().is_err(), "{mutation}");
+        assert!(selected.read(14).is_err(), "{mutation}");
+    }
 }

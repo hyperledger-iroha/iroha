@@ -75,7 +75,9 @@ jobs:
       - name: Kill every registered Core rule with its named test
         env:
           CARGO_BUILD_JOBS: "2"
-        run: python3 scripts/sumeragi_mutation_gate.py --core --jobs 1 --strict --fast
+        # Dependency decode counters and debug-only controls require the test profile.
+        # Optimized daemon artifacts receive separate production qualification.
+        run: python3 scripts/sumeragi_mutation_gate.py --core --core-profile test --jobs 1 --strict --fast
       - name: Upload the Core gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

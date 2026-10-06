@@ -6,14 +6,15 @@ import Foundation
 // The canonical objects, transcripts and vectors are owned by the Rust module
 // `iroha_data_model::kagemusha::kagemusha_wallet_v1`; this file consumes
 // `fixtures/kagemusha/wallet_v1_vectors.json` and mirrors only the parts an SDK needs before it
-// hands bytes to the typed decoder: SHA-256 domain digests, the raw low-S P-256 signature rule,
-// the canonical σ-field encoding check, the envelope frame header and per-kind bounds, and the
-// strict `kgm1:` text form.
+// hands bytes to the typed decoder: SHA-256 domain digests, the signing domains, the raw low-S
+// P-256 signature rule over 32-byte signing messages, the canonical σ-field encoding check, the
+// envelope frame header and per-kind bounds, and the strict `kgm1:` text form.
 //
-// Poseidon values (`credit_id`, `proof_digest`, the Payment digest, state commitments, chains,
-// map, blacklist, quota-window and credit-digest roots and openings) are computed only by the
-// native Rust core over the bridge. Swift carries them as opaque 32-byte σ-field values and
-// checks only that they are canonical (``KagemushaWalletWireV1/isCanonicalFieldValue(_:)``).
+// Poseidon values (`credit_id`, `proof_digest`, the Payment, lineage, credit-opening,
+// credit-status and credited digests, every signing message, state commitments, chains, map,
+// blacklist, quota-window and credit-digest roots and openings) are computed only by the native
+// Rust core over the bridge. Swift carries them as opaque 32-byte σ-field values and checks only
+// that they are canonical (``KagemushaWalletWireV1/isCanonicalFieldValue(_:)``).
 //
 // TODO(G4): typed Swift decoding and `validate()` of the wallet message bodies (or the shared
 // Rust core over the native bridge) when the Swift wallet wire migrates; structural envelope
@@ -34,177 +35,119 @@ public enum KagemushaWalletWireErrorV1: Error, Equatable, Sendable {
   case invalidField(String)
 }
 
-/// The 34 retained H(role, body) labels in the canonical native Rust order.
+/// Exact role label of one domain-separated KAGEMUSHA wallet V1 digest `H(role, body)`.
+///
+/// The 18 cases and their order mirror the Rust `KagemushaWalletDigestRoleV1::ALL`. `H` remains
+/// only for values no relation recomputes: fixed identities, ledger, platform-attestation and
+/// artifact boundaries, output descriptors and local custody records. Only the artifact manifest hashes
+/// `m || signature`. Signed-object, certificate-set, package, statement, operation and nullifier
+/// digests are opaque Poseidon field values computed by the native core (wire record §1).
 public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
-  /// Native retained scheme digest.
+  /// Scheme identity.
   case scheme = "scheme"
-  /// Native retained relation digest.
+  /// Frozen relation identity.
   case relation = "relation"
-  /// Native retained provider-contract digest.
+  /// Advance contract and receipt format identity.
   case providerContract = "provider-contract"
-  /// Native retained asset-scope digest.
+  /// Asset incarnation and scale.
   case assetScope = "asset-scope"
-  /// Native retained account digest.
+  /// Canonical domainless `AccountId` frame.
   case account = "account"
-  /// Native retained enrollment-challenge digest.
+  /// Issuer enrollment challenge.
   case enrollmentChallenge = "enrollment-challenge"
-  /// Native retained enrollment-id digest.
+  /// Enrollment incarnation identity.
   case enrollmentID = "enrollment-id"
-  /// Native retained enrollment-key-binding digest.
+  /// App Attest enrollment assertion client data.
   case enrollmentKeyBinding = "enrollment-key-binding"
-  /// Native retained wallet-id digest.
+  /// Wallet incarnation identity.
   case walletID = "wallet-id"
-  /// Native retained certificate digest.
-  case certificate = "certificate"
-  /// Native retained certificate-set digest.
-  case certificateSet = "certificate-set"
-  /// Native retained credential digest.
-  case credential = "credential"
-  /// Native retained scheme-policy digest.
-  case schemePolicy = "scheme-policy"
-  /// Native retained fee-schedule digest.
-  case feeSchedule = "fee-schedule"
-  /// Native retained blacklist digest.
-  case blacklist = "blacklist"
-  /// Native retained quota-share digest.
-  case quotaShare = "quota-share"
-  /// Native retained time-anchor digest.
-  case timeAnchor = "time-anchor"
-  /// Native retained request digest.
-  case request = "request"
-  /// Native retained statement digest.
-  case statement = "statement"
-  /// Native retained receipt digest.
-  case receipt = "receipt"
-  /// Native retained package digest.
-  case `package` = "package"
-  /// Native retained operation-id digest.
-  case operationID = "operation-id"
-  /// Native retained output digest.
-  case output = "output"
-  /// Native retained capsule digest.
-  case capsule = "capsule"
-  /// Native retained marker digest.
-  case marker = "marker"
-  /// Native retained completion digest.
-  case completion = "completion"
-  /// Native retained fold digest.
-  case fold = "fold"
-  /// Native retained voucher digest.
-  case voucher = "voucher"
-  /// Native retained unload-nullifier digest.
-  case unloadNullifier = "unload-nullifier"
-  /// Native retained renewal-assertion digest.
-  case renewalAssertion = "renewal-assertion"
-  /// Native retained artifact-manifest digest.
+  /// Artifact manifest digest.
   case artifactManifest = "artifact-manifest"
-  /// Native retained verifying-key-set digest.
-  case verifyingKeySet = "verifying-key-set"
-  /// Native retained charge-quote digest.
-  case chargeQuote = "charge-quote"
-  /// Native retained evidence digest.
+  /// Original platform evidence bytes.
   case evidence = "evidence"
+  /// App Attest renewal assertion client data.
+  case renewalAssertion = "renewal-assertion"
+  /// σ verifying-key allowlist; its digest is the manifest's `verifying_key_set_digest`.
+  case verifyingKeySet = "verifying-key-set"
+  /// Receipt-free output descriptor.
+  case output = "output"
+  /// Local provider marker frame.
+  case marker = "marker"
+  /// Local recovery capsule frame.
+  case capsule = "capsule"
+  /// Local completion record frame.
+  case completion = "completion"
+  /// Durable fold record of one self-verified Ω.
+  case fold = "fold"
 }
 
-/// Native P_bytes signing domains. Domain is non-wire context, never a byte prefix.
+/// Signing domain of one signed KAGEMUSHA wallet V1 body (wire record §1, owner answer A1).
+///
+/// The 17 cases and their order mirror the Rust `KagemushaWalletSigningDomainV1::ALL`; the raw
+/// value is the 8-byte ASCII Poseidon domain word. Every P-256 signature of the protocol signs, as
+/// its message, the 32-byte canonical encoding `m` of `P_bytes(d, transcript)` with standard
+/// ECDSA-P256-SHA256 (the ECDSA hash is `SHA-256(m)`): the Secure Enclave through
+/// `kSecKeyAlgorithmECDSASignatureMessageX962SHA256`, Android KeyMint through a `DIGEST_SHA256`
+/// key and `SHA256withECDSA`, and issuer, policy, ledger and artifact signers with the same
+/// algorithm. No-digest modes are never used. The native core computes `m`; Swift treats it as an
+/// opaque canonical σ-field value.
 public enum KagemushaWalletSigningDomainV1: String, CaseIterable, Sendable {
-  /// Native Certificate transcript (108 bytes).
+  /// Signer certificate body, signed by the scheme root.
   case certificate = "kgwcert1"
-  /// Native Credential transcript (476 bytes).
+  /// Credential body, signed by an Enrollment-role key.
   case credential = "kgwcred1"
-  /// Native RenewalChallenge transcript (130 bytes).
+  /// Renewal challenge, signed by the payment key (possession).
   case renewalChallenge = "kgwrnch1"
-  /// Native RenewalKeyBinding transcript (163 bytes).
+  /// Renewal key binding of a newly attested Android key, signed by the payment key.
   case renewalKeyBinding = "kgwrnkb1"
-  /// Native ArtifactManifest transcript (290 bytes).
+  /// Artifact manifest body, signed by an Artifact-role key.
   case artifactManifest = "kgwartf1"
-  /// Native Receipt transcript (338 bytes).
+  /// Provider receipt body, signed by the payment key.
   case receipt = "kgwrcpt1"
-  /// Native SchemePolicy transcript (142 bytes).
+  /// Scheme policy body, signed by a RegulatoryPolicy-role key.
   case schemePolicy = "kgwspol1"
-  /// Native FeeSchedule transcript (191 bytes).
+  /// Fee schedule body, signed by a RegulatoryPolicy-role key.
   case feeSchedule = "kgwfsch1"
-  /// Native Blacklist transcript (118 bytes).
+  /// Blacklist body, signed by a RegulatoryPolicy-role key.
   case blacklist = "kgwblst1"
-  /// Native QuotaShare transcript (190 bytes).
+  /// Quota share body, signed by a RegulatoryPolicy-role key.
   case quotaShare = "kgwqshr1"
-  /// Native TimeAnchor transcript (138 bytes).
+  /// Time anchor body, signed by a TimeAnchor-role key.
   case timeAnchor = "kgwtanc1"
-  /// Native ChargeQuote transcript (219 bytes).
+  /// Charge quote body, signed by a RegulatoryPolicy-role key.
   case chargeQuote = "kgwchgq1"
-  /// Native Offer transcript (194 bytes).
+  /// Offer body, signed by the payer payment key.
   case offer = "kgwoffr1"
-  /// Native SessionControl transcript (197 bytes).
+  /// Session control body, signed by the session payment key.
   case sessionControl = "kgwsctl1"
-  /// Native Request transcript (418 bytes).
+  /// Request body, signed by the receiver payment key.
   case request = "kgwrqst1"
-  /// Native Voucher transcript (250 bytes).
+  /// Load voucher body, signed by a LoadAuthorization-role key.
   case voucher = "kgwvchr1"
-  /// Native LedgerControl transcript (211 bytes).
+  /// Ledger control body, signed by the payment key.
   case ledgerControl = "kgwlctl1"
 
-  /// Exact input transcript length; Poseidon itself stays with the native core.
+  /// Exact byte length of the signed transcript.
   public var transcriptBytes: Int {
     switch self {
-    case .certificate: return 108
-    case .credential: return 476
-    case .renewalChallenge: return 130
-    case .renewalKeyBinding: return 163
-    case .artifactManifest: return 290
-    case .receipt: return 338
-    case .schemePolicy: return 142
-    case .feeSchedule: return 191
-    case .blacklist: return 118
-    case .quotaShare: return 190
-    case .timeAnchor: return 138
-    case .chargeQuote: return 219
-    case .offer: return 194
-    case .sessionControl: return 197
-    case .request: return 418
-    case .voucher: return 250
-    case .ledgerControl: return 211
+    case .certificate: 108
+    case .credential: 476
+    case .renewalChallenge: 130
+    case .renewalKeyBinding: 163
+    case .artifactManifest: 290
+    case .receipt: 338
+    case .schemePolicy: 142
+    case .feeSchedule: 191
+    case .blacklist: 118
+    case .quotaShare: 190
+    case .timeAnchor: 138
+    case .chargeQuote: 219
+    case .offer: 194
+    case .sessionControl: 197
+    case .request: 458
+    case .voucher: 250
+    case .ledgerControl: 211
     }
-  }
-
-  /// Retained H role of the signed object, where the protocol defines one.
-  public var signedObjectRole: KagemushaWalletDigestRoleV1? {
-    switch self {
-    case .certificate: return .certificate
-    case .credential: return .credential
-    case .renewalChallenge: return nil
-    case .renewalKeyBinding: return nil
-    case .artifactManifest: return .artifactManifest
-    case .receipt: return .receipt
-    case .schemePolicy: return .schemePolicy
-    case .feeSchedule: return .feeSchedule
-    case .blacklist: return .blacklist
-    case .quotaShare: return .quotaShare
-    case .timeAnchor: return .timeAnchor
-    case .chargeQuote: return .chargeQuote
-    case .offer: return nil
-    case .sessionControl: return nil
-    case .request: return .request
-    case .voucher: return .voucher
-    case .ledgerControl: return nil
-    }
-  }
-}
-
-/// An exactly 32-byte canonical field message supplied by the native wallet core and its domain.
-/// This validates encoding; it neither computes Poseidon nor authenticates monetary authority.
-public struct KagemushaWalletSigningMessageV1: Sendable {
-  /// Non-wire signing context. Hardware signs only `bytes` with ordinary ECDSA-P256-SHA256.
-  public let domain: KagemushaWalletSigningDomainV1
-  /// Exact native message; Data has value semantics.
-  public let bytes: Data
-
-  /// Accept the native core message after requiring its exact canonical field encoding.
-  public init(domain: KagemushaWalletSigningDomainV1, bytes: Data) throws {
-    guard KagemushaWalletWireV1.isCanonicalFieldValue(bytes) else {
-      throw KagemushaWalletWireErrorV1.invalidField("signing_message")
-    }
-    self.domain = domain
-    self.bytes = Data(bytes)
   }
 }
 
@@ -299,20 +242,36 @@ public enum KagemushaWalletWireV1 {
   /// Lineage.
   public static let messageMaximumBytes = 10_000
   /// `F_payment`: the bytes of a Payment envelope frame other than its Ω and σ_send proofs.
-  public static let paymentFixedBytes = 1_681
+  public static let paymentFixedBytes = 1_723
   /// Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`.
   ///
-  /// σ and Ω carry no other byte caps: their exact lengths come from the frozen verifying-key
-  /// allowlist (owner answer Q6). Until the artifacts freeze (TODO(G3)) only the carrying frame
-  /// bounds them, which is all the structural envelope check enforces.
+  /// σ and Ω carry no other byte caps than this budget and ``lineageProofCapBytes``: their exact
+  /// lengths come from the frozen verifying-key allowlist (owner answer Q6). Until the artifacts
+  /// freeze (TODO(G3)) only the carrying frame bounds them, which is all the structural envelope
+  /// check enforces.
   public static let paymentProofBudgetBytes = messageMaximumBytes - paymentFixedBytes
-  /// Maximum σ entries of the verifying-key allowlist: one per operation other than Send and one
-  /// per supported Send enabled-controls mask.
-  public static let verifyingKeyEntriesMaximum = 15
+  /// `F_status`: the bytes of a Credited::Status envelope frame other than its Ω(h) transport
+  /// proof, with the fixed 32-sibling credit opening.
+  public static let creditedStatusFixedBytes = 2_188
+  /// Cap of the Ω transport proof so that Credited::Status fits: `10,000 − F_status`.
+  public static let lineageProofCapBytes = messageMaximumBytes - creditedStatusFixedBytes
+  /// Maximum σ entries of the verifying-key allowlist: one per operation, Send also once per
+  /// supported enabled-controls mask, and Receive also once with the blacklist bit.
+  public static let verifyingKeyEntriesMaximum = 16
   /// Maximum standalone canonical frame of the verifying-key allowlist.
   public static let verifyingKeyAllowlistMaximumBytes = 2_048
-  /// Exact siblings of a depth-32 indexed credit-digest opening, without bitmap compression.
-  public static let creditOpeningSiblingCount = 32
+  /// Depth of every Poseidon indexed map tree and of the credit-digest tree (owner answer A2):
+  /// every opening carries exactly this many siblings.
+  public static let indexedTreeDepth = 32
+  /// Depth of the quota-window and aligned quota-usage arrays.
+  public static let quotaTreeDepth = 6
+  /// Exact number of slots in each quota-usage array.
+  public static let quotaUsageSlots = 1 << quotaTreeDepth
+  /// Exact credit-opening transcript of a CreditStatus: `credit_id ‖ payment_digest ‖ u8 burned ‖
+  /// next_key ‖ LE32 slot ‖ 32 siblings`.
+  public static let creditOpeningBytes = 3 * 32 + 1 + 4 + indexedTreeDepth * 32
+  /// Bytes of one signing message `m`: one canonical σ-field value (wire record §1).
+  public static let signingMessageBytes = 32
   /// Maximum complete `kgm1:` text of a session-bounded envelope (2_736).
   public static let sessionTextMaximumBytes = constantTextMaximumBytes(sessionMaximumBytes)
   /// Maximum complete `kgm1:` text of a message-bounded envelope (13_339).
@@ -388,10 +347,11 @@ public enum KagemushaWalletWireV1 {
 
   // MARK: Digests
 
-  /// Exact SHA-256 digest preimage of retained `H(role, body)`; never a signing message.
+  /// Exact SHA-256 preimage of `H(role, body)`.
   ///
-  /// The layout is `prefix || role || 0x00 || LE64(len(body)) || body`.
-  public static func digestPreimage(role: KagemushaWalletDigestRoleV1, body: Data) -> Data {
+  /// The layout is `prefix || role || 0x00 || LE64(len(body)) || body`. It is never a signed
+  /// message: signatures sign the Poseidon message `m` of their ``KagemushaWalletSigningDomainV1``.
+  public static func preimage(role: KagemushaWalletDigestRoleV1, body: Data) -> Data {
     let label = Data(role.rawValue.utf8)
     var preimage = Data()
     preimage.reserveCapacity(digestPrefix.count + label.count + 9 + body.count)
@@ -414,20 +374,24 @@ public enum KagemushaWalletWireV1 {
     return Data(hasher.finalize())
   }
 
-  /// H(role, m || signature) using the exact native message and canonical low-S signature.
-  /// - Throws: An incompatible signing domain or a noncanonical signature.
-  public static func signedObjectDigest(
-    role: KagemushaWalletDigestRoleV1,
-    signingMessage: KagemushaWalletSigningMessageV1,
+  /// Artifact manifest digest: `H(artifact-manifest, m || signature)`, where `m` is its
+  /// 32-byte Poseidon signing message (a canonical σ-field value).
+  ///
+  /// - Throws: ``KagemushaWalletWireErrorV1/invalidField(_:)`` for a message that is not one
+  ///   canonical 32-byte σ-field value or a signature that is not canonical low-S.
+  public static func artifactManifestDigest(
+    message: Data,
     signature: Data
   ) throws -> Data {
-    guard signingMessage.domain.signedObjectRole == role else {
-      throw KagemushaWalletWireErrorV1.invalidField("signing_domain")
+    guard message.count == signingMessageBytes, isCanonicalFieldValue(message) else {
+      throw KagemushaWalletWireErrorV1.invalidField("signing_message")
     }
     guard isCanonicalLowSSignature(signature) else {
       throw KagemushaWalletWireErrorV1.invalidField("signature")
     }
-    return digest(role: role, body: signingMessage.bytes + signature)
+    var body = Data(message)
+    body.append(signature)
+    return digest(role: .artifactManifest, body: body)
   }
 
   // MARK: σ-field values
@@ -453,7 +417,7 @@ public enum KagemushaWalletWireV1 {
   /// Whether `signature` is `r || s` with `1 <= r < n` and `1 <= s <= floor(n / 2)`.
   ///
   /// CryptoKit accepts a high-S signature, so every received signature must pass this check
-  /// before ``verifySignature(publicKey:signingMessage:signature:)`` hands it to CryptoKit.
+  /// before ``verifySignature(publicKey:message:signature:)`` hands it to CryptoKit.
   public static func isCanonicalLowSSignature(_ signature: Data) -> Bool {
     guard signature.count == signatureBytes else { return false }
     let bytes = [UInt8](signature)
@@ -469,18 +433,26 @@ public enum KagemushaWalletWireV1 {
       && (try? P256.Signing.PublicKey(x963Representation: publicKey)) != nil
   }
 
-  /// Verify low-S ECDSA-P256-SHA256 over exactly the native 32-byte message m.
-  /// Received signatures are checked for low S before CryptoKit evaluates SHA-256(m).
-  public static func verifySignature(
-    publicKey: Data, signingMessage: KagemushaWalletSigningMessageV1, signature: Data
-  ) -> Bool {
+  /// Verify a received low-S ECDSA-P256-SHA256 signature over the 32-byte signing `message`
+  /// (wire record §1).
+  ///
+  /// The message must be one canonical σ-field value: the Poseidon `P_bytes(d, transcript)` the
+  /// native core computed for the body's ``KagemushaWalletSigningDomainV1``. The raw low-S check
+  /// runs next; CryptoKit then checks the ECDSA equation with `e = SHA-256(message)`. Received
+  /// bytes are never normalized. Returns `false` for another message length, a non-canonical
+  /// message, key or signature, and a signature that does not verify.
+  public static func verifySignature(publicKey: Data, message: Data, signature: Data) -> Bool {
     guard
+      message.count == signingMessageBytes,
+      isCanonicalFieldValue(message),
       isCanonicalLowSSignature(signature),
       isValidPublicKey(publicKey),
       let key = try? P256.Signing.PublicKey(x963Representation: publicKey),
       let parsed = try? P256.Signing.ECDSASignature(rawRepresentation: signature)
-    else { return false }
-    return key.isValidSignature(parsed, for: signingMessage.bytes)
+    else {
+      return false
+    }
+    return key.isValidSignature(parsed, for: message)
   }
 
   // MARK: Text

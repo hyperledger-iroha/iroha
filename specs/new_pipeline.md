@@ -1865,50 +1865,12 @@ CRDT/commutative precompiles (optional)
 
 ---
 
-## KAGEMUSHA V1 (protocol-bound aggregate balance)
-
-> **Superseded design authority (2026-10-03).** The
-> [single implementation draft](kagemusha_single_design_proposal.md) §6 defines
-> load, unload and fee settlement. The text below describes the instructions
-> that exist today and is replaced together with the implementing change.
+## KAGEMUSHA (offline wallet settlement)
 
 The first release does not expose generic deposit, transfer, or withdrawal
-instructions. Its sole KAGEMUSHA settlement surface is:
-
-- `TopUpKagemushaV1`, which atomically debits the payer, credits the sole
-  reserve for `(network, asset)`, and fixes one hardware-bound mint credit;
-- device-to-device `SendSplit` and singular `ReceiveFold`, which move value
-  between recursively proven aggregate balances without touching consensus
-  state; and
-- `RedeemKagemushaV1`, which verifies a hardware-bound full or partial
-  redemption voucher, consumes one terminal nullifier, debits the reserve, and
-  credits the beneficiary atomically.
-
-The top-up Torii adapter accepts only a canonical versioned
-`SignedTransaction` containing exactly one `TopUpKagemushaV1`. It verifies the
-network and transaction signature, requires `authority == request.payer`, and
-binds the HTTP idempotency key to the embedded operation ID before submitting
-the same signed transaction through strict durable ingress. Torii never
-substitutes its configured redemption issuer as the payer. The bounded embedded
-request is at most 16 KiB; enabled nodes reserve at least 32 KiB of ordinary
-signed-transaction ingress capacity for its framing.
-
-Each hardware lane and asset has one hidden `u128` balance, policy and device
-binding, hardware epoch, logical sequence, consumed-credit sparse-Merkle root,
-nonce, and public commitment. The fixed-shape paired-Pasta recursion implements
-`Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`, `RedeemSplit`, and
-hardware-only `Rotate`. Each `ReceiveFold` consumes exactly one durably staged
-credit, proves its ID was absent from the sparse-Merkle replay root, and updates
-that root. Wallets may stage any number of credits and perform these serialized
-folds continuously or synchronously before spending. The relation verifies the
-normalized GuardBundle and folds every prior proof obligation into constant-size
-history accumulators. No hop, note, input, origin, fan-in, ancestry, receipt
-count, historical transition count, or proof-depth field participates in
-admission.
-
-Conservation is enforced twice: circuits prove exact balance arithmetic, while
-the ledger maintains `reserve = total_topups - total_redemptions` with checked
-`u128` arithmetic and idempotent operation records. Peer transfers do not alter
-the reserve. Top-up finality is verified inside the mint helper and redemption
-proofs are terminally decided against the authenticated release artifacts; a
-host-side certificate check alone grants no monetary authority.
+instructions. The KAGEMUSHA V1 `TopUpKagemushaV1`, `TopUpKagemushaOrdinaryV1`
+and `RedeemKagemushaV1` instructions, their Torii adapter, the reserve and the
+hardware-bound recursion were deleted on 2026-10-05. The
+[single implementation draft](kagemusha_single_design_proposal.md) §6 defines
+load, unload and fee settlement; no ledger instruction implements it yet.
+Device-to-device payments never touch consensus state.

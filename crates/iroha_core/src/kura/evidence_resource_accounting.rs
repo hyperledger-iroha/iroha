@@ -21,13 +21,6 @@ fn evidence_resource_hex(text: &str, bytes: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn evidence_resource_height(text: &str) -> bool {
-    text.len() == 20
-        && text
-            .parse::<u64>()
-            .is_ok_and(|height| height != 0 && text == format!("{height:020}"))
-}
-
 /// Classify exact existing standalone record formats, with no payload decoding.
 ///
 /// The caller separately binds the path to the complete authenticated Kura scope.

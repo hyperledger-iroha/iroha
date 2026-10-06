@@ -519,7 +519,7 @@ same topology intent and public bundle:
       --output /absolute/private/beacon-inputs.json
 
 Use the authenticated same-revision unit renderer for each returned final-unit
-entry, preserving its initial runtime-key and mint-finality-seed paths and using
+entry, preserving its initial runtime-key path and using
 the exact native `credential_path` with `--global-beacon-credential` and
 `--config-file beacon.toml`. The [maintained retry caller](taira_retry.md) verifies
 the pinned renderer and initial units before rendering these four final mode0644
@@ -535,7 +535,8 @@ map before signing. Apply receives only admitted runtime inputs.
 
 The same-release artifact closure includes Kagami. Reset installs no epoch
 maintenance worker; old worker state or service files reject host preflight.
-The current production epoch boundary retains the incumbent authority.
+The production epoch boundary applies the authenticated validator epoch graph
+and its certified activation or retention decision.
 See the [maintained retry caller](taira_retry.md) for the current path records
 and preparation order.
 

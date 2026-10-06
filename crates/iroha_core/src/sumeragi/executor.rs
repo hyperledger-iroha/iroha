@@ -357,13 +357,6 @@ enum Request {
             Result<super::epoch_beacon::producer::NativeBeaconReadiness, PublicationError>,
         >,
     },
-    AttachAttestation {
-        verifier: super::attestation::NativePastaVerifier,
-        custody:
-            Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
-        publisher: super::attestation::NativeAttestationPublisher,
-        reply: mpsc::SyncSender<Result<(), PublicationError>>,
-    },
     Reject(u64, u64, Hash32),
     AttachQueue(Arc<Queue>),
     AttachFinalizedArchives(FinalizedArchives, mpsc::SyncSender<Result<(), String>>),
@@ -538,27 +531,6 @@ impl StateExecutor {
             instance,
             local_bls,
             signer,
-            reply,
-        })
-        .unwrap_or_else(|| Err(control::stopped()))
-    }
-
-    /// Attach provisioned generation custody and its original-pool mailbox before startup.
-    ///
-    /// # Errors
-    /// Rejects replacement of an existing signer or a stopped serialized worker.
-    pub(crate) fn attach_attestation(
-        &self,
-        verifier: super::attestation::NativePastaVerifier,
-        custody: Option<
-            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
-        >,
-        publisher: super::attestation::NativeAttestationPublisher,
-    ) -> Result<(), PublicationError> {
-        self.call(|reply| Request::AttachAttestation {
-            verifier,
-            custody,
-            publisher,
             reply,
         })
         .unwrap_or_else(|| Err(control::stopped()))
@@ -776,8 +748,6 @@ struct Live<'s> {
     result: Hash32,
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
     commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
-    /// Exact original witness/signature progress, retained independently of durable encoding.
-    attestation: local_attestation::Progress,
     applied_config: AppliedConfig,
     committee: Vec<PeerId>,
     events: Vec<EventBox>,
@@ -822,8 +792,6 @@ enum PublicationPhase {
 
 #[path = "executor_control.rs"]
 mod control;
-#[path = "executor_attestation.rs"]
-mod local_attestation;
 mod preparation;
 mod publication;
 mod replay;
@@ -834,7 +802,7 @@ struct QuarantineContext {
     height: u64,
     view: u64,
     block_hash: Hash32,
-    pulse_context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
+    _pulse_context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
 }
 
 mod payload_owner;
@@ -1035,8 +1003,6 @@ struct Worker<'s> {
     queue: Option<Arc<Queue>>,
     /// The process-lifetime partial owner; view changes never replace it.
     beacon: Option<super::epoch_beacon::producer::NativeBeaconProducer>,
-    /// Sole local Pasta custodian and one original-pool receipt publisher.
-    attestation: Option<local_attestation::Custody>,
     /// Only an exact control-free transaction rejection permits queue isolation.
     quarantine_context: Option<QuarantineContext>,
     /// A consuming publication cannot be retried on this worker, even after an unwind.
@@ -1067,7 +1033,6 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
         archives: None,
         pending_commit: None,
         completed_replay: None,
-        attestation: None,
         quarantine_context: None,
     };
     loop {
@@ -1221,14 +1186,6 @@ impl<'s> Worker<'s> {
             } => {
                 let _ = reply.send(self.attach_beacon(instance, local_bls, signer));
             }
-            Request::AttachAttestation {
-                verifier,
-                custody,
-                publisher,
-                reply,
-            } => {
-                let _ = reply.send(self.attach_attestation(verifier, custody, publisher));
-            }
             Request::Reject(height, view, block_hash) => self.reject(height, view, block_hash),
             Request::AttachQueue(queue) => {
                 self.completed_payload = None;
@@ -1343,7 +1300,7 @@ impl<'s> Worker<'s> {
                         &"execution retry changes its original header",
                     ));
                 }
-                return Some(execution_report(self.finish_local_attestation().map(Some)));
+                return Some(ExecOutcome::Valid(live.result));
             }
         }
         if let Some((source, outcome)) = self.results.get(&block_hash) {
@@ -1463,10 +1420,6 @@ impl<'s> Worker<'s> {
                 }
                 return finish(self);
             }
-        }
-        // Invalidate the public receipt before releasing its exact original overlay.
-        if let Err(error) = self.clear_local_attestation() {
-            return Err(PublicationError::Retryable(error));
         }
         // An explicitly superseded candidate releases its original private execution.
         self.finishing = None;
@@ -1594,9 +1547,9 @@ impl<'s> Worker<'s> {
                 &"the payload's height or view differs from the header",
             );
         }
-        if block.header().attest
-            != proposal_requires_attestation(iroha_block, configured.epoch.last_height)
-        {
+        // This application requests no commit attestation (`specs/sumeragi.md` §3.7 A1):
+        // every height, epoch boundaries included, commits on its exact-quorum CommitQC.
+        if block.header().attest {
             return invalid_attempt(
                 height,
                 &"the attestation flag differs from the payload's rule",
@@ -1696,7 +1649,7 @@ impl<'s> Worker<'s> {
                         height,
                         view: block.header().origin_view,
                         block_hash,
-                        pulse_context,
+                        _pulse_context: pulse_context,
                     });
                 }
                 let outcome = classify(height, &error);
@@ -1893,11 +1846,6 @@ impl<'s> Worker<'s> {
             self.recovery = Some(reason.clone());
             PublicationError::RecoveryRequired(reason)
         })?;
-        if top_ups_without_flag(commitment.get(), original.header.attest) {
-            let reason = "executed top-ups without the attestation flag".to_owned();
-            self.recovery = Some(reason.clone());
-            return Err(PublicationError::RecoveryRequired(reason));
-        }
         original.phase = FinishingPhase::Ready(commitment);
         Ok(())
     }
@@ -2005,12 +1953,11 @@ impl<'s> Worker<'s> {
             witness: Some(original.witness),
             result,
             commitment,
-            attestation: local_attestation::Progress::WaitingBacking(None),
             applied_config: original.applied_config,
             committee: original.committee,
             events: original.events,
         });
-        self.finish_local_attestation().map(Some)
+        Ok(Some(result))
     }
 
     /// Admit the keys of the committee scheduled for `height` into the driver's cryptography.
@@ -2028,6 +1975,73 @@ impl<'s> Worker<'s> {
                 iroha_logger::warn!(peer = %member.validator, ?error, "sumeragi: committee key not admitted");
             }
         }
+    }
+
+    /// Reconstruct authority from the independently authenticated committed source even
+    /// during startup replay. This application requests no commit attestation, so the exact
+    /// quorum certificate is verified with [`iroha_sumeragi::crypto::NoAttestation`].
+    fn verify_prepared_certificate(
+        &self,
+        block: &AvailableBody,
+        qc: &Qc,
+    ) -> Result<(), PublicationError> {
+        let view = self.state.try_view_once().map_err(|error| {
+            if cfg!(all(test, sumeragi_core_mutation = "HC72"))
+                && matches!(&error, crate::state::StateViewError::Busy(_))
+            {
+                PublicationError::Retryable(error.to_string())
+            } else {
+                PublicationError::from(error)
+            }
+        })?;
+        // Only signed genesis selects the root instance. Its result-only R is not
+        // needed here; reading an executed receipt would walk the entire history
+        // on every new certificate. The sole durable reader still authenticates
+        // this State cut's exact genesis hash, network, payload and signatures.
+        #[cfg(all(test, sumeragi_core_mutation = "HC139"))]
+        let instance = {
+            let genesis = crate::sumeragi::certified_chain::committed_block(&view, 1)
+                .map_err(|error| error.map_rejection(|error| error.to_string()))?;
+            crate::sumeragi::node::root_instance(genesis.block(), &view.chain_id().to_string())?
+        };
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC139")))]
+        let instance = crate::sumeragi::certified_chain::CertifiedChain::new(&view)
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?
+            .instance();
+        let scheduled = view
+            .world()
+            .consensus_schedule()
+            .ready(block.header().height)
+            .map_err(|error| error.to_string())?;
+        let config = scheduled
+            .height_config()
+            .map_err(|error| error.to_string())?;
+        if block.source().instance() != instance || block.source().config() != &config {
+            return Err(
+                "available body does not bind the independently authenticated authority".into(),
+            );
+        }
+        let crypto = self
+            .context
+            .crypto
+            .as_ref()
+            .ok_or("native committee crypto is not attached")?;
+        // New scheduled keys must be admitted from their exact authenticated PoPs.
+        for member in &scheduled.epoch.committee {
+            crypto
+                .admit(member.validator.public_key(), &member.proof_of_possession)
+                .map_err(|error| error.to_string())?;
+        }
+        iroha_sumeragi::crypto::Verifier::new(
+            &**crypto,
+            &instance,
+            &config.epoch.id,
+            &config.committee,
+        )
+        .verify_qc(&iroha_sumeragi::crypto::NoAttestation, qc)
+        .map_err(|error| {
+            PublicationError::Retryable(format!("native quorum verification failed: {error:?}"))
+        })
     }
 
     fn scheduled(&self, height: u64) -> Option<ScheduledAuthority> {
@@ -2050,9 +2064,6 @@ impl<'s> Worker<'s> {
             .as_ref()
             .is_some_and(|live| live.height == height && !keep.contains(&live.block_hash))
         {
-            if self.clear_local_attestation().is_err() {
-                return;
-            }
             self.live = None;
         }
         if self.finishing.as_ref().is_some_and(|original| {
@@ -2245,8 +2256,6 @@ impl<'s> Worker<'s> {
                 return Ok(None);
             }
         }
-        // Reusing an executed overlay must complete the same receipt publication too.
-        self.finish_local_attestation()?;
         let live = self
             .live
             .as_mut()
@@ -2616,13 +2625,6 @@ impl<'s> Worker<'s> {
         let state_events = state_events
             .take()
             .expect("original finalized State events");
-        // Invalidate the local signing receipt before its original overlay is released.
-        // A poisoned mailbox after visibility is a recovery condition, never a fresh execution.
-        if let Some(custody) = &self.attestation {
-            if !custody.publisher.discard(0, &[]) {
-                return Err("native attestation mailbox requires recovery".into());
-            }
-        }
         // Retire only after the complete original State and its retained post-effects
         // have published. State's Drop releases siblings before refunds and notices.
         drop(live.overlay.take().expect("original published overlay"));
@@ -2862,10 +2864,9 @@ impl<'s> Worker<'s> {
             schedule: schedule.clone(),
             height,
         };
-        let boundary_attestation = height == scheduled.epoch.authorization.last_height;
         if self.queue.is_none() {
             self.completed_payload = None;
-            return Ok((None, boundary_attestation));
+            return Ok((None, false));
         }
         let scope = OriginalPayloadScope::capture(
             &current_view,
@@ -2913,7 +2914,6 @@ impl<'s> Worker<'s> {
             view,
             transactions = selected.len(),
             lane_merges = merges.merges.len(),
-            boundary_attestation,
             "sumeragi: payload selection completed"
         );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
@@ -2974,10 +2974,7 @@ impl<'s> Worker<'s> {
             match block.resultless_proposal_wire_len() {
                 Ok(length) if length <= max_bytes => {
                     let source = GlobalPayloadSource {
-                        attest: proposal_requires_attestation(
-                            &block,
-                            scheduled.epoch.authorization.last_height,
-                        ),
+                        attest: false,
                         pending_inputs,
                         block,
                     };
@@ -3007,7 +3004,7 @@ impl<'s> Worker<'s> {
                 }
             }
         }
-        Ok((None, boundary_attestation))
+        Ok((None, false))
     }
 
     fn finish_payload_build(&mut self) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
@@ -3134,40 +3131,6 @@ fn proposal_matches_header(header: IrohaHeader, block: &AvailableBody) -> bool {
         && header.view_change_index() == block.header().origin_view
 }
 
-/// The node application's exact attestation rule for an original native proposal.
-///
-/// Every native top-up needs its source-complete mint seal, including a rejected
-/// top-up whose executed tree is empty. The caller supplies the epoch's last
-/// height from its authenticated committed schedule. This inspection grants no
-/// fee, execution, mint or finality authority; execution still checks its actual
-/// top-up count independently. The generic consensus core adds no boundary rule.
-#[must_use]
-pub fn proposal_requires_attestation(block: &SignedBlock, epoch_last_height: u64) -> bool {
-    if cfg!(all(test, sumeragi_core_mutation = "HC132")) {
-        return block.header().height().get() == epoch_last_height;
-    }
-    block.header().height().get() == epoch_last_height
-        || block.external_entrypoints_slice().iter().any(|entrypoint| {
-            let TransactionEntrypoint::External(tx) = entrypoint else {
-                return false;
-            };
-            tx.instructions()
-                .explicit_instructions()
-                .any(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
-                        .is_some()
-                })
-        })
-}
-
-/// Executed top-ups in a block that does not require attestations: the static rule missed a
-/// top-up path, so the block cannot be finalized with mint finality.
-fn top_ups_without_flag(commitment: &ExecutionResultCommitment, attest: bool) -> bool {
-    commitment.execution.kagemusha_top_up_count > 0 && !attest
-}
-
 /// A deterministically invalid block at `height`, logged with its reason.
 fn invalid(height: u64, reason: &dyn std::fmt::Display) -> ExecOutcome {
     iroha_logger::warn!(height, %reason, "sumeragi: block is invalid");
@@ -3217,9 +3180,6 @@ fn classify_lane_step(
         }
         lanes::step::LaneStepError::Deferred(original) => {
             Err(PublicationError::Deferred(original.clone().into()))
-        }
-        lanes::step::LaneStepError::CustodyAllocation => {
-            Err(PublicationError::Retryable(error.to_string()))
         }
         _ => invalid_attempt(height, error),
     }
@@ -3291,7 +3251,12 @@ mod tests {
     fn lane_custody_allocation_refusal_is_local_and_semantic_errors_remain_invalid() {
         use lanes::step::LaneStepError;
         assert!(matches!(
-            execution_report(classify_lane_step(2, &LaneStepError::CustodyAllocation)),
+            execution_report(classify_lane_step(
+                2,
+                &LaneStepError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into()
+                ),
+            )),
             ExecOutcome::Failed(_)
         ));
         for error in [
@@ -3457,7 +3422,3 @@ mod payload_refusal_tests;
 #[cfg(test)]
 #[path = "executor_local_signature_preparation_tests.rs"]
 mod local_signature_preparation_tests;
-
-#[cfg(test)]
-#[path = "executor_attestation_policy_tests.rs"]
-mod attestation_policy_tests;

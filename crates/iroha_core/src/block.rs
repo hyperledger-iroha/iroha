@@ -6379,11 +6379,8 @@ pub(crate) mod valid {
                 if !cfg!(all(test, sumeragi_core_mutation = "HC133")) {
                     lane_outcome.map_err(|error| match error {
                         crate::sumeragi::lanes::step::LaneStepError::Deferred(original) => {
-                            BlockValidationError::ExecutionDeferred(original)
-                        }
-                        crate::sumeragi::lanes::step::LaneStepError::CustodyAllocation => {
                             BlockValidationError::ExecutionDeferred(
-                                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                                original.at_native_lane_finalizer(),
                             )
                         }
                         completed => Self::execution_context_error(completed.to_string()),

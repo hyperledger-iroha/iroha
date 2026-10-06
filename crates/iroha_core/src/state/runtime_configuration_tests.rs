@@ -744,7 +744,6 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let snapshot = norito::json::to_value(&state).unwrap();
         let restore = |execution_budget, snapshot| {
             deserialize::KuraSeed {
-                operation_index_budget: state.world.operation_index_budget().clone(),
                 execution_budget,
                 lane_manifests: state.lane_manifests.read().clone(),
                 kura: state.kura_handle(),
@@ -768,7 +767,9 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let retained_layout_bytes = mv::cell::CellInitialization::<u64>::allocation_layouts()
             .into_iter()
             .chain(mv::cell::CellInitialization::<Option<NativeExecutionTip>>::allocation_layouts())
-            .chain(mv::cell::CellInitialization::<crate::sumeragi::amx::RetainedNativeAmx>::allocation_layouts())
+            .chain(mv::cell::CellInitialization::<
+                crate::sumeragi::amx::RetainedNativeAmx,
+            >::allocation_layouts())
             .map(|layout| layout.size())
             .sum::<usize>();
         let retired_ebr_bytes =

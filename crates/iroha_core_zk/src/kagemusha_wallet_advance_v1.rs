@@ -14,7 +14,7 @@
 //! - `platform`: the platform interface the provider needs — tri-state key, anchor and storage
 //!   probes (`Present | Absent | Unavailable`, never inferring absence from an error), explicit
 //!   write outcomes (`Published | NotPublished | Uncertain`), the boot identity, a
-//!   sleep-inclusive monotonic clock, single-step filesystem operations, and the role-checked
+//!   sleep-inclusive monotonic clock, single-step filesystem operations, and the domain-checked
 //!   signer that freezes the hardware output with `kagemusha_wallet_freeze_signature_v1`.
 //! - `store`: the durable store composing filesystem steps into create-new, paired,
 //!   same-content-rewrite and removal primitives, its `std::fs` backend, and (tests and
@@ -76,8 +76,8 @@
 //! retirement, Selected-marker capabilities, the durable store and the receipt signer are
 //! private: a capability exists only for a marker published here or adopted after its exact
 //! bytes were read back, the receipt signer re-reads that marker immediately before signing,
-//! and the payment key's `key_sign` takes the exact native 32-byte signing message with
-//! explicit domain context constructed by the role-checked signers.
+//! and the payment key's `key_sign` takes exactly the 32-byte Poseidon signing message that
+//! only the domain-checked signers construct.
 //!
 //! # Durability doctrine
 //!
@@ -96,13 +96,13 @@
 //! loss with exhaustive survival subsets of unsynced directory operations, lost writebacks,
 //! faults during recovery and platform faults); run them with
 //! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Android Keystore/storage
-//! and iPhone Secure Enclave/keychain adapters exist in the SDKs. Bridge registration,
-//! the monetary transition owner and physical-phone qualification remain open.
-// TODO(G2-bridge): JNI and C-vtable platform adapters and the exclusive per-process handle
-// (one provider per process; revoke the handle after an uncertain dispatch).
-// TODO(G2-S): the state owner's G1 transition owner (`assemble_output_v1`, receipt body from
-// the credential), its archive under `slots/<slot>/archive/`, the E8 activation request and
-// its acknowledgement-driven capsule collection.
+//! and iPhone Secure Enclave/keychain adapters exist in the SDKs. The shared state owner
+//! assembles G1 completions and retains its archive through this provider. The C callback
+//! adapter and opaque bridge handles exist; the authenticated proof-artifact loader, SDK
+//! registration and physical-phone qualification remain open.
+// TODO(G2-bridge): connect the Android JNI adapter and SDK platform registration to the
+// authenticated native owner. Foreign open fails closed until its proof-artifact loader exists.
+// TODO(G2-S): the E8 activation request and acknowledgement-driven capsule collection.
 // TODO(G2-iOS): physical-device tests of the Swift adapter's keychain power-loss durability
 // and residual anchor window.
 // TODO(G2-fs): typed descriptor-relative primitives in `iroha_fs` replace the path-based
@@ -110,6 +110,7 @@
 
 mod advance;
 mod anchor;
+mod archive;
 mod capsule;
 mod completion;
 mod enrollment;
@@ -136,6 +137,11 @@ pub use self::{
         KagemushaWalletCapacityClassV1, KagemushaWalletExpectedHeadV1,
         KagemushaWalletNotPerformedV1, KagemushaWalletTransitionOwnerV1,
     },
+    anchor::KAGEMUSHA_WALLET_ANCHOR_MAX_BYTES_V1,
+    archive::{
+        KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1, KagemushaWalletArchiveAccessV1,
+        kagemusha_wallet_archive_checkpoint_digest_v1, kagemusha_wallet_archive_object_digest_v1,
+    },
     capsule::{KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1, KagemushaWalletFrozenFrameV1},
     completion::KagemushaWalletCompletionFrameV1,
     enrollment::{
@@ -150,15 +156,15 @@ pub use self::{
     },
     marker::{KagemushaWalletMarkerPhaseV1, KagemushaWalletMarkerRecordV1},
     platform::{
-        KAGEMUSHA_WALLET_PAYMENT_KEY_SIGNING_DOMAINS_V1, KagemushaWalletAnchorPolicyV1,
+        KAGEMUSHA_WALLET_PAYMENT_KEY_DOMAINS_V1, KagemushaWalletAnchorPolicyV1,
         KagemushaWalletEntryKindV1, KagemushaWalletFsV1, KagemushaWalletKeyGenerationRequestV1,
         KagemushaWalletKeyGenerationV1, KagemushaWalletKeyProfileV1, KagemushaWalletListedEntryV1,
         KagemushaWalletNotPublishedV1, KagemushaWalletPlatformSignatureV1,
         KagemushaWalletPlatformV1, KagemushaWalletProbeV1, KagemushaWalletPublishOutcomeV1,
         KagemushaWalletReadV1, KagemushaWalletRemoveOutcomeV1, KagemushaWalletSignErrorV1,
-        KagemushaWalletSigningMessageV1, KagemushaWalletUnavailableV1,
+        KagemushaWalletSignMessageV1, KagemushaWalletUnavailableV1,
         kagemusha_wallet_boot_id_from_text_v1, kagemusha_wallet_native_boot_id_v1,
-        kagemusha_wallet_native_monotonic_ms_v1, kagemusha_wallet_sign_role_v1,
+        kagemusha_wallet_native_monotonic_ms_v1, kagemusha_wallet_sign_domain_v1,
     },
     provider::{
         KagemushaWalletProviderOptionsV1, KagemushaWalletProviderV1, KagemushaWalletSlotStatusV1,

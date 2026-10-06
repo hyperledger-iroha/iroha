@@ -211,7 +211,6 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) {
         Ok(_) => panic!("ordinary signed snapshot must not repair a lost Kura suffix"),
         Err(error) => error,
@@ -284,7 +283,6 @@ async fn signed_native_snapshot_cannot_replace_missing_historical_bodies() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     )
     .err()
     .expect("a locally signed cache cannot replace original certified history");
@@ -348,7 +346,6 @@ async fn emergency_fast_rejects_native_snapshot_before_world_or_journal_restore(
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
             &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
         )
         .err()
         .expect("Fast manifest cannot authorize committed World recovery")
@@ -646,7 +643,6 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     )
     .expect("snapshot read");
     assert_eq!(snapshot_state.chain_id, expected_chain_id);
@@ -1206,7 +1202,6 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1239,7 +1234,6 @@ async fn cannot_parse_snapshot_on_read_is_error() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1276,7 +1270,6 @@ async fn checksum_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1312,7 +1305,6 @@ async fn network_id_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1371,7 +1363,6 @@ async fn missing_checksum_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1410,7 +1401,6 @@ async fn missing_merkle_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1449,7 +1439,6 @@ async fn merkle_root_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1488,7 +1477,6 @@ async fn merkle_leaf_count_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };
@@ -1524,7 +1512,6 @@ async fn merkle_chunk_size_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
     ) else {
         panic!("should not be ok")
     };

@@ -53,6 +53,30 @@ pub(crate) const BUCKET_BYTES: usize = 64 + 96 + 1 + 1 + 4;
 /// Largest number of additions sharing one inversion.
 const MAX_BATCH: usize = 1024;
 
+/// Heap storage of a bucket set, including the bounded addition queue and
+/// batch-inversion buffers. Pasta projective points occupy 96 bytes.
+pub(crate) fn bucket_bytes(count: usize) -> Option<usize> {
+    let cap = (count / 4).clamp(16, MAX_BATCH);
+    let queued =
+        cap.checked_mul(2 * size_of::<u32>() + size_of::<bool>() + size_of::<Kind>() + 2 * 32)?;
+    count.checked_mul(BUCKET_BYTES)?.checked_add(queued)
+}
+
+/// Scratch retained across waves: recoded digits, skip flags and window sums.
+fn fixed_bytes(n: usize, nw: usize) -> Option<usize> {
+    n.checked_mul(nw)?
+        .checked_mul(2)?
+        .checked_add(n)?
+        .checked_add(nw.checked_mul(96)?)
+}
+
+/// One live task's buckets, returned window sums and its slot in the wave.
+fn task_bytes(windows: usize, buckets_per_window: usize) -> Option<usize> {
+    bucket_bytes(windows.checked_mul(buckets_per_window)?)?
+        .checked_add(windows.checked_mul(96)?)?
+        .checked_add(size_of::<(usize, Vec<crate::Ep>)>())
+}
+
 /// Number of windows for scalars of at most `bits` bits with window `c`.
 ///
 /// One more window than `ceil(bits / c)` may be needed for the signed-digit
@@ -405,8 +429,8 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
     for c in MIN_WINDOW..=MAX_WINDOW {
         let nw = num_windows(bits, c);
         let nb_per = 1usize << (c - 1);
-        let digit_bytes = n.checked_mul(nw)?.checked_mul(2)?;
-        let Some(avail) = budget.checked_sub(digit_bytes) else {
+        let fixed = fixed_bytes(n, nw)?;
+        let Some(avail) = budget.checked_sub(fixed) else {
             continue;
         };
         let max_windows_per_task = ((2usize << 20) / (nb_per * BUCKET_BYTES)).max(1);
@@ -414,12 +438,11 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
             .div_ceil(threads.min(nw))
             .min(max_windows_per_task)
             .max(1);
-        let window_bytes = nb_per.checked_mul(BUCKET_BYTES)?;
         // Shrink tasks to one window if a single task would not fit.
-        while per_group > 1 && per_group * window_bytes > avail {
+        while per_group > 1 && task_bytes(per_group, nb_per)? > avail {
             per_group = per_group.div_ceil(2);
         }
-        let task_bytes = per_group.checked_mul(window_bytes)?;
+        let task_bytes = task_bytes(per_group, nb_per)?;
         if task_bytes > avail {
             continue;
         }
@@ -433,7 +456,7 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
             .min(threads)
             .min(avail / task_bytes)
             .max(1);
-        let bytes = concurrency * task_bytes + digit_bytes;
+        let bytes = concurrency * task_bytes + fixed;
         let cost = model_cost(n, bits, c) / (concurrency as u128);
         if best.is_none_or(|(b, _)| cost < b) {
             best = Some((
@@ -454,15 +477,12 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
 }
 
 /// The smallest budget [`plan`] accepts: over every window width, the digits
-/// of all windows plus one task holding a single window's buckets
-/// (`n * nw(c) * 2 + 2^(c-1) * BUCKET_BYTES`), exactly the feasibility test
-/// of [`plan`].
+/// of all windows, skip flags and window sums, plus one task holding a single
+/// window's buckets and result, exactly the feasibility test of [`plan`].
 pub(crate) fn min_plan_bytes(n: usize, bits: usize) -> usize {
     (MIN_WINDOW..=MAX_WINDOW)
         .filter_map(|c| {
-            let digits = n.checked_mul(num_windows(bits, c))?.checked_mul(2)?;
-            let buckets = (1usize << (c - 1)).checked_mul(BUCKET_BYTES)?;
-            digits.checked_add(buckets)
+            fixed_bytes(n, num_windows(bits, c))?.checked_add(task_bytes(1, 1usize << (c - 1))?)
         })
         .min()
         .unwrap_or(usize::MAX)
@@ -576,6 +596,34 @@ mod tests {
         assert_eq!(min_plan_bytes(usize::MAX, 255), usize::MAX);
         assert_eq!(num_windows(255, 15), 18);
         assert!(model_cost(1000, 255, 8) > 0);
+    }
+
+    #[test]
+    fn bucket_accounting_covers_every_allocated_buffer() {
+        fn bytes<T>(values: &Vec<T>) -> usize {
+            values.capacity() * size_of::<T>()
+        }
+        for count in [2, 8, 16, 1024, 4096, 1 << 15] {
+            let buckets = Buckets::<Ep, false>::new(&[], count);
+            let allocated = bytes(&buckets.x)
+                + bytes(&buckets.y)
+                + bytes(&buckets.has)
+                + bytes(&buckets.mark)
+                + bytes(&buckets.overflow)
+                + bytes(&buckets.overflow_used)
+                + bytes(&buckets.queue_bucket)
+                + bytes(&buckets.queue_point)
+                + bytes(&buckets.queue_neg)
+                + bytes(&buckets.kind)
+                + bytes(&buckets.den)
+                + bytes(&buckets.prefix);
+            assert_eq!(bucket_bytes(count), Some(allocated));
+        }
+        assert_eq!(size_of::<crate::Ep>(), 96);
+        assert_eq!(size_of::<crate::Eq>(), 96);
+        assert_eq!(size_of::<crate::Fp>(), 32);
+        assert_eq!(size_of::<crate::Fq>(), 32);
+        assert!(bucket_bytes(usize::MAX).is_none());
     }
 
     #[test]

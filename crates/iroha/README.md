@@ -51,12 +51,13 @@ tracing = { version = "0.1", features = ["log"] }
 ## Client construction
 
 Construct an asynchronous client with `Client::builder(config).build()?`.
-The builder validates the endpoint, signing authority, address discriminant and
+The builder immediately validates the endpoint, signing authority, address discriminant and
 HTTP headers. Configure headers with `headers(...)`, HTTP transport with
 `http_transport(Arc<dyn iroha::http::HttpTransport>)`, and WebSocket transport with
 `stream_transport(Arc<dyn iroha::stream::StreamTransport>)` on the builder.
-Configuration is fixed after construction; transport initialization failures
-are returned through `iroha::Error`. The explicit blocking HTTP constructor is
+Configuration is fixed after construction. Native HTTP pools initialize on their
+first corresponding HTTP use; asynchronous pool construction failures are returned
+there through `iroha::Error`. The explicit blocking HTTP constructor is
 `iroha::blocking::Client::with_http_transport(config, transport)?`.
 
 Clones share their HTTP and stream transports and compatibility decision. To

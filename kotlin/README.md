@@ -550,21 +550,26 @@ Lane observations do not confer finality.
 
 ### KAGEMUSHA wallet peer transports
 
-`KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, 34 retained SHA-256
-digest roles, explicit signing domains and immutable canonical 32-byte signing messages,
-envelope header validation and strict `kgm1:` text, matching the Rust owner
-`iroha_data_model::kagemusha::kagemusha_wallet_v1`. P-256 verifies exactly the native
-message bytes; domain context is not prepended. Kotlin carries native Poseidon values
-without recomputing them, and message construction grants no signer or monetary authority.
-`KagemushaP256Codec` is the P-256 device-key boundary: uncompressed SEC1 public
-keys and fixed-width low-S `r || s` signatures. The QR, NFC, and Nearby carriers
-(`IrohaPeer*`) move KAGEMUSHA wallet V1 envelope frames
+`KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, domain-separated
+18 SHA-256 digest roles, 17 signing domains, envelope header validation and strict `kgm1:` text,
+matching the Rust owner `iroha_data_model::kagemusha::kagemusha_wallet_v1`. Every
+signature is ECDSA-P256-SHA256 over the 32-byte Poseidon message of its body, which
+the native core computes; the SDK checks it only as a canonical σ-field value.
+Only `artifactManifestDigest` hashes a signed object with SHA-256. Circuit-visible
+object, package, statement, operation and nullifier digests use the canonical
+60-domain Poseidon table. Requests bind the recorded receiver blacklist; quota
+usage is a depth-6 array.
+`KagemushaP256Codec` is the P-256 device-key boundary: uncompressed SEC1 public keys
+and fixed-width low-S `r || s` signatures. The Android payment key
+(`kagemusha-wallet-android`) is a `DIGEST_SHA256` KeyMint key that signs exactly the
+32-byte message the Rust signer passes with `SHA256withECDSA`. The QR, NFC, and
+Nearby carriers (`IrohaPeer*`) move KAGEMUSHA wallet V1 envelope frames
 (`../specs/kagemusha_wallet_wire_v1.md` §6) and test against
-`../fixtures/kagemusha/wallet_v1_vectors.json`. Envelope inspection is a
-structural transport check: the carried message is not decoded or verified and
-grants no monetary authority. Public wire size and verification work are
-independent of balance history; no hop, input, origin, ancestry, fan-in, or
-proof-depth limit is encoded.
+`../fixtures/kagemusha/wallet_v1_vectors.json`. Envelope inspection is a structural
+transport check: the carried message is not decoded or verified and grants no
+monetary authority. Public wire size and verification work are independent of
+balance history; no hop, input, origin, ancestry, fan-in, or proof-depth limit is
+encoded.
 
 ### Petal Stream optical transport
 

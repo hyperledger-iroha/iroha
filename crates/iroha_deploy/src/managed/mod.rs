@@ -121,6 +121,19 @@ pub enum Error {
     /// Startup could not prove readiness within the requested budget.
     #[error("localnet startup did not complete within {0:?}")]
     Timeout(Duration),
+    /// The original native I/O budget elapsed; retained custody remains unresolved.
+    #[error("native operation I/O deadline elapsed; retain original journals")]
+    NativeDeadline,
+    /// Startup failed at its original closed stage, and cleanup or status publication also failed.
+    #[error("{failure}{}", worker_failure_followup(cleanup, publication))]
+    WorkerFailure {
+        /// Original closed startup or service failure, excluding remote bodies and credentials.
+        failure: String,
+        /// Exact error from stopping this worker's directly owned validator handles.
+        cleanup: Option<Box<Error>>,
+        /// Exact error from retaining the failed status after cleanup was attempted.
+        publication: Option<Box<Error>>,
+    },
     /// Parent attachment or its independent registry work exhausted the caller's finite budget.
     #[error(
         "parent operation deadline expired; inspect `kagami dataspace status` and retry the same retained context"
@@ -136,6 +149,22 @@ pub enum Error {
         /// Closed classification containing no request, response or custody text.
         failure: ManagedAttachmentFailure,
     },
+}
+
+fn worker_failure_followup(
+    cleanup: &Option<Box<Error>>,
+    publication: &Option<Box<Error>>,
+) -> String {
+    let mut details = String::new();
+    if let Some(error) = cleanup {
+        details.push_str(&format!("\nOwned validator cleanup failed: {error}"));
+    }
+    if let Some(error) = publication {
+        details.push_str(&format!(
+            "\nFailed to retain startup failure status: {error}"
+        ));
+    }
+    details
 }
 
 /// Selected, secret-free client context backed by owner-private generated configuration.
@@ -283,6 +312,7 @@ pub struct ManagedStatus {
     /// Current worker observation.
     pub phase: ManagedPhase,
     /// Number of still-running owned validator processes.
+    /// When `failure` reports unconfirmed cleanup, this is an upper bound from retained handles.
     pub running_peers: usize,
     /// Public reason for a failed operation, without child output or credentials.
     pub failure: Option<String>,

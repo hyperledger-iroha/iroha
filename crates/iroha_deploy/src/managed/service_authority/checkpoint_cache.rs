@@ -25,6 +25,14 @@ pub(super) struct CheckpointCache {
 }
 
 impl ServiceAuthority {
+    #[cfg(test)]
+    /// Count attempted canonical imports without changing the optional cache.
+    pub(in crate::managed) fn test_checkpoint_import_attempts(&self) -> usize {
+        self.checkpoint_cache
+            .decode_attempts
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Import an exact independently selected checkpoint, retaining only successful immutable work.
     /// Callers still read and authenticate their original custody before supplying these bytes.
     pub(in crate::managed) fn decode_checkpoint(&self, bytes: &[u8]) -> Result<FinalityVerifier> {
@@ -60,6 +68,16 @@ impl CheckpointCache {
         #[cfg(test)]
         self.decode_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(test)]
+        if crate::managed::native_operation::deadline_diagnostics::active() {
+            crate::managed::native_operation::deadline_diagnostics::import_attempt(
+                bytes,
+                network,
+                chain,
+                self.decode_attempts
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
+        }
         let verifier = decode_checkpoint(bytes, network, chain)?;
         if may_store {
             // Successful admission already enforces the original frame/chain bounds. Optional

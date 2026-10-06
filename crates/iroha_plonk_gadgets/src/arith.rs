@@ -166,9 +166,16 @@ impl<F: PastaField> GlueChip<F> {
     /// users above it).
     #[must_use]
     pub const fn starting_at(config: GlueConfig, row: usize) -> Self {
+        Self::with_cursor(config, RowCursor::starting_at(row))
+    }
+
+    /// A chip whose rows come from `rows` (a bounded cursor keeps them in a
+    /// row range other users of the columns do not touch).
+    #[must_use]
+    pub const fn with_cursor(config: GlueConfig, rows: RowCursor) -> Self {
         Self {
             config,
-            rows: RowCursor::starting_at(row),
+            rows,
             _marker: core::marker::PhantomData,
         }
     }
@@ -543,6 +550,40 @@ impl<F: PastaField> GlueChip<F> {
         ];
         let selector = Some(self.config.s_select);
         self.row_output(region, Coefficients::zero(), slots, selector, 3)
+    }
+
+    /// `bit ? x : constant` in one standard-gate row: `bit (x - constant) +
+    /// constant - out = 0` (`bit` must already be boolean).
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] from the layout.
+    pub fn select_constant(
+        &mut self,
+        region: &mut Region<'_, F>,
+        bit: &Bit<F>,
+        x: &Word<F>,
+        constant: F,
+    ) -> Result<Word<F>, Error> {
+        let out = bit
+            .word()
+            .value()
+            .zip(x.value())
+            .map(|(bit, x)| bit * (x - constant) + constant);
+        let coefficients = Coefficients {
+            m: F::ONE,
+            a: -constant,
+            d: -F::ONE,
+            k: constant,
+            ..Coefficients::zero()
+        };
+        let slots = [
+            Slot::Copy(bit.word()),
+            Slot::Copy(x),
+            Slot::Empty,
+            Slot::Value(out),
+        ];
+        self.row_output(region, coefficients, slots, None, 3)
     }
 
     /// `[x = 0]`.

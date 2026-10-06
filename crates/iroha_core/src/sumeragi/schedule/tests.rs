@@ -367,7 +367,7 @@ fn native_epoch_binds_core_authority_and_rejects_missing_reordered_or_changed_or
     );
     assert_eq!(
         core.epoch.authority_generation,
-        iroha_sumeragi::types::Hash32(config.epoch.authority.authority_id().unwrap())
+        iroha_sumeragi::types::Hash32(config.epoch.generation().generation_id().unwrap())
     );
     assert_eq!((core.committee.n(), core.committee.q()), (4, 3));
     for mutation in 0..4 {
@@ -404,7 +404,10 @@ fn boundary_application_is_the_only_cut_that_replaces_pending_authority() {
     let boundary = retained_boundary(&current);
     let next = pending.advanced(&boundary).unwrap();
     assert_eq!(next.ready(4).unwrap().epoch.authorization.epoch, 1);
-    assert_eq!(next.ready(4).unwrap().epoch.authority, current.authority);
+    assert_eq!(
+        next.ready(4).unwrap().epoch.generation(),
+        current.generation()
+    );
     assert_eq!(next.ready(4).unwrap().epoch.committee, current.committee);
     assert!(matches!(
         boundary.applied_config().unwrap(),

@@ -543,18 +543,17 @@ impl<'state> StateBlock<'state> {
             world
                 .install_frozen_publication(&state_ref.world)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
-            let scope = &world.operation_index_scope;
             canonical_runtime
-                .install_frozen_publication(&state_ref.canonical_runtime, scope)
+                .install_frozen_publication(&state_ref.canonical_runtime)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
             native_execution_tip
-                .install_frozen_publication(&state_ref.native_execution_tip, scope)
+                .install_frozen_publication(&state_ref.native_execution_tip)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
             prev_committed_topology
-                .install_frozen_publication(&state_ref.prev_commit_topology, scope)
+                .install_frozen_publication(&state_ref.prev_commit_topology)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
             committed_topology
-                .install_frozen_publication(&state_ref.commit_topology, scope)
+                .install_frozen_publication(&state_ref.commit_topology)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
             transactions.install_frozen_publication(&state_ref.transactions);
             transactions

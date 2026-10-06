@@ -245,7 +245,7 @@ impl NativeBeaconProducer {
             let authenticated = record.session.network_id == current.network_id
                 && record.session.adaptive_dkg.finalized_at_height <= applied.0
                 && record.session.adaptive_dkg.session.authority_generation
-                    == current.authority.generation
+                    == current.authorization.authority_generation
                 && (current.authorization.beacon == BeaconEpochBindingV1::Bootstrap
                     || current.authorization.beacon == BeaconEpochBindingV1::Installed(binding));
             if authenticated {

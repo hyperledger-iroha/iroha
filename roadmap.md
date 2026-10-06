@@ -7,7 +7,8 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 
 ## Current priorities
 
-1. Complete Nexus fault/restart qualification and restricted lane isolation;
+1. Rebuild the daemon and Nexus harness, then complete fault/restart qualification
+   and restricted lane isolation;
    preserve original funded execution through publication and replay, qualify lane
    retirement ownership, and reclaim physical storage only after retained global
    history releases its certified dependencies.
@@ -54,7 +55,7 @@ Authoritative contracts: [Sumeragi](specs/sumeragi.md),
 
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
-| N0 | Complete Sumeragi | Core/P2P/Kura | S1–S9: execute-before-vote, round overlay, signed RS16 acquisition, DS-local finality, AMX and evidence/committee scheduling; named mutation test per rule. |
+| N0 | Complete Sumeragi | Core/P2P/Kura | S1–S9: execute-before-vote, round overlay, signed RS16 acquisition, DS-local finality, AMX and evidence/committee scheduling; the KAGEMUSHA mint-finality authority is deleted; remove the remaining generic attestation extension (owner decision 2026-10-04); named mutation test per rule. |
 | N1 | Driver/storage closure | Driver/State/Kura/daemon | Sole driver passes conformance oracles, certified execution and retained custody; per-key safety records and remaining retired storage/SDK owner removal. |
 | N2 | Consensus qualification | Simulator/CI/operators | Nightly fault scenarios at 10,000 seeds and every mutation killed; native authority and fresh Taira four-validator readiness/write/restart. Governance owns deployment policy. |
 | N3 | Dataspace topology/SNS | Nexus/Core/deployment | Manifest-owned membership/privacy/DA/governance; additive activation preserves certified history and cold replay; prove physical server/storage isolation. |
@@ -95,9 +96,9 @@ and [verification checklist](specs/kagemusha_evidence_gate.md).
 | S4 | Shared wire/activity | SDKs/Torii | Canonical signing/executable/account fixtures, multisig witnesses and snapshot-bound activity with bounded cursors and expiry. |
 | S5 | Kotlin closure | Kotlin/Android | Finish Java/JNI/publication retirement; release transport/attestation/Nearby and CUDA hardware qualification with separate host/device evidence. |
 | S6 | Native release matrix | Bridge/platform owners | Signed same-source current-bridge AAR/XCFramework/JNI/wheel/host packages; all SDK checkpoint/wire/alias/SNS and OS/architecture matrices; retired layouts fail closed. Swift framework construction, installation and native suite qualification follow the [completion goals](specs/sdk/swift/native_framework_completion_goals.md). |
-| S7 | Recursive KAGEMUSHA | Core/coordinator/proofs | G3/G4 (G1 objects and vectors exist in `kagemusha_wallet_v1`): owner-approved relation architecture that meets the 10,000-byte bounds; one fixed relation consuming the G1 objects; complete proof/receipt lineage, irreversible Send, exact Payment replay, permanent receive deduplication and offline onward spending; retire refund paths and duplicate monetary engines. |
-| S8 | Durable money | Native/platform/reserves | G2/G5: stock-OS journal/marker Advance, recoverable exact successor and platform enrollment; reserve-backed loads, one-use redemption/fee claims, optional controls default off. |
-| S9 | Mobile/Nearby/NFC | SDKs/device providers | G4/G6/G7: shared Rust core with Swift/Kotlin adapters and one envelope over NFC/radio/QR/Petal; record device recovery, replay/restore, memory/thermal, size and latency results while integrating and using the POC. |
+| S7 | Recursive KAGEMUSHA | Core/coordinator/proofs | G3/G4 (G1 objects and vectors exist in `kagemusha_wallet_v1`, the native σ step relations in `iroha_kagemusha_proof`; G6 deleted the superseded refund paths and duplicate monetary engines): implement and qualify the accepted Q → A → Ω construction within the 10,000-byte bounds; bind the tested native/circuit proof components into every operation relation and wrap consuming the G1 objects; complete proof/receipt lineage, irreversible Send, exact Payment replay, permanent receive deduplication and offline onward spending. |
+| S8 | Durable money | Native/platform/reserves | G2/G5: connect the Rust stock-OS journal/marker `Advance` provider to the Kotlin/Swift platform adapters through the bridge and qualify the recoverable exact successor and platform enrollment on devices; reserve-backed loads, one-use redemption/fee claims, optional controls default off. |
+| S9 | Mobile/Nearby/NFC | SDKs/device providers | G4/G7: shared Rust core with Swift/Kotlin adapters and one envelope over NFC/radio/QR/Petal; record device recovery, replay/restore, memory/thermal, size and latency results while integrating and using the POC. |
 | S10 | Private-file/ZK-ACE SDK | JS/privacy/native | Governed two-pass intent signing, nonserializable private witnesses/erasure; Windows secure storage and authenticated native packages. |
 | S11 | Petal Stream devices | Petal/SDKs/device providers | [Device protocol](specs/petal_stream.md#8-qualification): 20 timed runs per device and distance on governed profiles including a low-end 480p–720p Android phone, a modern iPhone and a webcam; `ScanStats` lane rates filed per device with exposure compensation at 0, −1 and −2 EV, and the Swift/Kotlin/JS/Python/C# readers re-run against the same recorded camera captures. Field results tune the inferred-corner search and the 500 ms tracking window, and measure tracking on hand-held phones. |
 | S12 | Collection query qualification | Torii/SDKs/CLI/MCP | Move remaining trigger list routes onto the collection contract. Qualify the [shared query contract](specs/torii/collection_queries.md) on current-source live peers: multi-dataspace visibility and exact totals/aggregates, deep history after restart, changing authorization between pages, bounded sparse scans and every SDK's installed/native suite. The [implementation completion goals](specs/torii/query_completion_goals.md) define the component contract; they do not establish release readiness. |
@@ -130,7 +131,7 @@ compared by no state transition, become committed State (F.4).
 | C6 | FHE/MKHE/Figure 9 | Crypto/model/proofs | Complete native40 correspondence/full-size eight-party replay; qPCS redesign within fixed work bounds, governed Figure 9 keys and independent measured ordinary-stack proofs. |
 | C7 | Acceleration | Native backends | Automatic target-appropriate daemon defaults, ten reproducible signed embedded CUDA PTX families, driverless daemon startup, actual CPU/Metal/CUDA KAT/root parity, authenticated library/device/calibration, fault quarantine, side-channel and RSS/throughput; unqualified T256/MKHE stay scalar. |
 | C8 | Kaigi sessions | Model/crypto/Core/SDKs | Complete authorization/usage circuits and account lifecycle/undo; keys/fixtures, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |
-| C9 | Native PLONK/IPA prover | ZK/prover owners | Iroha-owned `iroha_pasta`, `iroha_plonk`, gadget and recursion crates replace vendored halo2-axiom/halo2curves-axiom/halo2-base, halo2-ecc and snark-verifier: byte parity against the vendored oracle where a consumer keeps its keys, KAGEMUSHA step/lineage/transport/CreditStatus relations first, every [inventoried consumer](specs/native_prover_migration_inventory.md) migrated with a planned live-network cutover, then the vendored stack and the temporary `iroha_plonk_oracle` deleted. |
+| C9 | Native PLONK/IPA prover | ZK/prover owners | Qualify owned-witness M3 with the process-wide 64 MiB MSM budget and fixed shared-host method; finish PIPA-R/PIPA-AS, KAGEMUSHA operation/lineage/transport/CreditStatus relations and soundness tests. Migrate and re-key every retained [inventoried consumer](specs/native_prover_migration_inventory.md), then delete superseded vendored engines and the temporary `iroha_plonk_oracle`. First release: no compatibility decoder, old-key fallback or parallel legacy production engine. |
 
 ## Services and deployment
 

@@ -228,7 +228,6 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
         archives: Some(archives),
         pending_commit: None,
         completed_replay: None,
-        attestation: None,
         quarantine_context: None,
     }
 }
@@ -258,10 +257,7 @@ fn prepare_and_append(worker: &mut Worker<'_>, block: &AvailableBody, qc: &Qc) -
             )
             .unwrap(),
         ),
-        Arc::new(crate::sumeragi::attestation::NativePastaVerifier::new(
-            block.header().instance,
-            *worker.state.network_id_ref(),
-        )),
+        Arc::new(iroha_sumeragi::crypto::NoAttestation),
     )
     .append(block, qc)
     .unwrap();

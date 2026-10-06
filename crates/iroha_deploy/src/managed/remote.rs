@@ -439,7 +439,7 @@ fn authenticate_parent(
     }
     remaining(deadline)?;
     CheckpointTransport::new()
-        .and_then(|transport| transport.fetch_and_authenticate(profile, &release, deadline))
+        .fetch_and_authenticate(profile, &release, deadline)
         .map_err(|error| Error::Invalid(error.to_string()))
 }
 

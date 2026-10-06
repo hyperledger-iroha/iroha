@@ -188,14 +188,14 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
 }
 
 #[test]
-fn streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary() {
+fn streamed_prefix_checks_exact_native_quorum_at_retained_empty_epoch_boundary() {
     with_native_boundary_chain(
-        assert_streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary,
+        assert_streamed_prefix_checks_exact_native_quorum_at_retained_empty_epoch_boundary,
     );
 }
 
 #[inline(never)]
-fn assert_streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary(
+fn assert_streamed_prefix_checks_exact_native_quorum_at_retained_empty_epoch_boundary(
     chain: &CertifiedTestChain,
 ) {
     let id = ChainId::from("sumeragi-certified-test-chain");
@@ -204,20 +204,37 @@ fn assert_streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary(
         prefix.push(frame(chain, height)).unwrap();
     }
     let original = frame(chain, 10);
-    let tampered = with_parts(&original, |_, qc, _| {
-        qc.attestation_witness = None;
-    });
-    assert!(matches!(
-        prefix.push(tampered),
-        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
-            ChainReadError::Certificate { .. }
-        ))
-    ));
-    let (boundary, genesis) = prefix.push(original).unwrap().into_parts();
+    for attach_result in [false, true] {
+        let tampered = with_parts(&original, |_, qc, preimage| {
+            if attach_result {
+                qc.attestation_witness = Some(
+                    iroha_sumeragi::message::ResultWitness::from_untrusted(preimage.clone())
+                        .unwrap(),
+                );
+            } else {
+                qc.agg_sig.0[0] ^= 1;
+            }
+        });
+        assert!(matches!(
+            prefix.push(tampered),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ChainReadError::Certificate { height: 10, .. }
+            ))
+        ));
+        assert_eq!(prefix.prefix.tip.height(), 9);
+    }
+    let (boundary, genesis) = prefix.push(original.clone()).unwrap().into_parts();
     assert!(genesis.is_none());
-    assert!(boundary.header().unwrap().attest);
+    assert!(!boundary.header().unwrap().attest);
     assert!(boundary.commitment().schedule.boundary.is_some());
-    assert!(boundary.commit_qc().unwrap().attestation_witness.is_some());
+    let qc = boundary.commit_qc().unwrap();
+    assert!(!qc.attest);
+    assert_eq!(qc.signers.count_ones(), 3);
+    assert!(qc.attestations.is_empty() && qc.attestation_witness.is_none());
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        boundary.block(),
+        &original
+    ));
 }
 
 /// Shape reuse binds the complete context, while each subsequent QC remains independently
@@ -233,7 +250,7 @@ fn warmed_epoch_shape_rejects_substituted_context_and_still_checks_each_qc() {
         let changed = with_parts(&original, |_, _, preimage| {
             let mut commitment = ExecutionResultCommitment::decode(preimage).unwrap();
             if mutate_keys {
-                commitment.schedule.current.authority.validators[0].eq_proof_public_key = [0; 32];
+                commitment.schedule.current.committee[0].proof_of_possession[0] ^= 1;
             } else {
                 commitment.schedule.current.leader_seed = [0; 32];
             }

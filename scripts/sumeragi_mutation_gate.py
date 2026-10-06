@@ -25,6 +25,13 @@ Purpose
     Deadlines classify execution as an error. After a deadline the runner waits for
     its owned Cargo child to exit naturally and retains the output without sending
     termination signals. A late completed result never counts as a mutation kill.
+    Each step discovers its actual filtered test names first and accounts for every
+    terminal result and the complete libtest summary. Discovery and execution share
+    the original step deadline; ignored or incomplete controls cannot establish a kill.
+    A named step is a mutation's exact selector tuple. Baselines run each distinct
+    tuple once; baseline and mutant randomized steps run one distinct scenario each.
+    These independent invocations retain the configured per-step deadlines, and any
+    step error prevents the aggregate result from qualifying.
 
     The table MUTATIONS mirrors §13.4 (MS*/ML* rows, the MA* rows of the commit-attestation
     extension, §3.7, and the MX* rows of the simulator's toy AMX application, §11) plus ME*
@@ -458,8 +465,6 @@ CORE_MUTATIONS = [
       ["beacon::validation::tests::beacon_verification_reserves_exact_buffers_and_refuses_before_unfunded_work"]),
     m("HC13", "certificate query: construct aggregate pairing scratch without original request admission",
       ["sumeragi::certified_chain::tests::state_certificate::state_certificate_pairing_constructor_refusal_preserves_original_source_for_retry"]),
-    m("HC14", "certificate reader: reuse an original decoded result for different witness bytes",
-      ["sumeragi::certified_chain::artifacts::tests::original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph"]),
     m("HC15", "committed body reader: duplicate the original decoded quorum certificate at handoff",
       ["sumeragi::block_store::committed_read::tests::committed_read_returns_original_qc_backing_after_projection_refusal_and_retry"]),
     m("HC16", "lane custody: clone decoded signers without original-pool admission",
@@ -577,7 +582,7 @@ CORE_MUTATIONS = [
     m("HC53", "network time: omit host suspension from admission time and probe custody",
       ['time::tests::suspend_inclusive_clock_advances_admission_and_expires_retained_probes', 'time::tests::suspend_inclusive_clock_counts_entire_probe_round_trip']),
     m("HC48", "incumbent authority and key lifecycle: turn local read refusal into completed instruction failure",
-      ['state::validator_committee::tests::refusal::original_incumbent_history_refusal_keeps_authority_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_authority_refusal_keeps_command_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_command_decode_refusal_has_no_publication_and_retries', 'state::validator_committee::tests::refusal::original_beacon_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_tle_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_staking_authority_refusal_keeps_exit_overlay_and_same_signed_retry']),
+      ['state::validator_committee::tests::refusal::original_incumbent_history_refusal_keeps_authority_and_same_source_retry', 'state::validator_committee::tests::refusal::original_credentials_authority_refusal_keeps_command_and_same_source_retry', 'state::validator_committee::tests::refusal::original_credentials_command_decode_refusal_has_no_publication_and_retries', 'state::validator_committee::tests::refusal::original_beacon_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_tle_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_staking_authority_refusal_keeps_exit_overlay_and_same_signed_retry']),
     m("HC50", "original NPoS policy: erase local decoder refusal as absent authority",
       ['state::validator_committee::tests::refusal::original_npos_parameter_refusal_does_not_become_missing_staking_policy', 'state::validator_committee::tests::refusal::original_npos_exit_policy_refusal_keeps_stake_and_same_signed_retry', 'state::validator_committee::tests::refusal::original_npos_reserve_validation_refuses_without_changing_current_or_undo', 'smartcontracts::ivm::host::return_resource_tests::original_npos_policy_refusal_preserves_host_seed_projection_and_retries', 'sumeragi::evidence::tests::original_npos_policy_refusal_cannot_prune_retained_evidence', 'state::validator_committee::tests::refusal::late_original_npos_activation_read_refusal_rolls_back_and_same_signed_retry', 'sumeragi::evidence_history::lane::tests::original_lane_observer_late_policy_refusal_retains_observation_and_retries']),
 
@@ -741,8 +746,6 @@ CORE_MUTATIONS = [
 
     m("HC129", "native validation: retry after a consuming unwind lost its original graph",
       ["sumeragi::executor::tests::consuming_validation_unwind_requires_recovery_after_original_owner_is_lost"]),
-    m("HC132", "native proposal: omit the required top-up seal outside an epoch boundary",
-      ["sumeragi::executor::attestation_policy_tests::native_top_up_proposal_requires_attestation_before_an_epoch_boundary"]),
     m("HC133", "native lane finalizer: finish the output seal after original lane preparation refused",
       ["sumeragi::executor::validation_refusal_tests::original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry"]),
     m("HC134", "native witness handoff: promise retry after the original witness owner is absent or source-invalid",
@@ -750,6 +753,20 @@ CORE_MUTATIONS = [
 
     m("HC135", "borrowed transaction custody: deep-copy the original accepted entrypoint graph",
       ["sumeragi::amx::native::tests::paid_borrowed_custody::native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime"]),
+
+    m("HC136", "native lane admission: erase the original signer or sample finite-pool refusal",
+      ["sumeragi::lanes::custody::tests::original_signer_pinning_refuses_then_retries_the_same_pool_and_stake_cut",
+       "sumeragi::lanes::step::sample_owner_tests::sample_finalizer_refusal_preserves_exact_source_and_retry_funds_only_suffix"]),
+
+    m("HC137", "Queue resident custody: refund original accepted residence before its last shared owner",
+      ["queue::tests::resident_owner_tests::removed_pending_owner_retains_original_resident_credit_until_last_reader"]),
+
+    m("HC138", "Queue cold custody: inspect absent resident owner without the original mutation fence",
+      ["queue::tests::resident_owner_tests::cold_queue_retirement_holds_original_fence_until_first_admission_can_publish"]),
+
+    m("HC139", "native root selection: rewalk executed ancestry for signed-genesis identity on each successor",
+      ["sumeragi::executor::validation_refusal_tests::prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_history",
+       "sumeragi::executor::validation_refusal_tests::successor_context_uses_original_parent_and_bounded_signed_root_without_history_rewalk"]),
 
 ]
 
@@ -801,8 +818,13 @@ def package_options(args):
         return "iroha_core", "mutation-testing,iroha-core-tests", "SUMERAGI_CORE_MUTATION"
     return CRATE, FEATURES, "SUMERAGI_MUTATION"
 
-TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored)", re.M)
-TEST_COMPLETION = re.compile(r"^test result: (ok|FAILED)\. \d+ passed; \d+ failed;", re.M)
+TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored(?:, [^\n]*)?)$", re.M)
+TEST_COMPLETION = re.compile(
+    r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; "
+    r"(\d+) measured; (\d+) filtered out; finished in \d+(?:\.\d+)?s$", re.M)
+TEST_RUNNING = re.compile(r"^running (\d+) tests?$", re.M)
+TEST_LIST = re.compile(r"^(\S+): test$", re.M)
+TEST_LIST_COMPLETION = re.compile(r"^(\d+) tests?, (\d+) benchmarks?$", re.M)
 
 
 @dataclass
@@ -813,6 +835,8 @@ class Step:
     ran: list = field(default_factory=list)
     detail: list = field(default_factory=list)
     log: str = ""
+    selected: list = field(default_factory=list)
+    discovery_log: str = ""
 
 
 def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no_run=False):
@@ -865,14 +889,38 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
 
 
 def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
-    code, out, elapsed = cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path)
+    """Account for the actual substring selection within one original deadline."""
+    started = time.monotonic()
+    discovery_log = log_path.with_name(log_path.stem + ".discovery" + log_path.suffix)
+    discovery_code, listing, discovery_elapsed = cargo_test(
+        args, target_dir, mutation, [*filters, "--list", "--format", "pretty", "--color", "never"],
+        seeds, timeout, discovery_log)
+    selected = TEST_LIST.findall(listing)
+    declared = TEST_LIST_COMPLETION.findall(listing)
+    elapsed = max(time.monotonic() - started, discovery_elapsed)
+    step = Step(status="pass", seconds=round(elapsed, 1), selected=selected,
+                log=str(log_path), discovery_log=str(discovery_log))
+    if discovery_code is None or (timeout and elapsed >= timeout):
+        step.status = "timeout"
+        step.detail.append(f"discovery exhausted the original {timeout}s deadline")
+        return step
+    if discovery_code != 0 or declared != [(str(len(selected)), "0")] or len(selected) != len(set(selected)):
+        step.status = "execution-error"
+        step.detail.append("test discovery did not complete exactly one unique libtest inventory")
+        return step
+    remaining = max(0.0, timeout - elapsed) if timeout else 0
+    code, out, runtime_elapsed = cargo_test(
+        args, target_dir, mutation,
+        [*filters, "--test-threads=1", "--format", "pretty", "--color", "never"],
+        seeds, remaining, log_path)
+    elapsed = max(time.monotonic() - started, discovery_elapsed + runtime_elapsed)
     results = TEST_LINE.findall(out)
-    ran = sorted({name for name, verdict in results if verdict != "ignored"})
+    ran = sorted({name for name, verdict in results if not verdict.startswith("ignored")})
     failed = sorted({name for name, verdict in results if verdict == "FAILED"})
     step = Step(status="pass", seconds=round(elapsed, 1), failed=failed, ran=ran,
-                log=str(log_path))
+                selected=selected, log=str(log_path), discovery_log=str(discovery_log))
     missing = [flt for flt in filters if not any(flt in name for name in ran)]
-    if code is None:
+    if code is None or (timeout and elapsed > timeout):
         step.status = "timeout"
         step.detail.append(f"timed out after {timeout}s")
     elif "error[E" in out or "could not compile" in out:
@@ -892,9 +940,25 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
         step.status = "missing-test"
     if step.status in ("pass", "fail"):
         expected = "FAILED" if step.status == "fail" else "ok"
-        if TEST_COMPLETION.findall(out) != [expected] or code != (101 if failed else 0):
+        passed = sum(verdict == "ok" for _, verdict in results)
+        summaries = TEST_COMPLETION.findall(out)
+        summary_lines = re.findall(r"^test result:.*$", out, re.M)
+        running = list(TEST_RUNNING.finditer(out))
+        terminals = list(TEST_LINE.finditer(out))
+        completions = list(TEST_COMPLETION.finditer(out))
+        ordered = (len(running) == len(completions) == 1 and bool(terminals)
+                   and running[0].end() < terminals[0].start()
+                   and terminals[-1].end() < completions[0].start())
+        exact = (len(summary_lines) == len(summaries) == 1
+                 and [match.group(1) for match in running] == [str(len(selected))]
+                 and ordered
+                 and summaries[0][0] == expected
+                 and tuple(map(int, summaries[0][1:5])) == (passed, len(failed), 0, 0)
+                 and len(results) == len(selected) and len(ran) == len(results)
+                 and set(ran) == set(selected))
+        if not exact or code != (101 if failed else 0):
             step.status = "execution-error"
-            step.detail.append("cargo did not complete exactly one expected test harness")
+            step.detail.append("cargo did not complete every discovered test exactly once with a matching summary")
     return step
 
 
@@ -920,10 +984,36 @@ def has_switch(mid, *, core=False, daemon=False):
     return any(needle in p.read_text() for p in source.rglob("*.rs"))
 
 
+
+def run_grouped_steps(args, target_dir, mutation, groups, seeds, timeout, logs, stem):
+    """Retain every invocation and refuse an aggregate pass or kill on any step error."""
+    steps = []
+    for index, filters in enumerate(groups):
+        log = logs / f"{stem}.{index:03d}.log"
+        if not filters:
+            step = Step(status="missing-test", detail=["no selectors for this invocation"], log=str(log))
+        else:
+            step = run_step(args, target_dir, mutation, filters, seeds, timeout, log)
+        steps.append({"filters": list(filters), "deadline_seconds": timeout,
+                      "seeds": seeds, **step.__dict__})
+    errors = [step["status"] for step in steps if step["status"] not in ("pass", "fail")]
+    status = (errors[0] if errors else "fail" if any(step["status"] == "fail" for step in steps)
+              else "pass" if steps else "missing-test")
+    return {"status": status,
+            "seconds": round(sum(step["seconds"] for step in steps), 1),
+            "failed": sorted({name for step in steps for name in step["failed"]}),
+            "ran": sorted({name for step in steps for name in step["ran"]}),
+            "selected": sorted({name for step in steps for name in step["selected"]}),
+            "steps": steps}
+
+
 def evaluate(args, target_dir, mu):
     logs = args.target_dir / "logs"
     result = {"id": mu.id, "site": mu.site, "named_tests": list(mu.tests),
               "scenarios": [SCENARIOS[s] for s in mu.scenarios]}
+    if not mu.tests:
+        result.update(verdict="error", reason="no named test selectors")
+        return result
     started = time.monotonic()
     if getattr(args, "daemon", False):
         present = has_switch(mu.id, daemon=True)
@@ -943,15 +1033,15 @@ def evaluate(args, target_dir, mu):
     killed_by_test = named.status == "fail"
     scen = None
     if mu.scenarios and not args.fast:
-        filters = [SCENARIOS[s] for s in mu.scenarios]
-        scen = run_step(args, target_dir, mu.id, filters, args.seeds, args.timeout_scenario,
-                        logs / f"{mu.id}.scenario.log")
-        result["scenario"] = scen.__dict__
-    killed_by_scenario = scen is not None and scen.status == "fail"
+        groups = [(scenario,) for scenario in dict.fromkeys(SCENARIOS[s] for s in mu.scenarios)]
+        scen = run_grouped_steps(args, target_dir, mu.id, groups, args.seeds,
+                                 args.timeout_scenario, logs, f"{mu.id}.scenario")
+        result["scenario"] = scen
+    killed_by_scenario = scen is not None and scen["status"] == "fail"
     if named.status not in ("pass", "fail"):
         result.update(verdict="error", reason=f"named tests: {named.status}")
-    elif scen is not None and scen.status not in ("pass", "fail"):
-        result.update(verdict="error", reason=f"scenarios: {scen.status}")
+    elif scen is not None and scen["status"] not in ("pass", "fail"):
+        result.update(verdict="error", reason=f"scenarios: {scen['status']}")
     elif killed_by_test:
         result["verdict"] = "killed_by_test"
     elif killed_by_scenario:
@@ -970,18 +1060,19 @@ def evaluate_baseline(args, target_dir, mutations):
     if b.status != "pass":
         result["verdict"] = "error"
         return result
-    tests = sorted({t for mu in mutations for t in mu.tests})
-    named = run_step(args, target_dir, None, tests, None, args.timeout_test,
-                     logs / "baseline.named.log")
-    result["named"] = named.__dict__
-    ok = named.status == "pass"
-    scenarios = sorted({s for mu in mutations for s in mu.scenarios})
+    # Preserve each mutation's exact named-selector tuple as its original step.
+    # The baseline de-duplicates tuples, rather than merging unrelated steps.
+    groups = sorted({tuple(mu.tests) for mu in mutations})
+    named = run_grouped_steps(args, target_dir, None, groups, None, args.timeout_test,
+                             logs, "baseline.named")
+    result["named"] = named
+    ok = named["status"] == "pass"
+    scenarios = sorted({SCENARIOS[s] for mu in mutations for s in mu.scenarios})
     if scenarios and not args.fast:
-        filters = [SCENARIOS[s] for s in scenarios]
-        scen = run_step(args, target_dir, None, filters, args.seeds,
-                        args.timeout_scenario, logs / "baseline.scenario.log")
-        result["scenario"] = scen.__dict__
-        ok = ok and scen.status == "pass"
+        scen = run_grouped_steps(args, target_dir, None, [(s,) for s in scenarios],
+                                 args.seeds, args.timeout_scenario, logs, "baseline.scenario")
+        result["scenario"] = scen
+        ok = ok and scen["status"] == "pass"
     result["verdict"] = "pass" if ok else "fail"
     return result
 
@@ -1016,7 +1107,7 @@ def main():
     parser.add_argument("--timeout-build", type=int, default=1200,
                         help="seconds per build deadline (0 disables its deadline)")
     parser.add_argument("--timeout-test", type=int, default=900,
-                        help="seconds per named-test deadline (0 disables its deadline)")
+                        help="seconds per named-selector tuple deadline (0 disables its deadline)")
     parser.add_argument("--timeout-scenario", type=int, default=3600,
                         help="seconds per scenario deadline (0 disables its deadline)")
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")

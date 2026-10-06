@@ -1272,14 +1272,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private typealias EncodeControlPongFn = EncodeControlPingFn
 
-    private typealias EncodeConfidentialPayloadFn = @convention(c) (
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?
-    ) -> Int32
-
     private typealias AccountAddressParseFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UInt16, UInt8,
@@ -1854,7 +1846,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeControlCloseFn: EncodeControlCloseFn? = nil
     private var encodeControlPingFn: EncodeControlPingFn? = nil
     private var encodeControlPongFn: EncodeControlPongFn? = nil
-    private var encodeConfidentialPayloadFn: EncodeConfidentialPayloadFn? = nil
     private var accountAddressParseFn: AccountAddressParseFn? = nil
     private var accountAddressRenderFn: AccountAddressRenderFn? = nil
     private var publicKeyFromPrivateFn: PublicKeyFromPrivateFn? = nil
@@ -1982,7 +1973,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeControlCloseFn: Any? = nil
     private let encodeControlPingFn: Any? = nil
     private let encodeControlPongFn: Any? = nil
-    private let encodeConfidentialPayloadFn: Any? = nil
     private let accountAddressParseFn: Any? = nil
     private let accountAddressRenderFn: Any? = nil
     private let publicKeyFromPrivateFn: Any? = nil
@@ -2697,11 +2687,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.encodeControlPongFn = nil
             }
-            if let encodeConfidentialSymbol = dlsym(handle, "connect_norito_encode_confidential_encrypted_payload") {
-                self.encodeConfidentialPayloadFn = unsafeBitCast(encodeConfidentialSymbol, to: EncodeConfidentialPayloadFn.self)
-            } else {
-                self.encodeConfidentialPayloadFn = nil
-            }
             if let accountAddressParseSymbol = dlsym(handle, "connect_norito_account_address_parse") {
                 self.accountAddressParseFn = unsafeBitCast(accountAddressParseSymbol, to: AccountAddressParseFn.self)
             } else {
@@ -3146,7 +3131,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
-            self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
             self.accountAddressRenderFn = nil
             self.sm2DefaultDistidFn = nil
@@ -7104,36 +7088,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                     &outPtr,
                     &outLen
                 )
-            }
-        }
-        guard status == 0, let outPtr else {
-            if status == 0, let outPtr { freeFn(outPtr) }
-            return nil
-        }
-        return takeData(pointer: outPtr, length: outLen)
-        #else
-        return nil
-        #endif
-    }
-
-    func encodeConfidentialPayload(ephemeralPublicKey: Data,
-                                   nonce: Data,
-                                   ciphertext: Data) -> Data? {
-        #if canImport(Darwin)
-        guard let encodeConfidentialPayloadFn, let freeFn else { return nil }
-        var outPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outLen: UInt = 0
-        let status = ephemeralPublicKey.withUnsafeBytes { ep in
-            nonce.withUnsafeBytes { np in
-                ciphertext.withUnsafeBytes { cp in
-                    encodeConfidentialPayloadFn(
-                        ep.bindMemory(to: UInt8.self).baseAddress, UInt(ep.count),
-                        np.bindMemory(to: UInt8.self).baseAddress, UInt(nonce.count),
-                        cp.bindMemory(to: UInt8.self).baseAddress, UInt(ciphertext.count),
-                        &outPtr,
-                        &outLen
-                    )
-                }
             }
         }
         guard status == 0, let outPtr else {

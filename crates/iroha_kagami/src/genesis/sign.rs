@@ -720,7 +720,6 @@ pub fn prepared_native_test_chain(
     manifest: &RawGenesisTransaction,
     config: &actual::Root,
     validator_keys: Vec<KeyPair>,
-    pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
     clock: KeyPair,
     lane_blocks: Arc<dyn iroha_core::sumeragi::lanes::merge::LaneBlockSource>,
 ) -> Result<iroha_core::sumeragi::test_chain::CertifiedTestChain, color_eyre::eyre::Error> {
@@ -745,7 +744,6 @@ pub fn prepared_native_test_chain(
             state: Arc::new(state),
             kura,
             validator_keys,
-            pasta_seeds,
             clock,
             lane_blocks,
         },
@@ -790,7 +788,7 @@ pub(super) fn prepare_genesis_for_signing(
     if topology_override.is_some() {
         genesis = genesis.clear_topology();
     }
-    super::ensure_kagemusha_mint_finality_schedule_matches_consensus(&genesis)?;
+    super::ensure_genesis_schedule_matches_consensus(&genesis)?;
     let mut final_topology =
         topology_override.map_or_else(|| collect_topology_peers(&genesis), <[PeerId]>::to_vec);
     ensure_valid_genesis_committee(&final_topology)?;
@@ -803,10 +801,6 @@ pub(super) fn prepare_genesis_for_signing(
     let topology_entries = topology_override
         .map(|topology| build_topology_entries(topology, peer_pops))
         .transpose()?;
-    super::ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
-        &genesis,
-        &final_topology,
-    )?;
 
     let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     let topology_peers = if uses_npos {
@@ -870,10 +864,8 @@ pub(super) fn prepare_genesis_for_signing(
             .with_consensus_meta()?
     };
     prepared
-        .validate_kagemusha_mint_finality_topology()
-        .wrap_err(
-            "refusing to sign a genesis whose final topology lacks its exact provisioned KAGEMUSHA authority; Kagami never derives or rewrites production Pasta keys",
-        )?;
+        .validate_genesis_topology()
+        .wrap_err("refusing to sign a genesis whose final topology is not an exact committee")?;
     Ok(prepared)
 }
 
@@ -1366,9 +1358,6 @@ pub mod tests {
                 &fixture.manifest,
                 &fixture.config,
                 keys,
-                (0..4)
-                    .map(|seat| zeroize::Zeroizing::new([0xA0 + seat; 32]))
-                    .collect(),
                 KeyPair::from_seed(vec![0x7D; 32], Algorithm::Ed25519),
                 Arc::new(iroha_core::sumeragi::lanes::merge::NoLanes),
             )
@@ -1959,11 +1948,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert_eq!(
                 object.get("consensus_fingerprint"),
                 Some(&norito::json::Value::Null),
-                "{path} must not advertise a fingerprint before authority materialization"
-            );
-            assert!(
-                !object.contains_key("kagemusha_mint_finality"),
-                "{path} must leave operator authority unmaterialized"
+                "{path} must not advertise a fingerprint before materialization"
             );
             assert!(
                 RawGenesisTransaction::from_path(&full_path).is_err(),
@@ -2390,16 +2375,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
         let consensus_mode = manifest.consensus_mode();
         let chain_discriminant = manifest.chain_discriminant();
-        let manifest = super::super::complete_test_genesis_builder_for_peers(
-            manifest.into_builder(),
-            topology.to_vec(),
-        )
-        .build_raw()
-        .expect("complete topology-bound signing fixture")
-        .with_consensus_mode(consensus_mode)
-        .with_chain_discriminant(chain_discriminant)
-        .with_consensus_meta()
-        .expect("valid fixture consensus parameters");
+        let manifest = manifest
+            .into_builder()
+            .complete_for_test()
+            .build_raw()
+            .expect("complete topology-bound signing fixture")
+            .with_consensus_mode(consensus_mode)
+            .with_chain_discriminant(chain_discriminant)
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let manifest = with_explicit_test_xor_allocations(manifest, topology);
         fs::write(
             &path,
@@ -3447,17 +3431,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("generate BLS PoP");
         let (new_peers, peer_pops) = valid_test_topology(4);
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
-        let manifest = super::super::complete_test_genesis_builder_for_peers(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("topology-override"),
-                PathBuf::from("."),
-            )
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)]),
-            new_peers.clone(),
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("topology-override"),
+            PathBuf::from("."),
         )
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)])
+        .complete_for_test()
         .build_raw()
         .expect("complete topology-override fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)

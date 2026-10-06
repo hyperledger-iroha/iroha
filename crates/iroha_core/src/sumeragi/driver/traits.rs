@@ -263,9 +263,6 @@ pub enum PublicationDeferral {
     /// Original reputation archive index reader or writer must release.
     #[error("original reputation archive index is busy")]
     ReputationArchiveBusy(iroha_allocation::release::ReleaseWait),
-    /// Original native receipt mailbox reader or writer must release.
-    #[error("original native attestation mailbox is busy")]
-    AttestationBusy(iroha_allocation::release::ReleaseWait),
 }
 impl PublicationDeferral {
     /// Borrow the original execution refusal; lock contention has no VM allocation category.
@@ -314,8 +311,7 @@ impl PublicationDeferral {
             | Self::PublicationBusy(wait)
             | Self::MembershipBusy(wait)
             | Self::ProviderArchiveBusy(wait)
-            | Self::ReputationArchiveBusy(wait)
-            | Self::AttestationBusy(wait) => Some(wait),
+            | Self::ReputationArchiveBusy(wait) => Some(wait),
         }
     }
 }

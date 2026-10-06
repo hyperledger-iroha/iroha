@@ -642,6 +642,17 @@ fn native_amx_original_graph_refusal_preserves_committed_owner_and_exact_retry_c
     let limit = budget.limit_bytes();
     let retained = budget.reserved_bytes();
     let owner = RetainedNativeAmx::admit(&source, &budget).unwrap();
+    let copied = &owner.canonical().unwrap().participant.global.current;
+    assert_eq!(copied, &source.participant.global.current);
+    assert_eq!(
+        copied.generation().generation_id().unwrap(),
+        copied.authorization.authority_id,
+        "the retained sole BLS roster preserves its exact authorized generation"
+    );
+    assert!(
+        !owner.is_authenticated(),
+        "admitting an exact graph does not authenticate its history"
+    );
     assert_eq!(
         norito::encode_canonical(&owner).unwrap(),
         norito::encode_canonical(&Some(source.clone())).unwrap(),
@@ -660,9 +671,36 @@ fn native_amx_original_graph_refusal_preserves_committed_owner_and_exact_retry_c
     ));
     assert_eq!(budget.reserved_bytes(), retained);
     assert_eq!(native(&roots.participants[0]), source);
+    for mutation in 0..6 {
+        let mut malformed = source.clone();
+        let current = &mut malformed.participant.global.current;
+        match mutation {
+            0 => current.authorization.authority_generation += 1,
+            1 => current.authorization.authority_id[0] ^= 1,
+            2 => current.committee.swap(0, 1),
+            3 => current.committee[0].proof_of_possession[0] ^= 1,
+            4 => current.network_id = roots.participants[0].network_id(),
+            5 => current.leader_seed = [0; 32],
+            _ => unreachable!(),
+        }
+        assert!(matches!(
+            RetainedNativeAmx::admit(&malformed, &budget),
+            Err(GraphError::Invalid(_))
+        ));
+        assert_eq!(
+            budget.reserved_bytes(),
+            retained,
+            "malformed epoch mutation {mutation} is rejected before the occupied pool is charged"
+        );
+        assert_eq!(native(&roots.participants[0]), source);
+    }
     budget.set_limit_bytes(limit);
     let candidate = Candidate::copy(&source, &budget, 1, 0, None, None).unwrap();
     assert!(budget.reserved_bytes() > retained);
+    assert_eq!(
+        candidate.value.as_ref().unwrap().participant.global.current,
+        source.participant.global.current
+    );
     drop(candidate);
     assert_eq!(budget.reserved_bytes(), retained);
 }
@@ -1150,6 +1188,17 @@ fn native_amx_global_handoff_requires_real_boundary_and_preserves_original_sourc
         next.participant.global.previous,
         Some(original.participant.global.current.clone())
     );
+    for context in [
+        &next.participant.global.current,
+        next.participant.global.previous.as_ref().unwrap(),
+    ] {
+        context.validate().unwrap();
+        assert_eq!(
+            context.generation().generation_id().unwrap(),
+            context.authorization.authority_id,
+            "both prepaid handoff contexts retain their complete original BLS generation"
+        );
+    }
     assert_eq!(next.global_genesis, original.global_genesis);
     assert_eq!(next.global_successor, original.global_successor);
     assert_eq!(next.global_chain_label, original.global_chain_label);

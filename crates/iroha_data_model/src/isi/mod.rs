@@ -488,9 +488,6 @@ impl_musubi_instruction_box!(
     SetMusubiRegistryPolicyV1,
     AssertMusubiReleaseDigestV1,
 );
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaV1);
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1);
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::RedeemKagemushaV1);
 // Allow direct boxing of oracle feed instructions.
 impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);
 impl_direct_instruction_box!(crate::isi::oracle::SubmitOracleObservation);
@@ -1884,8 +1881,6 @@ pub mod defi;
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
-/// Clean-slate pooled-reserve KAGEMUSHA V1 instructions and operation records.
-pub mod kagemusha_v1;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -1951,7 +1946,6 @@ pub use confidential::*;
 pub use contract_alias::*;
 pub use defi::*;
 pub use identifier::*;
-pub use kagemusha_v1::*;
 pub use kaigi::*;
 pub use ministry::*;
 pub use mint_burn::*;

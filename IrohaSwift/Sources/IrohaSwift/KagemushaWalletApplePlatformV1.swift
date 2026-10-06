@@ -18,9 +18,9 @@ import Security
 // TODO(G2-bridge): connect_norito_bridge registers this adapter as the C vtable behind the
 // Rust `KagemushaWalletPlatformV1` (kagemusha_wallet_advance_v1/platform.rs). The
 // vtable-facing methods stay internal so app code reaches the payment key and the anchor only
-// through the Rust provider: `keySign` with arbitrary bytes would bypass the role-checked
-// receipt signer. The bridge obtains the custody root path (which verifies the canary) before
-// any storage answer.
+// through the Rust provider: `keySign` with an arbitrary 32-byte message would bypass the
+// domain-checked signers that compute it. The bridge obtains the custody root path (which
+// verifies the canary) before any storage answer.
 //
 // TODO(G2-iOS): device tests: Secure Enclave key generation and signing under
 // kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly (the error domain and code of a signature
@@ -77,6 +77,8 @@ public enum KagemushaWalletAppleStatusV1 {
   public static let dataProtectionUnavailable: Int32 = 0x4B47_000A
   /// The custody root has not been prepared and its canary verified in this process.
   public static let custodyRootNotPrepared: Int32 = 0x4B47_000B
+  /// A signing message is not exactly 32 bytes; nothing was signed.
+  public static let invalidSigningMessage: Int32 = 0x4B47_000C
 }
 
 /// Why the adapter's keychain access group could not be derived.
@@ -214,9 +216,11 @@ enum KagemushaWalletAppleRemoveOutcomeV1: Equatable {
 ///
 /// - The payment key is a Secure Enclave P-256 key (`kSecAttrTokenIDSecureEnclave`) stored
 ///   permanently under the slot's tag with `.privateKeyUsage` only. It is never bound to user
-///   presence or biometry (spec §2.3), never replaced, and signs only as DER through
-///   `SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256)`; Rust normalizes to low S and
-///   verifies before any byte is written.
+///   presence or biometry (spec §2.3), never replaced, and signs only the exact 32-byte Poseidon
+///   signing message as DER through
+///   `SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256)` (owner answer A1: the Secure
+///   Enclave hashes the message once with SHA-256; the digest variants are never used); Rust
+///   normalizes to low S and verifies before any byte is written.
 /// - The rollback anchor is one generic-password item per slot, created add-only and read
 ///   inside protected-data brackets. Its value is the Rust-encoded
 ///   `{generation, marker_file_digest}`.
@@ -247,6 +251,12 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// Access-control flags of the payment key: Secure Enclave private-key use only, with no
   /// user-presence, biometry or passcode-entry constraint (spec §2.3).
   static let paymentKeyAccessFlags: SecAccessControlCreateFlags = [.privateKeyUsage]
+  /// The only signing algorithm of the payment key: ECDSA-P256 over SHA-256 of the 32-byte
+  /// signing message (`kSecKeyAlgorithmECDSASignatureMessageX962SHA256`, owner answer A1).
+  static let signingAlgorithm = SecKeyAlgorithm.ecdsaSignatureMessageX962SHA256
+  /// Exact length of every signing message: the canonical encoding of one σ-field value, the
+  /// Rust `KagemushaWalletSignMessageV1` bytes.
+  static let signingMessageBytes = KagemushaWalletWireV1.signingMessageBytes
 
   /// Keychain access group of every item the adapter adds or queries: the app's own
   /// application identifier `<App ID prefix>.<bundle id>`, so no extension or other app of the
@@ -540,14 +550,19 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     }
   }
 
-  /// Sign the exact 32-byte canonical message with the slot's payment key (Rust `key_sign`).
-  /// The Secure Enclave signs `SHA-256(message)` and returns strict DER. Only the Rust
-  /// role-checked signers construct messages; this method stays internal for that reason. It is
-  /// not bracketed, so a locked keychain is told apart from one not yet unlocked since boot.
+  /// Sign the exact 32-byte signing `message` with the slot's payment key (Rust `key_sign`): the
+  /// Secure Enclave signs it with ``signingAlgorithm``, so the ECDSA hash is `SHA-256(message)`,
+  /// and returns strict DER. Nothing here prefixes, hashes or truncates the message. Only the
+  /// Rust domain-checked signers construct messages; this method stays internal for that reason.
+  /// A message of another length is refused
+  /// (``KagemushaWalletAppleStatusV1/invalidSigningMessage``) before the keychain is queried. It
+  /// is not bracketed, so a locked keychain is told apart from one not yet unlocked since boot.
   func keySign(_ slot: KagemushaWalletAppleSlotV1, message: Data)
     -> Result<Data, KagemushaWalletAppleUnavailableV1>
   {
-    guard message.count == 32 else { return .failure(.keyUnusable) }
+    guard message.count == Self.signingMessageBytes else {
+      return .failure(.platform(KagemushaWalletAppleStatusV1.invalidSigningMessage))
+    }
     let signed: Result<Data, KagemushaWalletAppleUnavailableV1>
     switch lookupPaymentKey(slot) {
     case .present(let item): signed = sign(item.key, slot: slot, message: message)
@@ -558,12 +573,14 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     return signed
   }
 
-  /// DER ECDSA P-256 / SHA-256 over `message` with `key`.
+  /// DER ECDSA P-256 / SHA-256 over the 32-byte `message` with `key`.
   func sign(_ key: SecKey, slot: KagemushaWalletAppleSlotV1, message: Data)
     -> Result<Data, KagemushaWalletAppleUnavailableV1>
   {
-    guard message.count == 32 else { return .failure(.keyUnusable) }
-    let algorithm = SecKeyAlgorithm.ecdsaSignatureMessageX962SHA256
+    guard message.count == Self.signingMessageBytes else {
+      return .failure(.platform(KagemushaWalletAppleStatusV1.invalidSigningMessage))
+    }
+    let algorithm = Self.signingAlgorithm
     guard SecKeyIsAlgorithmSupported(key, .sign, algorithm) else {
       diagnose("payment key does not support ECDSA P-256 SHA-256 signing", slot: slot)
       return .failure(.keyUnusable)

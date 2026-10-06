@@ -175,8 +175,6 @@ pub mod data_dir {
     pub const STREAMING_KEY: &str = "streaming.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
-    /// KAGEMUSHA mint-finality seed.
-    pub const MINT_FINALITY_SEED: &str = "mint_finality.seed";
     /// Global beacon partial-signer credential.
     pub const BEACON_CREDENTIAL: &str = "beacon.cred";
     /// Faucet authority private key (`torii.faucet.private_key_file`).
@@ -3475,8 +3473,6 @@ pub mod nexus {
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
-        /// Finite original allocation pool shared by fixed KAGEMUSHA indexes.
-        pub const KAGEMUSHA_OPERATION_INDEX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
         /// Exact backing for one maximum-size committed-evidence prune-key plan.

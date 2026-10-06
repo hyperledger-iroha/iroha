@@ -314,8 +314,6 @@ pub enum NodeSecretFile {
     Streaming,
     /// Soracloud runtime mutation-signer private key.
     RuntimeSigner,
-    /// KAGEMUSHA mint-finality seed.
-    MintFinalitySeed,
     /// Global beacon partial-signer credential.
     BeaconCredential,
     /// Faucet authority private key.
@@ -330,12 +328,11 @@ pub enum NodeSecretFile {
 }
 impl NodeSecretFile {
     /// Every fixed secret file, in a stable order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::Validator,
         Self::Transport,
         Self::Streaming,
         Self::RuntimeSigner,
-        Self::MintFinalitySeed,
         Self::BeaconCredential,
         Self::FaucetAuthority,
         Self::OnboardingAuthority,
@@ -350,7 +347,6 @@ impl NodeSecretFile {
             Self::Transport => names::TRANSPORT_KEY,
             Self::Streaming => names::STREAMING_KEY,
             Self::RuntimeSigner => names::RUNTIME_SIGNER_KEY,
-            Self::MintFinalitySeed => names::MINT_FINALITY_SEED,
             Self::BeaconCredential => names::BEACON_CREDENTIAL,
             Self::FaucetAuthority => names::FAUCET_AUTHORITY_KEY,
             Self::OnboardingAuthority => names::ONBOARDING_AUTHORITY_KEY,
@@ -497,7 +493,6 @@ mod data_dir_tests {
                 "transport.key",
                 "streaming.key",
                 "runtime_signer.key",
-                "mint_finality.seed",
                 "beacon.cred",
                 "authority/faucet.key",
                 "authority/onboarding.key",
@@ -3284,9 +3279,6 @@ pub struct NexusStorage {
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes,
-    /// Original allocation pool for the four fixed KAGEMUSHA operation indexes.
-    /// Current/undo versions and overlapping execution retain this same capacity.
-    pub kagemusha_operation_index_bytes: Bytes,
     /// Finite shared pool for retained carrier World shells, effects and service descriptors.
     /// This is not an aggregate RAM or nested execution-payload limit; zero admits none.
     pub retained_carrier_shell_bytes: usize,
@@ -3325,10 +3317,6 @@ impl fmt::Debug for NexusStorage {
             )
             .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
             .field(
-                "kagemusha_operation_index_bytes",
-                &self.kagemusha_operation_index_bytes,
-            )
-            .field(
                 "retained_carrier_shell_bytes",
                 &self.retained_carrier_shell_bytes,
             )
@@ -3351,8 +3339,6 @@ impl_default!(NexusStorage => {
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
-            kagemusha_operation_index_bytes:
-                defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
             retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
             consensus_evidence_preparation_bytes:
                 defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
@@ -6741,8 +6727,6 @@ mod sumeragi_core_config_tests {
 pub struct Sumeragi {
     /// Node-local participation role.
     pub role: NodeRole,
-    /// Fixed inherited private descriptor for the locally consumed Pasta seed.
-    pub mint_finality_seed_fd: Option<u16>,
     /// Public deployment binding for the runtime-only global beacon share signer.
     pub global_beacon_partial_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision paired with the beacon signer handle.
@@ -6765,7 +6749,6 @@ impl_default!(Sumeragi => {
         let store_dir = PathBuf::from(defaults::kura::STORE_DIR);
         Self {
             role: NodeRole::Validator,
-            mint_finality_seed_fd: None,
             global_beacon_partial_signer_provider_handle: None,
             global_beacon_partial_signer_provider_revision: None,
             global_beacon_partial_signer_provider_policy_digest: None,

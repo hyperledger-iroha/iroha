@@ -29,12 +29,8 @@
 //! (tests and the `test-utils` feature) keeps visible and durable state separately for file
 //! data and directory entries, injects deterministic faults at every step, and simulates
 //! process crashes, restarts and power loss.
-// TODO(G2-fs): design §2 places these typed primitives in `iroha_fs::PrivateDirectory`
-// (descriptor-relative `openat(O_DIRECTORY | O_NOFOLLOW)` for every component, `renameat2`,
-// `unlinkat`, `fsync(dirfd)`, identity rechecks after a rename, owner and mode validation of
-// every ancestor) together with the typed `write_atomic` outcome. `iroha_fs` is being changed
-// in another stage; once it lands, `KagemushaWalletStdFsV1` becomes a thin adapter over it and
-// this path-based backend is removed.
+// Native descriptor custody is provided by `iroha_fs::PrivateDirectory`; this adapter keeps
+// the G2 split write/sync/rename boundaries used by the deterministic fault simulator.
 
 use std::io;
 
@@ -104,6 +100,19 @@ fn not_published(error: &io::Error) -> KagemushaWalletNotPublishedV1 {
         KagemushaWalletNotPublishedV1::NoSpace
     } else {
         KagemushaWalletNotPublishedV1::Failed(unavailable(error))
+    }
+}
+
+// Retain the exact writer across the rename boundary. Native publication validates that
+// the staging name still identifies this original descriptor, even if a path was replaced.
+struct StagedV1<T> {
+    name: String,
+    _file: T,
+}
+impl<T> std::ops::Deref for StagedV1<T> {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.name
     }
 }
 
@@ -416,12 +425,12 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletDurableStoreV1<F> {
         Ok(removed)
     }
 
-    /// Write and sync `bytes` to a fresh staging file; returns its name.
+    /// Write and sync bytes while retaining the exact staged descriptor through publication.
     fn stage(
         &self,
         dir: &KagemushaWalletCustodyDirV1,
         bytes: &[u8],
-    ) -> Result<String, KagemushaWalletNotPublishedV1> {
+    ) -> Result<StagedV1<F::StagedFile>, KagemushaWalletNotPublishedV1> {
         let mut collisions = 0_u32;
         let (staged, mut file) = loop {
             let staged = self.fs.staging_name();
@@ -442,12 +451,15 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletDurableStoreV1<F> {
             .write_all(&mut file, bytes)
             .and_then(|()| self.fs.sync_staged(&file))
             .map_err(|error| not_published(&error));
-        drop(file);
         if let Err(reason) = result {
+            drop(file);
             self.discard_staged(dir, &staged);
             return Err(reason);
         }
-        Ok(staged)
+        Ok(StagedV1 {
+            name: staged,
+            _file: file,
+        })
     }
 
     fn rename_new(
@@ -506,13 +518,6 @@ pub use self::std_fs::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 
 #[cfg(unix)]
 mod std_fs {
-    use std::{
-        fs::{DirBuilder, File, OpenOptions, TryLockError},
-        io::{self, Read as _, Write as _},
-        os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _},
-        path::{Path, PathBuf},
-    };
-
     use super::super::{
         layout::{KAGEMUSHA_WALLET_LOCK_NAME_V1, KagemushaWalletCustodyDirV1, lower_hex},
         platform::{
@@ -521,36 +526,63 @@ mod std_fs {
             KagemushaWalletUnavailableV1,
         },
     };
+    use iroha_fs::{
+        CustodyEntryKind, FileIdentity, OwnerDirectory, PrivateDirectory, PublishMode, RetainedFile,
+    };
+    use std::{
+        collections::BTreeMap,
+        fs::{File, TryLockError},
+        io::{self, Read as _, Write as _},
+        os::unix::fs::MetadataExt as _,
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex, Weak},
+    };
 
-    /// `std::fs` backend rooted at one custody directory.
-    ///
-    /// Files are opened with `O_NOFOLLOW`; create-new renames use `renameat2(RENAME_NOREPLACE)`
-    /// (Linux, Android) or `renameatx_np(RENAME_EXCL)` (Apple) and are refused elsewhere.
+    type DirectoryCache = Mutex<BTreeMap<Vec<String>, Arc<PrivateDirectory>>>;
+    type StagingCache = Mutex<BTreeMap<(Vec<String>, String), Weak<FileIdentity>>>;
+    /// Descriptor-relative native custody. The root and each visited child retain their exact
+    /// ancestor identities across operations; no pathname reopening can adopt a replacement.
     #[derive(Debug, Clone)]
     pub struct KagemushaWalletStdFsV1 {
-        root: PathBuf,
+        root: Arc<PrivateDirectory>,
+        path: PathBuf,
+        directories: Arc<DirectoryCache>,
+        staging: Arc<StagingCache>,
     }
-
-    /// Held `flock` on `<root>/lock`; released when dropped.
+    /// Exclusive ownership lock retaining the same root custody for its whole lifetime.
     #[derive(Debug)]
     pub struct KagemushaWalletStdFsLockV1 {
         _file: File,
+        _root: Arc<PrivateDirectory>,
     }
-
+    /// Original staged descriptor and identity; publication must still name this exact inode.
+    #[derive(Debug)]
+    pub struct KagemushaWalletStdFsStagedV1 {
+        file: RetainedFile,
+        _identity: Arc<FileIdentity>,
+    }
+    fn custody_changed(error: io::Error) -> io::Error {
+        if error.kind() == io::ErrorKind::NotFound {
+            io::Error::other("retained custody path disappeared")
+        } else {
+            error
+        }
+    }
+    fn poisoned() -> io::Error {
+        io::Error::other("custody handle poisoned")
+    }
+    fn components(dir: &KagemushaWalletCustodyDirV1) -> Vec<String> {
+        dir.components().to_vec()
+    }
     impl KagemushaWalletStdFsV1 {
-        /// Open an existing custody root directory: never a symbolic link, owned by this
-        /// process's effective user, and closed to group and others (mode `0700` or tighter).
+        /// Open one existing owner-private custody root, retaining all native ancestors.
         ///
         /// # Errors
-        ///
-        /// Returns the reason the root cannot be used: the OS error, `Io(0)` for a non-directory
-        /// and `Io(EACCES)` for another owner or a group- or world-accessible mode.
-        // TODO(G2-fs): ancestors are resolved by path (Android `/data/user/0` is itself a
-        // symbolic link); descriptor-relative opens arrive with the `iroha_fs` primitives.
+        /// Missing or unsafe roots, symlinks, replaced ancestors and genuine native errors.
         pub fn open(root: impl Into<PathBuf>) -> Result<Self, KagemushaWalletUnavailableV1> {
-            let root = root.into();
-            let metadata = std::fs::symlink_metadata(&root)
-                .map_err(|error| KagemushaWalletUnavailableV1::from_io(&error))?;
+            let path = root.into();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|e| KagemushaWalletUnavailableV1::from_io(&e))?;
             if !metadata.is_dir() {
                 return Err(KagemushaWalletUnavailableV1::Io(0));
             }
@@ -559,222 +591,249 @@ mod std_fs {
                     rustix::io::Errno::ACCESS.raw_os_error(),
                 ));
             }
-            Ok(Self { root })
+            let root = PrivateDirectory::open(&path)
+                .map_err(|e| KagemushaWalletUnavailableV1::from_io(&e))?;
+            Ok(Self {
+                root: Arc::new(root),
+                path,
+                directories: Arc::default(),
+                staging: Arc::default(),
+            })
         }
-
-        /// Durably create the custody root directory `root` (mode `0700`) and sync its parent.
+        /// Create and sync one private child of a retained safe parent; never harden an existing
+        /// object or follow a final symlink. An error after native creation is uncertain.
         #[must_use]
         pub fn create_root(root: &Path) -> KagemushaWalletPublishOutcomeV1 {
-            let Some(parent) = root.parent() else {
+            let Some((parent, name)) = root.parent().zip(root.file_name()) else {
                 return KagemushaWalletPublishOutcomeV1::NotPublished(
                     KagemushaWalletNotPublishedV1::Failed(KagemushaWalletUnavailableV1::Io(0)),
                 );
             };
-            let created = match DirBuilder::new().mode(0o700).create(root) {
-                Ok(()) => true,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
-                Err(error) => {
+            let parent = match OwnerDirectory::open(parent) {
+                Ok(parent) => parent,
+                Err(e) => {
                     return KagemushaWalletPublishOutcomeV1::NotPublished(
                         KagemushaWalletNotPublishedV1::Failed(
-                            KagemushaWalletUnavailableV1::from_io(&error),
+                            KagemushaWalletUnavailableV1::from_io(&e),
                         ),
                     );
                 }
             };
-            match File::open(parent).and_then(|directory| directory.sync_all()) {
-                Ok(()) if created => KagemushaWalletPublishOutcomeV1::Published,
-                Ok(()) => KagemushaWalletPublishOutcomeV1::NotPublished(
-                    KagemushaWalletNotPublishedV1::DestinationExists,
-                ),
-                Err(error) => KagemushaWalletPublishOutcomeV1::Uncertain(
-                    KagemushaWalletUnavailableV1::from_io(&error),
+            match parent.create_private_child(name) {
+                Ok(child) => match child.sync().and_then(|()| parent.sync()) {
+                    Ok(()) => KagemushaWalletPublishOutcomeV1::Published,
+                    Err(e) => KagemushaWalletPublishOutcomeV1::Uncertain(
+                        KagemushaWalletUnavailableV1::from_io(&e),
+                    ),
+                },
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    KagemushaWalletPublishOutcomeV1::NotPublished(
+                        KagemushaWalletNotPublishedV1::DestinationExists,
+                    )
+                }
+                Err(e) => KagemushaWalletPublishOutcomeV1::Uncertain(
+                    KagemushaWalletUnavailableV1::from_io(&e),
                 ),
             }
         }
-
-        /// The custody root path.
+        /// Original spelling for display only; filesystem operations use retained descriptors.
         #[must_use]
         pub fn root(&self) -> &Path {
-            &self.root
+            &self.path
         }
-
-        fn dir_path(&self, dir: &KagemushaWalletCustodyDirV1) -> PathBuf {
-            let mut path = self.root.clone();
-            path.extend(dir.components());
-            path
+        fn directory(
+            &self,
+            dir: &KagemushaWalletCustodyDirV1,
+        ) -> io::Result<Arc<PrivateDirectory>> {
+            self.root.revalidate().map_err(custody_changed)?;
+            let mut current = Arc::clone(&self.root);
+            let mut prefix = Vec::new();
+            let mut cache = self.directories.lock().map_err(|_| poisoned())?;
+            for component in dir.components() {
+                prefix.push(component.to_owned());
+                if let Some(held) = cache.get(&prefix) {
+                    held.revalidate().map_err(custody_changed)?;
+                    current = Arc::clone(held);
+                } else {
+                    let opened = current.open_child(component);
+                    current.revalidate().map_err(custody_changed)?;
+                    let child = Arc::new(opened?);
+                    cache.insert(prefix.clone(), Arc::clone(&child));
+                    current = child;
+                }
+            }
+            current.revalidate().map_err(custody_changed)?;
+            Ok(current)
         }
-
-        fn file_path(&self, dir: &KagemushaWalletCustodyDirV1, name: &str) -> PathBuf {
-            self.dir_path(dir).join(name)
+        fn rename(
+            &self,
+            dir: &KagemushaWalletCustodyDirV1,
+            from: &str,
+            to: &str,
+            mode: PublishMode,
+        ) -> io::Result<()> {
+            let original = self
+                .staging
+                .lock()
+                .map_err(|_| poisoned())?
+                .get(&(components(dir), from.to_owned()))
+                .and_then(Weak::upgrade)
+                .ok_or_else(|| {
+                    io::Error::other("publication requires the live original staged file")
+                })?;
+            self.directory(dir)?
+                .rename_custody_file(from, to, *original, mode)
         }
     }
-
-    /// Whether a custody root owned by `uid` with `mode` is private to this process's user.
     pub(super) fn root_is_private(uid: u32, mode: u32) -> bool {
         uid == rustix::process::geteuid().as_raw() && mode & 0o077 == 0
     }
-
-    /// `O_NOFOLLOW` as a `custom_flags` argument, checked at compile time: never zero, so a
-    /// final symbolic link is always refused (fail closed).
+    #[cfg(test)]
     pub(super) const NOFOLLOW: i32 = {
         let bits = rustix::fs::OFlags::NOFOLLOW.bits();
-        assert!(
-            bits != 0 && bits <= 0x7fff_ffff,
-            "O_NOFOLLOW must be a nonzero open flag"
-        );
+        assert!(bits != 0 && bits <= 0x7fff_ffff);
         i32::from_ne_bytes(bits.to_ne_bytes())
     };
-
-    fn open_read(path: &Path) -> io::Result<File> {
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(NOFOLLOW)
-            .open(path)
-    }
-
     impl KagemushaWalletFsV1 for KagemushaWalletStdFsV1 {
-        type StagedFile = File;
+        type StagedFile = KagemushaWalletStdFsStagedV1;
         type Lock = KagemushaWalletStdFsLockV1;
-
-        fn create_new(&self, dir: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<File> {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(NOFOLLOW)
-                .open(self.file_path(dir, name))
+        fn create_new(
+            &self,
+            dir: &KagemushaWalletCustodyDirV1,
+            name: &str,
+        ) -> io::Result<Self::StagedFile> {
+            let file = self.directory(dir)?.create_custody_writer(name)?;
+            let identity = Arc::new(file.identity()?);
+            let mut staging = self.staging.lock().map_err(|_| poisoned())?;
+            staging.retain(|_, entry| entry.strong_count() > 0);
+            staging.insert(
+                (components(dir), name.to_owned()),
+                Arc::downgrade(&identity),
+            );
+            Ok(KagemushaWalletStdFsStagedV1 {
+                file,
+                _identity: identity,
+            })
         }
-
-        fn write_all(&self, file: &mut File, bytes: &[u8]) -> io::Result<()> {
-            file.write_all(bytes)
+        fn write_all(&self, file: &mut Self::StagedFile, bytes: &[u8]) -> io::Result<()> {
+            file.file.revalidate()?;
+            file.file.file_mut().write_all(bytes)?;
+            file.file.revalidate()
         }
-
-        fn sync_staged(&self, file: &File) -> io::Result<()> {
-            file.sync_all()
+        fn sync_staged(&self, file: &Self::StagedFile) -> io::Result<()> {
+            file.file.revalidate()?;
+            file.file.file().sync_all()?;
+            file.file.revalidate()
         }
-
         fn sync_named(&self, dir: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
-            open_read(&self.file_path(dir, name))?.sync_all()
+            let directory = self.directory(dir)?;
+            let file = directory.open_retained_private(name)?;
+            file.file().sync_all()?;
+            file.revalidate()
         }
-
         fn rename_noreplace(
             &self,
             dir: &KagemushaWalletCustodyDirV1,
             from: &str,
             to: &str,
         ) -> io::Result<()> {
-            #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
-            {
-                rustix::fs::renameat_with(
-                    rustix::fs::CWD,
-                    self.file_path(dir, from),
-                    rustix::fs::CWD,
-                    self.file_path(dir, to),
-                    rustix::fs::RenameFlags::NOREPLACE,
-                )
-                .map_err(io::Error::from)
-            }
-            #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
-            {
-                // No weaker fallback: create-new publication is refused on this target.
-                let _ = (dir, from, to);
-                Err(io::Error::from(io::ErrorKind::Unsupported))
-            }
+            self.rename(dir, from, to, PublishMode::CreateNew)
         }
-
         fn rename_replace(
             &self,
             dir: &KagemushaWalletCustodyDirV1,
             from: &str,
             to: &str,
         ) -> io::Result<()> {
-            std::fs::rename(self.file_path(dir, from), self.file_path(dir, to))
+            self.rename(dir, from, to, PublishMode::Replace)
         }
-
         fn unlink(&self, dir: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
-            std::fs::remove_file(self.file_path(dir, name))
+            self.directory(dir)?.remove_custody_file(name)
         }
-
         fn sync_dir(&self, dir: &KagemushaWalletCustodyDirV1) -> io::Result<()> {
-            File::open(self.dir_path(dir))?.sync_all()
+            self.directory(dir)?.sync()
         }
-
         fn mkdir(&self, parent: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
-            DirBuilder::new()
-                .mode(0o700)
-                .create(self.file_path(parent, name))
+            let child = Arc::new(self.directory(parent)?.create_child(name)?);
+            let mut key = components(parent);
+            key.push(name.to_owned());
+            self.directories
+                .lock()
+                .map_err(|_| poisoned())?
+                .insert(key, child);
+            Ok(())
         }
-
         fn remove_dir(&self, parent: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
-            std::fs::remove_dir(self.file_path(parent, name))
+            let key_name = super::super::KagemushaWalletEntryNameV1::new(name)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory name"))?;
+            let target = parent.child(&key_name);
+            let child = self.directory(&target)?;
+            self.directory(parent)?
+                .remove_custody_directory(name, child.identity()?)?;
+            let key = components(&target);
+            self.directories
+                .lock()
+                .map_err(|_| poisoned())?
+                .retain(|candidate, _| !candidate.starts_with(&key));
+            Ok(())
         }
-
         fn read(
             &self,
             dir: &KagemushaWalletCustodyDirV1,
             name: &str,
             limit: usize,
         ) -> io::Result<Vec<u8>> {
-            let file = open_read(&self.file_path(dir, name))?;
-            if !file.metadata()?.is_file() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "custody entry is not a regular file",
-                ));
-            }
+            let directory = self.directory(dir)?;
+            let opened = directory.open_retained_private(name);
+            directory.revalidate().map_err(custody_changed)?;
+            let original = opened?;
             let mut bytes = Vec::new();
-            file.take(u64::try_from(limit).unwrap_or(u64::MAX))
+            original
+                .file()
+                .take(u64::try_from(limit).unwrap_or(u64::MAX))
                 .read_to_end(&mut bytes)?;
+            original.revalidate().map_err(custody_changed)?;
             Ok(bytes)
         }
-
         fn list(
             &self,
             dir: &KagemushaWalletCustodyDirV1,
         ) -> io::Result<Vec<KagemushaWalletListedEntryV1>> {
+            let directory = self.directory(dir)?;
             let mut entries = Vec::new();
-            for entry in std::fs::read_dir(self.dir_path(dir))? {
-                let entry = entry?;
-                let name = entry.file_name().into_string().map_err(|_| {
+            for name in directory.entries(usize::MAX)? {
+                let kind = match directory.custody_entry_kind(&name)? {
+                    CustodyEntryKind::File => KagemushaWalletEntryKindV1::File,
+                    CustodyEntryKind::Directory => KagemushaWalletEntryKindV1::Directory,
+                    CustodyEntryKind::Other => KagemushaWalletEntryKindV1::Other,
+                };
+                let name = name.into_string().map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 custody entry")
                 })?;
-                let file_type = entry.file_type()?;
-                let kind = if file_type.is_file() {
-                    KagemushaWalletEntryKindV1::File
-                } else if file_type.is_dir() {
-                    KagemushaWalletEntryKindV1::Directory
-                } else {
-                    KagemushaWalletEntryKindV1::Other
-                };
                 entries.push(KagemushaWalletListedEntryV1 { name, kind });
             }
+            directory.revalidate()?;
             Ok(entries)
         }
-
         fn available_bytes(&self) -> io::Result<u64> {
-            let stat = rustix::fs::statvfs(&self.root).map_err(io::Error::from)?;
-            let overflow = || io::Error::new(io::ErrorKind::InvalidData, "statvfs overflow");
-            let blocks = u64::try_from(stat.f_bavail).map_err(|_| overflow())?;
-            let block = u64::try_from(stat.f_frsize).map_err(|_| overflow())?;
-            blocks.checked_mul(block).ok_or_else(overflow)
+            self.root.available_bytes()
         }
-
-        fn try_lock(&self) -> io::Result<KagemushaWalletStdFsLockV1> {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .custom_flags(NOFOLLOW)
-                .open(self.root.join(KAGEMUSHA_WALLET_LOCK_NAME_V1))?;
+        fn try_lock(&self) -> io::Result<Self::Lock> {
+            let file = self
+                .root
+                .open_ownership_lock(KAGEMUSHA_WALLET_LOCK_NAME_V1)?;
             match file.try_lock() {
-                Ok(()) => Ok(KagemushaWalletStdFsLockV1 { _file: file }),
-                Err(TryLockError::WouldBlock) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+                Ok(()) => {
+                    self.root.revalidate().map_err(custody_changed)?;
+                    Ok(KagemushaWalletStdFsLockV1 {
+                        _file: file,
+                        _root: Arc::clone(&self.root),
+                    })
+                }
+                Err(TryLockError::WouldBlock) => Err(io::ErrorKind::WouldBlock.into()),
                 Err(TryLockError::Error(error)) => Err(error),
             }
         }
-
         fn staging_name(&self) -> String {
             format!(
                 "{}{}",

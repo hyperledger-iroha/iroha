@@ -108,8 +108,6 @@ expected_hash_file = "genesis.expected_hash"
 [sumeragi]
 # role = "validator"
 # role = "observer" # sync-only; omit to use the validator default
-## Validator mint-finality seed descriptor (only descriptor 199; observers must not set it).
-# mint_finality_seed_fd = 199
 ## Credential-free global beacon share signer binding.
 # global_beacon_partial_signer_provider_handle = "signer://..."
 # global_beacon_partial_signer_provider_revision = 1

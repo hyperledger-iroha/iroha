@@ -178,6 +178,13 @@ impl SumeragiFinalityCheckpoint {
         Ok(value)
     }
     fn validate_bounds(&self) -> Result<(), FinalityError> {
+        self.validate_bounds_with_validation(None)
+    }
+
+    fn validate_bounds_with_validation(
+        &self,
+        mut validation: Option<&mut EpochValidationScope>,
+    ) -> Result<(), FinalityError> {
         need(
             !self.chain_id.is_empty() && self.chain_id.len() <= 1024,
             "checkpoint chain label exceeds bound",
@@ -215,7 +222,11 @@ impl SumeragiFinalityCheckpoint {
                     && decision.result != [0; 32]
                     && decision.committee_digest != [0; 32]
                     && decision.schedule.height == decision.height
-                    && decision.schedule.validate().is_ok()
+                    && match validation.as_deref_mut() {
+                        Some(validation) => decision.schedule.validate_with_validation(validation),
+                        None => decision.schedule.validate(),
+                    }
+                    .is_ok()
                     && decision.executed_len > 0
                     && decision.executed_len <= MAX_FINALITY_BLOCK_BYTES as u64,
                 "checkpoint commitments are malformed or discontinuous",
@@ -241,7 +252,8 @@ impl SumeragiFinalityVerifier {
             self.decisions.last_key_value().map(|(height, _)| *height) == Some(tip.height()),
             "checkpoint must export the authenticated tip",
         )?;
-        self.verify_same_decision(tip, tip)?;
+        // One immutable witness needs the complete certificate/prefix check exactly once.
+        self.verify_retained_decision(tip)?;
         let first = tip.height().saturating_sub(2).max(1);
         let checkpoint = SumeragiFinalityCheckpoint {
             network_id: NetworkId::from_genesis_hash(self.genesis.hash()),
@@ -280,14 +292,79 @@ impl SumeragiFinalityVerifier {
         network: &NetworkId,
         chain_id: &str,
     ) -> Result<Self, super::FinalityReadError> {
-        checkpoint.validate_bounds()?;
+        Self::from_trusted_checkpoint_with_consumer(
+            checkpoint,
+            network,
+            chain_id,
+            |_, verifier, _| verifier,
+        )
+    }
+
+    /// Import an independently authenticated checkpoint and retain its exact verified tip.
+    ///
+    /// This performs the same complete import as [`Self::from_trusted_checkpoint`] and returns
+    /// the tip capability produced by that verification. It authenticates historical execution;
+    /// current authority, freshness and newly supplied witnesses require their own checks.
+    /// The checkpoint must be selected independently of any responding peer's proof.
+    ///
+    /// # Errors
+    /// Bounds, selected network/chain/genesis mismatch, inconsistent retained commitments or an
+    /// invalid tip certificate. Canonical decode resource errors retain their original fields.
+    pub fn from_trusted_checkpoint_with_tip(
+        checkpoint: &SumeragiFinalityCheckpoint,
+        network: &NetworkId,
+        chain_id: &str,
+    ) -> Result<(Self, VerifiedSumeragiBlock), super::FinalityReadError> {
+        Self::from_trusted_checkpoint_with_consumer(
+            checkpoint,
+            network,
+            chain_id,
+            |_, verifier, tip| (verifier, tip),
+        )
+    }
+
+    /// Authenticate an owned or borrowed selected checkpoint before consuming its exact tip.
+    ///
+    /// This is the single checkpoint import producer. The consumer runs exactly once after
+    /// the complete signed-genesis, retained-decision and native tip authentication succeeds;
+    /// it receives the original source owner, resumed verifier and already authenticated tip.
+    /// Discarding consumers can return a small owner without returning the full decoded graph.
+    /// The original source borrow ends before an owned checkpoint is moved to the consumer.
+    /// Historical authentication supplies neither current authority nor a fresh quorum.
+    ///
+    /// The checkpoint must be independently selected. A response-selected trust root is
+    /// invalid. No consumer runs on refusal, and no checkpoint or verified graph is cloned
+    /// to invoke it. An owned input is consumed on either success or refusal.
+    ///
+    /// # Errors
+    /// Exactly the original import bounds, network/chain/genesis, retained commitment and
+    /// certificate failures. Original canonical decode resource fields are retained.
+    #[inline(never)]
+    pub fn from_trusted_checkpoint_with_consumer<C, T>(
+        checkpoint: C,
+        network: &NetworkId,
+        chain_id: &str,
+        consume: impl FnOnce(C, Self, VerifiedSumeragiBlock) -> T,
+    ) -> Result<T, super::FinalityReadError>
+    where
+        C: std::borrow::Borrow<SumeragiFinalityCheckpoint>,
+    {
+        // Optional epoch reuse is lexical to this complete import. An existing cumulative
+        // decoder owner keeps the original independent scopes and optional retention charges;
+        // never move its admitted work into a fresh shared scope. Signed genesis is fully
+        // authenticated and reconstructed before exact pure epoch reuse; every native frame,
+        // roster and certificate is reread.
+        let mut validation =
+            (!norito::core::decode_limits_active()).then(EpochValidationScope::new);
+        let selected = checkpoint.borrow();
+        selected.validate_bounds_with_validation(validation.as_mut())?;
         need(
-            checkpoint.network_id == *network && checkpoint.chain_id == chain_id,
+            selected.network_id == *network && selected.chain_id == chain_id,
             "checkpoint differs from independently selected network or chain",
         )?;
         let genesis = norito::core::with_decode_limits_scope(
-            norito::canonical_decode_limits(checkpoint.genesis_wire.len()),
-            || decode_framed_signed_block(&checkpoint.genesis_wire),
+            norito::canonical_decode_limits(selected.genesis_wire.len()),
+            || decode_framed_signed_block(&selected.genesis_wire),
         )
         .map_err(|error| match error.kind() {
             norito::core::DecodeAttemptErrorKind::Allocator
@@ -306,16 +383,21 @@ impl SumeragiFinalityVerifier {
                     .map_err(malformed)?
                     .encode_wire()
                     .map_err(malformed)?
-                    == checkpoint.genesis_wire,
+                    == selected.genesis_wire,
             "checkpoint genesis differs from selected network or canonical root",
         )?;
-        let mut verifier = Self::new(&genesis, chain_id, checkpoint.genesis_committee.clone())?;
-        verifier.decisions = checkpoint
+        let mut verifier = Self::new_with_validation(
+            &genesis,
+            chain_id,
+            selected.genesis_committee.clone(),
+            validation.as_ref(),
+        )?;
+        verifier.decisions = selected
             .decisions
             .iter()
             .map(|decision| (decision.height, decision.decision()))
             .collect();
-        for decision in checkpoint
+        for decision in selected
             .decisions
             .iter()
             .filter(|decision| decision.height <= 2)
@@ -333,10 +415,18 @@ impl SumeragiFinalityVerifier {
                 )?;
             }
         }
-        verifier.verify_same_decision(&checkpoint.tip, &checkpoint.tip)?;
-        Ok(verifier)
+        // Retain the capability produced by this complete single-witness verification.
+        let tip = verifier
+            .verify_retained_decision_with_validation(&selected.tip, validation.as_mut())?;
+        drop(genesis);
+        // Only exact, fully validated nonsecret epoch contexts were retained. Release this
+        // bounded workspace before transferring any source, verifier or tip to a consumer.
+        drop(validation);
+        Ok(consume(checkpoint, verifier, tip))
     }
 }
 
+#[cfg(all(test, feature = "transparent_api"))]
+mod epoch_validation_tests;
 #[cfg(all(test, feature = "transparent_api"))]
 mod tests;

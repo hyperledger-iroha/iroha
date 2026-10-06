@@ -169,6 +169,12 @@ fn check_common<F: PoseidonField>(
     request: &RequestBody,
     statement: &StatementV1<F>,
 ) -> Result<(), ConsumerError> {
+    require(request.canonical_digests::<F>(), ConsumerError::Effect)?;
+    require(
+        (request.terms.receiver_blacklist_version == 0)
+            == (request.terms.receiver_blacklist_root == [0; 32]),
+        ConsumerError::Controls,
+    )?;
     require(
         statement.step == step && statement.relation_id == *relation_id,
         ConsumerError::Relation,
@@ -252,7 +258,8 @@ pub fn check_send<F: PoseidonField>(
 /// The checks of a `sigma_recv` statement (for example Credited evidence)
 /// against the scheme's relation identity and the Request body the consumer
 /// holds. The receiver's credential digest is not compared with the
-/// Request's (owner answer Q8). Returns the `sigma_recv` relation and the
+/// Request's (owner answer Q8). Returns the `sigma_recv` relation the
+/// Request's recorded blacklist version selects (B6: `(4, version != 0)`) and the
 /// public input to verify the proof against.
 ///
 /// # Errors
@@ -270,7 +277,11 @@ pub fn check_receive<F: PoseidonField>(
     )?;
     let statement_digest = statement.digest().ok_or(ConsumerError::Effect)?;
     Ok(Accepted {
-        relation: SigmaRelation::RECEIVE,
+        relation: crate::proof::selector_for(
+            StepRelation::Receive,
+            statement.enabled_controls,
+            request.terms.receiver_blacklist_version,
+        ),
         public: StepPublic {
             statement: statement_digest,
         },

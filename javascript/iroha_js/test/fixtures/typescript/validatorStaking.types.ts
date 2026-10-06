@@ -15,6 +15,7 @@ import {
   type StakingMonetaryPreconditionV1,
   type StakingRewardClaimPlanV1,
   type StakingEpochAuthorizationV1,
+  type StakingValidatorGenerationV1,
   type StakingUnsignedV1,
 } from "../../../index.js";
 import {
@@ -46,6 +47,16 @@ const noFee: Buffer = encodeNorito("RewardClaimPlan", { ...claim, fee_claim: nul
 const authorization: StakingEpochAuthorizationV1 = decodeValidatorStakingValueV1("EpochAuthorization", bytes);
 const epoch: StakingUnsignedV1 = authorization.epoch;
 const generation: StakingUnsignedV1 = authorization.authority_generation;
+const validatorGeneration: StakingValidatorGenerationV1 = decodeNorito("ValidatorGeneration", bytes);
+const generationBytes: Buffer = encodeNorito("ValidatorGeneration", validatorGeneration);
+const peerKey: string = validatorGeneration.validators[0].public_key;
+
+// @ts-expect-error the retired monetary-authority generation is not an exported layout
+decodeValidatorStakingValueV1("AuthorityGeneration", bytes);
+// @ts-expect-error validator generations have no separate serialized version field
+encodeNorito("ValidatorGeneration", { ...validatorGeneration, version: 1 });
+// @ts-expect-error generation seats are peer identities without retired proof-key wrappers
+encodeNorito("ValidatorGeneration", { ...validatorGeneration, validators: [{ validator: validatorGeneration.validators[0] }] });
 
 // @ts-expect-error each operation carries its typed precondition, never opaque bytes
 encodeValidatorStakingValueV1("MonetaryPlan", { ...plan, precondition: bytes });
@@ -60,7 +71,7 @@ const roundedEpoch: number = authorization.epoch;
 // @ts-expect-error no obsolete epoch-coupled authority layout is exported
 decodeValidatorStakingValueV1("EpochAuthority", bytes);
 
-void [feeOnly, noFee, epoch, generation, incompleteUnbond, confusedPlan, roundedEpoch];
+void [feeOnly, noFee, epoch, generation, generationBytes, peerKey, incompleteUnbond, confusedPlan, roundedEpoch];
 
 
 declare const networkId: NetworkId;

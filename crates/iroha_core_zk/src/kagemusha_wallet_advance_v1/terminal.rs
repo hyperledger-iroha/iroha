@@ -49,7 +49,7 @@ use super::{
         KagemushaWalletEntryKindV1, KagemushaWalletFsV1, KagemushaWalletNotPublishedV1,
         KagemushaWalletPlatformV1, KagemushaWalletProbeV1, KagemushaWalletPublishOutcomeV1,
         KagemushaWalletReadV1, KagemushaWalletRemoveOutcomeV1, KagemushaWalletUnavailableV1,
-        kagemusha_wallet_boot_stamp_v1, kagemusha_wallet_sign_role_v1,
+        kagemusha_wallet_boot_stamp_v1, kagemusha_wallet_sign_domain_v1,
     },
     provider::{KagemushaWalletProviderV1, KagemushaWalletSlotStatusV1},
     retained::kagemusha_wallet_list_tombstones_v1,
@@ -207,7 +207,7 @@ where
                 .map_err(|_| KagemushaWalletProviderErrorV1::Invalid {
                     field: "abandon.body",
                 })?;
-        let signature = kagemusha_wallet_sign_role_v1(
+        let signature = kagemusha_wallet_sign_domain_v1(
             &self.platform,
             slot,
             terminal.payment_key(),

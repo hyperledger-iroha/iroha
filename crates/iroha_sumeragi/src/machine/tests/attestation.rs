@@ -248,7 +248,7 @@ fn det_a4_commitqc_attestations_checked_core() {
     })
     .collect();
     // MA11: over-aggregated by a Byzantine aggregator — `q + 1` genuine signatures and
-    // attestations (a KAGEMUSHA bundle has exactly `q`).
+    // attestations (a certificate must have exactly `q`).
     let everyone: Vec<ValidatorIndex> = (0..4).collect();
     bad.push(h.qc(VoteKind::Commit, 0, &b, &everyone));
     let from = h.others(1, &[])[0];
@@ -387,8 +387,8 @@ fn det_a5_no_authority_abstains_from_commit_only() {
     assert_eq!(unavailable(&h.all), 0);
 }
 
-/// MA12, SR40: an authority that needs the node's own execution of the block (KAGEMUSHA: `R`'s
-/// preimage) answers `Pending` when the `PrepareQC` of a flagged block arrives first: no Commit
+/// MA12, SR40: an authority that needs the node's own execution of the block answers
+/// `Pending` when the `PrepareQC` of a flagged block arrives first: no Commit
 /// vote, nothing persisted, no `AttestationUnavailable`. Its execution completing to the
 /// certified `R` makes the node Commit-vote at once with its attestation; an execution to
 /// another `R` leaves it `Pending` (an `ExecutionMismatch` only).

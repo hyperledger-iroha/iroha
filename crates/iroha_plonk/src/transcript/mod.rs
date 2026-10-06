@@ -39,10 +39,14 @@ use ff::PrimeField;
 use group::{GroupEncoding, prime::PrimeCurveAffine};
 use iroha_pasta::{PastaCurve, poseidon::PoseidonField};
 
+#[cfg(any(test, iroha_plonk_oracle))]
 use crate::cs::TranscriptV1;
+use crate::cs::TranscriptV2;
 
 pub mod blake2b;
 pub mod kagemusha_poseidon;
+pub mod pipa_r;
+pub use pipa_r::{BasePoseidonHash, TranscriptRepr, absorb_prelude_v2};
 #[cfg(test)]
 mod kat_tests;
 
@@ -61,6 +65,8 @@ pub const INSTANCE_FRAME_TAG: [u8; 8] = *b"pipainst";
 pub enum TranscriptError {
     /// The proof ended inside or before a message.
     ProofTruncated,
+    /// The transcript does not accept a binding from this field/profile.
+    ProfileMismatch,
     /// Bytes remain after the last message.
     TrailingBytes {
         /// The number of unread bytes.
@@ -77,6 +83,7 @@ pub enum TranscriptError {
 impl fmt::Display for TranscriptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProfileMismatch => f.write_str("transcript binding/profile mismatch"),
             Self::ProofTruncated => f.write_str("the proof is truncated"),
             Self::TrailingBytes { remaining } => {
                 write!(f, "{remaining} bytes follow the last proof message")
@@ -141,6 +148,28 @@ pub trait TranscriptHash<C: PastaCurve>: Clone {
     /// Absorbs a scalar.
     fn absorb_scalar(&mut self, scalar: &C::ScalarExt);
 
+    /// Absorbs native base-field context; scalar profiles explicitly reject it.
+    ///
+    /// # Errors
+    /// [`TranscriptError::ProfileMismatch`] when the binding field is unsupported.
+    fn absorb_base(&mut self, _value: &C::Base) -> Result<(), TranscriptError> {
+        Err(TranscriptError::ProfileMismatch)
+    }
+
+    /// Absorbs a VK binding only in its declared field.
+    ///
+    /// # Errors
+    /// [`TranscriptError::ProfileMismatch`] when the binding field is unsupported.
+    fn absorb_binding(&mut self, binding: &TranscriptRepr<C>) -> Result<(), TranscriptError> {
+        match binding {
+            TranscriptRepr::Scalar(value) => {
+                self.absorb_scalar(value);
+                Ok(())
+            }
+            TranscriptRepr::Base(_) => Err(TranscriptError::ProfileMismatch),
+        }
+    }
+
     /// Squeezes a challenge; the state continues.
     fn squeeze(&mut self) -> C::ScalarExt;
 }
@@ -159,6 +188,27 @@ pub trait Transcript<C: PastaCurve> {
 
     /// Absorbs a scalar that both sides know (not written to the proof).
     fn common_scalar(&mut self, scalar: &C::ScalarExt);
+
+    /// Absorbs native base-field context; scalar profiles explicitly reject it.
+    ///
+    /// # Errors
+    /// [`TranscriptError::ProfileMismatch`] when the binding field is unsupported.
+    fn common_base(&mut self, _value: &C::Base) -> Result<(), TranscriptError> {
+        Err(TranscriptError::ProfileMismatch)
+    }
+    /// Absorbs a descriptor binding only in its declared field.
+    ///
+    /// # Errors
+    /// [`TranscriptError::ProfileMismatch`] when the binding field is unsupported.
+    fn common_binding(&mut self, binding: &TranscriptRepr<C>) -> Result<(), TranscriptError> {
+        match binding {
+            TranscriptRepr::Scalar(value) => {
+                self.common_scalar(value);
+                Ok(())
+            }
+            TranscriptRepr::Base(_) => Err(TranscriptError::ProfileMismatch),
+        }
+    }
 }
 
 /// The prover's transcript: messages are absorbed and written to the proof.
@@ -251,6 +301,13 @@ impl<C: PastaCurve, H: TranscriptHash<C>> Transcript<C> for TranscriptWriter<C, 
 
     fn common_scalar(&mut self, scalar: &C::ScalarExt) {
         self.hash.absorb_scalar(scalar);
+    }
+
+    fn common_base(&mut self, value: &C::Base) -> Result<(), TranscriptError> {
+        self.hash.absorb_base(value)
+    }
+    fn common_binding(&mut self, binding: &TranscriptRepr<C>) -> Result<(), TranscriptError> {
+        self.hash.absorb_binding(binding)
     }
 }
 
@@ -345,6 +402,13 @@ impl<C: PastaCurve, H: TranscriptHash<C>> Transcript<C> for TranscriptReader<'_,
     fn common_scalar(&mut self, scalar: &C::ScalarExt) {
         self.hash.absorb_scalar(scalar);
     }
+
+    fn common_base(&mut self, value: &C::Base) -> Result<(), TranscriptError> {
+        self.hash.absorb_base(value)
+    }
+    fn common_binding(&mut self, binding: &TranscriptRepr<C>) -> Result<(), TranscriptError> {
+        self.hash.absorb_binding(binding)
+    }
 }
 
 impl<C: PastaCurve, H: TranscriptHash<C>> TranscriptRead<C> for TranscriptReader<'_, C, H> {
@@ -368,24 +432,29 @@ impl<C: PastaCurve, H: TranscriptHash<C>> TranscriptRead<C> for TranscriptReader
 pub enum DescriptorHash<C: PastaCurve>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     /// `BLAKE2b` `Challenge255` (spec 6.1).
     Blake2b(Blake2bHash<C>),
     /// KAGEMUSHA RP57 Poseidon (spec 6.2).
     Poseidon(PoseidonHash<C>),
+    /// PIPA-R base-field RP57 Poseidon.
+    BasePoseidon(BasePoseidonHash<C>),
 }
 
 impl<C: PastaCurve> DescriptorHash<C>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     /// The production hash of `transcript` (injective Poseidon point
     /// absorption).
     #[must_use]
-    pub fn production(transcript: TranscriptV1) -> Self {
-        match transcript {
-            TranscriptV1::Blake2bChallenge255 => Self::Blake2b(Blake2bHash::new()),
-            TranscriptV1::KagemushaPoseidonRp57 => Self::Poseidon(PoseidonHash::new()),
+    pub fn production(transcript: impl Into<TranscriptV2>) -> Self {
+        match transcript.into() {
+            TranscriptV2::KagemushaPoseidonRp57Base => Self::BasePoseidon(BasePoseidonHash::new()),
+            TranscriptV2::Blake2bChallenge255 => Self::Blake2b(Blake2bHash::new()),
+            TranscriptV2::KagemushaPoseidonRp57 => Self::Poseidon(PoseidonHash::new()),
         }
     }
 
@@ -405,11 +474,13 @@ where
 impl<C: PastaCurve> TranscriptHash<C> for DescriptorHash<C>
 where
     C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
 {
     fn absorb_point(&mut self, point: &C::AffineExt) -> Result<(), TranscriptError> {
         let result = match self {
             Self::Blake2b(hash) => hash.absorb_point(point),
             Self::Poseidon(hash) => hash.absorb_point(point),
+            Self::BasePoseidon(hash) => hash.absorb_point(point),
         };
         #[cfg(test)]
         if result.is_ok() {
@@ -422,9 +493,36 @@ where
         match self {
             Self::Blake2b(hash) => hash.absorb_scalar(scalar),
             Self::Poseidon(hash) => hash.absorb_scalar(scalar),
+            Self::BasePoseidon(hash) => hash.absorb_scalar(scalar),
         }
         #[cfg(test)]
         recording::note(crate::protocol::HashOperation::AbsorbScalar);
+    }
+
+    fn absorb_binding(&mut self, binding: &TranscriptRepr<C>) -> Result<(), TranscriptError> {
+        match (self, binding) {
+            (Self::BasePoseidon(_), TranscriptRepr::Scalar(_)) => {
+                Err(TranscriptError::ProfileMismatch)
+            }
+            (hash @ Self::BasePoseidon(_), TranscriptRepr::Base(value)) => hash.absorb_base(value),
+            (_, TranscriptRepr::Base(_)) => Err(TranscriptError::ProfileMismatch),
+            (hash, TranscriptRepr::Scalar(value)) => {
+                hash.absorb_scalar(value);
+                Ok(())
+            }
+        }
+    }
+
+    fn absorb_base(&mut self, value: &C::Base) -> Result<(), TranscriptError> {
+        match self {
+            Self::BasePoseidon(hash) => {
+                hash.absorb_base(value)?;
+                #[cfg(test)]
+                recording::note(crate::protocol::HashOperation::AbsorbBase);
+                Ok(())
+            }
+            _ => Err(TranscriptError::ProfileMismatch),
+        }
     }
 
     fn squeeze(&mut self) -> C::ScalarExt {
@@ -433,6 +531,7 @@ where
         match self {
             Self::Blake2b(hash) => hash.squeeze(),
             Self::Poseidon(hash) => hash.squeeze(),
+            Self::BasePoseidon(hash) => hash.squeeze(),
         }
     }
 }

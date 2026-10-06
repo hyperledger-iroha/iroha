@@ -138,18 +138,35 @@ pub fn to_u128<F: PastaField>(value: &F) -> Option<u128> {
 /// The next free row of a group of columns.
 ///
 /// Rows are absolute (regions start at row 0). [`RowCursor::take`] hands out
-/// consecutive, non-overlapping row ranges with checked arithmetic; the
+/// consecutive, non-overlapping row ranges with checked arithmetic below an
+/// optional end row (chips that share columns get disjoint row ranges); the
 /// assembly rejects rows at or beyond the usable rows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowCursor {
     next: usize,
+    end: usize,
+}
+
+impl Default for RowCursor {
+    fn default() -> Self {
+        Self::starting_at(0)
+    }
 }
 
 impl RowCursor {
     /// A cursor whose first free row is `row`.
     #[must_use]
     pub const fn starting_at(row: usize) -> Self {
-        Self { next: row }
+        Self {
+            next: row,
+            end: usize::MAX,
+        }
+    }
+
+    /// A cursor over the rows `[start, end)`.
+    #[must_use]
+    pub const fn bounded(start: usize, end: usize) -> Self {
+        Self { next: start, end }
     }
 
     /// The first free row.
@@ -158,14 +175,25 @@ impl RowCursor {
         self.next
     }
 
+    /// The end of the cursor's rows (`usize::MAX` when unbounded).
+    #[must_use]
+    pub const fn end(self) -> usize {
+        self.end
+    }
+
     /// Reserves `rows` consecutive rows and returns the first.
     ///
     /// # Errors
     ///
-    /// [`Error::BoundsFailure`] when the row index overflows.
+    /// [`Error::BoundsFailure`] when the row index overflows or the rows
+    /// pass the end.
     pub fn take(&mut self, rows: usize) -> Result<usize, Error> {
         let start = self.next;
-        self.next = start.checked_add(rows).ok_or(Error::BoundsFailure)?;
+        let next = start
+            .checked_add(rows)
+            .filter(|next| *next <= self.end)
+            .ok_or(Error::BoundsFailure)?;
+        self.next = next;
         Ok(start)
     }
 }
@@ -231,6 +259,15 @@ mod tests {
         let mut full = RowCursor::starting_at(usize::MAX);
         assert_eq!(full.take(1), Err(Error::BoundsFailure));
         assert_eq!(full.next_row(), usize::MAX);
+        // A bounded cursor stops at its end and is unchanged by a refusal.
+        let mut bounded = RowCursor::bounded(10, 14);
+        assert_eq!(bounded.end(), 14);
+        assert_eq!(bounded.take(3), Ok(10));
+        assert_eq!(bounded.take(2), Err(Error::BoundsFailure));
+        assert_eq!(bounded.next_row(), 13);
+        assert_eq!(bounded.take(1), Ok(13));
+        assert_eq!(bounded.take(0), Ok(14));
+        assert_eq!(RowCursor::default().end(), usize::MAX);
     }
 
     #[test]

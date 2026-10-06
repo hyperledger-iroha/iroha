@@ -4,7 +4,6 @@
 use p256::ecdsa::SigningKey;
 
 use super::*;
-use crate::kagemusha::kagemusha_wallet_v1::digest::kagemusha_wallet_digest_v1;
 use crate::kagemusha::kagemusha_wallet_v1::{
     KagemushaWalletChargeQuoteBodyV1, KagemushaWalletEvidenceKindV1, KagemushaWalletStatementV1,
     KagemushaWalletValidationErrorV1,
@@ -403,11 +402,16 @@ fn kagemusha_wallet_v1_load_voucher_sign_verify_and_effect() {
     voucher
         .verify(&f.identity.scheme, &f.authorizer_certificate)
         .expect("verify");
-    let mut signed = voucher.body.signing_message().to_vec();
-    signed.extend_from_slice(voucher.signature.as_raw_bytes());
     assert_eq!(
         voucher.voucher_digest(),
-        kagemusha_wallet_digest_v1(Role::Voucher, &signed)
+        super::super::digest::kagemusha_wallet_signed_object_digest_v1(
+            super::super::digest::KagemushaWalletObjectDigestDomainV1::Voucher,
+            &voucher.body.signing_message(),
+            &voucher.signature
+        )
+    );
+    assert!(
+        super::super::digest::kagemusha_wallet_is_canonical_field_v1(&voucher.voucher_digest())
     );
     let effect = voucher.load_effect().expect("effect");
     assert_eq!(
@@ -547,7 +551,7 @@ fn kagemusha_wallet_v1_ledger_control_sign_verify_and_flips() {
     let key = f.credential().body.payment_key;
     let control = f.control(
         f.control_body(KagemushaWalletLedgerControlActionV1::CloseLoads {
-            package_digest: [0x41; 32],
+            package_digest: field_value(0x41),
             next_load: 3,
         }),
     );
@@ -658,7 +662,7 @@ fn kagemusha_wallet_v1_activation_records_the_bootstrap_package() {
     let mut digest = activation.clone();
     digest.control = f.control(
         f.control_body(KagemushaWalletLedgerControlActionV1::Activate {
-            package_digest: [0x51; 32],
+            package_digest: field_value(0x51),
         }),
     );
     assert_invalid(digest.validate(), "activation.package_digest");
@@ -674,7 +678,7 @@ fn kagemusha_wallet_v1_activation_records_the_bootstrap_package() {
     let mut action = activation.clone();
     action.control = f.control(
         f.control_body(KagemushaWalletLedgerControlActionV1::CloseLoads {
-            package_digest: [0x52; 32],
+            package_digest: field_value(0x52),
             next_load: 0,
         }),
     );
@@ -765,7 +769,7 @@ fn kagemusha_wallet_v1_close_loads_requires_a_retiring_package() {
     let mut digest = close.clone();
     digest.control = f.control(
         f.control_body(KagemushaWalletLedgerControlActionV1::CloseLoads {
-            package_digest: [0x61; 32],
+            package_digest: field_value(0x61),
             next_load: 7,
         }),
     );

@@ -1,4 +1,4 @@
-//! Genuine signed evidence must retain result witnesses under its original finite pool.
+//! Original signed conflicts retain untrusted witness attachments under their finite pool.
 use super::*;
 use crate::sumeragi::test_chain::{CertifiedTestChain, Signers};
 use iroha_sumeragi::{message::ResultWitness, types::Hash32};
@@ -14,27 +14,26 @@ fn witnessed_conflict(chain: &CertifiedTestChain) -> Evidence {
             .to_vec(),
     )
     .unwrap();
-    Evidence::from_native(&NativeEvidence::ConflictingCertificates(
-        chain.commit_qc_with_witness(
-            2,
-            Hash32([0x31; 32]),
-            committed.result(),
-            true,
-            Signers::Quorum,
-            Some(witness.clone()),
-        ),
-        chain.commit_qc_with_witness(
-            2,
-            Hash32([0x32; 32]),
-            committed.result(),
-            true,
-            Signers::LastThree,
-            Some(witness),
-        ),
-    ))
-    .unwrap()
+    let mut first = chain.commit_qc(
+        2,
+        Hash32([0x31; 32]),
+        committed.result(),
+        true,
+        Signers::Quorum,
+    );
+    let mut second = chain.commit_qc(
+        2,
+        Hash32([0x32; 32]),
+        committed.result(),
+        true,
+        Signers::LastThree,
+    );
+    // Conflicting values prove safety through exact BLS signatures alone. Untrusted
+    // attachments are retained evidence bytes, never native application authority.
+    first.attestation_witness = Some(witness.clone());
+    second.attestation_witness = Some(witness);
+    Evidence::from_native(&NativeEvidence::ConflictingCertificates(first, second)).unwrap()
 }
-
 #[test]
 fn retained_native_evidence_witnesses_belong_to_original_preparation_pool() {
     let mut chain = super::super::tests::chain();
@@ -49,7 +48,7 @@ fn retained_native_evidence_witnesses_belong_to_original_preparation_pool() {
     let view = state.view();
     let mut read =
         AdmissionRead::capture(state, &view, generation, 3, std::slice::from_ref(&proof))
-            .expect("real quorum signatures and original Pasta authority");
+            .expect("real quorum signatures; attachments grant no native authority");
     drop(view);
     read.complete().unwrap();
     let candidate = &read.candidates.as_slice()[0];

@@ -13,10 +13,12 @@ use iroha_data_model::{
     sumeragi_finality::{ScheduledConfig, ScheduledSlot},
 };
 use iroha_model_base::topology::LaneId;
-use iroha_sumeragi::types::{Hash32, HeightConfig};
+use iroha_sumeragi::{
+    crypto::NoAttestation,
+    types::{Hash32, HeightConfig},
+};
 
 use super::{
-    attestation::NativePastaVerifier,
     availability_schedule::AvailabilitySchedule,
     certified_chain::{CertifiedChain, committed_block},
     crypto::BlsCrypto,
@@ -278,7 +280,8 @@ impl LaneStoreAuthorities for NativeLaneStoreAuthorities {
                 instance,
                 authority,
             }),
-            verifier: Arc::new(NativePastaVerifier::new(instance, network)),
+            // Match the node application: no flagged certificate supplies lane authority.
+            verifier: Arc::new(NoAttestation),
         }))
     }
 }

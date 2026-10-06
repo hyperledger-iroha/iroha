@@ -514,6 +514,21 @@ impl ManagedInitialReservePolicy {
         })
     }
     fn validate_original(&self, original: &Original) -> Result<()> {
+        self.validate_original_selection(original)?;
+        self.authority
+            .decode_checkpoint(&original.checkpoint)?
+            .verified_tip_ref()
+            .map_err(|_| invalid("invalid original reserve checkpoint"))?
+            .verify_global_scope(
+                self.authority.config.network_id,
+                &self.authority.config.chain.to_string(),
+            )
+            .map_err(|_| invalid("original reserve checkpoint is not the selected Global root"))?;
+        Ok(())
+    }
+    // Finish all original selection scratch before cold checkpoint authentication begins.
+    #[inline(never)]
+    fn validate_original_selection(&self, original: &Original) -> Result<()> {
         original.validate()?;
         self.validate_policy(&original.policy)?;
         if encode(&original.selection, journal::MAX_SELECTION_BYTES)?
@@ -526,15 +541,6 @@ impl ManagedInitialReservePolicy {
                 "original reserve selection differs from the authenticated generation",
             ));
         }
-        self.authority
-            .decode_checkpoint(&original.checkpoint)?
-            .verified_tip()
-            .map_err(|_| invalid("invalid original reserve checkpoint"))?
-            .verify_global_scope(
-                self.authority.config.network_id,
-                &self.authority.config.chain.to_string(),
-            )
-            .map_err(|_| invalid("original reserve checkpoint is not the selected Global root"))?;
         Ok(())
     }
     fn validate_carrier(

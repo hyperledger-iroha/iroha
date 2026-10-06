@@ -231,8 +231,8 @@ api_tokens = ["example-token-value-at-least-32-bytes"]
 proof_rate_per_minute = 120           # steady-state tokens/min (None to disable rate limiting)
 proof_burst = 60                      # burst tokens per endpoint key
 proof_max_body_bytes = 8_388_608      # maximum submission payload size (bytes)
-proof_body_max_inflight = 8           # aggregate pre-parse proof/KAGEMUSHA body admission
-proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted proof/KAGEMUSHA body
+proof_body_max_inflight = 8           # aggregate pre-parse proof body admission
+proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted proof body
 proof_max_list_limit = 200            # maximum allowed `limit` for proofs list
 proof_request_timeout_ms = 1000       # wall-clock timeout for list/count
 proof_cache_max_age_secs = 30         # Cache-Control max-age for proof fetches
@@ -250,7 +250,7 @@ images include the helper, and Linux images include Bubblewrap.
 
 Configuration must be set via `iroha_config` files. Environment variable overrides exist for developer tooling but are not intended for operator-facing deployments.
 
-The body-admission count and read deadline are shared with KAGEMUSHA V1 top-up/redemption command bodies; the shared gate prevents slow or concurrent uploads from reserving heavy verification capacity before their bounded bodies are complete.
+The body-admission count and read deadline are shared by every proof-bearing request body; the shared gate prevents slow or concurrent uploads from reserving heavy verification capacity before their bounded bodies are complete.
 
 When the worker exhausts the byte, time, or bounded directory-work budget, it stops scheduling new attachments, increments `torii_zk_prover_budget_exhausted_total{reason="bytes|time|work"}`, and leaves the remainder queued for the next scan. Discovery retains only a scan-budget-derived window, resumes its directory cursor across cycles, canonically orders that window instead of collecting the complete multi-tenant attachment population, and reserves the latter half of the scan deadline for scheduled work. Live gauges expose the current workload via `torii_zk_prover_inflight` (attachments in progress), `torii_zk_prover_pending` (discovered pending entries plus one sentinel while the sweep is incomplete), and the most recent cycle statistics: `torii_zk_prover_last_scan_bytes` and `torii_zk_prover_last_scan_ms`.
 

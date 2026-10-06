@@ -2677,11 +2677,7 @@ fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {
         ]
         .map(SignatureRejectionCode::as_str),
     );
-    acceptance_codes.extend([
-        "ED07",
-        "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
-        "PRTRY:ROUTE_UNRESOLVED",
-    ]);
+    acceptance_codes.extend(["ED07", "PRTRY:ROUTE_UNRESOLVED"]);
     assert_eq!(
         acceptance_codes,
         TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES

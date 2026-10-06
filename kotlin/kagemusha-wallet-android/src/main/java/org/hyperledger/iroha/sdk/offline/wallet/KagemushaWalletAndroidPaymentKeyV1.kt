@@ -126,14 +126,24 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
         return readBack(alias, challenge, level)
     }
 
-    /** Sign the exact 32-byte native [message] with `SHA256withECDSA`; the platform's DER is returned unmodified. */
+    /**
+     * Sign the exact 32-byte signing [message] with `SHA256withECDSA` (owner answer A1): the
+     * message is the canonical encoding of the Poseidon value `P_bytes(d, transcript)` that the
+     * Rust domain-checked signer computed, and KeyMint hashes it once with SHA-256. Nothing here
+     * prefixes, hashes or truncates it. The platform's DER is returned unmodified; Rust normalizes
+     * it to low S and verifies it under the payment key.
+     *
+     * @throws IllegalArgumentException for a message that is not exactly 32 bytes.
+     */
     fun sign(slot: ByteArray, message: ByteArray): KagemushaWalletAndroidSignatureV1 =
         synchronized(lock) { signLocked(slot, message) }
 
-    private fun signLocked(slot: ByteArray, input: ByteArray): KagemushaWalletAndroidSignatureV1 {
-        require(input.size == KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1) { "signing message must contain exactly 32 bytes" }
+    private fun signLocked(slot: ByteArray, signingMessage: ByteArray): KagemushaWalletAndroidSignatureV1 {
         val alias = kagemushaWalletAndroidAliasV1(slot)
-        val message = input.copyOf()
+        val message = signingMessage.copyOf()
+        require(message.size == KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1) {
+            "signing message must be exactly $KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1 bytes"
+        }
         val key = when (val loaded = loadKey(alias)) {
             is Loaded.Key -> loaded.key
             Loaded.Absent -> return KagemushaWalletAndroidSignatureV1.Unavailable(
@@ -356,7 +366,7 @@ internal const val KAGEMUSHA_WALLET_ANDROID_MIN_API_V1: Int = 31
 
 private fun KagemushaWalletAndroidEnvironmentV1.keystore2(): Boolean = apiLevel >= KAGEMUSHA_WALLET_ANDROID_MIN_API_V1
 
-/** Exact canonical `P_bytes(domain, transcript)` message length handed off by Rust. */
+/** Exact length of every signing message the payment key signs: one canonical σ-field value. */
 internal const val KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1: Int = 32
 
 /** Attestation chain bounds, as in `AndroidKeyAttestationOriginalV1`. */

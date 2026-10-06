@@ -71,7 +71,6 @@ iroha_test_samples = { workspace = true }
 iroha_version = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
 iroha_allocation = { workspace = true }
-halo2curves = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_sumeragi = { workspace = true }
 kotodama_lang = { workspace = true }

@@ -2,41 +2,27 @@ import Foundation
 
 /// Typed consumer views of the first-release validator and staking Norito records.
 public enum ValidatorStakingNoritoV1 {
-    /// One consensus identity and its paired generation-bound Pasta public keys.
-    public struct ValidatorKeys: Sendable {
+    /// Immutable ordered BLS validator generation, independent of scheduling epochs.
+    public struct ValidatorGeneration: Sendable {
         private let record: Record
-        public let validator: Data
-        public let eqProofPublicKey: Data
-        public let epProofPublicKey: Data
+        public let networkID: NetworkId
+        public let generation: UInt64
+        public let validators: [PeerID]
 
         public init(noritoPayload: Data) throws {
             let record = try Record(noritoPayload, fields: 3)
             self.record = record
-            validator = record.field(0)
-            eqProofPublicKey = try record.fixed(1, count: 32)
-            epProofPublicKey = try record.fixed(2, count: 32)
-        }
-
-        public var noritoPayload: Data { record.encode() }
-    }
-
-    /// Immutable signing-key generation, independent of scheduling epochs.
-    public struct AuthorityGeneration: Sendable {
-        private let record: Record
-        public let version: UInt16
-        public let networkID: NetworkId
-        public let generation: UInt64
-        public let validators: [ValidatorKeys]
-
-        public init(noritoPayload: Data) throws {
-            let record = try Record(noritoPayload, fields: 4)
-            self.record = record
-            version = try record.u16(0)
-            networkID = try NetworkId(bytes: record.fixed(1, count: 32))
-            generation = try record.u64(2)
-            validators = try record.vector(3, limit: 31, ValidatorKeys.init(noritoPayload:))
-            guard version == 1, validators.count >= 4, (validators.count - 1) % 3 == 0 else {
-                throw CanonicalNoritoDecodingError.invalidField("invalid authority-generation geometry")
+            networkID = try NetworkId(bytes: record.fixed(0, count: 32))
+            generation = try record.u64(1)
+            validators = try record.vector(2, limit: 31, PeerID.init(noritoPayload:))
+            guard validators.count >= 4, (validators.count - 1) % 3 == 0,
+                  validators.allSatisfy({ $0.algorithm == .blsNormal }) else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid validator-generation roster")
+            }
+            for index in 1..<validators.count {
+                guard validators[index - 1].publicKey.lexicographicallyPrecedes(validators[index].publicKey) else {
+                    throw CanonicalNoritoDecodingError.invalidField("validator keys must be strictly ordered and unique")
+                }
             }
         }
 
@@ -427,35 +413,31 @@ public enum ValidatorStakingNoritoV1 {
         public var noritoPayload: Data { record.encode() }
     }
 
-    /// Exact successor generation and finalized beacon transcript.
+    /// Exact finalized beacon transcript retained for the prepared committee.
     public struct CommitteeCredentials: Sendable {
         private let record: Record
-        public let authority: AuthorityGeneration
         public let beacon: InstalledBeacon
 
         public init(noritoPayload: Data) throws {
-            let record = try Record(noritoPayload, fields: 2)
+            let record = try Record(noritoPayload, fields: 1)
             self.record = record
-            authority = try AuthorityGeneration(noritoPayload: record.field(0))
-            beacon = try InstalledBeacon(noritoPayload: record.field(1))
+            beacon = try InstalledBeacon(noritoPayload: record.field(0))
         }
 
         public var noritoPayload: Data { record.encode() }
     }
 
-    /// Exact target seat and its two retained possession proofs.
+    /// Exact target seat and its retained threshold beacon-share possession proof.
     public struct SeatReadiness: Sendable {
         private let record: Record
         public let validatorIndex: UInt32
-        public let pastaPossession: Data
         public let beaconPossession: Data
 
         public init(noritoPayload: Data) throws {
-            let record = try Record(noritoPayload, fields: 3)
+            let record = try Record(noritoPayload, fields: 2)
             self.record = record
             validatorIndex = try record.u32(0)
-            pastaPossession = record.field(1)
-            beaconPossession = record.field(2)
+            beaconPossession = record.field(1)
         }
 
         public var noritoPayload: Data { record.encode() }

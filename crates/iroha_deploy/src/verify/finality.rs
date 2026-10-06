@@ -335,7 +335,8 @@ impl Budget {
 /// An independently anchored certified prefix; fresh readiness requires a successful observation.
 #[derive(Debug, Clone)]
 pub struct FinalityVerifier {
-    checkpoint: SumeragiFinalityCheckpoint,
+    /// Exact selected immutable image; verifier clones share storage, never advancement.
+    checkpoint: Arc<SumeragiFinalityCheckpoint>,
     /// Successors an observation verified before its budget ran out, awaiting a fresh quorum.
     /// The next observation continues from here. The durable runtime owner may explicitly
     /// retain them as a certificate-only checkpoint while still returning CatchingUp.
@@ -386,7 +387,7 @@ impl FinalityVerifier {
         )?;
         verifier.verify(genesis)?;
         Ok(Self {
-            checkpoint: verifier.export_checkpoint(genesis)?,
+            checkpoint: Arc::new(verifier.export_checkpoint(genesis)?),
             pending: None,
             verified_tip: Arc::new(OnceLock::new()),
         })
@@ -401,25 +402,26 @@ impl FinalityVerifier {
         expected_network: NetworkId,
         expected_chain: &str,
     ) -> Result<Self, FinalityError> {
-        #[cfg(test)]
-        let _timing =
-            crate::custody_timing::Span::enter(crate::custody_timing::Category::CheckpointImport);
-        SumeragiFinalityVerifier::from_trusted_checkpoint(
-            &checkpoint,
+        SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+            checkpoint,
             &expected_network,
             expected_chain,
-        )?;
-        CommitteeSize::new(checkpoint.tip().committee.len())?;
-        Ok(Self {
-            checkpoint,
-            pending: None,
-            verified_tip: Arc::new(OnceLock::new()),
-        })
+            |checkpoint, native, verified_tip| {
+                // The original importer discarded this verifier before the committee check.
+                drop(native);
+                CommitteeSize::new(checkpoint.tip().committee.len())?;
+                Ok(Self {
+                    checkpoint: Arc::new(checkpoint),
+                    pending: None,
+                    verified_tip: Arc::new(OnceLock::from(verified_tip)),
+                })
+            },
+        )?
     }
 
     /// Complete native checkpoint to persist for independently authenticated restart.
     pub fn checkpoint(&self) -> &SumeragiFinalityCheckpoint {
-        &self.checkpoint
+        self.checkpoint.as_ref()
     }
     /// Move only previously native-verified successors into the durable owner's certified prefix.
     /// This supplies no fresh attestation quorum; the owner must retain the CatchingUp refusal.
@@ -437,22 +439,41 @@ impl FinalityVerifier {
     /// # Errors
     /// The retained native checkpoint or its certified execution decision is inconsistent.
     pub fn verified_tip(&self) -> Result<VerifiedSumeragiBlock, FinalityError> {
-        #[cfg(test)]
-        let _timing =
-            crate::custody_timing::Span::enter(crate::custody_timing::Category::VerifiedTip);
+        self.verified_tip_ref().cloned()
+    }
+    /// Borrow the exact authenticated tip retained by this immutable checkpoint owner.
+    /// Read-only scope gates require no owned result graph. Failed authentication is never
+    /// stored; independently supplied proofs and every new checkpoint still require their
+    /// original verification, and the returned reference cannot outlive this owner.
+    ///
+    /// # Errors
+    /// The original selected checkpoint's native authentication or decoder resource refusal.
+    pub(crate) fn verified_tip_ref(&self) -> Result<&VerifiedSumeragiBlock, FinalityError> {
         if let Some(verified) = self.verified_tip.get() {
-            return Ok(verified.clone());
+            return Ok(verified);
         }
-        let verified = self
-            .native()?
-            .verify_retained_decision(self.checkpoint.tip())?;
-        // Racing immutable callers may both verify; only successful canonical results are kept.
-        let _ = self.verified_tip.set(verified.clone());
-        Ok(verified)
+        self.retain_verified_tip()
+    }
+    // Keep cold native import scratch outside the warm borrowed read's frame. Authentication
+    // completes before the immutable OnceLock publication, as in the original owned accessor.
+    #[inline(never)]
+    fn retain_verified_tip(&self) -> Result<&VerifiedSumeragiBlock, FinalityError> {
+        Ok(
+            SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+                self.checkpoint.as_ref(),
+                &self.checkpoint.network_id(),
+                self.checkpoint.chain_id(),
+                |_, native, verified| {
+                    drop(native);
+                    // Racing immutable callers may both verify; only successful canonical results are kept.
+                    self.verified_tip.get_or_init(|| verified)
+                },
+            )?,
+        )
     }
     /// Replace the checkpoint and detach only this owner's derived tip capability.
     fn replace_checkpoint(&mut self, checkpoint: SumeragiFinalityCheckpoint) {
-        self.checkpoint = checkpoint;
+        self.checkpoint = Arc::new(checkpoint);
         self.verified_tip = Arc::new(OnceLock::new());
     }
     /// Size of the exact committee that certified the tip.
@@ -460,9 +481,6 @@ impl FinalityVerifier {
         CommitteeSize(self.checkpoint.tip().committee.len())
     }
     fn native(&self) -> Result<SumeragiFinalityVerifier, FinalityError> {
-        #[cfg(test)]
-        let _timing =
-            crate::custody_timing::Span::enter(crate::custody_timing::Category::NativeVerifier);
         Ok(SumeragiFinalityVerifier::from_trusted_checkpoint(
             &self.checkpoint,
             &self.checkpoint.network_id(),
@@ -682,7 +700,7 @@ impl FinalityVerifier {
     ) -> Result<AttestationQuorum, FinalityError> {
         require_challenge(challenge)?;
         let network = self.checkpoint.network_id();
-        let mut prefix = Prefix::new(self.pending.as_ref().unwrap_or(&self.checkpoint))?;
+        let mut prefix = Prefix::new(self.pending.as_ref().unwrap_or(self.checkpoint.as_ref()))?;
         let mut reads = BTreeMap::new();
         // Why a member's own proof could not extend the prefix: invalid or over budget.
         let mut unverified = BTreeMap::new();

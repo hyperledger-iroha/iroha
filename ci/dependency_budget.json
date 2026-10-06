@@ -146,7 +146,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -198,7 +197,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -236,7 +234,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -282,7 +279,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -328,7 +324,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -374,7 +369,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -420,7 +414,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -480,7 +473,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -523,7 +515,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -566,7 +557,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -609,7 +599,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -652,7 +641,6 @@
           "iroha_core_zk": [
             "default",
             "halo2-dev-tests",
-            "kagemusha-real-proof-harness",
             "proofs-stark",
             "test-utils",
             "zk-stark",
@@ -775,7 +763,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:b9b020df5356c3539b5f39651d66fb67e4fef77de0fdc22beec7b92d25413604",
+    "manifest_fingerprint": "sha256:7341b4126b1c053bd1855ed53f4c2682eff656821dd2c16373427506420c0b51",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -802,15 +790,15 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1093,
-        "declared_external_dependency_edges": 657,
-        "declared_external_packages": 180,
+        "declared_dependency_edges": 1085,
+        "declared_external_dependency_edges": 653,
+        "declared_external_packages": 177,
         "declared_local_packages": 82,
         "declared_path_packages": 4,
         "declared_workspace_packages": 78,
-        "required_dependency_edges": 938,
-        "required_external_dependency_edges": 531,
-        "required_external_packages": 130,
+        "required_dependency_edges": 930,
+        "required_external_dependency_edges": 527,
+        "required_external_packages": 127,
         "required_local_packages": 79,
         "required_path_packages": 4,
         "required_workspace_packages": 75
@@ -882,15 +870,15 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1091,
-        "declared_external_dependency_edges": 664,
-        "declared_external_packages": 188,
+        "declared_dependency_edges": 1083,
+        "declared_external_dependency_edges": 660,
+        "declared_external_packages": 186,
         "declared_local_packages": 80,
         "declared_path_packages": 4,
         "declared_workspace_packages": 76,
-        "required_dependency_edges": 908,
-        "required_external_dependency_edges": 532,
-        "required_external_packages": 138,
+        "required_dependency_edges": 900,
+        "required_external_dependency_edges": 528,
+        "required_external_packages": 136,
         "required_local_packages": 75,
         "required_path_packages": 4,
         "required_workspace_packages": 71
@@ -902,18 +890,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2135,
-        "declared_external_dependency_edges": 1175,
-        "declared_external_packages": 239,
-        "declared_local_packages": 127,
+        "declared_dependency_edges": 2136,
+        "declared_external_dependency_edges": 1177,
+        "declared_external_packages": 237,
+        "declared_local_packages": 128,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 123,
-        "required_dependency_edges": 1958,
-        "required_external_dependency_edges": 1037,
-        "required_external_packages": 191,
-        "required_local_packages": 127,
+        "declared_workspace_packages": 124,
+        "required_dependency_edges": 1959,
+        "required_external_dependency_edges": 1039,
+        "required_external_packages": 189,
+        "required_local_packages": 128,
         "required_path_packages": 4,
-        "required_workspace_packages": 123
+        "required_workspace_packages": 124
       },
       "roots": [
         "*"

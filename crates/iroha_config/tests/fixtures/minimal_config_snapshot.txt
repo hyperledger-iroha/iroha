@@ -731,7 +731,6 @@ Root {
     },
     sumeragi: Sumeragi {
         role: Validator,
-        mint_finality_seed_fd: None,
         global_beacon_partial_signer_provider_handle: None,
         global_beacon_partial_signer_provider_revision: None,
         global_beacon_partial_signer_provider_policy_digest: None,
@@ -806,9 +805,6 @@ Root {
             budget_enforce_interval_blocks: 10,
             max_wsv_memory_bytes: Bytes(
                 8589934592,
-            ),
-            kagemusha_operation_index_bytes: Bytes(
-                67108864,
             ),
             retained_carrier_shell_bytes: 268435456,
             consensus_evidence_preparation_bytes: 441187328,

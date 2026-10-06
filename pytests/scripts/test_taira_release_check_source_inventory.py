@@ -139,7 +139,6 @@ class SelectedSourceInventoryTests(unittest.TestCase):
             "core": (gate.CORE_SHARED_BLOCK_HISTORY_STAGES
                      + gate.CORE_CANONICAL_XOR_STAGES
                      + gate.CORE_NATIVE_STAKING_PENALTY_STAGES
-                     + gate.CORE_NATIVE_RECEIPT_STAGES
                      + gate.CORE_MONETARY_AUTHORITY_STAGES
                      + gate.CORE_STATE_VIEW_CONSUMER_STAGES
                      + gate.native_owner_stages("native lane read failure classification")
@@ -352,12 +351,12 @@ class SelectedSourceInventoryTests(unittest.TestCase):
             "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
             "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
             "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-            "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
+            "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
             "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
             "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
             "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
             "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
-            "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
+            "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
             "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
             "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
         )
