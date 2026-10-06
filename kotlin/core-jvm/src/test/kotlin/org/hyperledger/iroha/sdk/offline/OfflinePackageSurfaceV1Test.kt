@@ -11,8 +11,8 @@ import org.junit.jupiter.api.Test
 /**
  * Pins the KAGEMUSHA source surface of the three published Kotlin SDK modules.
  *
- * Only the KAGEMUSHA wallet V1 wire, the P-256 codec and the `KagemushaWalletAndroid*V1` platform
- * handle and its private typed native callback reply remain. The retired coordinator,
+ * Only the KAGEMUSHA wallet V1 wire, P-256 codec, exclusive native wallet handle, platform
+ * adapter and private typed native callback reply remain. The retired coordinator,
  * ordinary-runtime, device-lifecycle, probe, provider and
  * Torii sources must not return under any source set, and neither Android module may register a
  * `ServiceLoader` provider. The `core-jvm` test task declares these file names as inputs.
@@ -57,12 +57,14 @@ class OfflinePackageSurfaceV1Test {
             "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletAndroidPlatformV1.kt",
             "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletAndroidResultsV1.kt",
             "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletNativeReplyV1.kt",
+            "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletV1.kt",
             "$WALLET/main/res/xml/kagemusha_wallet_v1_data_extraction_rules.xml",
             "$WALLET/main/res/xml/kagemusha_wallet_v1_full_backup_content.xml",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletAndroidBackupRulesV1Test.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletAndroidPaymentKeyV1Test.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletAndroidPlatformV1Test.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletAndroidTestFakesV1.kt",
+            "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletV1Test.kt",
             "$WALLET/androidTest/java/$WALLET_PACKAGE/KagemushaWalletAndroidPlatformDeviceV1Test.kt",
         )
 

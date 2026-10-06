@@ -1918,6 +1918,7 @@ fn inspect_stopped_peer(
         store_dir: WithOrigin::inline(peer.kura_store_dir()),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: NonZeroUsize::new(2).expect("nonzero"),
+        history_checkpoint_cache_capacity: defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
         debug_output_new_blocks: false,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
