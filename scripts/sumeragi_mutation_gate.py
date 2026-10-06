@@ -117,6 +117,7 @@ SCENARIOS = {
     "f35": "sim::tests::f35_local_queue_asymmetry",
     "f36": "sim::tests::f36_late_leaders",
     "f37": "sim::tests::f37_commit_attestation",
+    "f39": "sim::tests::f39_clock_guard",
     # F9 variant for ML5a: a vote blackout ending at GST (sim/mutation_group_2.rs).
     "f09r": "sim::mutation_group_2::f09r_vote_blackout_until_gst",
     # F32 with up to f proposers of the needed blocks kept down after the restart (ML10).
@@ -257,6 +258,15 @@ MUTATIONS = [
        "codec_resource_errors_survive_lossless_norito_conversion"], []),
     m("MS50", "static byte-domain bounds become retryable local decode refusals",
       ["protocol_byte_lengths_are_terminal_codec_errors"], []),
+    # The application clock guard of §4.5: the core's `Execute.certified` flag (MS51) and the
+    # simulator's model of the node executor's CT1 (MS52, a fake-driver mutation; the
+    # production guard is the Core entry HC137).
+    m("MS51", "request_exec: emits Execute{certified: false} for a block a held PrepareQC certifies",
+      ["f33_hidden_prepareqc_due_work_block_commits_after_lag",
+       "det_s51_execute_certified_flag"], ["f39"]),
+    m("MS52", "fake driver executor: the application clock guard CT1 deleted",
+      ["clock_guard_certified_time_within_two_drifts",
+       "clock_guard_liveness_with_f_plus_one_slow_clocks"], ["f39"]),
     # ---- liveness rules
     m("ML1", "level returns start(h)", ["det_l1_levels_grow"], ["f15"]),
     m("ML2", "on_tick rebroadcast 1 deleted", ["det_l2_lost_timeout_resent"], ["f09"]),

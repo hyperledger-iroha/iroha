@@ -8944,6 +8944,7 @@ fn decode_world_fields(
         sccp_light_client_sets: Storage::default(),
         sccp_light_client_checkpoints: Storage::default(),
         sccp_light_client_stride_index: Storage::default(),
+        sccp_light_client_profiles: Storage::default(),
         external_event_buf,
     }));
     Ok(world)

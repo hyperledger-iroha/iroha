@@ -73,7 +73,7 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
     freeze_world(&mut block);
     assert_eq!(
         require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS),
-        Ok(217)
+        Ok(218)
     );
     let mut raw_count = 0;
     for owner in TABLE_MATERIALIZERS {
@@ -99,7 +99,7 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
             }
         );
     }
-    assert_eq!(raw_count, 192);
+    assert_eq!(raw_count, 193);
 }
 
 #[test]

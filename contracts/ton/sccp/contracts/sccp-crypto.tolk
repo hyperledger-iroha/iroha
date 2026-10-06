@@ -1,10 +1,9 @@
 // Cryptographic and chain-identity primitives of the SCCP v1 TON contracts.
 //
-// Tolk 1.4.2 has no ECRECOVER, keccak or GLOBALID builtins, so they are
-// declared here as asm wrappers (specs/sccp.md §5.3.7). Every wrapper is
-// pinned by an Acton emulator test in `tests/unit/sccp-crypto.test.tolk`.
-
-import "sccp-constants"
+// Tolk 1.4.2 has no BLS, keccak, SHA-256-over-builders or GLOBALID builtins,
+// so they are declared here as asm wrappers (specs/sccp.md §5.3.7). Every
+// wrapper is pinned by an Acton emulator test in
+// `tests/unit/sccp-vectors.test.tolk`.
 
 /// `GLOBALID` (0xF835): the `global_id` of config parameter 19
 /// (TON mainnet = -239).
@@ -34,40 +33,36 @@ fun keccak256Builder(b: builder): uint256
 fun keccak256Builders2(a: builder, b: builder): uint256
     asm "2 PUSHINT" "3 HASHEXT"
 
-/// Raw `ECRECOVER` (0xF912). Stack in `hash v r s`, out `h x y -1` or `0`;
-/// the two `NULLSWAPIFNOT` steps normalize the failure branch to four values.
-/// `v` is the recovery id (0 or 1), not the Ethereum `v`.
+/// Keccak-256 of two byte-aligned slices (`2 PUSHINT 3 HASHEXT`; the
+/// checkpoint id over `XHead.bytes` and `XTail.bytes`, §5.3.4 item 3).
 @pure
-fun ecrecoverRaw(hash: uint256, v: int, r: uint256, s: uint256): (int?, int?, int?, bool)
-    asm "ECRECOVER" "NULLSWAPIFNOT2" "NULLSWAPIFNOT"
+fun keccak256Slices2(a: slice, b: slice): uint256
+    asm "2 PUSHINT" "3 HASHEXT"
 
-/// 20-byte address of an uncompressed secp256k1 point:
-/// `keccak256(X ‖ Y)[12..32]` as the low 160 bits (§3.8).
-@inline
-fun sccpAddressOfPoint(x: uint256, y: uint256): int {
-    return keccak256Builder(beginCell().storeUint(x, 256).storeUint(y, 256)) & SCCP_ADDRESS_MASK;
-}
+/// SHA-256 (`HASHEXT` hash id 0) of the concatenation of the byte-aligned
+/// slices and builders in `parts` (at most 255 entries).
+@pure
+fun sha256Parts(parts: tuple): uint256
+    asm "255 PUSHINT" "EXPLODEVAR" "0 HASHEXT"
 
-/// Recovers the signer address of a §3.8 signature over `digest`.
-///
-/// Returns 0 when the signature is malformed (`v ∉ {27, 28}`, `r ∉ [1, N)`,
-/// `s ∉ [1, HALF_N]`) or recovery fails. The contract passes `v − 27` to
-/// `ECRECOVER`, so it does not depend on the global-version rule that also
-/// accepts 27/28 (§5.3.7). The result is masked to 160 bits.
-@inline
-fun sccpRecoverSigner(digest: uint256, r: int, s: int, v: int): int {
-    if ((v != 27) & (v != 28)) {
-        return 0;
-    }
-    if ((r < 1) | (r >= SECP256K1_N)) {
-        return 0;
-    }
-    if ((s < 1) | (s > SECP256K1_HALF_N)) {
-        return 0;
-    }
-    val (_, x, y, ok) = ecrecoverRaw(digest, v - 27, r, s);
-    if (!ok) {
-        return 0;
-    }
-    return sccpAddressOfPoint(x!, y!);
-}
+/// SHA-256 of the byte-aligned `parts` as a slice of exactly 256 bits and
+/// no references (§5.3.4 item 2): `HASHEXTA` id 0 into an empty builder,
+/// then `ENDC`, `CTOS`.
+@pure
+fun sha256PartsToSlice(parts: tuple): slice
+    asm "NEWC" "SWAP" "255 PUSHINT" "EXPLODEVAR" "0 HASHEXTA" "ENDC" "CTOS"
+
+/// `BLS_FASTAGGREGATEVERIFY` over the tuple `t = [k_1 … k_q, q, m, σ]`
+/// (§5.3.4 item 5): `DUP TLEN UNTUPLEVAR` leaves `k_1 … k_q q m σ` with `σ`
+/// on top, exactly the opcode's pop order. The opcode hashes `m` to G2 under
+/// `DST_SIG`, aggregates the keys and checks the pairing; it returns false
+/// for any malformed point.
+@pure
+fun sccpBlsFastAggregateVerify(t: tuple): bool
+    asm "DUP" "TLEN" "UNTUPLEVAR" "BLS_FASTAGGREGATEVERIFY"
+
+/// `SDLEXCMP`: −1, 0 or 1 as `a` is lexicographically below, equal to or
+/// above `b` (data bits only).
+@pure
+fun sccpLexCompare(a: slice, b: slice): int
+    asm "SDLEXCMP"

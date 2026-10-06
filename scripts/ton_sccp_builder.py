@@ -628,9 +628,12 @@ def minter_initial_data(
         .uint(valid_until_ms, 64).uint(len(members), 8).uint(roster_threshold(len(members)), 8)
         .ref(members_cell).end()
     )
+    # initialized, total/pending supply, outbound nonce, op count, control
+    # nonce, paused, deployed buckets, config, roster, no previous roster and
+    # an empty `retries` dictionary
     root = (
         Builder().bit(False).coins(0).coins(0).uint(0, 64).uint(0, 64).uint(0, 64).bit(False)
-        .uint(0, 64).ref(config).ref(roster).maybe_ref(None).end()
+        .uint(0, 64).ref(config).ref(roster).maybe_ref(None).bit(False).end()
     )
     return {"root": root, "config": config, "roster": roster, "members": members_cell}
 

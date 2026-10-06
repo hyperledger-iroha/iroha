@@ -130,7 +130,8 @@ contract SccpTairaXor {
     error BadNonce(uint64 expected);
     /// @notice TRON burns and voids require `msg.sender == tx.origin`.
     error DirectCallerRequired();
-    /// @notice `transferToTaira` calldata is not the canonical ABI encoding (§5.1.7).
+    /// @notice The calldata of `transferToTaira`, `voidExpired`, `voidExpiredHistorical` or
+    /// `voidFrozen` is not the canonical ABI encoding Taira decodes (§5.1.7, §5.1.8, §5.2.2).
     error NonCanonicalCalldata();
     /// @notice The mint deadline of the message has passed.
     error DeadlinePassed();
@@ -181,8 +182,10 @@ contract SccpTairaXor {
     uint256 private constant MAX_ROSTER_MEMBERS = 31;
     uint256 private constant MAX_BLOCK_LEAVES = 512;
     uint256 private constant MAX_HISTORY_PATH = 32;
+    uint256 private constant MAX_HISTORY_SIZE = 1 << 32;
     uint256 private constant MAX_ROTATIONS_PER_CALL = 16;
     uint256 private constant MAX_VOID_FROZEN_RANGE = 256;
+    uint256 private constant VOID_FROZEN_CALLDATA_BYTES = 0x44; // 4 + 2 * 0x20
     uint256 private constant MAX_TAIRA_ACCOUNT_BYTES = 1024;
     uint256 private constant MAX_PAYLOAD_BYTES = 4096;
     uint256 private constant MIN_PAYLOAD_BYTES = 59;
@@ -390,6 +393,7 @@ contract SccpTairaXor {
     // ---------------------------------------------------------------------
 
     /// @notice Voids an attested Taira transfer after its deadline so that Taira refunds it.
+    /// @dev Only the canonical ABI encoding succeeds, because Taira proves TRON voids from calldata.
     function voidExpired(
         uint64 nonce,
         AttestationV1 calldata attestation,
@@ -398,6 +402,7 @@ contract SccpTairaXor {
         MessageProofV1 calldata proof
     ) external {
         _requireChain();
+        _requireCanonicalVoidExpiredCalldata(false);
         if (REQUIRE_DIRECT_CALLER) _requireDirectCaller();
         _verifyAccepted(attestation, roster, signatures);
         (bytes32 id, uint64 payloadNonce,,) =
@@ -406,6 +411,7 @@ contract SccpTairaXor {
     }
 
     /// @notice Voids an older attested Taira transfer after its deadline through the history root.
+    /// @dev Only the canonical ABI encoding succeeds, because Taira proves TRON voids from calldata.
     function voidExpiredHistorical(
         uint64 nonce,
         AttestationV1 calldata attestation,
@@ -415,6 +421,7 @@ contract SccpTairaXor {
         MessageProofV1 calldata proof
     ) external {
         _requireChain();
+        _requireCanonicalVoidExpiredCalldata(true);
         if (REQUIRE_DIRECT_CALLER) _requireDirectCaller();
         _verifyAccepted(attestation, roster, signatures);
         (bytes32 id, uint64 payloadNonce,,) = _verifyMessage(proof, history.sccpRoot, history.messageCount, false);
@@ -423,8 +430,11 @@ contract SccpTairaXor {
     }
 
     /// @notice Voids up to 256 unconsumed nonces once both the current and the previous roster expired.
+    /// @dev Only the exact 68-byte encoding succeeds (the ABI decoder already rejects dirty words),
+    /// because Taira proves TRON voids from calldata.
     function voidFrozen(uint64 firstNonce, uint64 count) external {
         _requireChain();
+        if (msg.data.length != VOID_FROZEN_CALLDATA_BYTES) revert NonCanonicalCalldata();
         if (REQUIRE_DIRECT_CALLER) _requireDirectCaller();
         uint256 first = firstNonce;
         if (count == 0 || count > MAX_VOID_FROZEN_RANGE || first + count > 1 << 64) revert BadAmount();
@@ -793,12 +803,13 @@ contract SccpTairaXor {
         if (_merkleRoot(leaf, control.leafIndex, messageCount, control.path) != sccpRoot) revert BadProof();
     }
 
-    /// @dev Proves the historical block `{height, sccpRoot, messageCount}` against `A.historyRoot`.
+    /// @dev Proves the historical block `{height, sccpRoot, messageCount}` against `A.historyRoot`
+    /// of a history of at most 2^32 blocks (§3.5).
     function _verifyHistory(AttestationV1 calldata attestation, HistoryProofV1 calldata history) private pure {
         uint256 messageCount = history.messageCount;
         bytes32 sccpRoot = history.sccpRoot;
         if (messageCount == 0 || messageCount > MAX_BLOCK_LEAVES || sccpRoot == bytes32(0)) revert BadProof();
-        if (history.path.length > MAX_HISTORY_PATH) revert BadProof();
+        if (attestation.historySize > MAX_HISTORY_SIZE || history.path.length > MAX_HISTORY_PATH) revert BadProof();
         uint256 height = history.height;
         bytes32 leaf;
         assembly ("memory-safe") {
@@ -1037,6 +1048,88 @@ contract SccpTairaXor {
                 let last := calldataload(add(CANONICAL_TRANSFER_HEAD, sub(padded, 32)))
                 canonical := iszero(shl(mul(tail, 8), last))
             }
+        }
+        if (!canonical) revert NonCanonicalCalldata();
+    }
+
+    /// @dev `NonCanonicalCalldata()` unless the calldata is exactly the canonical ABI encoding of
+    /// `voidExpired` or, with `historical`, `voidExpiredHistorical` (§5.2.2): every offset is the
+    /// canonical tail position, every integer word fits its declared width, `bytes` padding is
+    /// zero and nothing trails the last value. The supplied offsets are only compared, never
+    /// followed, and the positions read are bounded by `calldatasize()`.
+    function _requireCanonicalVoidExpiredCalldata(bool historical) private pure {
+        bool canonical;
+        assembly ("memory-safe") {
+            // Whether the calldata word at `p` is below 2^bits.
+            function fits(p, bits) -> ok {
+                ok := iszero(shr(bits, calldataload(p)))
+            }
+            // Encoded size of the `bytes` whose length word is at `p`; 0 if not canonical.
+            function bytesSize(p) -> size {
+                let length := calldataload(p)
+                if gt(length, calldatasize()) { leave }
+                let padded := and(add(length, 31), not(31))
+                let tail := and(length, 31)
+                if tail {
+                    if shl(mul(tail, 8), calldataload(add(p, padded))) { leave }
+                }
+                size := add(32, padded)
+            }
+            // Encoded size of the `bytes32[]` whose length word is at `p`; 0 if too long.
+            function wordsSize(p) -> size {
+                let count := calldataload(p)
+                if gt(count, calldatasize()) { leave }
+                size := add(32, mul(count, 32))
+            }
+
+            // Head (from 4): nonce, AttestationV1 (ten static words), then the offsets of
+            // RosterV1, SignaturesV1, [HistoryProofV1,] MessageProofV1.
+            let ok := fits(4, 64)
+            ok := and(ok, and(and(fits(0x24, 64), fits(0x44, 64)), fits(0x64, 64)))
+            ok := and(ok, and(fits(0xc4, 32), fits(0x104, 64)))
+            let cursor := 0x1c0
+            let proofOffsetAt := 0x1a4
+            if historical {
+                cursor := 0x1e0
+                proofOffsetAt := 0x1c4
+            }
+            // RosterV1 {uint64 generation, uint64 validFromMs, uint64 validUntilMs, uint8 threshold, bytes members}
+            ok := and(ok, eq(calldataload(0x164), cursor))
+            let p := add(4, cursor)
+            ok := and(ok, and(and(fits(p, 64), fits(add(p, 0x20), 64)), and(fits(add(p, 0x40), 64), fits(add(p, 0x60), 8))))
+            ok := and(ok, eq(calldataload(add(p, 0x80)), 0xa0))
+            let size := bytesSize(add(p, 0xa0))
+            ok := and(ok, gt(size, 0))
+            cursor := add(cursor, add(0xa0, size))
+            // SignaturesV1 {uint32 signerBitmap, bytes signatures}
+            ok := and(ok, eq(calldataload(0x184), cursor))
+            p := add(4, cursor)
+            ok := and(ok, and(fits(p, 32), eq(calldataload(add(p, 0x20)), 0x40)))
+            size := bytesSize(add(p, 0x40))
+            ok := and(ok, gt(size, 0))
+            cursor := add(cursor, add(0x40, size))
+            if historical {
+                // HistoryProofV1 {uint64 height, bytes32 sccpRoot, uint32 messageCount, uint64 leafIndex, bytes32[] path}
+                ok := and(ok, eq(calldataload(0x1a4), cursor))
+                p := add(4, cursor)
+                ok := and(ok, and(and(fits(p, 64), fits(add(p, 0x40), 32)), fits(add(p, 0x60), 64)))
+                ok := and(ok, eq(calldataload(add(p, 0x80)), 0xa0))
+                size := wordsSize(add(p, 0xa0))
+                ok := and(ok, gt(size, 0))
+                cursor := add(cursor, add(0xa0, size))
+            }
+            // MessageProofV1 {bytes payload, uint32 leafIndex, bytes32[] path}
+            ok := and(ok, eq(calldataload(proofOffsetAt), cursor))
+            p := add(4, cursor)
+            ok := and(ok, and(eq(calldataload(p), 0x60), fits(add(p, 0x20), 32)))
+            size := bytesSize(add(p, 0x60))
+            ok := and(ok, gt(size, 0))
+            let pathAt := add(0x60, size)
+            ok := and(ok, eq(calldataload(add(p, 0x40)), pathAt))
+            size := wordsSize(add(p, pathAt))
+            ok := and(ok, gt(size, 0))
+            cursor := add(cursor, add(pathAt, size))
+            canonical := and(ok, eq(calldatasize(), add(4, cursor)))
         }
         if (!canonical) revert NonCanonicalCalldata();
     }

@@ -84,7 +84,7 @@ Query syscall (Norito)
 - Gas is `base + per_item + per_byte`, with per-item cost multiplied when sorting is requested and an offset penalty applied for large pagination skips.
 
 Vendor syscall (Norito)
-- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory operation tag in `r11`: `1` for `SubmitBallot` or `2` for `RecordSccpMessage`. Tag `0`, unknown tags, mismatched instruction types, and other instruction types are rejected.
+- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and the mandatory operation tag `1` (`SubmitBallot`) in `r11`. Tag `0`, every other tag, mismatched instruction types, and other instruction types are rejected with `PermissionDenied`. In particular a contract cannot execute `RecordSccpMessage` under any tag: an outbound SCCP record executes only from signed transactions, directly or through a multisig proposal that signed approvals execute (`specs/sccp.md` §4.4).
 
 Ordering and OUTPUT
 - Syscalls execute in program order. Hosts must apply their side effects in the order received.
@@ -384,7 +384,7 @@ Durable state
   ancestor directories remain an operator-owned trust boundary.
 
 Smart‑contract helpers (Norito)
-- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`, `2=RecordSccpMessage`) → 0 — Gas: G_sci
+- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`) → 0 — Gas: G_sci
 - 0xA5 SUBSCRIPTION_BILL — Args: none → 0 — Gas: G_sub_bill
   - Uses trigger metadata `subscription_ref` to locate the subscription NFT, computes charges, updates subscription metadata (including `subscription_invoice`), and reschedules the billing trigger.
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
@@ -438,7 +438,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 Canonical instruction bridge
 - `EXECUTE_INSTRUCTION` accepts only a pointer-ABI `NoritoBytes` payload containing the canonical
   Norito frame of one data-model `InstructionBox`. Register `r11` must contain the matching
-  operation tag: `1` for `SubmitBallot` or `2` for `RecordSccpMessage`.
+  operation tag `1`, and the instruction must be `SubmitBallot`.
 - JSON pointers, raw JSON envelopes, direct concrete-instruction frames, alternate-layout Norito
   frames, tag `0`, unknown tags, mismatched instruction types, and all other instruction types are
   rejected. There is no compatibility decoding path.
@@ -602,6 +602,13 @@ node enforces that policy unconditionally.
 - ABI goldens (syscall list, ABI hash, pointer type IDs) are pinned to the current
   v1 surface and must be updated in the same change whenever the first-release
   surface intentionally changes.
+- Syscall `0xA0` defines exactly one operation tag, `1=SubmitBallot`; every
+  other tag is rejected. Contracts cannot record outbound SCCP messages: an
+  encoded `RecordSccpMessage` fails under every tag, and a contract-registered
+  trigger or any other opaque execution output that derives `RecordSccpMessage`
+  is refused (`specs/sccp.md` §4.4). The argument text of `spec/syscalls.toml`
+  is part of the hashed surface, so it must match the implemented registers
+  exactly.
 - Callable metadata carries complete flat `CallSchemaV1` argument/result trees.
   The sole CS1 body uses magic `43533100`, fixed `u64` node count and one-byte
   node tags with complete canonical payloads; enclosing Norito flags declare
@@ -718,7 +725,7 @@ node enforces that policy unconditionally.
 | 0x98 | BLAKE2B256_HASH | r10=&Blob(message) | r10=ptr (&Blob(raw Blake2b-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x99 | KECCAK256_HASH | r10=&Blob(message) | r10=ptr (&Blob(Keccak-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x9A | IROHA_HASH | r10=&Blob(message) | r10=ptr (&Blob(Iroha Hash::new digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
-| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=RecordSccpMessage) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
+| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v2 |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v2 |

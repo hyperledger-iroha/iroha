@@ -284,7 +284,7 @@ impl Cluster {
                         },
                     );
                 }
-                Action::Execute { block, req } => {
+                Action::Execute { block, req, .. } => {
                     let bh = block.hash(&self.v.crypto);
                     self.schedule(
                         self.now + self.exec_delay,

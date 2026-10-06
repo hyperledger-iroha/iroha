@@ -627,6 +627,19 @@ pub mod isi {
                 ),
             ));
         }
+        // An outbound SCCP record is signed-only (`specs/sccp.md` §4.4): a trigger body is an
+        // opaque deferred executable, so refuse the action before it is stored. Execution
+        // re-checks every derived group, including contract outputs and multisig approvals.
+        if crate::deferred_authority::trigger_executable_derives_sccp_outbound_record(
+            new_trigger.action().executable(),
+        ) {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "a trigger action cannot derive `RecordSccpMessage`; an outbound SCCP record must be a signed transaction instruction or an instruction of a multisig proposal approved by signed transactions"
+                        .into(),
+                ),
+            ));
+        }
         enforce_ivm_trigger_program_policy(
             new_trigger.action().executable(),
             new_trigger.metadata(),

@@ -1,7 +1,8 @@
 //! Oracles of §13.2, checked after every event of every honest replica: O-AGR, O-VAL, O-SIGN
 //! (in the provenance log at signing time), O-PBS (at the first exposure of every own
 //! signature), O-CERT (every certificate a core holds or commits on), O-LIVE, O-PERF (P1–P6),
-//! O-MEM, O-HALT, O-EVID, O-FAULT, O-TXP, O-CQ and O-ATT (commit attestation, §3.7).
+//! O-MEM, O-HALT, O-EVID, O-FAULT, O-TXP, O-CQ, O-ATT (commit attestation, §3.7) and O-TIME
+//! (the certified-time bound of the application clock guard, §4.5, in `world::clock_guard`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1032,9 +1033,8 @@ impl World {
             .committee(h)
             .get(block.header().proposer)
             .cloned();
-        let honest_proposer = proposer_key
-            .and_then(|k| self.key_owner.get(&k).copied())
-            .is_some_and(|m| !self.machines[m].byz);
+        let proposer = proposer_key.and_then(|k| self.key_owner.get(&k).copied());
+        let honest_proposer = proposer.is_some_and(|m| !self.machines[m].byz);
         for (id, _) in decode_txs(block.payload().as_slice()) {
             if let Some(entry) = self.txs[inst].get_mut(&id)
                 && entry.2.is_none()
@@ -1053,6 +1053,8 @@ impl World {
                 view: qc.view,
             },
         );
+        // O-TIME: the application clock guard's certified-time bound (§4.5).
+        self.check_certified_time(inst, block, qc.block_hash, proposer);
     }
 
     fn validity(&self, inst: usize, block: &AvailableBody, qc: &Qc) -> Result<(), String> {

@@ -1027,13 +1027,15 @@ impl ConfidentialFeatureDigest {
 }
 /// Ruleset version embedded into [`ConfidentialFeatureDigest::conf_rules_version`] for v1 networks.
 pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
-/// Default genesis confidential-policy hash for bundled ZK defaults and compiled SCCP profiles.
+/// Default genesis confidential-policy hash for bundled ZK defaults and the version-1 (genesis)
+/// SCCP light-client profiles.
 ///
 /// Core's `default_genesis_confidential_policy_hash_uses_default_zk_and_sccp_v1_policy` test
 /// requires this pin to match the current consensus inputs; regenerate it when those change.
+/// Appending a light-client profile version that is not yet activated leaves it unchanged.
 pub const DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH: [u8; 32] = [
-    0xc7, 0x36, 0xb6, 0x94, 0xd3, 0x98, 0x31, 0x82, 0x92, 0x6e, 0xe2, 0xbd, 0x49, 0x44, 0xbc, 0x87,
-    0xb4, 0x7c, 0xab, 0xbe, 0xea, 0x4f, 0x1e, 0xea, 0x87, 0x4b, 0xab, 0xcb, 0x37, 0xaf, 0xaf, 0x54,
+    0x79, 0x6b, 0xf4, 0x0b, 0x85, 0xfd, 0xf8, 0xc6, 0xfd, 0x34, 0x55, 0xbe, 0x6d, 0xa3, 0x6f, 0xd2,
+    0xf1, 0x3f, 0x30, 0x2d, 0x4f, 0x5a, 0x0f, 0x10, 0x65, 0xe4, 0x6e, 0x7e, 0x32, 0xb3, 0x8d, 0x18,
 ];
 /// Default digest advertising the v1 ruleset and canonical genesis confidential policy.
 pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =

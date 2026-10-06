@@ -4802,10 +4802,12 @@ pub mod sccp {
         pub const ENABLED: bool = true;
         /// `0` advances once `ws_bound_ms / 4` of each light client has elapsed without progress.
         pub const ADVANCE_AFTER_MS: u64 = 0;
-        /// Cadence of checking local light-client state.
+        /// Per-network cadence of checking local light-client state.
         pub const POLL_INTERVAL_MS: u64 = 60_000;
-        /// Timeout of one RPC request before failing over to the next endpoint.
+        /// Total wall-clock time of one RPC attempt before failing over to the next endpoint.
         pub const REQUEST_TIMEOUT_MS: u64 = 10_000;
+        /// Wall-clock budget of one network's poll: every RPC request of one advance build.
+        pub const POLL_BUDGET_MS: u64 = 120_000;
         /// Largest encoded advance the keeper submits.
         pub const MAX_ADVANCE_BYTES: usize = 262_144;
         /// Longest accepted endpoint list per chain.

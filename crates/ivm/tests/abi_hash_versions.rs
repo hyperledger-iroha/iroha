@@ -1,6 +1,6 @@
 //! ABI hash tests ensure the hash is stable for the same policy.
 use ivm::syscalls::compute_abi_hash;
-const ABI_V1_HASH_GOLDEN: &str = "28209c6885b3bed442f0b2e4194d92e9e5b187f24c74c7837faa7a1f285c94d9";
+const ABI_V1_HASH_GOLDEN: &str = "27ab957dce9aad4ead521fbc6c293003b76b7942e8f485b131e146ca3f3d512d";
 #[test]
 fn abi_hash_is_stable() {
     let h1 = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
@@ -20,4 +20,21 @@ fn abi_hash_has_valid_iroha_hash_marker() {
         1,
         "ABI hash must not be an invalid-surface diagnostic sentinel"
     );
+}
+#[test]
+fn abi_v1_execute_instruction_advertises_only_the_submit_ballot_tag() {
+    // specs/sccp.md §4.4: contracts record no SCCP messages, so the hashed 0xA0 surface names
+    // the single operation tag `1=SubmitBallot` and nothing about `RecordSccpMessage`.
+    let table = ivm::syscalls::render_syscalls_markdown_table();
+    let rows: Vec<&str> = table
+        .lines()
+        .filter(|line| line.starts_with("| 0xA0 |"))
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one 0xA0 row: {rows:?}");
+    assert!(
+        rows[0].contains("r11=operation_tag(1=SubmitBallot) |"),
+        "{}",
+        rows[0]
+    );
+    assert!(!table.contains("RecordSccpMessage"));
 }

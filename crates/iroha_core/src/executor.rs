@@ -95,7 +95,9 @@ mod execution_fee;
 pub(crate) mod private_fees;
 /// Authenticated root scope for native and contract-generated instruction effects.
 pub(crate) mod root_scope;
-pub(crate) use execution_fee::{ExecutionFeeMeter, ExecutionFeeSettlementError};
+pub(crate) use execution_fee::{
+    ExecutionFeeExemption, ExecutionFeeMeter, ExecutionFeeSettlementError,
+};
 #[path = "executor_execution_effects.rs"]
 mod execution_effects;
 pub(crate) use execution_effects::ExecutionEffects;
@@ -1512,14 +1514,16 @@ fn fee_exempt_payload(
             || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)?
             || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload)))
 }
+/// Return whether `transaction` skips the Nexus fee when it succeeds, judged against the
+/// committed `world` the next block executes on (queue admission). Execution uses
+/// [`transaction_fee_exemption`], which also says whether a failure is charged.
 fn fee_exempt_transaction(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
     transaction: &SignedTransaction,
     observation_time_ms: u64,
 ) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
-    // SCCP exemptions hold on success only (`specs/sccp.md` §4.19).
-    // TODO(ws31): charge the ordinary Nexus fee when an SCCP-exempt transaction fails.
+    // `world` is the committed parent World, the one SCCP eligibility is judged against.
     Ok(private_fees::permits_public_exemption(world)?
         && (nexus_fee_exempt_transaction(transaction)
             || successful_claim_fee_exempt_transaction(
@@ -1532,6 +1536,47 @@ fn fee_exempt_transaction(
                 world,
                 transaction.payload(),
             )))
+}
+/// Return how the Nexus fee applies to `transaction` executing in `state_transaction`, with
+/// its SCCP exempt class when it has one.
+///
+/// Protocol and successful-claim exemptions are judged against the executing World and hold
+/// whatever the outcome. SCCP exemptions are judged against the committed parent World of the
+/// executing block, exactly like queue admission, fee quoting and the per-block exempt cap,
+/// and hold on success only: a failure is charged the ordinary fee (`specs/sccp.md` §4.19).
+fn transaction_fee_exemption(
+    state_transaction: &StateTransaction<'_, '_>,
+    transaction: &SignedTransaction,
+) -> Result<
+    (
+        ExecutionFeeExemption,
+        Option<crate::smartcontracts::isi::sccp::admission::SccpExemptClassV1>,
+    ),
+    crate::execution_attempt::ExecutionDeferred,
+> {
+    let world = &state_transaction.world;
+    if !private_fees::permits_public_exemption(world)? {
+        return Ok((ExecutionFeeExemption::Charged, None));
+    }
+    if nexus_fee_exempt_transaction(transaction)
+        || successful_claim_fee_exempt_transaction(
+            world,
+            &state_transaction.nexus,
+            transaction,
+            state_transaction.block_unix_timestamp_ms(),
+        )?
+    {
+        return Ok((ExecutionFeeExemption::Exempt, None));
+    }
+    Ok(
+        match crate::smartcontracts::isi::sccp::fees::exempt_class_in_block(
+            state_transaction,
+            transaction.payload(),
+        ) {
+            Some(class) => (ExecutionFeeExemption::ExemptOnSuccess, Some(class)),
+            None => (ExecutionFeeExemption::Charged, None),
+        },
+    )
 }
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
@@ -4451,6 +4496,10 @@ pub fn quote_nexus_fee_admission_draft(
     if fee_exempt_payload(world, nexus, payload, observation_time_ms)
         .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
     {
+        // TODO(ws31): an SCCP payload is exempt on success only, and a failure is charged
+        // only within its signed limits (`specs/sccp.md` §4.19). Recommend the ordinary
+        // limits for such payloads (without requiring the payer to hold the fee asset now),
+        // so a funded signer of an eligible SCCP transaction makes its failure chargeable.
         return Ok(FeeAdmissionDraftQuote {
             quote: fee_exempt_admission_quote(payload),
             recommended_intent: fee_intent_with_exact_bounds(&payload.fee_payment, &[]),
@@ -4567,13 +4616,10 @@ pub(crate) fn validate_transaction_fee_admission(
     transaction: &SignedTransaction,
 ) -> Result<(), ValidationFail> {
     if is_initial_genesis_context(state_transaction)
-        || fee_exempt_transaction(
-            &state_transaction.world,
-            &state_transaction.nexus,
-            transaction,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .map_err(|reason| state_transaction.defer_execution(reason))?
+        || transaction_fee_exemption(state_transaction, transaction)
+            .map_err(|reason| state_transaction.defer_execution(reason))?
+            .0
+            .skips_fee_on_success()
     {
         return Ok(());
     }
@@ -4681,13 +4727,10 @@ fn charge_fees_for_applied_overlay_inner(
         .fee_payment_intent()
         .sponsor_program()
         .map(|(program_id, _)| program_id.clone());
-    let skip_nexus_fee = fee_exempt_transaction(
-        &state_transaction.world,
-        &state_transaction.nexus,
-        transaction,
-        state_transaction.block_unix_timestamp_ms(),
-    )
-    .map_err(|reason| state_transaction.defer_execution(reason))?;
+    let skip_nexus_fee = transaction_fee_exemption(state_transaction, transaction)
+        .map_err(|reason| state_transaction.defer_execution(reason))?
+        .0
+        .skips_fee_on_success();
     // Admission captured the governed gas policy before business effects were applied.
     // Keep that immutable snapshot for settlement so this transaction cannot alter its
     // own fee asset, rate, or destination account through the overlay.
@@ -6556,6 +6599,8 @@ impl Executor {
         }
         let result =
             self.execute_transaction_body(state_transaction, authority, transaction, ivm_cache);
+        // The self-claim marker belongs to the signed body only, never to later callbacks.
+        state_transaction.sccp_exempt_self_claim = None;
         // A local refusal has no completed execution, fee, gas, or effect result.
         // The transaction overlay remains poisoned until its owner drops it.
         if let Some(reason) = state_transaction.execution_deferral() {
@@ -6612,14 +6657,17 @@ impl Executor {
             .fee_payment_intent()
             .sponsor_program()
             .map(|(program_id, _)| program_id.clone());
-        let skip_nexus_fee = is_initial_genesis_context(state_transaction)
-            || fee_exempt_transaction(
-                &state_transaction.world,
-                &state_transaction.nexus,
-                &transaction,
-                state_transaction.block_unix_timestamp_ms(),
-            )
-            .map_err(|reason| state_transaction.defer_execution(reason))?;
+        let (fee_exemption, sccp_class) = if is_initial_genesis_context(state_transaction) {
+            (ExecutionFeeExemption::Exempt, None)
+        } else {
+            transaction_fee_exemption(state_transaction, &transaction)
+                .map_err(|reason| state_transaction.defer_execution(reason))?
+        };
+        let skip_nexus_fee = fee_exemption.skips_fee_on_success();
+        // Only an exempt self-claim makes the self-claim fee due at release (§4.12.4).
+        state_transaction.sccp_exempt_self_claim = (sccp_class
+            == Some(crate::smartcontracts::isi::sccp::admission::SccpExemptClassV1::SelfClaim))
+        .then(|| authority.clone());
         // Quote against the exact governed gas snapshot execution will charge.
         Self::refresh_gas_from_parameters(state_transaction)?;
         let fee_quote = if !skip_nexus_fee {
@@ -6650,7 +6698,7 @@ impl Executor {
             governance_ballot_binding.as_ref(),
         )?;
         state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
-        state_transaction.begin_execution_fee_meter(&transaction, tx_bytes_len, skip_nexus_fee)?;
+        state_transaction.begin_execution_fee_meter(&transaction, tx_bytes_len, fee_exemption)?;
         state_transaction.begin_execution_effect_budget(&transaction)?;
         // Disallow direct signing with multisig accounts; only explicit multisig
         // proposal/approval envelopes with bundled multisig signatures are allowed.
@@ -9029,6 +9077,10 @@ mod public_pin_admission_tests;
 #[cfg(test)]
 #[path = "executor_opaque_monetary_tests.rs"]
 mod opaque_monetary_tests;
+
+#[cfg(test)]
+#[path = "executor_opaque_sccp_record_tests.rs"]
+mod opaque_sccp_record_tests;
 
 #[cfg(test)]
 fn executor_test_budget() -> iroha_allocation::AllocationBudget {

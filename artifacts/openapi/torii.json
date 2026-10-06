@@ -38331,6 +38331,30 @@
         ],
         "type": "object"
       },
+      "SccpActivateLightClientProfileActionV1": {
+        "additionalProperties": false,
+        "description": "Activate a compiled light-client profile version of one external network from the block after enactment; version 1 is active from genesis.",
+        "properties": {
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
+          },
+          "profile_hash": {
+            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
+          },
+          "version": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "network",
+          "version",
+          "profile_hash"
+        ],
+        "type": "object"
+      },
       "SccpCanonicalBase64": {
         "description": "Nonempty canonical RFC 4648 standard base64 with required padding and no whitespace.",
         "minLength": 4,
@@ -38695,6 +38719,22 @@
               },
               "payload": {
                 "$ref": "#/components/schemas/SccpClearBridgeKeyFaultActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "activate_light_client_profile"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpActivateLightClientProfileActionV1"
               }
             },
             "required": [
@@ -89275,7 +89315,7 @@
     },
     "/v1/sccp/capabilities": {
       "get": {
-        "description": "Returns the live Taira network id and EIP-712 domain separator, the SCCP parameters, the committed and highest attested heights, the current roster generation with member liveness, and unattested rotation subjects.",
+        "description": "Returns the live Taira network id, chain id and EIP-712 domain separator, the SCCP parameters, the committed and highest attested heights, the current roster generation with member liveness, unattested rotation subjects, the newest compiled light-client profiles, the light-client profile versions active at the next block with their policy hash, the read-route page limits and the SCCP path templates.",
         "operationId": "sccpCapabilitiesV1",
         "responses": {
           "200": {
@@ -89321,6 +89361,126 @@
           "authentication": "torii_default",
           "schemaVersion": 1,
           "stableRouteId": "sccp.capabilities.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/controls/{network}/{revision}": {
+      "get": {
+        "description": "Returns at most 64 control records of the revision with nonce above `after_nonce`, ascending, each with its pause state, height, commitment index, enacting proposal id and the attestation progress of its block, plus the revision's next control nonce.",
+        "operationId": "sccpControlsV1",
+        "parameters": [
+          {
+            "description": "External network profile key (`ethereum-mainnet`, `bsc-mainnet`, `tron-mainnet`, `ton-mainnet`).",
+            "in": "path",
+            "name": "network",
+            "required": true,
+            "schema": {
+              "enum": [
+                "ethereum-mainnet",
+                "bsc-mainnet",
+                "tron-mainnet",
+                "ton-mainnet"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deployment revision.",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Decimal nonce to list after (default 0: every control).",
+            "in": "query",
+            "name": "after_nonce",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Decimal page size, at most 64.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SccpReadDocumentV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`iroha_sccp::api::SccpControlPageV1`."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A path or query parameter is malformed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested record does not exist."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "List the Parliament destination controls of one route revision.",
+        "tags": [
+          "SCCP"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.controls.list"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -89393,7 +89553,25 @@
                 }
               }
             },
-            "description": "`iroha_sccp::api::SccpControlProofBundleV1`."
+            "description": "`iroha_sccp::api::SccpControlProofBundleV1`.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Immutable records revalidate with their entity tag.",
+                "schema": {
+                  "const": "public, no-cache",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong entity tag of the negotiated representation.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: the `If-None-Match` validator matches the current representation."
           },
           "400": {
             "content": {
@@ -89434,6 +89612,16 @@
               }
             },
             "description": "The subject is not attested yet."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The subject's signatures were pruned by retention (`sccp_pruned`); request a later attestation."
           }
         },
         "security": [
@@ -89559,6 +89747,203 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sccp/governance/proposals/{proposal_id}": {
+      "get": {
+        "description": "Returns one SCCP Parliament proposal in any phase with its proposer, full body, phase, whether a new attempt would pass the SCCP preflight, and its newest Parliament attempt.",
+        "operationId": "sccpGovernanceProposalV1",
+        "parameters": [
+          {
+            "description": "Proposal content id as 64 lowercase hexadecimal characters.",
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(0x)?[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SccpReadDocumentV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`iroha_sccp::api::SccpGovernanceProposalDetailV1`."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A path or query parameter is malformed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested record does not exist."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read one SCCP governance proposal.",
+        "tags": [
+          "SCCP"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.governance.proposal"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/history/{height}": {
+      "get": {
+        "description": "Returns the history leaf index of the SCCP-bearing block at `height`, `history_root(size)` and the leaf's path within it (`size` defaults to the current history size). Responses for an explicit `size` are immutable and carry an `ETag`.",
+        "operationId": "sccpHistoryProofV1",
+        "parameters": [
+          {
+            "description": "Taira height of an SCCP-bearing block.",
+            "in": "path",
+            "name": "height",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Decimal history size (default: the current size).",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SccpReadDocumentV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`iroha_sccp::api::SccpHistoryPathViewV1`.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Immutable records revalidate with their entity tag.",
+                "schema": {
+                  "const": "public, no-cache",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong entity tag of the negotiated representation.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: the `If-None-Match` validator matches the current representation."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A path or query parameter is malformed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested record does not exist."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read the history path of one SCCP block.",
+        "tags": [
+          "SCCP"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.history.proof"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/sccp/light-clients": {
       "get": {
         "description": "Returns every installed inbound light client with its parameters, head, state hash and freeze state.",
@@ -89607,6 +89992,204 @@
           "authentication": "torii_default",
           "schemaVersion": 1,
           "stableRouteId": "sccp.light_client.list"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/light-clients/{network}": {
+      "get": {
+        "description": "Returns the stored light client (params, head, freeze state, state hash), whether it is usable at the committed block time, its weak-subjectivity deadline, the `supported_until` of the running release's compiled chain profile, and summaries of its stored sets and checkpoints.",
+        "operationId": "sccpLightClientV1",
+        "parameters": [
+          {
+            "description": "External network profile key (`ethereum-mainnet`, `bsc-mainnet`, `tron-mainnet`, `ton-mainnet`).",
+            "in": "path",
+            "name": "network",
+            "required": true,
+            "schema": {
+              "enum": [
+                "ethereum-mainnet",
+                "bsc-mainnet",
+                "tron-mainnet",
+                "ton-mainnet"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SccpReadDocumentV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`iroha_sccp::api::SccpLightClientDetailV1`."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A path or query parameter is malformed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested record does not exist."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read one SCCP inbound light client.",
+        "tags": [
+          "SCCP"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.light_client.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/light-clients/{network}/checkpoints": {
+      "get": {
+        "description": "Returns the lowest retained checkpoint at or above `covering` (the anchor of an ancestry proof), the lowest permanent one, and the light client head. 404 while the head is below `covering`; 410 when the head covers it but no checkpoint at or above it is retained.",
+        "operationId": "sccpLightClientCheckpointsV1",
+        "parameters": [
+          {
+            "description": "External network profile key (`ethereum-mainnet`, `bsc-mainnet`, `tron-mainnet`, `ton-mainnet`).",
+            "in": "path",
+            "name": "network",
+            "required": true,
+            "schema": {
+              "enum": [
+                "ethereum-mainnet",
+                "bsc-mainnet",
+                "tron-mainnet",
+                "ton-mainnet"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Decimal source height to anchor.",
+            "in": "query",
+            "name": "covering",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SccpReadDocumentV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`iroha_sccp::api::SccpLcCheckpointCoverV1`."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A path or query parameter is malformed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested record does not exist."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The data existed but was pruned by retention (`sccp_pruned`)."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read the checkpoints that anchor a proof of one source height.",
+        "tags": [
+          "SCCP"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.light_client.checkpoints"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -89690,13 +90273,124 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sccp/messages/recent": {
+      "get": {
+        "description": "Returns at most 50 records of one direction, newest first: outbound records by `(height, commitment_index)` with their wallet-facing state, inbound records by `(proven_at_height, message_id)`. `next_before` is the cursor of the next, older page.",
+        "operationId": "sccpMessagesRecentV1",
+        "parameters": [
+          {
+            "description": "`outbound` (default) or `inbound`.",
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "enum": [
+                "outbound",
+                "inbound"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only records of this external network profile key.",
+            "in": "query",
+            "name": "network",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ethereum-mainnet",
+                "bsc-mainnet",
+                "tron-mainnet",
+                "ton-mainnet"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "`next_before` cursor of the previous page: `<height>:<commitment_index>` (outbound) or `<height>:<message id hex>` (inbound).",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Decimal page size, at most 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SccpReadDocumentV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`iroha_sccp::api::SccpRecentMessagesV1`."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A path or query parameter is malformed."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "List the newest SCCP outbound or inbound records.",
+        "tags": [
+          "SCCP"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.messages.recent"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/sccp/messages/{message_id}": {
       "get": {
-        "description": "Returns one outbound message record.",
+        "description": "Returns the status union of one message id: an outbound record with its state (`recorded{deadline_ms}`, `attested{subject_height, signers, threshold}`, `voided`, `refunded`, `stranded`), an inbound record with its status (`pending{reason}`, `released`, `bounced{bounce_message_id}`), or `unknown`. Final states carry an `ETag`.",
         "operationId": "sccpMessageV1",
         "parameters": [
           {
-            "description": "Outbound message id as 64 lowercase hexadecimal characters.",
+            "description": "Message id as 64 lowercase hexadecimal characters.",
             "in": "path",
             "name": "message_id",
             "required": true,
@@ -89722,7 +90416,25 @@
                 }
               }
             },
-            "description": "`iroha_data_model::sccp::outbound::SccpOutboundMessageRecordV1`."
+            "description": "`iroha_sccp::api::SccpMessageStatusV1`.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Immutable records revalidate with their entity tag.",
+                "schema": {
+                  "const": "public, no-cache",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong entity tag of the negotiated representation.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: the `If-None-Match` validator matches the current representation."
           },
           "400": {
             "content": {
@@ -89733,16 +90445,6 @@
               }
             },
             "description": "A path or query parameter is malformed."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The requested record does not exist."
           },
           "406": {
             "content": {
@@ -89761,7 +90463,7 @@
             "IrohaApiToken": []
           }
         ],
-        "summary": "Read one SCCP outbound message.",
+        "summary": "Read the status of one SCCP message id.",
         "tags": [
           "SCCP"
         ],
@@ -89815,7 +90517,25 @@
                 }
               }
             },
-            "description": "`iroha_sccp::api::SccpMessageProofBundleV1`."
+            "description": "`iroha_sccp::api::SccpMessageProofBundleV1`.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Immutable records revalidate with their entity tag.",
+                "schema": {
+                  "const": "public, no-cache",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong entity tag of the negotiated representation.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: the `If-None-Match` validator matches the current representation."
           },
           "400": {
             "content": {
@@ -89856,6 +90576,16 @@
               }
             },
             "description": "The subject is not attested yet."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The subject's signatures were pruned by retention (`sccp_pruned`); request a later attestation."
           }
         },
         "security": [
@@ -89873,6 +90603,126 @@
           "authentication": "torii_default",
           "schemaVersion": 1,
           "stableRouteId": "sccp.message.proof"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/outbound/{network}/{revision}": {
+      "get": {
+        "description": "Returns at most 256 outbound records of the revision with nonce at or above `from_nonce`, ascending, each with its wallet-facing state and deadline, plus the revision's next nonce. Wallets use it to find a just-recorded transfer and to plan voids and refunds.",
+        "operationId": "sccpOutboundByNonceV1",
+        "parameters": [
+          {
+            "description": "External network profile key (`ethereum-mainnet`, `bsc-mainnet`, `tron-mainnet`, `ton-mainnet`).",
+            "in": "path",
+            "name": "network",
+            "required": true,
+            "schema": {
+              "enum": [
+                "ethereum-mainnet",
+                "bsc-mainnet",
+                "tron-mainnet",
+                "ton-mainnet"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deployment revision.",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Decimal first nonce (default 0).",
+            "in": "query",
+            "name": "from_nonce",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Decimal page size, at most 256.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SccpReadDocumentV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`iroha_sccp::api::SccpOutboundPageV1`."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A path or query parameter is malformed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested record does not exist."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "List the SCCP outbound records of one route revision by nonce.",
+        "tags": [
+          "SCCP"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.outbound.by_nonce"
         },
         "x-iroha-tool-effect": "read"
       }

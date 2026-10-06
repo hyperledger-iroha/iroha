@@ -236,7 +236,7 @@ impl CapturedStateSnapshot {
             network_id: *state.network_id_ref(),
             height: view.block_hashes.len(),
             tip: view.block_hashes.last().copied(),
-            sccp_policy_hash: crate::state::sccp_policy_hash_v1(),
+            sccp_policy_hash: crate::state::sccp_genesis_policy_hash_v1(),
         };
         drop(view);
         Ok(Self { json, identity })
@@ -2875,7 +2875,7 @@ where
             expected_chain_id,
             *expected_network_id,
         )?;
-        if fast_manifest.sccp_policy_hash != crate::state::sccp_policy_hash_v1() {
+        if fast_manifest.sccp_policy_hash != crate::state::sccp_genesis_policy_hash_v1() {
             return Err(TryReadError::SnapshotGenerationInvalid {
                 path: generation
                     .generation_dir
@@ -3010,7 +3010,7 @@ where
         || fast_manifest.network_id != *state.network_id_ref()
         || fast_manifest.committed_height != snapshot_height_u64
         || fast_manifest.tip_hash != snapshot_hashes.last().copied()
-        || fast_manifest.sccp_policy_hash != crate::state::sccp_policy_hash_v1()
+        || fast_manifest.sccp_policy_hash != crate::state::sccp_genesis_policy_hash_v1()
     {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: generation
@@ -3022,6 +3022,19 @@ where
     }
     if snapshot_height > 0 && !summary.has_space_directory_manifests {
         return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
+    }
+    // The snapshot's own light-client profile activations decide how its next block verifies
+    // (`specs/sccp.md` §4.13.2): a release without an active version refuses the snapshot.
+    if let Err(unavailable) =
+        crate::smartcontracts::isi::sccp::light_clients::ensure_profiles_compiled(
+            state.view().world(),
+            snapshot_height_u64.saturating_add(1),
+        )
+    {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: generation.generation_dir.join(SNAPSHOT_FILE_NAME),
+            reason: format!("snapshot state activates a light-client profile: {unavailable}"),
+        });
     }
     // Runtime configuration is a semantic check on the newly decoded, still-isolated state. Canonicality was enforced while each
     // borrowed field was typed-decoded, so no second full payload is built here.
@@ -4744,7 +4757,7 @@ fn geometry_checkpoint_from_snapshot(
         "native_execution_tip",
     )?)
     .map_err(TryWriteError::Serialization)?;
-    let sccp_policy_hash = crate::state::sccp_policy_hash_v1();
+    let sccp_policy_hash = crate::state::sccp_genesis_policy_hash_v1();
     Ok(DurableSnapshotGeometryCheckpoint {
         chain_id,
         network_id,

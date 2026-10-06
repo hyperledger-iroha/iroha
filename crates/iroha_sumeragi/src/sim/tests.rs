@@ -569,6 +569,24 @@ fn f31_amx_two_phase_commit() {
     });
 }
 
+/// F39: the application clock guard under skewed honest wall clocks (§4.5): O-TIME at every
+/// commit, and no block a Byzantine builder post-dated beyond the guard ever commits.
+#[test]
+fn f39_clock_guard() {
+    sweep("F39", scenarios::f39, |world| {
+        let guard = world
+            .clock_guard
+            .as_ref()
+            .expect("F39 runs the clock guard");
+        let bound = i64::try_from(2 * guard.max_clock_drift_ms).unwrap_or(i64::MAX);
+        assert!(
+            guard.certified.iter().all(|c| c.excess <= bound),
+            "O-TIME holds at every commit"
+        );
+        assert!(guard.certified.len() >= 5, "the chain progressed");
+    });
+}
+
 /// F38: a lane instance next to the global one, followed by every machine.
 #[test]
 fn f38_lane_next_to_global() {

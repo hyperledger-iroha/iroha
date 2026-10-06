@@ -361,14 +361,14 @@ passes.
   execution/finalized-State binding and signed release evidence remain open under
   the [ZK goals](specs/zk_first_release_goals.md).
 
-- **Parliament:** the [final requirements and launch decision](specs/parliament_private_ballot_design.md)
-  requires PQ private ballots without decryption custodians and with potentially
-  small electorates. No construction satisfying accepted-voter dropout is
-  selected; this is a construction blocker, with no pending owner decision.
-  Binding-governance mainnet launch is no-go until qualification. The fast pause
-  panel is seated per epoch independently of attempts. Current timed-OVN ballots and consensus-mandatory Parliament pulse/
-  custody checks do not satisfy that target; construction and availability
-  isolation remain blockers.
+- **Parliament:** binding juries move to [anonymous on-chain ballots](specs/parliament_private_ballot_design.md):
+  public votes and tally, voter-to-ballot linkage hidden by a PQ membership and
+  nullifier proof, and no ballot custodian. The construction is selected but its
+  proof profile is unqualified and nothing is implemented. Binding-governance
+  mainnet launch is no-go until qualification. The epoch-seated fast pause
+  panel is specified, not implemented. Current timed-OVN ballots and consensus-mandatory
+  Parliament pulse/custody checks are retirement and availability-isolation
+  targets.
 - **Services:** Musubi publication/paid contracts, standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

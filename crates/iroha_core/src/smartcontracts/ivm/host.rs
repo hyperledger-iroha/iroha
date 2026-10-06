@@ -10591,6 +10591,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         }
                         Trigger::new(id, action)
                     };
+                    // A contract-registered trigger is an opaque deferred executable: it may
+                    // not carry the signed-only outbound SCCP record (specs/sccp.md §4.4).
+                    // Applying the queue re-checks every effect, including multisig approvals.
+                    if crate::deferred_authority::trigger_executable_derives_sccp_outbound_record(
+                        trigger.action().executable(),
+                    ) {
+                        return Err(ivm::VMError::PermissionDenied);
+                    }
                     let instr = InstructionBox::from(Register::trigger(trigger));
                     Ok(self.queue_instruction(instr))
                 }
@@ -10778,7 +10786,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             debug_assert_eq!(queued_gas, gas);
                             Ok(gas)
                         }
-                        // TODO(ws45): drop 2=RecordSccpMessage from the ivm_abi 0xA0 args text (ABI hash change)
+                        // ABI v1 defines only `1=SubmitBallot`. Contracts record no SCCP
+                        // messages (specs/sccp.md §4.4): an encoded `RecordSccpMessage` fails
+                        // under every tag, like every other instruction type.
                         _ => Err(ivm::VMError::PermissionDenied),
                     }
                 }
@@ -14709,6 +14719,80 @@ seiyaku PrivilegedBinding {
         );
     }
     #[test]
+    fn create_trigger_syscall_rejects_sccp_outbound_record_before_queueing() {
+        // specs/sccp.md §4.4: a contract-registered trigger is an opaque deferred
+        // executable, so it can carry `RecordSccpMessage` neither directly nor nested in a
+        // batch, a registered trigger or a multisig proposal.
+        let authority = ALICE_ID.clone();
+        let record = || {
+            InstructionBox::from(
+                crate::smartcontracts::isi::sccp::test_support::SampleInstructions::record(),
+            )
+        };
+        let action = |executable: Executable| {
+            Action::new(
+                executable,
+                Repeats::Exactly(1),
+                authority.clone(),
+                DataEventFilter::Any,
+            )
+            .expect("trigger action fixture satisfies validation invariants")
+        };
+        let inner = Trigger::new(
+            "inner_record".parse().unwrap(),
+            action(Executable::Instructions(vec![record()].into())),
+        );
+        let executables = [
+            Executable::Instructions(vec![record()].into()),
+            Executable::Batch(
+                vec![
+                    iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                        InstructionBox::from(Log::new(Level::INFO, "first".to_owned())),
+                    ),
+                    iroha_data_model::transaction::ExecutableBatchItem::Instruction(record()),
+                ]
+                .into(),
+            ),
+            Executable::Instructions(vec![InstructionBox::from(Register::trigger(inner))].into()),
+            Executable::Instructions(
+                vec![InstructionBox::from(
+                    iroha_executor_data_model::isi::multisig::MultisigPropose::new(
+                        authority.clone(),
+                        vec![record()],
+                        None,
+                    ),
+                )]
+                .into(),
+            ),
+        ];
+        for (index, executable) in executables.into_iter().enumerate() {
+            let trigger = Trigger::new(
+                format!("record_trigger_{index}").parse().unwrap(),
+                action(executable),
+            );
+            let json = Json::new(trigger);
+            for contract_frame in [false, true] {
+                let mut host = if contract_frame {
+                    local_contract_host(authority.clone())
+                } else {
+                    CoreHost::new(authority.clone())
+                };
+                let mut vm = ivm::IVM::new(1_000);
+                let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+                vm.set_register(10, ptr);
+                assert_eq!(
+                    host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm),
+                    Err(ivm::VMError::PermissionDenied),
+                    "executable {index} (contract frame: {contract_frame})"
+                );
+                assert!(
+                    host.queued.is_empty(),
+                    "a refused trigger registration must not leave queued effects"
+                );
+            }
+        }
+    }
+    #[test]
     fn remove_trigger_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
@@ -17258,10 +17342,11 @@ seiyaku OuterCaller {
             "mismatched opaque instruction".to_owned(),
         ));
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        // Tag 2 is not part of ABI v1 (the retired contract-originated SCCP send).
         for operation_tag in [
             0,
             ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+            2,
             u64::MAX,
         ] {
             let mut host = local_contract_host(authority.clone());
@@ -17277,6 +17362,53 @@ seiyaku OuterCaller {
                 host.queued.is_empty(),
                 "rejected tag must not enqueue an ISI"
             );
+        }
+    }
+    #[test]
+    fn execute_instruction_syscall_rejects_record_sccp_message_under_every_tag() {
+        // specs/sccp.md §4.4: contracts record no SCCP messages. In a contract frame the
+        // canonical encoded instruction decodes (a decode failure would be `NoritoInvalid`)
+        // and then fails under the only v1 tag, under tag 2 and under every other tag. A
+        // generic frame may not call `0xA0` at all. Nothing is queued in either frame.
+        let authority = (*ALICE_ID).clone();
+        let instruction = InstructionBox::from(
+            crate::smartcontracts::isi::sccp::test_support::SampleInstructions::record(),
+        );
+        let payload = norito::to_bytes(&instruction).expect("encode RecordSccpMessage");
+        for contract_frame in [false, true] {
+            for operation_tag in [
+                0,
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
+                2,
+                3,
+                u64::MAX,
+            ] {
+                let mut host = if contract_frame {
+                    local_contract_host(authority.clone())
+                } else {
+                    CoreHost::new(authority.clone())
+                };
+                let mut vm = ivm::IVM::new(1_000_000);
+                let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+                vm.set_register(10, ptr);
+                vm.set_register(11, operation_tag);
+                let expected = if contract_frame {
+                    ivm::VMError::PermissionDenied
+                } else {
+                    ivm::VMError::GenericSyscallNotAllowed {
+                        syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                    }
+                };
+                assert_eq!(
+                    host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+                    Err(expected),
+                    "tag {operation_tag} (contract frame: {contract_frame}) must not execute RecordSccpMessage"
+                );
+                assert!(
+                    host.queued.is_empty(),
+                    "a refused SCCP record must not enqueue an ISI"
+                );
+            }
         }
     }
     #[test]

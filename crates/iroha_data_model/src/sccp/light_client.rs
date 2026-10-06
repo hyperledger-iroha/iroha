@@ -8,8 +8,9 @@
 //! JSON integer invariant.
 //!
 //! Stored state is [`SccpLightClientV1`] (params, head, freeze reason and CAS state hash),
-//! [`SccpLcConsensusSetV1`] and [`SccpLcCheckpointV1`]. Advances and equivocation evidence are
-//! the bounded opaque wrappers [`SccpLcAdvanceBytesV1`] and [`SccpLcEvidenceBytesV1`].
+//! [`SccpLcConsensusSetV1`], [`SccpLcCheckpointV1`] and the Parliament-activated compiled
+//! profile versions ([`SccpLcProfileActivationV1`]). Advances and equivocation evidence are the
+//! bounded opaque wrappers [`SccpLcAdvanceBytesV1`] and [`SccpLcEvidenceBytesV1`].
 
 use super::{bounded_bytes::impl_sccp_bounded_bytes, governance::SCCP_JSON_SAFE_U64_MAX_V1};
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, bridge::SccpNetworkV1};
@@ -56,10 +57,13 @@ pub const SCCP_LC_DEFAULT_MAX_ADVANCE_BYTES_V1: u32 = 1_048_576;
 /// Default bound on the canonical bytes of one inbound or void proof.
 pub const SCCP_LC_DEFAULT_MAX_PROOF_BYTES_V1: u32 = 1_048_576;
 
+/// Compiled light-client profile version every network runs before any activation (§4.13.2).
+pub const SCCP_LC_GENESIS_PROFILE_VERSION_V1: u32 = 1;
+
 /// Stored parameters of one light client (§4.13.1).
 ///
-/// The source-chain fork schedule and its `supported_until` are compiled into the running
-/// release's chain profile and are deliberately not stored here (§4.13.2).
+/// The source-chain fork schedule and its `supported_until` belong to a compiled chain profile
+/// version, selected by Parliament activation (§4.13.2), and are deliberately not stored here.
 #[derive(
     Debug,
     Clone,
@@ -748,6 +752,43 @@ impl SccpLcConsensusSetV1 {
     }
 }
 
+/// Parliament activation of one compiled light-client profile version
+/// (`sccp_light_client_profiles[(network, version)]`, §4.13.2), written by an enacted
+/// `ActivateLightClientProfile`.
+///
+/// Version 1 of every network is active from genesis without a record. At Taira height `h` the
+/// active version of a network is its highest recorded version whose `activation_height ≤ h`
+/// (version 1 when none is). Records are append-only: versions and activation heights only grow.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sccp::light_client::SccpLcProfileActivationV1")]
+pub struct SccpLcProfileActivationV1 {
+    /// Keccak-256 of the version's canonical profile bytes, as the enacted action named it.
+    pub profile_hash: [u8; 32],
+    /// First Taira height whose blocks verify under the version: the enacting block plus one,
+    /// so the enacting block itself still runs the previous version.
+    pub activation_height: u64,
+    /// Parliament proposal that enacted the activation.
+    pub proposal_id: [u8; 32],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,6 +1083,27 @@ mod tests {
         assert_rejects_unknown_field(&set, &[]);
         roundtrip(&SccpLcAdvanceBytesV1::new(vec![1, 2]).expect("bounded"));
         roundtrip(&SccpLcEvidenceBytesV1::new(vec![3]).expect("bounded"));
+    }
+
+    #[test]
+    fn profile_activation_roundtrips_with_a_fixed_layout() {
+        let activation = SccpLcProfileActivationV1 {
+            profile_hash: [0x71; 32],
+            activation_height: 9_007_199_254_740_991,
+            proposal_id: [0x72; 32],
+        };
+        roundtrip(&activation);
+        assert_rejects_unknown_field(&activation, &[]);
+        // Two fixed 32-byte arrays around one u64: the bare layout has no length prefixes.
+        let encoded = activation.encode();
+        assert!(encoded.len() >= 72, "{}", encoded.len());
+        let value = norito::json::to_value(&activation).expect("value");
+        let object = value.as_object().expect("object");
+        assert_eq!(object.len(), 3);
+        for field in ["profile_hash", "activation_height", "proposal_id"] {
+            assert!(object.contains_key(field), "{field}");
+        }
+        assert_eq!(SCCP_LC_GENESIS_PROFILE_VERSION_V1, 1);
     }
 
     #[test]

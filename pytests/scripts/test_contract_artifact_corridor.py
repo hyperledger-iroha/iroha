@@ -1345,6 +1345,7 @@ def test_evm_smoke_script_uses_the_authenticated_corridor_and_audited_runtime() 
         "digest mismatch before execution",
         "SCCP_CONTRACT_ARTIFACT_MANIFEST",
         "contracts/evm/sccp/test/sccp_taira_xor.test.js",
+        "contracts/evm/sccp/test/sccp_v1_fixtures.test.js",
     ):
         assert required in smoke, required
     completed = subprocess.run(["bash", "-n", str(ROOT / "scripts" / "sccp_evm_contract_smoke.sh")], check=False)

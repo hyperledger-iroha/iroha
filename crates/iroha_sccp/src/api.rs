@@ -26,17 +26,24 @@
 //! and Merkle path locally (`iroha_sccp_wallet::pure`). The conversions below map the records
 //! onto the contract-visible `v1` structures that the verifiers and ABI encoders take.
 //!
-//! - [`SccpCapabilitiesV1`] (`GET /v1/sccp/capabilities`): identity, parameters and
-//!   attestation health.
+//! - [`SccpCapabilitiesV1`] (`GET /v1/sccp/capabilities`): identity, parameters, compiled
+//!   light-client profiles, page limits and attestation health.
+//! - The views of [`views`]: the message status union, outbound and control pages, recent
+//!   messages, light-client detail and checkpoint cover, governance proposal detail and history
+//!   paths.
 //!
-//! Routes that serve stored data-model records (registry, outbound records, rosters, bridge
-//! keys) use those records directly.
+//! Routes that serve stored data-model records (registry, rosters, light-client sets) use those
+//! records directly.
 //!
-//! TODO(ws35): add the remaining §6 read-API records (attestation views and the governance
-//! targets beyond the proposal listing).
+//! TODO(ws35): add the attestation views (`/attestations/{height}`, `/latest`) and the bridge-key
+//! view once the attestation and bridge-key formats are redesigned, and the governance targets
+//! beyond the proposal listing and detail (diffs, readiness).
 
 use iroha_data_model::{bridge::SccpNetworkV1, sccp::attestation::SccpAttestationStatementV1};
 use norito::codec::{Decode, Encode};
+
+pub mod views;
+pub use views::*;
 
 use crate::v1::{
     constants::{
@@ -773,6 +780,44 @@ pub struct SccpPendingHandoffV1 {
     pub stalled: bool,
 }
 
+/// The light-client profile one source chain runs under for the next Taira block (§4.13.2, §6).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Decode,
+    Encode,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::api::SccpLcProfileStatusV1")]
+pub struct SccpLcProfileStatusV1 {
+    /// External source chain.
+    pub network: SccpNetworkV1,
+    /// Active compiled profile version (1 until the Parliament activates another).
+    pub version: u32,
+    /// Profile hash of the version: the hash the activation recorded, or the compiled hash of
+    /// version 1.
+    pub profile_hash: [u8; 32],
+    /// First Taira height verifying under the version; `None` for version 1 (from genesis).
+    #[norito(required)]
+    pub activation_height: Option<u64>,
+    /// Parliament proposal that activated the version; `None` for version 1.
+    #[norito(required)]
+    pub proposal_id: Option<[u8; 32]>,
+    /// Unix time (ms) from which source evidence lies beyond the version's `supported_until`
+    /// and fails closed; wallets stop burning seven days before it (§7.2).
+    #[norito(required)]
+    pub supported_until_ms: Option<u64>,
+}
+
 /// `GET /v1/sccp/capabilities`: the Taira identity, parameters and attestation health a wallet
 /// reads before any flow (§6, §7.1).
 #[derive(
@@ -810,6 +855,22 @@ pub struct SccpCapabilitiesV1 {
     pub members: Vec<SccpMemberLivenessV1>,
     /// Unattested rotation subjects, oldest first.
     pub pending_handoffs: Vec<SccpPendingHandoffV1>,
+    /// Active light-client profile of every external source chain, in network order.
+    pub light_client_profiles: Vec<SccpLcProfileStatusV1>,
+    /// Taira chain id.
+    pub chain_id: String,
+    /// Newest compiled source-chain profile of every network in the running release (§4.13.2),
+    /// in network order. The chain verifies under `light_client_profiles`, which may name an
+    /// older version until the Parliament activates the newer one.
+    pub profiles: Vec<SccpChainProfileViewV1>,
+    /// Keccak-256 commitment to the version and profile hash active at the next block for every
+    /// network (`SccpLcActiveProfilesV1::policy_hash`, the versions `light_client_profiles`
+    /// lists): the SCCP light-client input of the confidential policy digest (§4.13.2).
+    pub profiles_policy_hash: [u8; 32],
+    /// Page limits of the read routes.
+    pub limits: SccpReadLimitsV1,
+    /// Path templates of the SCCP read routes this peer serves.
+    pub path_templates: Vec<String>,
 }
 
 /// Norito JSON field helper for `Vec<u8>` as padded standard base64 (RFC 4648 §4), the
@@ -1128,6 +1189,37 @@ mod tests {
             SccpRotationChainV1::nominal_name(),
             "iroha_sccp::api::SccpRotationChainV1"
         );
+        assert_eq!(
+            SccpLcProfileStatusV1::nominal_name(),
+            "iroha_sccp::api::SccpLcProfileStatusV1"
+        );
+    }
+
+    #[test]
+    fn light_client_profile_status_roundtrips_and_is_closed() {
+        let genesis = SccpLcProfileStatusV1 {
+            network: SccpNetworkV1::EthereumMainnet,
+            version: 1,
+            profile_hash: [0x11; 32],
+            activation_height: None,
+            proposal_id: None,
+            supported_until_ms: Some(1_814_313_600_000),
+        };
+        let activated = SccpLcProfileStatusV1 {
+            network: SccpNetworkV1::TonMainnet,
+            version: 2,
+            profile_hash: [0x22; 32],
+            activation_height: Some(1_234),
+            proposal_id: Some([0x33; 32]),
+            supported_until_ms: None,
+        };
+        for status in [genesis, activated] {
+            roundtrip(&status);
+            assert_rejects_unknown_field(&status);
+            for field in ["activation_height", "proposal_id", "supported_until_ms"] {
+                assert_requires_field(&status, field);
+            }
+        }
     }
 
     #[test]

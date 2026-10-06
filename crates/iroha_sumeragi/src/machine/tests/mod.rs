@@ -89,6 +89,9 @@ pub(super) struct H {
     pub records: BTreeMap<PublicKey, Vec<u8>>,
     /// Outstanding `Execute` requests.
     pub pending_exec: Vec<(Hash32, u64, AvailableBody)>,
+    /// The `certified` flag of every `Execute` since the core was created, by request id
+    /// (§4.5 "Certified re-proposals").
+    pub exec_certified: BTreeMap<u64, bool>,
     /// Actions of the most recent `fire`.
     pub out: Vec<Action>,
     /// Every action since the core was (re)started.
@@ -158,6 +161,7 @@ impl H {
             bodies: BTreeMap::new(),
             records: BTreeMap::new(),
             pending_exec: Vec::new(),
+            exec_certified: BTreeMap::new(),
             out: Vec::new(),
             all: Vec::new(),
             auto_apply: true,
@@ -347,8 +351,13 @@ impl H {
                         self.bodies
                             .insert(block.hash(&self.v.crypto), block.clone());
                     }
-                    Action::Execute { block, req } => {
+                    Action::Execute {
+                        block,
+                        req,
+                        certified,
+                    } => {
                         let bh = block.hash(&self.v.crypto);
+                        self.exec_certified.insert(*req, *certified);
                         if self.auto_exec {
                             queue.push_back(Event::Executed {
                                 block_hash: bh,
@@ -1382,7 +1391,7 @@ pub(super) fn executes(actions: &[Action]) -> Vec<(Hash32, u64)> {
     actions
         .iter()
         .filter_map(|a| match a {
-            Action::Execute { block, req } => Some((block.header().payload_hash, *req)),
+            Action::Execute { block, req, .. } => Some((block.header().payload_hash, *req)),
             _ => None,
         })
         .collect()

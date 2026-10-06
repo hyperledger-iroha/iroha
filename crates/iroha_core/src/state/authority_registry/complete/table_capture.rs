@@ -743,6 +743,11 @@ capture_world_table_once!(
     sccp_light_client_stride_index,
     "world.sccp_light_client_stride_index"
 );
+capture_world_table_once!(
+    capture_sccp_light_client_profiles_once,
+    sccp_light_client_profiles,
+    "world.sccp_light_client_profiles"
+);
 
 const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     TableMaterializer::Single {
@@ -1015,6 +1020,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_sccp_light_client_sets_once::MATERIALIZER,
     capture_sccp_light_client_checkpoints_once::MATERIALIZER,
     capture_sccp_light_client_stride_index_once::MATERIALIZER,
+    capture_sccp_light_client_profiles_once::MATERIALIZER,
     TableMaterializer::TransactionMembership,
 ];
 
@@ -1183,7 +1189,7 @@ mod tests {
     #[test]
     fn actual_table_catalog_admits_metadata_then_enforces_original_node_capacity() {
         let count = require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS).unwrap();
-        assert_eq!(count, 217);
+        assert_eq!(count, 218);
         assert_eq!(require_complete_inventory(STATE_FIELDS), Ok(()));
         let state = state();
         let budget = state.ivm_execution_budget();
@@ -1419,6 +1425,7 @@ mod tests {
             "world.sccp_light_client_sets",
             "world.sccp_light_client_checkpoints",
             "world.sccp_light_client_stride_index",
+            "world.sccp_light_client_profiles",
             "state.transactions.current",
             "state.transactions.rollback",
         ];
@@ -1431,7 +1438,7 @@ mod tests {
         );
         // Every listed Single has one table; the one indivisible transaction
         // membership owner retains both current and rollback tables together.
-        assert_eq!(expected.len(), 217);
+        assert_eq!(expected.len(), 218);
         assert_eq!(
             TABLE_MATERIALIZERS
                 .iter()
@@ -1465,9 +1472,9 @@ mod tests {
         );
         assert_eq!(
             require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS),
-            Ok(217)
+            Ok(218)
         );
-        assert_eq!(TABLE_MATERIALIZERS.len(), 216);
+        assert_eq!(TABLE_MATERIALIZERS.len(), 217);
         assert_eq!(
             TABLE_MATERIALIZERS
                 .iter()

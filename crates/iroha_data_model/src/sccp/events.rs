@@ -263,7 +263,7 @@ sccp_event_payload! {
 }
 
 sccp_event_payload! {
-    /// Core registered an absent account to credit it (§4.12.3 step 3, §4.16).
+    /// Core registered an absent account to credit it (§4.12.3 step 5, §4.16).
     #[norito_schema(name = "iroha_data_model::sccp::events::SccpRecipientRegisteredV1")]
     pub struct SccpRecipientRegisteredV1 {
         /// Registered account.
@@ -277,7 +277,7 @@ sccp_event_payload! {
 }
 
 sccp_event_payload! {
-    /// An inbound message was released to its recipient (§4.12.3 step 5).
+    /// An inbound message was released to its recipient (§4.12.3 step 7).
     #[norito_schema(name = "iroha_data_model::sccp::events::SccpInboundReleasedV1")]
     pub struct SccpInboundReleasedV1 {
         /// Message id.
@@ -297,7 +297,10 @@ sccp_event_payload! {
     }
 }
 
-/// Why an inbound settlement bounced (§4.12.3 steps 1–2).
+/// Why an inbound settlement bounced (§4.12.3): the recipient can never be credited.
+///
+/// Only permanent identity refusals bounce; a credit the release movement refuses now holds the
+/// record `Pending` (`SccpPendingReasonV1::CreditRefused`) instead.
 #[derive(
     Debug,
     Clone,
@@ -332,10 +335,11 @@ pub enum SccpBounceReasonV1 {
     #[codec(index = 2)]
     #[norito(rename = "inadmissible_controller")]
     InadmissibleController,
-    /// Transfer control deterministically refuses an XOR credit to the recipient.
+    /// The recipient is absent and `Register<Account>` refuses its identity (for example a
+    /// retired rekey predecessor or a reserved protocol escrow identity).
     #[codec(index = 3)]
-    #[norito(rename = "credit_refused")]
-    CreditRefused,
+    #[norito(rename = "unregistrable_recipient")]
+    UnregistrableRecipient,
 }
 
 sccp_event_payload! {
@@ -362,7 +366,7 @@ sccp_event_payload! {
 }
 
 sccp_event_payload! {
-    /// Settlement or a bounce found `liability(r) < amount` (§4.12.3 step 4).
+    /// Settlement or a bounce found `liability(r) < amount` (§4.12.3 step 1).
     #[derive(Copy)]
     #[norito_schema(name = "iroha_data_model::sccp::events::SccpInboundLiabilityShortfallV1")]
     pub struct SccpInboundLiabilityShortfallV1 {
@@ -396,7 +400,8 @@ sccp_event_payload! {
         pub nonce: u64,
         /// Void kind.
         pub kind: SccpVoidKindV1,
-        /// Whether the refund waits for `SettleSccpV1::Refund`.
+        /// Whether the refund still waits for `SettleSccpV1::Refund` after the void's own
+        /// refund attempt; `false` when the same instruction refunded or stranded it.
         pub refund_pending: bool,
     }
 }

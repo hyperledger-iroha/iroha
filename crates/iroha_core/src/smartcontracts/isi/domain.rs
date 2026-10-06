@@ -1001,6 +1001,96 @@ pub mod isi {
     ) -> Option<AssetDefinitionId> {
         crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
+    /// Check, without mutating state, the identity rules `Register<Account>` applies to the
+    /// built `account` before it is inserted: reserved native metadata keys, controller
+    /// capabilities, an already registered id, retired rekey identities, reserved FX corridor
+    /// and SCCP escrow identities, and the UAID and opaque-identifier bindings.
+    ///
+    /// `Register<Account>` runs exactly this check first, and SCCP settlement runs it for an
+    /// absent recipient (`specs/sccp.md` §4.12.3): an identity it refuses can never be
+    /// registered, so the message bounces instead of failing. Metadata sizes and the account
+    /// label (which a bare `Account::new` never carries) are checked by the execution itself.
+    ///
+    /// TODO(ws41): `Register<Account>` ends with `retail_fee::reopen_account`, which can still
+    /// refuse an identity that has retained retail state (no active retail policy, or a
+    /// refused reopen). That refusal is not prechecked here, so SCCP settlement of such a
+    /// recipient fails instead of bouncing or holding.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal `Register<Account>` would report.
+    pub(crate) fn precheck_register_account(
+        state_transaction: &StateTransaction<'_, '_>,
+        account: &Account,
+    ) -> Result<(), Error> {
+        if let Some(reserved_key) = [
+            ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY,
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+        ]
+        .into_iter()
+        .find(|key| account.metadata().get(*key).is_some())
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "account metadata key `{reserved_key}` is reserved for native state; register the account without it and use the dedicated lifecycle instruction"
+                )
+                .into(),
+            ));
+        }
+        ensure_controller_capabilities(
+            account.controller(),
+            &state_transaction.crypto.allowed_signing,
+            &state_transaction.crypto.allowed_curve_ids,
+        )?;
+        let account_id = account.id();
+        if state_transaction.world.account(account_id).is_ok() {
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::AccountId(account_id.clone()),
+            }
+            .into());
+        }
+        crate::retail_fee::ensure_not_rekeyed(&state_transaction.world, account_id)?;
+        crate::smartcontracts::isi::kaigi::ensure_account_id_is_not_retired_rekey_predecessor(
+            state_transaction,
+            account_id,
+        )?;
+        if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
+            state_transaction,
+            account_id,
+        )? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot register account {account_id}: its identity is reserved for deterministic FX corridor protocol escrow"
+                )
+                .into(),
+            ));
+        }
+        if crate::smartcontracts::isi::sccp::escrow::is_escrow(
+            &*state_transaction.world,
+            account_id,
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot register account {account_id}: its identity is reserved for an SCCP route escrow"
+                )
+                .into(),
+            ));
+        }
+        if let Some(uaid) = account.uaid() {
+            if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("UAID {uaid} already bound to account {existing}").into(),
+                ));
+            }
+        } else if !account.opaque_ids().is_empty() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Opaque identifiers require a UAID".to_owned().into(),
+            ));
+        }
+        Ok(())
+    }
     impl Execute for Register<Account> {
         #[metrics(+"register_account")]
         fn execute(
@@ -1009,79 +1099,12 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account: Account = self.object().clone().build(authority);
-            if let Some(reserved_key) = [
-                ASSET_TRANSFER_CONTROL_METADATA_KEY,
-                iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY,
-                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
-            ]
-            .into_iter()
-            .find(|key| account.metadata().get(*key).is_some())
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "account metadata key `{reserved_key}` is reserved for native state; register the account without it and use the dedicated lifecycle instruction"
-                    )
-                    .into(),
-                )
-                .into());
-            }
+            precheck_register_account(state_transaction, &account)?;
             crate::smartcontracts::limits::enforce_metadata_value_sizes(
                 state_transaction,
                 account.metadata(),
             )?;
-            ensure_controller_capabilities(
-                account.controller(),
-                &state_transaction.crypto.allowed_signing,
-                &state_transaction.crypto.allowed_curve_ids,
-            )?;
             let (account_id, account_value) = account.clone().into_key_value();
-            if state_transaction.world.account(&account_id).is_ok() {
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::AccountId(account_id),
-                }
-                .into());
-            }
-            crate::retail_fee::ensure_not_rekeyed(&state_transaction.world, &account_id)?;
-            crate::smartcontracts::isi::kaigi::ensure_account_id_is_not_retired_rekey_predecessor(
-                state_transaction,
-                &account_id,
-            )?;
-            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
-                state_transaction,
-                &account_id,
-            )? {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot register account {account_id}: its identity is reserved for deterministic FX corridor protocol escrow"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if crate::smartcontracts::isi::sccp::escrow::is_escrow(
-                &*state_transaction.world,
-                &account_id,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot register account {account_id}: its identity is reserved for an SCCP route escrow"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some(uaid) = account.uaid() {
-                if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!("UAID {uaid} already bound to account {existing}").into(),
-                    ));
-                }
-            } else if !account.opaque_ids().is_empty() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Opaque identifiers require a UAID".to_owned().into(),
-                ));
-            }
             if let Some(label) = account.label() {
                 if account_label_is_pii(label) {
                     return Err(InstructionExecutionError::InvariantViolation(

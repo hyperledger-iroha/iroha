@@ -268,15 +268,27 @@ fn decode_confidential_registry_meta(
         norito::Error::Message("failed to decode confidential_registry_root payload".to_string())
     })
 }
+/// Project a confidential feature digest onto the height-independent policy the p2p handshake
+/// compares, so peers at different heights still connect.
+///
+/// The registry fields are dropped, and the policy hash binds the ZK configuration with the
+/// version-1 SCCP light-client profiles
+/// ([`iroha_core::state::compute_genesis_confidential_policy_hash`]) instead of the digest's
+/// own policy hash: that one binds the light-client profile versions active at the digest's
+/// height, which change at a Parliament activation and are checked by every block's digest
+/// instead (`specs/sccp.md` §4.13.2).
 fn confidential_handshake_policy_digest(
     digest: iroha_data_model::confidential::ConfidentialFeatureDigest,
+    zk_config: &iroha_config::parameters::actual::Zk,
 ) -> iroha_data_model::confidential::ConfidentialFeatureDigest {
     iroha_data_model::confidential::ConfidentialFeatureDigest::new(
         None,
         None,
         None,
         digest.conf_rules_version,
-        digest.zk_policy_hash,
+        Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+            zk_config,
+        )),
     )
 }
 fn decode_consensus_handshake_meta(
@@ -615,12 +627,29 @@ mod handshake_payload_tests {
             Some(1),
             Some([2; 32]),
         );
-        let handshake = confidential_handshake_policy_digest(digest);
+        let zk = iroha_core::state::default_zk_config();
+        let handshake = confidential_handshake_policy_digest(digest, &zk);
         assert_eq!(handshake.vk_set_hash, None);
         assert_eq!(handshake.poseidon_params_id, None);
         assert_eq!(handshake.pedersen_params_id, None);
         assert_eq!(handshake.conf_rules_version, Some(1));
-        assert_eq!(handshake.zk_policy_hash, Some([2; 32]));
+        // The block digest's policy hash binds the light-client profile versions active at its
+        // height; the handshake binds the version-1 profiles, so a Parliament profile
+        // activation never splits peers at different heights.
+        assert_eq!(
+            handshake.zk_policy_hash,
+            Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+                &zk
+            ))
+        );
+        let after_activation = iroha_data_model::confidential::ConfidentialFeatureDigest {
+            zk_policy_hash: Some([3; 32]),
+            ..digest
+        };
+        assert_eq!(
+            confidential_handshake_policy_digest(after_activation, &zk),
+            handshake
+        );
     }
 }
 #[derive(Debug, JsonDeserialize)]
@@ -3025,7 +3054,7 @@ impl Iroha {
                 Some(iroha_config::parameters::defaults::confidential::RULES_VERSION),
                 Some(iroha_core::state::combine_zk_and_sccp_policy_hashes(
                     iroha_core::state::compute_zk_consensus_policy_hash(&zk),
-                    iroha_core::state::sccp_policy_hash_v1(),
+                    iroha_core::state::sccp_genesis_policy_hash_v1(),
                 )),
             )
         } else {
@@ -3064,7 +3093,10 @@ impl Iroha {
             enabled: config.confidential.enabled,
             assume_valid: config.confidential.assume_valid,
             verifier_backend: config.confidential.verifier_backend.clone(),
-            features: Some(confidential_handshake_policy_digest(confidential_features)),
+            features: Some(confidential_handshake_policy_digest(
+                confidential_features,
+                &state.zk_snapshot(),
+            )),
         };
         let crypto_caps = iroha_p2p::CryptoHandshakeCaps {
             sm_enabled: config.crypto.sm_helpers_enabled(),
@@ -4543,19 +4575,20 @@ impl Iroha {
             supervisor.monitor(child);
             Some(runtime)
         };
-        // The SCCP attestor signs only durably final state and never aborts the node.
+        // The SCCP attestor signs only durably final state and never aborts the node. The
+        // light-client keeper is a separate task, so its public RPC never delays signing.
         #[cfg(unix)]
-        if !emergency_fast
-            && let Some(child) = sccp_attestor::start(
+        if !emergency_fast {
+            for child in sccp_attestor::start(
                 Arc::clone(&state),
                 Arc::clone(&queue),
                 config.common.key_pair.clone(),
                 config.sccp.attestor.clone(),
                 config.sccp.light_client_keeper.clone(),
                 supervisor.shutdown_signal(),
-            )
-        {
-            supervisor.monitor(child);
+            ) {
+                supervisor.monitor(child);
+            }
         }
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
@@ -10229,7 +10262,11 @@ mod tests {
             .split_once("} else {")
             .expect("Strict confidential-feature branch");
         assert!(confidential_setup.0.contains("state.zk_snapshot()"));
-        assert!(confidential_setup.0.contains("sccp_policy_hash_v1()"));
+        assert!(
+            confidential_setup
+                .0
+                .contains("sccp_genesis_policy_hash_v1()")
+        );
         assert!(!confidential_setup.0.contains("state.view()"));
         assert!(confidential_setup.1.contains("let view = state.view()"));
         assert!(

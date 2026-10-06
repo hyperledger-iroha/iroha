@@ -66,15 +66,64 @@ and wire definitions below describe that candidate, not a claim of release or li
    limits, replies and fetch sources.
 5. **Clocks.** Each node has a local monotonic clock (`now`, milliseconds) with bounded drift
    (`|rate − 1| ≤ ρ`, default assumption ρ ≤ 1%). Clocks are never compared across nodes and no
-   validity rule depends on a local clock.
+   validity rule depends on a local clock. **Application exception (§4.5):** the application
+   executor MAY answer `Failed` from a local wall-clock comparison (`ClockAhead`,
+   `StaleDueWork`) for a block executed with `certified = false`. This is liveness-only: it
+   delays only that node's Prepare vote and is never a validity verdict.
 6. **Cryptography.** EUF-CMA signatures with aggregation. Production: BLS12-381 in the min-pk
    setting, `iroha_crypto::Algorithm::BlsNormal` (public key = compressed G1 point, 48 bytes;
    signature and aggregate = compressed G2 point, 96 bytes). Proof-of-possession is checked by the
    application when a key enters a committee, so rogue-key attacks are excluded. Collision-resistant
    `H`. The simulator uses a fake scheme with identical interfaces and provenance tracking (§13).
+
+   **Consensus signing suite (application binding; target, not yet implemented).** Production
+   signatures of kinds `0x01`–`0x05` (§3.3) and of the RS16 availability statements (§12.8) are
+   made and checked only through the consensus API `iroha_crypto::bls::consensus`. It signs
+   `m = SHA-256(P)` for an allowlisted preimage `P`, as `sk · hash_to_G2(m, DST_SIG)` with
+   `DST_SIG = ASCII("BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_")`, the IETF min-pk
+   proof-of-possession ciphersuite. `ConsensusDigest::from_preimage(P)` returns `SHA-256(P)` iff
+   `P` matches one row exactly (the prefix is `TAG_SIG ‖ kind ‖ I ‖ E`, 85 bytes):
+
+   | Context | Prefix | Exact length |
+   |---|---|---|
+   | Proposal | `TAG_SIG ‖ 0x01` | 165 |
+   | Prepare / Commit vote | `TAG_SIG ‖ 0x02` / `0x03` | 166 |
+   | Timeout | `TAG_SIG ‖ 0x04` | 102 (byte 101 = `0x00`) or 110 (byte 101 = `0x01`) |
+   | Echo | `TAG_SIG ‖ 0x05` | 101 |
+   | RS16 manifest / row (§12.8) | `"sumeragi/availability/sign" ‖ 0x00` / `0x01` | 179 / 219 |
+
+   A preimage that is not allowlisted is refused: signing returns an error, which the driver
+   handles like any signing failure, and verification returns `false`. Kind `0x06`
+   (`att_preimage`) is not signed with consensus keys and is not allowlisted. The production
+   `Signer`/`Crypto` implementations (`KeyPairSigner`, `BlsCrypto`, `ProofCrypto`, and the
+   `CryptoRef` and lane signers that delegate to them) MUST route through this API; the generic
+   `iroha_crypto::Signature` API cannot emit a `DST_SIG` signature. `FastAggregateVerify`
+   requires `k ≥ 1` keys, each admitted with a w3f proof of possession or committed by an
+   authenticated committee root, `apk ≠ O`, and a canonical, in-subgroup, non-identity `σ`;
+   `AggregateVerify` over groups (timeout certificates) keeps its distinct-message and
+   distinct-key checks under `DST_SIG`. The simulator's fake crypto never calls this API, so
+   sans-IO (MS/ML) mutations that change a preimage layout are unaffected by the exact-length
+   allowlist; Core (HC) mutations run with real crypto and MUST NOT change a preimage layout.
+
+   **Registry of `BlsNormal` signing contexts.** A new context requires an entry here and a
+   review. Every aggregate user takes a PoP-verified key type.
+
+   | Context | Hash-to-curve domain | Message |
+   |---|---|---|
+   | Sumeragi kinds `0x01`–`0x05`; RS16 statements | `DST_SIG` | `SHA-256(P)`, allowlist only |
+   | Consensus-key proof of possession | w3f transcript | `H("iroha:bls:pop:v1" ‖ pk)` |
+   | P2P handshake and relay digests; Torii finality attestation; block-header signatures; `SignatureOf`; genesis signature; consensus-key lifecycle certificates; private settlement; jurisdiction; KAGEMUSHA reserve and state certificates; BLS account controllers; SoraFS | w3f transcript (unchanged) | unchanged bytes |
+
+   Only the consensus API hashes under `DST_SIG`, so no signature obtained in another context (a
+   chosen-challenge node attestation, a relay digest) can verify as a vote or certificate share,
+   and a w3f proof of possession is never a consensus signature. The global beacon keeps its own
+   DST, and the Ethereum sync-committee verifier stays a separate verify-only API that shares only
+   hash-to-curve with the consensus API. `TODO:` unify every other BLS signature on RFC 9380
+   suites in a later release.
 7. **Execution.** `exec(S_{h−1}, B) → Valid(R, S_h) | Invalid` is a deterministic pure function of
    the committed parent state and the block; it terminates within a chain-parameter budget
-   (`E_max`, enforced by gas/size limits). `R` is a 32-byte execution commitment (§4.1). A local
+   (`E_max`, enforced by gas/size limits). `R` is a 32-byte execution commitment (§4.1; for
+   instances that use `ExecutionResultCommitment`, the certified result of §4.1.1). A local
    executor *failure* (panic, I/O error, resource exhaustion) is not an outcome of `exec`: it is
    reported as `Failed` and never treated as invalidity (§4.2).
 8. **Instances.** One core instance per chain: the global (SORA Nexus) chain and every dataspace /
@@ -341,6 +390,11 @@ re-sign them. A proposal signature binds its complete header and QC/TC attachmen
 `ProposalMessage` additionally carries the mandatory original availability table. Corrupting
 that carrier or an actual row cannot frame the leader for a different signed proposal.
 
+The preimages are what is signed, not the signed message itself: production signatures over
+kinds `0x01`–`0x05` and the availability statements are `Sign(sk, SHA-256(preimage))` under
+`DST_SIG`, through the consensus API of §1 item 6. `att_preimage` is not signed with consensus
+keys.
+
 ```rust
 struct Proposal {
     instance: Hash32, height: u64, view: u64,  // round of this proposal (≥ header.origin_view)
@@ -369,6 +423,25 @@ struct TimeoutVote {
 ```
 
 `witness(None) = 0x00`; `witness(Some(w)) = 0x01 ‖ be32(len(w)) ‖ w`.
+
+#### 3.3.1 External verification surface (frozen)
+
+Contracts on other chains verify global `CommitQC`s directly (`specs/sccp.md` §3.8), so these
+parts of the protocol are frozen for the first release:
+
+- the Commit vote preimage layout `vote_preimage(0x03, h, v, bh, R, a)` (166 bytes) and the `I`
+  derivation of §1 item 8;
+- the signer bitmap order: bit `i` is canonical index `i`, LSB-first within each byte;
+- `n ≤ 31` and `q = n − f` exactly;
+- the consensus suite of §1 item 6: `DST_SIG` over `SHA-256` of the preimage;
+- `RESULT_TAG` and the 221-byte finality header layout of the certified result (§4.1.1).
+  Destinations take the body digest `D_body` as given, so `RESULT_BODY_TAG` is not part of
+  this surface.
+
+Changing any of them requires a new SCCP route revision with new destination contracts,
+activated by the SCCP governance, not only a node release. The golden test
+`crates/iroha_sumeragi/tests/destination_surface_golden.rs` pins the preimage, `I`, the bitmap
+order and the quorum for `n ∈ {4, 7, 31}` (target; `TODO:` WP-C5).
 
 ### 3.4 Certificates
 
@@ -547,6 +620,17 @@ executes to `Invalid` produces none: the leader does not execute before proposin
 honest leader can propose a poison transaction without knowing it, and a single divergent executor
 would otherwise accuse honest leaders. Penalties are the application's.
 
+**Application evidence (SCCP forgery; target, not yet implemented).** The application may record
+evidence the core never produces. SCCP records a `CommitQC`-valid certificate of a committee
+generation whose block hash or certified result differs from the global chain's at that height
+(`specs/sccp.md` §4.9). The committed evidence record carries
+`RecordedEvidenceV1 { Native(Evidence), SccpForgery(SccpForgeryRecordV1) }`, with the scope
+`EvidenceScope::SccpGeneration { generation }`. An SCCP record is self-contained: its offence
+height is the generation's start height and its offenders are the validator registrations
+resolved when the generation was created, so the penalty uses neither the peer-key lookup nor the
+locator tenure filter, and the native evidence horizon does not apply to it (Governed NPoS
+reconfiguration, below).
+
 Message sizes include complete authenticated epoch context and the declared Norito framing.
 A proposal or manifest additionally carries the exact availability table of §12.8
 (`4 + 96 + N·(32 + 96)` inner bytes, before its Norito envelope). Earlier estimates excluding
@@ -555,7 +639,10 @@ Commit vote of a flagged block adds its attestation, and a CommitQC of one (also
 `Status`, a proposal's `parent_qc` or a sync entry) adds `q` attestations (§3.7); each is at most
 `MAX_ATTESTATION_SIGNATURE_BYTES = 256` occupied bytes. Each vote carries its bounded
 `ResultWitness` and compact signature. Each flagged CommitQC carries exactly one shared
-`ResultWitness` of at most 64 KiB plus the ordered compact signatures. The only decoded witness
+`ResultWitness` of at most 64 KiB plus the ordered compact signatures. For instances that use
+`ExecutionResultCommitment`, the witness is the result preimage `F ‖ body` of §4.1.1 (the
+221-byte finality header followed by the canonical body), and the 64 KiB bound
+(`MAX_RESULT_WITNESS_BYTES`) covers both together. The only decoded witness
 state is explicitly untrusted; admission copies or shares it into the original State resource
 pool before native ingress retains it. Immutable clones retain the same actual backing/control
 charges. The frame allowance includes the witness, compact signatures and bounded header/TC
@@ -676,7 +763,9 @@ of its attestations, as unflagged to every node that lacks the header.
 `KagemushaMintFinalityLocalAuthorityV1`. The seal message binds the network, the authority
 generation and epoch authorization, the height, the digests of `bh` and of the execution
 commitment, and the top-up root and count. The last three come from `R`'s preimage, the node's
-`ExecutionResultCommitment` (`R = H("iroha/sumeragi/result/v1" ‖ preimage)`, §4.1), which travels as a bounded opaque immutable core witness. Hence:
+`ExecutionResultCommitment` (as-built `R = H("iroha/sumeragi/result/v1" ‖ preimage)`, Appendix E51;
+under §4.1.1 the preimage is `F ‖ body` and `R = result_of_preimage(F ‖ body)`), which travels as a
+bounded opaque immutable core witness. Hence:
 
 - A vote carries `(ResultWitness, compact paired seal)`; a QC stores the witness once.
   The seal is 132 bytes: big-endian seat index, then Eq nonce/response and Ep nonce/response.
@@ -721,7 +810,8 @@ message; no node-local execution cache supplies historical verification authorit
   obtained exactly the certified result (`tip.exec_ok`, §6.8), so durable apply of the parent is
   not on the vote path. If the driver no longer holds that post-state (evicted, lost on restart)
   it recomputes it; a missing cache entry is never a verdict (§12.3 O4). Execution is requested by
-  `Action::Execute { block, req }` and answered exactly once by
+  `Action::Execute { block, req, certified }` (`certified` only exempts the block from the
+  application's clock guards, §4.2, §4.5) and answered exactly once by
   `Event::Executed { block_hash, req, outcome }`,
   `outcome ∈ {Valid(R), Invalid, Failed, Cancelled}`; `req` is a per-core request counter, so an
   answer to a request the core has since discarded never matches a live entry (§6.3).
@@ -731,10 +821,57 @@ message; no node-local execution cache supplies historical verification authorit
   block (`C_{h+2}` and chain parameters, §10). The core treats `R` as opaque. After G.3, `R` binds
   `parent_keyed_state_root = root(P_{h−1})` and the post-execution
   `keyed_state_root = root(X_h)`, as specified in §16; until then E51 describes the as-built
-  behaviour.
+  behaviour. For instances that use `ExecutionResultCommitment`, §4.1.1 fixes how `R` binds the
+  finality header that external verifiers read.
 - The Prepare vote, the PrepareQC, the Commit vote and the CommitQC all sign
   `(I, h, v, block_hash, R)`. A CommitQC therefore finalizes order **and** result. The next
   block's header repeats the certified `R` as `parent_result`.
+
+#### 4.1.1 Certified result of `ExecutionResultCommitment` instances (application binding)
+
+**Status.** Target layout of `specs/sccp.md` revision 5, not yet implemented (`TODO:` WP-C2);
+until it lands, Appendix E51 describes the as-built `R`. The core still treats `R` as opaque;
+this subsection fixes how the application computes it, because external verifiers pin it
+(§3.3.1).
+
+Every instance whose result is an `ExecutionResultCommitment` (the global chain, dataspace roots
+and private developer anchors) computes:
+
+```text
+body   = norito::encode_canonical(ExecutionResultCommitment)     // ≤ MAX_RESULT_BODY_BYTES = 65 315
+D_body = H(RESULT_BODY_TAG ‖ body)                                // RESULT_BODY_TAG = "iroha/sumeragi/result-body/v1"
+R      = SHA-256(RESULT_TAG ‖ F ‖ D_body)                         // RESULT_TAG = "iroha/sumeragi/result/v1"; 277-byte input
+```
+
+- `F` is the 221-byte finality header `SccpFinalityHeaderV1` (`specs/sccp.md` §3.6 calls it `X`;
+  it is unrelated to the post-execution State `X_h` of §16). It names the network, height and
+  block time, and on the global chain, once SCCP exists, the block's SCCP commitment, the history
+  accumulator and the committee generation that certifies the block. Every other instance, and
+  the global chain before SCCP exists or when its inputs are missing, uses the inactive form
+  `magic ‖ network_id ‖ be64(h) ‖ be64(t(h)) ‖ 0x00 ‖ 0^156`.
+- The executor produces `F` after execution, from the post-execution state and the authenticated
+  schedule inputs, as a pure function that reads no clock, configuration or Kura. It travels with
+  the original execution owner and is never recomputed from another state view. Voters need no
+  separate check: each voter's own `F` enters its own `R`, so a divergent `F` is a divergent `R`
+  (`ExecutionMismatch`, §4.2). SCCP bookkeeping never makes a block `Invalid`.
+- The stored result preimage (`CommitCertificate.result_preimage`, and the flagged-QC
+  `ResultWitness`) is `F ‖ body`, at most `MAX_RESULT_WITNESS_BYTES = 65 536` bytes in total, so
+  the body bound is 65 315 bytes and `FRAME_OVERHEAD`, `T_req` and the core wire are unchanged. A
+  test MUST measure the worst supported graph (a 31-seat boundary with a frozen preparation)
+  against the body bound before this layout lands; if it does not fit, the witness bound is
+  raised to 65 757 bytes explicitly, with §3.6, §9.4 and the mutation gate updated, never
+  silently.
+- `R` is a raw SHA-256 output: it is never passed through `Hash::prehashed`, `HashOf` or any
+  type that checks or sets the `H` marker bit. `result_of_preimage(p)` is the only `R` function,
+  for voters and readers alike; it returns nothing when `len(p) < 222`, `len(p) > 65 536` or `F`
+  does not parse, and callers treat that as a mismatch, never as a local fault.
+- Readers that hold `F ‖ body` without executing it decode it through
+  `CertifiedResultV1::decode(p, scope)` (`specs/sccp.md` §3.6 C1–C5): `F` parses, its height
+  equals the body's, its network equals the scheduled epoch context's, its committee root
+  matches that context's committee, a boundary decision in the body is reflected in `F`, and a
+  `NonGlobal` scope requires the inactive form. `ExecutionResultCommitment::result()` is deleted,
+  because `R` cannot be computed from the body alone.
+- Lane instances keep their own `LANE_RESULT_TAG` result and carry no `F`.
 
 ### 4.2 Verdicts
 
@@ -750,7 +887,11 @@ message; no node-local execution cache supplies historical verification authorit
   executor disagrees with ≥ `f + 1` honest executions: `Action::LocalFault(ExecutionMismatch)`, no
   Prepare vote in this view, **no evidence and no early timeout**; the node keeps participating
   otherwise (timeouts, Commit votes, aggregation). If a CommitQC for `Q.result` later reaches
-  apply, the apply path detects the divergence and halts that instance (§12.5).
+  apply, the apply path detects the divergence and halts that instance (§12.5). The core tells
+  the executor whether a block is certified: `Action::Execute { block, req, certified }` carries
+  `certified = true` iff the node holds a PrepareQC at `h` for the block (§6.2 step 9). The
+  verdict never depends on the flag; it only exempts the block from the application's
+  local-clock guards (§4.5).
 - **Deterministic invalidity** of a proposal is either (a) a defect in its signed content
   (§6.2 step 7), or (b) `Executed = Invalid` for a `body_ok`, uncertified, fresh block. Then: no
   Prepare vote and an immediate timeout of the view (§6.6) if it is the current view; in case (a)
@@ -789,10 +930,11 @@ header's flag, §3.7) iff **all** hold:
 5. it is in set A of `(h, v)`, or its stage for `(h, v)` is ≥ 1 (§5.2).
 
 Nothing else may gate a vote: not load, queue state, mempool contents, recovery state, peer
-connectivity, disk pressure, clock readings, other instances, or a local lock (there is no
-voter-side lock check; §7.3 explains why the TC rule makes it unnecessary for safety and why it
-would harm liveness). Slowness only delays conditions 3–4; the vote is still sent when they become
-true, as long as condition 1 holds.
+connectivity, disk pressure, clock readings (except through the executor's `Failed` answers
+named in §1 item 5 and specified in §4.5, which only withhold condition 4 for an uncertified
+block), other instances, or a local lock (there is no voter-side lock check; §7.3 explains why
+the TC rule makes it unnecessary for safety and why it would harm liveness). Slowness only delays
+conditions 3–4; the vote is still sent when they become true, as long as condition 1 holds.
 
 ### 4.4 Why this does not reintroduce the v2 common-mode stall
 
@@ -821,6 +963,93 @@ slow resource stopped every honest node at once. Here:
    are local faults only; an `Invalid` it computes for an uncertified block costs one early
    timeout and a local `PayloadRejected`, i.e. the timeout of one faulty node, which the `q` (TC)
    and `f + 1` (join) thresholds already tolerate.
+
+### 4.5 Application clock guard on Prepare votes (application layer)
+
+**Status.** These are application-level executor rules of the node driver (`iroha_core`), not
+rules of the sans-IO core; the core's only part is the `certified` flag of `Action::Execute`
+(§4.2, §12.1), which `iroha_sumeragi` emits. The rules are the target of `specs/sccp.md`
+revision 5 and are not yet implemented in `iroha_core` (`TODO:` WP-C3), whose driver does not yet
+pass the flag to its executor (`TODO:` WP-C2). The simulator models them (§13.1).
+`specs/sccp.md` §4.3 and `specs/parliament_private_ballot_design.md` §3.4 rely on them.
+
+Canonical block time is `max(parent + cadence, lane time_floor_ms, max tx.creation_time + 1)`
+and is checked against a wall clock only at genesis, so one Byzantine leader could move the
+chain's clock arbitrarily far forward with a post-dated transaction, or anchor due work at a
+stale time with an old one. Deadlines of the SCCP and governance applications are anchored at
+certified block times, so both directions need a bound. No validity rule reads a clock:
+
+| # | Rule |
+|---|---|
+| CT1 | **Clock ahead.** For every non-genesis block of every instance of the network (global and lanes) executed with `certified = false`, the executor MUST answer `Failed(ClockAhead)` while `t(block) > local_wall_ms + max_clock_drift_ms`. It MUST NOT answer `Invalid`. Under §4.2 that is `LocalFault(ExecutorFailed)` and a retry with backoff; meanwhile no `Valid` is recorded, so §4.3 condition 4 withholds the Prepare vote. Commit votes are not guarded directly: `try_commit` Commit-votes an unflagged PrepareQC of the current view without executing, and the bound reaches every CommitQC through that PrepareQC. |
+| CT2 | **Scope.** The apply and replay path of CommitQC-certified blocks never consults the clock. Genesis keeps its existing wall-clock check. |
+| CT3 | **Builder pacing.** The payload builder MUST NOT include a transaction with `creation_time_ms > local_wall_ms`, and MUST NOT propose while the block's canonical time, including lane merge floors, would exceed `local_wall_ms`; it waits instead. |
+| CT4 | **Bound.** `max_clock_drift_ms` is a committed chain parameter (`SumeragiParameters`), not a node-local setting, so every honest voter's guard uses the same value. Genesis validation and `validate_parameter_change` MUST enforce `max_clock_drift_ms ≤ MAX_CLOCK_DRIFT_BOUND_MS = 60 000`. |
+| CT5 | **Stale due work** (global executor). The executor MUST answer `Failed(StaleDueWork)` for a block executed with `certified = false` that applies due governance or SCCP work, exactly the keepalive validity predicate of `specs/sccp.md` §4.7.4 K2, while `local_wall_ms − t(block) > gov.due_work_max_lag_ms`. It is in the same class as CT1: liveness only, never `Invalid`, never on apply or replay. `gov.due_work_max_lag_ms` is a committed governance parameter (default 60 000) and MUST be at least `2·max_clock_drift_ms + 4·block_cadence_ms`. Wherever CT5 can delay a block, a fresh keepalive is admissible, so an honest proposer can always satisfy it. |
+
+**Certified re-proposals.** The core sets `certified = !certified_results(bh).is_empty()` whenever
+it emits `Execute` (§6.2 step 9), re-evaluated when a `RetryAt` entry re-emits it; this covers a
+re-proposal's `Q` and the node's own lock. The executor skips CT1 and CT5 iff `certified` is
+true, and the verdict never depends on it. Without the exemption, nodes that discarded the
+execution on a view change, sat behind a hidden PrepareQC (F33) or restarted would answer
+`StaleDueWork` forever for a re-proposal, which keeps its original time, and a due-work block
+whose PrepareQC was hidden for longer than `gov.due_work_max_lag_ms` could never gather Prepare
+votes again, breaking L4. The exemption is sound because `Q` has `q` Prepare signers, at least
+`f + 1` of them honest, and each passed CT1 and CT5 when it first voted.
+
+**Properties.** Let every honest wall clock `W_i` be within `ε` of real time, with
+`2ε ≤ max_clock_drift_ms` (the liveness assumption).
+
+- **Upper bound.** If `C_h` has at most `f` Byzantine members, a CommitQC at `h` has at least
+  `f + 1` honest Commit signers; an honest member Commit-votes only on the PrepareQC of its
+  current view, whose `q` Prepare signers include at least `f + 1` honest ones; each passed CT1
+  at some real time `τ_v`, so `t(h) ≤ τ_v + ε + max_clock_drift_ms`. At any later real time an
+  individual honest clock reads `W_j ≥ τ − ε`, so `t(h) ≤ W_j + 2·max_clock_drift_ms`. A deadline
+  anchored at certified time can therefore fire up to `2·max_clock_drift_ms` early relative to
+  an individual honest clock, and wallets and relayers submit at least that plus inclusion
+  latency before a deadline. A cached `Valid` from an earlier view only lowers `τ_v`; a restart
+  re-sends a durable Prepare that was guarded when first signed; a certified re-proposal carries
+  the original honest votes.
+- **Lower bound for anchors.** Every block that anchors governance work or an SCCP heartbeat
+  has `t(h) ≥ W_i − gov.due_work_max_lag_ms` for some honest first Prepare voter, at the time of
+  that first Prepare. Between the first honest Prepare and the commit, view changes, a hidden
+  PrepareQC or a halt can add unbounded delay, so an anchor can be older than wall time at
+  commit; the applications state their recovery rules (`specs/sccp.md` §4.3).
+- **Liveness.** An honest leader's fresh block satisfies CT1 at every honest voter whose clock is
+  within `max_clock_drift_ms` of the leader's; CT5 is satisfied by including a fresh keepalive;
+  certified re-proposals are exempt; larger skew only delays votes.
+- **Determinism.** `Valid(R)` / `Invalid` is unchanged and never depends on `certified` or a
+  clock; only the timing of Prepare votes does.
+
+**Verification.** CT1, CT3, CT5 and the executor's use of `certified` are Core mutation-gate
+entries (HC137, HC138, HC144, HC149, §13.4). The machine's emission of `certified` is MS51,
+killed by `det_s51_execute_certified_flag` and
+`f33_hidden_prepareqc_due_work_block_commits_after_lag`. The deterministic simulator models CT1
+and CT5 in its toy application (§13.1): per-machine wall clocks with skew, block times stamped
+by the builders at their wall clock (so honest blocks satisfy CT3), honest executors that answer
+`Failed` for uncertified executions and skip both rules for certified ones. Its block time is
+the builder's stamp, not the canonical `max(parent + cadence, …)`, so a committed post-dated
+block does not raise the next block's time and CT3's wait is not exercised (`TODO:` model the
+canonical floor and the builder wait in the simulator; HC138 covers CT3 in the Core). Its tests
+are:
+
+- `clock_guard_liveness_with_f_plus_one_slow_clocks` (n = 4 and 7): `f` Byzantine members
+  withhold every vote and propose far-future blocks, `f + 1` honest clocks run at real time and
+  the others at `+max_clock_drift_ms`. Every height commits, the fast leaders' blocks included.
+  When the fast clocks jump 30 s ahead, none of their blocks commits; after the clocks converge,
+  their blocks commit again, and no far-future block ever commits.
+- `clock_guard_certified_time_within_two_drifts`: two honest clocks at `+max_clock_drift_ms` and
+  one at real time, and a Byzantine member that votes and proposes in turn blocks dated
+  `+2·max_clock_drift_ms` and far-future blocks. The oracle O-TIME (§13.2) holds at every commit,
+  some certified time exceeds an honest clock by more than one drift, and no far-future block
+  commits. It kills MS52, the simulator mutation that deletes CT1.
+- `f33_hidden_prepareqc_due_work_block_commits_after_lag`: in F33, every transaction applies due
+  work, and a hidden PrepareQC delays the re-proposal past `gov.due_work_max_lag_ms`. The honest
+  members execute it with `certified = true` and it commits. With MS51, CT5 refuses it forever.
+- F39 (§13.3) is the randomized scenario of MS51 and MS52.
+
+A simulator test cannot kill a Core mutation, so HC149 has its own Core test,
+`certified_execution_skips_clock_guards` (`TODO:` WP-C2, added once `iroha_core` builds).
 
 ---
 
@@ -1114,7 +1343,11 @@ that a mutation targets the actual current validation site.
    `DiscardExecution` is absent, so a re-proposed block is executed again, §4.2.)
 
 `request_exec(bh)`: `req = next_req; next_req += 1; exec[bh] = Pending{since: now, req}`; push
-`Execute{block: blocks[bh], req}`.
+`Execute{block: blocks[bh], req, certified: !certified_results(bh).is_empty()}`, where
+`certified_results(bh)` are the results of the PrepareQCs at `h` for `bh` that the node holds (a
+re-proposal's `Q`, or its lock). The flag is computed at every emission, so a due `RetryAt`
+(§6.3 step 2) re-evaluates it; it only exempts the block from the application's clock guards
+(§4.5).
 
 `discard_exec(keep)`: for every `Pending{since}` entry whose block is not in `keep`,
 `pm.last_exec_ms = max(pm.last_exec_ms, now − since)` (a lower bound of an execution that
@@ -2379,7 +2612,12 @@ and reports `LocalFault(ConfigTooTight)` instead of halting.
 5. **Fresh scheduling and obligations.** Even retained committees receive fresh authenticated
    epoch leader randomness, consumed by the actual topology permutation. Retention extends a
    generation's lifetime and makes no forward-security claim. Exit requests do not end voting
-   or slashing obligations before authenticated replacement. Current and pending credentials
+   or slashing obligations before authenticated replacement. On a network with SCCP
+   (application layer, `specs/sccp.md` §4.8), slashing obligations extend further: destination
+   contracts trust a committee generation until its anchored deadline, so a departed member's
+   stake is released only after no generation that contained it is still liable, and the
+   unbonding delay MUST cover the destination validity window plus the evidence grace period.
+   Exit itself is never blocked. Current and pending credentials
    and their separate durable safety records survive restart. No key signs if its record's
    epoch/context differs from the active authority at that height.
    Bootstrap admission and restored active beacon custody bind the transcript's signed
@@ -2393,7 +2631,9 @@ and reports `LocalFault(ConfigTooTight)` instead of halting.
    with bounded working authority, not an unbounded committee cache.
 7. **Long-range scope.** Removed members cannot certify later epochs. Historical verification
    still relies on the application's signed genesis/checkpoint trust root; later compromise of
-   old keys does not confer forward security. This rule is not a committee override.
+   old keys does not confer forward security. This rule is not a committee override. SCCP
+   destinations, which verify global CommitQCs directly, bound how long they trust a departed
+   committee and make its misuse slashable (`specs/sccp.md` §9.9).
 8. **Quorum loss.** Failure to prepare replacements can be resolved only by the current exact
    quorum's certified retention decision. If that quorum is absent, the instance halts safely.
    There is no local committee override, unsigned retention, observer padding or provisional
@@ -2444,6 +2684,18 @@ horizon plus delay may span at most three epochs, matching the fixed
 four-roster committed-evidence capacity. Other admitted fields may be governed
 through the on-chain parameter path; validators and executor upgrades must
 never replace consensus-owned values with local TOML or executor defaults.
+
+**SCCP liability (application layer; target, `specs/sccp.md` §4.8–§4.9; not yet implemented).**
+While SCCP exists, the genesis-pinned staking policy MUST satisfy
+`nexus.staking.unbonding_delay_ms ≥ committee_validity_ms + forgery_evidence_grace_ms` and
+`nexus.staking.max_slash_bps ≥ 1`; genesis, `irohad` start-up and the SCCP parameter path enforce
+it. `FinalizePublicLaneUnbond`, zero-custody pruning and a replacing re-registration are refused
+while an SCCP committee generation that contained the validator is liable, or while an SCCP
+forgery record naming it is pending. SCCP forgery records are applied by the same penalty
+pipeline after `slashing_delay_blocks`, but they are self-contained (§3.6): the offence height is
+the generation's start height (`ConsensusSlashLiability::Root(start_height)`), offenders come
+from the record and must still be the same registration, and the three-epoch evidence horizon
+does not apply to them, because SCCP liability is bounded by its own liability clock.
 
 A staged mode transition preserves the joint-consensus rule that the outgoing
 set authenticates the boundary: `mode_activation_height requires next_mode to be set in the same block`.
@@ -2700,6 +2952,8 @@ pub enum Action {
     Execute {
         block: AvailableBody,
         req: u64,
+        certified: bool,          // the node holds a PrepareQC at h for the block (§4.2, §6.2 step 9);
+                                  // never changes the verdict; exempts the block from §4.5 CT1/CT5
     },
     DiscardExecution {
         height: u64,
@@ -3135,6 +3389,16 @@ consensus metadata counts alone are not evidence of those costs or of live settl
   older snapshot, and the record store can be replaced by an empty one);
   `Init.nonce` drawn from the seeded PRNG; deterministic fake aggregate crypto that records the
   provenance `(node, key, preimage)` of every honest signature.
+- Optional application clock guard of the toy application (§4.5; F39 and the named clock-guard
+  tests). Each machine has a wall clock: its local clock plus a wall offset that a script may
+  step without moving the core's monotonic `now`. Builders stamp each non-empty payload with a
+  leading block-time record `wall + lead`, where honest builders use `lead = 0` (CT3) and
+  Byzantine builders may post-date or back-date; the stamp has no parent floor (§4.5
+  "Verification"). A transaction flag marks due work. Honest
+  executors answer `Failed(ClockAhead)` (CT1) and `Failed(StaleDueWork)` (CT5) only for
+  `Execute { certified: false }`, never `Invalid`, and record the rule they skip for a certified
+  execution. Byzantine executors run no guard, and apply never consults a clock (CT2). Without
+  the guard, payloads carry no block time and no execution reads a clock (F12).
 - Crash points: before/after every action and at every I/O completion (in particular between
   `PersistSafety` and its durability, between local QC formation and durability, and inside apply).
   Restart rebuilds `Init` from the fake stores.
@@ -3166,6 +3430,7 @@ consensus metadata counts alone are not evidence of those costs or of live settl
 | O-EVID | Evidence soundness: honest nodes never report evidence against honest nodes. |
 | O-FAULT | Local-fault soundness: an honest node emits `LocalFault(ExecutorFailed)` or `LocalFault(ExecutionMismatch)` only where the scenario injected executor failures or divergence; cancelled, discarded or evicted executions never surface as faults, `Failed` or `ApplyDiverged`. |
 | O-ATT | (F37) Commit attestation (§3.7): every CommitQC with which an honest node commits a flagged block carries the flag, exactly `q` signers and one attestation per signer, each produced by that signer's authority (ground truth) over `att_preimage(h, bh, R)`; no honest node sends a Commit vote for a flagged block without its attestation. |
+| O-TIME | (F39 and the clock-guard tests, §4.5) At the first honest commit of a block that carries a block time `t`, `t` is at most the smallest honest wall clock plus `2·max_clock_drift_ms`. |
 | O-AMX | (F31) Over every instance's committed reference chain: at most one `Begin`, one `Decision` and, per participant, one `Prepared` and one settlement per transaction (idempotence); `G` records `Commit` only at a height `≤ d` with a committed `Yes` from every participant, `Abort` before `d + 1` only on a committed `No`, and decides every transaction by `d + 1`; a participant applies a `Yes` escrow only on `G`'s `Commit` and releases it only on `G`'s `Abort` (an escrow leaves only through a settlement), and its ledger moves only by its escrows and settlements (atomicity); every transaction `G` decided at least the settle window (20 s) before the end is settled by every participant by the end. Non-blocking is O-LIVE, which exempts only the stalled instance. |
 
 ### 13.3 Fault scenarios (each over `n ∈ {1, 4, 5, 7, 22}` where meaningful)
@@ -3258,7 +3523,15 @@ instance next to the global one (`specs/sumeragi_lanes.md` §4.1): the lane's pi
 four of the global validators, every other machine follows the lane as an observer (a node runs
 every instance), the lane stalls while the global instance keeps finalizing, and a global validator
 that only observes the lane crashes and restarts → every replica of both instances, observers
-included, commits after the lane recovers (O-LIVE, O-AGR).
+included, commits after the lane recovers (O-LIVE, O-AGR) · F39 application clock guard (§4.5):
+every honest wall clock is within `[0, max_clock_drift_ms]` of real time, a third of the
+transactions apply due work, and `f` Byzantine members run no guard. Their builders date blocks
+`+2·max_clock_drift_ms`, far in the future, or older than `gov.due_work_max_lag_ms`, in turn.
+Variant 0: the Byzantine members vote or withhold every vote. Variant 1: as variant 0, and one
+honest wall clock jumps 30 s ahead for 15 s, then converges back. Variant 2: an F33 hidden-PrepareQC
+proxy tail, and every transaction applies due work, so re-proposals are older than the lag and
+execute only as certified. → O-TIME, O-LIVE, O-AGR, O-FAULT (the guard's refusals are local
+faults).
 
 ### 13.4 Mutations that MUST be detected
 
@@ -3335,6 +3608,8 @@ Detection needs targeted adversaries: random faults alone did not kill the TC-ru
 | MS42 | `PublicationRecoveryRequired` handler — ignores the irreversible local failure | `det_s42_original_publication_recovery_halts`: the original publication cannot retry, so halt immediately, sign/schedule nothing and retain serving | — | O-HALT, O-SIGN |
 | MS49 | Native codec converts scoped resource refusals to malformed-frame text | `scoped_decode_refusal_is_not_malformed_native_evidence`, `codec_resource_errors_survive_lossless_norito_conversion`: preserve exact typed refusals, retry identical bytes outside the refused scope, and continue rejecting corrupt frames | — | typed refusal and exact retry |
 | MS50 | Static byte-domain length violations become retryable local resource refusals | `protocol_byte_lengths_are_terminal_codec_errors`: reject empty or oversized result witnesses and oversized attestation signatures as malformed bytes; valid witnesses still retry after local decode limits are removed | — | permanent wire bounds versus local limits |
+| MS51 | `request_exec` — emits `Execute { certified: false }` for a block that a held PrepareQC certifies (the application clock guard of §4.5 then applies to certified re-proposals) | `f33_hidden_prepareqc_due_work_block_commits_after_lag`: n=4 F33 with the simulator's clock guard, every transaction applies due work; a Byzantine proxy tail hides PQC(B) of a due-work block B; the views fail until a TC carries PQC(B) and B is re-proposed past `gov.due_work_max_lag_ms` of the honest wall clocks → the honest nodes execute B with `certified = true` (CT5 skipped), Prepare, and B commits in a later view. `det_s51_execute_certified_flag`: a fresh block and its retry after `Failed(ClockAhead)` are executed with `certified = false`; after TC(1) carries the hidden PQC(B, 0), the re-proposal and its retry after `Failed(StaleDueWork)` are executed with `certified = true`, and X Prepares `Q.result`; on a second core, a PQC(C, 0) formed by the others reaches X while the guard refuses C, and the retry of C is executed with `certified = true` (the node's lock) | F39 | O-LIVE |
+| MS52 | fake driver executor (the simulator's model of §4.5) — CT1 deleted: an honest executor never answers `Failed(ClockAhead)` | `clock_guard_certified_time_within_two_drifts`: n=4, two honest wall clocks at `+max_clock_drift_ms`, one at real time; a Byzantine member that votes proposes in turn blocks dated `+2·max_clock_drift_ms` and far-future blocks → the far-future blocks are refused and never commit, and every committed block time is within `2·max_clock_drift_ms` of the smallest honest wall clock. Under MS52 a far-future block commits. `clock_guard_liveness_with_f_plus_one_slow_clocks` also detects it | F39 | O-TIME |
 
 Removed as equivalent mutants (revision 4, Appendix C): **MS6** (Commit sign-once check deleted)
 and **MS28** (Commit not recorded). A second, different Commit in one view is unreachable
@@ -3606,6 +3881,40 @@ strict named-test, normal-exit and complete-harness requirements are unchanged.
 The Core rules above are replay and committee-retention prerequisites. They do not qualify production lane
 offence admission, original-stake monetary dispatch or the complete H3 allocation graph.
 
+**SCCP and certified-time application rules** (`specs/sccp.md` §4.3–§4.10, §11.6; Core gate
+`--core`; target, not yet implemented). The CT rules are §4.5 of this document; the rest are SCCP
+rules whose code lives in `iroha_core`. These entries run with real crypto, so none may change a
+signing preimage layout (§1 item 6); the gate checks that no HC mutation edits
+`crates/iroha_sumeragi/src/preimage.rs` (`TODO:` WP-C5).
+
+| Id | Core site — change | Named deterministic test (setup → expected) | Oracle |
+|---|---|---|---|
+| HC133 | Core writes the result body without the finality header into the result preimage | `outer_result_binds_finality_header` | `R` binds `F` and `D_body` (§4.1.1) |
+| HC134 | The header's `committee_root` is taken from `C_{h+1}` at a boundary | `boundary_header_signed_by_outgoing` | A boundary header names the outgoing committee |
+| HC135 | `ROTATION` is not set at a key change | `boundary_header_names_successor` | A key change names the successor root and validity |
+| HC136 | `KeyPairSigner` or `BlsCrypto` signs through the generic (w3f) API | `consensus_signature_matches_dst_sig_fixture` | Consensus signatures match the `DST_SIG` vectors (§1 item 6) |
+| HC137 | CT1 disabled | `prepare_withheld_while_block_time_ahead` | No Prepare vote on a block ahead of the local clock (§4.5) |
+| HC138 | CT3 builder pacing disabled | `leader_waits_for_wall_clock` | The leader never proposes a block timed ahead of its clock |
+| HC139 | The keepalive due predicate ignores the heartbeat time | `keepalive_requires_heartbeat_due` | A keepalive before the heartbeat is refused |
+| HC140 | The keepalive due predicate ignores governance work | `idle_chain_enacts_due_fast_pause` | An idle chain produces the block a due enactment needs (fails before the keepalive exists) |
+| HC141 | Keepalive quota K1 disabled | `second_keepalive_invalidates_block` | A block with two keepalives is `Invalid` |
+| HC142 | Missing SCCP inputs return `Invalid` | `sccp_missing_inputs_keep_block_valid` | Missing inputs give an inactive header, never `Invalid` |
+| HC143 | The heartbeat trigger `BEAT` disabled | `idle_chain_heartbeat_renews_generation` | An idle chain creates a heartbeat generation |
+| HC144 | CT5 disabled | `stale_due_work_prepare_withheld` | No Prepare vote on a stale uncertified due-work block |
+| HC145 | Forgery rule E4 ignores `D_body` | `forged_result_body_at_genuine_block_is_evidence` | A genuine header with a forged body digest is evidence |
+| HC146 | Forgery rule E0 ignores `liable(g)` | `expired_forgery_evidence_rejected` | Evidence outside the liability window is refused |
+| HC147 | An unbond is finalized while its stake is liable or a forgery record is pending | `liable_unbond_held_until_generation_liability_ends`, `pending_forgery_penalty_holds_unbond` | Stake stays in custody while slashable |
+| HC148 | Keepalive rule K2 disabled | `non_due_keepalive_invalidates_block` | A block whose keepalive applies no due work is `Invalid` |
+| HC149 | The executor ignores `Execute.certified` | `certified_execution_skips_clock_guards` (Core unit test; `TODO:` WP-C2, added when `iroha_core` builds) | Given a block dated more than `max_clock_drift_ms` ahead of the local wall clock, and a due-work block older than `gov.due_work_max_lag_ms`, the executor answers `Failed(ClockAhead)` and `Failed(StaleDueWork)` with `certified = false`, and the same `Valid(R)` with `certified = true`. The simulator counterpart is `f33_hidden_prepareqc_due_work_block_commits_after_lag` (MS51) |
+| HC150 | Forgery rule E3 compares against Iroha's `state.block_hashes` | `genuine_certificate_is_not_evidence` | A genuine certificate is never evidence |
+| HC151 | The liability clock follows block time without the step cap | `halt_then_time_jump_keeps_generation_liable` | A halt followed by a time jump consumes no liability window |
+| HC152 | The destination-progress gate L5 is ignored | `backdated_destination_keeps_generation_liable` | A generation stays liable until destinations progress past its deadline |
+| HC153 | The SCCP penalty uses the certificate height as the offence height, or resolves offenders by peer key | `forgery_far_above_tenure_slashes_members` | Offenders are the recorded registrations at the generation start |
+| HC154 | The SCCP due predicate ignores the degraded run | `persistent_degradation_stops_keepalives_after_one_retry` | A persistent defect produces at most two keepalive blocks |
+| HC155 | The resync rule G7 disabled | `missed_boundary_resyncs_generation` | A missed key change is repaired by a resync generation |
+| HC156 | Pruning ignores pending forgery records | `pending_record_keeps_generation_retained` | A generation named by a pending record is retained |
+| HC157 | The forgery hold ignores the revision's `forgery_floor` | `old_generation_evidence_holds_no_attested_revision` | Evidence for a passed generation holds no revision |
+
 Also required: golden vectors for every preimage (including `echo_preimage` and `att_preimage`, §3.3), `block_hash`, `att_digest`, `committee_digest`,
 the permutation, `D_h`, slot substitution (order and leaders for `|D| ∈ {0, 1, f}`, with demoted
 slots at the anchor, between views and adjacent to each other) at views 0, 1, 2, and the stage
@@ -3726,7 +4035,10 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
    `|D| ≤ f`, with slot substitution. Silent set-A members and proxy tails are not demoted (their
    cost is in §8.2 P2/P3). Confirm.
 5. **Block time semantics.** Timestamps are application payload; the core never checks clocks.
-   The application must define time monotonicity without local-clock comparisons.
+   The application defines time monotonicity without local-clock comparisons, and bounds
+   certified time through the liveness-only Prepare-vote guard of §4.5, which never makes a
+   verdict depend on a local clock. Qualifying that guard on real networks (clock skew,
+   re-proposals after long hidden PrepareQCs) remains open.
 6. **Divergence recovery.** `ApplyDiverged` halts the instance; recovery needs a state-snapshot
    path (not in scope here).
 7. **Payload size and layout.** The current worker sends each canonical row to its requested
@@ -3944,15 +4256,17 @@ ExecutionCommitment {
   freezes the canonical encoding of a construction's native root and any normalisation hash, with
   its domain and its raw 256-bit output; a marker-setting `Hash` conversion is never used. The
   codec is tested with both values of the marker bit and rejects every alternate framing.
-- `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` is unchanged in form.
-  There is one layout and one tag.
+- `R` keeps the form of §4.1.1, `SHA-256(RESULT_TAG ‖ F ‖ H(RESULT_BODY_TAG ‖
+  norito(ExecutionResultCommitment)))` (as built, `H("iroha/sumeragi/result/v1" ‖
+  norito(ExecutionResultCommitment))`, E51); G.3 changes only the body. There is one layout and
+  one tag. `F` is the finality header of §4.1.1, not the State `X_h` of this section.
 
 ```text
 P_{h−1}
 header_h   = (…, parent_hash = bh_{h−1}, parent_result = R_{h−1}, payload_hash, …)
 bh_h       = H(TAG_BLOCK ‖ header_h)
 X_h        = exec(P_{h−1}, body_h)
-R_h        = H(RESULT_TAG ‖ norito({h, execution{root(P_{h−1}), root(X_h), …}, schedule, beacon, native_lanes}))
+R_h        = SHA-256(RESULT_TAG ‖ F_h ‖ H(RESULT_BODY_TAG ‖ norito({h, execution{root(P_{h−1}), root(X_h), …}, schedule, beacon, native_lanes})))
 CommitQC_h = q_h votes over (I, E, h, v, bh_h, R_h)
 P_h        = tail(X_h, body_h, R_h)
 header_{h+1}.parent_result = R_h,   R_{h+1} binds root(P_h)
@@ -4165,7 +4479,7 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E38 | Chain parameters | Historical rule, superseded by the no-empty-block design: `Core::new` also applies the transport-independent §9.4 chain-parameter rules to the initial configurations (`block_time ≤ payload_retry_interval`, `empty_after_views ≥ 1`), and the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh payload, at view 0 too: with `empty_after_views = 0` from a committed configuration it proposes `EMPTY` instead of a payload every voter reports as a signed defect. | `machine::restart::Core::new`, `machine::propose::propose_fresh` |
 | E45 | `CoreStatus` | Also reports the leader and the proxy tail of `(h, view)` (`None` while awaiting: the next round's committee is not known yet) and the view of the lock (`high_pqc`), for the node's status endpoint, which replaces the v2 leader and QC endpoints. | `machine::Core::status` |
 | E49 | Driver bounds and failure handling (§12.2, §12.3, §12.5) | The `iroha_core` driver bounds every queue the core's peers or a failing device can grow. Serving: the node's own `FetchPayload`s go first (one per body), then peers round-robin with at most one pending `ServeBlocks` and one `ServePayload` each (a newer one replaces it) within a per-peer token bucket of response bytes; the rest is dropped (O6). The O2 barrier holds at most 1 024 effects and 32 MiB of block payload, dropping the oldest `Send`, `Broadcast`, `ServeBlocks` or `ServePayload` beyond (the core rebroadcasts; `CommitBlock`, evidence and `Halt` are never dropped; a newer `FetchPayload` of a body replaces a held one); a record still queued is superseded by a newer one of the same key, and what waited for it waits for the newer; queued bodies of applied heights are dropped. Released effects leave in batches of 64 with a due `Tick` in between (O5). A prepared commit runs alone on the executor (nothing between its prepare and its commit, also while a step backs off), and a retryable refusal re-prepares the same original owner without a second append. Consuming publication failure or prepare/commit unwind halts for recovery; ordinary idempotent write failures and missing reads remain retryable; a thread that stops anyway, or an unreachable worker, stops the instance and is reported. Frames are decoded within the transport limit (O10). | `driver::{serve::ServeSched, barrier::Barrier, persist::PersistQueue, exec::ExecSched, Kernel, Driver}` |
-| E51 | Application `R` (node integration, §4.1) | `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` with `ExecutionResultCommitment{height, execution, schedule, beacon, native_lanes}`. `execution` (`ExecutionCommitment`) binds: (1) the **complete World state**: `parent_world_state_root`, the World the block executed on (every canonical World entry after the parent block's publication, including the parent's apply-time deterministic writes; for genesis the empty World, so genesis absorbs everything the World holds, including state seeded before it executes), and `world_state_root`, the World after the execution; (2) the **event root** `event_commitment`: the Merkle root (`iroha_crypto::MerkleTree`, leaves the hashes of the canonical Norito events) and count of the events the execution emitted, in emission order, `None` without events (pipeline status notifications are delivery, not results); (3) the witnessed pre- and post-state roots and the ordinary-write root (sparse Merkle roots over the execution witness; the ordinary-write root carries the per-key write proofs of §11 records and KAGEMUSHA receipts) and the KAGEMUSHA top-up root and count; (4) the length and hash of the result-bearing block wire (every transaction result and output) and the network-input and typed-output Merkle commitments. `schedule` retains the complete current epoch context and the lag-2 successor schedule with every ordered key and verified BLS proof of possession, `beacon` the finalized pulse the execution consumed and `native_lanes` the complete lane-context proof against the ordinary-write root. The canonical preimage is stored as `CommitCertificate.result_preimage` in the block's Kura frame. **World state root.** The root of an incremental homomorphic multiset hash (LtHash16). Each canonical World entry, a table row `(k, v)` or the value `v` of a cell `f` that the exhaustive World authority registry declares canonical (derived indexes and local buffers excluded; the trigger owner's authoritative stores included), expands to `e = BLAKE3-XOF(derive_key("iroha 2026-09-30 world-state lthash16 element v1"), P_f ‖ presence ‖ H(k) ‖ H(v))` read as 1 024 little-endian `u16` lanes, where `P_f` binds the field identity and kind and `H` is the bare-Norito value hash or the registry's declared semantic projection. The accumulator is the lane-wise sum of all elements modulo 2^16 with the entry count modulo 2^64 (order independent; removal is the exact inverse of addition), and the root is `H("iroha:world-state:root:v1\0" ‖ S ‖ entries ‖ lanes)` (little-endian count and lanes) with `S` the digest of the registry's canonical field identities, kinds and key/value schemas. A block subtracts `e(before)` and adds `e(after)` for every entry of every canonical World storage and cell that its overlay touched, read from the overlay's own undo journal, so the per-block cost is proportional to the change set and never to the World; every pass must visit exactly the registry's canonical fields (the registry destructures `WorldData` without `..`). The accumulator is the derived World cell `state_accumulator`: the node stores it after the block's last deterministic World write at publication, and it is the next block's parent root, so the apply-time writes of block `h` enter `R_{h+1}`. Chosen over a persistent sparse Merkle tree over the World: no consumer needs per-key membership proofs against the complete state (§11 and the §12.7 readers prove writes against the ordinary-write root), and the accumulator needs 2 KiB of state and no per-entry tree nodes. Replay re-executes every certified block and so recomputes and checks both World roots and the event root; after replay, startup also requires the accumulator to equal a cold capture of the rebuilt World. Each sparse Merkle tree is built once per block. **Specified replacement (prospective: specified by ZK delivery plan G.1 in §16, not built).** G.3 replaces the "World state root" part of this row by the following text in one fresh-genesis cutover that deletes the accumulator; until then this row is the as-built rule and no second State root is published. *Keyed State roots.* `execution` binds the complete keyed State: `parent_keyed_state_root`, the State the block executed on (every canonical State and World entry after the parent block's publication, including the parent's deterministic apply-time writes; for genesis the empty State), and `keyed_state_root`, the State after the execution. Both have the type `KeyedStateRoot` (a Norito payload of exactly 32 raw bytes without a `Hash` marker, §16.6) and are roots of the one State-owned keyed commitment of §16 over the canonical tables and cells of the exhaustive authority registry, in ascending identity order, with keys and values in their registered bare Norito V1 or semantic encodings. The construction is the one G.3 selects. Inclusion, absence and complete-range witnesses verify against either root from the witness bytes alone. A block updates the commitment from its complete change set, read from the overlay's own undo journal; the State publication owner advances it once, after the block's last deterministic write, and that root is the next block's parent root. Replay recomputes and checks both roots at every certified block and requires the incremental root to equal a cold build. Exactly one complete-State commitment scheme exists and no per-table State root is independently authoritative; the witnessed roots of (3) keep their roles, `schedule`, `beacon` and the epoch context identity keep their roles as consensus bindings (§16.8), application accumulators keep their application-statement proofs, a protocol fingerprint remains only as a comparison value recomputed from committed canonical entries (§16.5 P1), and node-local binding commitments remain only under §16.5 P1. The result, header and certificate order is unchanged: a header binds only its parent's `R`, `R` binds the State before and after execution, and no State cut depends on the certificate that authenticates it (§16.6). | `iroha_core::sumeragi::commitment::{execution_result, WorldStateTransition}`, `iroha_core::state::world_projection::WorldStateAccumulator` |
+| E51 | Application `R` (node integration, §4.1) | As built: `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))`; the specified replacement is §4.1.1 (`R = SHA-256(RESULT_TAG ‖ F ‖ H(RESULT_BODY_TAG ‖ body))`, preimage `F ‖ body`; `TODO:` WP-C2). The body is `ExecutionResultCommitment` with `ExecutionResultCommitment{height, execution, schedule, beacon, native_lanes}`. `execution` (`ExecutionCommitment`) binds: (1) the **complete World state**: `parent_world_state_root`, the World the block executed on (every canonical World entry after the parent block's publication, including the parent's apply-time deterministic writes; for genesis the empty World, so genesis absorbs everything the World holds, including state seeded before it executes), and `world_state_root`, the World after the execution; (2) the **event root** `event_commitment`: the Merkle root (`iroha_crypto::MerkleTree`, leaves the hashes of the canonical Norito events) and count of the events the execution emitted, in emission order, `None` without events (pipeline status notifications are delivery, not results); (3) the witnessed pre- and post-state roots and the ordinary-write root (sparse Merkle roots over the execution witness; the ordinary-write root carries the per-key write proofs of §11 records and KAGEMUSHA receipts) and the KAGEMUSHA top-up root and count; (4) the length and hash of the result-bearing block wire (every transaction result and output) and the network-input and typed-output Merkle commitments. `schedule` retains the complete current epoch context and the lag-2 successor schedule with every ordered key and verified BLS proof of possession, `beacon` the finalized pulse the execution consumed and `native_lanes` the complete lane-context proof against the ordinary-write root. The canonical preimage is stored as `CommitCertificate.result_preimage` in the block's Kura frame. **World state root.** The root of an incremental homomorphic multiset hash (LtHash16). Each canonical World entry, a table row `(k, v)` or the value `v` of a cell `f` that the exhaustive World authority registry declares canonical (derived indexes and local buffers excluded; the trigger owner's authoritative stores included), expands to `e = BLAKE3-XOF(derive_key("iroha 2026-09-30 world-state lthash16 element v1"), P_f ‖ presence ‖ H(k) ‖ H(v))` read as 1 024 little-endian `u16` lanes, where `P_f` binds the field identity and kind and `H` is the bare-Norito value hash or the registry's declared semantic projection. The accumulator is the lane-wise sum of all elements modulo 2^16 with the entry count modulo 2^64 (order independent; removal is the exact inverse of addition), and the root is `H("iroha:world-state:root:v1\0" ‖ S ‖ entries ‖ lanes)` (little-endian count and lanes) with `S` the digest of the registry's canonical field identities, kinds and key/value schemas. A block subtracts `e(before)` and adds `e(after)` for every entry of every canonical World storage and cell that its overlay touched, read from the overlay's own undo journal, so the per-block cost is proportional to the change set and never to the World; every pass must visit exactly the registry's canonical fields (the registry destructures `WorldData` without `..`). The accumulator is the derived World cell `state_accumulator`: the node stores it after the block's last deterministic World write at publication, and it is the next block's parent root, so the apply-time writes of block `h` enter `R_{h+1}`. Chosen over a persistent sparse Merkle tree over the World: no consumer needs per-key membership proofs against the complete state (§11 and the §12.7 readers prove writes against the ordinary-write root), and the accumulator needs 2 KiB of state and no per-entry tree nodes. Replay re-executes every certified block and so recomputes and checks both World roots and the event root; after replay, startup also requires the accumulator to equal a cold capture of the rebuilt World. Each sparse Merkle tree is built once per block. **Specified replacement (prospective: specified by ZK delivery plan G.1 in §16, not built).** G.3 replaces the "World state root" part of this row by the following text in one fresh-genesis cutover that deletes the accumulator; until then this row is the as-built rule and no second State root is published. *Keyed State roots.* `execution` binds the complete keyed State: `parent_keyed_state_root`, the State the block executed on (every canonical State and World entry after the parent block's publication, including the parent's deterministic apply-time writes; for genesis the empty State), and `keyed_state_root`, the State after the execution. Both have the type `KeyedStateRoot` (a Norito payload of exactly 32 raw bytes without a `Hash` marker, §16.6) and are roots of the one State-owned keyed commitment of §16 over the canonical tables and cells of the exhaustive authority registry, in ascending identity order, with keys and values in their registered bare Norito V1 or semantic encodings. The construction is the one G.3 selects. Inclusion, absence and complete-range witnesses verify against either root from the witness bytes alone. A block updates the commitment from its complete change set, read from the overlay's own undo journal; the State publication owner advances it once, after the block's last deterministic write, and that root is the next block's parent root. Replay recomputes and checks both roots at every certified block and requires the incremental root to equal a cold build. Exactly one complete-State commitment scheme exists and no per-table State root is independently authoritative; the witnessed roots of (3) keep their roles, `schedule`, `beacon` and the epoch context identity keep their roles as consensus bindings (§16.8), application accumulators keep their application-statement proofs, a protocol fingerprint remains only as a comparison value recomputed from committed canonical entries (§16.5 P1), and node-local binding commitments remain only under §16.5 P1. The result, header and certificate order is unchanged: a header binds only its parent's `R`, `R` binds the State before and after execution, and no State cut depends on the certificate that authenticates it (§16.6). | `iroha_core::sumeragi::commitment::{execution_result, WorldStateTransition}`, `iroha_core::state::world_projection::WorldStateAccumulator` |
 | E52 | Application schedule (node integration, §10.1, §9.4) | World retains the authenticated current native epoch and bounded three-slot schedule. Parameters retain lag two; membership beyond a boundary is Pending until original certified boundary application atomically installs its exact next epoch. Genesis uses its signed context. Parameter validation consumes the exported `FRAME_OVERHEAD`, including source-complete Pasta witnesses and control bytes, against the protocol transport bound. | `iroha_core::sumeragi::schedule` |
 | E54 | Production driver backends (§7.4, §12.2, §12.3 O2, O8, O10) | `iroha_core::sumeragi`: `crypto` — `H = iroha_crypto::Hash`; BLS-normal signatures (48-byte keys, 96-byte signatures); a committee key's proof of possession is verified once when the height schedule admits it and every aggregate naming a key not admitted fails (fail closed); a TC verifies with one multi-pairing over its `hq` groups (`iroha_crypto::bls_normal_verify_preaggregated_multi_message`); the signer is the node's key pair (BLS signatures are unique, so deterministic). `records` — one file per `(I, K)` under `records_dir/<I hex>/<H(K) hex>.record` and the store id beside them, each replaced by temp file, fsync, rename and directory fsync; the installation log is an append-only file of length-prefixed Norito entries outside `records_dir`, fsynced per entry; a torn or corrupt tail ends the log (cut before the next append), which the store-id check then sees as a mismatch (safe). The operator's assertion is a one-shot boot flag, never a configuration key. `bodies` — `<root>/bodies/<I hex>/<h>/<bh hex>`, written like records, never replaced, verified against `(h, bh)` when read, pruned through the applied height, and bounded by a byte cap that fails a write like a full disk (retried; never an eviction). `net` — `NetworkMessage::Sumeragi` carries the exact frame and `I`; one classifier (`traffic_class_of_frame`) serves the raw and the decoded P2P paths; Control → `ConsensusSafety` (the reserved safety FIFO), Proposal → `ConsensusPayload`, Bulk → `BlockSync`; one `post_recoverable` per recipient; payload streams retain the exact returned post and admission ticket under backpressure until admission succeeds; the driver owns its three FIFOs on `SubscriberRoute::Sumeragi`; relayed frames (origin ≠ authenticated connection) are not accepted, so ingress stays keyed by authenticated peers. | `sumeragi::{crypto, records, bodies, net}` |
 | E55 | Driver builds (§6.10 rule 1, §12.1 `PayloadReady`); found by the node's n = 4 in-process test with `payload_retry_interval` = 600 s | Two lost wakeups at a view-0 leader. (a) A transaction arriving while `BuildPayload{req}` runs (the builder may have read the queue before it) is remembered, and an `EMPTY` answer to `req` is followed by `PayloadReady{req}` at once. (b) A builder that first waits for the parent's apply can answer after `t_propose + build_timeout`: the core has then used `EMPTY` and waits for the heartbeat, and ignores the late answer (its `req` is no longer in `build`). The driver sends `PayloadReady{req}` after every non-empty answer too; in `Requested{req}` the answer is proposed first and the readiness is ignored, in `IdleWait{req}` it requests again at once. Without either, a transaction waited up to `payload_retry_interval`. The core is unchanged. | `driver::exec::ExecSched::{transactions_available, done}` |

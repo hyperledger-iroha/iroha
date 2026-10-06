@@ -1432,6 +1432,7 @@ macro_rules! with_world_overlay_fields {
             sccp_light_client_sets,
             sccp_light_client_checkpoints,
             sccp_light_client_stride_index,
+            sccp_light_client_profiles,
             ]
         }
     };
@@ -4635,6 +4636,12 @@ pub struct WorldData {
     #[norito(skip)]
     pub(crate) sccp_light_client_stride_index:
         Storage<(iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
+    /// Parliament-activated light-client profile versions by `(network, version)` (§4.13.2).
+    #[norito(skip)]
+    pub(crate) sccp_light_client_profiles: Storage<
+        (iroha_data_model::bridge::SccpNetworkV1, u32),
+        iroha_data_model::sccp::light_client::SccpLcProfileActivationV1,
+    >,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
@@ -5679,6 +5686,13 @@ pub struct WorldBlockFields<'world> {
     #[norito(skip)]
     pub(crate) sccp_light_client_stride_index:
         StorageField<'world, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
+    /// Parliament-activated light-client profile versions by `(network, version)` (§4.13.2).
+    #[norito(skip)]
+    pub(crate) sccp_light_client_profiles: StorageField<
+        'world,
+        (iroha_data_model::bridge::SccpNetworkV1, u32),
+        iroha_data_model::sccp::light_client::SccpLcProfileActivationV1,
+    >,
     /// Block-local buffer of events pending publication to external subscribers.
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
@@ -6338,6 +6352,7 @@ impl WorldBlock<'_> {
             sccp_light_client_sets,
             sccp_light_client_checkpoints,
             sccp_light_client_stride_index,
+            sccp_light_client_profiles,
         );
         out
     }
@@ -7319,6 +7334,12 @@ pub struct WorldTransaction<'block, 'world> {
     /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
     pub(crate) sccp_light_client_stride_index:
         StorageTransaction<'block, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
+    /// Parliament-activated light-client profile versions by `(network, version)` (§4.13.2).
+    pub(crate) sccp_light_client_profiles: StorageTransaction<
+        'block,
+        (iroha_data_model::bridge::SccpNetworkV1, u32),
+        iroha_data_model::sccp::light_client::SccpLcProfileActivationV1,
+    >,
     /// Parent block buffer that receives transaction-local external events on apply.
     pub(crate) external_event_sink: &'block mut Vec<EventBox>,
     /// Transaction-local buffer of external events. Dropping a transaction drops its events.
@@ -9117,6 +9138,12 @@ pub struct WorldView<'world> {
     /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
     pub(crate) sccp_light_client_stride_index:
         StorageView<'world, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
+    /// Parliament-activated light-client profile versions by `(network, version)` (§4.13.2).
+    pub(crate) sccp_light_client_profiles: StorageView<
+        'world,
+        (iroha_data_model::bridge::SccpNetworkV1, u32),
+        iroha_data_model::sccp::light_client::SccpLcProfileActivationV1,
+    >,
     /// Persisted consensus evidence records keyed by deterministic digest.
     pub(crate) consensus_evidence: StorageView<'world, Hash, EvidenceRecord>,
     /// Contract manifests
@@ -13918,6 +13945,14 @@ pub struct StateTransaction<'block, 'state> {
     pub last_tx_gas_used: u64,
     /// Actual admitted direct-body fee basis, owned independently from rollbackable business effects.
     pub(crate) execution_fee_meter: Option<crate::executor::ExecutionFeeMeter>,
+    /// The committed State whose World is the parent of the executing block. SCCP fee
+    /// exemption is judged against that World, like the per-block exempt cap and queue
+    /// admission (`specs/sccp.md` §4.19).
+    sccp_parent_state: &'state State,
+    /// Authority of the fee-exempt SCCP self-claim this signed body executes, set by the
+    /// executor before the body runs: only such a claim makes the self-claim fee due on its
+    /// inbound message (`specs/sccp.md` §4.12.4).
+    pub(crate) sccp_exempt_self_claim: Option<AccountId>,
     /// Single actual signed-root instruction budget, including any sticky refusal.
     pub(crate) execution_effects: crate::executor::ExecutionEffects,
     /// Bridge proof hashes recorded by this transaction and still available for one receipt.
@@ -14048,6 +14083,15 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX)
+    }
+    /// Per-entry FASTPQ source limits of the policy frozen at block start, which bound the
+    /// transcripts and deltas one transaction may produce.
+    #[inline]
+    #[must_use]
+    pub(crate) fn fastpq_intrinsic_source_limits(
+        &self,
+    ) -> iroha_data_model::parameter::FastpqSourceLimitsV1 {
+        self.fastpq_source_policy.0.intrinsic
     }
     /// Returns the world view constrained to this transaction scope.
     #[inline]
@@ -21136,6 +21180,8 @@ macro_rules! world_ro_accessors {
             storage sccp_light_client_checkpoints: (iroha_data_model::bridge::SccpNetworkV1, u64) => iroha_data_model::sccp::light_client::SccpLcCheckpointV1;
             /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
             storage sccp_light_client_stride_index: (iroha_data_model::bridge::SccpNetworkV1, u64) => u64;
+            /// Parliament-activated light-client profile versions by `(network, version)` (§4.13.2).
+            storage sccp_light_client_profiles: (iroha_data_model::bridge::SccpNetworkV1, u32) => iroha_data_model::sccp::light_client::SccpLcProfileActivationV1;
         );
     };
 }
@@ -24693,6 +24739,7 @@ impl WorldTransaction<'_, '_> {
             sccp_light_client_sets: _,
             sccp_light_client_checkpoints: _,
             sccp_light_client_stride_index: _,
+            sccp_light_client_profiles: _,
             #[cfg(feature = "telemetry")]
                 telemetry: _,
             internal_event_buf: _,
@@ -25015,6 +25062,7 @@ impl WorldTransaction<'_, '_> {
         self.sccp_light_client_sets.apply();
         self.sccp_light_client_checkpoints.apply();
         self.sccp_light_client_stride_index.apply();
+        self.sccp_light_client_profiles.apply();
         self.peers.apply();
         self.consensus_schedule.apply();
         self.state_accumulator.apply();
@@ -35684,15 +35732,16 @@ pub fn default_genesis_confidential_policy_hash() -> [u8; 32] {
 }
 /// Compute the genesis confidential policy hash from node-local configuration.
 ///
-/// Genesis binds the pure ZK policy with the fixed SCCP policy input, so genesis construction is
-/// identical to block validation.
+/// Genesis binds the pure ZK policy with the SCCP policy input of a state without light-client
+/// profile activations ([`sccp_genesis_policy_hash_v1`]), so genesis construction is identical to
+/// block validation.
 #[must_use]
 pub fn compute_genesis_confidential_policy_hash(
     zk_config: &iroha_config::parameters::actual::Zk,
 ) -> [u8; 32] {
     combine_zk_and_sccp_policy_hashes(
         compute_zk_consensus_policy_hash(zk_config),
-        sccp_policy_hash_v1(),
+        sccp_genesis_policy_hash_v1(),
     )
 }
 fn zk_policy_put_bytes(hasher: &mut Sha256, bytes: &[u8]) {
@@ -35748,22 +35797,44 @@ fn zk_policy_put_option_vk_ref(
         None => Sha2Digest::update(hasher, [0]),
     }
 }
-/// SCCP input of the confidential consensus policy hash.
+/// SCCP input of the confidential consensus policy hash for a block at `height` built on
+/// `world`.
 ///
 /// SCCP v1 consensus parameters live in world state and change only through Parliament enactment
 /// (`specs/sccp.md` §4.1), and the `[zk.sccp]` native verifier work limits are bound through
-/// [`compute_zk_consensus_policy_hash`]. The SCCP input binds the compiled light-client chain
-/// profiles and verifier bounds (`iroha_sccp::light_client::profile::policy_hash_contribution`),
-/// so peers that would verify source-chain proofs differently cannot agree on a policy
-/// (`specs/sccp.md` §4.13).
+/// [`compute_zk_consensus_policy_hash`]. The SCCP input binds the light-client profile version
+/// and profile hash active for every source chain at `height`
+/// (`iroha_sccp::light_client::profile::SccpLcActiveProfilesV1::policy_hash`, read from the
+/// Parliament activations recorded in `world`), so peers that would verify source-chain proofs
+/// under different profiles cannot agree on a block, while a release that only compiles a version
+/// not yet activated computes the same value (`specs/sccp.md` §4.13.2).
 #[must_use]
-pub fn sccp_policy_hash_v1() -> [u8; 32] {
+pub fn sccp_policy_hash_v1(world: &(impl WorldReadOnly + ?Sized), height: u64) -> [u8; 32] {
+    sccp_policy_hash_of_active_profiles(
+        &crate::smartcontracts::isi::sccp::light_clients::active_profiles_at(
+            world,
+            height,
+            &iroha_sccp::light_client::profile::SccpLcProfileCatalogV1::compiled(),
+        ),
+    )
+}
+/// [`sccp_policy_hash_v1`] of a state without light-client profile activations: version 1 of
+/// every source chain. Genesis signing, the p2p handshake (Strict and emergency Fast, through
+/// [`compute_genesis_confidential_policy_hash`], so peers at different heights still connect
+/// after an activation) and snapshot identities use it; it changes only if a release edits a
+/// version-1 profile, which the append-only rule forbids.
+#[must_use]
+pub fn sccp_genesis_policy_hash_v1() -> [u8; 32] {
+    sccp_policy_hash_of_active_profiles(
+        &iroha_sccp::light_client::profile::SccpLcProfileCatalogV1::compiled().genesis(),
+    )
+}
+fn sccp_policy_hash_of_active_profiles(
+    active: &iroha_sccp::light_client::profile::SccpLcActiveProfilesV1,
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
     zk_policy_put_bytes(&mut hasher, b"iroha:sccp:policy:v1");
-    zk_policy_put_bytes(
-        &mut hasher,
-        &iroha_sccp::light_client::profile::policy_hash_contribution(),
-    );
+    zk_policy_put_bytes(&mut hasher, &active.policy_hash());
     Sha2Digest::finalize(hasher).into()
 }
 /// Combine the pure ZK consensus policy with the SCCP policy input ([`sccp_policy_hash_v1`]).
@@ -36231,7 +36302,7 @@ pub fn compute_confidential_feature_digest(
         Some(iroha_config::parameters::defaults::confidential::RULES_VERSION),
         Some(combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(zk_config),
-            sccp_policy_hash_v1(),
+            sccp_policy_hash_v1(world, height),
         )),
     )
 }
@@ -37423,6 +37494,8 @@ impl<'state> StateBlock<'state> {
             original_fastpq_invocation_source: None,
             last_tx_gas_used: 0,
             execution_fee_meter: None,
+            sccp_parent_state: fields.state_ref,
+            sccp_exempt_self_claim: None,
             execution_effects: crate::executor::ExecutionEffects::default(),
             bridge_receipt_proofs_available_in_tx: BTreeSet::new(),
             gas_limit_per_block: fields.gas_limit_per_block,
@@ -41237,6 +41310,12 @@ impl StateTransaction<'_, '_> {
         world.apply();
         block_fastpq_quantity_candidate.apply(pending_fastpq_quantity_candidate);
     }
+    /// Borrow the committed parent World of the executing block, without the block's own
+    /// writes. SCCP fee exemption is judged against it (`specs/sccp.md` §4.19).
+    pub(crate) fn sccp_parent_world_view(&self) -> WorldView<'_> {
+        self.sccp_parent_state.world.view()
+    }
+
     /// Authorize only the block-start sweep's pre-admitted retained obligations.
     fn authorize_fastpq_governance_source_scope(&mut self) {
         self.fastpq_source_quota.authorize_governance_purposes();
