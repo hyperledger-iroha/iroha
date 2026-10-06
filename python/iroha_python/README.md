@@ -1434,6 +1434,14 @@ exact lifecycle record before constructing a sponsored draft. Metadata keys
 named `fee_sponsor`, `gas_asset_id`, or `gas_limit` are retired and rejected;
 sponsor failure never falls back to the authority.
 
+Fee-sponsor program IDs, revision JSON, and sponsored fee-intent JSON admit the
+exact canonical I105 prefix embedded in the sponsor account. Every account in a
+revision uses that same prefix. A transaction builder retains its authority's
+validated prefix for fee-quote JSON and requires sponsored intents to match it;
+no global chain setting or separate constructor argument is required. The quote
+signer still checks the exact original draft, payer, revision, and gas bound.
+Signed transaction submission uses the canonical versioned binary wire.
+
 Apply metadata updates or transfer ownership without dropping to raw Norito:
 
 ```python

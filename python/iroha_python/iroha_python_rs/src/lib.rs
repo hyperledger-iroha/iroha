@@ -41,7 +41,10 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     NetworkId,
-    account::{Account, address::AccountAddress},
+    account::{
+        Account,
+        address::{AccountAddress, ChainDiscriminantGuard},
+    },
     alias_setup::{
         AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasFramedInstructionV1,
         AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanAnchorV1, AliasPlanDispositionV1,
@@ -658,8 +661,30 @@ fn parse_provider_ingest_finalized_anchor(
         )?,
     })
 }
+fn fee_sponsor_discriminant(value: &str, context: &str) -> PyResult<u16> {
+    AccountAddress::i105_discriminant(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context}: {err}")))
+}
+fn fee_sponsor_program_json_discriminant(value: &json::Value, context: &str) -> PyResult<u16> {
+    let sponsor = value
+        .get("program_id")
+        .and_then(|program| program.get("sponsor"))
+        .and_then(json::Value::as_str)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!("invalid {context}: missing program_id.sponsor"))
+        })?;
+    fee_sponsor_discriminant(sponsor, context)
+}
 fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
     require_non_blank_unpadded(value, "fee sponsor program id")?;
+    let (sponsor, _) = value.split_once('/').ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "invalid fee sponsor program id `{value}`: missing program name"
+        ))
+    })?;
+    // The exact I105 literal supplies display context; account identity stays chain-neutral.
+    let discriminant = fee_sponsor_discriminant(sponsor, "fee sponsor program id")?;
+    let _guard = ChainDiscriminantGuard::enter(discriminant);
     let program_id = FeeSponsorProgramId::from_str(value).map_err(|err| {
         PyValueError::new_err(format!("invalid fee sponsor program id `{value}`: {err}"))
     })?;
@@ -670,8 +695,51 @@ fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
     }
     Ok(program_id)
 }
+fn parse_fee_sponsor_program_revision_json(value: &str) -> PyResult<FeeSponsorProgramRevision> {
+    let context = "fee sponsor program revision JSON";
+    let inspected: json::Value = json::from_str(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context}: {err}")))?;
+    let discriminant = fee_sponsor_program_json_discriminant(&inspected, context)?;
+    let _guard = ChainDiscriminantGuard::enter(discriminant);
+    // Decode the original JSON under the same prefix for every typed account selector.
+    // The current typed codec still owns all closed-field and canonical-value checks.
+    let revision: FeeSponsorProgramRevision = json::from_str(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context}: {err}")))?;
+    revision.validate().map_err(|err| {
+        PyValueError::new_err(format!("invalid fee sponsor program revision: {err}"))
+    })?;
+    Ok(revision)
+}
 fn parse_fee_payment_intent_json(value: &str) -> PyResult<FeePaymentIntent> {
+    parse_fee_payment_intent_json_with_discriminant(value, None)
+}
+fn parse_fee_payment_intent_json_with_discriminant(
+    value: &str,
+    expected_discriminant: Option<u16>,
+) -> PyResult<FeePaymentIntent> {
     require_non_blank_unpadded(value, "fee payment intent JSON")?;
+    let context = "fee payment intent JSON";
+    let inspected: json::Value = json::from_str(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context}: {err}")))?;
+    let sponsor_discriminant =
+        if inspected.get("payer").and_then(json::Value::as_str) == Some("sponsor") {
+            let payment = inspected.get("value").ok_or_else(|| {
+                PyValueError::new_err(format!("invalid {context}: missing sponsor value"))
+            })?;
+            Some(fee_sponsor_program_json_discriminant(payment, context)?)
+        } else {
+            None
+        };
+    if let (Some(expected), Some(actual)) = (expected_discriminant, sponsor_discriminant) {
+        if actual != expected {
+            return Err(PyValueError::new_err(
+                "fee sponsor account discriminant does not match transaction authority",
+            ));
+        }
+    }
+    let _guard = expected_discriminant
+        .or(sponsor_discriminant)
+        .map(ChainDiscriminantGuard::enter);
     let intent = json::from_str::<FeePaymentIntent>(value)
         .map_err(|err| PyValueError::new_err(format!("invalid fee payment intent JSON: {err}")))?;
     intent
@@ -9199,13 +9267,7 @@ impl Instruction {
         _cls: &Bound<'_, PyType>,
         revision_json: &str,
     ) -> PyResult<Self> {
-        let revision =
-            json::from_str::<FeeSponsorProgramRevision>(revision_json).map_err(|err| {
-                PyValueError::new_err(format!("invalid fee sponsor program revision JSON: {err}"))
-            })?;
-        revision.validate().map_err(|err| {
-            PyValueError::new_err(format!("invalid fee sponsor program revision: {err}"))
-        })?;
+        let revision = parse_fee_sponsor_program_revision_json(revision_json)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision { revision }.into(),
         ))
@@ -10500,6 +10562,8 @@ fn python_vega_statement_v1(
 struct TransactionBuilder {
     network_id: NetworkId,
     authority: AccountId,
+    // Retained exact authority display context for Torii fee-quote JSON only.
+    chain_discriminant: u16,
     fee_payment: FeePaymentIntent,
     creation_time: Option<Duration>,
     ttl: Option<Duration>,
@@ -10709,8 +10773,12 @@ impl TransactionBuilder {
     #[new]
     fn new(network_id: &PyNetworkId, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
         require_non_blank_unpadded(authority, "authority")?;
+        let chain_discriminant = fee_sponsor_discriminant(authority, "transaction authority")?;
         let authority = parse_account_id(authority)?;
-        let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        let fee_payment = parse_fee_payment_intent_json_with_discriminant(
+            fee_payment_json,
+            Some(chain_discriminant),
+        )?;
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|err| {
@@ -10719,6 +10787,7 @@ impl TransactionBuilder {
         Ok(Self {
             network_id: network_id.inner,
             authority,
+            chain_discriminant,
             fee_payment,
             creation_time: Some(creation_time),
             ttl: None,
@@ -10751,7 +10820,10 @@ impl TransactionBuilder {
     }
     /// Replace the exact signature-bound fee payment intent.
     fn set_fee_payment_json(&mut self, fee_payment_json: &str) -> PyResult<()> {
-        self.fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        self.fee_payment = parse_fee_payment_intent_json_with_discriminant(
+            fee_payment_json,
+            Some(self.chain_discriminant),
+        )?;
         Ok(())
     }
     /// Set a deterministic creation timestamp (milliseconds since UNIX epoch).
@@ -10967,6 +11039,7 @@ impl TransactionBuilder {
     /// Return the exact unsigned payload submitted to `/v1/fees/quote`.
     fn payload_json(&self) -> PyResult<String> {
         self.validate_executable()?;
+        let _guard = ChainDiscriminantGuard::enter(self.chain_discriminant);
         let payload = self
             .to_model_builder()
             .into_payload()
@@ -11117,10 +11190,12 @@ impl TransactionBuilder {
     ) -> PyResult<SignedTransactionEnvelope> {
         ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
-        let mut draft =
+        let mut draft = {
+            let _guard = ChainDiscriminantGuard::enter(self.chain_discriminant);
             json::from_str::<TransactionPayload>(draft_payload_json).map_err(|err| {
                 PyValueError::new_err(format!("invalid quoted transaction payload JSON: {err}"))
-            })?;
+            })?
+        };
         let expected = self
             .to_model_builder()
             .into_payload()
@@ -11130,7 +11205,10 @@ impl TransactionBuilder {
                 "quoted transaction payload does not match this builder's exact draft",
             ));
         }
-        let quoted_fee_payment = parse_fee_payment_intent_json(quoted_fee_payment_json)?;
+        let quoted_fee_payment = parse_fee_payment_intent_json_with_discriminant(
+            quoted_fee_payment_json,
+            Some(self.chain_discriminant),
+        )?;
         if !draft
             .fee_payment
             .has_same_payer_and_gas_bound(&quoted_fee_payment)

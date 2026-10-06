@@ -3,14 +3,275 @@ use iroha_data_model::transaction::TransactionSubmissionReceipt;
 
 #[test]
 fn fee_sponsor_program_ids_require_exact_canonical_literals() {
-    let sponsor_literal = canonical_i105_from_seed(0x74);
-    let literal = format!("{sponsor_literal}/retail");
-    let parsed = parse_fee_sponsor_program_id(&literal).expect("program id parses");
-    assert_eq!(parsed.sponsor, sample_account(0x74));
-    assert_eq!(parsed.name.as_ref(), "retail");
-    assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
-    assert!(parse_fee_sponsor_program_id(&sponsor_literal).is_err());
-    assert!(parse_fee_sponsor_program_id(&format!("{}/retail", taira_i105_from_seed(0x74))).is_err());
+    ensure_python();
+    let ambient = iroha_data_model::account::address::chain_discriminant();
+    for discriminant in [753, 369, 117] {
+        let sponsor = custom_i105_from_seed(0x74, discriminant);
+        let literal = format!("{sponsor}/retail");
+        let parsed = parse_fee_sponsor_program_id(&literal).expect("program id parses");
+        assert_eq!(parsed.sponsor, sample_account(0x74));
+        assert_eq!(parsed.name.as_ref(), "retail");
+        assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
+        assert!(parse_fee_sponsor_program_id(&sponsor).is_err());
+        assert!(parse_fee_sponsor_program_id(&format!("{literal}/other")).is_err());
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            ambient
+        );
+    }
+    let custom = custom_i105_from_seed(0x74, 117);
+    let noncanonical = custom.replacen("n117", "n00117", 1);
+    assert!(parse_fee_sponsor_program_id(&format!("{noncanonical}/retail")).is_err());
+    let tampered = fee_sponsor_tampered_i105(&custom);
+    assert!(parse_fee_sponsor_program_id(&format!("{tampered}/retail")).is_err());
+}
+fn fee_sponsor_tampered_i105(value: &str) -> String {
+    let mut chars: Vec<_> = value.chars().collect();
+    let last = chars.last_mut().expect("nonempty I105 literal");
+    *last = if *last == '1' { '2' } else { '1' };
+    chars.into_iter().collect()
+}
+fn fee_sponsor_revision_test_json(discriminant: u16) -> String {
+    use iroha_data_model::nexus::{
+        FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorIvmSelector,
+        FeeSponsorMultisigOperation, FeeSponsorMultisigSelector, FeeSponsorRule,
+        FeeSponsorRuleEffect, FeeSponsorRuleSelector,
+    };
+    let revision = FeeSponsorProgramRevision {
+        program_id: FeeSponsorProgramId::new(sample_account(0x70), "retail".parse().expect("name")),
+        revision: 1,
+        eligibility: FeeSponsorEligibility::EnrolledOnly,
+        rules: vec![FeeSponsorRule {
+            id: "allow".parse().expect("name"),
+            effect: FeeSponsorRuleEffect::Allow,
+            selectors: vec![
+                FeeSponsorRuleSelector::Multisig(FeeSponsorMultisigSelector {
+                    operations: vec![FeeSponsorMultisigOperation::Approve],
+                    account_ids: vec![sample_account(0x71)],
+                }),
+                FeeSponsorRuleSelector::Ivm(FeeSponsorIvmSelector {
+                    code_hash: Hash::from_str(&"a5".repeat(32)).expect("marked hash"),
+                }),
+            ],
+        }],
+        asset_budgets: vec![FeeSponsorAssetBudget {
+            asset_definition_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id"),
+            per_transaction: "1".parse().expect("valid quantity"),
+            per_block: "10".parse().expect("valid quantity"),
+            per_program_epoch: "100".parse().expect("valid quantity"),
+            per_beneficiary_epoch: "5".parse().expect("valid quantity"),
+            reserve_floor: "0.1".parse().expect("valid quantity"),
+            epoch_length_blocks: NonZeroU64::new(100).unwrap(),
+        }],
+    };
+    revision
+        .validate()
+        .expect("genuine current revision fixture");
+    let _guard = ChainDiscriminantGuard::enter(discriminant);
+    json::to_json(&revision).expect("typed revision JSON")
+}
+fn fee_sponsor_payment_test_json(discriminant: u16, revision: u64) -> String {
+    let program = FeeSponsorProgramId::new(sample_account(0x70), "retail".parse().expect("name"));
+    let intent = FeePaymentIntent::sponsor(program, revision, Vec::new(), NonZeroU64::new(100));
+    let _guard = ChainDiscriminantGuard::enter(discriminant);
+    json::to_json(&intent).expect("typed sponsor JSON")
+}
+#[test]
+fn fee_sponsor_stage_revision_uses_exact_embedded_prefix_and_native_instruction() {
+    ensure_python();
+    let _ambient = ChainDiscriminantGuard::enter(42);
+    for discriminant in [753, 369, 117] {
+        let original = fee_sponsor_revision_test_json(discriminant);
+        let revision = parse_fee_sponsor_program_revision_json(&original).expect("revision parses");
+        assert_eq!(revision.program_id.sponsor, sample_account(0x70));
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+        Python::attach(|py| {
+            let cls = py.get_type::<Instruction>();
+            let instruction = Instruction::stage_fee_sponsor_program_revision(&cls, &original)
+                .expect("real current native stage constructor");
+            let encoded = instruction.to_json().expect("opaque instruction JSON");
+            let restored =
+                Instruction::from_json(&cls, &encoded).expect("opaque instruction roundtrip");
+            assert_eq!(instruction.inner, restored.inner);
+            let expected: InstructionBox =
+                iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision { revision }.into();
+            assert_eq!(instruction.inner, expected);
+        });
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+    }
+}
+#[test]
+fn fee_sponsor_stage_revision_rejects_mixed_prefix_crc_schema_and_zero_revision() {
+    ensure_python();
+    let _ambient = ChainDiscriminantGuard::enter(42);
+    let original = fee_sponsor_revision_test_json(369);
+    let beneficiary = custom_i105_from_seed(0x71, 369);
+    let other_prefix = custom_i105_from_seed(0x71, 117);
+    assert!(
+        parse_fee_sponsor_program_revision_json(&original.replace(&beneficiary, &other_prefix))
+            .is_err()
+    );
+    let sponsor = custom_i105_from_seed(0x70, 369);
+    assert!(
+        parse_fee_sponsor_program_revision_json(
+            &original.replace(&sponsor, &fee_sponsor_tampered_i105(&sponsor))
+        )
+        .is_err()
+    );
+    let hash_value = json::to_value(&Hash::from_str(&"a5".repeat(32)).expect("marked hash"))
+        .expect("native canonical hash JSON");
+    let hash_literal = hash_value.as_str().expect("hash JSON literal").to_owned();
+    assert!(original.contains(&hash_literal));
+    let mut hash_chars: Vec<_> = hash_literal.chars().collect();
+    let last = hash_chars.last_mut().expect("hash checksum");
+    *last = if *last == '0' { '1' } else { '0' };
+    let wrong_crc: String = hash_chars.into_iter().collect();
+    assert!(
+        parse_fee_sponsor_program_revision_json(&original.replace(&hash_literal, &wrong_crc))
+            .is_err()
+    );
+    let zero_revision = original.replace("\"revision\":1", "\"revision\":0");
+    assert_ne!(zero_revision, original);
+    assert!(parse_fee_sponsor_program_revision_json(&zero_revision).is_err());
+    assert!(
+        parse_fee_sponsor_program_revision_json(&format!("{{\"unknown\":true,{}", &original[1..]))
+            .is_err()
+    );
+    assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+}
+#[test]
+fn fee_sponsor_payment_json_keeps_exact_embedded_prefix_and_closed_schema() {
+    ensure_python();
+    let _ambient = ChainDiscriminantGuard::enter(42);
+    for discriminant in [753, 369, 117] {
+        let original = fee_sponsor_payment_test_json(discriminant, 1);
+        let intent = parse_fee_payment_intent_json(&original).expect("sponsor payment parses");
+        let (program, revision) = intent.sponsor_program().expect("sponsor variant");
+        assert_eq!(program.sponsor, sample_account(0x70));
+        assert_eq!(revision, 1);
+        assert!(
+            parse_fee_payment_intent_json(&fee_sponsor_payment_test_json(discriminant, 0)).is_err()
+        );
+        assert!(
+            parse_fee_payment_intent_json(&format!("{{\"unknown\":true,{}", &original[1..]))
+                .is_err()
+        );
+        let sponsor = custom_i105_from_seed(0x70, discriminant);
+        assert!(
+            parse_fee_payment_intent_json(
+                &original.replace(&sponsor, &fee_sponsor_tampered_i105(&sponsor))
+            )
+            .is_err()
+        );
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+    }
+    assert!(parse_fee_payment_intent_json(authority_fee_payment_json()).is_ok());
+}
+#[test]
+fn fee_sponsor_builder_quote_json_retains_authority_prefix_and_signs_original_wire() {
+    ensure_python();
+    let _ambient = ChainDiscriminantGuard::enter(42);
+    for discriminant in [753, 369, 117] {
+        for sponsored in [false, true] {
+            let authority = custom_i105_from_seed(0x71, discriminant);
+            let intent = if sponsored {
+                fee_sponsor_payment_test_json(discriminant, 1)
+            } else {
+                authority_fee_payment_json().to_owned()
+            };
+            let mut builder =
+                TransactionBuilder::new(&python_test_network_id(), &authority, &intent)
+                    .expect("builder admits selected chain");
+            builder.set_creation_time_ms(42).expect("stable timestamp");
+            let original_payload = builder.to_model_builder().into_payload().expect("payload");
+            let original_bytes = builder.to_model_builder().encode_payload();
+            let draft = builder.payload_json().expect("quote payload JSON");
+            let view: json::Value = json::from_str(&draft).expect("public draft JSON");
+            assert_eq!(
+                view.get("authority").and_then(json::Value::as_str),
+                Some(authority.as_str())
+            );
+            if sponsored {
+                assert_eq!(
+                    view.get("fee_payment")
+                        .and_then(|fee| fee.get("value"))
+                        .and_then(|fee| fee.get("program_id"))
+                        .and_then(|id| id.get("sponsor"))
+                        .and_then(json::Value::as_str),
+                    Some(custom_i105_from_seed(0x70, discriminant).as_str())
+                );
+            }
+            let decoded: TransactionPayload = {
+                let _guard = ChainDiscriminantGuard::enter(discriminant);
+                json::from_str(&draft).expect("same-prefix Torii typed parse")
+            };
+            assert_eq!(decoded, original_payload);
+            assert_eq!(builder.to_model_builder().encode_payload(), original_bytes);
+            let envelope = builder
+                .sign_quoted_payload(&draft, &intent, &[0x71; 32])
+                .expect("exact quote signs");
+            let signed =
+                decode_canonical_signed_transaction_v1(&envelope.signed_transaction_versioned)
+                    .expect("exact current signed binary");
+            assert_eq!(signed.authority(), &sample_account(0x71));
+            assert_eq!(signed.payload(), &original_payload);
+            assert!(signed.verify_signature().is_ok());
+            assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+        }
+    }
+}
+#[test]
+fn fee_sponsor_builder_rejects_mixed_payment_prefix_without_state_change() {
+    ensure_python();
+    let _ambient = ChainDiscriminantGuard::enter(42);
+    let authority = custom_i105_from_seed(0x71, 369);
+    let original = fee_sponsor_payment_test_json(369, 1);
+    let mixed = fee_sponsor_payment_test_json(117, 1);
+    assert!(TransactionBuilder::new(&python_test_network_id(), &authority, &mixed).is_err());
+    let mut builder = TransactionBuilder::new(&python_test_network_id(), &authority, &original)
+        .expect("same-prefix builder");
+    let before = builder.fee_payment.clone();
+    assert!(builder.set_fee_payment_json(&mixed).is_err());
+    assert_eq!(builder.fee_payment, before);
+    let draft = builder.payload_json().expect("same-prefix draft");
+    assert!(
+        builder
+            .sign_quoted_payload(&draft, &mixed, &[0x71; 32])
+            .is_err()
+    );
+    let wrong_authority = custom_i105_from_seed(0x71, 117);
+    assert!(
+        builder
+            .sign_quoted_payload(
+                &draft.replace(&authority, &wrong_authority),
+                &original,
+                &[0x71; 32]
+            )
+            .is_err()
+    );
+    let other_sponsor = custom_i105_from_seed(0x72, 369);
+    let wrong_sponsor = original.replace(&custom_i105_from_seed(0x70, 369), &other_sponsor);
+    assert!(
+        builder
+            .sign_quoted_payload(&draft, &wrong_sponsor, &[0x71; 32])
+            .is_err()
+    );
+    assert!(
+        builder
+            .sign_quoted_payload(&draft, &fee_sponsor_payment_test_json(369, 2), &[0x71; 32])
+            .is_err()
+    );
+    let wrong_gas = original.replace("\"gas_limit\":100", "\"gas_limit\":101");
+    assert_ne!(wrong_gas, original);
+    assert!(
+        builder
+            .sign_quoted_payload(&draft, &wrong_gas, &[0x71; 32])
+            .is_err()
+    );
+    assert_eq!(builder.fee_payment, before);
+    assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
 }
 #[test]
 fn i105_discriminant_hint_decodes_valid_literals_only() {
@@ -484,7 +745,11 @@ fn sorafs_alias_proof_fixture_rejects_bad_cid_and_expiry_overflow() {
         let overflow = PyDict::new(py);
         overflow.set_item("generated_at_unix", u64::MAX).unwrap();
         let error = sorafs_alias_proof_fixture_py(py, Some(&overflow)).unwrap_err();
-        assert!(error.to_string().contains("overflows the default alias expiry"));
+        assert!(
+            error
+                .to_string()
+                .contains("overflows the default alias expiry")
+        );
     });
 }
 #[test]
