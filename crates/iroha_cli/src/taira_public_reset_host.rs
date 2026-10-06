@@ -4892,6 +4892,18 @@ fn terminal_rollback_receipt_exists(
     ))
 }
 
+fn terminal_rollback_failure_history_valid(record: &json::Value) -> bool {
+    record
+        .get("rollback_failures")
+        .and_then(json::Value::as_array)
+        .is_some_and(|history| {
+            history.len() <= 5
+                && history
+                    .iter()
+                    .all(|entry| entry.as_str().is_some_and(|entry| entry.len() <= 512))
+        })
+}
+
 fn terminal_rollback_receipt_matches(
     lease: &HostLeaseV1,
     touched_hosts: &BTreeSet<String>,
@@ -4905,10 +4917,9 @@ fn terminal_rollback_receipt_matches(
         || string("status") != Some("rolled_back")
         || string("phase") != Some("rolled_back")
         || record.get("recovery_intent") != Some(&json::Value::Null)
-        || !record
-            .get("rollback_failures")
-            .and_then(json::Value::as_array)
-            .is_some_and(Vec::is_empty)
+        // Failed attempts remain in the coordinator's append-only history.
+        // Completed cursors and exact local progress establish terminal rollback.
+        || !terminal_rollback_failure_history_valid(record)
         || !string("failure_summary")
             .is_some_and(|summary| !summary.is_empty() && summary.len() <= 512)
     {
@@ -20896,6 +20907,26 @@ pub(super) mod tests {
             &missing_host,
             &terminal
         ));
+        let mut recovered = terminal.clone();
+        recovered.as_object_mut().expect("journal object").insert(
+            "rollback_failures".to_owned(),
+            norito::json!(["first attempt failed", "second attempt failed"]),
+        );
+        assert!(terminal_rollback_receipt_matches(
+            &lease,
+            &touched_hosts,
+            &recovered
+        ));
+        // A historical failure never permits incomplete restoration.
+        recovered.as_object_mut().expect("journal object").insert(
+            "rollback_next_validator".to_owned(),
+            json::Value::from(3_u64),
+        );
+        assert!(!terminal_rollback_receipt_matches(
+            &lease,
+            &touched_hosts,
+            &recovered
+        ));
         for (field, value) in [
             ("status", json::Value::String("rolling_back".to_owned())),
             ("authorization_sha256", json::Value::String("0".repeat(64))),
@@ -20904,7 +20935,7 @@ pub(super) mod tests {
             ("edge_rollback_complete", json::Value::Bool(false)),
             (
                 "rollback_failures",
-                norito::json!(["taira-validator-2 rollback failed"]),
+                json::Value::Array(vec![json::Value::String("x".repeat(513))]),
             ),
         ] {
             let mut stale = terminal.clone();
@@ -20917,6 +20948,28 @@ pub(super) mod tests {
                 "unexpectedly accepted {field} drift"
             );
         }
+    }
+
+    #[test]
+    fn terminal_rollback_history_preserves_bounded_coordinator_evidence() {
+        for history in [
+            norito::json!([]),
+            norito::json!(["attempt failed"]),
+            json::Value::Array(vec![json::Value::String("x".repeat(512)); 5]),
+        ] {
+            let record = norito::json!({"rollback_failures": history});
+            assert!(terminal_rollback_failure_history_valid(&record));
+        }
+        for history in [
+            json::Value::Null,
+            norito::json!([false]),
+            json::Value::Array(vec![json::Value::String("x".repeat(513))]),
+            json::Value::Array(vec![json::Value::String("attempt failed".to_owned()); 6]),
+        ] {
+            let record = norito::json!({"rollback_failures": history});
+            assert!(!terminal_rollback_failure_history_valid(&record));
+        }
+        assert!(!terminal_rollback_failure_history_valid(&norito::json!({})));
     }
 
     fn select_target(admitted: &mut HostAdmission, slug: &str) {

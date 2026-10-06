@@ -353,10 +353,7 @@ pub(super) fn validate_rolled_back_records(
                 .get("failure_summary")
                 .and_then(Value::as_str)
                 .is_some_and(|summary| !summary.is_empty() && summary.len() <= 512)
-            && terminal
-                .get("rollback_failures")
-                .and_then(Value::as_array)
-                .is_some_and(Vec::is_empty),
+            && terminal_rollback_failure_history_valid(terminal),
         "native terminal rollback is incomplete",
     )?;
     for (name, expected) in [

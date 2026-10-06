@@ -458,7 +458,6 @@ fn dispatcher_transition_accepts_only_complete_occupied_rollback() {
     f.plan.predecessor.completed_next_step = 5;
     f.plan.predecessor.sealed_forward_ordinal = 49;
     let (lease, mut progress, mut terminal) = sealed_records(&f.plan);
-    progress.touched_hosts.pop();
     progress.sealed = false;
     progress.rolling_back = true;
     progress.last_rollback_rank = 1;
@@ -475,6 +474,11 @@ fn dispatcher_transition_accepts_only_complete_occupied_rollback() {
     record.insert(
         "failure_summary".into(),
         Value::String("apply failed".into()),
+    );
+    admission::validate_rolled_back_records(&f.plan, &lease, &progress, &terminal).unwrap();
+    terminal.as_object_mut().unwrap().insert(
+        "rollback_failures".into(),
+        norito::json!(["first failed attempt", "second failed attempt"]),
     );
     admission::validate_rolled_back_records(&f.plan, &lease, &progress, &terminal).unwrap();
 
@@ -502,7 +506,7 @@ fn dispatcher_transition_accepts_only_complete_occupied_rollback() {
             7 => {
                 terminal.as_object_mut().unwrap().insert(
                     "rollback_failures".into(),
-                    norito::json!(["validator1 rollback failed"]),
+                    Value::Array(vec![Value::String("x".repeat(513))]),
                 );
             }
             8 => {
