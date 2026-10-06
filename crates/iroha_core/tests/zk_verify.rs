@@ -458,9 +458,7 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
         .enumerate()
     {
         let world = test_world::world_with_test_accounts();
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query_handle);
+        let state = certified_state(world);
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero!(2_u64),
             state.view().latest_block_hash(),
@@ -502,9 +500,7 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
         .enumerate()
     {
         let world = test_world::world_with_test_accounts();
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query_handle);
+        let state = certified_state(world);
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero!(2_u64),
             state.view().latest_block_hash(),
