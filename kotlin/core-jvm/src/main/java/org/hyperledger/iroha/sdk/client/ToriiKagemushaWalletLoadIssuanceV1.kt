@@ -6,7 +6,7 @@ package org.hyperledger.iroha.sdk.client
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /**
- * Exact selectors of the current finalized-load issuance read route.
+ * Exact selectors of the committed Load receipt read route.
  *
  * These identify one retained original; they grant no issuance, finality or balance authority.
  */
@@ -23,7 +23,7 @@ class ToriiKagemushaWalletLoadSelectionV1(
     val schemeId: ByteArray get() = scheme.copyOf()
     /** Owned copy of the selected wallet incarnation. */
     val walletId: ByteArray get() = wallet.copyOf()
-    /** Owned copy of the original stable Load retry identity. */
+    /** Owned copy of the original Load request identity used for receipt recovery. */
     val requestId: ByteArray get() = request.copyOf()
 
     internal val path: String
@@ -46,15 +46,16 @@ class ToriiKagemushaWalletLoadSelectionV1(
 }
 
 /**
- * Bounded, unverified HTTP original for the Native wallet's Load admission.
+ * Bounded, unverified HTTP original of an unsigned `KagemushaWalletLoadReceiptV1`.
  *
  * [selection], [payerAccountId] and [networkId] retain the request's expected identities. They
- * do not assert that the response contains those identities. Native must decode the original,
- * bind its request, canonical payer, scheme and wallet to the enrolled owner, and verify any
- * original voucher and complete authenticated Load relation before Advance changes value.
+ * do not assert that the response contains those identities. The consumer must decode the
+ * canonical receipt and bind its request, payer, scheme and wallet to the expected owner.
+ * Before wallet admission it must independently authenticate the original successful
+ * transaction, ordinary chain finality and the complete recursive Load proof.
  *
- * This holder exposes no decoded voucher, pending verdict, amount, finality or balance. A 200
- * response can contain an unsigned pending body and can never credit value by itself.
+ * This transport implements none of those checks and exposes no balance or admission verdict.
+ * The receipt and HTTP success alone never authorize offline value.
  */
 class ToriiKagemushaWalletLoadIssuanceOriginalV1 internal constructor(
     /** Immutable selectors used for the exact signed request. */
@@ -78,8 +79,8 @@ class ToriiKagemushaWalletLoadIssuanceOriginalV1 internal constructor(
 
     companion object {
         /**
-         * Finite transport capacity covering the maximum canonical account literal/frame
-         * (36 KiB), fixed voucher body, bounded 1 KiB voucher and Norito overhead.
+         * Local online response limit for the unsigned receipt and canonical payer frame.
+         * Independent of the canonical account request-header text limit.
          */
         const val MAXIMUM_BYTES: Int = 64 * 1024
     }

@@ -462,7 +462,13 @@ mod tests {
         use iroha_allocation::AllocationRefusal;
         use std::task::{Context, Waker};
         let (chain, journal) = fixture();
-        let pool = chain.state().ivm_execution_budget();
+        // Keep the independent Kura read outside this operation's accounting
+        // window; only the cursor and its refusal observer are under test here.
+        let expected_tip = chain.committed(3).block_hash();
+        // This offline reader owns one finite operation pool. The fixture's
+        // committed State has independently retired MV generations whose epoch
+        // reclamation must not be counted as journal-reader refunds.
+        let pool = AllocationBudget::new(limits().allocated_bytes);
         let floor = pool.reserved_bytes();
         let mut observer = crate::unit_test_support::release_registration(&pool);
         let mut cursor = NativeJournalCursor::new(
@@ -506,7 +512,7 @@ mod tests {
         observer.cancel();
         assert_eq!(
             cursor.advance((&journal).into()).unwrap().block_hash(),
-            chain.committed(3).block_hash()
+            expected_tip,
         );
         drop(cursor);
         drop(observer);
@@ -516,7 +522,8 @@ mod tests {
     #[test]
     fn native_journal_decoder_refusal_never_runs_reader_or_replaces_cursor_tip() {
         let (chain, journal) = fixture();
-        let pool = chain.state().ivm_execution_budget();
+        // Keep refusal accounting within the one original offline operation.
+        let pool = AllocationBudget::new(limits().allocated_bytes);
         let mut cursor = NativeJournalCursor::new(
             ChainId::from("sumeragi-certified-test-chain"),
             chain.network_id(),

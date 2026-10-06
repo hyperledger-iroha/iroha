@@ -27,16 +27,14 @@ services:
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
           IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
           printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
-          require_publisher_file() {
+          require_private_file() {
               test -f \"$$1\" && test ! -L \"$$1\" && test -r \"$$1\" && test -s \"$$1\" &&
               test \"$$(stat -c '%u:%a:%h' \"$$1\")\" = \"$$(id -u):600:1\" &&
               test \"$$(wc -c < \"$$1\")\" -le \"$$2\" || {
-                  printf '%s\n' 'required publisher/config original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
+                  printf '%s\n' 'required configuration original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
               };
           } &&
-          require_publisher_file /config/peer.toml 8388608 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_keyring 65536 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_submitter 4096 &&
+          require_private_file /config/peer.toml 8388608 &&
           export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d --config /config/peer.toml
       "
     environment:
@@ -75,21 +73,7 @@ services:
         bind:
           create_host_path: false
         read_only: true
-        source: '${IROHA_PEER0_KAGEMUSHA_LOAD_KEYRING_FILE:?set IROHA_PEER0_KAGEMUSHA_LOAD_KEYRING_FILE to this nodes existing owner-0600 publisher keyring}'
-        target: /run/secrets/iroha_kagemusha_load_keyring
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER0_KAGEMUSHA_LOAD_SUBMITTER_FILE:?set IROHA_PEER0_KAGEMUSHA_LOAD_SUBMITTER_FILE to this nodes existing owner-0600 publisher submitter key}'
-        target: /run/secrets/iroha_kagemusha_load_submitter
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER0_CONFIG_FILE:?set IROHA_PEER0_CONFIG_FILE to this nodes existing owner-0600 TOML naming both mounted publisher files}'
+        source: '${IROHA_PEER0_CONFIG_FILE:?set IROHA_PEER0_CONFIG_FILE to this nodes existing owner-0600 TOML}'
         target: /config/peer.toml
         type: bind
   irohad1:
@@ -110,16 +94,14 @@ services:
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
           IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
           printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
-          require_publisher_file() {
+          require_private_file() {
               test -f \"$$1\" && test ! -L \"$$1\" && test -r \"$$1\" && test -s \"$$1\" &&
               test \"$$(stat -c '%u:%a:%h' \"$$1\")\" = \"$$(id -u):600:1\" &&
               test \"$$(wc -c < \"$$1\")\" -le \"$$2\" || {
-                  printf '%s\n' 'required publisher/config original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
+                  printf '%s\n' 'required configuration original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
               };
           } &&
-          require_publisher_file /config/peer.toml 8388608 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_keyring 65536 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_submitter 4096 &&
+          require_private_file /config/peer.toml 8388608 &&
           export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d --config /config/peer.toml
       "
     environment:
@@ -158,21 +140,7 @@ services:
         bind:
           create_host_path: false
         read_only: true
-        source: '${IROHA_PEER1_KAGEMUSHA_LOAD_KEYRING_FILE:?set IROHA_PEER1_KAGEMUSHA_LOAD_KEYRING_FILE to this nodes existing owner-0600 publisher keyring}'
-        target: /run/secrets/iroha_kagemusha_load_keyring
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER1_KAGEMUSHA_LOAD_SUBMITTER_FILE:?set IROHA_PEER1_KAGEMUSHA_LOAD_SUBMITTER_FILE to this nodes existing owner-0600 publisher submitter key}'
-        target: /run/secrets/iroha_kagemusha_load_submitter
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER1_CONFIG_FILE:?set IROHA_PEER1_CONFIG_FILE to this nodes existing owner-0600 TOML naming both mounted publisher files}'
+        source: '${IROHA_PEER1_CONFIG_FILE:?set IROHA_PEER1_CONFIG_FILE to this nodes existing owner-0600 TOML}'
         target: /config/peer.toml
         type: bind
   irohad2:
@@ -193,16 +161,14 @@ services:
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
           IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
           printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
-          require_publisher_file() {
+          require_private_file() {
               test -f \"$$1\" && test ! -L \"$$1\" && test -r \"$$1\" && test -s \"$$1\" &&
               test \"$$(stat -c '%u:%a:%h' \"$$1\")\" = \"$$(id -u):600:1\" &&
               test \"$$(wc -c < \"$$1\")\" -le \"$$2\" || {
-                  printf '%s\n' 'required publisher/config original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
+                  printf '%s\n' 'required configuration original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
               };
           } &&
-          require_publisher_file /config/peer.toml 8388608 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_keyring 65536 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_submitter 4096 &&
+          require_private_file /config/peer.toml 8388608 &&
           export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d --config /config/peer.toml
       "
     environment:
@@ -241,21 +207,7 @@ services:
         bind:
           create_host_path: false
         read_only: true
-        source: '${IROHA_PEER2_KAGEMUSHA_LOAD_KEYRING_FILE:?set IROHA_PEER2_KAGEMUSHA_LOAD_KEYRING_FILE to this nodes existing owner-0600 publisher keyring}'
-        target: /run/secrets/iroha_kagemusha_load_keyring
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER2_KAGEMUSHA_LOAD_SUBMITTER_FILE:?set IROHA_PEER2_KAGEMUSHA_LOAD_SUBMITTER_FILE to this nodes existing owner-0600 publisher submitter key}'
-        target: /run/secrets/iroha_kagemusha_load_submitter
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER2_CONFIG_FILE:?set IROHA_PEER2_CONFIG_FILE to this nodes existing owner-0600 TOML naming both mounted publisher files}'
+        source: '${IROHA_PEER2_CONFIG_FILE:?set IROHA_PEER2_CONFIG_FILE to this nodes existing owner-0600 TOML}'
         target: /config/peer.toml
         type: bind
   irohad3:
@@ -276,16 +228,14 @@ services:
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
           IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
           printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
-          require_publisher_file() {
+          require_private_file() {
               test -f \"$$1\" && test ! -L \"$$1\" && test -r \"$$1\" && test -s \"$$1\" &&
               test \"$$(stat -c '%u:%a:%h' \"$$1\")\" = \"$$(id -u):600:1\" &&
               test \"$$(wc -c < \"$$1\")\" -le \"$$2\" || {
-                  printf '%s\n' 'required publisher/config original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
+                  printf '%s\n' 'required configuration original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
               };
           } &&
-          require_publisher_file /config/peer.toml 8388608 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_keyring 65536 &&
-          require_publisher_file /run/secrets/iroha_kagemusha_load_submitter 4096 &&
+          require_private_file /config/peer.toml 8388608 &&
           export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d --config /config/peer.toml
       "
     environment:
@@ -324,20 +274,6 @@ services:
         bind:
           create_host_path: false
         read_only: true
-        source: '${IROHA_PEER3_KAGEMUSHA_LOAD_KEYRING_FILE:?set IROHA_PEER3_KAGEMUSHA_LOAD_KEYRING_FILE to this nodes existing owner-0600 publisher keyring}'
-        target: /run/secrets/iroha_kagemusha_load_keyring
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER3_KAGEMUSHA_LOAD_SUBMITTER_FILE:?set IROHA_PEER3_KAGEMUSHA_LOAD_SUBMITTER_FILE to this nodes existing owner-0600 publisher submitter key}'
-        target: /run/secrets/iroha_kagemusha_load_submitter
-        type: bind
-      -
-        bind:
-          create_host_path: false
-        read_only: true
-        source: '${IROHA_PEER3_CONFIG_FILE:?set IROHA_PEER3_CONFIG_FILE to this nodes existing owner-0600 TOML naming both mounted publisher files}'
+        source: '${IROHA_PEER3_CONFIG_FILE:?set IROHA_PEER3_CONFIG_FILE to this nodes existing owner-0600 TOML}'
         target: /config/peer.toml
         type: bind

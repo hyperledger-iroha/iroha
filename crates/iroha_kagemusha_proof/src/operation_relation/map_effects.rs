@@ -455,9 +455,25 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
         witness: &ReceiveMapWitness<D>,
         valid: &Bit<Fp>,
     ) -> Result<(), Error> {
+        self.receive_consumed(region, transition, witness, valid)?;
+        self.receive_credit(region, transition, witness, valid)?;
+        self.receive_burn_and_preserve(region, transition, valid)
+    }
+
+    /// Authenticate only the exact OQ-3 consumed-root update. A complete Receive
+    /// must also constrain the credit record and burn/preserved-state effects
+    /// under the identical transition and complete incoming verdict.
+    /// # Errors
+    /// Wrong variant, invalid insertion route, missing accepting insert or wrong root.
+    pub fn receive_consumed<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        witness: &ReceiveMapWitness<D>,
+        valid: &Bit<Fp>,
+    ) -> Result<(), Error> {
         require_receive(transition.statement)?;
         self.bind(region, transition)?;
-        self.glue.assert_nonzero(region, &witness.payment_digest)?;
         let fields = transition.statement.fields();
         let credit = &fields[17];
         let amount = &fields[20];
@@ -478,6 +494,29 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
             &witness.consumed.slot,
             &witness.insert,
         )?;
+        GlueChip::assert_equal(
+            region,
+            &consumed_root,
+            &transition.successor.state.core()[core::CONSUMED_CREDIT_ROOT],
+        )
+    }
+
+    /// Authenticate the first exact Payment/burn credit record, preserving an
+    /// already present record. Compose with both other Receive effect owners.
+    /// # Errors
+    /// Wrong variant, zero Payment digest, forged route or wrong successor root.
+    pub fn receive_credit<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        witness: &ReceiveMapWitness<D>,
+        valid: &Bit<Fp>,
+    ) -> Result<(), Error> {
+        require_receive(transition.statement)?;
+        self.bind(region, transition)?;
+        self.glue.assert_nonzero(region, &witness.payment_digest)?;
+        let fields = transition.statement.fields();
+        let credit = &fields[17];
         let burned = self.glue.not(region, valid)?;
         let credit_value = self.sponge.hash_words(
             region,
@@ -496,6 +535,28 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
             &witness.credit.low,
             &witness.credit.slot,
         )?;
+        GlueChip::assert_equal(
+            region,
+            record.root(),
+            transition.successor.lineage.credit_root(),
+        )
+    }
+
+    /// Apply the exact adjusted-burn iff rule and preserve unrelated roots.
+    /// The consumed-root and credit-root owners are separate mandatory inputs
+    /// to a complete Receive; this method alone does not authenticate them.
+    /// # Errors
+    /// Wrong variant, u128 overflow, discretionary burn or changed preserved state.
+    pub fn receive_burn_and_preserve(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        valid: &Bit<Fp>,
+    ) -> Result<(), Error> {
+        require_receive(transition.statement)?;
+        self.bind(region, transition)?;
+        let burned = self.glue.not(region, valid)?;
+        let amount = &transition.statement.fields()[20];
         let delta = self.glue.mul(region, burned.word(), amount)?;
         let mut uint = UintChip::new(self.glue, self.range);
         let previous_burn =
@@ -509,21 +570,11 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
         )?;
         GlueChip::assert_equal(
             region,
-            record.root(),
-            transition.successor.lineage.credit_root(),
-        )?;
-        GlueChip::assert_equal(
-            region,
             transition.predecessor.lineage.pending_root(),
             transition.successor.lineage.pending_root(),
         )?;
         let previous = transition.predecessor.state.core();
         let successor = transition.successor.state.core();
-        GlueChip::assert_equal(
-            region,
-            &consumed_root,
-            &successor[core::CONSUMED_CREDIT_ROOT],
-        )?;
         for index in [
             core::BURNED_TOTAL,
             core::PENDING_OUTGOING_ROOT,

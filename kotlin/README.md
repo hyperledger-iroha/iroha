@@ -571,7 +571,7 @@ monetary authority. Public wire size and verification work are independent of
 balance history; no hop, input, origin, ancestry, fan-in, or proof-depth limit is
 encoded.
 
-### KAGEMUSHA online Load issuance original
+### KAGEMUSHA online Load receipt recovery
 
 `HttpClientTransport.getKagemushaWalletLoadIssuanceOriginalV1(selection, canonicalAuth,
 requireCurrentOwner)` performs one bounded account-signed GET to the current
@@ -584,16 +584,18 @@ or cancelling the returned future cancels its scoped call. The request requires
 HTTPS, a positive timeout, fresh canonical authentication and transport-owned
 encoding/cache headers; there is no redirect, retry, JSON or legacy route fallback.
 
-`ToriiKagemushaWalletLoadIssuanceOriginalV1` is transport data, including any
-nonempty malformed binary response pending Native validation. Its expected payer,
-network and selectors do not assert the response's identity or signer match.
-Native must decode the complete canonical issuance, bind its request/canonical
-payer/scheme/wallet to the enrolled owner, preserve and verify the exact original
-voucher and authenticate the complete Load relation before proof and durable
-Advance. An unsigned pending body or HTTP 200 never proves publication, finality,
-completion or offline balance. The bounded holder adds no monetary codec and
-exports no account key. Existing canonical request signing retains its ordinary
-account-address admission requirements; this fetch adds no account parser.
+`ToriiKagemushaWalletLoadIssuanceOriginalV1` retains unverified response bytes for
+an unsigned `KagemushaWalletLoadReceiptV1`, including any nonempty malformed binary
+response. Its expected payer, network and selectors do not assert the response's
+identity. Before wallet admission, the consumer must decode the canonical receipt,
+bind its request/payer/scheme/wallet to the expected owner, and independently
+authenticate the original successful transaction, ordinary chain finality and the
+complete recursive Load proof. The receipt and HTTP 200 alone never authorize
+offline value. This transport adds no monetary codec, finality verifier or Native
+wallet admission integration, and exports no account key. Existing canonical request
+signing retains its ordinary account-address admission requirements; this fetch adds
+no account parser. Receipt recovery uses the original request identity; submitting a
+newly signed Load transaction with that identity is rejected.
 
 ### Petal Stream optical transport
 

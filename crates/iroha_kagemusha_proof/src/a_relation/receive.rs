@@ -1,13 +1,14 @@
 //! Receive's same-tape incoming object result and split-context ownership.
 //!
 //! Typed owners derive all five result groups, own hard authorization, map
-//! effects and the terminal iff rule. TODO: compose and qualify their complete
-//! fixed-stage proof chain before admitting a Receive key; component checks
-//! alone do not establish execution by an authenticated stage catalog.
+//! effects and the terminal iff rule. The native producer composes ten fixed A
+//! stages and nine W continuations. TODO: qualify both variants, acceptance and
+//! corrected claims under the authenticated final catalog before admitting a
+//! Receive key; component chains alone do not establish catalog execution.
 
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{Bit, GlueChip, UintChip, Word, bytes::tape::BytesChip};
+use iroha_plonk_gadgets::{Bit, GlueChip, Uint, UintChip, Word, bytes::tape::BytesChip};
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
 
 use super::{
@@ -42,6 +43,21 @@ pub use stage::{ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness};
 
 #[cfg(test)]
 mod tests;
+
+// Active tapes separately constrain each individual length to its fixed capacity.
+// Their UInt32 lengths make this UInt33 sum exact, including cap+1; this shared
+// component is exercised for every boundary split without duplicating raw tapes.
+fn joint_length_valid(
+    uint: &mut UintChip<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    omega: &Uint<Fp, 32>,
+    sigma: &Uint<Fp, 32>,
+) -> Result<Bit<Fp>, Error> {
+    let length = uint.glue().add(region, omega.word(), sigma.word())?;
+    let length = uint.range_check::<33>(region, &length)?;
+    let limit = uint.constant::<33>(region, (MAX_OMEGA_RAW_BYTES + 1) as u128)?;
+    uint.lt(region, &length, &limit)
+}
 
 /// Wire section4 joint raw Omega-transport and sigma budget: `10,000 - 1,723`.
 ///
@@ -205,12 +221,12 @@ impl ReceiveObjects {
         // Wire section4: |Omega transport| + |sigma| <= 10,000 - 1,723.
         // The active Omega source additionally contains its 320-byte public
         // transcript. UInt32 sources make the sum an exact 33-bit integer.
-        let length = uint
-            .glue()
-            .add(region, omega.length().word(), sigma.length().word())?;
-        let length = uint.range_check::<33>(region, &length)?;
-        let limit = uint.constant::<33>(region, (MAX_OMEGA_RAW_BYTES + 1) as u128)?;
-        checks.push(uint.lt(region, &length, &limit)?);
+        checks.push(joint_length_valid(
+            &mut uint,
+            region,
+            omega.length(),
+            sigma.length(),
+        )?);
         // Own effect inputs are deterministic projections of the exact
         // Request. A prover cannot change them to manufacture a false Objects
         // verdict for an otherwise valid fixed Payment. Scope/relation are

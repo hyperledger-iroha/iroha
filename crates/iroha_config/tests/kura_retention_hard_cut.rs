@@ -1,10 +1,6 @@
 //! Validate that retired Kura retention and replica-eviction settings are not configuration
 //! inputs.
 
-#[path = "publisher_config_fixture.rs"]
-mod publisher_config_fixture;
-use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
-
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;
@@ -30,11 +26,9 @@ const RETIRED_ENV_NAMES: [&str; 7] = [
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    with_fixture_refs(
-        ConfigReader::new()
-            .read_toml_with_extends(base_path)
-            .expect("base config should load"),
-    )
+    ConfigReader::new()
+        .read_toml_with_extends(base_path)
+        .expect("base config should load")
 }
 
 fn strip_ansi_codes(input: &str) -> String {
@@ -82,7 +76,7 @@ fn retired_kura_retention_environment_names_are_unvisited() {
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("retired environment names are not schema inputs")
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .parse()
         .expect("retired environment names cannot alter Kura configuration");
 
     let unvisited = env.unvisited();

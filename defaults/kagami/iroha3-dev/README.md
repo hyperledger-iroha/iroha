@@ -20,11 +20,7 @@ Signed genesis, expected NetworkId, verifier output, and public-key artifacts ar
 not checked in. The operator generating a disposable dev bundle must generate
 a complete signed genesis and matching validator configuration.
 
-Ordinary validator configs omit `kagemusha_load_authorizer`. An operator selects
-the issuer publication service explicitly by adding that table with owner-only
-`keyring_file` and `submitter_key_file` bindings. Selected roles require genuine
-network-bound Load-role custody, ledger permissions and finite fee caps; profile
-generation does not create monetary authority.
+Wallet loads are ordinary transactions authenticated by finalized blocks.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-dev --out <PRIVATE_OUTPUT_DIR>

@@ -238,6 +238,7 @@ impl KagemushaWalletStateCommitmentV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletStateCoreV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletStateCoreV1 {
     /// Lifecycle.
     pub lifecycle: KagemushaWalletLifecycleV1,
@@ -765,6 +766,7 @@ impl KagemushaWalletRecoveryKindV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletConsumedCreditLeafV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletConsumedCreditLeafV1 {
     /// Received credit identity (the map key), a canonical σ-field value.
     pub credit_id: [u8; 32],
@@ -815,6 +817,7 @@ impl KagemushaWalletConsumedCreditLeafV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletPendingOutgoingLeafV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletPendingOutgoingLeafV1 {
     /// Credit identity (the map key), a canonical σ-field value.
     pub credit_id: [u8; 32],
@@ -895,6 +898,7 @@ fn send_descriptor_items_v1(
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletLoadLeafV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletLoadLeafV1 {
     /// Load ordinal (the low part of the map key).
     pub ordinal: u128,
@@ -945,6 +949,7 @@ impl KagemushaWalletLoadLeafV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletRedeemLeafV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletRedeemLeafV1 {
     /// Redemption ordinal (the low part of the map key).
     pub ordinal: u128,
@@ -997,6 +1002,7 @@ impl KagemushaWalletRedeemLeafV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletFeeClaimLeafV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletFeeClaimLeafV1 {
     /// Credit identity (the map key), a canonical σ-field value.
     pub credit_id: [u8; 32],
@@ -1052,6 +1058,7 @@ impl KagemushaWalletFeeClaimLeafV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletQuotaUsageLeafV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletQuotaUsageLeafV1 {
     /// Window kind.
     pub window_kind: KagemushaWalletQuotaWindowKindV1,
@@ -1543,6 +1550,7 @@ fn chain_append_preimage_v1(chain: &[u8; 32], entry: Vec<[u8; 32]>) -> WalletRes
 ///
 /// `send_chain' = P(kgwschn1, [send_chain] || descriptor elements)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(16))]
 pub struct KagemushaWalletSendChainEntryV1 {
     /// Credit identity, a canonical σ-field value.
     pub credit_id: [u8; 32],
@@ -1605,6 +1613,7 @@ impl KagemushaWalletSendChainEntryV1 {
 ///
 /// `recv_chain' = P(kgwrchn1, [recv_chain] || descriptor elements)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(16))]
 pub struct KagemushaWalletRecvChainEntryV1 {
     /// Credit identity, a canonical σ-field value.
     pub credit_id: [u8; 32],
@@ -2011,6 +2020,7 @@ impl KagemushaWalletPolicyUpdateKindV1 {
 /// (§§3, 4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletEffectV1")]
+#[repr(align(16))]
 pub enum KagemushaWalletEffectV1 {
     /// Install the zero state from the generation-0 enrollment marker.
     #[codec(index = 1)]
@@ -2415,6 +2425,7 @@ pub fn kagemusha_wallet_unload_nullifier_v1(
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletStatementV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletStatementV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,
@@ -2836,6 +2847,7 @@ impl KagemushaWalletStepProofV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletLineagePublicV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletLineagePublicV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,
@@ -3142,6 +3154,7 @@ impl KagemushaWalletReceiptSignerV1 {
 /// Scheme, wallet and provider contract come from the signer; sequence and commitments from
 /// the statement. This value is never transmitted; it is recomputed by every verifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(16))]
 pub struct KagemushaWalletReceiptBodyV1 {
     /// Receipt version.
     pub version: u16,

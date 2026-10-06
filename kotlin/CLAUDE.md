@@ -96,8 +96,11 @@ All mutable collections and byte arrays are copied on construction and access. U
 - **Two instruction representations**: typed (structured fields) vs wire (opaque `ByteArray` + wire name); `InstructionBox` unifies both
 - **Source layout**: main sources under `src/main/java/` (Kotlin files, retained path from Java migration), tests under `src/test/kotlin/`
 - **Native libraries**: `.so` files built from Rust via
-  `./gradlew :client-android:buildNativeLibs`, not tracked in git. Raw cargo-ndk
-  output is isolated below
+  `./gradlew :client-android:buildNativeLibs`, not tracked in git. The maintained
+  production inventory requires `arm64-v8a`, `armeabi-v7a` and `x86_64` originals
+  throughout source seals, build, packaging and signed provenance; source
+  configuration alone grants no Native artifact or release qualification.
+  Raw cargo-ndk output is isolated below
   `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/native/cargo-ndk/<mode>/`;
   compiler state is separately isolated in the sibling
   `native/cargo-target/<mode>/` via `CARGO_TARGET_DIR`; canonically stripped
@@ -115,6 +118,13 @@ All mutable collections and byte arrays are copied on construction and access. U
   and consumes the authenticated repository-root `Cargo.lock`. Bootstrap,
   alternate locks, and compiler or profile configuration overrides are rejected;
   the root lock and effective Cargo configuration are rechecked after execution.
+- **Canonical wallet framing**: the reviewed wallet-local fixed-alignment source
+  pins direct `u128` records/enums to 16-byte archived alignment and preserves all
+  26 existing padding values through shipping compile-time assertions. Norito
+  primitives, decoders and frozen vectors are unchanged. Actual host checks are
+  running; no result is established; qualify ARMv7 compilation and identical canonical originals/exact
+  decoding on 32/64-bit Native targets. Packaging and ELF checks do not prove
+  runtime parity; all required Android targets remain in scope.
 - **ARMv7 diagnostic**: from `kotlin`, use the existing owner-only local artifact
   root, set `MOBILE_SDK_PYTHON_BINARY` to the canonical executable of Python 3.12
   (symbolic links are rejected), and run
@@ -126,8 +136,9 @@ All mutable collections and byte arrays are copied on construction and access. U
   `native/armv7-diagnostic/diagnostic-manifest.json` under that root's SDK module
   build directory. The report records ARM machine 40, actual native exports and
   LOAD alignment; it grants no release admission. The task supplies no
-  generated JNI or AAR outputs and leaves the admitted `arm64-v8a`/`x86_64`
-  inventory unchanged. Configure the pinned
+  generated JNI, AAR or production-inventory outputs. The maintained production
+  contract independently requires `arm64-v8a`, `armeabi-v7a` and `x86_64`; diagnostic
+  bytes cannot satisfy it. Configure the pinned
   toolchain and install its ARMv7 standard library before compiling. Run
   `:client-android:verifyArmv7DiagnosticContract` to check routing without a
   native build.
@@ -143,8 +154,10 @@ plus the shared SoraFS reference-validator cases. Missing native artifacts or
 capabilities fail; host JNI execution is separate from Android/device qualification.
 
 The current wallet module declares managed platform, payment-key and backup-rule
-unit tests. Its Rust `KagemushaWalletPlatformV1` JNI adapter and provider-open call
-remain TODO; there is no wallet host-JNI test task or native execution claim.
+unit tests. Its Rust `KagemushaWalletPlatformV1` JNI adapter exists, while wallet
+open still returns `ARTIFACTS_UNAVAILABLE` (`-4`). Complete installed prover and
+typed preparation integration plus authenticated owner intake remain unfinished;
+there is no wallet host-JNI test task or wallet execution qualification.
 
 ## Version Catalog
 

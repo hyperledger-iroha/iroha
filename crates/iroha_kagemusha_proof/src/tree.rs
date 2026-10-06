@@ -558,7 +558,8 @@ pub fn indexed_empty<F: PoseidonField>() -> [F; INDEXED_DEPTH + 1] {
 
 /// A sparse depth-32 indexed Merkle tree (the G1
 /// `KagemushaWalletIndexedTreeV1` construction): the zero sentinel in slot
-/// 0, insertions at the next free slot, removal never used by a σ.
+/// 0 and insertions at monotonically allocated slots. Removal relinks the
+/// predecessor and clears the removed slot without making it reusable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexedTree<F> {
     slots: BTreeMap<u32, IndexedLeaf<F>>,
@@ -701,6 +702,39 @@ impl<F: PoseidonField> IndexedTree<F> {
             slot_siblings,
         })
     }
+
+    /// Remove a present nonzero key, returning the ordered relink/clear paths.
+    /// The predecessor opens against the old root; the removed leaf opens
+    /// against the root after relinking. The cleared slot is exactly zero,
+    /// and its allocation is never reused. Absent keys and the sentinel are
+    /// rejected without changing the tree or its allocation counter.
+    #[must_use]
+    pub fn remove(&mut self, key: &F) -> Option<IndexedRemove<F>> {
+        let (slot, leaf) = self.find(key)?;
+        let (predecessor_slot, predecessor) = self
+            .slots
+            .iter()
+            .find(|(_, predecessor)| predecessor.next_key == *key)
+            .map(|(slot, predecessor)| (*slot, *predecessor))?;
+        let predecessor_siblings = self.siblings(predecessor_slot);
+        self.write(
+            predecessor_slot,
+            Some(IndexedLeaf {
+                next_key: leaf.next_key,
+                ..predecessor
+            }),
+        );
+        let leaf_siblings = self.siblings(slot);
+        self.write(slot, None);
+        Some(IndexedRemove {
+            predecessor,
+            predecessor_slot,
+            predecessor_siblings,
+            leaf,
+            slot,
+            leaf_siblings,
+        })
+    }
 }
 
 /// Witness of one indexed-tree insertion: the bracketing low leaf against
@@ -717,6 +751,23 @@ pub struct IndexedInsert<F> {
     pub slot: u32,
     /// The siblings of `slot` against the root after the first write.
     pub slot_siblings: [F; INDEXED_DEPTH],
+}
+
+/// Witness of one indexed-tree removal, in the circuit's relink/clear order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndexedRemove<F> {
+    /// Predecessor whose `next_key` is the removed key, before relinking.
+    pub predecessor: IndexedLeaf<F>,
+    /// Permanent slot of the predecessor, including sentinel slot zero.
+    pub predecessor_slot: u32,
+    /// Predecessor path against the original root.
+    pub predecessor_siblings: [F; INDEXED_DEPTH],
+    /// Original removed leaf, retaining its value and successor key.
+    pub leaf: IndexedLeaf<F>,
+    /// Removed slot, cleared permanently rather than recycled.
+    pub slot: u32,
+    /// Removed-leaf path against the root after relinking the predecessor.
+    pub leaf_siblings: [F; INDEXED_DEPTH],
 }
 
 #[cfg(test)]
@@ -844,6 +895,82 @@ mod tests {
         assert_eq!(tree.insert(Fp::from(7), Fp::from(11)), None);
         assert_eq!(tree, full);
         assert_eq!(tree.get(&Fp::from(7)), Some(Fp::from(9)));
+        let removal = tree.remove(&Fp::from(7)).expect("remove final allocation");
+        assert_eq!(removal.slot, u32::MAX);
+        assert_eq!(tree.root(), IndexedTree::<Fp>::new().root());
+        assert_eq!(tree.next_free(), 1_u64 << 32);
+        let exhausted = tree.clone();
+        assert_eq!(tree.insert(Fp::from(8), Fp::from(10)), None);
+        assert_eq!(tree, exhausted);
+    }
+
+    fn removal_paths<F: PoseidonField>() {
+        let mut tree = IndexedTree::<F>::new();
+        for key in [5, 3, 9] {
+            tree.insert(F::from(key), F::from(10 * key)).unwrap();
+        }
+        for key in [5, 9, 3] {
+            let before = tree.clone();
+            let removed = tree.remove(&F::from(key)).unwrap();
+            assert_eq!(removed.predecessor.next_key, F::from(key));
+            assert_eq!(removed.leaf.key, F::from(key));
+            assert_eq!(removed.leaf.value, F::from(10 * key));
+            assert_eq!(
+                path_root(
+                    INDEXED_NODE_DOMAIN,
+                    removed.predecessor.hash(),
+                    u64::from(removed.predecessor_slot),
+                    &removed.predecessor_siblings
+                ),
+                before.root(),
+            );
+            let relinked = IndexedLeaf {
+                next_key: removed.leaf.next_key,
+                ..removed.predecessor
+            };
+            let middle = path_root(
+                INDEXED_NODE_DOMAIN,
+                relinked.hash(),
+                u64::from(removed.predecessor_slot),
+                &removed.predecessor_siblings,
+            );
+            assert_eq!(
+                path_root(
+                    INDEXED_NODE_DOMAIN,
+                    removed.leaf.hash(),
+                    u64::from(removed.slot),
+                    &removed.leaf_siblings
+                ),
+                middle,
+            );
+            assert_eq!(
+                path_root(
+                    INDEXED_NODE_DOMAIN,
+                    F::ZERO,
+                    u64::from(removed.slot),
+                    &removed.leaf_siblings
+                ),
+                tree.root(),
+            );
+            assert_eq!(tree.node(0, u64::from(removed.slot)), F::ZERO);
+            assert_eq!(tree.get(&F::from(key)), None);
+            assert_eq!(tree.next_free(), before.next_free());
+            let retained = tree.clone();
+            for absent in [F::ZERO, F::from(key), F::from(11)] {
+                assert_eq!(tree.remove(&absent), None);
+                assert_eq!(tree, retained);
+            }
+        }
+        assert_eq!(tree.root(), IndexedTree::<F>::new().root());
+        assert_eq!(tree.insert(F::from(5), F::from(51)).unwrap().slot, 4);
+        assert_eq!(tree.get(&F::from(5)), Some(F::from(51)));
+        assert_eq!(tree.next_free(), 5);
+    }
+
+    #[test]
+    fn indexed_removal_relinks_clears_and_never_reuses_in_both_fields() {
+        removal_paths::<Fp>();
+        removal_paths::<Fq>();
     }
 
     #[test]

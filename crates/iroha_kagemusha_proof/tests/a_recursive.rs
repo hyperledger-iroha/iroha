@@ -1843,7 +1843,7 @@ pub(crate) fn authenticated_bootstrap_with_identity(
     let mut installed_native_source = None;
     if adversarial
         && profile
-            == (SourceProfile::Serialized {
+            == (SourceProfile::Tagged {
                 buses: iroha_kagemusha_proof::a_relation::native::bootstrap::SOURCE_RANGE_BUSES,
             })
     {
@@ -2320,7 +2320,14 @@ pub(crate) fn authenticated_bootstrap_with_identity(
 }
 
 #[test]
-#[ignore = "genuine common-Q2/A4 production A1/W/A2, source mutation and artifact differential"]
+#[ignore = "genuine common-Q2/Tagged3 production A1/W/A2, source mutation and artifact differential"]
 fn production_native_bootstrap_stages_preserve_the_genuine_installed_relation() {
-    let _ = authenticated_bootstrap_with_q_layout(true, Fp::from(91), 4, Some(2));
+    let _ = authenticated_bootstrap_with_profile(
+        true,
+        Fp::from(91),
+        SourceProfile::Tagged {
+            buses: iroha_kagemusha_proof::a_relation::native::bootstrap::SOURCE_RANGE_BUSES,
+        },
+        Some(2),
+    );
 }

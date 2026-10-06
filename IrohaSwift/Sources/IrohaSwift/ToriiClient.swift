@@ -23058,11 +23058,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            exactSuccessStatus: 202)
     }
 
-    /// Read the payer's exact finalized issuance original under the current wallet protocol.
+    /// Read the payer's original unsigned Load receipt from committed ledger state.
     ///
-    /// The returned bytes remain unverified. Only the Native wallet may decode/admit the
-    /// pending body or root-authenticated signed load voucher; HTTP success never credits a
-    /// balance. Missing/unfinalized source is an error, never a fresh issuance or absence.
+    /// The returned bytes remain unverified. Before wallet admission, the consumer must bind
+    /// the decoded receipt to the expected owner and independently authenticate the original
+    /// successful transaction, ordinary chain finality and the complete recursive Load proof.
+    /// This transport supplies no wallet admission; HTTP success never credits a balance.
+    /// An unavailable source is an error, never a fresh issuance or an absent wallet.
     public func getKagemushaWalletLoadIssuanceOriginalV1(
         selection: ToriiKagemushaWalletLoadSelectionV1,
         canonicalAuth: ToriiCanonicalRequestAuth,

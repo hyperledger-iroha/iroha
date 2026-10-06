@@ -1,7 +1,6 @@
 //! Deterministic ledger tests. Fixture proofs are explicit stand-ins: the injected test
 //! verifier exercises orchestration only and is not evidence of native proof validity.
 use super::*;
-use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use std::{cell::Cell, collections::BTreeMap};
 
 fn fixture<T>(name: &str) -> T
@@ -23,34 +22,6 @@ where
     norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
         .unwrap()
 }
-pub(super) fn signing(byte: u8) -> SigningKey {
-    SigningKey::from_slice(&[byte; 32]).unwrap()
-}
-pub(super) fn certificate(
-    scheme: &KagemushaWalletSchemeV1,
-    role: KagemushaWalletSignerRoleV1,
-    key_byte: u8,
-) -> KagemushaWalletSignerCertificateV1 {
-    let key = signing(key_byte);
-    let body = KagemushaWalletSignerCertificateBodyV1 {
-        version: 1,
-        scheme_id: scheme.scheme_id(),
-        role,
-        key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
-        )
-        .unwrap(),
-        serial: 99,
-    };
-    let signature: Signature = signing(0x11).sign(&body.signing_message());
-    KagemushaWalletSignerCertificateV1::sign(
-        body,
-        scheme,
-        KagemushaWalletSignerOutputV1::Der(signature.to_der().as_bytes()),
-    )
-    .unwrap()
-}
-
 struct Verifier {
     accept: bool,
     calls: Cell<usize>,
@@ -90,17 +61,14 @@ pub(super) struct Memory {
     unavailable: bool,
     history: bool,
     writes: usize,
+    height: u64,
+    transaction_hash: Digest,
 }
 impl Memory {
     pub(super) fn new() -> Self {
         let activation: KagemushaWalletActivationV1 = fixture("KagemushaWalletActivationV1");
         let scheme: KagemushaWalletSchemeV1 = fixture("KagemushaWalletSchemeV1");
         let unload: KagemushaWalletUnloadClaimV1 = fixture("KagemushaWalletUnloadClaimV1");
-        let authorizer = certificate(
-            &scheme,
-            KagemushaWalletSignerRoleV1::LoadAuthorization,
-            0x34,
-        );
         let reserve = AccountId::new(
             iroha_crypto::KeyPair::from_seed(vec![95; 32], iroha_crypto::Algorithm::Ed25519)
                 .public_key()
@@ -113,17 +81,18 @@ impl Memory {
                 asset: activation.asset,
                 reserve: reserve.clone(),
                 balance_scope: AssetBalanceScope::Global,
-                load_authorizer: authorizer,
             },
             authority: authority.clone(),
             wallets: BTreeMap::new(),
             issues: BTreeMap::new(),
             payouts: BTreeMap::new(),
             balances: BTreeMap::from([(authority, 1000), (reserve, 1000)]),
-            certs: BTreeMap::from([(authorizer.certificate_digest(), authorizer)]),
+            certs: BTreeMap::new(),
             unavailable: false,
             history: false,
             writes: 0,
+            height: 23,
+            transaction_hash: [42; 32],
         }
     }
     pub(super) fn active(&mut self) -> LoadCommand {
@@ -132,6 +101,8 @@ impl Memory {
         LoadCommand {
             scheme: self.registration.scheme.scheme_id(),
             wallet: activation.credential.body.wallet_id,
+            asset: self.registration.asset.asset_digest(),
+            ordinal: 0,
             request_id: [10; 32],
             amount: 100,
             charge: None,
@@ -143,10 +114,10 @@ impl Transaction for Memory {
         &self.authority
     }
     fn transaction_hash(&self) -> Digest {
-        [42; 32]
+        self.transaction_hash
     }
     fn block_height(&self) -> u64 {
-        23
+        self.height
     }
     fn registration(&self, scheme: &Digest, asset: &Digest) -> Result<Registration> {
         if *scheme != self.registration.scheme.scheme_id()
@@ -244,55 +215,6 @@ impl Transaction for Memory {
         Ok(())
     }
 }
-struct Finalized(Option<Issuance>);
-impl FinalizedSource for Finalized {
-    fn issuance(&self, _: &Digest, _: &Digest, _: &Digest) -> Result<Issuance> {
-        self.0.clone().ok_or(Error::NotFinalized)
-    }
-}
-fn voucher(issue: &Issuance, tx: &Memory) -> KagemushaWalletLoadVoucherV1 {
-    let signature: Signature = signing(0x34).sign(&issue.body.signing_message());
-    KagemushaWalletLoadVoucherV1::sign(
-        issue.body,
-        &tx.registration.load_authorizer,
-        KagemushaWalletSignerOutputV1::Der(signature.to_der().as_bytes()),
-    )
-    .unwrap()
-}
-
-pub(super) fn alternative_voucher(issue: &Issuance, tx: &Memory) -> KagemushaWalletLoadVoucherV1 {
-    use p256::ecdsa::signature::RandomizedSigner as _;
-    // Fixed extra RFC6979 entropy is strictly test-only and produces a second valid signature.
-    struct TestEntropy;
-    impl rand_core_06::RngCore for TestEntropy {
-        fn next_u32(&mut self) -> u32 {
-            0x61616161
-        }
-        fn next_u64(&mut self) -> u64 {
-            0x6161616161616161
-        }
-        fn fill_bytes(&mut self, bytes: &mut [u8]) {
-            bytes.fill(0x61);
-        }
-        fn try_fill_bytes(
-            &mut self,
-            bytes: &mut [u8],
-        ) -> std::result::Result<(), rand_core_06::Error> {
-            self.fill_bytes(bytes);
-            Ok(())
-        }
-    }
-    impl rand_core_06::CryptoRng for TestEntropy {}
-    let signature: Signature =
-        signing(0x34).sign_with_rng(&mut TestEntropy, &issue.body.signing_message());
-    KagemushaWalletLoadVoucherV1::sign(
-        issue.body,
-        &tx.registration.load_authorizer,
-        KagemushaWalletSignerOutputV1::Der(signature.to_der().as_bytes()),
-    )
-    .unwrap()
-}
-
 #[test]
 fn activation_requires_native_proof_and_exact_retry_never_reopens_closed() {
     let mut tx = Memory::new();
@@ -325,6 +247,7 @@ fn loads_are_successive_reserve_backed_and_exactly_retried_after_close() {
     assert_eq!(issue_load(&mut tx, &command).unwrap(), first);
     assert_eq!(tx.writes, 2);
     command.request_id = [11; 32];
+    command.ordinal = 1;
     assert_eq!(issue_load(&mut tx, &command).unwrap().body.ordinal, 1);
     tx.wallets.get_mut(&command.wallet).unwrap().phase = Phase::Closed;
     assert_eq!(issue_load(&mut tx, &command).unwrap().body.ordinal, 1);
@@ -334,6 +257,29 @@ fn loads_are_successive_reserve_backed_and_exactly_retried_after_close() {
         Err(Error::Lifecycle)
     ));
 }
+#[test]
+fn a_later_transaction_cannot_reissue_the_original_request() {
+    let mut tx = Memory::new();
+    let command = tx.active();
+    let original = issue_load(&mut tx, &command).unwrap();
+    let balances = tx.balances.clone();
+    for (transaction_hash, height) in [([43; 32], 23), ([42; 32], 24), ([43; 32], 24)] {
+        tx.transaction_hash = transaction_hash;
+        tx.height = height;
+        assert!(matches!(
+            issue_load(&mut tx, &command),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(tx.balances, balances);
+        assert_eq!(tx.wallets[&command.wallet].next_load, 1);
+        assert_eq!(tx.issues[&(command.wallet, command.request_id)], original);
+        assert_eq!(tx.writes, 2);
+    }
+    tx.transaction_hash = original.body.transaction_hash;
+    tx.height = original.body.block_height;
+    assert_eq!(issue_load(&mut tx, &command).unwrap(), original);
+}
+
 #[test]
 fn changed_retries_storage_failure_overflow_and_unfunded_loads_do_not_mutate() {
     let mut tx = Memory::new();
@@ -346,6 +292,7 @@ fn changed_retries_storage_failure_overflow_and_unfunded_loads_do_not_mutate() {
     ));
     command.request_id = [12; 32];
     command.amount = 10_000;
+    command.ordinal = 1;
     assert!(matches!(
         issue_load(&mut tx, &command),
         Err(Error::InsufficientFunds)
@@ -353,6 +300,7 @@ fn changed_retries_storage_failure_overflow_and_unfunded_loads_do_not_mutate() {
     assert_eq!(tx.wallets[&command.wallet].next_load, 1);
     assert_eq!(tx.issues.len(), 1);
     tx.wallets.get_mut(&command.wallet).unwrap().next_load = u128::MAX;
+    command.ordinal = u128::MAX;
     assert!(matches!(
         issue_load(&mut tx, &command),
         Err(Error::Overflow)
@@ -365,75 +313,49 @@ fn changed_retries_storage_failure_overflow_and_unfunded_loads_do_not_mutate() {
     assert_eq!(tx.writes, 2);
 }
 #[test]
-fn voucher_publication_requires_exact_finalized_source_and_freezes_bytes() {
+fn load_refuses_genesis_before_any_debit_or_issuance() {
     let mut tx = Memory::new();
     let command = tx.active();
-    let issue = issue_load(&mut tx, &command).unwrap();
-    let signed = voucher(&issue, &tx);
-    assert!(matches!(
-        publish_voucher(
-            &mut tx,
-            &Finalized(None),
-            command.scheme,
-            command.wallet,
-            command.request_id,
-            &signed
-        ),
-        Err(Error::NotFinalized)
-    ));
-    assert!(tx.issues.values().next().unwrap().voucher.is_none());
-    let mut wrong = issue.clone();
-    wrong.body.block_height += 1;
-    assert!(matches!(
-        publish_voucher(
-            &mut tx,
-            &Finalized(Some(wrong)),
-            command.scheme,
-            command.wallet,
-            command.request_id,
-            &signed
-        ),
-        Err(Error::Binding)
-    ));
-    let alternate = alternative_voucher(&issue, &tx);
-    let source = Finalized(Some(issue));
-    let bytes = publish_voucher(
-        &mut tx,
-        &source,
-        command.scheme,
-        command.wallet,
-        command.request_id,
-        &signed,
-    )
-    .unwrap();
-    assert_eq!(bytes, signed.to_canonical_bytes().unwrap());
-    assert_eq!(
-        publish_voucher(
-            &mut tx,
-            &source,
-            command.scheme,
-            command.wallet,
-            command.request_id,
-            &signed
-        )
-        .unwrap(),
-        bytes
-    );
-    assert_eq!(tx.writes, 3);
-    assert_ne!(alternate.to_canonical_bytes().unwrap(), bytes);
-    assert!(matches!(
-        publish_voucher(
-            &mut tx,
-            &source,
-            command.scheme,
-            command.wallet,
-            command.request_id,
-            &alternate
-        ),
-        Err(Error::Conflict)
-    ));
-    assert_eq!(tx.writes, 3);
+    let balances = tx.balances.clone();
+    for height in [0, 1] {
+        tx.height = height;
+        assert!(matches!(issue_load(&mut tx, &command), Err(Error::Binding)));
+        assert_eq!(tx.balances, balances);
+        assert!(tx.issues.is_empty());
+        assert_eq!(tx.wallets[&command.wallet].next_load, 0);
+    }
 }
+
+#[test]
+fn load_requires_exact_asset_and_next_ordinal_before_any_debit() {
+    let mut tx = Memory::new();
+    let command = tx.active();
+    let before = tx.balances.clone();
+    for (asset, ordinal) in [
+        ([0x55; 32], 0),
+        (command.asset, 1),
+        (command.asset, u128::MAX),
+    ] {
+        let mut wrong = command.clone();
+        wrong.asset = asset;
+        wrong.ordinal = ordinal;
+        assert!(issue_load(&mut tx, &wrong).is_err());
+        assert_eq!(tx.balances, before);
+        assert_eq!(tx.wallets[&command.wallet].next_load, 0);
+        assert!(tx.issues.is_empty());
+    }
+    let first = issue_load(&mut tx, &command).unwrap();
+    assert_eq!(first.body.request_id, command.request_id);
+    assert_eq!(first.body.payer, tx.authority);
+    let mut stale = command.clone();
+    stale.request_id = [0x77; 32];
+    let funded = tx.balances.clone();
+    assert!(matches!(issue_load(&mut tx, &stale), Err(Error::Conflict)));
+    assert_eq!(tx.balances, funded);
+    assert_eq!(tx.issues.len(), 1);
+    assert_eq!(issue_load(&mut tx, &command).unwrap(), first);
+}
+
 #[test]
 fn closing_requires_native_proof_and_no_outstanding_ordinal() {
     let mut tx = Memory::new();
@@ -589,6 +511,8 @@ fn load_charge_is_separate_and_whole_batch_failure_keeps_both_balances() {
         },
     );
     command.amount = quote.body.net_amount;
+    command.asset = quote.body.asset_digest;
+    command.ordinal = quote.body.ordinal;
     command.charge = Some(LoadCharge {
         quote,
         beneficiary: claim.beneficiary.clone(),
@@ -701,7 +625,7 @@ fn ledger_key_encoding_is_bounded_and_rejects_aliases() {
     assert!(norito::json::to_json_bounded(&storage, ordinary.len() - 1).is_err());
 }
 #[test]
-fn committed_world_row_without_transaction_membership_is_not_finality() {
+fn uncommitted_world_row_cannot_supply_receipt_recovery() {
     let mut tx = Memory::new();
     let command = tx.active();
     let issue = issue_load(&mut tx, &command).unwrap();
@@ -721,16 +645,12 @@ fn committed_world_row_without_transaction_membership_is_not_finality() {
     );
     let view = state.view();
     assert!(matches!(
-        FinalizedLedger::new(
+        CommittedLoadReceipts::new(
             &view,
-            iroha_data_model::sumeragi::finality::NativeFinalityLimits {
-                block_bytes: 1_000_000,
-                journal_bytes: 4_000_000,
-                block_count: 8,
-                allocated_bytes: 8_000_000
-            }
+            1_000_000,
+            norito::DecodeLimits::new(1_000_000, 1_000_000, 4_000_000, 8_000_000, 128),
         ),
-        Err(Error::NotFinalized)
+        Err(Error::NotCommitted)
     ));
 }
 

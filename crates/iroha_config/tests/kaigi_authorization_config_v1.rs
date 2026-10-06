@@ -1,21 +1,15 @@
 //! Final Kaigi verifier configuration has one authorization key and no aliases.
 
-#[path = "publisher_config_fixture.rs"]
-mod publisher_config_fixture;
-use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
-
 use iroha_config::parameters::user::Root;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;
 
 fn reader() -> ConfigReader {
-    with_fixture_refs(
-        ConfigReader::new()
-            .read_toml_with_extends(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml"),
-            )
-            .unwrap(),
-    )
+    ConfigReader::new()
+        .read_toml_with_extends(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml"),
+        )
+        .unwrap()
 }
 
 #[test]
@@ -27,7 +21,7 @@ fn every_authorization_action_uses_one_explicit_governed_key_reference() {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<Root>()
         .unwrap()
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .parse()
         .unwrap();
     let key = config.zk.kaigi_authorization_vk.unwrap();
     assert_eq!(key.backend, "pipa-r/pasta/kaigi-authorization-v1");

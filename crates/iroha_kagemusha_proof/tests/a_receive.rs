@@ -354,7 +354,47 @@ pub(crate) fn genuine_receive_source_for_heads(
     insert: bool,
     mode: IncomingMode,
 ) -> ReceiveQ {
-    let send = send_objects::from_load(payer);
+    genuine_receive_source_for_send(before, send_objects::from_load(payer), valid, insert, mode)
+}
+
+/// Generate real sources for an exact Request carrying a supplied quoted credential.
+#[allow(dead_code)] // Used by the recursive fixture which includes this module.
+pub(crate) fn genuine_receive_source_for_quoted(
+    before: &StateWitness,
+    payer: Option<&StateWitness>,
+    quoted_bytes: &[u8],
+    valid: bool,
+    insert: bool,
+    mode: IncomingMode,
+) -> ReceiveQ {
+    let (enrolled, _, _) = bootstrap_objects::enrollment();
+    let (loaded, _, _, _) = load_objects::authorized(&enrolled);
+    let payer = payer.unwrap_or(&loaded.successor);
+    let quoted = bootstrap_objects::sign(
+        iroha_kagemusha_proof::operation_relation::objects::ObjectKind::Credential,
+        quoted_bytes[..iroha_kagemusha_proof::operation_relation::objects::ObjectKind::Credential
+            .body_len()]
+            .to_vec(),
+        17,
+        79,
+    );
+    assert_eq!(quoted.bytes, quoted_bytes);
+    genuine_receive_source_for_send(
+        before,
+        send_objects::from_load_with_receiver_credential(payer, &quoted),
+        valid,
+        insert,
+        mode,
+    )
+}
+
+fn genuine_receive_source_for_send(
+    before: &StateWitness,
+    send: send_objects::SendFixture,
+    valid: bool,
+    insert: bool,
+    mode: IncomingMode,
+) -> ReceiveQ {
     let witness = receive_objects::from_send(&send, before, Fp::from(401), valid, insert);
     let params = PinnedParams::<Ep>::derive(16).unwrap();
     let vparams = common::vesta_params(16);

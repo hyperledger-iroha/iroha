@@ -632,7 +632,7 @@ impl ManagedReserveTopUpApproval {
         }
         let verifier = self.authority.decode_checkpoint(&original.checkpoint)?;
         let block = verifier
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original approval checkpoint"))?;
         block
             .verify_global_scope(
@@ -656,7 +656,7 @@ impl ManagedReserveTopUpApproval {
     ) -> Result<ManagedHistoricalReserveTopUpApproval> {
         self.validate_original(history, original)?;
         let block = verifier
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original approval carrier"))?;
         block
             .verify_global_scope(

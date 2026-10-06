@@ -5,6 +5,7 @@
 //! the operation, authenticated-map and byte-consumer constraints must compose
 //! with it before the resulting circuit can authorize a lineage update.
 
+pub mod archive;
 mod binding;
 pub mod bootstrap;
 pub mod context;
@@ -15,6 +16,7 @@ pub mod load;
 pub mod native;
 pub mod own;
 pub mod receive;
+pub mod refresh;
 pub mod results;
 pub mod schedule;
 pub mod send;

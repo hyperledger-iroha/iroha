@@ -174,10 +174,16 @@ Canonical bytes are one complete `norito::encode_canonical` frame ([Norito](../n
   vectors pin the name and schema hash of all 26 framed types (envelope:
   `f03a9dc47142299cad9ffe0b2115fd42`).
 - `p` is a property of the type, never inferred from the bytes. It is 8 when a
-  `u128` is reachable without passing through a sequence (archived alignment 16;
-  the envelope payload starts at byte 48), and 0 otherwise. The table below lists
-  it per type. `armv7` is not an admitted native target: its `u128` alignment would
-  change the padding.
+  `u128` is reachable without passing through indirect Vec-backed storage (archived
+  alignment 16;
+  the envelope payload starts at byte 48), and 0 otherwise. The wallet model pins
+  every record or enum with a direct `u128` field to `repr(align(16))`; enclosing
+  records, enums and inline fixed arrays inherit that alignment, while indirect
+  Vec-backed storage does not inherit its elements' alignment. All 26 frame padding values below are compile-time
+  assertions. `armv7`, `aarch64` and `x86_64` use this one layout and the existing
+  canonical bytes, schemas, flags and payload encodings. There is no target-specific
+  decoder or alternate-padding acceptance. Native runtime and physical-device
+  qualification remain separate from the frame contract.
 - Payload (Norito derived layout under `COMPACT_LEN`): a record is its fields in
   declaration order, each `varint len ‖ payload`; integers are little-endian fixed
   width; a `bool` is one byte; a digest field is `0x20 ‖ 32 bytes`, a key
@@ -895,11 +901,14 @@ Abandon) are ledger state: design only, TODO(G6).
 
 ## 4. Measured sizes
 
-Worst-case valid envelopes, printed by `size_tests.rs`. The Payment and Request carry
-a fee schedule and two Request certificates. The size test uses 3,296-byte σ_send and
-σ_recv stand-ins from the earlier measured single-lane `k = 12` shape, plus an explicit
-4,000-byte Ω placeholder. These lengths measure envelope framing; current proof relations
-and the final Ω transport still need artifact qualification (G3).
+Structurally valid complete envelopes, printed by `size_tests.rs`. The Payment and Request
+carry a fee schedule and two Request certificates. The current size test uses a 3,456-byte
+σ_send sample, the largest measured revision-4 Send proof, and a 4,800-byte Ω sample,
+the measured three-terminal compact transport. Receive uses a conservative 3,456-byte
+sample. The proof bytes are stand-ins: these tests establish encoding overhead and exact
+bounds, not cryptographic acceptance or a completed Payment. The fresh release size suite
+passes 2/2 (`target/qualification/payment-current-encoding-size.log`). The accepted ordinary
+transaction/finality Load relation and complete proof catalog still require qualification (G3).
 `F_payment` = 1,723 bytes and the joint proof budget is 8,277 bytes
 (`KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1`, `KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`).
 `F_status` = 2,188 bytes and the Ω cap is 7,812 bytes
@@ -912,15 +921,13 @@ The size tests and verifying-key allowlist pin these constants for Ω and σ len
 | Offer (credential frame 618 / 1,024) | 1,104 / 2,048 | — | — |
 | SessionControl (signed ReceiveDeferred) | 338 / 2,048 | — | — |
 | Request (fee schedule, 2 certificates) | 1,843 / 10,000 | — | — |
-| Payment (σ_send 3,296; Ω proof 4,000) | 9,019 / 10,000 | 1,723 + Ω proof + σ_send | Ω proof 4,981 with the selected σ_send; Ω proof + σ_send 8,277 |
-| Credited::Receive (σ_recv 3,296) | 3,975 / 10,000 | 679 + σ_recv | — |
-| Credited::Status (Ω(h) proof 4,000, 32 siblings; CreditStatus frame 6,133) | 6,188 / 10,000 | 2,188 + Ω(h) proof | Ω(h) proof 7,812 |
-| Lineage (Ω proof 4,000) | 4,413 / 10,000 | 413 + Ω proof | — |
+| Payment (σ_send 3,456; Ω proof 4,800) | 9,979 / 10,000 | 1,723 + Ω proof + σ_send | Ω proof 4,821 with the selected σ_send; Ω proof + σ_send 8,277 |
+| Credited::Receive (σ_recv 3,456 sample) | 4,135 / 10,000 | 679 + σ_recv | — |
+| Credited::Status (Ω(h) proof 4,800, 32 siblings; CreditStatus frame 6,933) | 6,988 / 10,000 | 2,188 + Ω(h) proof | Ω(h) proof 7,812 |
+| Lineage (Ω proof 4,800) | 5,213 / 10,000 | 413 + Ω proof | — |
 | PolicyData certificates (3) | 698 / 10,000 | — | — |
 
-A Send package alone is 5,358 bytes with a 1,000-byte Ω proof and 8,358 with a
-4,000-byte one (1,062 bytes beyond the two proofs). Other measured frames: the
-largest Android renewal request (8 certificates totalling 65,536 DER bytes) is
+Other measured frames: the largest Android renewal request (8 certificates totalling 65,536 DER bytes) is
 66,021 of 73,728 bytes; a 64-window quota share is 2,941 bytes; the full
 65,535-entry blacklist, an online download rather than an envelope, is 2,228,433 of
 2,228,736 bytes. Vector frames with 48-byte stand-in σ and Ω proofs: envelopes
@@ -933,12 +940,12 @@ its two consumed-credit insertion openings).
 version and root. Tests measure Request 1,843 bytes, `F_payment` 1,723 bytes and the
 joint budget `|Ω| + |σ_send| ≤ 8,277` bytes. B1 changes no field width,
 and B5, B7 and B8 change only private state, so `F_status` (2,188 bytes) and the Ω cap
-(7,812 bytes) stay. With the Λ/Ω estimate of 4,736 bytes for Ω, the largest σ_send must
-be at most 3,541 bytes: k12 (3,296 bytes) fits and the measured pre-B5 quota σ_send
-(3,584 bytes, k16) does not. With the B5 usage array the quota σ_send is estimated at
-about 309 permutations for the quota part and 346 with every control, a single-lane k14
-shape of about 3,424 bytes [C] (k13, about 3,360 bytes, if shared window and usage
-paths fit), to be measured.
+(7,812 bytes) stay. With a 4,800-byte Ω transport, σ_send must be at most 3,477 bytes;
+the measured 3,456-byte Send shape leaves 21 bytes in the complete envelope. The fixed64
+quota implementation has real k14 proofs at that size. Every admitted Send mask, both
+Receive variants and the complete uniform Ω catalog must retain their exact measured
+descriptors before artifact freeze. The ordinary-transaction/finality Load migration does
+not add a Payment evidence trail or relax the 10,000-byte bound.
 
 ## 5. Vectors
 

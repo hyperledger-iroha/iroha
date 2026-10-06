@@ -40972,6 +40972,7 @@ fn data_event_kind(event: &iroha_data_model::events::data::DataEvent) -> &'stati
         E::Bridge(_) => "Bridge",
         E::GameSession(_) => "GameSession",
         E::Sccp(_) => "Sccp",
+        E::KagemushaLoadCommitted(_) => "KagemushaLoadCommitted",
     }
 }
 app_api_items! {

@@ -84,12 +84,10 @@ use zeroize::Zeroizing;
 pub const AUTHORITY_KEY_FILE_MAX_BYTES_V1: usize = 64 * 1024;
 /// Key files the configuration parser reads from `<data_dir>/secrets/` when the configuration
 /// names them; [`verify_config_key_custody`] checks each one that exists.
-pub const CONFIG_KEY_FILES_V1: [NodeSecretFile; 7] = [
+pub const CONFIG_KEY_FILES_V1: [NodeSecretFile; 5] = [
     NodeSecretFile::Validator,
     NodeSecretFile::Transport,
     NodeSecretFile::Streaming,
-    NodeSecretFile::KagemushaLoadAuthorizerKeyring,
-    NodeSecretFile::KagemushaLoadSubmitter,
     NodeSecretFile::FaucetAuthority,
     NodeSecretFile::OnboardingAuthority,
 ];

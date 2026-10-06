@@ -45,20 +45,17 @@ use iroha_plonk_recursion::{
 use super::super::{
     AProofPlan, LineagePublicCells, ProofMessageCells, SigmaBindingCells, VestaClaimCells,
     context::{ContextInputs, ContextPlan, ContextPredecessor, ContextState},
-    unload::{UnloadObjects, UnloadProofInputs, UnloadStagePlan, UnloadStageWitness},
     own::{ConsumingProofCells, OwnPolicy},
     schedule::OperationTask,
     split::{SplitPlan, WCircuit, WKey, close_first},
+    unload::{UnloadObjects, UnloadProofInputs, UnloadStagePlan, UnloadStageWitness},
     verify_predecessor, verify_sigma,
 };
 use crate::{
     admin_sigma::{ConsumingWitness, StateWitness},
     omega::OmegaWitness,
     operation_relation::{
-        map_effects::InsertCells,
-        objects::ObjectKind,
-        state::StateCells,
-        statement::StatementCells,
+        map_effects::InsertCells, objects::ObjectKind, state::StateCells, statement::StatementCells,
     },
     q_signature::{QSignaturePlan, SignatureKey},
     tree::IndexedInsert,
@@ -155,8 +152,10 @@ impl Plan {
         pallas: PinnedParams<Ep>,
         vesta: PinnedParams<Eq>,
     ) -> Result<Self, Error> {
-        if !matches!(operation.frame().variant(), Variant::Unload | Variant::Retiring)
-            || operation.frame().part_source_k() != 12
+        if !matches!(
+            operation.frame().variant(),
+            Variant::Unload | Variant::Retiring
+        ) || operation.frame().part_source_k() != 12
             || operation.q_count() != 2
             || !operation.frame().has_predecessor()
             || operation.sigma.slot_count() != 1
@@ -194,12 +193,19 @@ impl Plan {
         let slots = signatures.slots();
         if slots.len() != 3
             || slots.iter().any(|slot| slot.mode != VerifyMode::Hard)
-            || slots[..2].iter().any(|slot| slot.key != SignatureKey::Variable)
+            || slots[..2]
+                .iter()
+                .any(|slot| slot.key != SignatureKey::Variable)
             || slots[2].key != SignatureKey::Fixed(policy.root)
         {
             return Err(Error::Artifact);
         }
-        let signature = operation.q(1).ok_or(Error::Artifact)?.verifier().binding().descriptor();
+        let signature = operation
+            .q(1)
+            .ok_or(Error::Artifact)?
+            .verifier()
+            .binding()
+            .descriptor();
         if signature.instance_lengths
             != [u32::try_from(signatures.instance_length()).map_err(|_| Error::Artifact)?]
             || signature.instance_types.as_deref() != Some(&QSignaturePlan::instance_types())
@@ -215,14 +221,18 @@ impl Plan {
             operation,
             vec![vec![], vec![], vec![0], vec![1]],
             Some(0),
-            UnloadObjects::context_specs().map_err(|_| Error::Artifact)?.to_vec(),
+            UnloadObjects::context_specs()
+                .map_err(|_| Error::Artifact)?
+                .to_vec(),
         )
-        .and_then(|p| p.with_operation_tasks(vec![
-            vec![OperationTask::UnloadProof],
-            vec![state_task],
-            vec![],
-            vec![OperationTask::UnloadAuthorization],
-        ]))
+        .and_then(|p| {
+            p.with_operation_tasks(vec![
+                vec![OperationTask::UnloadProof],
+                vec![state_task],
+                vec![],
+                vec![OperationTask::UnloadAuthorization],
+            ])
+        })
         .map_err(|_| Error::Artifact)?;
         UnloadStagePlan::new(context.clone(), policy).map_err(|_| Error::Artifact)?;
         Ok(Self {
@@ -330,7 +340,10 @@ impl Plan {
         let part = q_sigma_part(&input.q[0], 12, variant)?;
         part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
         let omega = lineage_bytes(
-            &input.state.predecessor.lineage, &input.predecessor.proof, &pallas, &vesta,
+            &input.state.predecessor.lineage,
+            &input.predecessor.proof,
+            &pallas,
+            &vesta,
         )?;
         let objects = core::array::from_fn(|i| SignedTape {
             kind: object_kinds()[i],
@@ -494,7 +507,7 @@ struct First {
 }
 #[derive(Clone, Debug)]
 /// Fixed Tagged3 verifier, exact byte tape and homogeneous public columns.
- pub struct StageConfig {
+pub struct StageConfig {
     verifier: VerifierConfig<Ep>,
     bytes: BytesConfig,
     public: Column<Instance>,
@@ -584,7 +597,8 @@ impl First {
         region: &mut Region<'_, Fp>,
         statement: &StatementCells,
     ) -> Result<SigmaBindingCells, LayoutError> {
-        let length = u32::try_from(self.source.sigma.len()).map_err(|_| LayoutError::BoundsFailure)?;
+        let length =
+            u32::try_from(self.source.sigma.len()).map_err(|_| LayoutError::BoundsFailure)?;
         let source = length
             .to_le_bytes()
             .into_iter()
@@ -602,11 +616,17 @@ impl First {
         )?;
         let index = chip.uint().glue().constant(
             region,
-            Fp::from(if self.source.variant == Variant::Unload {
-                13
-            } else {
-                15
-            }),
+            Fp::from(u64::from(
+                super::super::schedule::sigma_selector(
+                    if self.source.variant == Variant::Unload {
+                        6
+                    } else {
+                        8
+                    },
+                    0,
+                )
+                .ok_or(LayoutError::Synthesis)?,
+            )),
         )?;
         SigmaBindingCells::from_run(chip, region, statement, index, &run)
     }
@@ -638,8 +658,9 @@ impl Circuit<Fp> for First {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        let verifier = VerifierConfig::configure_serialized_foreign_tagged(meta, SOURCE_RANGE_BUSES)
-            .expect("fixed native consuming Tagged3 profile");
+        let verifier =
+            VerifierConfig::configure_serialized_foreign_tagged(meta, SOURCE_RANGE_BUSES)
+                .expect("fixed native consuming Tagged3 profile");
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -651,7 +672,11 @@ impl Circuit<Fp> for First {
             public,
         }
     }
-    fn synthesize(&self, config: StageConfig, mut layouter: impl Layouter<Fp>) -> Result<(), LayoutError> {
+    fn synthesize(
+        &self,
+        config: StageConfig,
+        mut layouter: impl Layouter<Fp>,
+    ) -> Result<(), LayoutError> {
         let mut chip = VerifierChip::new(config.verifier);
         let mut bytes = BytesChip::new(config.bytes);
         chip.load_tables(&mut layouter)?;
@@ -861,7 +886,11 @@ impl Circuit<Fp> for Continuation {
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
         First::configure(meta)
     }
-    fn synthesize(&self, config: StageConfig, mut layouter: impl Layouter<Fp>) -> Result<(), LayoutError> {
+    fn synthesize(
+        &self,
+        config: StageConfig,
+        mut layouter: impl Layouter<Fp>,
+    ) -> Result<(), LayoutError> {
         let first = &self.first;
         let mut chip = VerifierChip::new(config.verifier);
         let mut bytes = BytesChip::new(config.bytes);
@@ -1165,19 +1194,16 @@ pub struct Prover {
 impl Prover {
     /// Import the complete fixed typed artifact set, never generating keys from a witness.
     /// # Errors
-    /// Nonuniform A descriptors, wrong k/public schema, or wrong W stage/context identity.
+    /// Wrong fixed source descriptor or W stage/context identity.
     pub fn from_artifacts(
         plan: Plan,
         a: [Arc<ProvingKey<Eq>>; 4],
         w: [Arc<ProvingKey<Ep>>; 3],
     ) -> Result<Self, Error> {
+        let expected =
+            super::artifact::source_descriptor::<StageCircuit>(()).ok_or(Error::Artifact)?;
         for key in &a {
-            let d = key.binding().descriptor();
-            if d.k != 16
-                || d.instance_lengths != [69]
-                || d.instance_types.as_deref() != Some(&[InstanceType::Bounded])
-                || key.binding() != a[0].binding()
-            {
+            if key.binding() != &expected {
                 return Err(Error::Artifact);
             }
             VerifierPlan::new(key.binding().clone(), plan.vesta.clone())
@@ -1712,7 +1738,11 @@ pub struct Terminal {
 }
 
 fn object_kinds() -> [ObjectKind; 3] {
-    [ObjectKind::Credential, ObjectKind::Certificate, ObjectKind::Receipt]
+    [
+        ObjectKind::Credential,
+        ObjectKind::Certificate,
+        ObjectKind::Receipt,
+    ]
 }
 
 fn check_sigma_tape(input: &Inputs, variant: Variant) -> Result<(), Error> {
@@ -2016,12 +2046,16 @@ fn prove_a(
 }
 
 fn sigma_selector(variant: Variant) -> Result<Fq, Error> {
-    match variant {
-        Variant::Unload => Ok(Fq::from(13)),
-        Variant::Retiring => Ok(Fq::from(15)),
-        _ => Err(Error::Artifact),
-    }
+    let tag = match variant {
+        Variant::Unload => 6,
+        Variant::Retiring => 8,
+        _ => return Err(Error::Artifact),
+    };
+    super::super::schedule::sigma_selector(tag, 0)
+        .map(|index| Fq::from(u64::from(index)))
+        .ok_or(Error::Artifact)
 }
+
 fn frame(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     let mut out = u32::try_from(bytes.len())
         .map_err(|_| Error::Input)?

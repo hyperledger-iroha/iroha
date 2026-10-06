@@ -34,6 +34,7 @@ pub(crate) struct KagamiProfileOptions {
     pub kagami_override: Option<PathBuf>,
     pub nexus_xor_asset_definition_id: Option<String>,
     pub xor_allocations_dir: PathBuf,
+    pub genesis_creation_time_ms: u64,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProfileSpec {
@@ -76,7 +77,8 @@ fn published_private_key_rendering(spec: &ProfileSpec) -> PrivateKeyRendering {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GenesisIdentityRendering<'a> {
-    InlineBootstrap(&'a str),
+    Unpublished,
+    Inline(&'a str),
     SiblingFile,
     RuntimeFile,
 }
@@ -95,7 +97,9 @@ struct StagedGenesis {
 type AnyResult<T> = Result<T, Box<dyn Error>>;
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
+#[cfg(test)]
 const PROFILE_GENESIS_CREATION_TIME_MS: u64 = 1_700_000_000_000;
+#[cfg(test)]
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
     "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
@@ -268,6 +272,9 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
         options.nexus_xor_asset_definition_id.as_deref(),
         &options.xor_allocations_dir,
     )?;
+    if options.genesis_creation_time_ms == 0 {
+        return Err("profile genesis requires an explicit nonzero creation time".into());
+    }
     let kagami_bin = resolve_kagami_path(options.kagami_override.as_deref())?;
     fs::create_dir_all(&options.output)?;
     for spec in specs {
@@ -277,6 +284,7 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
             &options.output,
             options.nexus_xor_asset_definition_id.as_deref(),
             &options.xor_allocations_dir,
+            options.genesis_creation_time_ms,
         )?;
     }
     Ok(())
@@ -330,6 +338,168 @@ fn resolve_requested_profiles(names: &[String]) -> AnyResult<Vec<ProfileSpec>> {
         out.push(*spec);
     }
     Ok(out)
+}
+struct CapturedProfileFile {
+    path: PathBuf,
+    original: iroha_fs::RetainedFile,
+    bytes: Zeroizing<Vec<u8>>,
+}
+impl CapturedProfileFile {
+    fn capture(path: PathBuf, maximum: usize) -> AnyResult<Self> {
+        let original = iroha_fs::RetainedFile::open_private(&path)?;
+        Self::capture_opened(path, original, maximum)
+    }
+    fn capture_regular(path: PathBuf, maximum: usize) -> AnyResult<Self> {
+        let original = iroha_fs::RetainedFile::open_regular(&path)?;
+        Self::capture_opened(path, original, maximum)
+    }
+    fn capture_opened(
+        path: PathBuf,
+        mut original: iroha_fs::RetainedFile,
+        maximum: usize,
+    ) -> AnyResult<Self> {
+        use std::io::Read as _;
+        original.revalidate()?;
+        let length = usize::try_from(original.file().metadata()?.len())?;
+        if length == 0 || length > maximum {
+            return Err("profile original is empty or exceeds its fixed bound".into());
+        }
+        let mut bytes = Zeroizing::new(Vec::with_capacity(length));
+        original
+            .file_mut()
+            .take(u64::try_from(maximum)? + 1)
+            .read_to_end(&mut bytes)?;
+        original.revalidate()?;
+        if bytes.len() != length {
+            return Err("profile original changed during bounded capture".into());
+        }
+        Ok(Self {
+            path,
+            original,
+            bytes,
+        })
+    }
+    fn revalidate(&self) -> AnyResult<()> {
+        self.original.revalidate()?;
+        Ok(())
+    }
+}
+struct ProfileConfigFiles<'a> {
+    spec: &'a ProfileSpec,
+    index: usize,
+    peer: &'a PeerMaterial,
+    expected_hash: &'a CapturedProfileFile,
+}
+impl iroha_config::base::file_source::ConfigFileSource for ProfileConfigFiles<'_> {
+    fn read(
+        &self,
+        path: &Path,
+        request: iroha_config::base::file_source::ConfigFileRequest,
+    ) -> std::io::Result<Zeroizing<Vec<u8>>> {
+        use iroha_config::base::file_source::ConfigFileAccess;
+        let refusal = || {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "unselected profile configuration file binding",
+            )
+        };
+        let bytes = if path == self.expected_hash.path
+            || path == Path::new("/run/iroha/genesis.expected_hash")
+        {
+            if request.access != ConfigFileAccess::Public {
+                return Err(refusal());
+            }
+            self.expected_hash.original.revalidate()?;
+            Zeroizing::new(self.expected_hash.bytes.to_vec())
+        } else {
+            // Validate the runtime projection using the exact generated transport and
+            // consensus identity records. Runtime provisioning remains mandatory.
+            if request.access != ConfigFileAccess::Private {
+                return Err(refusal());
+            }
+            let prefix = format!("/run/secrets/iroha/{}-peer-{}", self.spec.slug, self.index);
+            let value = if path == Path::new(&format!("{prefix}-validator-private-key")) {
+                &self.peer.private_key
+            } else if path == Path::new(&format!("{prefix}-soranet-private-key")) {
+                &self.peer.soranet_transport_private_key
+            } else if path == Path::new(&format!("{prefix}-streaming-private-key")) {
+                &self.peer.streaming_private_key
+            } else {
+                return Err(refusal());
+            };
+            Zeroizing::new(value.as_bytes().to_vec())
+        };
+        if bytes.len() > request.maximum {
+            return Err(refusal());
+        }
+        Ok(bytes)
+    }
+}
+fn validate_final_profile_configs(
+    spec: &ProfileSpec,
+    peers: &[PeerMaterial],
+    directory: &iroha_fs::PrivateDirectory,
+    network: NetworkId,
+) -> AnyResult<()> {
+    use iroha_config::base::{read::ConfigReader, toml::TomlSource};
+    // Identity bytes are from the exact newly signed artifact, not a replacement test table.
+    let expected_hash =
+        CapturedProfileFile::capture(directory.path().join("genesis.expected_hash"), 512)?;
+    let signed = CapturedProfileFile::capture_regular(
+        directory.path().join("genesis.signed.nrt"),
+        iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1,
+    )?;
+    let manifest_original = CapturedProfileFile::capture_regular(
+        directory.path().join("genesis.json"),
+        iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
+    )?;
+    let manifest = RawGenesisTransaction::from_json_slice_at_path(
+        &manifest_original.bytes,
+        &manifest_original.path,
+    )?;
+    manifest_original.revalidate()?;
+    for (index, peer) in peers.iter().enumerate() {
+        let source = CapturedProfileFile::capture(
+            directory.path().join(peer_config_file_name(index)),
+            1024 * 1024,
+        )?;
+        let table = iroha_deploy::secret_toml::parse_table(
+            std::str::from_utf8(&source.bytes)?,
+            "final profile config",
+        )
+        .map_err(|_| "final profile config is invalid TOML")?;
+        let files = ProfileConfigFiles {
+            spec,
+            index,
+            peer,
+            expected_hash: &expected_hash,
+        };
+        let root = ConfigReader::new()
+            .without_env()
+            .with_toml_source(TomlSource::new_sensitive(
+                source.path.clone(),
+                table,
+                iroha_deploy::secret_toml::zeroize_table,
+            ))
+            .read_and_complete::<iroha_config::parameters::user::Root>()
+            .map_err(|_| "final profile config has invalid schema")?
+            .parse_with_file_source(&files)
+            .map_err(|_| "final profile config has invalid node policy or selected originals")?;
+        if NetworkId::from_genesis_hash(root.genesis.expected_hash) != network {
+            return Err("final profile config and signed genesis identities differ".into());
+        }
+        iroha_deploy::genesis::staging::staged_signed_native_genesis(
+            &manifest,
+            &signed.bytes,
+            &root,
+        )
+        .map_err(|_| "final profile config does not reproduce authenticated signed genesis")?;
+        source.revalidate()?;
+    }
+    manifest_original.revalidate()?;
+    signed.revalidate()?;
+    expected_hash.revalidate()?;
+    Ok(())
 }
 // tempfile 3.27 has no public constructor for adopting a natively created directory.
 // Retain only this uniquely created, unpublished staging directory; keep/drop mirror
@@ -401,6 +571,7 @@ fn write_profile_bundle(
     output_root: &Path,
     nexus_xor_asset_definition_id: Option<&str>,
     xor_allocations_dir: &Path,
+    genesis_creation_time_ms: u64,
 ) -> AnyResult<()> {
     let staging = create_profile_staging(output_root, spec.slug)?;
     let bundle_root = staging.path().to_path_buf();
@@ -429,7 +600,7 @@ fn write_profile_bundle(
         &peers,
         genesis_key.public_key(),
         staging.directory(),
-        GenesisIdentityRendering::InlineBootstrap(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+        GenesisIdentityRendering::Unpublished,
         PrivateKeyRendering::Inline,
     )?;
     let config_path = bundle_root.join(peer_config_file_name(0));
@@ -440,6 +611,7 @@ fn write_profile_bundle(
         &config_path,
         &genesis_key,
         patched_genesis,
+        genesis_creation_time_ms,
     )?;
     write_json(&genesis_path, &staged_genesis.manifest)?;
     let network_id = staged_genesis.network_id.to_string();
@@ -451,9 +623,10 @@ fn write_profile_bundle(
         bundle_root.join("genesis.public_key"),
         format!("{}\n", genesis_key.public_key()),
     )?;
-    fs::write(
-        bundle_root.join("genesis.expected_hash"),
-        format!("{network_id}\n"),
+    staging.directory().write_atomic(
+        "genesis.expected_hash",
+        format!("{network_id}\n").as_bytes(),
+        iroha_fs::PublishMode::Replace,
     )?;
     write_peer_configs(
         spec,
@@ -463,6 +636,7 @@ fn write_profile_bundle(
         published_genesis_identity_rendering(spec),
         published_private_key_rendering(spec),
     )?;
+    validate_final_profile_configs(spec, &peers, staging.directory(), staged_genesis.network_id)?;
     let vrf_seed_hex = if spec.requires_seed {
         Some(spec.vrf_seed_hex())
     } else {
@@ -472,12 +646,13 @@ fn write_profile_bundle(
     fs::write(bundle_root.join("verify.txt"), verify_out)?;
     let compose = render_docker_compose(spec, &peers);
     fs::write(bundle_root.join("docker-compose.yml"), compose)?;
-    let readme = render_readme(
+    let readme = render_readme_with_creation_time(
         spec,
         &peers,
         genesis_key.public_key(),
         vrf_seed_hex.as_deref(),
         nexus_xor_asset_definition_id,
+        genesis_creation_time_ms,
     );
     fs::write(bundle_root.join("README.md"), readme)?;
     publish_profile_bundle(staging, &output_root.join(spec.slug))?;
@@ -613,6 +788,7 @@ fn bind_staged_context(
     config_path: &Path,
     genesis_key: &KeyPair,
     portable_manifest: RawGenesisTransaction,
+    genesis_creation_time_ms: u64,
 ) -> AnyResult<StagedGenesis> {
     let workdir = genesis_path
         .parent()
@@ -654,7 +830,7 @@ fn bind_staged_context(
             )
         })?;
     let expected_public_key = genesis_key.public_key().to_string();
-    let creation_time_ms = PROFILE_GENESIS_CREATION_TIME_MS.to_string();
+    let creation_time_ms = genesis_creation_time_ms.to_string();
     let output = Command::new(kagami_bin)
         .args(["genesis", "sign", genesis_file, "--private-key-file"])
         .arg(private_key_file.path())
@@ -1003,9 +1179,10 @@ fn render_peer_config_with_private_keys(
     private_key_rendering: PrivateKeyRendering,
 ) -> String {
     let genesis_identity_source = match genesis_identity_rendering {
-        // The staging config exists before the genesis block has been signed, so it alone carries
-        // the inline unresolved sentinel used to derive the consensus policy embedded at signing.
-        GenesisIdentityRendering::InlineBootstrap(expected_hash) => {
+        // Unpublished authoring policy cannot claim a runtime identity. The signer binds it
+        // through a genuine original provisional block, then generation validates the final cut.
+        GenesisIdentityRendering::Unpublished => String::new(),
+        GenesisIdentityRendering::Inline(expected_hash) => {
             format!("expected_hash = \"{expected_hash}\"")
         }
         // Published host-run profiles resolve this path relative to the generated config itself.
@@ -1222,7 +1399,7 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
         GenesisIdentityRendering::RuntimeFile => {
             "\n      - ./genesis.expected_hash:/run/iroha/genesis.expected_hash:ro"
         }
-        GenesisIdentityRendering::InlineBootstrap(_) => {
+        GenesisIdentityRendering::Unpublished | GenesisIdentityRendering::Inline(_) => {
             unreachable!("published profiles never carry an inline genesis identity")
         }
     };
@@ -1288,12 +1465,30 @@ networks:
 fn peer_config_file_name(peer_index: usize) -> String {
     format!("peer{peer_index}.toml")
 }
+#[cfg(test)]
 fn render_readme(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
     genesis_public_key: &iroha_crypto::PublicKey,
     vrf_seed_hex: Option<&str>,
     nexus_xor_asset_definition_id: Option<&str>,
+) -> String {
+    render_readme_with_creation_time(
+        spec,
+        peers,
+        genesis_public_key,
+        vrf_seed_hex,
+        nexus_xor_asset_definition_id,
+        PROFILE_GENESIS_CREATION_TIME_MS,
+    )
+}
+fn render_readme_with_creation_time(
+    spec: &ProfileSpec,
+    peers: &[PeerMaterial],
+    genesis_public_key: &iroha_crypto::PublicKey,
+    vrf_seed_hex: Option<&str>,
+    nexus_xor_asset_definition_id: Option<&str>,
+    genesis_creation_time_ms: u64,
 ) -> String {
     let peer_rows = peers
         .iter()
@@ -1331,9 +1526,9 @@ fn render_readme(
     let runtime_key_note = if published_private_key_rendering(spec)
         == PrivateKeyRendering::RuntimeFiles
     {
-        "\nRuntime keys:\n- Validator, SoraNet transport, and streaming private keys are not embedded. Provision the per-peer files named by each config under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required configured file is absent.\n\n\n"
+        "\nRuntime keys:\n- Validator, SoraNet transport, and streaming private keys are not embedded. Provision the per-peer files named by each config under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required configured file is absent.\n"
     } else {
-        "\n"
+        ""
     };
     let topology_note = match spec.slug {
         "iroha3-nexus" => {
@@ -1348,7 +1543,7 @@ fn render_readme(
 - chain id: {chain}
 {chain_discriminant_line}
 - {vrf_line}
-- deterministic genesis creation-time base (ms): {creation_time_ms}
+- operator-provided exact genesis creation time (ms): {creation_time_ms}
 - genesis public key: {genesis_pk}
 {topology_note}- peers:
 {peer_rows}
@@ -1361,17 +1556,18 @@ Files:
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
-{runtime_key_note}Regenerate:
-- cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
+{runtime_key_note}
+Regenerate:
+- cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg} --xor-allocations-dir <DIR> --genesis-creation-time-ms {genesis_creation_time_ms}
 
-Kagemusha issuer role:
-- Ordinary validator configs omit `kagemusha_load_authorizer`. An operator explicitly selects the issuer publication service by adding that table with owner-only `keyring_file` and `submitter_key_file` bindings. Selected roles require genuine network-bound Load-role custody, ledger permissions and finite fee caps; profile generation does not create monetary authority.
+Kagemusha Load:
+- Load is submitted through normal block transactions. This bundle provisions no separate publisher service or issuer keys.
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
         chain_discriminant_line = chain_discriminant_line,
         vrf_line = vrf_line,
-        creation_time_ms = PROFILE_GENESIS_CREATION_TIME_MS,
+        creation_time_ms = genesis_creation_time_ms,
         genesis_pk = genesis_public_key,
         topology_note = topology_note,
         peer_rows = peer_rows,
@@ -1566,7 +1762,7 @@ fn profile_slug_list() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_config::{base::toml::TomlSource, parameters::actual};
+    use iroha_config::base::toml::TomlSource;
     use iroha_crypto::{HashOf, Signature};
     use iroha_data_model::{account::address::ChainDiscriminantGuard, block::BlockHeader};
     use tempfile::tempdir;
@@ -2170,12 +2366,11 @@ mod tests {
         };
         use iroha_config::parameters::user::Root as UserConfig;
 
-        // An ordinary validator must not read any issuer custody file. Explicit role
-        // selection below still reaches the production missing-custody refusal.
-        struct UnavailablePublisherFiles {
+        // Fully inline authoring policy must not open any external private file.
+        struct UnavailableProfileFiles {
             calls: std::cell::Cell<usize>,
         }
-        impl ConfigFileSource for UnavailablePublisherFiles {
+        impl ConfigFileSource for UnavailableProfileFiles {
             fn read(
                 &self,
                 _path: &Path,
@@ -2203,7 +2398,7 @@ mod tests {
                 &peers,
                 0,
                 genesis_key.public_key(),
-                GenesisIdentityRendering::InlineBootstrap(&expected_hash),
+                GenesisIdentityRendering::Inline(&expected_hash),
                 PrivateKeyRendering::Inline,
             );
             let table = rendered
@@ -2216,7 +2411,7 @@ mod tests {
                 "ordinary profile {} must not select an issuer role",
                 profile.slug
             );
-            let parser_files = UnavailablePublisherFiles {
+            let parser_files = UnavailableProfileFiles {
                 calls: std::cell::Cell::new(0),
             };
             let parse = |table: toml::Table| {
@@ -2231,13 +2426,12 @@ mod tests {
             let _chain_discriminant = profile
                 .chain_discriminant
                 .map(ChainDiscriminantGuard::enter);
-            let parsed = parse(table.clone()).unwrap_or_else(|error| {
+            parse(table.clone()).unwrap_or_else(|error| {
                 panic!(
                     "rendered profile {} must pass bounded config parsing: {error:?}",
                     profile.slug
                 )
             });
-            assert!(parsed.kagemusha_load_authorizer.is_none());
             assert_eq!(parser_files.calls.get(), 0);
             for retired in ["block", "queues"] {
                 let mut retired_config = table.clone();
@@ -2253,28 +2447,11 @@ mod tests {
                 );
             }
             assert_eq!(parser_files.calls.get(), 0);
-            let mut selected = table.clone();
-            let publisher: toml::Table = r#"
-keyring_file = "unavailable-keyring.nrt"
-submitter_key_file = "unavailable-submitter-private-key"
-"#
-            .parse()
-            .expect("explicit operator role references");
-            selected.insert(
-                "kagemusha_load_authorizer".to_owned(),
-                toml::Value::Table(publisher),
-            );
-            assert!(
-                parse(selected).is_err(),
-                "an explicitly selected issuer role must refuse unavailable private custody"
-            );
-            assert!(parser_files.calls.get() > 0);
-            let retried = parse(table).expect("same ordinary config must remain admissible");
-            assert!(retried.kagemusha_load_authorizer.is_none());
+            parse(table).expect("same inline config must remain admissible");
         }
     }
     #[test]
-    fn bootstrap_configs_keep_the_unresolved_genesis_identity_inline() {
+    fn unpublished_configs_do_not_claim_a_runtime_genesis_identity() {
         for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
@@ -2287,12 +2464,10 @@ submitter_key_file = "unavailable-submitter-private-key"
                 &peers,
                 0,
                 genesis_key.public_key(),
-                GenesisIdentityRendering::InlineBootstrap(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+                GenesisIdentityRendering::Unpublished,
                 PrivateKeyRendering::Inline,
             );
-            assert!(rendered.contains(&format!(
-                "expected_hash = \"{GENESIS_EXPECTED_HASH_PLACEHOLDER}\""
-            )));
+            assert!(!rendered.contains("expected_hash ="));
             assert!(!rendered.contains("expected_hash_file"));
         }
     }
@@ -2398,7 +2573,7 @@ submitter_key_file = "unavailable-submitter-private-key"
         let genesis_key = deterministic_keypair("native-staging-genesis", Algorithm::Ed25519)
             .expect("derive existing test genesis key");
         for identity in [
-            GenesisIdentityRendering::InlineBootstrap(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+            GenesisIdentityRendering::Unpublished,
             GenesisIdentityRendering::SiblingFile,
         ] {
             write_peer_configs(
@@ -2562,10 +2737,11 @@ submitter_key_file = "unavailable-submitter-private-key"
         assert!(readme.contains("genesis.public_key"));
         assert!(readme.contains("genesis.expected_hash"));
         assert!(readme.contains("peer0.toml through peerN.toml"));
-        assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
+        assert!(readme.contains(&format!(
+            "cargo xtask kagami-profiles --profile iroha3-dev --xor-allocations-dir <DIR> --genesis-creation-time-ms {PROFILE_GENESIS_CREATION_TIME_MS}\n"
+        )));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
-        assert!(readme.contains("Ordinary validator configs omit `kagemusha_load_authorizer`"));
-        assert!(readme.contains("An operator explicitly selects the issuer publication service"));
+        assert!(readme.contains("Load is submitted through normal block transactions"));
     }
     #[test]
     fn rendered_dev_text_preserves_canonical_spacing() {
@@ -2604,7 +2780,7 @@ submitter_key_file = "unavailable-submitter-private-key"
         );
         assert!(readme.contains(
             "cargo xtask kagami-profiles --profile iroha3-nexus \
-             --nexus-xor-asset-definition-id xor-definition-id\n"
+             --nexus-xor-asset-definition-id xor-definition-id --xor-allocations-dir <DIR>"
         ));
         assert!(readme.contains("3 logical lanes (`core`, `governance`, `zk`)"));
         assert!(readme.contains("single physical `universal` dataspace"));
@@ -2626,6 +2802,7 @@ submitter_key_file = "unavailable-submitter-private-key"
             kagami_override: Some(kagami),
             nexus_xor_asset_definition_id: None,
             xor_allocations_dir: temp.path().join("missing-allocations"),
+            genesis_creation_time_ms: PROFILE_GENESIS_CREATION_TIME_MS,
         })
         .expect_err("all-profile generation without the Nexus XOR id must fail");
         assert_eq!(error.to_string(), NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED);
@@ -2665,6 +2842,75 @@ submitter_key_file = "unavailable-submitter-private-key"
             "successful publication must remove its recovery backup"
         );
     }
+    #[cfg(unix)]
+    #[test]
+    fn retained_profile_original_rejects_empty_oversize_public_links_and_replacement() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let parent = tempdir().unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private-inputs"))
+                .unwrap();
+        let path = directory.path().join("profile-DATA");
+        directory
+            .write_atomic(
+                "profile-DATA",
+                b"DATA-only",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let retained = CapturedProfileFile::capture(path.clone(), 16).unwrap();
+        assert_eq!(retained.bytes.as_slice(), b"DATA-only");
+        assert!(CapturedProfileFile::capture(path.clone(), 8).is_err());
+        let link = directory.path().join("link");
+        symlink(&path, &link).unwrap();
+        assert!(CapturedProfileFile::capture(link, 16).is_err());
+        let hardlink = directory.path().join("hardlink");
+        fs::hard_link(&path, &hardlink).unwrap();
+        assert!(CapturedProfileFile::capture(path.clone(), 16).is_err());
+        fs::remove_file(hardlink).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(CapturedProfileFile::capture(path.clone(), 16).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        directory
+            .write_atomic("profile-DATA", b"replaced", iroha_fs::PublishMode::Replace)
+            .unwrap();
+        assert!(retained.revalidate().is_err());
+        directory
+            .write_atomic("empty", b"", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        assert!(CapturedProfileFile::capture(directory.path().join("empty"), 16).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn retained_profile_original_refuses_same_inode_same_length_content_change() {
+        let parent = tempdir().unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private-inputs"))
+                .unwrap();
+        directory
+            .write_atomic(
+                "original-DATA",
+                b"ORIG-DATA",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let path = directory.path().join("original-DATA");
+        let retained = CapturedProfileFile::capture_opened(
+            path.clone(),
+            directory.open_retained_private("original-DATA").unwrap(),
+            16,
+        )
+        .unwrap();
+        retained.revalidate().unwrap();
+        let identity = retained.original.identity().unwrap();
+        let mut writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        writer.write_all(b"EDIT-DATA").unwrap();
+        writer.sync_all().unwrap();
+        assert_eq!(retained.original.identity().unwrap(), identity);
+        assert_eq!(retained.original.file().metadata().unwrap().len(), 9);
+        assert_eq!(retained.bytes.as_slice(), b"ORIG-DATA");
+        assert!(retained.revalidate().is_err());
+    }
     #[test]
     fn invalid_nexus_identity_is_preflighted_before_profile_mutation() {
         let temp = tempdir().expect("temp dir");
@@ -2678,6 +2924,7 @@ submitter_key_file = "unavailable-submitter-private-key"
             kagami_override: Some(temp.path().join("unused-kagami")),
             nexus_xor_asset_definition_id: Some("xor#universal".to_owned()),
             xor_allocations_dir: temp.path().join("missing-allocations"),
+            genesis_creation_time_ms: PROFILE_GENESIS_CREATION_TIME_MS,
         })
         .expect_err("invalid Nexus XOR identity must fail before output mutation");
         assert!(
@@ -2876,10 +3123,7 @@ submitter_key_file = "unavailable-submitter-private-key"
         );
         assert!(!rendered.contains("/run/iroha/genesis.expected_hash"));
         assert!(!rendered.contains("--genesis"));
-        assert!(
-            !rendered.contains("kagemusha-load-authorizer"),
-            "ordinary dev validators must not require issuer custody mounts"
-        );
+        assert!(!rendered.contains("kagemusha-load-authorizer"));
         assert_eq!(rendered.matches("create_host_path: false").count(), 0);
         for peer_index in 1..peers.len() {
             assert!(rendered.contains(&format!("./peer{peer_index}.toml:/config/config.toml:ro")));
@@ -2904,7 +3148,11 @@ submitter_key_file = "unavailable-submitter-private-key"
             runtime_peers.len(),
             "runtime peers receive their required validator signing files in the secret directory"
         );
-        assert!(!runtime_rendered.contains("source: ./kagemusha-load-authorizer-peer-"));
+        assert_eq!(
+            runtime_rendered.matches("create_host_path: false").count(),
+            0
+        );
+        assert!(!runtime_rendered.contains("kagemusha-load-authorizer"));
     }
     #[test]
     fn peer_configs_use_distinct_consensus_streaming_and_port_material() {
@@ -2975,9 +3223,7 @@ submitter_key_file = "unavailable-submitter-private-key"
                     PrivateKeyRendering::RuntimeFiles,
                 ] {
                     for genesis_identity in [
-                        GenesisIdentityRendering::InlineBootstrap(
-                            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-                        ),
+                        GenesisIdentityRendering::Unpublished,
                         published_genesis_identity_rendering(profile),
                     ] {
                         let rendered = render_peer_config_with_private_keys(

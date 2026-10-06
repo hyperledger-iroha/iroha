@@ -103,6 +103,9 @@ private object NativeBridgeBuildContract {
         val androidNdk: java.nio.file.Path,
         val cargoTargetDirectory: java.nio.file.Path,
         val cargoLock: java.nio.file.Path,
+        val cargoHome: java.nio.file.Path,
+        val cargoInvocationDirectory: java.nio.file.Path,
+        val diagnosticConfiguration: ByteArray?,
         val cargoRelease: String,
         val cargoCommitHash: String,
         val rustcRelease: String,
@@ -476,6 +479,7 @@ private object NativeBridgeBuildContract {
         hermeticRunnerFile: File,
         androidNdkDirectory: File,
         cargoTargetDirectory: File,
+        armv7Diagnostic: Boolean = false,
     ): BuildTools {
         val python = trustedPython(execOperations, irohaRoot)
         val homeText = commandOutput(
@@ -593,6 +597,38 @@ private object NativeBridgeBuildContract {
         ) {
             "Iroha root must be one absolute canonical non-symbolic directory"
         }
+        val diagnosticConfiguration = if (armv7Diagnostic) {
+            val cache = System.getenv("MOBILE_SDK_CARGO_HOME")
+                ?: throw GradleException("Armv7 diagnostics require explicit MOBILE_SDK_CARGO_HOME")
+            val invocation = System.getenv("MOBILE_SDK_CARGO_INVOCATION_DIR")
+                ?: throw GradleException("Armv7 diagnostics require explicit MOBILE_SDK_CARGO_INVOCATION_DIR")
+            val owner = canonicalIrohaRoot.resolve("scripts/norito_bridge_local_integration.py")
+            requireRegularFileInside(irohaRoot, owner.toFile(), "diagnostic configuration policy")
+            commandOutput(
+                execOperations, irohaRoot,
+                baseToolEnvironment(home, temporaryDirectory, "${python.parent}:/usr/bin:/bin"),
+                listOf(python.toString(), "-I", "-S", owner.toString(),
+                    "--root", canonicalIrohaRoot.toString(), "--role", "android-armv7-diagnostic",
+                    "--path", invocation, "--cargo-home", cache, "--local-integration"),
+                "armv7 diagnostic configuration custody",
+            ).toByteArray(Charsets.UTF_8)
+        } else null
+        val diagnostic = diagnosticConfiguration?.let {
+            JsonSlurper().parse(it) as? Map<*, *>
+                ?: throw GradleException("Diagnostic configuration must be an object")
+        }
+        if (diagnostic != null) {
+            require(diagnostic["schema"] == "iroha.android-armv7-diagnostic-configuration.v1" &&
+                diagnostic["artifact_scope"] == "android-local-diagnostic" &&
+                diagnostic["release_admitted"] == false &&
+                diagnostic["source_root"] == canonicalIrohaRoot.toString()) {
+                "Diagnostic configuration grants no release admission"
+            }
+        }
+        val cargoHome = diagnostic?.get("cargo_home")?.let { Path.of(it as String) }
+            ?: home.resolve(".cargo").toPath()
+        val cargoInvocationDirectory = diagnostic?.get("cargo_invocation_directory")
+            ?.let { Path.of(it as String) } ?: canonicalIrohaRoot
         val cargoLock = canonicalIrohaRoot.resolve("Cargo.lock")
         require(
             Files.isRegularFile(cargoLock, LinkOption.NOFOLLOW_LINKS) &&
@@ -625,6 +661,7 @@ private object NativeBridgeBuildContract {
         ).distinct().joinToString(File.pathSeparator)
         val cargoEnvironment = baseToolEnvironment(home, temporaryDirectory, cargoPath) +
             mapOf(
+                "CARGO_HOME" to cargoHome.toString(),
                 "CARGO" to cargo.toString(),
                 "CARGO_BUILD_JOBS" to "1",
                 "RUSTC" to rustc.toString(),
@@ -634,21 +671,21 @@ private object NativeBridgeBuildContract {
             )
         val cargoVersion = commandOutput(
             execOperations,
-            irohaRoot,
+            cargoInvocationDirectory.toFile(),
             cargoEnvironment,
             listOf(cargo.toString(), "--version", "--verbose"),
             "Cargo identity",
         )
         val rustcVersion = commandOutput(
             execOperations,
-            irohaRoot,
+            cargoInvocationDirectory.toFile(),
             cargoEnvironment,
             listOf(rustc.toString(), "--version", "--verbose"),
             "rustc identity",
         )
         val rustdocVersion = commandOutput(
             execOperations,
-            irohaRoot,
+            cargoInvocationDirectory.toFile(),
             cargoEnvironment,
             listOf(rustdoc.toString(), "--version", "--verbose"),
             "rustdoc identity",
@@ -681,7 +718,7 @@ private object NativeBridgeBuildContract {
         }
         val cargoNdkVersionOutput = commandOutput(
             execOperations,
-            irohaRoot,
+            cargoInvocationDirectory.toFile(),
             cargoEnvironment,
             listOf(cargo.toString(), "ndk", "--version"),
             "cargo-ndk identity",
@@ -767,6 +804,9 @@ private object NativeBridgeBuildContract {
             androidNdk = androidNdk,
             cargoTargetDirectory = canonicalCargoTarget,
             cargoLock = cargoLock,
+            cargoHome = cargoHome,
+            cargoInvocationDirectory = cargoInvocationDirectory,
+            diagnosticConfiguration = diagnosticConfiguration,
             cargoRelease = cargoRelease,
             cargoCommitHash = cargoCommitHash,
             rustcRelease = rustcRelease,
@@ -789,7 +829,8 @@ private object NativeBridgeBuildContract {
         "schema" to buildEnvironmentSchema,
         "hermetic_runner_schema" to hermeticRunnerSchema,
         "hermetic_runner_sha256" to sha256Hex(tools.hermeticRunner),
-        "environment_profile" to "android-cargo",
+        "environment_profile" to if (tools.diagnosticConfiguration == null) "android-cargo"
+            else "android-armv7-diagnostic-cargo",
         "environment_allowlist" to androidCargoEnvironmentAllowlist,
         "cargo_build_jobs" to 1,
         "rust_toolchain_channel" to pinnedRustToolchain,
@@ -812,7 +853,11 @@ private object NativeBridgeBuildContract {
         "rustup_binary_sha256" to sha256Hex(tools.rustup),
         "android_ndk_revision" to tools.androidNdkRevision,
         "android_ndk_source_properties_sha256" to tools.androidNdkSourcePropertiesSha256,
-        )
+        ).apply {
+            tools.diagnosticConfiguration?.let {
+                put("diagnostic_configuration", JsonSlurper().parse(it))
+            }
+        }
     }
 
     fun buildEnvironmentBytes(tools: BuildTools): ByteArray =
@@ -835,7 +880,7 @@ private object NativeBridgeBuildContract {
             "LANG" to "C.UTF-8",
             "LC_ALL" to "C.UTF-8",
             "NORITO_BRIDGE_SEAL_HOME" to tools.home.absolutePath,
-            "NORITO_BRIDGE_SEAL_CARGO_HOME" to tools.home.resolve(".cargo").absolutePath,
+            "NORITO_BRIDGE_SEAL_CARGO_HOME" to tools.cargoHome.toString(),
             "NORITO_BRIDGE_SEAL_RUSTUP_HOME" to tools.home.resolve(".rustup").absolutePath,
             "NORITO_BRIDGE_SEAL_TMPDIR" to tools.temporaryDirectory.absolutePath,
             "NORITO_BRIDGE_SEAL_CARGO" to tools.cargo.toString(),
@@ -843,7 +888,11 @@ private object NativeBridgeBuildContract {
             "NORITO_BRIDGE_SEAL_RUSTDOC" to tools.rustdoc.toString(),
             "NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR" to
                 tools.cargoTargetDirectory.toString(),
-        )
+        ).apply {
+            if (tools.diagnosticConfiguration != null) {
+                put("NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR", tools.cargoInvocationDirectory.toString())
+            }
+        }
 
     fun requireLibraries(
         root: java.io.File,
@@ -1066,6 +1115,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             hermeticRunner.get().asFile,
             androidNdkDirectory.get().asFile,
             cargoTargetRoot,
+            armv7Diagnostic = platform == NativeBridgeBuildContract.armv7DiagnosticPlatform,
         )
         val sourceSeal = NativeBridgeBuildContract.captureSourceSeal(
             execOperations,
@@ -1079,6 +1129,12 @@ abstract class CompileNativeBridgeTask @Inject constructor(
         require(capturedSeal["platform"] == platform &&
             capturedSeal["targets"] == NativeBridgeBuildContract.buildTargets(platform)) {
             "Native source seal target inventory differs from the selected build profile"
+        }
+        if (tools.diagnosticConfiguration != null) {
+            require(capturedSeal["diagnostic_configuration"] ==
+                JsonSlurper().parse(tools.diagnosticConfiguration)) {
+                "Diagnostic source seal and build configuration differ before compilation"
+            }
         }
         val buildEnvironment = NativeBridgeBuildContract.buildEnvironmentBytes(tools)
         val outputRoot = outputDirectory.get().asFile
@@ -1145,7 +1201,15 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         "-S",
                         tools.hermeticRunner.toString(),
                         "--profile",
-                        "android-cargo",
+                        if (tools.diagnosticConfiguration == null) "android-cargo"
+                            else "android-armv7-diagnostic-cargo",
+                    ),
+                )
+                if (tools.diagnosticConfiguration != null) {
+                    addAll(listOf("--working-directory", tools.cargoInvocationDirectory.toString()))
+                }
+                addAll(
+                    listOf(
                         "--set",
                         "ANDROID_NDK_HOME=${tools.androidNdk}",
                         "--set",
@@ -1155,7 +1219,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         "--set",
                         "CARGO_BUILD_JOBS=1",
                         "--set",
-                        "CARGO_HOME=${tools.home.resolve(".cargo")}",
+                        "CARGO_HOME=${tools.cargoHome}",
                         "--set",
                         "CARGO_INCREMENTAL=0",
                         "--set",
@@ -1297,6 +1361,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             hermeticRunner.get().asFile,
             androidNdkDirectory.get().asFile,
             cargoTargetDirectory.get().asFile,
+            armv7Diagnostic = sourceSealPlatform.get() == NativeBridgeBuildContract.armv7DiagnosticPlatform,
         )
         NativeBridgeBuildContract.requireLibraries(outputRoot, NativeBridgeBuildContract.buildAbis(sourceSealPlatform.get()))
         require(Files.isRegularFile(sealFile.toPath(), LinkOption.NOFOLLOW_LINKS))
@@ -1352,6 +1417,7 @@ abstract class InspectArmv7DiagnosticTask @Inject constructor(
         val tools = NativeBridgeBuildContract.resolveBuildTools(
             execOperations, root, hermeticRunner.get().asFile,
             androidNdkDirectory.get().asFile, cargoTargetDirectory.get().asFile,
+            armv7Diagnostic = true,
         )
         val profile = NativeBridgeBuildContract.armv7DiagnosticPlatform
         val sealFile = sourceSealFile.get().asFile

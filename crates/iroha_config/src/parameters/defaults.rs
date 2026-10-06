@@ -20,25 +20,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-/// Defaults for an explicitly selected online finalized-load publication service.
-pub mod kagemusha_load_authorizer {
-    /// Maximum encoded private Norito keyring bytes admitted at startup.
-    pub const KEYRING_MAX_BYTES: usize = 65_536;
-    /// Retry cadence while the chain, worker or submitter is unavailable.
-    pub const POLL_INTERVAL_MS: u64 = 1_000;
-    /// Bounded pending identities per tick.
-    pub const PAGE_SIZE: usize = 16;
-    /// Maximum original block frame bytes.
-    pub const BLOCK_BYTES: usize = 2 * 1024 * 1024;
-    /// Maximum original history bytes per tick.
-    pub const JOURNAL_BYTES: usize = 16 * 1024 * 1024;
-    /// Maximum original block frames per tick.
-    pub const BLOCK_COUNT: usize = 64;
-    /// Maximum Norito decoded allocation per tick.
-    pub const ALLOCATED_BYTES: usize = 32 * 1024 * 1024;
-    /// Normal online publication transaction expiration; vouchers themselves never expire here.
-    pub const TRANSACTION_TTL_MS: u64 = 60_000;
-}
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
@@ -192,10 +173,6 @@ pub mod data_dir {
     pub const TRANSPORT_KEY: &str = "transport.key";
     /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
     pub const STREAMING_KEY: &str = "streaming.key";
-    /// Selected online KAGEMUSHA publisher's private Norito signer keyring.
-    pub const KAGEMUSHA_LOAD_AUTHORIZER_KEYRING: &str = "kagemusha_load_authorizer.keyring.norito";
-    /// Selected online KAGEMUSHA publisher's private transaction submitter key.
-    pub const KAGEMUSHA_LOAD_SUBMITTER_KEY: &str = "kagemusha_load_submitter.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
     /// Global beacon partial-signer credential.

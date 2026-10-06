@@ -7,7 +7,9 @@ use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip}
 
 use super::{
     ReceiveObjects, ReceiveProofDigest, ReceiveProofInputs, ReceiveSignedObjects,
-    authorization::{ReceiveAuthorizationObjects, ReceiveSignatureInputs},
+    authorization::{
+        ReceiveAuthorizationObjects, ReceiveSignatureInputs, ReceiveSignatureQProjection,
+    },
     maps::{self, ReceiveEffectsCells},
 };
 use crate::{
@@ -63,12 +65,12 @@ pub struct ReceiveStageWitness<'a> {
     /// Hard current credential/certificate/receipt Q, only in Authorization.
     pub own_signatures: Option<&'a SignatureQCells>,
     /// Soft original signatures Q, only in Signatures.
-    pub incoming_signatures: Option<&'a SignatureQCells>,
+    pub incoming_signatures: Option<&'a ReceiveSignatureQProjection>,
     /// Unique consumed-credit search route, only in Nonmembership.
     pub nonmembership: Option<&'a OpeningCells<Fp>>,
     /// Unique Request-recorded history route, only in Blacklist.
     pub blacklist: Option<&'a OpeningCells<Fp>>,
-    /// Exact OQ-3/credit-record paths, only in terminal Effects.
+    /// Exact OQ-3/credit-record paths, only in the consumed/credit effect owners.
     pub effects: Option<&'a ReceiveMapWitness>,
 }
 
@@ -115,11 +117,27 @@ impl ReceiveStagePlan {
         for stage in 0..context.stage_count() {
             let tasks = context.operation_tasks(stage).ok_or(Error::Synthesis)?;
             let partition = context.q_partition(stage).ok_or(Error::Synthesis)?;
+            if stage + 1 == context.stage_count()
+                && tasks.iter().any(|task| {
+                    matches!(
+                        task,
+                        OperationTask::ReceiveConsumedEffects | OperationTask::ReceiveCreditEffects
+                    )
+                })
+            {
+                return Err(Error::Synthesis);
+            }
             for (task, q) in [
                 (OperationTask::ReceiveAuthorization, 1),
                 (OperationTask::ReceiveSignatures, 2),
             ] {
-                if tasks.contains(&task) && !partition.contains(&q) {
+                let earlier = task == OperationTask::ReceiveSignatures
+                    && (0..stage).any(|i| {
+                        context
+                            .q_partition(i)
+                            .is_some_and(|partition| partition.contains(&q))
+                    });
+                if tasks.contains(&task) && !partition.contains(&q) && !earlier {
                     return Err(Error::Synthesis);
                 }
             }
@@ -271,19 +289,25 @@ impl ReceiveStagePlan {
                 witness.nonmembership.is_some(),
             ),
             (OperationTask::ReceiveBlacklist, witness.blacklist.is_some()),
-            (OperationTask::ReceiveEffects, witness.effects.is_some()),
         ] {
             if tasks.contains(&task) != present {
                 return Err(Error::Synthesis);
             }
         }
-        for (bundle, index) in [
-            (witness.own_signatures, 1),
-            (witness.incoming_signatures, 2),
-        ] {
-            if bundle.is_some_and(|b| b.verified().index != index) {
-                return Err(Error::Synthesis);
-            }
+        let needs_maps = tasks.iter().any(|task| {
+            matches!(
+                task,
+                OperationTask::ReceiveConsumedEffects | OperationTask::ReceiveCreditEffects
+            )
+        });
+        if needs_maps != witness.effects.is_some() {
+            return Err(Error::Synthesis);
+        }
+        if witness
+            .own_signatures
+            .is_some_and(|bundle| bundle.verified().index != 1)
+        {
+            return Err(Error::Synthesis);
         }
         let mut effects = None;
         for task in tasks {
@@ -363,6 +387,17 @@ impl ReceiveStagePlan {
                         input.context,
                         input.own_sigma.ok_or(Error::Synthesis)?,
                     )?,
+                OperationTask::ReceiveConsumedEffects | OperationTask::ReceiveCreditEffects => {
+                    maps::constrain_map_effects(
+                        chip,
+                        region,
+                        &self.context,
+                        stage,
+                        input.context,
+                        witness.effects.ok_or(Error::Synthesis)?,
+                        *task,
+                    )?
+                }
                 OperationTask::ReceiveEffects => {
                     effects = Some(maps::constrain_effects(
                         chip,
@@ -370,7 +405,6 @@ impl ReceiveStagePlan {
                         &self.context,
                         stage,
                         input.context,
-                        witness.effects.ok_or(Error::Synthesis)?,
                     )?)
                 }
                 _ => return Err(Error::Synthesis),

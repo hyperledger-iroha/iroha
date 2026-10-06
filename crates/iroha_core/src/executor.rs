@@ -5790,6 +5790,7 @@ impl Executor {
         fee_sponsor: Option<FeeSponsorProgramId>,
         skip_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
+        state_transaction.current_direct_kagemusha_load_instruction_index = None;
         if require_gas_limit && gas_limit_md.is_none() {
             return Err(ValidationFail::NotPermitted(
                 "missing gas limit in fee payment intent".to_owned(),
@@ -6102,12 +6103,16 @@ impl Executor {
                             contract_runtime_context.is_none()
                                 && entrypoint_authorization.is_none(),
                         )?;
+                    state_transaction.current_direct_kagemusha_load_instruction_index =
+                        (contract_runtime_context.is_none() && entrypoint_authorization.is_none())
+                            .then_some(index);
                     let result = self.execute_instruction_with_contract_runtime_context(
                         state_transaction,
                         authority,
                         isi,
                         contract_runtime_context,
                     );
+                    state_transaction.current_direct_kagemusha_load_instruction_index = None;
                     state_transaction.current_direct_stream_token_instruction_index = None;
                     state_transaction.current_direct_stream_token_gateway_instruction_index = None;
                     state_transaction.current_direct_stream_token_reputation_payload = None;
@@ -6250,7 +6255,8 @@ impl Executor {
         logical_time_ms: u64,
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
-        // A contract frame cannot inherit a native gateway instruction's signed ordinal.
+        // A contract frame cannot inherit a native instruction's signed ordinal.
+        state_transaction.current_direct_kagemusha_load_instruction_index = None;
         state_transaction.current_direct_stream_token_gateway_instruction_index = None;
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;
@@ -6278,7 +6284,8 @@ impl Executor {
         logical_time_ms: u64,
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
-        // A contract frame cannot inherit a native gateway instruction's signed ordinal.
+        // A contract frame cannot inherit a native instruction's signed ordinal.
+        state_transaction.current_direct_kagemusha_load_instruction_index = None;
         state_transaction.current_direct_stream_token_gateway_instruction_index = None;
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;
@@ -6730,6 +6737,7 @@ impl Executor {
         transaction: SignedTransaction,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+        state_transaction.bind_kagemusha_load_entrypoint_v1(None);
         if let Some(reason) = state_transaction.execution_deferral() {
             return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
                 reason,
@@ -6737,6 +6745,7 @@ impl Executor {
         }
         let result =
             self.execute_transaction_body(state_transaction, authority, transaction, ivm_cache);
+        state_transaction.bind_kagemusha_load_entrypoint_v1(None);
         // A local refusal has no completed execution, fee, gas, or effect result.
         // The transaction overlay remains poisoned until its owner drops it.
         if let Some(reason) = state_transaction.execution_deferral() {
@@ -6831,6 +6840,7 @@ impl Executor {
             governance_ballot_binding.as_ref(),
         )?;
         state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
+        state_transaction.bind_kagemusha_load_entrypoint_v1(Some(&transaction));
         state_transaction.begin_execution_fee_meter(&transaction, tx_bytes_len, skip_nexus_fee)?;
         state_transaction.begin_execution_effect_budget(&transaction)?;
         // Disallow direct signing with multisig accounts; only explicit multisig
@@ -7189,6 +7199,8 @@ impl Executor {
                             state_transaction.current_direct_musubi_pin_outbox_origin = None;
                             let result =
                                 self.execute_instruction(state_transaction, authority, instruction);
+                            state_transaction.current_direct_kagemusha_load_instruction_index =
+                                None;
                             state_transaction.current_direct_stream_token_instruction_index = None;
                             state_transaction.current_direct_stream_token_reputation_payload = None;
                             state_transaction.current_direct_reputation_policy_origin = None;
@@ -7200,6 +7212,8 @@ impl Executor {
                             result?;
                         }
                         ExecutableBatchItem::ContractCall(call) => {
+                            state_transaction.current_direct_kagemusha_load_instruction_index =
+                                None;
                             state_transaction.current_direct_stream_token_instruction_index = None;
                             state_transaction.current_direct_stream_token_reputation_payload = None;
                             state_transaction.current_direct_reputation_policy_origin = None;

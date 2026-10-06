@@ -65,7 +65,7 @@ use crate::{
 
 /// The fixed source profile measured with the complete Bootstrap/Load catalog.
 /// A witness cannot select another bus count or a generic fallback profile.
-pub const SOURCE_RANGE_BUSES: usize = 4;
+pub const SOURCE_RANGE_BUSES: usize = 3;
 
 /// Production preparation or proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,24 +330,19 @@ impl Prover {
     /// This method imports and checks keys; it never generates one.
     ///
     /// # Errors
-    /// Wrong stage/curve/k, heterogeneous A frames or invalid W metadata.
+    /// A key differs from the exact Tagged3 source descriptor, or W metadata is invalid.
     pub fn from_artifacts(
         plan: Plan,
         first: Arc<ProvingKey<Eq>>,
         wrapper: Arc<ProvingKey<Ep>>,
         terminal: Arc<ProvingKey<Eq>>,
     ) -> Result<Self, Error> {
+        let expected =
+            super::artifact::source_descriptor::<StageCircuit>(()).ok_or(Error::Artifact)?;
         for key in [&first, &terminal] {
-            let d = key.binding().descriptor();
-            if d.k != 16
-                || d.instance_lengths != [69]
-                || d.instance_types.as_deref() != Some(&[InstanceType::Bounded])
-            {
+            if key.binding() != &expected {
                 return Err(Error::Artifact);
             }
-        }
-        if first.binding() != terminal.binding() {
-            return Err(Error::Artifact);
         }
         let w = WKey::from_artifact(
             &plan.context,
@@ -1276,8 +1271,9 @@ impl Circuit<Fp> for StageCircuit {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        let verifier = VerifierConfig::configure_serialized_foreign(meta, SOURCE_RANGE_BUSES)
-            .expect("fixed Bootstrap source buses are valid");
+        let verifier =
+            VerifierConfig::configure_serialized_foreign_tagged(meta, SOURCE_RANGE_BUSES)
+                .expect("fixed native Bootstrap Tagged3 profile");
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);

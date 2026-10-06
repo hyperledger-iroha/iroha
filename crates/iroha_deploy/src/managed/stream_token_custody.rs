@@ -11,7 +11,7 @@ use super::{
         MAX_CHECKPOINT_BYTES, ManagedTransactionFinality, Terms, checkpoint_bytes, encode, invalid,
         now_ms, read_optional, read_selected_peers, require_deadline, require_empty,
     },
-    service_authority::{ProviderPurpose, ServiceAuthority},
+    service_authority::{CheckpointImports, ProviderPurpose, ServiceAuthority},
 };
 use crate::{
     localnet::service_authorities::StreamTokenAuthorityRole, verify::finality::FinalityVerifier,
@@ -19,7 +19,8 @@ use crate::{
 use iroha_crypto::{Hash, Signature};
 use iroha_data_model::{
     sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
-    sumeragi_finality::VerifiedSumeragiBlock, transaction::SignedTransaction,
+    sumeragi_finality::{EpochValidationScope, VerifiedSumeragiBlock},
+    transaction::SignedTransaction,
 };
 use iroha_fs::{PrivateDirectory, PublishMode};
 use iroha_wallet::operations::{
@@ -515,7 +516,7 @@ impl ManagedStreamTokenCustody {
         self.authority.validate_profile()?;
         let checkpoint = self.authority.decode_checkpoint(&original.checkpoint)?;
         let tip = checkpoint
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid custody checkpoint"))?;
         if historical.height() != checkpoint.checkpoint().height()
             || historical.context_id() != tip.context_id()
@@ -660,6 +661,30 @@ impl ManagedStreamTokenCustody {
         purpose: CustodyPurpose,
         mode: Mode<'_>,
     ) -> Result<Option<ManagedCustodyProgress>> {
+        // One recovery may reuse only the existing two exact, validated epoch contexts.
+        // Every original source, wallet, carrier and active decode admission remains fresh.
+        let mut validation = EpochValidationScope::new();
+        let result = self.recover_selected_with_validation(
+            policy,
+            fees,
+            deadline,
+            purpose,
+            mode,
+            Some(&mut validation),
+        );
+        drop(validation);
+        result
+    }
+
+    fn recover_selected_with_validation(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        fees: &Fees,
+        deadline: Instant,
+        purpose: CustodyPurpose,
+        mode: Mode<'_>,
+        mut validation: Option<&mut EpochValidationScope>,
+    ) -> Result<Option<ManagedCustodyProgress>> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
@@ -667,7 +692,12 @@ impl ManagedStreamTokenCustody {
             if purpose != CustodyPurpose::InitialEnroll {
                 return Err(invalid("bootstrap cannot recover renewal as initial"));
             }
-            let Some(history) = BodyHistory::open(self, purpose)? else {
+            let Some(history) = BodyHistory::open_with_imports(
+                self,
+                purpose,
+                &mut CheckpointImports::new(&self.authority, validation.as_deref_mut()),
+            )?
+            else {
                 return Ok(None);
             };
             history.matches_policy(policy)?;
@@ -678,7 +708,9 @@ impl ManagedStreamTokenCustody {
             match history.into_selected() {
                 Ok(selected) => {
                     return self
-                        .advance_selected(purpose, selected, deadline, mode, false)
+                        .advance_selected_with_validation(
+                            purpose, selected, deadline, mode, false, validation,
+                        )
                         .map(Some);
                 }
                 Err(super::Error::Bootstrap(ManagedBootstrapFailure::TransitionPending)) => {
@@ -703,7 +735,11 @@ impl ManagedStreamTokenCustody {
         let Some(original) = journal::read_intent(&directory)? else {
             return Ok(None);
         };
-        self.validate_original(&original, purpose)?;
+        self.validate_original_with_imports(
+            &original,
+            purpose,
+            &mut CheckpointImports::new(&self.authority, validation.as_deref_mut()),
+        )?;
         original.matches_configuration(policy)?;
         let history = attempts::History::read(
             &directory,
@@ -713,7 +749,7 @@ impl ManagedStreamTokenCustody {
         )?;
         history.require_fees(fees)?;
         let selected = Selected::from_history(original, history)?;
-        self.advance_selected(purpose, selected, deadline, mode, false)
+        self.advance_selected_with_validation(purpose, selected, deadline, mode, false, validation)
             .map(Some)
     }
 
@@ -745,9 +781,35 @@ impl ManagedStreamTokenCustody {
         mode: Mode<'_>,
         observe_current: bool,
     ) -> Result<ManagedCustodyProgress> {
+        self.advance_selected_with_validation(
+            purpose,
+            original,
+            deadline,
+            mode,
+            observe_current,
+            None,
+        )
+    }
+
+    fn advance_selected_with_validation(
+        &mut self,
+        purpose: CustodyPurpose,
+        original: Selected<Original>,
+        deadline: Instant,
+        mode: Mode<'_>,
+        observe_current: bool,
+        validation: Option<&mut EpochValidationScope>,
+    ) -> Result<ManagedCustodyProgress> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
-        self.advance_selected_validated(purpose, original, deadline, mode, observe_current)
+        self.advance_selected_validated_with_validation(
+            purpose,
+            original,
+            deadline,
+            mode,
+            observe_current,
+            validation,
+        )
     }
 
     fn advance_selected_validated(
@@ -758,8 +820,31 @@ impl ManagedStreamTokenCustody {
         mode: Mode<'_>,
         observe_current: bool,
     ) -> Result<ManagedCustodyProgress> {
+        self.advance_selected_validated_with_validation(
+            purpose,
+            original,
+            deadline,
+            mode,
+            observe_current,
+            None,
+        )
+    }
+
+    fn advance_selected_validated_with_validation(
+        &mut self,
+        purpose: CustodyPurpose,
+        original: Selected<Original>,
+        deadline: Instant,
+        mode: Mode<'_>,
+        observe_current: bool,
+        mut validation: Option<&mut EpochValidationScope>,
+    ) -> Result<ManagedCustodyProgress> {
         let directory = original.directory();
-        self.validate_original(&original, purpose)?;
+        self.validate_original_with_imports(
+            &original,
+            purpose,
+            &mut CheckpointImports::new(&self.authority, validation.as_deref_mut()),
+        )?;
         if matches!(purpose, CustodyPurpose::Renewal(_)) {
             self.validate_renewal_context(&original, deadline)?;
         }
@@ -794,7 +879,11 @@ impl ManagedStreamTokenCustody {
         };
         let needs_prepare = retained_transaction.is_none();
         if let Some(transaction) = &retained_transaction
-            && let Some(finalized) = self.authority.retained_finality(&directory, transaction)?
+            && let Some(finalized) = {
+                let mut imports =
+                    CheckpointImports::new(&self.authority, validation.as_deref_mut());
+                imports.retained_finality(&directory, transaction)?
+            }
         {
             // Immutable original inclusion survives a current peer/quorum outage. Freshness
             // remains a separate best-effort observation and cannot renew that historical fact.
@@ -926,21 +1015,23 @@ impl ManagedStreamTokenCustody {
             return Err(super::ManagedBootstrapFailure::SignedUnresolved.into());
         }
         verify_custody()?;
-        let finalized =
-            if let Some(retained) = self.authority.retained_finality(&directory, &transaction)? {
-                Some(retained)
-            } else if report.status == OperationStatus::Applied {
-                self.authority.advance_carrier(
-                    &directory,
-                    &original.checkpoint,
-                    &transaction,
-                    &report,
-                    observed.checkpoint().height(),
-                    deadline,
-                )?
-            } else {
-                None
-            };
+        let finalized = if let Some(retained) = {
+            let mut imports = CheckpointImports::new(&self.authority, validation.as_deref_mut());
+            imports.retained_finality(&directory, &transaction)?
+        } {
+            Some(retained)
+        } else if report.status == OperationStatus::Applied {
+            self.authority.advance_carrier(
+                &directory,
+                &original.checkpoint,
+                &transaction,
+                &report,
+                observed.checkpoint().height(),
+                deadline,
+            )?
+        } else {
+            None
+        };
         // Refresh separately after any dispatch/replay; an old original inclusion never becomes
         // a claim that today's policy, revocation or enrollment head still agrees.
         let current = if observe_current {
@@ -975,9 +1066,9 @@ impl ManagedStreamTokenCustody {
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         let block = verifier
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid certified custody tip"))?;
-        self.read_current_at(binding, &block, deadline)
+        self.read_current_at(binding, block, deadline)
     }
 
     fn read_current_at(
@@ -1108,3 +1199,11 @@ mod renewal_tests;
 #[cfg(test)]
 #[path = "stream_token_custody/epoch_test_support.rs"]
 mod epoch_test_support;
+
+#[cfg(test)]
+#[path = "stream_token_custody/recovery_scope_tests.rs"]
+mod recovery_scope_tests;
+
+#[cfg(test)]
+#[path = "stream_token_custody/borrowed_tip_tests.rs"]
+mod borrowed_tip_tests;

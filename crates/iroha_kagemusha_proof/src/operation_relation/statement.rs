@@ -4,7 +4,7 @@ use ff::Field;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
 use iroha_plonk_gadgets::{
-    GlueChip, UintChip, Word, WordHasher,
+    Bit, GlueChip, UintChip, Word, WordHasher,
     statement::{STATEMENT_DOMAIN, STATEMENT_FIELDS},
 };
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
@@ -39,7 +39,7 @@ impl StatementCells {
         variant: Variant,
         fields: &[Word<Fp>; STATEMENT_FIELDS],
     ) -> Result<Self, Error> {
-        validate_fields(uint, region, variant, fields)?;
+        validate_fields(uint, region, variant, fields, false)?;
         let digest = sponge.hash_words(region, STATEMENT_DOMAIN, fields)?;
         Ok(Self {
             variant,
@@ -160,6 +160,7 @@ fn validate_fields(
     region: &mut Region<'_, Fp>,
     variant: Variant,
     fields: &[Word<Fp>; STATEMENT_FIELDS],
+    refresh_class: bool,
 ) -> Result<(), Error> {
     GlueChip::assert_constant(region, &fields[0], Fp::ONE)?;
     for start in [1, 3, 5] {
@@ -191,7 +192,7 @@ fn validate_fields(
             uint.glue().assert_nonzero(region, &fields[index])?;
         }
     }
-    let (tag, count) = effect(uint, region, variant, &fields[17..])?;
+    let (tag, count) = effect(uint, region, variant, &fields[17..], refresh_class)?;
     GlueChip::assert_constant(region, &fields[16], Fp::from(tag))?;
     for word in &fields[17 + count..] {
         GlueChip::assert_constant(region, word, Fp::ZERO)?;
@@ -231,6 +232,7 @@ fn effect(
     region: &mut Region<'_, Fp>,
     variant: Variant,
     e: &[Word<Fp>],
+    refresh_class: bool,
 ) -> Result<(u64, usize), Error> {
     match variant {
         Variant::Bootstrap => {
@@ -295,10 +297,81 @@ fn effect(
                 Variant::RefreshTimeAnchor => 5,
                 _ => return Err(Error::Synthesis),
             };
-            GlueChip::assert_constant(region, &e[0], Fp::from(kind))?;
+            if !refresh_class {
+                GlueChip::assert_constant(region, &e[0], Fp::from(kind))?;
+            }
             uint.glue().assert_nonzero(region, &e[1])?;
             uint.range_check::<64>(region, &e[2])?;
             Ok((7, 3))
         }
+    }
+}
+
+/// One shared tag7 sigma statement, with the update kind constrained in-circuit.
+/// The fixed A owner still selects its own exact `Variant` and authenticates
+/// the corresponding update. This wrapper never exposes a host-selected variant.
+#[derive(Clone, Debug)]
+pub(crate) struct RefreshClassStatementCells {
+    common: StatementCells,
+    kinds: [Bit<Fp>; 5],
+}
+impl RefreshClassStatementCells {
+    /// Validate the common Refresh header and exact one-of-five kind selector.
+    pub(crate) fn constrain(
+        uint: &mut UintChip<'_, Fp>,
+        sponge: &mut impl WordHasher<Fp>,
+        region: &mut Region<'_, Fp>,
+        fields: &[Word<Fp>; STATEMENT_FIELDS],
+    ) -> Result<Self, Error> {
+        // All five kinds share this header and state-binding behavior. Only the
+        // effect kind and credential-renewal equality need a constrained union.
+        validate_fields(uint, region, Variant::RefreshTimeAnchor, fields, true)?;
+        let mut kinds = Vec::with_capacity(5);
+        for kind in 1..=5 {
+            let difference = uint
+                .glue()
+                .add_constant(region, &fields[17], -Fp::from(kind))?;
+            kinds.push(uint.glue().is_zero(region, &difference)?);
+        }
+        let mut selected = kinds[0].word().clone();
+        for kind in &kinds[1..] {
+            selected = uint.glue().add(region, &selected, kind.word())?;
+        }
+        GlueChip::assert_constant(region, &selected, Fp::ONE)?;
+        let credential = uint.glue().sub(region, &fields[18], &fields[7])?;
+        let mismatch = uint.glue().mul(region, kinds[0].word(), &credential)?;
+        GlueChip::assert_constant(region, &mismatch, Fp::ZERO)?;
+        Ok(Self {
+            common: StatementCells {
+                variant: Variant::RefreshTimeAnchor,
+                fields: fields.clone(),
+                digest: sponge.hash_words(region, STATEMENT_DOMAIN, fields)?,
+            },
+            kinds: kinds.try_into().map_err(|_| Error::Synthesis)?,
+        })
+    }
+    /// Bind the same non-consuming header for every refresh kind.
+    pub(crate) fn bind_states(
+        &self,
+        uint: &mut UintChip<'_, Fp>,
+        region: &mut Region<'_, Fp>,
+        predecessor: (&StateCells, &LineagePublicCells),
+        successor: &StateCells,
+        lineage: &LineagePublicCells,
+    ) -> Result<(), Error> {
+        self.common
+            .bind_states(uint, region, Some(predecessor), successor, lineage)
+    }
+    /// The constrained update kinds, Credential through `TimeAnchor`.
+    pub(crate) fn kinds(&self) -> &[Bit<Fp>; 5] {
+        &self.kinds
+    }
+    /// The validated public statement preimage.
+    pub(crate) fn fields(&self) -> &[Word<Fp>; STATEMENT_FIELDS] {
+        self.common.fields()
+    }
+    /// The digest bound to the public sigma input.
+    pub(crate) fn digest(&self) -> &Word<Fp> {
+        self.common.digest()
     }
 }

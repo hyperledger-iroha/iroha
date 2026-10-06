@@ -9,7 +9,7 @@ pub mod send_chain;
 use bootstrap_outer::{RootedBootstrapOmega, bootstrap_chain};
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::omega::{OmegaCircuit, OmegaPlan, OmegaWitness};
-use iroha_pasta::{Ep, Eq, Fp, Fq, PastaAffine, msm::MemoryBudget};
+use iroha_pasta::{Ep, Eq, Fp, Fq, PastaAffine, PastaCurve, msm::MemoryBudget};
 use iroha_plonk::{
     DescriptorBinding, Protocol, ProverConfig, ProverRandomness, VerifyingKey, Witness,
     create_proof_owned_with_claim,
@@ -363,6 +363,9 @@ pub(crate) fn compact_payer_load() -> DiagnosticLoadOmega {
 /// state word is changed after proving; both retained accumulators are decided.
 #[allow(dead_code)] // Consumed by the accepted Receive integration fixture.
 pub(crate) fn compact_payer_load_and_receiver() -> SharedKeyWallets {
+    compact_shared_wallets_and_program().1
+}
+fn compact_shared_wallets_and_program() -> (Program, SharedKeyWallets) {
     let (program, initial_bootstrap, initial_load) = compact_load_program();
     let payer = rebuild_bootstrap_load(&program, &initial_bootstrap, &initial_load);
     let source = bootstrap_chain::authenticated_bootstrap_with_identity(
@@ -407,10 +410,234 @@ pub(crate) fn compact_payer_load_and_receiver() -> SharedKeyWallets {
     eprintln!(
         "COMPACT_SHARED_WALLETS payer=Load receiver=Bootstrap distinct_wallets=true immutable_key=true signed_objects_rebuilt=true all_native_proofs=true transport=4800 catalog_size=2 receive_terminal_admitted=false full_catalog=false"
     );
-    SharedKeyWallets { payer, receiver }
+    (program, SharedKeyWallets { payer, receiver })
 }
 
-fn catalog_roundtrip(include_send: bool) {
+/// Adversarial component only: the real Omega proof still verifies, but its
+/// carried Vesta claim is false. Production/full-head decide must reject it.
+/// This gives Receive a genuine corrected-claim witness under the identical key.
+#[allow(dead_code)] // Used by the corrected-V Receive owner-chain fixture.
+pub(crate) fn compact_payer_load_and_receiver_with_bad_vesta()
+-> (SharedKeyWallets, iroha_pasta::EqAffine) {
+    let (program, mut wallets) = compact_shared_wallets_and_program();
+    let (outer, corrected) = program.prove_nondeciding_vesta(load_terminal(&wallets.payer.source));
+    wallets.payer.proof = outer.proof;
+    wallets.payer.instances = outer.public;
+    wallets.payer.opening = outer.opening;
+    wallets.payer.vesta = outer.vesta;
+    (wallets, corrected)
+}
+
+// Deliberately dishonest PIPA-AS prover, copied in structure from the recursion
+// adversarial test. It satisfies the succinct equation but chooses round points
+// without the generator witness. No production prover calls this helper.
+fn forged_fold<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    inputs: &[FoldInput<C>],
+) -> iroha_plonk_recursion::FoldWitness<C> {
+    use iroha_plonk::{
+        pcs::ipa::fold_evaluation,
+        transcript::{BasePoseidonHash, Transcript, TranscriptWrite, TranscriptWriter},
+    };
+    let salt = C::Base::from(123);
+    let mut t = TranscriptWriter::<C, _>::new(BasePoseidonHash::with_domain(*b"pipa-as1"));
+    t.common_base(&salt).unwrap();
+    t.common_base(&C::Base::from(u64::try_from(inputs.len()).unwrap()))
+        .unwrap();
+    for input in inputs {
+        t.common_point(input.g()).unwrap();
+        t.common_base(&C::Base::from(u64::from(input.source_k())))
+            .unwrap();
+        for challenge in input.challenges() {
+            t.common_scalar(challenge);
+        }
+    }
+    let alpha = t.squeeze_challenge();
+    let z = t.squeeze_challenge();
+    let zeta = t.squeeze_challenge();
+    let mut equation = C::identity();
+    let mut evaluation = C::ScalarExt::ZERO;
+    for input in inputs.iter().rev() {
+        equation = equation * alpha + C::from(*input.g());
+        evaluation = evaluation * alpha + fold_evaluation(z, input.challenges());
+    }
+    equation -= C::from(params.params().g()[0]) * evaluation;
+    let mut challenges = [C::ScalarExt::ZERO; iroha_plonk_recursion::K];
+    for challenge in &mut challenges {
+        let left = C::generator().to_affine();
+        let right = (C::generator() * C::ScalarExt::from(2)).to_affine();
+        t.write_point(&left).unwrap();
+        t.write_point(&right).unwrap();
+        *challenge = t.squeeze_challenge();
+        equation =
+            equation + C::from(left) * challenge.invert().unwrap() + C::from(right) * *challenge;
+    }
+    t.write_scalar(&C::ScalarExt::ONE);
+    equation -= C::from(params.params().u()) * (fold_evaluation(z, &challenges) * zeta);
+    t.append_unabsorbed_point(&equation.to_affine()).unwrap();
+    iroha_plonk_recursion::FoldWitness::new(salt.to_repr(), &t.finish()).unwrap()
+}
+fn deciding_correction<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    original: &AccumulatorT<C>,
+) -> C::AffineExt {
+    let scalars = iroha_plonk::pcs::ipa::fold_scalars(original.challenges(), C::ScalarExt::ONE);
+    let point = iroha_plonk::pcs::ipa::commit::msm_complete::<C>(
+        &scalars,
+        params.params().g(),
+        MemoryBudget::DEFAULT,
+    )
+    .to_affine();
+    assert_ne!(&point, original.g());
+    AccumulatorT::new(point, *original.challenges())
+        .unwrap()
+        .decide(params, MemoryBudget::DEFAULT)
+        .unwrap();
+    point
+}
+impl Program {
+    fn prove_nondeciding_vesta(&self, source: Terminal<'_>) -> (Outer, iroha_pasta::EqAffine) {
+        let vparams = PinnedParams::<Eq>::derive(16).unwrap();
+        let trivial = AccumulatorT::trivial(&vparams, MemoryBudget::DEFAULT).unwrap();
+        let claims = [
+            source.part.as_input(),
+            source.opening.clone(),
+            source.predecessor.as_input(),
+            trivial.as_input(),
+        ];
+        let fold = forged_fold(&vparams, &claims);
+        let vesta =
+            iroha_plonk_recursion::verify_fold(&vparams, &claims, &fold, &FoldConfig::default())
+                .unwrap();
+        assert!(vesta.decide(&vparams, MemoryBudget::DEFAULT).is_err());
+        let corrected = deciding_correction(&vparams, &vesta);
+        let (x, y) = vesta.g().coordinates().unwrap();
+        let public = vec![
+            vec![Fq::from_repr(source.instances[0].to_repr()).unwrap()],
+            vec![x, y],
+            vesta
+                .challenges()
+                .iter()
+                .map(|v| Fq::from_repr(v.to_repr()).unwrap())
+                .collect(),
+        ];
+        let digests = self
+            .catalog
+            .iter()
+            .map(|key| key.kagemusha_digest(source.binding).unwrap())
+            .collect();
+        let plan = OmegaPlan::new(source.binding.clone(), vparams, digests).unwrap();
+        let circuit = OmegaCircuit::new(
+            plan,
+            OmegaWitness {
+                key: source.key.clone(),
+                instances: source.instances.to_vec(),
+                length: source.proof.len().try_into().unwrap(),
+                proof: source.proof.to_vec(),
+                fold: fold.to_bytes(),
+            },
+        )
+        .unwrap()
+        .with_secondary_layout(self.spans, self.schedule.clone());
+        let known = synthesize(&circuit, 16, Some(&public)).unwrap();
+        assert!(
+            iroha_plonk::check::check(
+                &known.cs,
+                &known.tables,
+                iroha_plonk::check::CheckMode::Strict
+            )
+            .unwrap()
+            .is_satisfied()
+        );
+        let unknown = synthesize(&circuit.without_witnesses(), 16, None).unwrap();
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+        let params = PinnedParams::<Ep>::derive(16).unwrap();
+        let key = keygen_pk_v2(&params, &circuit, &key_config()).unwrap();
+        assert_eq!(key.binding(), &self.binding);
+        assert_eq!(key.vk().to_bytes(), self.key.to_bytes());
+        let proof = create_proof_owned_with_claim(
+            &params,
+            &key,
+            Witness::from_circuit(&key, &circuit, &public).unwrap(),
+            ProverRandomness::os(),
+            ProverConfig::default(),
+        )
+        .unwrap();
+        iroha_plonk::verify_full(
+            &params,
+            &self.binding,
+            &self.key,
+            &public,
+            &proof.proof,
+            MemoryBudget::DEFAULT,
+        )
+        .unwrap();
+        assert_eq!(proof.proof.len(), 3712);
+        let opening =
+            FoldInput::from_opening(*proof.opening.g(), proof.opening.challenges()).unwrap();
+        eprintln!(
+            "ADVERSARIAL_COMPACT_VESTA genuine_omega_verifies=true carried_vesta_decides=false distinct_same_challenges_correction_decides=true immutable_key=true source_A_unchanged=true full_head_accepted=false"
+        );
+        (
+            Outer {
+                proof: proof.proof,
+                public,
+                opening,
+                vesta,
+            },
+            corrected,
+        )
+    }
+}
+
+#[test]
+fn forged_succinct_fold_requires_a_distinct_same_challenges_correction() {
+    let params = PinnedParams::<Eq>::derive(16).unwrap();
+    let honest = AccumulatorT::trivial(&params, MemoryBudget::DEFAULT).unwrap();
+    let inputs = [honest.as_input(), honest.as_input()];
+    let proof = forged_fold(&params, &inputs);
+    let original =
+        iroha_plonk_recursion::verify_fold(&params, &inputs, &proof, &FoldConfig::default())
+            .unwrap();
+    assert!(original.decide(&params, MemoryBudget::DEFAULT).is_err());
+    let correction = deciding_correction(&params, &original);
+    assert_ne!(&correction, original.g());
+}
+
+/// Genuine controls-off Send lineage under the common three-terminal compact key.
+/// Its exact sources remain available for retained-Payment and Archive tests.
+/// Load ancestry uses the superseded issuer relation: this is component evidence
+/// only until ordinary transaction/finality proofs replace that source relation.
+#[allow(dead_code)] // Archive consumes the full retained source and outer artifact.
+pub(crate) struct CompactSendOmega {
+    /// Complete genuine Send terminal and its exact statement/maps/signed sources.
+    pub(crate) source: send_chain::AuthenticatedSend,
+    /// Immutable common Bootstrap/Load/Send-mask0 outer verifying key.
+    pub(crate) key: VerifyingKey<Ep>,
+    /// Actual compact outer descriptor.
+    pub(crate) binding: DescriptorBinding,
+    /// Exact verified raw outer proof bytes.
+    pub(crate) proof: Vec<u8>,
+    /// Exact outer public columns.
+    pub(crate) instances: Vec<Vec<Fq>>,
+    /// Verified outer opening retained for the next operation's P fold.
+    pub(crate) opening: FoldInput<Ep>,
+    /// Fully decided transported V claim.
+    pub(crate) vesta: AccumulatorT<Eq>,
+    /// Exact three admitted terminal keys; internal A keys are excluded.
+    pub(crate) catalog: Vec<VerifyingKey<Eq>>,
+}
+
+/// Rebuild the genuine Send predecessor from the existing three-terminal closure.
+/// Every signed source is created after the common outer key is fixed. This
+/// helper never admits Archive or changes the superseded Load ancestry scope.
+#[allow(dead_code)] // Used by genuine Archive integration fixtures.
+pub(crate) fn compact_payer_send() -> CompactSendOmega {
+    catalog_roundtrip(true).expect("three-terminal catalog produces Send")
+}
+
+fn catalog_roundtrip(include_send: bool) -> Option<CompactSendOmega> {
     let initial_root = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
     let initial_load =
         load_chain::authenticated_load_with_profile(&initial_root, PROFILE, Some(2), false);
@@ -435,7 +662,7 @@ fn catalog_roundtrip(include_send: bool) {
         "COMPACT_TWO_TERMINAL_CLOSURE source_keys_equal=true common_key_bound_before_signing=true all_native_proofs=true transport=4800 full_catalog=false"
     );
     if !include_send {
-        return;
+        return None;
     }
 
     let initial_send = send_chain::run_send_from_load(&load, PROFILE, Some(2), false);
@@ -455,7 +682,7 @@ fn catalog_roundtrip(include_send: bool) {
     assert_eq!(send.binding, initial_send.binding);
     assert_eq!(send.key.to_bytes(), initial_send.key.to_bytes());
     assert_eq!(send.state.lineage[17], program.digest());
-    let _outer = program.prove(send_terminal(&send), "Send-mask0");
+    let outer = program.prove(send_terminal(&send), "Send-mask0");
     send.pallas
         .decide(
             &PinnedParams::<Ep>::derive(16).unwrap(),
@@ -463,20 +690,40 @@ fn catalog_roundtrip(include_send: bool) {
         )
         .unwrap();
     eprintln!(
-        "COMPACT_THREE_TERMINAL_CLOSURE source_keys_equal=true common_key_bound_before_signing=true all_native_proofs=true transport=4800 mask0_only=true full_catalog=false"
+        "COMPACT_THREE_TERMINAL_CLOSURE source_keys_equal=true common_key_bound_before_signing=true all_native_proofs=true transport=4800 mask0_only=true full_catalog=false superseded_load_ancestry=true"
     );
+    Some(CompactSendOmega {
+        source: send,
+        key: program.key,
+        binding: program.binding,
+        proof: outer.proof,
+        instances: outer.public,
+        opening: outer.opening,
+        vesta: outer.vesta,
+        catalog: program.catalog,
+    })
 }
 
 #[test]
 #[ignore = "actual compact Bootstrap/Load chains rebuilt under one immutable two-terminal key"]
 fn compact_bootstrap_load_catalog_rebinds_every_proof_and_key() {
-    catalog_roundtrip(false);
+    assert!(catalog_roundtrip(false).is_none());
 }
 
 #[test]
 #[ignore = "actual compact Bootstrap/Load/Send-mask0 rebuilt under one immutable three-terminal key"]
 fn compact_bootstrap_load_send_catalog_rebinds_every_proof_and_key() {
-    catalog_roundtrip(true);
+    let send = compact_payer_send();
+    assert_eq!(send.proof.len(), 3712);
+    assert_eq!(send.catalog.len(), 3);
+    assert_eq!(
+        send.source.state.lineage[17],
+        send.key.kagemusha_digest(&send.binding).unwrap()
+    );
+    assert_eq!(send.source.maps.witness.after.core, send.source.state.core);
+    assert_eq!(send.source.context.stage_count(), 5);
+    assert_eq!(send.source.predecessor_omega.len(), 5120);
+    assert_eq!(send.source.sigma.len(), 3296);
 }
 
 #[test]

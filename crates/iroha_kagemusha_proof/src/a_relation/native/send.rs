@@ -1273,19 +1273,16 @@ pub struct Prover {
 impl Prover {
     /// Import the complete fixed typed artifact set, never generating keys from a witness.
     /// # Errors
-    /// Nonuniform A descriptors, wrong k/public schema, or wrong W stage/context identity.
+    /// An A key differs from the exact Tagged3 descriptor, or W stage/context identity is wrong.
     pub fn from_artifacts(
         plan: Plan,
         a: [Arc<ProvingKey<Eq>>; A_STAGE_COUNT],
         w: [Arc<ProvingKey<Ep>>; A_STAGE_COUNT - 1],
     ) -> Result<Self, Error> {
+        let expected =
+            super::artifact::source_descriptor::<StageCircuit>(()).ok_or(Error::Artifact)?;
         for key in &a {
-            let d = key.binding().descriptor();
-            if d.k != 16
-                || d.instance_lengths != [69]
-                || d.instance_types.as_deref() != Some(&[InstanceType::Bounded])
-                || key.binding() != a[0].binding()
-            {
+            if key.binding() != &expected {
                 return Err(Error::Artifact);
             }
             VerifierPlan::new(key.binding().clone(), plan.vesta.clone())

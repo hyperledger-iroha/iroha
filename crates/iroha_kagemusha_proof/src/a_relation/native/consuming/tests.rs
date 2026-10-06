@@ -96,7 +96,10 @@ fn consuming_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias
             4 => bad.instances[4][0] = Fq::from(16),
             _ => bad.instances[2][0] = Fq::ZERO,
         }
-        assert!(q_sigma_part(&bad, 12, Variant::Unload).is_err(), "mutation{mutation}");
+        assert!(
+            q_sigma_part(&bad, 12, Variant::Unload).is_err(),
+            "mutation{mutation}"
+        );
     }
     let p = [
         0x992d_30ed_0000_0001_u64,
@@ -196,21 +199,32 @@ fn final_digest_has_exact52_fields_and_keeps_high_foreign_challenge_limbs() {
 #[test]
 fn retiring_has_its_own_sigma_selector_and_unrelated_variants_reject() {
     let mut source = original();
-    assert_eq!(check_sigma_tape(&source, Variant::Retiring), Err(Error::Input));
+    assert_eq!(
+        check_sigma_tape(&source, Variant::Retiring),
+        Err(Error::Input)
+    );
     source.q[0].instances[2][0] = Fq::from(15);
     assert_eq!(check_sigma_tape(&source, Variant::Retiring), Ok(()));
-    assert_eq!(check_sigma_tape(&source, Variant::Unload), Err(Error::Input));
-    assert_eq!(check_sigma_tape(&source, Variant::Load), Err(Error::Artifact));
+    assert_eq!(
+        check_sigma_tape(&source, Variant::Unload),
+        Err(Error::Input)
+    );
+    assert_eq!(
+        check_sigma_tape(&source, Variant::Load),
+        Err(Error::Artifact)
+    );
 }
 
 #[test]
 fn original_lineage_bytes_bind_every_byte_without_truncating_limbs() {
     let ep = iroha_plonk::transcript::decode_point::<Ep>(
         &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
-    ).unwrap();
+    )
+    .unwrap();
     let eq = iroha_plonk::transcript::decode_point::<Eq>(
         &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
-    ).unwrap();
+    )
+    .unwrap();
     let p = AccumulatorT::new(ep, [Fq::ONE; K]).unwrap();
     let v = AccumulatorT::new(eq, [Fp::ONE; K]).unwrap();
     let mut fields = [Fp::ONE; 18];
@@ -218,12 +232,18 @@ fn original_lineage_bytes_bind_every_byte_without_truncating_limbs() {
     let raw = lineage_bytes(&fields, &proof, &p, &v).unwrap();
     assert_eq!(raw.len(), 320 + proof.len() + 544 + 544);
     assert_eq!(&raw[320..320 + proof.len()], &proof);
-    assert_eq!(&raw[320 + proof.len()..320 + proof.len() + 544], p.to_bytes());
+    assert_eq!(
+        &raw[320 + proof.len()..320 + proof.len() + 544],
+        p.to_bytes()
+    );
     assert_eq!(&raw[320 + proof.len() + 544..], v.to_bytes());
     let framed = frame(&raw).unwrap();
     assert_eq!(&framed[4..], raw);
-    assert_eq!(&framed[..4], u32::try_from(raw.len()).unwrap().to_le_bytes());
-    for (index, width) in [(1,128), (6,128), (9,128), (13,104), (14,128)] {
+    assert_eq!(
+        &framed[..4],
+        u32::try_from(raw.len()).unwrap().to_le_bytes()
+    );
+    for (index, width) in [(1, 128), (6, 128), (9, 128), (13, 104), (14, 128)] {
         fields[index] = Fp::from(2).pow_vartime([width]);
         assert_eq!(lineage_bytes(&fields, &proof, &p, &v), Err(Error::Input));
         fields[index] = Fp::ONE;

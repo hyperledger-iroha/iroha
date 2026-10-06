@@ -5528,7 +5528,12 @@ dependencies = [
 name = "iroha_kagemusha_proof"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "ark-bls12-381",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
  "ff",
+ "iroha_crypto",
  "iroha_pasta",
  "iroha_plonk",
  "iroha_plonk_gadgets",
@@ -5537,6 +5542,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rayon",
  "rustix 1.1.4",
+ "sha2",
 ]
 
 [[package]]
@@ -5733,7 +5739,12 @@ dependencies = [
 name = "iroha_plonk_gadgets"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "ark-bls12-381",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
  "ff",
+ "iroha_crypto",
  "iroha_measurement",
  "iroha_pasta",
  "iroha_plonk",

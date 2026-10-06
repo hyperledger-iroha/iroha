@@ -940,20 +940,61 @@ resumes delivery of the existing Payment; it does not create another payment.
 
 ### 6.1 Load and unload
 
-The online load-authorizer is an explicitly selected issuer service, not a prerequisite
-for an unrelated validator or private dataspace node. Selecting it requires its genuine
-network-bound role custody and ordinary submission permissions and fees. An absent service
-never disables ledger or VM verification, authorizes issuance, or removes pending liabilities.
+After completed Bootstrap activation (§3.2), the payer submits an ordinary signed
+block transaction containing `KagemushaWalletLedgerActionV1::IssueLoad` inside
+`KagemushaWalletLedgerV1`. It fixes the
+scheme, wallet, asset digest, expected next ordinal, nonzero request ID, net
+amount and any canonical charge quote and beneficiary. Ledger execution compares
+the exact asset and ordinal, debits the payer into the scheme reserve, applies
+any displayed charge and advances the ordinal atomically. A stale ordinal or
+changed retry terms fail. No separate Load signer, publisher service or voucher
+publication transaction participates in this operation.
 
-After completed Bootstrap activation (§3.2), a finalized online transaction
-debits the payer's ledger account into the scheme reserve and creates a unique
-load voucher bound to `(wallet_id, next_load, asset, amount)`. The ledger assigns
-successive ordinals per incarnation. `Load` consumes exactly the next voucher,
-verifies its finalized issuance, adds its amount and increments `next_load`.
-Out-of-order vouchers wait; duplicates cannot load twice. Retrieving the
-original voucher after a connection failure is idempotent. Unabsorbed vouchers
-remain reserve liabilities; failed delivery does not refund their issuance.
-Retirement closes future loads atomically (§6.3).
+The immutable `KagemushaWalletLoadReceiptV1` records those terms, the payer,
+original transaction hash and block height. An exact replay within the original
+transaction and height can recover its original result; another transaction or
+height cannot reuse that request ID successfully. After a lost response, the
+payer queries the original receipt instead of signing another successful Load.
+Receipt retrieval reads bounded recovery data from committed State without
+reconstructing historical certificates; its result grants no independent
+finality or offline balance authority. Retrieval is idempotent; failed delivery
+does not refund the deposit or remove its reserve liability. Retirement closes future loads atomically (§6.3).
+
+Native finality verification is implemented in
+`iroha_data_model::isi::kagemusha_wallet::load_finality`:
+`verify_finalized_kagemusha_wallet_load_v1` returns the opaque
+`VerifiedKagemushaWalletLoadV1` only after authenticating the selected global
+network and chain, successful external transaction, exact direct instruction
+index, payer and complete approved terms. Its receipt is bound to the original
+transaction and height. The query's serialized receipt alone is not finality
+proof. `Load` must absorb only its exact next ordinal and cannot credit a
+duplicate.
+
+**Remaining proof work:** this native capability does not replace the offline
+Load relation. The current wire/model `KagemushaWalletLoadVoucherV1` and
+`LoadAuthorization` role, and the proof circuit's issuer-signature check, still
+exist. Replacing that relation with a succinct proof of ordinary consensus
+finality, binding the same transaction, successful execution and receipt, is
+**not implemented**. Neither the receipt codec nor native finality verification
+completes that offline proof path; the remaining voucher references describe
+that unfinished replacement, not an additional production issuer role.
+
+TODO(G3/G5): build a generic recursive finality proof during the online Load,
+with proving off-device and public inputs binding the independently selected
+network, chain and canonical receipt digest. The relation must prove the exact
+CommitQC signer bitmap/quorum and authenticated epoch schedule from genesis,
+Blake2b header/result linkage, and counted input/output Merkle membership for
+the successful direct original transaction and its complete approved terms.
+`A_Load` must verify this proof and bind its receipt to the Load effect, so later
+Receive and Unload inherit the authorization through ordinary lineage recursion
+without carrying an expanding certificate history. Missing primitives include
+BLS12-381 canonical/subgroup checks, the exact W3f hash-to-G2 transcript and
+pairing verification; the existing foreign-field chip supports only 256-bit
+residues. Blake2b and canonical consensus-input constraints also need PIPA
+implementations. Rebuild the Load/model/wire producers and common recursive
+catalog, then measure complete envelopes against 10,000 bytes; unchanged public
+lineage fields alone do not establish that bound. No host verdict or additional
+signer substitutes for this unfinished proof.
 
 `Unload` subtracts a chosen positive amount, increments `next_redeem` and creates
 a ledger-directed claim with a domain-separated nullifier derived from scheme,

@@ -35,6 +35,7 @@ use iroha_plonk_recursion::{
 pub const CONTEXT_DOMAIN: [u8; 8] = *b"kgwctx_1";
 const TAPE_DOMAIN: [u8; 8] = *b"kgwctap1";
 const ACTIVE_TAPE_DOMAIN: [u8; 8] = *b"kgwcact1";
+const INTERNAL_WORDS_DOMAIN: [u8; 8] = *b"kgwciw_1";
 
 #[cfg(test)]
 mod tests;
@@ -66,15 +67,16 @@ fn push_q_context(
     Ok(())
 }
 
-/// A circuit-fixed external object category and exact carrier capacity.
+/// A circuit-fixed context category and exact carrier or canonical-word size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContextObjectSpec {
     /// Unique nonzero category within this context schema.
     pub tag: u32,
-    /// Fixed payload capacity, excluding its LE32 actual-length prefix.
+    /// Fixed payload capacity, excluding its LE32 actual-length prefix;
+    /// internal word commitments use exactly32 bytes per canonical native word.
     pub capacity: u32,
 }
-/// Exact object digest, actual length and byte commitment from one bound tape.
+/// Exact object digest, length and separately typed byte/word commitment.
 #[derive(Clone, Debug)]
 pub struct ContextObjectCells {
     spec: ContextObjectSpec,
@@ -83,6 +85,42 @@ pub struct ContextObjectCells {
     tape_digest: Word<Fp>,
 }
 impl ContextObjectCells {
+    /// Commit circuit-internal native field words under a separate typed domain.
+    ///
+    /// This carries proposed results or private arrays between fixed owners;
+    /// it does not authenticate their semantics or claim an original byte tape.
+    /// The schema's capacity is exactly32 times the fixed word count, using the
+    /// unique canonical field encoding as its size convention. Tags, count and
+    /// all words enter the hash. The owning tasks must derive or constrain every
+    /// proposed value against this same commitment before key admission.
+    /// # Errors
+    /// Zero tag/count, wrong fixed capacity, overflow or layout failure.
+    pub fn from_internal_words(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        spec: ContextObjectSpec,
+        words: &[Word<Fp>],
+    ) -> Result<Self, Error> {
+        let count = u32::try_from(words.len()).map_err(|_| Error::BoundsFailure)?;
+        if spec.tag == 0 || count == 0 || count.checked_mul(32) != Some(spec.capacity) {
+            return Err(Error::Synthesis);
+        }
+        let mut framed = [spec.tag, count]
+            .map(|v| chip.uint().glue().constant(region, Fp::from(u64::from(v))))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        framed.extend_from_slice(words);
+        let digest = chip.hash_words(region, u64::from_le_bytes(INTERNAL_WORDS_DOMAIN), &framed)?;
+        Ok(Self {
+            spec,
+            authenticated_digest: digest.clone(),
+            length: chip
+                .uint()
+                .constant::<32>(region, u128::from(spec.capacity))?,
+            tape_digest: digest,
+        })
+    }
+
     pub(super) fn commitment_words(&self) -> [Word<Fp>; 3] {
         [
             self.authenticated_digest.clone(),
@@ -358,6 +396,52 @@ impl ContextPlan {
         {
             return Err(Error::Synthesis);
         }
+        self.objects
+            .iter()
+            .zip(values)
+            .map(|(spec, values)| {
+                let [authenticated_digest, length, tape_digest] = chip
+                    .uint()
+                    .glue()
+                    .witnesses(region, values)?
+                    .try_into()
+                    .map_err(|_| Error::Synthesis)?;
+                let length = chip.uint().range_check::<32>(region, &length)?;
+                Ok(ContextObjectCells {
+                    spec: *spec,
+                    authenticated_digest,
+                    length,
+                    tape_digest,
+                })
+            })
+            .collect()
+    }
+
+    /// Assign proposed quota object triples under the complete fixed owner plan.
+    ///
+    /// These commitments retain proposed object digests, lengths and tape hashes;
+    /// they do not prove byte provenance. Every signed original is recomputed by
+    /// the mandatory Effects and authorization owners, while the mandatory merge
+    /// owner binds the signed issue time and window count. Root-only stages may
+    /// retain these claims without decoding all unrelated signed objects again.
+    ///
+    /// # Errors
+    /// Wrong variant, incomplete task set, different object schema or count,
+    /// or layout failure. Lengths outside `UInt32` are unsatisfiable.
+    pub fn assign_quota_object_claims(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        values: &[[Value<Fp>; 3]],
+    ) -> Result<Vec<ContextObjectCells>, Error> {
+        let variant = self.operation.frame().variant();
+        if variant != Variant::RefreshQuotaShare
+            || self.objects != super::refresh::RefreshObjects::context_specs(variant)?
+            || values.len() != self.objects.len()
+        {
+            return Err(Error::Synthesis);
+        }
+        OperationTask::validate(variant, &self.stage_tasks)?;
         self.objects
             .iter()
             .zip(values)

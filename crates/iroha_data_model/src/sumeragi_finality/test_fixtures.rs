@@ -179,9 +179,30 @@ impl NativeFinalityFixture {
         root_scope: crate::block::consensus::SumeragiRootScope,
         explicit_parameters: bool,
     ) -> Self {
+        Self::start_with_selected_npos_parameters(
+            chain_id,
+            mode,
+            root_scope,
+            explicit_parameters,
+            crate::parameter::system::SumeragiNposParameters::default(),
+            4,
+        )
+    }
+
+    fn start_with_selected_npos_parameters(
+        chain_id: &str,
+        mode: SumeragiConsensusMode,
+        root_scope: crate::block::consensus::SumeragiRootScope,
+        explicit_parameters: bool,
+        npos_parameters: crate::parameter::system::SumeragiNposParameters,
+        committee_seats: usize,
+    ) -> Self {
         assert!(!chain_id.is_empty(), "fixture chain label must be selected");
-        let mut keys: Vec<_> = (1..=4)
-            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        assert!((4..=31).contains(&committee_seats) && (committee_seats - 1).is_multiple_of(3));
+        let mut keys: Vec<_> = (1..=committee_seats)
+            .map(|seed| {
+                KeyPair::from_seed(vec![u8::try_from(seed).unwrap(); 32], Algorithm::BlsNormal)
+            })
             .collect();
         keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
         let validators: Vec<_> = keys
@@ -221,11 +242,8 @@ impl NativeFinalityFixture {
         );
         if mode == SumeragiConsensusMode::Npos {
             instructions.push(
-                SetParameter::new(Parameter::Custom(
-                    crate::parameter::system::SumeragiNposParameters::default()
-                        .into_custom_parameter(),
-                ))
-                .into(),
+                SetParameter::new(Parameter::Custom(npos_parameters.into_custom_parameter()))
+                    .into(),
             );
         }
         if explicit_parameters {
@@ -393,13 +411,32 @@ impl NativeFinalityFixture {
             .unwrap();
     }
 
-    /// Certify one caller-supplied synthetic result block with the real native three-of-four QC.
+    /// Certify one caller-supplied synthetic result block with the real native exact-quorum QC.
     /// No World execution, monetary-policy verification or committee-transition claim is made.
     ///
     /// # Panics
     /// Panics if the block does not extend the fixture's exact tip or violates native proof rules.
     pub fn certify(&mut self, block: SignedBlock) -> SumeragiFinalityProof {
         let result = Self::result(&block, &self.epoch);
+        self.certify_result(block, &result)
+    }
+
+    /// Certify an explicit synthetic ordered event stream with a genuine native QC.
+    /// This helper executes no World transition; Core must separately test that
+    /// only successful execution emits its system events and rollback removes them.
+    ///
+    /// # Panics
+    /// Panics if the block is not the exact fixture successor or violates proof rules.
+    pub fn certify_with_events(
+        &mut self,
+        block: SignedBlock,
+        events: &[crate::events::EventBox],
+    ) -> SumeragiFinalityProof {
+        let tree: iroha_crypto::MerkleTree<crate::events::EventBox> =
+            events.iter().map(HashOf::new).collect();
+        let mut result = Self::result(&block, &self.epoch);
+        result.execution.event_commitment = tree.commitment();
+        result.validate().unwrap();
         self.certify_result(block, &result)
     }
 
@@ -500,6 +537,7 @@ impl NativeFinalityFixture {
             .complete(self.verifier.instance(), &config, &budget, &crypto, &signer)
             .unwrap_or_else(|_| panic!("genuine fixture availability authoring"));
         let header = authored.body.header();
+        let quorum = self.keys.len() - (self.keys.len() - 1) / 3;
         let mut qc = Qc {
             kind: VoteKind::Commit,
             instance: header.instance,
@@ -508,10 +546,11 @@ impl NativeFinalityFixture {
             view: header.origin_view,
             block_hash: header.hash(&crypto),
             result: result.result().unwrap(),
-            signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap(),
+            signers: Bitmap::from_indices(self.keys.len(), 0..u32::try_from(quorum).unwrap())
+                .unwrap(),
             agg_sig: AggregateSignature([0; 96]),
         };
-        let shares: Vec<_> = self.keys[..3]
+        let shares: Vec<_> = self.keys[..quorum]
             .iter()
             .map(|key| iroha_crypto::Signature::try_new(key.private_key(), &qc.preimage()).unwrap())
             .collect();
@@ -591,6 +630,9 @@ impl NativeFinalityFixture {
         .unwrap()
     }
 }
+
+#[cfg(test)]
+mod npos_capture;
 
 #[cfg(test)]
 mod tests {

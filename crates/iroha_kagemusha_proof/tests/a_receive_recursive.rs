@@ -17,7 +17,7 @@ pub mod bootstrap_outer;
 mod common;
 /// Genuine distinct payer/receiver heads rebuilt under one compact outer key.
 #[path = "compact_catalog.rs"]
-mod compact_catalog;
+pub mod compact_catalog;
 /// Real Receive/Send source proofs and exact depth32 map witnesses.
 #[path = "a_receive.rs"]
 pub mod receive_components;
@@ -38,10 +38,13 @@ use iroha_kagemusha_proof::{
             ReceiveObjectSources, ReceiveObjects, ReceiveProofDigest, ReceiveProofInputs,
             ReceiveProofSources, ReceiveSignedObjects, ReceiveStageInputs, ReceiveStagePlan,
             ReceiveStageWitness,
-            authorization::{ReceiveAuthorizationObjects, ReceiveAuthorizationSources},
+            authorization::{
+                ReceiveAuthorizationObjects, ReceiveAuthorizationSources,
+                ReceiveSignatureQProjection,
+            },
         },
         results::ReceiveResultClaims,
-        schedule::{OperationTask, sigma_selector},
+        schedule::OperationTask,
         split::{
             ContextLinkCells, SplitPlan, WCircuit, WKey, close_first, close_stage, resume_context,
         },
@@ -59,7 +62,9 @@ use iroha_kagemusha_proof::{
     q_signature::{QSignatureCircuit, QSignaturePlan, SignatureWitness},
     tree::IndexedInsert,
 };
-use iroha_pasta::{Ep, Eq, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain};
+use iroha_pasta::{
+    Ep, Eq, EqAffine, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain,
+};
 use iroha_plonk::{
     ProverConfig, ProverOutput, ProvingKey, VerifyingKey, Witness,
     check::{CheckMode, check},
@@ -68,6 +73,7 @@ use iroha_plonk::{
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value, synthesize},
     keys::{KeygenConfigV2, keygen_pk_v2},
     pcs::ipa::PinnedParams,
+    verifier::verify_full,
 };
 use iroha_plonk_gadgets::{
     UintChip, Word,
@@ -125,6 +131,9 @@ struct Source {
     predecessor: Head,
     incoming_head: Head,
     accept: bool,
+    objects_valid: bool,
+    corrected_vesta: bool,
+    vesta_correction: EqAffine,
     plan: ReceiveStagePlan,
     q: Vec<QSource>,
     objects: [Vec<u8>; 11],
@@ -133,12 +142,30 @@ struct Source {
     params: PinnedParams<Ep>,
 }
 impl Source {
-    fn mode_words(&self) -> [Fp; 3] {
+    fn variant(&self) -> Variant {
+        self.plan.context().operation().frame().variant()
+    }
+    fn mode(&self, index: usize) -> IncomingMode {
         if self.accept {
-            [Fp::ONE, Fp::ZERO, Fp::ZERO]
+            IncomingMode::Accept
+        } else if index == 2 && self.corrected_vesta {
+            IncomingMode::Corrected
         } else {
-            [Fp::ZERO, Fp::ONE, Fp::ZERO]
+            IncomingMode::Trivial
         }
+    }
+    fn mode_words(&self, index: usize) -> [Fp; 3] {
+        match self.mode(index) {
+            IncomingMode::Accept => [Fp::ONE, Fp::ZERO, Fp::ZERO],
+            IncomingMode::Trivial => [Fp::ZERO, Fp::ONE, Fp::ZERO],
+            IncomingMode::Corrected => [Fp::ZERO, Fp::ZERO, Fp::ONE],
+        }
+    }
+    fn vesta_correction_words(&self) -> [Fp; 4] {
+        let (x, y) = self.vesta_correction.coordinates().unwrap();
+        let [x0, x1] = foreign_limbs(&x).map(Fp::from_u128);
+        let [y0, y1] = foreign_limbs(&y).map(Fp::from_u128);
+        [x0, x1, y0, y1]
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -190,6 +217,46 @@ fn signed_digest(kind: ObjectKind, raw: &[u8]) -> Fp {
     }
     hash_with_domain(kind.object_domain(), &words)
 }
+/// Build the transitive Payment from the retained payer credential. Request is
+/// signed by the receiver, but Payment's key identifies the payer's Send.
+fn payment_transcript(
+    request: &[u8],
+    payer: &[u8],
+    statement: &[Fp; 26],
+    proof_digest: Fp,
+    receipt: Fp,
+) -> Vec<u8> {
+    let package = hash_with_domain(
+        u64::from_le_bytes(*b"kgwpkg_1"),
+        &[
+            hash_with_domain(iroha_plonk_gadgets::statement::STATEMENT_DOMAIN, statement),
+            proof_digest,
+            receipt,
+        ],
+    );
+    let mut payment = 1u16.to_le_bytes().to_vec();
+    payment.extend(signed_digest(ObjectKind::Request, request).to_repr());
+    payment.extend(&payer[130..195]);
+    payment.extend(signed_digest(ObjectKind::Credential, payer).to_repr());
+    payment.extend(package.to_repr());
+    assert_eq!(payment.len(), 163);
+    payment
+}
+
+#[test]
+fn payment_transcript_uses_payer_key_not_receiver_request_signer() {
+    let (_, _, payer) = bootstrap_objects::enrollment();
+    let (_, _, receiver) = bootstrap_objects::enrollment_for(bootstrap_objects::Identity::Receiver);
+    let request = vec![0; ObjectKind::Request.body_len() + 64];
+    let payment = payment_transcript(&request, &payer.bytes, &[Fp::ZERO; 26], Fp::ONE, Fp::ONE);
+    assert_eq!(
+        &payment[34..99],
+        bootstrap_objects::sec1(bootstrap_objects::key(29))
+    );
+    assert_ne!(&payment[34..99], &receiver.bytes[130..195]);
+    assert_eq!(&payment[99..131], payer.digest().to_repr());
+}
+
 fn commitment(spec: ContextObjectSpec, raw: &[u8], digest: Fp, active: bool) -> [Fp; 3] {
     let mut words = vec![
         Fp::from(u64::from(spec.tag)),
@@ -286,24 +353,87 @@ fn signature_q(
     }
 }
 fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -> Source {
+    source_variant(predecessor, payer, capacity, Variant::Receive, None)
+}
+fn source_variant(
+    predecessor: Head,
+    payer: Option<Head>,
+    capacity: IngestionCapacity,
+    variant: Variant,
+    insert_override: Option<bool>,
+) -> Source {
+    source_with_correction(predecessor, payer, capacity, variant, insert_override, None)
+}
+fn source_with_correction(
+    predecessor: Head,
+    payer: Option<Head>,
+    capacity: IngestionCapacity,
+    variant: Variant,
+    insert_override: Option<bool>,
+    correction: Option<EqAffine>,
+) -> Source {
     use OperationTask::*;
     let params = PinnedParams::<Ep>::derive(16).unwrap();
     let before = predecessor.state;
-    let accept = payer.is_some();
+    let objects_valid = payer.is_some();
+    let accept = objects_valid && correction.is_none();
+    let insert = insert_override.unwrap_or(objects_valid);
+    assert!(!accept || insert);
     let incoming_head = payer.unwrap_or_else(|| predecessor.clone());
     assert_eq!(incoming_head.binding, predecessor.binding);
     assert_eq!(incoming_head.key.to_bytes(), predecessor.key.to_bytes());
     assert_eq!(incoming_head.state.lineage[17], before.lineage[17]);
-    let mut own = if accept {
+    let (_, certificate, credential) =
+        bootstrap_objects::enrollment_for(bootstrap_objects::Identity::Receiver);
+    assert_eq!(credential.digest(), before.core[7]);
+    let quoted = if variant == Variant::ReceiveRenewed {
+        // A distinct genuine issuer signature changes the credential content
+        // address while retaining its wallet, account, key and certificate.
+        bootstrap_objects::sign(
+            ObjectKind::Credential,
+            credential.bytes[..ObjectKind::Credential.body_len()].to_vec(),
+            17,
+            79,
+        )
+    } else {
+        credential.clone()
+    };
+    assert_eq!(
+        quoted.digest() == credential.digest(),
+        variant == Variant::Receive
+    );
+    let mut own = if variant == Variant::ReceiveRenewed {
+        receive_components::genuine_receive_source_for_quoted(
+            &before,
+            objects_valid.then_some(&incoming_head.state),
+            &quoted.bytes,
+            accept,
+            insert,
+            if accept {
+                IncomingMode::Accept
+            } else {
+                IncomingMode::Trivial
+            },
+        )
+    } else if objects_valid {
         receive_components::genuine_receive_source_for_heads(
             &before,
             &incoming_head.state,
-            true,
-            true,
-            IncomingMode::Accept,
+            accept,
+            insert,
+            if accept {
+                IncomingMode::Accept
+            } else {
+                IncomingMode::Trivial
+            },
         )
     } else {
-        receive_components::genuine_receive_source_for(&before, false, false, IncomingMode::Trivial)
+        receive_components::genuine_receive_source_for(
+            &before,
+            false,
+            insert,
+            IncomingMode::Trivial,
+        )
     };
     let mut incoming = public_bytes(&incoming_head.state.lineage);
     incoming.extend(&incoming_head.proof);
@@ -325,25 +455,15 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
     );
     let request = own.send.objects[1].clone();
     let payer = own.send.objects[0].clone();
-    let package = hash_with_domain(
-        u64::from_le_bytes(*b"kgwpkg_1"),
-        &[
-            hash_with_domain(
-                iroha_plonk_gadgets::statement::STATEMENT_DOMAIN,
-                &own.send.statement,
-            ),
-            proof_digest,
-            send_receipt.digest(),
-        ],
+    let payment = payment_transcript(
+        &request,
+        &payer,
+        &own.send.statement,
+        proof_digest,
+        send_receipt.digest(),
     );
-    let mut payment = 1u16.to_le_bytes().to_vec();
-    payment.extend(signed_digest(ObjectKind::Request, &request).to_repr());
-    payment.extend(bootstrap_objects::sec1(bootstrap_objects::key(43)));
-    payment.extend(signed_digest(ObjectKind::Credential, &payer).to_repr());
-    payment.extend(package.to_repr());
-    assert_eq!(payment.len(), 163);
     let payment_digest = p_bytes_native(u64::from_le_bytes(*b"kgwpay_1"), &payment);
-    own.bind_payment(payment_digest, accept, accept);
+    own.bind_payment(payment_digest, accept, insert);
     let own_receipt = receipt(
         &own.witness.statement,
         &before.lineage[6..8],
@@ -352,11 +472,8 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
         43,
         73,
     );
-    let (_, certificate, credential) =
-        bootstrap_objects::enrollment_for(bootstrap_objects::Identity::Receiver);
-    assert_eq!(credential.digest(), before.core[7]);
     let policy = OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23)).unwrap();
-    let schemas = ReceiveStagePlan::signature_schemas(Variant::Receive, policy).unwrap();
+    let schemas = ReceiveStagePlan::signature_schemas(variant, policy).unwrap();
     let q_own = signature_q(
         &params,
         &schemas[0],
@@ -382,12 +499,11 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
         assert_eq!(signed.bytes, request);
         signed.signature
     };
-    let q_incoming = signature_q(
-        &params,
-        &schemas[1],
-        vec![send_receipt.signature, request_signature],
-        246,
-    );
+    let mut incoming_signatures = vec![send_receipt.signature, request_signature];
+    if variant == Variant::ReceiveRenewed {
+        incoming_signatures.extend([quoted.signature, certificate.signature]);
+    }
+    let q_incoming = signature_q(&params, &schemas[1], incoming_signatures, 246);
     let q = vec![
         QSource {
             plan: own.q.clone(),
@@ -399,7 +515,7 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
         q_incoming,
     ];
     let operation = AProofPlan::new(
-        Variant::Receive,
+        variant,
         own.sigma_plan.clone(),
         q.iter().map(|q| q.plan.clone()).collect(),
         Some(VerifierPlan::new(predecessor.binding.clone(), params.clone()).unwrap()),
@@ -412,8 +528,7 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
     eprintln!(
         "RECEIVE_INGESTION {capacity:?} omega_capacity={omega_capacity} sigma_capacity={sigma_capacity}"
     );
-    let specs =
-        ReceiveStagePlan::context_specs(Variant::Receive, omega_capacity, sigma_capacity).unwrap();
+    let specs = ReceiveStagePlan::context_specs(variant, omega_capacity, sigma_capacity).unwrap();
     let context = ContextPlan::with_schedule(
         operation,
         vec![
@@ -426,18 +541,24 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
             vec![2],
             vec![],
             vec![],
+            vec![],
         ],
         Some(0),
         specs.clone(),
     )
     .unwrap()
     .with_operation_tasks(vec![
-        vec![],
+        vec![
+            ReceiveOwnProof,
+            ReceiveConsumedEffects,
+            ReceiveCreditEffects,
+        ],
         vec![],
         vec![ReceiveProofs],
         vec![ReceiveProofDigest],
         vec![ReceiveObjects],
-        vec![ReceiveAuthorization, ReceiveOwnProof],
+        vec![ReceiveAuthorization],
+        vec![],
         vec![ReceiveSignatures],
         vec![ReceiveNonmembership, ReceiveBlacklist],
         vec![ReceiveEffects],
@@ -454,7 +575,7 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
         credential.bytes.clone(),
         certificate.bytes.clone(),
         own_receipt.bytes,
-        credential.bytes,
+        quoted.bytes,
         certificate.bytes,
     ];
     let kinds = [
@@ -491,6 +612,13 @@ fn source(predecessor: Head, payer: Option<Head>, capacity: IngestionCapacity) -
         predecessor,
         incoming_head,
         accept,
+        objects_valid,
+        corrected_vesta: correction.is_some(),
+        vesta_correction: correction.unwrap_or_else(|| {
+            *AccumulatorT::<Eq>::trivial(&common::vesta_params(16), MemoryBudget::DEFAULT)
+                .unwrap()
+                .g()
+        }),
         plan,
         q,
         objects,
@@ -729,6 +857,7 @@ enum ContinuationMutation {
     Mode,
     IncomingStatement,
     QChunk,
+    Q2Verdict,
     DropHistory,
     ReverseHistory,
 }
@@ -798,7 +927,7 @@ impl Circuit<Fp> for Stage {
                 let statement = StatementCells::constrain_with_verifier(
                     &mut chip,
                     &mut region,
-                    Variant::Receive,
+                    source.variant(),
                     &fields,
                 )?;
                 let mut incoming_fields = source.own.send.statement;
@@ -842,6 +971,16 @@ impl Circuit<Fp> for Stage {
                                             )
                                         {
                                             value += Fq::ONE;
+                                        }
+                                        if q_index == 2
+                                            && column == 0
+                                            && index == 9
+                                            && matches!(
+                                                self.mutation,
+                                                Some(ContinuationMutation::Q2Verdict)
+                                            )
+                                        {
+                                            value = Fq::ONE - value;
                                         }
                                         let ty = *q
                                             .plan
@@ -891,7 +1030,7 @@ impl Circuit<Fp> for Stage {
                                 [Fp::ONE, Fp::ZERO, Fp::ZERO]
                             }
                         } else {
-                            source.mode_words()
+                            source.mode_words(index)
                         };
                         let bits = cells.words(&mut chip, &mut region, &values)?;
                         ModeCells::constrain(chip.uint().glue(), &mut region, &bits)
@@ -903,10 +1042,8 @@ impl Circuit<Fp> for Stage {
                     chip.witness_point(&mut region, cells.value(Ep::from(*trivial.g())))?,
                     chip.witness_point(&mut region, cells.value(Ep::from(*trivial.g())))?,
                 ];
-                let trivial_v =
-                    AccumulatorT::<Eq>::trivial(&common::vesta_params(16), MemoryBudget::DEFAULT)
-                        .map_err(|_| Error::Synthesis)?;
-                let (x, y) = Option::from(trivial_v.g().coordinates()).ok_or(Error::Synthesis)?;
+                let (x, y) =
+                    Option::from(source.vesta_correction.coordinates()).ok_or(Error::Synthesis)?;
                 let vcorrections = [[
                     cells.scalar(&mut chip, &mut region, x)?,
                     cells.scalar(&mut chip, &mut region, y)?,
@@ -917,7 +1054,7 @@ impl Circuit<Fp> for Stage {
                     source.incoming_head.opening.clone()
                 };
                 let opening = cells.pallas(&mut chip, &mut region, &exported)?;
-                let mut verdicts = [true, source.accept, true, true, true];
+                let mut verdicts = [true, source.objects_valid, true, true, true];
                 if let Some(ContinuationMutation::Result(index)) = self.mutation {
                     verdicts[index] = !verdicts[index];
                 }
@@ -942,13 +1079,18 @@ impl Circuit<Fp> for Stage {
                     .collect::<Vec<_>>();
                 let context =
                     plan.assign_receive_object_claims(&mut chip, &mut region, &commitments)?;
-                let own_index = chip.uint().glue().constant(
+                // Fixed owner predicates derive both selectors from the original
+                // Request/Send statement. Reuse the hard Q exports here so this
+                // circuit covers every admitted control mask with one schema.
+                let own_index = iroha_kagemusha_proof::a_relation::bounded_word(
+                    &mut chip,
                     &mut region,
-                    Fp::from(u64::from(sigma_selector(4, 0).ok_or(Error::Synthesis)?)),
+                    &q_instances[0][2][0],
                 )?;
-                let incoming_index = chip.uint().glue().constant(
+                let incoming_index = iroha_kagemusha_proof::a_relation::bounded_word(
+                    &mut chip,
                     &mut region,
-                    Fp::from(u64::from(sigma_selector(3, 0).ok_or(Error::Synthesis)?)),
+                    &q_instances[0][2][1],
                 )?;
                 let own_chunks = source
                     .own
@@ -1026,7 +1168,15 @@ impl Circuit<Fp> for Stage {
                 };
                 let sigma_raw = if tasks.contains(&OperationTask::ReceiveObjects) || needs_digest {
                     let segments = if tasks.contains(&OperationTask::ReceiveObjects) {
-                        SigmaBindingCells::incoming_segments(source.own.incoming_sigma.len())?
+                        SigmaBindingCells::incoming_segments(
+                            source
+                                .own
+                                .sigma_plan
+                                .class(1)
+                                .ok_or(Error::Synthesis)?
+                                .verifier()
+                                .proof_length(),
+                        )?
                     } else {
                         vec![]
                     };
@@ -1058,7 +1208,13 @@ impl Circuit<Fp> for Stage {
                         &incoming_statement,
                         incoming_index,
                         sigma_raw.as_ref().ok_or(Error::Synthesis)?,
-                        source.own.incoming_sigma.len(),
+                        source
+                            .own
+                            .sigma_plan
+                            .class(1)
+                            .ok_or(Error::Synthesis)?
+                            .verifier()
+                            .proof_length(),
                     )?;
                 }
                 let proof_digest = if needs_digest {
@@ -1123,7 +1279,7 @@ impl Circuit<Fp> for Stage {
                         &mut chip,
                         &mut bytes,
                         &mut region,
-                        Variant::Receive,
+                        source.variant(),
                         ReceiveAuthorizationSources {
                             current: &values[6],
                             certificate: &values[7],
@@ -1180,7 +1336,6 @@ impl Circuit<Fp> for Stage {
                 };
                 let mut verified = Vec::new();
                 let mut own_signature = None;
-                let mut incoming_signature = None;
                 for index in plan.q_partition(stage).ok_or(Error::Synthesis)? {
                     let proof = cells.proof(&mut chip, &mut region, &source.q[*index].proof)?;
                     let q = verify_q(
@@ -1191,7 +1346,7 @@ impl Circuit<Fp> for Stage {
                         &q_instances[*index],
                         &proof,
                     )?;
-                    if *index > 0 {
+                    if *index == 1 {
                         let slots = iroha_kagemusha_proof::a_relation::bind_signature_q(
                             &mut chip,
                             &mut region,
@@ -1203,11 +1358,7 @@ impl Circuit<Fp> for Stage {
                                 .ok_or(Error::Synthesis)?,
                             &q,
                         )?;
-                        if *index == 1 {
-                            own_signature = Some(slots)
-                        } else {
-                            incoming_signature = Some(slots)
-                        }
+                        own_signature = Some(slots);
                     }
                     verified.push(q);
                 }
@@ -1240,7 +1391,12 @@ impl Circuit<Fp> for Stage {
                 } else {
                     None
                 };
-                let effects = if tasks.contains(&OperationTask::ReceiveEffects) {
+                let effects = if tasks.iter().any(|task| {
+                    matches!(
+                        task,
+                        OperationTask::ReceiveConsumedEffects | OperationTask::ReceiveCreditEffects
+                    )
+                }) {
                     let consumed = cells.insertion(
                         &mut chip.uint(),
                         &mut region,
@@ -1273,6 +1429,18 @@ impl Circuit<Fp> for Stage {
                         insert,
                         payment_digest: context[3].authenticated_digest().clone(),
                     })
+                } else {
+                    None
+                };
+                let incoming_signature = if tasks.contains(&OperationTask::ReceiveSignatures) {
+                    Some(ReceiveSignatureQProjection::from_context(
+                        &mut chip,
+                        &mut region,
+                        plan,
+                        u32::try_from(stage).map_err(|_| Error::BoundsFailure)?,
+                        OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23))?,
+                        &input,
+                    )?)
                 } else {
                     None
                 };
@@ -1441,20 +1609,19 @@ fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Fp {
     words.extend(source.commitments.iter().flatten().copied());
     words.extend([
         Fp::ONE,
-        Fp::from(u64::from(source.accept)),
+        Fp::from(u64::from(source.objects_valid)),
         Fp::ONE,
         Fp::ONE,
         Fp::ONE,
     ]);
     push_pallas(&mut words, &source.incoming_head.opening);
-    for _ in 0..4 {
-        words.extend(source.mode_words());
+    for index in 0..4 {
+        words.extend(source.mode_words(index));
     }
     let trivial = AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap();
     let (x, y) = trivial.g().coordinates().unwrap();
     words.extend([x, y, x, y]);
-    let trivial = AccumulatorT::trivial(&common::vesta_params(16), MemoryBudget::DEFAULT).unwrap();
-    words.extend(&vesta_words(&trivial.as_input())[..4]);
+    words.extend(source.vesta_correction_words());
     push_pallas(&mut words, &first.as_input());
     hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words)
 }
@@ -1529,10 +1696,8 @@ impl Stage {
         // A exports the ORIGINAL incoming V and its mode; Omega performs the
         // mode selection and includes the chosen deciding claim exactly once.
         words.extend(vesta_words(&self.source.incoming_head.vesta.as_input()));
-        words.extend(self.source.mode_words());
-        let trivial =
-            AccumulatorT::trivial(&common::vesta_params(16), MemoryBudget::DEFAULT).unwrap();
-        words.extend(&vesta_words(&trivial.as_input())[..4]);
+        words.extend(self.source.mode_words(2));
+        words.extend(self.source.vesta_correction_words());
         assert_eq!(words.len(), 69);
         vec![words]
     }
@@ -1597,6 +1762,15 @@ fn prove_stage(circuit: &Stage) -> (ProvingKey<Eq>, ProverOutput<Eq>, Vec<Vec<Fp
         .opening
         .decide(&params, MemoryBudget::DEFAULT)
         .unwrap();
+    verify_full(
+        &params,
+        key.binding(),
+        key.vk(),
+        &public,
+        &proof.proof,
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
     (key, proof, public)
 }
 
@@ -1631,7 +1805,7 @@ fn assert_foreign_wrapper_rejects(circuit: &Stage, previous_wrapper: &[u8]) {
     }
 }
 #[test]
-#[ignore = "real receiver Bootstrap, both sigmas, three Qs and nine fixed A/W stages; run optimized"]
+#[ignore = "real receiver Bootstrap, both sigmas, three Qs and ten fixed A/W stages; run optimized"]
 fn genuine_receive_burn_owner_chain_preserves_all_proofs_and_result_claims() {
     receive_owner_chain(IngestionCapacity::Descriptor);
 }
@@ -1643,9 +1817,59 @@ fn canonical_envelope_receive_burn_owner_chain() {
 }
 
 #[test]
+#[ignore = "real full-envelope Receive burn with authenticated consumed-credit insertion"]
+fn canonical_envelope_receive_burn_inserts_consumed_credit() {
+    let receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
+        bootstrap_outer::bootstrap_chain::BootstrapIdentity::Receiver,
+    );
+    let source = source_variant(
+        receiver.into(),
+        None,
+        IngestionCapacity::CanonicalEnvelope,
+        Variant::Receive,
+        Some(true),
+    );
+    assert!(source.own.witness.insert);
+    assert_ne!(
+        source.own.witness.before.core[16],
+        source.own.witness.after.core[16]
+    );
+    assert_eq!(
+        source.own.witness.after.lineage[14] - source.own.witness.before.lineage[14],
+        source.own.witness.statement[20]
+    );
+    prove_receive_owner_chain(source);
+}
+
+#[test]
+#[ignore = "real renewed Receive soft3V1F Q and every owner at fixed maximum incoming capacities"]
+fn canonical_envelope_receive_renewed_burn_owner_chain() {
+    let receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
+        bootstrap_outer::bootstrap_chain::BootstrapIdentity::Receiver,
+    );
+    prove_receive_owner_chain(source_variant(
+        receiver.into(),
+        None,
+        IngestionCapacity::CanonicalEnvelope,
+        Variant::ReceiveRenewed,
+        None,
+    ));
+}
+
+#[test]
 #[ignore = "genuine payer Load and receiver Bootstrap, real Send/Receive sigmas, all fixed Receive owners at maximum capacity"]
 fn canonical_envelope_receive_accepts_exact_payer_and_receiver_heads() {
     let wallets = compact_catalog::compact_payer_load_and_receiver();
+    let (receiver, payer) = shared_wallet_heads(wallets);
+    let source = source(receiver, Some(payer), IngestionCapacity::CanonicalEnvelope);
+    assert_exact_payer_source(&source);
+    assert_eq!(
+        source.own.witness.after.lineage[14], source.own.witness.before.lineage[14],
+        "accepted value never enters the burn accumulator"
+    );
+    prove_receive_owner_chain(source);
+}
+fn shared_wallet_heads(wallets: compact_catalog::SharedKeyWallets) -> (Head, Head) {
     let receiver = Head {
         state: StateWitness::from(&wallets.receiver.source.state),
         key: wallets.receiver.key,
@@ -1665,7 +1889,9 @@ fn canonical_envelope_receive_accepts_exact_payer_and_receiver_heads() {
         opening: wallets.payer.opening,
     };
     assert_ne!(receiver.state.core[5..7], payer.state.core[5..7]);
-    let source = source(receiver, Some(payer), IngestionCapacity::CanonicalEnvelope);
+    (receiver, payer)
+}
+fn assert_exact_payer_source(source: &Source) {
     assert_eq!(source.own.send.before.core, source.incoming_head.state.core);
     assert_eq!(source.own.send.before.rest, source.incoming_head.state.rest);
     assert_eq!(
@@ -1677,10 +1903,61 @@ fn canonical_envelope_receive_accepts_exact_payer_and_receiver_heads() {
             - source.own.witness.before.core[iroha_kagemusha_proof::witness::core_index::BALANCE],
         source.own.witness.statement[20],
     );
-    assert_eq!(
-        source.own.witness.after.lineage[14], source.own.witness.before.lineage[14],
-        "accepted value never enters the burn accumulator",
+}
+
+#[test]
+#[ignore = "genuine common-key source catalog plus adversarial deferred-V Omega component; superseded Load trust"]
+fn genuine_omega_can_carry_a_succinct_but_nondeciding_vesta_claim() {
+    let (wallets, correction) = compact_catalog::compact_payer_load_and_receiver_with_bad_vesta();
+    let (receiver, payer) = shared_wallet_heads(wallets);
+    assert_eq!(receiver.key.to_bytes(), payer.key.to_bytes());
+    assert_eq!(payer.proof.len(), 3712);
+    let params = common::vesta_params(16);
+    assert!(payer.vesta.decide(&params, MemoryBudget::DEFAULT).is_err());
+    assert_ne!(*payer.vesta.g(), correction);
+    let corrected =
+        FoldInput::<Eq>::from_normalized(correction, 16, *payer.vesta.challenges()).unwrap();
+    corrected.decide(&params, MemoryBudget::DEFAULT).unwrap();
+    eprintln!(
+        "GENUINE_NONDECIDING_VESTA_OMEGA actual_proof=3712 original_V_fails_decide=true distinct_same_challenges_correction_decides=true superseded_Load_trust=true full_Receive=false"
     );
+}
+
+#[test]
+#[ignore = "genuine common-key payer/receiver and Omega proof carrying a false Vesta claim; full corrected burn chain"]
+fn canonical_envelope_receive_corrected_vesta_burn_inserts_credit() {
+    receive_corrected_vesta_chain(true);
+}
+#[test]
+#[ignore = "genuine common-key payer/receiver and Omega proof carrying a false Vesta claim; full corrected no-op chain"]
+fn canonical_envelope_receive_corrected_vesta_burn_without_consumed_insert() {
+    receive_corrected_vesta_chain(false);
+}
+fn receive_corrected_vesta_chain(insert: bool) {
+    let (wallets, correction) = compact_catalog::compact_payer_load_and_receiver_with_bad_vesta();
+    let (receiver, payer) = shared_wallet_heads(wallets);
+    assert!(
+        payer
+            .vesta
+            .decide(&common::vesta_params(16), MemoryBudget::DEFAULT)
+            .is_err()
+    );
+    let source = source_with_correction(
+        receiver,
+        Some(payer),
+        IngestionCapacity::CanonicalEnvelope,
+        Variant::Receive,
+        Some(insert),
+        Some(correction),
+    );
+    assert_exact_payer_source(&source);
+    assert!(source.objects_valid && !source.accept);
+    assert_eq!(source.mode(2), IncomingMode::Corrected);
+    assert_eq!(
+        source.own.witness.after.lineage[14] - source.own.witness.before.lineage[14],
+        source.own.witness.statement[20]
+    );
+    assert_eq!(source.own.witness.insert, insert);
     prove_receive_owner_chain(source);
 }
 
@@ -1691,8 +1968,443 @@ fn receive_owner_chain(capacity: IngestionCapacity) {
     prove_receive_owner_chain(source(receiver.into(), None, capacity));
 }
 
+/// Check every fixed owner shape before expensive proof production. Unknown
+/// advice removes no rows: the genuine proof loop separately checks parity and
+/// soundness with the actual authenticated W/source witnesses.
+fn preflight_owner_shapes(source: &Arc<Source>) {
+    let pallas = AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap();
+    let vparams = common::vesta_params(16);
+    let vesta = AccumulatorT::trivial(&vparams, MemoryBudget::DEFAULT).unwrap();
+    let (first_fold, _) = create_fold(
+        &source.params,
+        &[pallas.as_input(), pallas.as_input()],
+        Fp::from(901).to_repr(),
+        &FoldConfig::default(),
+    )
+    .unwrap();
+    let mut stage = Stage {
+        source: source.clone(),
+        continuation: None,
+        pallas: pallas.clone(),
+        first: pallas.clone(),
+        fold: first_fold.to_bytes().to_vec(),
+        known: false,
+        mutation: None,
+    };
+    let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
+    config.compress_selectors = false;
+    let mut wrapper_template = None;
+    let mut overflow = Vec::new();
+    for index in 0..source.plan.context().stage_count() {
+        let assigned = synthesize(&stage, 18, None).unwrap();
+        let rows = assigned
+            .tables
+            .advice_assigned()
+            .iter()
+            .map(|column| column.iter().rposition(|v| *v).map_or(0, |r| r + 1))
+            .collect::<Vec<_>>();
+        eprintln!(
+            "RECEIVE_SHAPE_PREFLIGHT A{} tagged{} rows={rows:?} actual_proof=false",
+            index + 1,
+            stage.params()
+        );
+        if rows.iter().any(|n| *n >= 65_529) {
+            overflow.push((index + 1, *rows.iter().max().unwrap()));
+        }
+        drop(assigned);
+        if index + 1 == source.plan.context().stage_count() {
+            break;
+        }
+        // Only sizing: all internal A descriptors are identical, and changing
+        // the fixed W stage/key constants does not change its verifier shape.
+        // Reusing one same-descriptor key here permits measuring every owner,
+        // even after an earlier owner overflows. These imported diagnostic keys
+        // are never proved, restored or admitted; the actual chain below keys
+        // and verifies every exact stage independently.
+        let (binding, key, wrapper_length) = wrapper_template.get_or_insert_with(|| {
+            let key = keygen_pk_v2(&vparams, &stage, &config).unwrap();
+            let proof_length = VerifierPlan::new(key.binding().clone(), vparams.clone())
+                .unwrap()
+                .proof_length();
+            let (fold, _) = create_fold(
+                &vparams,
+                &[
+                    vesta.as_input(),
+                    vesta.as_input(),
+                    vesta.as_input(),
+                    vesta.as_input(),
+                ],
+                Fq::from(902).to_repr(),
+                &FoldConfig::default(),
+            )
+            .unwrap();
+            let wrapper = WCircuit::new(
+                source.plan.context(),
+                index,
+                key.binding().clone(),
+                vparams.clone(),
+                vec![key.vk().kagemusha_digest(key.binding()).unwrap()],
+                iroha_kagemusha_proof::omega::OmegaWitness {
+                    key: key.vk().clone(),
+                    instances: stage.public()[0].clone(),
+                    length: u32::try_from(proof_length).unwrap(),
+                    proof: vec![0; proof_length],
+                    fold: fold.to_bytes(),
+                },
+            )
+            .unwrap()
+            .without_witnesses();
+            let (wkey, wprover) = WKey::keygen(&wrapper, &source.params).unwrap();
+            (
+                wprover.binding().clone(),
+                wkey.verifying_key().clone(),
+                wkey.verifier().proof_length(),
+            )
+        });
+        let wkey = WKey::from_artifact(
+            source.plan.context(),
+            index,
+            binding.clone(),
+            source.params.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        let wrapper_length = *wrapper_length;
+        let split = SplitPlan::new(
+            source.plan.context().clone(),
+            index + 1,
+            wkey,
+            &source.params,
+        )
+        .unwrap();
+        let count = 2
+            + if split.is_terminal() { 2 } else { 0 }
+            + source.plan.context().q_partition(index + 1).unwrap().len();
+        let (fold, _) = create_fold(
+            &source.params,
+            &vec![pallas.as_input(); count],
+            Fp::from(903).to_repr(),
+            &FoldConfig::default(),
+        )
+        .unwrap();
+        stage = Stage {
+            source: source.clone(),
+            continuation: Some(Continuation {
+                plan: split,
+                proof: vec![0; wrapper_length],
+                carried: pallas.clone(),
+                vesta: vesta.clone(),
+                history: vec![(pallas.clone(), vesta.clone()); index],
+            }),
+            pallas: pallas.clone(),
+            first: pallas.clone(),
+            fold: fold.to_bytes().to_vec(),
+            known: false,
+            mutation: None,
+        };
+    }
+    assert!(
+        overflow.is_empty(),
+        "Receive fixed owners exceed k16: {overflow:?}"
+    );
+}
+
+fn native_inputs(
+    source: &Source,
+) -> (
+    iroha_kagemusha_proof::a_relation::native::receive::Plan,
+    iroha_kagemusha_proof::a_relation::native::receive::Inputs,
+) {
+    use iroha_kagemusha_proof::a_relation::native::receive as native;
+    let policy = OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23)).unwrap();
+    let plan = native::Plan::new(
+        source.plan.context().operation().clone(),
+        policy,
+        source.predecessor.key.clone(),
+        source.params.clone(),
+        common::vesta_params(16),
+    )
+    .unwrap();
+    assert_eq!(plan.context().schema(), source.plan.context().schema());
+    let trivial_p = AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap();
+    let inputs = native::Inputs {
+        transition: native::Transition {
+            before: source.own.witness.before,
+            after: source.own.witness.after,
+            statement: source.own.witness.statement,
+            consumed: source.own.witness.consumed,
+            credit: source.own.witness.credit,
+            blacklist: source.own.witness.consumed,
+            insert: source.own.witness.insert,
+        },
+        incoming_statement: source.own.send.statement,
+        sigma: source.own.sigma.clone(),
+        objects: source.objects.clone(),
+        q: core::array::from_fn(|i| native::QInput {
+            proof: source.q[i].proof.clone(),
+            instances: source.q[i].instances.clone(),
+        }),
+        predecessor: native::PredecessorInput {
+            proof: source.predecessor.proof.clone(),
+            pallas: source.predecessor.pallas.to_bytes(),
+            vesta: source.predecessor.vesta.to_bytes(),
+        },
+        incoming: native::IncomingWitness {
+            public: source.incoming_head.state.lineage,
+            public_valid: true,
+            pallas: source.incoming_head.pallas.clone(),
+            vesta: source.incoming_head.vesta.clone(),
+            opening: source.incoming_head.opening.clone(),
+            results: [true, source.objects_valid, true, true, true],
+            modes: core::array::from_fn(|i| source.mode(i)),
+            pallas_corrections: [*trivial_p.g(); 2],
+            vesta_correction: source.vesta_correction,
+        },
+    };
+    (plan, inputs)
+}
+
+fn assert_native_first_relation(source: &Source, first: &Stage) {
+    let (plan, inputs) = native_inputs(source);
+    let prepared = plan.prepare(inputs, MemoryBudget::DEFAULT).unwrap();
+    let (native, public) = prepared
+        .first_circuit(Fp::from(247), &FoldConfig::default())
+        .unwrap();
+    assert_eq!(public, first.public()[0]);
+    let actual = synthesize(first, 16, Some(&first.public())).unwrap();
+    let native = synthesize(&native, 16, Some(&[public])).unwrap();
+    assert_eq!(actual.tables.fixed(), native.tables.fixed());
+    assert_eq!(actual.tables.permutation(), native.tables.permutation());
+    assert_eq!(
+        actual.tables.advice_assigned(),
+        native.tables.advice_assigned()
+    );
+    assert!(
+        check(&native.cs, &native.tables, CheckMode::Strict)
+            .unwrap()
+            .is_satisfied()
+    );
+    eprintln!(
+        "NATIVE_RECEIVE_A1_PARITY exact_context=true fixed_permutation_advice_layout_equal=true native_constraint_check=true final_catalog=false"
+    );
+}
+
+/// Retained native restore evidence contains verifier metadata only. Each native
+/// parity check reconstructs and releases one stage PK; no full PK catalog is held.
+/// These component checks remain separate from mobile or M3 memory qualification.
+#[derive(Default)]
+struct NativeCheckpoints {
+    a: Vec<iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact<Eq>>,
+    w: Vec<iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact<Ep>>,
+    a_proofs: Vec<Vec<u8>>,
+    w_proofs: Vec<Vec<u8>>,
+    pallas: Vec<[u8; 544]>,
+    vesta: Vec<[u8; 544]>,
+}
+impl NativeCheckpoints {
+    fn check(self, source: &Source, terminal_public: &[Fp]) {
+        use iroha_kagemusha_proof::a_relation::native::receive as native;
+        let (plan, inputs) = native_inputs(source);
+        let a: [_; native::A_STAGE_COUNT] = self.a.try_into().ok().unwrap();
+        let w: [_; native::A_STAGE_COUNT - 1] = self.w.try_into().ok().unwrap();
+        let parity_keys = a.clone();
+        let prover = native::Prover::from_artifacts(plan, a, w).unwrap();
+        let session = prover
+            .prepare(inputs.clone(), MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(prover.descriptors().len(), 2 * native::A_STAGE_COUNT - 1);
+        let mut checkpoint = session
+            .restore_first(
+                self.a_proofs[0].clone(),
+                &self.pallas[0],
+                MemoryBudget::DEFAULT,
+            )
+            .unwrap();
+        assert_eq!(checkpoint.stage(), 0);
+        assert!(
+            session
+                .terminal(&checkpoint, MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        let mut truncated = self.a_proofs[0].clone();
+        truncated.pop();
+        assert!(
+            session
+                .restore_first(truncated, &self.pallas[0], MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        // Even identical inputs belong to a distinct checked session. Opaque
+        // checkpoints cannot be mixed across preparation/custody handles.
+        let foreign = prover
+            .prepare(inputs.clone(), MemoryBudget::DEFAULT)
+            .unwrap();
+        assert!(
+            foreign
+                .restore_wrapper(
+                    &checkpoint,
+                    self.w_proofs[0].clone(),
+                    &self.vesta[0],
+                    MemoryBudget::DEFAULT
+                )
+                .is_err()
+        );
+        let mut changed = inputs;
+        changed.objects[3][0] ^= 1;
+        if let Ok(rebound) = prover.prepare(changed, MemoryBudget::DEFAULT) {
+            assert!(
+                rebound
+                    .restore_first(
+                        self.a_proofs[0].clone(),
+                        &self.pallas[0],
+                        MemoryBudget::DEFAULT
+                    )
+                    .is_err(),
+                "changed original Payment cannot restore original A1"
+            );
+        }
+        for stage in 0..native::A_STAGE_COUNT - 1 {
+            let wrapper = session
+                .restore_wrapper(
+                    &checkpoint,
+                    self.w_proofs[stage].clone(),
+                    &self.vesta[stage],
+                    MemoryBudget::DEFAULT,
+                )
+                .unwrap();
+            assert_eq!(wrapper.stage(), stage);
+            assert_eq!(wrapper.proof(), self.w_proofs[stage]);
+            assert_eq!(wrapper.vesta_bytes(), self.vesta[stage]);
+            let (native_circuit, native_public) = session
+                .next_circuit(
+                    &wrapper,
+                    Fp::from(262 + u64::try_from(stage).unwrap()),
+                    &FoldConfig::default(),
+                )
+                .unwrap();
+            // Reconstruct only this native stage PK and compare its exact VK
+            // commitments with the independent A proof's installed metadata.
+            // This checks fixed/permutation commitments without retaining ten PKs.
+            let mut key_config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
+            key_config.compress_selectors = false;
+            let native_key =
+                keygen_pk_v2(&common::vesta_params(16), &native_circuit, &key_config).unwrap();
+            assert_eq!(native_key.binding(), parity_keys[stage + 1].binding());
+            assert_eq!(
+                native_key.vk().to_bytes(),
+                parity_keys[stage + 1].key().to_bytes()
+            );
+            if stage == 0 {
+                assert!(
+                    matches!(
+                        session.first(
+                            &native_key,
+                            Fp::from(247),
+                            &FoldConfig::default(),
+                            common::recovery(200),
+                            ProverConfig::default(),
+                        ),
+                        Err(native::Error::Artifact)
+                    ),
+                    "same descriptor but wrong stage VK must reject before proving"
+                );
+                let reproved = session
+                    .advance(
+                        &native_key,
+                        &wrapper,
+                        Fp::from(262),
+                        &FoldConfig::default(),
+                        common::recovery(201),
+                        ProverConfig::default(),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    reproved.proof(),
+                    self.a_proofs[1],
+                    "borrowed native stage key preserves exact deterministic proof bytes"
+                );
+            }
+            drop(native_key);
+            let native_tables = synthesize(
+                &native_circuit,
+                16,
+                Some(std::slice::from_ref(&native_public)),
+            )
+            .unwrap();
+            let report =
+                check(&native_tables.cs, &native_tables.tables, CheckMode::Strict).unwrap();
+            assert!(
+                report.is_satisfied(),
+                "native A{}: {:?}",
+                stage + 2,
+                report.failures().first()
+            );
+            drop(native_tables);
+            if stage == 0 {
+                let mut truncated = self.w_proofs[0].clone();
+                truncated.pop();
+                assert!(
+                    session
+                        .restore_wrapper(
+                            &checkpoint,
+                            truncated,
+                            &self.vesta[0],
+                            MemoryBudget::DEFAULT
+                        )
+                        .is_err()
+                );
+                assert!(
+                    session
+                        .restore_wrapper(
+                            &checkpoint,
+                            self.w_proofs[1].clone(),
+                            &self.vesta[1],
+                            MemoryBudget::DEFAULT
+                        )
+                        .is_err(),
+                    "cannot skip the fixed W owner"
+                );
+                assert!(
+                    session
+                        .restore_a(
+                            &wrapper,
+                            self.a_proofs[2].clone(),
+                            &self.pallas[2],
+                            MemoryBudget::DEFAULT
+                        )
+                        .is_err(),
+                    "cannot drop an A checkpoint"
+                );
+            }
+            checkpoint = session
+                .restore_a(
+                    &wrapper,
+                    self.a_proofs[stage + 1].clone(),
+                    &self.pallas[stage + 1],
+                    MemoryBudget::DEFAULT,
+                )
+                .unwrap();
+            assert_eq!(checkpoint.stage(), stage + 1);
+            assert_eq!(checkpoint.proof(), self.a_proofs[stage + 1]);
+            assert_eq!(checkpoint.pallas_bytes(), self.pallas[stage + 1]);
+            assert_eq!(checkpoint.instances(), native_public);
+        }
+        assert_eq!(checkpoint.instances(), terminal_public);
+        let terminal = session
+            .terminal(&checkpoint, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(terminal.proof, *self.a_proofs.last().unwrap());
+        assert_eq!(terminal.pallas.to_bytes(), *self.pallas.last().unwrap());
+        assert_eq!(terminal.incoming_vesta, source.incoming_head.vesta);
+        assert_eq!(terminal.predecessor_vesta, source.predecessor.vesta);
+        eprintln!(
+            "NATIVE_RECEIVE_RESTORE all10A_all9W=true all_native_A_verifier_commitments_and_constraints_equal=true native_producer_retains_no_PK=true borrowed_PK_proof_bytes_equal=true wrong_stage_truncated_foreign_session_original_substitution_rejected=true terminal_exports_equal=true final_catalog=false"
+        );
+    }
+}
+
 fn prove_receive_owner_chain(source: Source) {
     let source = Arc::new(source);
+    preflight_owner_shapes(&source);
     let (first_fold, pallas) = create_fold(
         &source.params,
         &[
@@ -1712,7 +2424,15 @@ fn prove_receive_owner_chain(source: Source) {
         known: true,
         mutation: None,
     };
+    let native_capacity = source.plan.context().object_specs()[4].capacity
+        == u32::try_from(MAX_OMEGA_RAW_BYTES).unwrap();
+    if native_capacity {
+        assert_native_first_relation(&source, &first);
+    }
     let (mut key, mut proof, mut public) = prove_stage(&first);
+    let mut native = NativeCheckpoints::default();
+    native.a_proofs.push(proof.proof.clone());
+    native.pallas.push(pallas.to_bytes());
     let mut carried = pallas;
     let mut part = source.own.part.clone();
     let mut history = Vec::new();
@@ -1747,6 +2467,14 @@ fn prove_receive_owner_chain(source: Source) {
             witness,
         )
         .unwrap();
+        native.a.push(
+            iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact::new(
+                key.binding().clone(),
+                key.vk().clone(),
+            )
+            .unwrap(),
+        );
+        drop(key);
         let (wkey, wprover) = WKey::keygen(&wrapper, &source.params).unwrap();
         let (x, y) = vesta.g().coordinates().unwrap();
         let wpublic = vec![
@@ -1770,6 +2498,25 @@ fn prove_receive_owner_chain(source: Source) {
             .opening
             .decide(&source.params, MemoryBudget::DEFAULT)
             .unwrap();
+        verify_full(
+            &source.params,
+            wprover.binding(),
+            wprover.vk(),
+            &wpublic,
+            &wproof.proof,
+            MemoryBudget::DEFAULT,
+        )
+        .unwrap();
+        native.w.push(
+            iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact::new(
+                wprover.binding().clone(),
+                wprover.vk().clone(),
+            )
+            .unwrap(),
+        );
+        drop(wprover);
+        native.w_proofs.push(wproof.proof.clone());
+        native.vesta.push(vesta.to_bytes());
         let mut claims = vec![
             carried.as_input(),
             FoldInput::from_opening(*wproof.opening.g(), wproof.opening.challenges()).unwrap(),
@@ -1819,6 +2566,8 @@ fn prove_receive_owner_chain(source: Source) {
             mutation: None,
         };
         (key, proof, public) = prove_stage(&continuation);
+        native.a_proofs.push(proof.proof.clone());
+        native.pallas.push(pallas.to_bytes());
         if let Some(previous) = &previous_wrapper {
             assert_foreign_wrapper_rejects(&continuation, previous);
         }
@@ -1850,6 +2599,19 @@ fn prove_receive_owner_chain(source: Source) {
                 "Receive genuine W rejects all33 object words, all5 results, source reorder, opening, mode and statement substitution"
             );
         }
+        if source
+            .plan
+            .context()
+            .operation_tasks(stage)
+            .unwrap()
+            .contains(&OperationTask::ReceiveSignatures)
+        {
+            assert_continuation_rejects(&continuation, ContinuationMutation::Q2Verdict);
+            assert_continuation_rejects(&continuation, ContinuationMutation::DropHistory);
+            eprintln!(
+                "Receive projected Signatures owner rejects changed Q2 verdict and dropped Q2/W history"
+            );
+        }
         if stage == 3 {
             assert_continuation_rejects(&continuation, ContinuationMutation::DropHistory);
             assert_continuation_rejects(&continuation, ContinuationMutation::ReverseHistory);
@@ -1863,6 +2625,17 @@ fn prove_receive_owner_chain(source: Source) {
     carried
         .decide(&source.params, MemoryBudget::DEFAULT)
         .unwrap();
+    native.a.push(
+        iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact::new(
+            key.binding().clone(),
+            key.vk().clone(),
+        )
+        .unwrap(),
+    );
+    drop(key);
+    if native_capacity {
+        native.check(&source, &public[0]);
+    }
     eprintln!(
         "RECEIVE_OWNER_CHAIN stages={} accepted_credit={} original_sources_bound=true final_catalog=false release_qualified=false",
         source.plan.context().stage_count(),

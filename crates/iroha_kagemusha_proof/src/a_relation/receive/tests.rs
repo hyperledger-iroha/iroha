@@ -18,6 +18,7 @@ use iroha_plonk_gadgets::{
 };
 use iroha_plonk_recursion::verifier::VerifierConfig;
 
+mod lengths;
 mod signatures;
 
 pub(super) fn recursive_program_fixture() -> (crate::a_relation::AProofPlan, OwnPolicy) {
@@ -659,7 +660,6 @@ impl Objects {
         .unwrap()
         .with_operation_tasks(vec![
             OperationTask::required(Variant::Receive)
-                .unwrap()
                 .iter()
                 .copied()
                 .filter(|task| *task != OperationTask::ReceiveEffects)

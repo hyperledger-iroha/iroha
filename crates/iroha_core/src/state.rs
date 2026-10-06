@@ -329,6 +329,7 @@ mod committed_hash_journal;
 mod committed_transaction_context;
 mod da_hydration;
 mod exec_witness_capture;
+mod kagemusha_load_entrypoint;
 /// Original local owners and completed errors from witness capture.
 pub use exec_witness_capture::WitnessCaptureError;
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -13863,6 +13864,11 @@ pub struct StateTransaction<'block, 'state> {
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
     governance_ballot_entrypoint_binding: Option<GovernanceBallotEntrypointBindingV1>,
+    /// Immutable Load instructions from the exact external signed transaction.
+    kagemusha_load_entrypoint_binding:
+        Option<kagemusha_load_entrypoint::KagemushaLoadEntrypointBindingV1>,
+    /// Currently executing direct instruction ordinal; nested frames receive no Load authority.
+    pub(crate) current_direct_kagemusha_load_instruction_index: Option<usize>,
     /// Penalties that must be replayed after this transaction overlay is rejected.
     deferred_governance_ballot_penalties: Vec<DeferredGovernanceBallotPenaltyV1>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
@@ -37318,6 +37324,8 @@ impl<'state> StateBlock<'state> {
             genesis_execution_scope: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
+            kagemusha_load_entrypoint_binding: None,
+            current_direct_kagemusha_load_instruction_index: None,
             deferred_governance_ballot_penalties: Vec::new(),
             privacy_transaction_intent_binding: None,
             private_settlement_carrier_binding: None,
@@ -40415,6 +40423,34 @@ impl StateTransaction<'_, '_> {
     /// Returns [`Error`] if any confidential proof quota would be exceeded or counters overflow.
     pub fn register_confidential_proof(&mut self, proof_bytes: usize) -> Result<(), Error> {
         self.register_confidential_usage(proof_bytes, 1)
+    }
+    /// Reserve all native proof verification work for one KAGEMUSHA package.
+    ///
+    /// The actual package selects one sigma verification plus one Omega verification
+    /// when lineage is carried. Both fixed-width accumulator originals are included
+    /// in the lineage transport byte count. One package remains one confidential
+    /// operation, and all existing transaction/block/aggregate-byte ceilings apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] without changing accounting when any byte/count arithmetic
+    /// overflows or a confidential quota refuses the whole reservation. The existing
+    /// output owner retains completed-work accounting after later business rollback.
+    pub(crate) fn register_kagemusha_package_proof(
+        &mut self,
+        package: &iroha_data_model::kagemusha::KagemushaWalletPackageV1,
+    ) -> Result<(), Error> {
+        let lineage = package.lineage.lineage();
+        let proof_bytes = package
+            .step_proof
+            .bytes
+            .len()
+            .checked_add(lineage.map_or(0, |value| value.proof.len()))
+            .ok_or_else(|| {
+                Error::InvariantViolation("KAGEMUSHA package proof-byte count overflow".into())
+            })?;
+        let verify_calls = if lineage.is_some() { 2 } else { 1 };
+        self.register_confidential_usage(proof_bytes, verify_calls)
     }
     /// Return the exact index required by the next privacy proof in this transaction.
     #[must_use]

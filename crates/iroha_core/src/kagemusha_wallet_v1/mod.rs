@@ -2,31 +2,23 @@
 //!
 //! Native proof verification is a mandatory injected dependency. Model validation alone never
 //! authorizes a transfer. The transaction owner atomically persists transfers and permanent
-//! replay indexes; finalized load vouchers have a separate source-bound publication boundary.
+//! replay indexes. Normal block finality authenticates each retained load receipt.
 // TODO(G3/G6): qualify the complete producer catalog and online/offline flow.
 // The ledger verifier mounts only the immutable authenticated World installation.
 
+use iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1;
 use iroha_data_model::{account::AccountId, asset::AssetBalanceScope, kagemusha::*};
 use norito::{Decode, Encode};
 
 pub(crate) mod artifacts;
-mod authorizer;
-pub use authorizer::{
-    LOAD_AUTHORIZER_KEYRING_MAX_BYTES, LOAD_AUTHORIZER_MAX_KEYS, LoadAuthorizer,
-    LoadAuthorizerKeyV1, LoadAuthorizerKeyringV1, PreparedVoucher, PublicationWorker,
-};
+mod committed;
 pub(crate) mod custody;
-mod finalized;
-pub use finalized::FinalizedLedger;
+pub use committed::CommittedLoadReceipts;
 mod ledger;
-mod pending;
-pub use pending::{MAX_PENDING_PAGE, PendingPublication};
 pub(crate) mod routing;
 mod storage;
 pub(crate) mod wsv;
-pub use ledger::{
-    abandon, activate, close_loads, issue_load, pay_fee, pay_unload, publish_voucher,
-};
+pub use ledger::{abandon, activate, close_loads, issue_load, pay_fee, pay_unload};
 pub(crate) use storage::validate_snapshot;
 pub use storage::{CredentialRecord, validate_row};
 #[cfg(test)]
@@ -58,8 +50,8 @@ pub enum Error {
     /// The wallet has not been activated or is permanently closed/abandoned.
     #[error("wallet does not permit this operation")]
     Lifecycle,
-    /// Issued vouchers have not all been absorbed before closing loads.
-    #[error("unabsorbed load voucher")]
+    /// Issued receipts have not all been absorbed before closing loads.
+    #[error("unabsorbed load receipt")]
     OutstandingLoad,
     /// Arithmetic exceeded the fixed monetary or ordinal range.
     #[error("ledger amount or ordinal overflow")]
@@ -67,9 +59,9 @@ pub enum Error {
     /// Missing historical ledger record or unavailable storage.
     #[error("ledger record unavailable")]
     Unavailable,
-    /// The source block has not finalized.
-    #[error("load issuance is not finalized")]
-    NotFinalized,
+    /// The requested receipt lacks a consistent committed execution source.
+    #[error("load receipt has no committed source")]
+    NotCommitted,
     /// Ledger accounts cannot fund the whole atomic transfer batch.
     #[error("insufficient ledger balance")]
     InsufficientFunds,
@@ -106,15 +98,11 @@ pub struct Registration {
     pub reserve: AccountId,
     /// Exact balance partition; never inferred from mutable account routing.
     pub balance_scope: AssetBalanceScope,
-    /// Ledger-recorded LoadAuthorization signer certificate.
-    pub load_authorizer: KagemushaWalletSignerCertificateV1,
 }
 impl Registration {
     fn require(&self, scheme: &Digest, asset: &Digest) -> Result<()> {
         self.scheme.validate()?;
         self.asset.validate()?;
-        self.load_authorizer
-            .verify_role(&self.scheme, KagemushaWalletSignerRoleV1::LoadAuthorization)?;
         if self.scheme.scheme_id() != *scheme || self.asset.asset_digest() != *asset {
             return Err(Error::Binding);
         }
@@ -133,7 +121,7 @@ pub enum Phase {
     /// Unused enrollment was irreversibly abandoned.
     Abandoned,
 }
-/// Constant-size wallet index. It does not retain or scan the voucher history.
+/// Constant-size wallet index. It does not retain or scan the receipt history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kagemusha_wallet_v1::WalletRecord")]
 pub struct WalletRecord {
@@ -146,7 +134,8 @@ pub struct WalletRecord {
     /// First ordinal not issued by the ledger.
     pub next_load: u128,
 }
-/// Load command identity and pricing; `request_id` remains stable across transaction retries.
+/// Load command identity and pricing; `request_id` identifies the original receipt for recovery.
+/// Reusing it in another transaction fails rather than issuing a second successful receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kagemusha_wallet_v1::LoadCommand")]
 pub struct LoadCommand {
@@ -154,6 +143,10 @@ pub struct LoadCommand {
     pub scheme: Digest,
     /// Wallet incarnation.
     pub wallet: Digest,
+    /// Exact registered asset incarnation committed by the payer's transaction.
+    pub asset: Digest,
+    /// Expected next ordinal; successful execution authenticates this exact value.
+    pub ordinal: u128,
     /// Nonzero client retry identity, scoped by wallet.
     pub request_id: Digest,
     /// Net value deposited in the reserve.
@@ -178,10 +171,8 @@ pub struct Issuance {
     pub command: LoadCommand,
     /// Authenticated transaction authority whose account funded the deposit.
     pub payer: AccountId,
-    /// Body that only a finalized source may release for signing.
-    pub body: KagemushaWalletLoadVoucherBodyV1,
-    /// First published canonical voucher bytes; immutable once present.
-    pub voucher: Option<Vec<u8>>,
+    /// Exact normal-transaction receipt; its fields alone do not establish finality.
+    pub body: KagemushaWalletLoadReceiptV1,
 }
 /// One transfer of atomic asset units; reserve movements use the registered asset scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,7 +193,7 @@ pub struct Batch {
     asset: Digest,
     /// Wallet index replacement, if any.
     wallet: Option<(Digest, WalletRecord)>,
-    /// Unique issuance insertion or first voucher publication, if any.
+    /// Unique immutable issuance insertion, if any.
     issuance: Option<Issuance>,
     /// Exact-once payout insertion, if any.
     payout: Option<KagemushaWalletPayoutRecordV1>,
@@ -268,11 +259,4 @@ pub trait Transaction {
     fn fee_inputs(&self, claim: &KagemushaWalletFeeClaimV1) -> Result<FeeInputs>;
     /// Commit the entire verified batch, or leave the transaction unchanged.
     fn apply(&mut self, batch: Batch) -> Result<()>;
-}
-/// Finalized ledger read capability. Implementations authenticate the exact retained issuance
-/// against a finalized block, including transaction inclusion and height; a live WSV read or
-/// caller-provided voucher body is insufficient. No timeout or failed delivery refunds a load.
-pub trait FinalizedSource {
-    /// Return the source-bound issuance only after its block finalized.
-    fn issuance(&self, scheme: &Digest, wallet: &Digest, request: &Digest) -> Result<Issuance>;
 }

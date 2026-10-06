@@ -8,10 +8,9 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle,
-    kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
-    state::{State, World},
+    state::World,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -30,25 +29,33 @@ use std::{
     time::Duration,
 };
 use tower::ServiceExt as _;
+#[path = "fixtures.rs"]
+mod fixtures;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TOOL_LIST_PAGE_LIMIT: usize = 128;
-fn build_router(cfg: iroha_config::parameters::actual::Root) -> iroha_torii::TestApiRouterRuntime {
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+fn build_router(mut cfg: iroha_config::parameters::actual::Root) -> fixtures::CommittedToriiRouterRuntime {
+    let native_chain = fixtures::commit_genesis_fixture(
         World::default(),
-        kura.clone(),
-        LiveQueryStore::start_test(),
         cfg.common.chain.clone(),
-        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
-    ));
+        &cfg.common.key_pair,
+        Vec::new(),
+        None,
+        iroha_primitives::time::TimeSource::new_system(),
+    );
+    let state = native_chain.state().clone();
+    let kura = native_chain.kura().clone();
+    let network_id = native_chain.network_id();
+    let local_peer_id = native_chain.validators()[0].0.clone();
+    cfg.genesis.expected_hash = native_chain.genesis().hash();
+    cfg.genesis.public_key = cfg.common.key_pair.public_key().clone();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
     let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let torii = Torii::new_with_handle(
         cfg.common.chain.clone(),
-        *state.network_id_ref(),
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -64,10 +71,26 @@ fn build_router(cfg: iroha_config::parameters::actual::Root) -> iroha_torii::Tes
             MaybeTelemetry::disabled(),
         ),
     )
-    .expect("valid Torii MCP fixture");
-    torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes")
+    .expect("valid Torii MCP fixture")
+    .with_local_peer_id(local_peer_id);
+    fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    )
+}
+#[tokio::test]
+async fn mcp_fixture_has_applied_global_root_authority() {
+    use iroha_core::state::StateReadOnly as _;
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let app = build_router(test_utils::mk_minimal_root_cfg());
+    assert_eq!(app.state().view().height(), 1);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state().view().world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
+    );
+    app.shutdown().await;
 }
 async fn read_json_body(response: axum::response::Response) -> Value {
     let bytes = response
@@ -4799,8 +4822,8 @@ async fn mcp_jsonrpc_connect_session_create_derives_sid_from_exact_identity() {
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
-    let network_id = test_utils::signed_query_network_id().to_string();
     let app = build_router(cfg);
+    let network_id = app.network_id().to_string();
     for (id, tool_name, app_key_byte, nonce_byte) in
         [(2081, "iroha.connect.session.create", 0x42u8, 0x22u8)]
     {

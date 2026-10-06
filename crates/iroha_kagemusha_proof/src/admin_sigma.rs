@@ -1,7 +1,8 @@
 //! Administrative sigma relations over the exact G1 state and statement.
 //!
 //! Bootstrap proves the initial zero-value state, empty maps and counters.
-//! Load, Unload, Retiring and `ArchiveSent` prove exact private state effects,
+//! Load, Unload, Retiring, `ArchiveSent` and the shared five-kind Refresh class
+//! prove exact private state effects,
 //! checked value arithmetic and statement/head/lineage continuity. A separately authenticates
 //! their objects, map updates and predecessor proofs. These leaves are not
 //! stand-alone enrollment, monetary authorization or wallet acceptance APIs.
@@ -36,6 +37,10 @@ pub use consuming::{ConsumingWitness, RetiringCircuit, UnloadCircuit};
 #[path = "admin_sigma/archive.rs"]
 mod archive;
 pub use archive::{ArchiveCircuit, ArchiveWitness};
+
+#[path = "admin_sigma/refresh.rs"]
+mod refresh;
+pub use refresh::{RefreshCircuit, RefreshWitness};
 
 /// Fixed domain size of the Bootstrap sigma class.
 pub const BOOTSTRAP_K: u32 = 12;

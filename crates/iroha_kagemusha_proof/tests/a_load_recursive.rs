@@ -1973,11 +1973,11 @@ fn reduced_q_two_bus_tagged_three_bus_load_capacity() {
 #[test]
 #[ignore = "genuine fixed-key production Load A1/W0/A2/W1/A3/W2/A4 proof and restoration differential"]
 fn installed_native_load_proves_and_restores_all_four_stages() {
-    let rooted = bootstrap_outer::rooted_bootstrap_omega(false);
-    let profile = SourceProfile::Serialized {
+    let rooted = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
+    let profile = SourceProfile::Tagged {
         buses: iroha_kagemusha_proof::a_relation::native::load::SOURCE_RANGE_BUSES,
     };
-    assert!(load_source_profiles(&rooted, &[profile], None, false, false, true).is_some());
+    assert!(load_source_profiles(&rooted, &[profile], Some(2), false, false, true).is_some());
 }
 
 fn native_installed_load_differential(
@@ -1990,7 +1990,7 @@ fn native_installed_load_differential(
     use iroha_kagemusha_proof::a_relation::native::load as native;
     assert_eq!(
         first.profile,
-        SourceProfile::Serialized {
+        SourceProfile::Tagged {
             buses: native::SOURCE_RANGE_BUSES,
         }
     );

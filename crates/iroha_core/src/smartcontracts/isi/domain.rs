@@ -801,9 +801,6 @@ pub mod isi {
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet::try_from(permission) {
             return &permission.asset_definition == asset_definition_id;
         }
-        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher::try_from(permission) {
-            return &permission.asset_definition == asset_definition_id;
-        }
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
             return &permission.asset_definition == asset_definition_id;
         }

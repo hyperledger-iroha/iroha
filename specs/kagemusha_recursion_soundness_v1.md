@@ -223,6 +223,20 @@ combined Omega-plus-sigma digest from both original active tapes. A safe decoder
 not permission to omit an original deferred obligation; terminal mode selection
 still follows the branch uniqueness argument above.
 
+The transport verifier takes the trusted successor Omega-key digest explicitly.
+Its verifier-key witness is hard-bound to that digest, while a foreign incoming
+identity or proof contributes a false soft verdict. The digest is absent from
+`public320`; the production active decoder already supplies the trusted successor
+digest as lineage field 17. Removing the redundant owner equality therefore
+hardens the shared API boundary without identifying a current-wire admission bug.
+Substituting the verifier key itself remains a hard failure.
+An actual k16 PIPA-R component regression generates proofs under two distinct
+keys with the same descriptor. The foreign proof satisfies the transport
+constraints only with a false verdict, both when field 17 uses the trusted key
+and when it proposes the foreign identity. Substituting the verifier-key witness
+fails for either verdict. The source relation binds public columns only; this
+tests the cryptographic boundary, not admission of a complete Omega program.
+
 Component tests construct a sigma projection with neither an active carrier nor
 a step digest and require the complete fixed owners to reject all proposed raw
 object triples, Q digest/index/chunk substitutions and original-length changes.
@@ -240,5 +254,133 @@ unchanged k16 capacity gate: its diagnostic layout used 73,112 sponge rows,
 62,148 main rows and 44,118 range rows. The diagnostic k18 layout was rejected,
 not accepted as qualification. The new fixed ProofDigest stage separates the
 combined hash from semantic decoding; every stage still checks known/unknown
-layout equality and must produce and decide its actual k16 proof. The full
-nine-stage result and current catalog remain unqualified until that run finishes.
+layout equality and must produce and decide its actual k16 proof. The first nine-stage attempt produced genuine A1–A5 proofs with maxima of
+29,600, 60,976, 55,056, 64,195 and 64,787 rows respectively, including the
+maximum-capacity digest and Objects owners. A6 then failed at 67,044 sponge rows
+when hard current authorization and own-sigma hashing were combined. The current
+schedule moves the mandatory OwnProof task into A1, leaving Q0 verification at
+A2 and current authorization/Q1 at A6. The same context binds OwnProof's exact
+sigma bytes, Q0 exports and own Receipt before later Q verification; no task or
+hard predicate is removed. An unknown-witness preflight now checks every fixed
+owner's capacity before producing proofs; it does not replace the actual
+known/unknown equality and real-proof checks. Moving OwnProof reduced A6 to
+64,972 rows, with A1 at 35,446 rows; that nine-stage preflight then rejected
+Signatures plus Q2 at 69,523 rows. No proof was produced by that preflight.
+
+The measured ten-stage schedule hard-verifies and folds Q2 alone at A7, then
+executes Signatures at A8. A9 owns Nonmembership/Blacklist. Signatures extracts a typed projection of the exact Q2 public cells in
+`D_ctx`; it cannot construct a verified-Q result or a pending opening. The
+complete ContextPlan pins the Q key digest and requires each Q exactly once;
+the Receive plan rejects a missing or future Q2 owner. The projection checks the
+fixed signature schema, retains all original 128-bit key/signature limbs and
+boolean verdicts, and binds every scalar half to the same context. The Q2 proof
+and its opening are still hard-verified and accumulated by A7, so these are
+constrained exports of that exact proof, not caller-selected signature verdicts.
+Omitting the Q2 owner, its W continuation, context equality or terminal obligation
+closure invalidates this composition argument. The ten-stage preflight fit
+A1–A9 with maxima 35,483, 61,013, 55,093, 64,232, 64,824, 65,009, 62,530,
+57,794 and 62,715 rows. It then rejected terminal A10 at 84,545 sponge rows;
+that attempt produced no Receive A proofs.
+
+The twelve-stage candidate separated the two depth32 map effects into
+mandatory hard owners: consumed-credit at A10 (task36) and permanent credit record
+at A11 (task37), followed by terminal Effects at A12. Each map owner binds the
+same complete statement/state/lineage context, all five result claims, all four
+modes and exact Payment digest. Each independently derives the identical complete
+mode verdict; no new result bit is proposed. The consumed owner authenticates the
+exact insertion/no-op and successor consumed root, including empty insertion-slot
+checks. The credit owner authenticates and preserves the first Payment/burn record
+and successor credit root. Terminal Effects applies the exact adjusted-burn rule,
+preserves unrelated roots, and closes the ordinary terminal obligations. Catalog
+admission requires both hard owners exactly once before terminal; a terminal-only
+map projection is not sufficient. The composed `MapEffectsChip::receive` calls all
+three effect parts for standalone consumers. The twelve-stage preflight fit
+A1–A9, then rejected consumed-effect A10 at 69,375 sponge rows. The current fixed
+ten-stage candidate moves both hard map owners into A1 alongside OwnProof and
+the authenticated receiver predecessor. This avoids the later accumulated trace
+cost; it does not derive or accept a result early. A1 binds the same complete
+context, including all five proposed results, while each mandatory later owner
+still derives its result before terminal admission. The terminal A10 performs
+burn/preservation and complete obligation closure. The ordinary burn candidate
+now passes all ten actual A proofs and nine W proofs at these fixed capacities.
+Independent code review found no omitted map predicate or premature acceptance
+in this ordering; that review assumes the complete source-key chain executes
+every declared owner and does not substitute for actual proof/restoration tests.
+
+The ordinary full-capacity preflight now fits all ten stages, with maxima
+65,157; 61,050; 55,130; 64,269; 64,861; 65,046; 62,567; 57,831; 62,752; and
+54,945 rows. The first native A relation matches the independent test circuit's
+public context, fixed columns, permutation and advice layout and passes strict
+constraints. The ordinary burn chain also passes all ten native A layouts and
+strict constraints against the independent proof keys, restores all ten A and
+nine W checkpoints, rejects wrong stages, truncation, foreign sessions and
+substituted original inputs, and preserves exact terminal exports. Its complete
+test takes 1,819.06 seconds on this busy host; this is a component test duration,
+not a qualified latency measurement or final Omega admission. The renewed
+variant also passes its complete ten-A/nine-W proof chain, every native stage's
+layout/strict constraints and checkpoint mutations in 1,990.77 seconds. Its A1
+maximum is 65,527 rows, only two below the strict 65,529 gate; that actual stage
+passes unchanged. Its larger Q2 owner uses 63,677 rows and terminal uses 55,315
+rows. No spare-row or runtime margin is inferred from these constraint counts.
+
+The split map regression passes acceptance,
+burn insertion and burn no-op with known/unknown equality and mutations of the
+verdict, roots, authenticated paths, Payment and credit identity. The twelve-stage
+Receive component suite passes eleven checks, including the fixed task/Q-owner
+schema and original-byte context mutations. Acceptance and corrected-claim
+whole-chain closure still require their own actual proof results.
+
+The first distinct-wallet accepted-chain attempt reached actual A1–A4 proofs,
+then correctly rejected the fixture at Objects A5: its Payment encoded the
+receiver's key in the payer-key field. The fixture now copies that key from the
+retained payer credential and has a direct regression check. That failure is not
+an accepted credit result; the corrected chain must run again.
+
+The native producer pins this full-envelope schedule, exact current internal
+Tagged4 and terminal Tagged3 descriptors, installed A/W keys, and both k16
+parameter sets. Incoming decoder fields, results and corrections remain witness
+proposals whose fixed circuit owners authenticate the original sources. Native
+preparation checks hard predecessor/Q proofs and decides selected incoming claims;
+checkpoint restoration checks exact proof frames and complete accumulators. The
+producer never generates runtime keys or chooses a witness-dependent profile.
+The native key-ownership revision retains only installed descriptor/VK metadata.
+Each proving call borrows its single exact stage PK, rejects a descriptor or VK
+mismatch before proving, and releases the borrow on return. Restoration and
+next-circuit preparation use no PK. Component tooling likewise releases each
+generated PK and retains verifier metadata; later native parity reconstructs
+one stage key at a time. This removes implicit simultaneous residency of nineteen
+PKs without changing circuits or proof formats. The full borrowed-key regression
+and deterministic proof-byte parity remain pending; memory gate qualification
+still requires actual peak measurements under the agreed harness.
+Its sigma classes are pinned to the admitted k12 or k14 source descriptors. The
+installed descriptor-sized Omega transport (excluding public320) plus incoming
+sigma must fit the actual 8,277-byte proof budget; the full raw capacities remain
+unchanged for total malformed-input handling.
+Its pure component checks cover every result/mode combination, distinct deciding
+corrections on both curves, exact original lengths/tails and all signed limbs.
+The shared circuit joint-length predicate additionally passes every one of 8,278
+boundary splits and both one-byte-over variants under identical fixed/permutation
+layouts; native admission tests reject the corresponding over-bound inputs and
+individual-capacity/overflow cases. This arithmetic component does not replace
+the original active-tape provenance and capacity checks.
+TODO: complete the borrowed-key regression, accepted native stage parity and
+checkpoint mutation tests, corrected-claim owner chains and final Omega admission.
+
+The completed distinct payer-Load/receiver-Bootstrap shared-key source fixture is
+component evidence under the superseded Load voucher trust construction. The
+human-selected ordinary-transaction/finality Load replacement must rebuild the
+source/catalog before release qualification or artifact freezing. No result here
+establishes the final catalog, phone performance or the durable-completion gate.
+
+The adversarial test-only compact source helper uses a deliberately forged
+succinct PIPA-AS transcript, following the recursion mutation test. It requires
+the resulting original Vesta claim to fail decide and derives a distinct deciding
+commitment under exactly the same challenges. The standalone forged-fold component
+passes. The complete common-key helper also passes: a genuine 3,712-byte Omega
+under the immutable shared key verifies while its original Vesta claim fails
+decide, and the distinct correction with identical challenges decides. Both
+signed source chains and the distinct receiver are rebuilt under that same key;
+the adversarial Omega keeps its source A unchanged. This test takes 1,984.25
+seconds on the busy host and is superseded-Load-trust component evidence, never
+a valid monetary head. Corrected Receive burn/no-op proof chains remain open. Production proving
+and complete-decide checks are unchanged, and this is never a valid monetary head.

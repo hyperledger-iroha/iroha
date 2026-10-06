@@ -1357,6 +1357,31 @@ is `5768b457b2b56ea5d66f932c3a3de9bb503af5b8c5c9a056b2a4f27f8d07bb1b`
 and the executable is
 `c2858721b9fa187e55a0fc6a2781f44c0b25308f76bfe4f4b5ffd8937c332e34`.
 
+
+The common two-terminal Bootstrap/Load and three-terminal
+Bootstrap/Load/Send-mask0 component catalogs also pass immutable-key continuity.
+Every signed source chain is rebuilt under its actual common Omega digest;
+source and outer VK bytes remain unchanged, all outer proofs verify and both
+transported obligations decide. The schedules use 64,991 and 64,996 primary
+range rows; each outer proof is 3,712 bytes / 4,800 bytes transported. The full
+three-terminal test passes in 2,754.43 seconds on the busy host, with source and
+binary provenance in `target/qualification/compact-three-terminal-catalog-merged2-source.json`
+and outcomes in the matching `.log`. This is not timing qualification.
+
+These Load-derived component chains use the superseded dedicated-publisher
+voucher trust model. The accepted ordinary-transaction/block-finality Load
+replacement must enter the native and recursive producers before rebuilding a
+current release catalog. No measured component key is an admitted release key.
+The other seven Send masks and full fourteen-terminal composition remain open.
+
+Fresh merged-wire size tests pass 2/2 in
+`target/qualification/payment-current-encoding-size.log`: the fixed Payment
+overhead remains 1,723 bytes and explicitly structural 3,456-byte sigma /
+4,800-byte Omega samples encode to 9,979 bytes. The joint proof budget is 8,277
+bytes, leaving 4,821 bytes for Omega with that sigma size and a 21-byte margin
+for this component. Encoding fit does not establish proof acceptance under a
+completed current catalog or the two-second durable-completion requirement.
+
 ## 29. Retained hard integer bounds on canonical S6
 
 `CanonicalS6` now distinguishes its declared arithmetic modulus from a private

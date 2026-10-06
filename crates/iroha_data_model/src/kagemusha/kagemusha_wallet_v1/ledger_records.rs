@@ -90,6 +90,7 @@ pub enum KagemushaWalletPayoutKeyV1 {
 /// Durable original payout result returned by every valid exact retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_core::kagemusha_wallet_v1::Payout")]
+#[repr(align(16))]
 pub struct KagemushaWalletPayoutRecordV1 {
     /// Permanent exact-once key.
     pub key: KagemushaWalletPayoutKeyV1,

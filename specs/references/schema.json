@@ -972,6 +972,12 @@
       "type": "u8"
     }
   },
+  "Array<u8, 97>": {
+    "Array": {
+      "len": 97,
+      "type": "u8"
+    }
+  },
   "ArtifactAbiHashMismatchInfo": {
     "Struct": [
       {
@@ -2448,7 +2454,7 @@
     "Enum": [
       {
         "discriminant": 0,
-        "tag": "Halo2IpaPasta"
+        "tag": "NativePipaRPasta"
       },
       {
         "discriminant": 1,
@@ -3263,22 +3269,6 @@
       {
         "name": "deployment_id",
         "type": "String"
-      }
-    ]
-  },
-  "CanPublishKagemushaLoadVoucher": {
-    "Struct": [
-      {
-        "name": "asset_definition",
-        "type": "AssetDefinitionId"
-      },
-      {
-        "name": "scheme",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "authorizer_certificate",
-        "type": "Array<u8, 32>"
       }
     ]
   },
@@ -4475,8 +4465,8 @@
         "type": "bool"
       },
       {
-        "name": "halo2",
-        "type": "Halo2Status"
+        "name": "trace",
+        "type": "DiagnosticTraceStatus"
       }
     ]
   },
@@ -5046,6 +5036,11 @@
         "discriminant": 23,
         "tag": "Sccp",
         "type": "SccpEvent"
+      },
+      {
+        "discriminant": 24,
+        "tag": "KagemushaLoadCommitted",
+        "type": "KagemushaLoadCommittedV1"
       }
     ]
   },
@@ -5179,6 +5174,11 @@
         "discriminant": 25,
         "tag": "Sccp",
         "type": "SccpEventFilter"
+      },
+      {
+        "discriminant": 26,
+        "tag": "KagemushaLoadCommitted",
+        "type": "Option<Array<u8, 32>>"
       }
     ]
   },
@@ -5300,6 +5300,26 @@
       {
         "name": "field",
         "type": "String"
+      }
+    ]
+  },
+  "DiagnosticTraceStatus": {
+    "Struct": [
+      {
+        "name": "enabled",
+        "type": "bool"
+      },
+      {
+        "name": "max_batch",
+        "type": "u32"
+      },
+      {
+        "name": "worker_threads",
+        "type": "u64"
+      },
+      {
+        "name": "queue_cap",
+        "type": "u64"
       }
     ]
   },
@@ -11000,34 +11020,6 @@
       }
     ]
   },
-  "Halo2Status": {
-    "Struct": [
-      {
-        "name": "enabled",
-        "type": "bool"
-      },
-      {
-        "name": "curve",
-        "type": "String"
-      },
-      {
-        "name": "backend",
-        "type": "String"
-      },
-      {
-        "name": "max_k",
-        "type": "u32"
-      },
-      {
-        "name": "verifier_budget_ms",
-        "type": "u64"
-      },
-      {
-        "name": "verifier_max_batch",
-        "type": "u32"
-      }
-    ]
-  },
   "HandleBudget": {
     "Struct": [
       {
@@ -11496,6 +11488,14 @@
     ]
   },
   "Json": "String",
+  "KagemushaLoadCommittedV1": {
+    "Struct": [
+      {
+        "name": "receipt_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "KagemushaWalletLedgerActionV1": {
     "Enum": [
       {
@@ -11505,58 +11505,69 @@
       },
       {
         "discriminant": 1,
+        "tag": "install_verifier_pack",
+        "type": "KagemushaWalletLedgerActionV1::InstallVerifierPack"
+      },
+      {
+        "discriminant": 2,
         "tag": "activate",
         "type": "Vec<u8>"
       },
       {
-        "discriminant": 2,
+        "discriminant": 3,
         "tag": "abandon",
         "type": "Vec<u8>"
       },
       {
-        "discriminant": 3,
+        "discriminant": 4,
         "tag": "close_loads",
         "type": "Vec<u8>"
       },
       {
-        "discriminant": 4,
+        "discriminant": 5,
         "tag": "issue_load",
         "type": "KagemushaWalletLedgerActionV1::IssueLoad"
       },
       {
-        "discriminant": 5,
+        "discriminant": 6,
         "tag": "unload",
         "type": "Vec<u8>"
       },
       {
-        "discriminant": 6,
+        "discriminant": 7,
         "tag": "claim_fee",
         "type": "Vec<u8>"
       },
       {
-        "discriminant": 7,
+        "discriminant": 8,
         "tag": "retain_certificate",
         "type": "KagemushaWalletLedgerActionV1::RetainCertificate"
       },
       {
-        "discriminant": 8,
+        "discriminant": 9,
         "tag": "retain_credential",
         "type": "KagemushaWalletLedgerActionV1::RetainCredential"
       },
       {
-        "discriminant": 9,
+        "discriminant": 10,
         "tag": "retain_request",
         "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::InstallVerifierPack": {
+    "Struct": [
+      {
+        "name": "asset",
+        "type": "Array<u8, 32>"
       },
       {
-        "discriminant": 10,
-        "tag": "publish_voucher",
-        "type": "KagemushaWalletLedgerActionV1::PublishVoucher"
+        "name": "manifest_digest",
+        "type": "Array<u8, 32>"
       },
       {
-        "discriminant": 11,
-        "tag": "rotate_load_authorizer",
-        "type": "KagemushaWalletLedgerActionV1::RotateLoadAuthorizer"
+        "name": "pack",
+        "type": "Vec<u8>"
       }
     ]
   },
@@ -11565,6 +11576,14 @@
       {
         "name": "wallet",
         "type": "Array<u8, 32>"
+      },
+      {
+        "name": "asset",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "ordinal",
+        "type": "u128"
       },
       {
         "name": "request_id",
@@ -11577,18 +11596,6 @@
       {
         "name": "charge",
         "type": "Option<KagemushaWalletLoadChargeV1>"
-      }
-    ]
-  },
-  "KagemushaWalletLedgerActionV1::PublishVoucher": {
-    "Struct": [
-      {
-        "name": "request_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "voucher",
-        "type": "Vec<u8>"
       }
     ]
   },
@@ -11609,10 +11616,6 @@
       {
         "name": "balance_scope",
         "type": "AssetBalanceScope"
-      },
-      {
-        "name": "load_authorizer",
-        "type": "Vec<u8>"
       }
     ]
   },
@@ -11640,18 +11643,7 @@
       }
     ]
   },
-  "KagemushaWalletLedgerActionV1::RotateLoadAuthorizer": {
-    "Struct": [
-      {
-        "name": "asset",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "certificate",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
+  "KagemushaWalletLedgerKeyV1": "Array<u8, 97>",
   "KagemushaWalletLedgerV1": {
     "Struct": [
       {
@@ -11676,27 +11668,7 @@
       }
     ]
   },
-  "KagemushaWalletLoadIssuanceV1": {
-    "Struct": [
-      {
-        "name": "request_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "payer",
-        "type": "AccountId"
-      },
-      {
-        "name": "body",
-        "type": "KagemushaWalletLoadVoucherBodyV1"
-      },
-      {
-        "name": "voucher",
-        "type": "Option<Vec<u8>>"
-      }
-    ]
-  },
-  "KagemushaWalletLoadVoucherBodyV1": {
+  "KagemushaWalletLoadReceiptV1": {
     "Struct": [
       {
         "name": "version",
@@ -11712,6 +11684,10 @@
       },
       {
         "name": "wallet_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "request_id",
         "type": "Array<u8, 32>"
       },
       {
@@ -11739,7 +11715,41 @@
         "type": "u64"
       },
       {
-        "name": "authorizer_certificate",
+        "name": "payer",
+        "type": "AccountId"
+      }
+    ]
+  },
+  "KagemushaWalletPayoutKeyV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Unload",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Fee",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "KagemushaWalletPayoutRecordV1": {
+    "Struct": [
+      {
+        "name": "key",
+        "type": "KagemushaWalletPayoutKeyV1"
+      },
+      {
+        "name": "source",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "transaction",
         "type": "Array<u8, 32>"
       }
     ]
@@ -15863,6 +15873,18 @@
       {
         "name": "reason",
         "type": "String"
+      }
+    ]
+  },
+  "NativePipaRProofV1": {
+    "Struct": [
+      {
+        "name": "public_inputs",
+        "type": "Vec<Array<u8, 32>>"
+      },
+      {
+        "name": "proof",
+        "type": "Vec<u8>"
       }
     ]
   },

@@ -61,7 +61,67 @@ pub struct ReceiveSignatureInputs<'a> {
     pub objects: &'a ReceiveSignedObjects,
     /// Soft Send receipt/Request slots, followed by the quoted credential and
     /// fixed-root certificate only in the renewed variant.
-    pub incoming: &'a SignatureQCells,
+    pub incoming: &'a ReceiveSignatureQProjection,
+}
+
+/// Exact context-bound incoming Q2 exports. Q2 remains a separately verified
+/// and folded hard obligation at its unique preceding (or same) fixed stage.
+#[derive(Clone, Debug)]
+pub struct ReceiveSignatureQProjection {
+    projection: crate::a_relation::signature::SignatureQProjection,
+}
+impl ReceiveSignatureQProjection {
+    /// Extract only the fixed Q2 schema and public cells of this Signatures owner.
+    /// This does not verify Q2 or create a replacement deferred opening.
+    /// # Errors
+    /// Wrong owner, missing/future Q2 verification, wrong fixed schema or public shape.
+    pub fn from_context(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        policy: OwnPolicy,
+        input: &ContextInputs<'_>,
+    ) -> Result<Self, Error> {
+        require_task(plan, stage, OperationTask::ReceiveSignatures)?;
+        let owner = (0..plan.stage_count())
+            .find(|i| plan.q_partition(*i).is_some_and(|q| q.contains(&2)))
+            .ok_or(Error::Synthesis)?;
+        if owner > usize::try_from(stage).map_err(|_| Error::BoundsFailure)? {
+            return Err(Error::Synthesis);
+        }
+        let schemas =
+            super::ReceiveStagePlan::signature_schemas(plan.operation().frame().variant(), policy)?;
+        Ok(Self {
+            projection: crate::a_relation::signature::project_signature_q(
+                chip,
+                region,
+                plan.operation(),
+                2,
+                &schemas[1],
+                input.q_instances.get(2).ok_or(Error::Synthesis)?,
+            )?,
+        })
+    }
+    /// Original raw message, key/signature and exact soft verdict exports.
+    pub fn slots(&self) -> &[crate::a_relation::SignatureProofCells] {
+        self.projection.slots()
+    }
+    fn bind_context(
+        &self,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+    ) -> Result<(), Error> {
+        require_task(plan, stage, OperationTask::ReceiveSignatures)?;
+        self.projection.bind_context(
+            region,
+            plan.operation(),
+            2,
+            input.q_instances.get(2).ok_or(Error::Synthesis)?,
+        )
+    }
 }
 
 fn kinds(variant: Variant) -> Result<Vec<ObjectKind>, Error> {
@@ -351,7 +411,7 @@ impl ReceiveAuthorizationObjects {
         require_task(plan, stage, OperationTask::ReceiveSignatures)?;
         self.bind_context(region, plan, input)?;
         proof.objects.bind_context(region, plan, input)?;
-        bind_bundle(region, plan, stage, input, proof.incoming)?;
+        proof.incoming.bind_context(region, plan, stage, input)?;
         let slots = proof.incoming.slots();
         let renewed = self.variant == Variant::ReceiveRenewed;
         if slots.len() != if renewed { 4 } else { 2 }

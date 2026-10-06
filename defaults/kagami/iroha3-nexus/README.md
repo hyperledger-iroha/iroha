@@ -22,11 +22,7 @@ Files:
 
 Runtime keys are deliberately absent. A regenerated deployable bundle fails closed until every file named by its validator configs is provisioned by the operator.
 
-Ordinary validator configs omit `kagemusha_load_authorizer`. An operator selects
-the issuer publication service explicitly by adding that table with owner-only
-`keyring_file` and `submitter_key_file` bindings. Selected roles require genuine
-network-bound Load-role custody, ledger permissions and finite fee caps; profile
-generation does not create monetary authority.
+Wallet loads are ordinary transactions authenticated by finalized blocks.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-nexus --nexus-xor-asset-definition-id <BASE58>

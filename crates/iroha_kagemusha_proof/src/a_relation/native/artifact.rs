@@ -1,0 +1,106 @@
+//! Exact source descriptors derived from the installed producer's configuration.
+//!
+//! Descriptor checks bind the arithmetic layout, transcript and public schema.
+//! They do not replace authentication of the stage's verifying-key commitments.
+
+use iroha_pasta::Fp;
+use iroha_plonk::{
+    DescriptorBinding,
+    cs::{
+        CircuitDescriptorV1, CircuitDescriptorV2, ConstraintSystem, CurveV1, DescriptorConfig,
+        InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV1, TranscriptV2,
+    },
+    frontend::Circuit,
+};
+
+/// Reconstruct the fixed k16 source descriptor without synthesizing a witness.
+/// The caller supplies its concrete circuit and circuit-fixed profile parameters.
+/// No imported artifact can select a different configuration through this helper.
+pub(super) fn source_descriptor<C: Circuit<Fp>>(params: C::Params) -> Option<DescriptorBinding> {
+    let mut meta = ConstraintSystem::default();
+    C::configure_with_params(&mut meta, params);
+    finalize(meta)
+}
+
+fn finalize(meta: ConstraintSystem<Fp>) -> Option<DescriptorBinding> {
+    if meta.instance_lengths() != [69] {
+        return None;
+    }
+    // Compression is disabled for these source classes. Each selector becomes
+    // its own fixed column, so its activation rows affect the VK commitments
+    // but cannot affect the descriptor. Empty rows avoid allocating a witness.
+    let activations = vec![Vec::new(); meta.num_selectors()];
+    let finalized = meta.finalize(&activations, false).ok()?;
+    let layout = CircuitDescriptorV1::from_constraint_system(
+        &finalized,
+        DescriptorConfig {
+            curve: CurveV1::Vesta,
+            k: 16,
+            // This is only the engine's common layout builder. The resulting
+            // binding below is exclusively the PIPA-R V2 descriptor.
+            transcript: TranscriptV1::Blake2bChallenge255,
+            instance_mode: InstanceModeV1::Direct,
+            proof_suffix: ProofSuffixV1::FoldedGenerator,
+        },
+    )
+    .ok()?;
+    DescriptorBinding::new_v2(
+        CircuitDescriptorV2::from_layout(
+            layout,
+            TranscriptV2::KagemushaPoseidonRp57Base,
+            vec![InstanceType::Bounded],
+        )
+        .ok()?,
+    )
+    .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_plonk_gadgets::bytes::tape::BytesConfig;
+    use iroha_plonk_recursion::verifier::VerifierConfig;
+
+    fn configured(tagged: bool, buses: usize, public_length: usize) -> ConstraintSystem<Fp> {
+        let mut meta = ConstraintSystem::default();
+        if tagged {
+            VerifierConfig::<iroha_pasta::Ep>::configure_serialized_foreign_tagged(
+                &mut meta, buses,
+            )
+            .unwrap();
+        } else {
+            VerifierConfig::<iroha_pasta::Ep>::configure_serialized_foreign(&mut meta, buses)
+                .unwrap();
+        }
+        let a = meta.advice_column();
+        let b = meta.advice_column();
+        BytesConfig::configure(&mut meta, a, b);
+        let public = meta.instance_column(public_length);
+        meta.enable_equality(public);
+        meta
+    }
+
+    #[test]
+    fn current_native_sources_share_exact_tagged3_and_reject_retired_layout() {
+        let expected = finalize(configured(true, 3, 69)).unwrap();
+        assert_eq!(
+            source_descriptor::<super::super::bootstrap::StageCircuit>(()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            source_descriptor::<super::super::load::StageCircuit>(()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            source_descriptor::<super::super::send::StageCircuit>(()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            source_descriptor::<super::super::consuming::StageCircuit>(()).unwrap(),
+            expected
+        );
+        assert_ne!(finalize(configured(false, 4, 69)).unwrap(), expected);
+        assert_ne!(finalize(configured(true, 4, 69)).unwrap(), expected);
+        assert!(finalize(configured(true, 3, 68)).is_none());
+    }
+}

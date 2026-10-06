@@ -1,11 +1,8 @@
-//! Canonically authenticated finalized issuance reads. This route never signs a voucher,
-//! releases an unfinalized body, or accepts a caller-supplied proof verdict.
+//! Account-authenticated recovery of ordinary Load receipts from committed state.
+//! Returned data requires independent block-finality verification before wallet use.
 use super::*;
 use iroha_allocation::AllocationBudget;
-use iroha_core::kagemusha_wallet_v1::FinalizedLedger;
-use iroha_data_model::sumeragi::finality::{
-    NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityLimits,
-};
+use iroha_core::kagemusha_wallet_v1::CommittedLoadReceipts;
 
 struct IssuanceBody {
     bytes: iroha_allocation::ChargedBuffer<u8>,
@@ -71,7 +68,7 @@ pub(crate) async fn handler(
     };
     let principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     // This endpoint preserves the canonical binary issuance frame. There is no JSON fallback
-    // that could erase the distinction between an unsigned body and retained voucher bytes.
+    // that could replace the exact original terms with an unbound projection.
     if !matches!(
         negotiate_heavy_query_response_format(&headers),
         Ok(ResponseFormat::Norito)
@@ -94,35 +91,18 @@ pub(crate) async fn handler(
     let response =
         routing::run_admitted_blocking(admission, "KAGEMUSHA issuance worker failed", move || {
             let budget = AllocationBudget::new(bytes);
-            let limits = NativeFinalityLimits {
-                block_bytes: maximum.min(NATIVE_FINALITY_MAX_BLOCK_BYTES),
-                journal_bytes: maximum
-                    .saturating_mul(2)
-                    .min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
-                block_count: 8,
-                allocated_bytes: maximum.saturating_mul(4),
-            };
-            let _source = budget
-                .try_reserve_bytes(maximum.saturating_mul(12))
+            let limits = norito::DecodeLimits::new(maximum, maximum, maximum * 4, maximum * 4, 128);
+            let _decoded = budget
+                .try_reserve_bytes(maximum * 4)
                 .map_err(|_| crate::native_projection_response::capacity())?;
             let view = state.view();
-            let issuance = norito::core::with_decode_limits_scope(
-                limits.decode_limits().map_err(|_| unavailable())?,
-                || {
-                    FinalizedLedger::new(&view, limits)
-                        .map_err(|_| unavailable())?
-                        .issuance_for(&payer, &scheme, &wallet, &request, maximum)
-                        .map_err(|_| unavailable())
-                },
-            )?;
+            let receipt = CommittedLoadReceipts::new(&view, maximum, limits)
+                .map_err(|_| unavailable())?
+                .receipt_for(&payer, &scheme, &wallet, &request)
+                .map_err(|_| unavailable())?;
             let body = IssuanceBody {
                 bytes: crate::native_projection_response::encode_canonical(
-                    &iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadIssuanceV1 {
-                        request_id: issuance.command.request_id,
-                        payer: issuance.payer,
-                        body: issuance.body,
-                        voucher: issuance.voucher,
-                    },
+                    &receipt,
                     maximum,
                     &budget,
                     unavailable,

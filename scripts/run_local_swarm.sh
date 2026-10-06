@@ -2,31 +2,20 @@
 set -euo pipefail
 
 # Bare-metal 4-node swarm (no Docker). Run from repo root.
-# Prerequisites: Bash, Python 3, Cargo or existing target/release binaries, and
-# genuine operator-provisioned Kagemusha Load keyrings and ledger submitter keys.
+# Prerequisites: Bash, Python 3, Cargo or existing target/release binaries.
 # Required existing paired GENESIS_PUBLIC_KEY_FILE / GENESIS_PRIVATE_KEY_FILE and
 # GENESIS_CREATION_TIME_MS pin the operator-admitted signed network. No fresh
 # genesis signer or implicit wall-clock network identity is generated.
-# Required KAGEMUSHA_LOAD_AUTHORIZER_CUSTODY_DIR: canonical absolute owner-only
-# directory outside BASE, containing peer{0..3}-keyring.nrt and
-# peer{0..3}-submitter-private-key. No publisher secrets or authority are generated.
-# See scripts/README.run-local-swarm.md for custody and launch prerequisites.
+# See scripts/README.run-local-swarm.md for node configuration and launch prerequisites.
 
 usage() {
   cat <<'HELP'
 Usage: scripts/run_local_swarm.sh [--help]
 
 Start four bare-metal local Iroha peers from the repository root.
-Required: KAGEMUSHA_LOAD_AUTHORIZER_CUSTODY_DIR is a canonical absolute,
-owner-only directory outside BASE containing these existing private files:
-  peer0-keyring.nrt through peer3-keyring.nrt
-  peer0-submitter-private-key through peer3-submitter-private-key
-The keyrings need genuine Load-role certificates bound to the signed network.
-The submitters need ordinary ledger authority and sufficient fee admission.
-Missing or unsafe custody prevents startup; there is no publisher disable mode.
-Required also: existing paired GENESIS_PUBLIC_KEY_FILE / GENESIS_PRIVATE_KEY_FILE
-and GENESIS_CREATION_TIME_MS (canonical u64 Unix milliseconds). The exact manifest,
-signer and time must match the network admitted by the genuine Load certificates.
+Required: existing paired GENESIS_PUBLIC_KEY_FILE / GENESIS_PRIVATE_KEY_FILE
+and GENESIS_CREATION_TIME_MS (canonical u64 Unix milliseconds).
+Wallet loads use ordinary transaction validation and finalized blocks.
 Other inputs: BASE, BASE_API_PORT, BASE_P2P_PORT, SKIP_BUILD, RESET_STORAGE.
 RESET_STORAGE defaults to 0; explicitly set it to 1 to delete prior storage.
 HELP
@@ -43,9 +32,6 @@ fi
 # Generated node and client configs contain existing private demo identities.
 umask 077
 RESET_STORAGE="${RESET_STORAGE-0}"
-KAGEMUSHA_LOAD_AUTHORIZER_CUSTODY_DIR="${KAGEMUSHA_LOAD_AUTHORIZER_CUSTODY_DIR:-}"
-PUBLISHER_KEYRING_TOMLS=()
-PUBLISHER_SUBMITTER_TOMLS=()
 
 BASE="${BASE:-/tmp/iroha-bare}"
 GENESIS_PUBLIC_KEY_FILE="${GENESIS_PUBLIC_KEY_FILE:-}"
@@ -303,77 +289,6 @@ PY_TIME
   }
 }
 
-validate_publisher_custody() {
-  local checked_paths line
-  local values=()
-  if ! checked_paths="$(python3 - "$KAGEMUSHA_LOAD_AUTHORIZER_CUSTODY_DIR" "$BASE" <<'PY_CUSTODY'
-import json
-import os
-import stat
-import sys
-
-raw, base = sys.argv[1:]
-if not raw:
-    raise SystemExit("KAGEMUSHA_LOAD_AUTHORIZER_CUSTODY_DIR is required; publisher custody has no default")
-if os.name != "posix" or not all(hasattr(os, flag) for flag in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK")):
-    raise SystemExit("publisher custody requires native Unix no-follow file checks")
-if not os.path.isabs(raw) or raw != os.path.realpath(raw):
-    raise SystemExit("publisher custody directory must be canonical, absolute and free of symlinks")
-if os.path.commonpath((raw, os.path.realpath(base))) == os.path.realpath(base):
-    raise SystemExit("publisher custody must be outside BASE to preserve original operator files")
-
-try:
-    directory = os.open(raw, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        protected = os.fstat(directory)
-        if (not stat.S_ISDIR(protected.st_mode)
-                or protected.st_uid != os.geteuid()
-                or protected.st_mode & 0o077
-                or protected.st_mode & 0o500 != 0o500):
-            raise ValueError("publisher custody directory must be readable, searchable and owner-only")
-        paths = []
-        identities = set()
-        for index in range(4):
-            for suffix, maximum in (("keyring.nrt", 65_536), ("submitter-private-key", 4_096)):
-                name = f"peer{index}-{suffix}"
-                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-                try:
-                    protected = os.fstat(descriptor)
-                    if (not stat.S_ISREG(protected.st_mode)
-                            or protected.st_uid != os.geteuid()
-                            or protected.st_mode & 0o077
-                            or not protected.st_mode & 0o400
-                            or protected.st_nlink != 1
-                            or not 0 < protected.st_size <= maximum):
-                        raise ValueError("publisher files must be readable, bounded, nonempty, single-link owner-only regular files")
-                    identity = (protected.st_dev, protected.st_ino)
-                    if identity in identities:
-                        raise ValueError("publisher file references must retain distinct original files")
-                    identities.add(identity)
-                    # Metadata only. The genuine daemon parses the original private bytes.
-                    paths.append(json.dumps(os.path.join(raw, name), ensure_ascii=False))
-                finally:
-                    os.close(descriptor)
-        for path in paths:
-            print(path)
-    finally:
-        os.close(directory)
-except (OSError, ValueError) as error:
-    raise SystemExit(f"publisher custody is unavailable or unsafe: {error}") from None
-PY_CUSTODY
-)"; then
-    return 1
-  fi
-  while IFS= read -r line; do values+=("$line"); done <<< "$checked_paths"
-  if [[ ${#values[@]} -ne 8 ]]; then
-    echo "Publisher custody check did not return all eight original file references." >&2
-    return 1
-  fi
-  PUBLISHER_KEYRING_TOMLS=("${values[0]}" "${values[2]}" "${values[4]}" "${values[6]}")
-  PUBLISHER_SUBMITTER_TOMLS=("${values[1]}" "${values[3]}" "${values[5]}" "${values[7]}")
-}
-
-
 validate_storage_reset() {
   case "$RESET_STORAGE" in
     0|1) ;;
@@ -465,7 +380,6 @@ validate_transport_identities() {
 }
 
 validate_storage_reset
-validate_publisher_custody
 validate_genesis_inputs
 validate_transport_identities
 mkdir -p "$BASE"
@@ -576,9 +490,6 @@ identity_private_key = "${STREAM_SKS[$idx]}"
 public_key = "$GEN_PUB"
 file = "$BASE/genesis.signed.nrt"
 expected_hash_file = "$BASE/genesis.expected_hash"
-[kagemusha_load_authorizer]
-keyring_file = ${PUBLISHER_KEYRING_TOMLS[$idx]}
-submitter_key_file = ${PUBLISHER_SUBMITTER_TOMLS[$idx]}
 [kura]
 init_mode = "fast"
 store_dir = "$store_dir"
@@ -619,9 +530,7 @@ echo "[4/6] Write configs"
 for i in 0 1 2 3; do write_config "$i"; done
 write_client_config
 
-# Recheck original metadata after config generation. Neither this preflight nor
-# the offline daemon check reserves future authority or freezes mutable files.
-validate_publisher_custody
+# Admit every generated node configuration before starting any peer.
 for i in 0 1 2 3; do
   "$IROHAD" --config "$BASE/peer${i}.toml" --check-config > "$BASE/peer${i}.check-config.log" 2>&1
 done

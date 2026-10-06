@@ -80,8 +80,7 @@ use iroha_executor_data_model::permission::{
     asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
         CanManageAssetDefinitionConfidentialPolicy, CanManageKagemushaWallet,
-        CanModifyAssetDefinitionMetadata, CanPublishKagemushaLoadVoucher,
-        CanUnregisterAssetDefinition,
+        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
     },
     nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
@@ -7417,11 +7416,6 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .try_into_any_norito::<CanManageKagemushaWallet>()
             .ok()
             .is_some(),
-        "CanPublishKagemushaLoadVoucher" => permission
-            .payload()
-            .try_into_any_norito::<CanPublishKagemushaLoadVoucher>()
-            .ok()
-            .is_some(),
         "CanManageAssetDefinitionConfidentialPolicy" => permission
             .payload()
             .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
@@ -7590,21 +7584,6 @@ fn dataspace_scoped_permission_target(
                 permission
                     .payload()
                     .try_into_any_norito::<CanManageKagemushaWallet>()
-                    .ok(),
-                |token| {
-                    asset_definition_dataspace_target(
-                        &token.asset_definition,
-                        None,
-                        None,
-                        dataspace_catalog,
-                        state_view,
-                    )
-                },
-            ),
-            "CanPublishKagemushaLoadVoucher" => resolve_optional_dataspace_target(
-                permission
-                    .payload()
-                    .try_into_any_norito::<CanPublishKagemushaLoadVoucher>()
                     .ok(),
                 |token| {
                     asset_definition_dataspace_target(
@@ -7858,22 +7837,6 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 permission
                     .payload()
                     .try_into_any_norito::<CanManageKagemushaWallet>()
-                    .ok(),
-                |token| {
-                    asset_definition_dataspace_target_with_world(
-                        &token.asset_definition,
-                        None,
-                        None,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
-                },
-            ),
-            "CanPublishKagemushaLoadVoucher" => resolve_optional_dataspace_target(
-                permission
-                    .payload()
-                    .try_into_any_norito::<CanPublishKagemushaLoadVoucher>()
                     .ok(),
                 |token| {
                     asset_definition_dataspace_target_with_world(

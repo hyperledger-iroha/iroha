@@ -71,13 +71,13 @@ impl LoadCircuit {
         [InstanceType::Bounded]
     }
 }
-const BASE_HASH_ROWS: usize = (2
+pub(super) const BASE_HASH_ROWS: usize = (2
     * (domain_permutations(CORE_FIELDS + 1, true) + domain_permutations(REST_FIELDS, true))
     + domain_permutations(26, true))
     * ROWS_PER_PERMUTATION;
-const STATE_WORDS: usize = CORE_FIELDS + REST_FIELDS + 18;
+pub(super) const STATE_WORDS: usize = CORE_FIELDS + REST_FIELDS + 18;
 
-fn state(
+pub(super) fn state(
     uint: &mut UintChip<'_, Fp>,
     sponge: &mut SpongeChip<Fp>,
     region: &mut iroha_plonk::frontend::Region<'_, Fp>,

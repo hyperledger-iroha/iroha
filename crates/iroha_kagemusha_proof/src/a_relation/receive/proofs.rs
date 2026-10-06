@@ -178,14 +178,13 @@ impl ReceiveProofSources {
         // There is no separately assigned message proposal in this schema.
         // The actual verifier below consumes only this active tape's checked
         // decoder; bind_context authenticates its exact original commitment.
-        GlueChip::assert_equal(
+        let omega = self.transport.verify(
+            chip,
             region,
-            self.transport.public().omega_key_digest(),
+            plan.operation(),
+            proof.omega_key,
             input.successor.public.omega_key_digest(),
         )?;
-        let omega = self
-            .transport
-            .verify(chip, region, plan.operation(), proof.omega_key)?;
         let claims = input.receive_results.ok_or(Error::Synthesis)?;
         bind_claim(region, claims.opening()?, &omega.opening)?;
         let bindings = [proof.own_sigma.clone(), self.sigma.clone()];

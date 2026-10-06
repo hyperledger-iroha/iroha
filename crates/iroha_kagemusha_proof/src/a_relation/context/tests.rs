@@ -10,6 +10,137 @@ use iroha_plonk::{
 use iroha_plonk_gadgets::statement::foreign_limbs;
 use iroha_plonk_recursion::verifier::VerifierConfig;
 
+#[derive(Clone)]
+struct InternalWords {
+    words: Vec<Fp>,
+    spec: ContextObjectSpec,
+    known: bool,
+}
+impl Circuit<Fp> for InternalWords {
+    type Config = Config;
+    type Params = ();
+    type FloorPlanner = SimpleFloorPlanner;
+    fn without_witnesses(&self) -> Self {
+        Self {
+            known: false,
+            ..self.clone()
+        }
+    }
+    fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
+        let verifier = VerifierConfig::configure_serialized_foreign_tagged(meta, 3).unwrap();
+        let public = meta.instance_column(2);
+        meta.enable_equality(public);
+        Config { verifier, public }
+    }
+    fn synthesize(&self, config: Config, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
+        let mut chip = VerifierChip::new(config.verifier);
+        chip.load_tables(&mut layouter)?;
+        let out = layouter.assign_region(
+            || "typed internal context",
+            |mut r| {
+                let values = self
+                    .words
+                    .iter()
+                    .map(|v| {
+                        if self.known {
+                            Value::known(*v)
+                        } else {
+                            Value::unknown()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let words = chip.uint().glue().witnesses(&mut r, &values)?;
+                let bound =
+                    ContextObjectCells::from_internal_words(&mut chip, &mut r, self.spec, &words)?;
+                let [digest, length, tape] = bound.commitment_words();
+                GlueChip::assert_equal(&mut r, &digest, &tape)?;
+                Ok([digest, length])
+            },
+        )?;
+        for (i, word) in out.iter().enumerate() {
+            layouter.constrain_instance(word.cell(), config.public, i)?;
+        }
+        Ok(())
+    }
+}
+impl InternalWords {
+    fn public(&self) -> Vec<Vec<Fp>> {
+        let mut words = vec![
+            Fp::from(u64::from(self.spec.tag)),
+            Fp::from(self.words.len() as u64),
+        ];
+        words.extend_from_slice(&self.words);
+        vec![vec![
+            iroha_pasta::poseidon::hash_with_domain(
+                u64::from_le_bytes(INTERNAL_WORDS_DOMAIN),
+                &words,
+            ),
+            Fp::from(u64::from(self.spec.capacity)),
+        ]]
+    }
+    fn accepts(&self, public: &[Vec<Fp>]) -> bool {
+        synthesize(self, 16, Some(public)).is_ok_and(|a| {
+            check(&a.cs, &a.tables, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        })
+    }
+}
+
+#[test]
+fn internal_word_context_has_exact_domain_count_tag_and_original_words() {
+    for count in [3, 578] {
+        let c = InternalWords {
+            words: (0..count).map(|i| Fp::from(i + 1)).collect(),
+            spec: ContextObjectSpec {
+                tag: 24,
+                capacity: u32::try_from(count * 32).unwrap(),
+            },
+            known: true,
+        };
+        let public = c.public();
+        assert!(c.accepts(&public));
+        for i in [0, 1, 2, 255, 256, 511, 512, 575, 576, 577]
+            .into_iter()
+            .filter(|i| *i < count as usize)
+        {
+            let mut changed = c.clone();
+            changed.words[i] += Fp::ONE;
+            assert!(!changed.accepts(&public), "word {i}");
+        }
+        let mut wrong = c.clone();
+        wrong.spec.tag += 1;
+        assert!(!wrong.accepts(&public));
+        assert!(wrong.accepts(&wrong.public()));
+        wrong.spec.capacity += 1;
+        assert!(!wrong.accepts(&wrong.public()));
+        wrong = c.clone();
+        wrong.spec.tag = 0;
+        assert!(!wrong.accepts(&wrong.public()));
+        let known = synthesize(&c, 16, None).unwrap();
+        let unknown = synthesize(&c.without_witnesses(), 16, None).unwrap();
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+        let mut input = vec![Fp::from(24), Fp::from(count)];
+        input.extend_from_slice(&c.words);
+        for domain in [TAPE_DOMAIN, ACTIVE_TAPE_DOMAIN, CONTEXT_DOMAIN] {
+            assert_ne!(
+                public[0][0],
+                iroha_pasta::poseidon::hash_with_domain(u64::from_le_bytes(domain), &input)
+            );
+        }
+    }
+    let empty = InternalWords {
+        words: vec![],
+        spec: ContextObjectSpec {
+            tag: 1,
+            capacity: 0,
+        },
+        known: true,
+    };
+    assert!(!empty.accepts(&empty.public()));
+}
+
 #[derive(Clone, Debug)]
 struct Config {
     verifier: VerifierConfig<Ep>,

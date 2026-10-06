@@ -87,30 +87,6 @@ fn fixture(path: &Path) -> (toml::Table, Files) {
         );
         table.insert(file.into(), toml::Value::String(name.into()));
     }
-    // These bytes exercise private-file parsing only; they cannot admit a publisher worker.
-    let mut publisher = toml::Table::new();
-    for (field, name, bytes) in [
-        (
-            "keyring_file",
-            "publisher.keyring",
-            b"unadmitted-parser-only-publisher-keyring".to_vec(),
-        ),
-        (
-            "submitter_key_file",
-            "publisher.submitter",
-            values[&root.join("validator.key")].1.to_vec(),
-        ),
-    ] {
-        publisher.insert(field.into(), toml::Value::String(name.into()));
-        values.insert(
-            root.join(name),
-            (ConfigFileAccess::Private, zeroize::Zeroizing::new(bytes)),
-        );
-    }
-    table.insert(
-        "kagemusha_load_authorizer".into(),
-        toml::Value::Table(publisher),
-    );
     let genesis = table.get_mut("genesis").unwrap().as_table_mut().unwrap();
     let identity = genesis
         .remove("expected_hash")
@@ -296,17 +272,7 @@ fn complete_node_parser_reads_every_reference_from_supplied_bytes_and_preserves_
         parsed.streaming.codec.rans_tables_path,
         path.with_file_name("tables.toml")
     );
-    assert_eq!(files.values.len(), 9);
-    assert_eq!(
-        parsed
-            .kagemusha_load_authorizer
-            .as_ref()
-            .unwrap()
-            .custody
-            .keyring
-            .as_slice(),
-        b"unadmitted-parser-only-publisher-keyring"
-    );
+    assert_eq!(files.values.len(), 7);
     assert!(parsed.torii.account_onboarding.is_some());
     assert!(parsed.torii.faucet.is_some());
     assert!(!path.parent().unwrap().exists());
@@ -346,36 +312,6 @@ fn supplied_node_files_match_native_inputs_and_never_fall_back_to_existing_files
     assert!(native.common.soranet_transport_key_pair == supplied.common.soranet_transport_key_pair);
     assert_eq!(native.genesis.expected_hash, supplied.genesis.expected_hash);
     assert_eq!(
-        native
-            .kagemusha_load_authorizer
-            .as_ref()
-            .unwrap()
-            .custody
-            .keyring
-            .as_slice(),
-        supplied
-            .kagemusha_load_authorizer
-            .as_ref()
-            .unwrap()
-            .custody
-            .keyring
-            .as_slice()
-    );
-    assert!(
-        native
-            .kagemusha_load_authorizer
-            .as_ref()
-            .unwrap()
-            .custody
-            .submitter
-            == supplied
-                .kagemusha_load_authorizer
-                .as_ref()
-                .unwrap()
-                .custody
-                .submitter
-    );
-    assert_eq!(
         native.streaming.codec.rans_tables_path,
         supplied.streaming.codec.rans_tables_path
     );
@@ -390,19 +326,9 @@ fn supplied_node_files_match_native_inputs_and_never_fall_back_to_existing_files
     );
     for (name, bad) in [
         ("genesis.expected_hash", vec![b'x'; 513]),
-        ("onboarding.key", oversized_key.clone()),
+        ("onboarding.key", oversized_key),
         ("faucet.key", b"invalid key\n".to_vec()),
         ("tables.toml", vec![b' '; 64 * 1024 + 1]),
-        ("publisher.keyring", Vec::new()),
-        (
-            "publisher.keyring",
-            vec![0; defaults::kagemusha_load_authorizer::KEYRING_MAX_BYTES + 1],
-        ),
-        ("publisher.submitter", oversized_key),
-        (
-            "publisher.submitter",
-            b"invalid publisher submitter key\n".to_vec(),
-        ),
     ] {
         let key = directory.0.join(name);
         let before = std::mem::replace(
@@ -469,22 +395,8 @@ fn supplied_node_files_match_native_inputs_and_never_fall_back_to_existing_files
     user(table.clone(), &path)
         .parse()
         .expect("all disk inputs remain valid before one-at-a-time source refusals");
-    for name in ["publisher.keyring", "publisher.submitter"] {
-        let reference = directory.0.join(name);
-        let input = files.values.get_mut(&reference).unwrap();
-        assert_eq!(input.0, ConfigFileAccess::Private);
-        input.0 = ConfigFileAccess::Public;
-        let error = user(table.clone(), &path)
-            .parse_with_file_source(&files)
-            .expect_err("private publisher bytes must not be accepted through public access");
-        assert!(error.frames().any(|frame| matches!(
-            frame.downcast_ref::<ParseError>(),
-            Some(ParseError::InvalidKagemushaLoadAuthorizerConfig)
-        )));
-        files.values.get_mut(&reference).unwrap().0 = ConfigFileAccess::Private;
-    }
     let references: Vec<_> = files.values.keys().cloned().collect();
-    assert_eq!(references.len(), 9);
+    assert_eq!(references.len(), 7);
     for missing in references {
         user(table.clone(), &path)
             .parse_with_file_source(&files)
@@ -496,14 +408,7 @@ fn supplied_node_files_match_native_inputs_and_never_fall_back_to_existing_files
             .expect_err("valid disk bytes must not replace one absent supplied input");
         assert!(files.reads.borrow().contains(&missing));
         let name = missing.file_name().unwrap().to_str().unwrap();
-        if matches!(name, "publisher.keyring" | "publisher.submitter") {
-            // Publisher diagnostics deliberately redact private paths; exact reads prove selection.
-            assert!(error.frames().any(|frame| matches!(
-                frame.downcast_ref::<ParseError>(),
-                Some(ParseError::InvalidKagemushaLoadAuthorizerConfig)
-            )));
-            assert!(format!("{error:?}").contains("kagemusha_load_authorizer"));
-        } else if name == "tables.toml" {
+        if name == "tables.toml" {
             // Nested codec values have Inline origins; their canonical diagnostic does not
             // display the stored path. Validate the typed refusal and field instead.
             assert!(error.frames().any(|frame| matches!(
@@ -670,15 +575,10 @@ fn vpn_operator_key_reference_uses_supplied_bytes_and_native_defaults_without_fa
 }
 
 #[test]
-fn absent_publisher_role_preserves_other_original_inputs_without_issuer_file_reads() {
-    let path = Path::new("ABSENT-role-test/peer.toml");
-    let (mut table, mut files) = fixture(path);
-    table.remove("kagemusha_load_authorizer").unwrap();
-    for name in ["publisher.keyring", "publisher.submitter"] {
-        files.values.remove(&path.with_file_name(name)).unwrap();
-    }
-    let parsed = user(table, path).parse_with_file_source(&files).unwrap();
-    assert!(parsed.kagemusha_load_authorizer.is_none());
+fn supplied_source_reads_only_original_node_inputs() {
+    let path = Path::new("ABSENT-original-node-inputs/peer.toml");
+    let (table, files) = fixture(path);
+    user(table, path).parse_with_file_source(&files).unwrap();
     assert_eq!(files.values.len(), 7);
     assert_eq!(
         files

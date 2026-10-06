@@ -711,6 +711,55 @@ fn load_peer_config_source(
     actual::Root::from_toml_source(source)
         .map_err(|_| eyre!("peer config {} is invalid", config_path.display()))
 }
+/// Load one complete signing input. Absence of both runtime identity fields selects the
+/// distinct unpublished context; a supplied identity is always parsed by the strict runtime
+/// parser. A failed runtime parse never falls back to an unpublished context.
+fn load_peer_config_for_signing(
+    config_path: &Path,
+    genesis: &RawGenesisTransaction,
+    key: &KeyPair,
+    creation_time_ms: Option<u64>,
+) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let config_bytes = Zeroizing::new(
+        crate::secure_fs::read_private_file(config_path)
+            .wrap_err("read owner-only complete genesis signing config")?,
+    );
+    let text = std::str::from_utf8(&config_bytes)
+        .map_err(|_| eyre!("genesis signing config is not UTF-8"))?;
+    let table = crate::secret_toml::parse_table(text, "genesis signing config")?;
+    let source = TomlSource::new_sensitive(
+        config_path.to_path_buf(),
+        table,
+        crate::secret_toml::zeroize_table,
+    );
+    let user = iroha_config::base::read::ConfigReader::new()
+        .without_env()
+        .with_toml_source(source)
+        .read_and_complete::<iroha_config::parameters::user::Root>()
+        .map_err(|_| eyre!("complete genesis signing config is invalid"))?;
+    if user.has_genesis_identity() {
+        let config = user
+            .parse()
+            .map_err(|_| eyre!("runtime genesis signing config is invalid"))?;
+        return Ok(config);
+    }
+    let context = user
+        .parse_for_genesis_signing()
+        .map_err(|_| eyre!("unpublished genesis signing policy is invalid"))?;
+    let provisional = iroha_deploy::genesis::staging::build_signed_genesis(
+        genesis.clone(),
+        key,
+        Some(iroha_core::da::proof_policy_bundle(
+            &context.nexus().lane_config,
+        )),
+        iroha_core::state::compute_genesis_confidential_policy_hash(context.zk()),
+        creation_time_ms,
+    )
+    .wrap_err("construct original provisional signed genesis for policy binding")?;
+    context
+        .bind_signed_genesis(&provisional.0)
+        .map_err(|message| eyre!(message))
+}
 /// Execute an independently prepared genesis with its exact original node configuration and
 /// known fixture custody. No provisional block, alternate epoch, or synthetic result enters
 /// the production native worker.
@@ -897,7 +946,20 @@ impl<T: Write> RunArgs<T> for Args {
         // Parse the peer configuration exactly once. Every policy projection
         // below borrows this immutable snapshot, so replacing the source file
         // concurrently cannot create a mixed genesis generation.
-        let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
+        let genesis_key_pair = load_genesis_key_file(&self.private_key_file)?;
+        ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
+        let peer_config = self
+            .config
+            .as_deref()
+            .map(|path| {
+                load_peer_config_for_signing(
+                    path,
+                    &genesis,
+                    &genesis_key_pair,
+                    self.creation_time_ms,
+                )
+            })
+            .transpose()?;
         let manifest_consensus_mode = genesis.consensus_mode();
         let consensus_mode = manifest_consensus_mode;
         let topology_override = if let Some(raw) = self.topology.as_deref() {
@@ -912,8 +974,6 @@ impl<T: Write> RunArgs<T> for Args {
             topology_override.as_deref(),
             &self.peer_pops,
         )?;
-        let genesis_key_pair = load_genesis_key_file(&self.private_key_file)?;
-        ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
         let da_proof_policies = resolve_da_proof_policies(peer_config.as_ref());
         let confidential_policy_hash = resolve_confidential_policy_hash(peer_config.as_ref());
         if let Some(config) = peer_config.as_ref()
@@ -1978,6 +2038,86 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert!(
             load_peer_config_bytes(&path, source.as_bytes()).is_err(),
             "unrendered Taira production template must not be runnable"
+        );
+    }
+    #[test]
+    fn unpublished_signing_context_binds_original_signature() {
+        let manifest = RawGenesisTransaction::from_path(minimal_genesis_file()).unwrap();
+        let key = test_genesis_key_pair();
+        let table = checked_in_consensus_config_table(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../defaults/kagami/iroha3-dev/peer0.toml"),
+        );
+        let path = runtime_test_peer_config(table, &manifest, &key);
+        let mut table: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+        let genesis = table.get_mut("genesis").unwrap().as_table_mut().unwrap();
+        genesis.remove("expected_hash");
+        genesis.remove("expected_hash_file");
+        let source = || TomlSource::new(path.clone(), table.clone());
+        assert!(actual::Root::from_toml_source(source()).is_err());
+        let context = actual::GenesisSigningContext::from_toml_source(source()).unwrap();
+        let signed = build_signed_genesis(
+            manifest.clone(),
+            &key,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            Some(1_700_000_000_000),
+        )
+        .unwrap();
+        let bound = context.bind_signed_genesis(&signed.0).unwrap();
+        assert_eq!(bound.genesis.expected_hash, signed.0.hash());
+        assert_eq!(bound.genesis.public_key, *key.public_key());
+        let wrong_key = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
+        let wrong = build_signed_genesis(
+            manifest,
+            &wrong_key,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            Some(1_700_000_000_000),
+        )
+        .unwrap();
+        assert!(
+            actual::GenesisSigningContext::from_toml_source(source())
+                .unwrap()
+                .bind_signed_genesis(&wrong.0)
+                .is_err()
+        );
+        let mut runtime_claim = table.clone();
+        runtime_claim
+            .get_mut("genesis")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert(
+                "expected_hash".into(),
+                NetworkId::from_genesis_hash(signed.0.hash())
+                    .to_string()
+                    .into(),
+            );
+        assert!(
+            actual::GenesisSigningContext::from_toml_source(TomlSource::new(
+                path.clone(),
+                runtime_claim
+            ),)
+            .is_err()
+        );
+        let mut referenced_claim = table.clone();
+        referenced_claim
+            .get_mut("genesis")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert(
+                "expected_hash_file".into(),
+                "unavailable-identity-DATA-only".into(),
+            );
+        // Structural presence refuses unpublished selection before any identity file read.
+        assert!(
+            actual::GenesisSigningContext::from_toml_source(TomlSource::new(
+                path.clone(),
+                referenced_claim,
+            ))
+            .is_err()
         );
     }
     #[test]

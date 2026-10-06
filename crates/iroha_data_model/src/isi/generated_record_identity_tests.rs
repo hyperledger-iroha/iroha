@@ -120,7 +120,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "ef36bf35db7c3251cd51cb3b2e169dbcd1e7b9c71e8d393691c9a78948216ad0",
+                "36c50a7a78f98713d83ac26a687720bab9047d9fbf07c668b61a466e9719726d",
                 "instruction record capture digest drift"
             );
             let capture: Value =
@@ -213,6 +213,19 @@ where
         let actual = frame_fields(&capture(value));
         fixture_json::assert_json_matches(expected, &actual, nominal);
     }
+}
+
+#[test]
+fn retired_load_instruction_without_asset_and_ordinal_is_rejected() {
+    // Exact pre-cutover root frame. Its nominal type identity is unchanged, so the
+    // required asset/ordinal fields must reject the retired payload itself.
+    let retired = unhex(
+        "4e52543000008eef66c2b4be9ed7b2604aec85793350007b000000000000000a09ab00d41fc01a020000000000000000200101010101010101010101010101010101010101010101010101010101010101590400000020020202020202020202020202020202020202020202020202020202020202020220030303030303030303030303030303030303030303030303030303030303030310070000000000000000000000000000000100",
+    );
+    assert!(
+        norito::decode_from_bytes::<super::kagemusha_wallet::KagemushaWalletLedgerV1>(&retired,)
+            .is_err()
+    );
 }
 
 #[test]

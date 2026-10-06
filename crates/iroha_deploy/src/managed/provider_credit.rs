@@ -534,7 +534,7 @@ impl ManagedInitialProviderCredit {
         }
         self.authority
             .decode_checkpoint(&original.checkpoint)?
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original initial provider credit checkpoint"))?
             .verify_global_scope(
                 self.authority.config.network_id,

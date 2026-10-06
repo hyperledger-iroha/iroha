@@ -982,6 +982,18 @@ pub(crate) struct AuthenticatedSend {
     pub(crate) vesta_part: AccumulatorT<Eq>,
     pub(crate) predecessor_vesta: AccumulatorT<Eq>,
     pub(crate) state: iroha_kagemusha_proof::admin_sigma::StateWitness,
+    /// Exact Send statement, original Credential/Request/Fee and map openings.
+    pub(crate) maps: send_components::SendMaps,
+    /// Exact own Send sigma bytes bound by the operation Receipt.
+    pub(crate) sigma: Vec<u8>,
+    /// Original predecessor Omega transport bound by the Receipt and Payment.
+    pub(crate) predecessor_omega: Vec<u8>,
+    /// Exact enrollment certificate and own Send Receipt, in that order.
+    pub(crate) own_objects: [Vec<u8>; 2],
+    /// Complete fixed source task and object schema.
+    pub(crate) context: ContextPlan,
+    /// Original context digest before the A/W continuation links.
+    pub(crate) root_context: Fp,
 }
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -1366,6 +1378,16 @@ fn continue_schedule(
                 vesta_part: vesta,
                 predecessor_vesta: first.source.predecessor.vesta.clone(),
                 state: first.source.maps.witness.after,
+                maps: first.source.maps.clone(),
+                sigma: first.source.sigma.clone(),
+                predecessor_omega: first.source.omega.clone(),
+                own_objects: first
+                    .source
+                    .own_objects
+                    .each_ref()
+                    .map(|object| object.bytes.clone()),
+                context: first.plan.clone(),
+                root_context: context_digest(first),
             });
         }
         intermediate_keys.push(key.vk().clone());

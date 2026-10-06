@@ -321,7 +321,7 @@ fn increasing(
     uint.assert_lt(region, &old, &new)
 }
 
-fn mask(
+pub(crate) fn mask(
     uint: &mut UintChip<'_, Fp>,
     region: &mut Region<'_, Fp>,
     word: &Word<Fp>,

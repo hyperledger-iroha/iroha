@@ -160,7 +160,7 @@ fn quoted_receiver(
     }
     checks.push(uint.glue().is_equal(
         region,
-        request.object().word(17)?,
+        request.object().word(8)?,
         receiver.object().digest(),
     )?);
     all(uint.glue(), region, &checks)
@@ -213,13 +213,37 @@ impl StatusCells {
         segments(2, 5)
     }
 
+    /// Decode the proof digest carried by the original Status transcript.
+    ///
+    /// This field has no proof preimage in `CreditStatus`. The receipt's copy is
+    /// a separate semantic comparison: deriving this value from that receipt
+    /// would incorrectly turn an original mismatch into a hard rejection.
+    /// Noncanonical bytes select zero; [`Self::from_run`] on the same tape must
+    /// still contribute its mandatory false structural verdict.
+    /// # Errors
+    /// Wrong transcript size/segments or layout failure.
+    pub fn carried_proof_digest(
+        uint: &mut UintChip<'_, Fp>,
+        region: &mut Region<'_, Fp>,
+        run: &ByteRun<Fp>,
+    ) -> Result<Word<Fp>, Error> {
+        if run.len() != Self::BYTES {
+            return Err(Error::Synthesis);
+        }
+        let (words, _) = decode_atom(uint, region, run, 34, Atom::Field)?;
+        words.into_iter().next().ok_or(Error::Synthesis)
+    }
+
     /// Bind the original status transcript to all component tapes and identities.
     /// Malformed bytes and semantic mismatches return false while the digest
-    /// still covers those original bytes. Incoming proof/signature validity is
-    /// a separate mandatory conjunct; no claimed verifier boolean is accepted.
+    /// still covers those original bytes. Each canonical component address is
+    /// hard-bound to its supplied preimage: substituting a statement, receipt,
+    /// proof carrier or opening cannot manufacture a no-op. Incoming proof and
+    /// signature validity remain separate mandatory conjuncts.
     ///
     /// # Errors
-    /// Wrong fixed transcript/receipt class or layout failure.
+    /// Wrong fixed transcript/receipt class, substituted canonical content
+    /// address or layout failure. Noncanonical address bytes remain total false.
     pub fn from_run(
         uint: &mut UintChip<'_, Fp>,
         hash: &mut impl WordHasher<Fp>,
@@ -244,6 +268,7 @@ impl StatusCells {
                 inputs.lineage_digest,
                 inputs.opening.digest(),
             ],
+            0,
             u64::from_le_bytes(*b"kgwcsts1"),
         )?;
         checks.extend([
@@ -363,12 +388,15 @@ impl CreditedCells {
     pub fn secondary_segments() -> Vec<SegmentSpec> {
         segments(3, 3)
     }
-    /// Bind all three digests and the circuit's fixed evidence kind, returning
-    /// false for any altered version/tag/digest or noncanonical field encoding.
-    /// The exact Request/Payment/evidence checks must also join Archive's verdict.
+    /// Bind the circuit's fixed evidence kind, credit and exact component tapes.
+    /// The Payment and evidence hashes are content addresses, so a canonical
+    /// reference must equal its supplied preimage digest even on the no-op
+    /// branch. Credit mismatch, wrong version/tag and noncanonical fields yield
+    /// false. The complete evidence checks must also join Archive's verdict.
     ///
     /// # Errors
-    /// Wrong fixed transcript/segments or layout failure.
+    /// Wrong fixed transcript/segments, substituted canonical component address
+    /// or layout failure. Malformed field encodings remain total false.
     pub fn from_run(
         uint: &mut UintChip<'_, Fp>,
         hash: &mut impl WordHasher<Fp>,
@@ -388,6 +416,7 @@ impl CreditedCells {
             3,
             Some(kind.tag()),
             &expected.each_ref(),
+            1,
             u64::from_le_bytes(*b"kgwcrdd1"),
         )?;
         for word in &expected[..2] {
@@ -427,6 +456,7 @@ fn transcript(
     prefix: usize,
     tag: Option<u64>,
     expected: &[&Word<Fp>],
+    address_start: usize,
     domain: u64,
 ) -> Result<(Word<Fp>, Vec<Bit<Fp>>), Error> {
     let version = run.secondary_segment(SegmentSpec::little(0, 2))?.word();
@@ -441,6 +471,15 @@ fn transcript(
     }
     for (i, expected) in expected.iter().enumerate() {
         let (word, valid) = decode_atom(uint, region, run, prefix + i * 32, Atom::Field)?;
+        if i >= address_start {
+            // Content addresses select the exact original components before
+            // their semantic verdicts are joined. Only a noncanonical original
+            // reference may use the total decoder's dummy; that original bit
+            // itself forces false and cannot be chosen by the prover.
+            let delta = uint.glue().sub(region, &word[0], expected)?;
+            let bound = uint.glue().mul(region, valid.word(), &delta)?;
+            iroha_plonk_gadgets::GlueChip::assert_constant(region, &bound, Fp::ZERO)?;
+        }
         checks.push(valid);
         checks.push(uint.glue().is_equal(region, &word[0], expected)?);
     }

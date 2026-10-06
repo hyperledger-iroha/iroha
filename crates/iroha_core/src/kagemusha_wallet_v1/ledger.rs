@@ -78,10 +78,10 @@ pub fn abandon(
     tx.apply(batch)
 }
 
-/// Close issuance atomically after proving all previously issued vouchers were absorbed.
+/// Close issuance atomically after proving all previously issued loads were absorbed.
 ///
 /// # Errors
-/// Rejects invalid proofs, unactivated/abandoned wallets, or an unabsorbed issued voucher.
+/// Rejects invalid proofs, unactivated/abandoned wallets, or an unabsorbed issued load.
 pub fn close_loads(
     tx: &mut impl Transaction,
     verifier: &impl NativePackageVerifier,
@@ -101,7 +101,7 @@ pub fn close_loads(
     if record.phase == Phase::Abandoned {
         return Err(Error::Lifecycle);
     }
-    // Issuance is successive from zero, so equality proves no voucher >= next_load exists.
+    // Issuance is successive from zero, so equality proves no load >= next_load exists.
     if record.next_load != close.package.statement.next_load {
         return Err(Error::OutstandingLoad);
     }
@@ -115,28 +115,39 @@ pub fn close_loads(
 }
 
 /// Debit the authenticated payer, reserve the exact offline value and assign the next ordinal.
-/// The returned body is not a voucher and conveys no finality or signing authority.
+/// The returned receipt is authenticated only after its ordinary transaction finalizes.
 ///
 /// # Errors
 /// Rejects inactive wallets, changed retry inputs, invalid quotes, overflow or unfunded debits.
 pub fn issue_load(tx: &mut impl Transaction, command: &LoadCommand) -> Result<Issuance> {
-    if command.request_id == [0; 32] || command.amount == 0 {
+    if command.request_id == [0; 32] || command.amount == 0 || tx.block_height() < 2 {
         return Err(Error::Binding);
     }
     let mut record = tx
         .wallet(&command.scheme, &command.wallet)?
         .ok_or(Error::Lifecycle)?;
+    if record.asset != command.asset {
+        return Err(Error::Binding);
+    }
     let registration = tx.registration(&command.scheme, &record.asset)?;
     registration.require(&command.scheme, &record.asset)?;
     if let Some(prior) = tx.issuance(&command.scheme, &command.wallet, &command.request_id)? {
-        if prior.command != *command || prior.payer != *tx.authority() {
+        if prior.command != *command
+            || prior.payer != *tx.authority()
+            || prior.body.transaction_hash != tx.transaction_hash()
+            || prior.body.block_height != tx.block_height()
+        {
             return Err(Error::Conflict);
         }
-        // Closed wallets still return an already committed original issuance.
+        // Only deterministic retry of the original execution can reuse its receipt.
+        // A later transaction must fail so successful input identifies the original issuance.
         return Ok(prior);
     }
     if record.phase != Phase::Active {
         return Err(Error::Lifecycle);
+    }
+    if record.next_load != command.ordinal {
+        return Err(Error::Conflict);
     }
     if *tx.authority() == registration.reserve {
         return Err(Error::Binding);
@@ -179,7 +190,7 @@ pub fn issue_load(tx: &mut impl Transaction, command: &LoadCommand) -> Result<Is
     } else {
         (0, [0; 32])
     };
-    let body = KagemushaWalletLoadVoucherBodyV1 {
+    let body = KagemushaWalletLoadReceiptV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
         scheme_id: command.scheme,
         asset_digest: record.asset,
@@ -190,93 +201,19 @@ pub fn issue_load(tx: &mut impl Transaction, command: &LoadCommand) -> Result<Is
         charge_quote,
         transaction_hash: tx.transaction_hash(),
         block_height: tx.block_height(),
-        authorizer_certificate: registration.load_authorizer.certificate_digest(),
+        request_id: command.request_id,
+        payer: tx.authority().clone(),
     };
     body.validate()?;
     let issuance = Issuance {
         command: command.clone(),
         payer: tx.authority().clone(),
         body,
-        voucher: None,
     };
     batch.wallet = Some((command.wallet, record));
     batch.issuance = Some(issuance.clone());
     tx.apply(batch)?;
     Ok(issuance)
-}
-
-/// Freeze the first verified voucher only for the identical source-bound finalized issuance.
-/// Exact retries return the originally retained bytes; another encoding cannot replace them.
-///
-/// # Errors
-/// Rejects nonfinality, a different issuance/body/certificate, invalid signatures or storage failure.
-pub fn publish_voucher(
-    tx: &mut impl Transaction,
-    source: &impl FinalizedSource,
-    scheme: Digest,
-    wallet: Digest,
-    request: Digest,
-    voucher: &KagemushaWalletLoadVoucherV1,
-) -> Result<Vec<u8>> {
-    let finalized = source.issuance(&scheme, &wallet, &request)?;
-    let retained = tx
-        .issuance(&scheme, &wallet, &request)?
-        .ok_or(Error::Unavailable)?;
-    if finalized.body != retained.body
-        || finalized.command != retained.command
-        || finalized.payer != retained.payer
-        || voucher.body != retained.body
-        || retained.command.scheme != scheme
-        || retained.command.wallet != wallet
-        || retained.command.request_id != request
-    {
-        return Err(Error::Binding);
-    }
-    retain_voucher(tx, request, voucher)
-}
-
-/// Native publication used only after the command owner authenticates the exact issuer token.
-/// Signature verification binds the already backed original issuance, never a caller-made body.
-pub(super) fn retain_voucher(
-    tx: &mut impl Transaction,
-    request: Digest,
-    voucher: &KagemushaWalletLoadVoucherV1,
-) -> Result<Vec<u8>> {
-    let scheme = voucher.body.scheme_id;
-    let wallet = voucher.body.wallet_id;
-    let mut retained = tx
-        .issuance(&scheme, &wallet, &request)?
-        .ok_or(Error::Unavailable)?;
-    if voucher.body != retained.body
-        || retained.command.scheme != scheme
-        || retained.command.wallet != wallet
-        || retained.command.request_id != request
-    {
-        return Err(Error::Binding);
-    }
-    let registration = tx.registration(&scheme, &retained.body.asset_digest)?;
-    registration.require(&scheme, &retained.body.asset_digest)?;
-    // Verify against the historical certificate fixed at issuance, not today's signing key.
-    let certificate = tx.certificate(&scheme, &retained.body.authorizer_certificate)?;
-    voucher.verify(&registration.scheme, &certificate)?;
-    let candidate = voucher.to_canonical_bytes()?;
-    if let Some(bytes) = retained.voucher {
-        let prior = KagemushaWalletLoadVoucherV1::decode_canonical(&bytes, &scheme)?;
-        if prior.body != retained.body {
-            return Err(Error::Binding);
-        }
-        prior.verify(&registration.scheme, &certificate)?;
-        if bytes != candidate {
-            return Err(Error::Conflict);
-        }
-        return Ok(bytes);
-    }
-    let bytes = candidate;
-    retained.voucher = Some(bytes.clone());
-    let mut batch = Batch::new(scheme, voucher.body.asset_digest);
-    batch.issuance = Some(retained);
-    tx.apply(batch)?;
-    Ok(bytes)
 }
 
 fn prior_payout(

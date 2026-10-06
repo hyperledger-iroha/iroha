@@ -489,19 +489,6 @@ fn initial_permission_capability_root_authority(
                 &token.asset_definition,
             )?
         }
-        "CanPublishKagemushaLoadVoucher" => {
-            let token =
-                decode!(executor_permission::asset_definition::CanPublishKagemushaLoadVoucher);
-            if token.scheme == [0; 32] || token.authorizer_certificate == [0; 32] {
-                return Err(invalid_initial_permission_payload(permission,
-                    "KAGEMUSHA publication scope must name nonzero scheme and certificate identities").into());
-            }
-            authority_owns_asset_definition(
-                &state_transaction.world,
-                authority,
-                &token.asset_definition,
-            )?
-        }
         "CanManageAssetDefinitionConfidentialPolicy" => {
             let token = decode!(
                 executor_permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy
@@ -2740,7 +2727,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyAssetDefinitionMetadata",
     "CanManageAssetDefinitionConfidentialPolicy",
     "CanManageKagemushaWallet",
-    "CanPublishKagemushaLoadVoucher",
     "CanRegisterAccount",
     "CanUnregisterAccount",
     "CanModifyAccountMetadata",
@@ -2894,15 +2880,9 @@ mod kagemusha_permission_tests {
                 asset_definition: other.clone(),
             }
             .into();
-        let publisher = executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
-            asset_definition: asset,
-            scheme: [1; 32],
-            authorizer_certificate: [2; 32],
-        };
-        let publish_permission: Permission = publisher.clone().into();
         world.account_permissions.insert(
             delegate.clone(),
-            Permissions::from_iter([permission.clone(), publish_permission.clone()]),
+            Permissions::from_iter([permission.clone()]),
         );
         let state = crate::state::State::new_for_testing(
             world,
@@ -2922,42 +2902,5 @@ mod kagemusha_permission_tests {
         assert!(!initial_permission_delegation_allowed(&tx, &stranger, &permission).unwrap());
         assert!(!initial_permission_delegation_allowed(&tx, &delegate, &unrelated).unwrap());
         assert!(initial_permission_revocation_allowed(&tx, &owner, &permission).unwrap());
-        assert!(initial_permission_delegation_allowed(&tx, &owner, &publish_permission).unwrap());
-        assert!(
-            initial_permission_delegation_allowed(&tx, &delegate, &publish_permission).unwrap()
-        );
-        assert!(
-            !initial_permission_delegation_allowed(&tx, &stranger, &publish_permission).unwrap()
-        );
-        assert!(initial_permission_revocation_allowed(&tx, &owner, &publish_permission).unwrap());
-        let invalid: Permission =
-            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
-                scheme: [0; 32],
-                ..publisher.clone()
-            }
-            .into();
-        assert!(initial_permission_delegation_allowed(&tx, &owner, &invalid).is_err());
-        for changed in [
-            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
-                asset_definition: other,
-                ..publisher.clone()
-            },
-            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
-                scheme: [3; 32],
-                ..publisher.clone()
-            },
-            executor_permission::asset_definition::CanPublishKagemushaLoadVoucher {
-                authorizer_certificate: [4; 32],
-                ..publisher
-            },
-        ] {
-            assert!(
-                !initial_permission_delegation_allowed(&tx, &delegate, &changed.clone().into())
-                    .unwrap()
-            );
-            assert!(
-                !initial_permission_revocation_allowed(&tx, &delegate, &changed.into()).unwrap()
-            );
-        }
     }
 }

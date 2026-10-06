@@ -1124,6 +1124,26 @@ impl BodyHistory {
         deadline: Instant,
         prerequisite: impl FnOnce() -> Result<enrollment::RetainedInitialPrerequisite>,
     ) -> Result<()> {
+        self.with_unsigned_renewal_context(|unsigned| {
+            owner.validate_unsigned_renewal_context_using(unsigned, deadline, prerequisite)
+        })
+    }
+
+    pub(super) fn validate_renewal_context_with_imports(
+        &self,
+        owner: &ManagedStreamTokenCustody,
+        deadline: Instant,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
+    ) -> Result<()> {
+        self.with_unsigned_renewal_context(|unsigned| {
+            owner.validate_unsigned_renewal_context_with_imports(unsigned, deadline, imports)
+        })
+    }
+
+    fn with_unsigned_renewal_context(
+        &self,
+        validate: impl FnOnce(&UnsignedEnrollment) -> Result<()>,
+    ) -> Result<()> {
         if !matches!(self.purpose, CustodyPurpose::Renewal(_)) {
             return Err(invalid("renewal context used for another purpose"));
         }
@@ -1134,7 +1154,7 @@ impl BodyHistory {
             .map(|r| &r.unsigned)
             .or_else(|| self.bodies.last().map(|b| &b.reservation.unsigned))
             .ok_or_else(|| invalid("renewal unsigned selection absent"))?;
-        owner.validate_unsigned_renewal_context_using(unsigned, deadline, prerequisite)
+        validate(unsigned)
     }
     /// Paid payload/signature phases retain their original recovery path even after body expiry.
     /// This result comes from the sole canonical wallet inspector after the complete history read.
@@ -1851,7 +1871,18 @@ impl ManagedStreamTokenCustody {
         &self,
         purpose: CustodyPurpose,
     ) -> Result<Selected<Original>> {
-        BodyHistory::open(self, purpose)?
+        self.required_enrollment_with_imports(
+            purpose,
+            &mut crate::managed::service_authority::CheckpointImports::new(&self.authority, None),
+        )
+    }
+
+    pub(super) fn required_enrollment_with_imports(
+        &self,
+        purpose: CustodyPurpose,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
+    ) -> Result<Selected<Original>> {
+        BodyHistory::open_with_imports(self, purpose, imports)?
             .ok_or(ManagedBootstrapFailure::RetainedMaterial)?
             .into_selected()
     }

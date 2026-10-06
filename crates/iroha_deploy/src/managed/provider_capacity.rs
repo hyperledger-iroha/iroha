@@ -273,7 +273,7 @@ impl ManagedProviderCapacity {
     ) -> Result<Original> {
         let plan = self.plan()?;
         let tip = verifier
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("capacity requires selected certified state"))?;
         if current.height() != tip.height()
             || current.context_id() != tip.context_id()
@@ -701,7 +701,7 @@ impl ManagedProviderCapacity {
         }
         let checkpoint = self.authority.decode_checkpoint(&original.checkpoint)?;
         let tip = checkpoint
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original capacity checkpoint"))?;
         tip.verify_global_scope(
             self.authority.config.network_id,

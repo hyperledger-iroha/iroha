@@ -601,7 +601,7 @@ impl ManagedReserveTopUpRequest {
         }
         self.authority
             .decode_checkpoint(&original.checkpoint)?
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original reserve top-up checkpoint"))?
             .verify_global_scope(
                 self.authority.config.network_id,
@@ -619,7 +619,7 @@ impl ManagedReserveTopUpRequest {
     ) -> Result<ManagedHistoricalReserveTopUp> {
         self.validate_original(original)?;
         let block = verifier
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original top-up carrier"))?;
         block
             .verify_global_scope(
