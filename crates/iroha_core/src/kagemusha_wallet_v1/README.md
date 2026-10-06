@@ -21,10 +21,22 @@ blacklist is not consulted for Unload. This implements the distinction in design
 full claim face value and historical fees remain fixed; ordinary online asset controls
 can delay execution but do not rewrite a retained claim or create a haircut.
 
-The native verifier is a mandatory Rust dependency. The public handler currently returns
-`ArtifactsUnavailable` for package verification until the authenticated production A/Ω
-artifact loader is installed. Fixture verifiers exist only in tests. Registration or
-structural G1 checks cannot substitute for a completed Bootstrap proof.
+The native verifier is a mandatory Rust dependency. `InstallVerifierPack` requires the
+registered reserve account's own authority and its live exact asset management permission.
+It authenticates the complete signed sixteen-selector σ and Ω inventory against the
+registered Scheme and independently selected manifest identity, then retains the exact
+original bytes in one immutable World row. Exact retry preserves that row; replacement
+conflicts. Current and rollback snapshots require its authorizing registration. Every
+proof-consuming instruction mounts that same-overlay installation and fully verifies σ,
+the required Ω and both transported accumulator claims. Missing originals retain
+`ArtifactsUnavailable`; registration and structural G1 checks never authorize a proof.
+
+One package consumes one confidential operation and reserves one σ verification plus one
+Ω verification when lineage is carried. Aggregate transport bytes include both accumulator
+originals. All transaction/block proof limits are checked together before any reservation
+counter changes or native verification. Complete monetary producer artifacts, fold schedules
+and device/release qualification remain separate work; installing this verifier grants no
+foreign wallet-open capability. Fixture verifiers remain test-only orchestration.
 
 Finalized issuance reads require a source-verified global CertifiedChain tip under finite
 NativeFinalityLimits, plus exact original transaction membership in that same World cut.

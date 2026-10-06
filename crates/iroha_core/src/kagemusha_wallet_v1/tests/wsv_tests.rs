@@ -420,6 +420,184 @@ fn routing_uses_permanent_scope_and_refuses_missing_wallet_records() {
 }
 
 #[test]
+fn verifier_install_routing_uses_only_the_registered_asset_scope() {
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
+    };
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    // Deliberately unadmitted DATA: routing reads the permanent asset registration;
+    // it neither mounts these empty originals nor grants install authority.
+    let instruction = |asset| {
+        KagemushaWalletLedgerV1::new(
+            memory.registration.scheme.scheme_id(),
+            KagemushaWalletLedgerActionV1::InstallVerifierPack {
+                asset,
+                manifest_digest: [9; 32],
+                pack: Vec::new(),
+            },
+        )
+    };
+    assert_eq!(
+        routing::dataspace(
+            &state.view().world,
+            &instruction(memory.registration.asset.asset_digest())
+        )
+        .unwrap(),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL
+    );
+    assert!(matches!(
+        routing::dataspace(&state.view().world, &instruction([7; 32])),
+        Err(Error::Unavailable)
+    ));
+}
+
+#[test]
+fn package_quota_charges_exact_native_calls_and_one_operation_at_the_boundary() {
+    let memory = Memory::new();
+    let activation: KagemushaWalletActivationV1 = fixture("KagemushaWalletActivationV1");
+    let unload: KagemushaWalletUnloadClaimV1 = fixture("KagemushaWalletUnloadClaimV1");
+    for (package, calls) in [(&activation.bootstrap, 1), (&unload.package, 2)] {
+        assert_eq!(package.lineage.lineage().is_some(), calls == 2);
+        let bytes = package.step_proof.bytes.len()
+            + package
+                .lineage
+                .lineage()
+                .map_or(0, |value| value.proof.len());
+        assert!(bytes > 0);
+        let mut state = world_state(&memory, true);
+        transact(&mut state, 1, |tx| {
+            tx.zk.max_proof_size_bytes = u32::try_from(bytes).unwrap();
+            tx.zk.max_verify_calls_per_tx = calls;
+            tx.zk.max_verify_calls_per_block = calls;
+            tx.zk.max_confidential_ops_per_block = 1;
+            tx.zk.max_proof_bytes_block = u64::try_from(bytes).unwrap();
+            let rows = tx.world.kagemusha_wallet_ledger.iter().count();
+            // Existing model fixtures are used only to count retained transport
+            // work. No fixture proof enters the native verifier or gets a verdict.
+            wsv::WsvLedger::new(tx, &memory.authority)?.reserve_package_proof(package)?;
+            assert_eq!(tx.zk_confidential_ops_in_tx, 1);
+            assert_eq!(tx.zk_verify_calls_in_tx, calls);
+            assert_eq!(tx.zk_proof_bytes_in_tx, u64::try_from(bytes).unwrap());
+            assert_eq!(tx.world.kagemusha_wallet_ledger.iter().count(), rows);
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn package_quota_refusal_is_atomic_for_sigma_and_lineage_limits_and_overflow() {
+    let memory = Memory::new();
+    let activation: KagemushaWalletActivationV1 = fixture("KagemushaWalletActivationV1");
+    let unload: KagemushaWalletUnloadClaimV1 = fixture("KagemushaWalletUnloadClaimV1");
+    for (package, calls) in [(&activation.bootstrap, 1), (&unload.package, 2)] {
+        let bytes = package.step_proof.bytes.len()
+            + package
+                .lineage
+                .lineage()
+                .map_or(0, |value| value.proof.len());
+        assert!(bytes > 1);
+        for refusal in 0..10 {
+            let mut state = world_state(&memory, true);
+            transact(&mut state, 1, |tx| {
+                tx.zk_confidential_ops_in_tx = 1;
+                tx.zk_verify_calls_in_tx = 1;
+                tx.zk_proof_bytes_in_tx = 13;
+                tx.zk.max_proof_size_bytes = u32::try_from(bytes).unwrap();
+                tx.zk.max_verify_calls_per_tx = calls + 1;
+                tx.zk.max_verify_calls_per_block = calls + 1;
+                tx.zk.max_confidential_ops_per_block = 2;
+                tx.zk.max_proof_bytes_block = 13 + u64::try_from(bytes).unwrap();
+                match refusal {
+                    0 => tx.zk.max_verify_calls_per_tx = calls,
+                    1 => tx.zk.max_verify_calls_per_block = calls,
+                    2 => tx.zk.max_proof_bytes_block -= 1,
+                    3 => tx.zk.max_proof_size_bytes -= 1,
+                    4 => tx.zk.max_confidential_ops_per_block = 1,
+                    5 => tx.zk_verify_calls_in_tx = u32::MAX,
+                    6 => tx.zk_proof_bytes_in_tx = u64::MAX,
+                    7 => tx.zk_confidential_ops_in_tx = u32::MAX,
+                    8 => tx.zk_verify_calls_in_block_so_far = u32::MAX,
+                    _ => tx.zk_proof_bytes_in_block_so_far = u64::MAX,
+                }
+                let before = (
+                    tx.zk_confidential_ops_in_tx,
+                    tx.zk_verify_calls_in_tx,
+                    tx.zk_proof_bytes_in_tx,
+                    tx.zk_confidential_ops_in_block_so_far,
+                    tx.zk_verify_calls_in_block_so_far,
+                    tx.zk_proof_bytes_in_block_so_far,
+                );
+                let rows = tx.world.kagemusha_wallet_ledger.iter().count();
+                assert!(
+                    wsv::WsvLedger::new(tx, &memory.authority)?
+                        .reserve_package_proof(package)
+                        .is_err(),
+                    "native call count {calls}, refusal {refusal}"
+                );
+                assert_eq!(
+                    (
+                        tx.zk_confidential_ops_in_tx,
+                        tx.zk_verify_calls_in_tx,
+                        tx.zk_proof_bytes_in_tx,
+                        tx.zk_confidential_ops_in_block_so_far,
+                        tx.zk_verify_calls_in_block_so_far,
+                        tx.zk_proof_bytes_in_block_so_far,
+                    ),
+                    before,
+                    "refused whole-package reservation must leave no partial charge"
+                );
+                assert_eq!(tx.world.kagemusha_wallet_ledger.iter().count(), rows);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn lineage_call_quota_refuses_before_native_verifier_or_payout() {
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
+    };
+    let memory = Memory::new();
+    let claim: KagemushaWalletUnloadClaimV1 = fixture("KagemushaWalletUnloadClaimV1");
+    assert!(claim.package.lineage.lineage().is_some());
+    claim.verify(&memory.registration.scheme).unwrap();
+    for transaction_limit in [true, false] {
+        let mut state = world_state(&memory, true);
+        register(&mut state, &memory, 1).unwrap();
+        let verifier = Verifier::new(true);
+        let instruction = KagemushaWalletLedgerV1::new(
+            memory.registration.scheme.scheme_id(),
+            KagemushaWalletLedgerActionV1::Unload(claim.to_canonical_bytes().unwrap()),
+        );
+        let result: Result<()> = transact(&mut state, 2, |tx| {
+            tx.zk.max_verify_calls_per_tx = if transaction_limit { 1 } else { 2 };
+            tx.zk.max_verify_calls_per_block = if transaction_limit { 2 } else { 1 };
+            let rows = tx.world.kagemusha_wallet_ledger.iter().count();
+            let result = crate::smartcontracts::isi::kagemusha_wallet::execute_with_verifier(
+                instruction,
+                &memory.authority,
+                tx,
+                &verifier,
+            );
+            assert!(matches!(result, Err(Error::Execution(_))));
+            assert_eq!(verifier.calls.get(), 0);
+            assert_eq!(tx.zk_confidential_ops_in_tx, 0);
+            assert_eq!(tx.zk_verify_calls_in_tx, 0);
+            assert_eq!(tx.zk_proof_bytes_in_tx, 0);
+            assert_eq!(tx.world.kagemusha_wallet_ledger.iter().count(), rows);
+            result
+        });
+        assert!(matches!(result, Err(Error::Execution(_))));
+        assert_eq!(verifier.calls.get(), 0);
+    }
+}
+
+#[test]
 fn unavailable_production_artifacts_retain_local_deferral_and_no_activation() {
     use iroha_data_model::isi::kagemusha_wallet::{
         KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,

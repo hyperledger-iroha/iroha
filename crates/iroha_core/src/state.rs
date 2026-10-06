@@ -37988,20 +37988,6 @@ impl StateTransaction<'_, '_> {
         {
             return crate::zk::PreverifyResult::PreverifyBudgetExceeded;
         }
-        // Apply the original State curve policy only to the exact admitted Halo2
-        // engine, before verifier-key admission or per-block deduplication. Native
-        // PIPA-R and STARK retain their independently pinned curve policies.
-        if !cfg!(all(test, sumeragi_core_mutation = "HC146"))
-            && crate::zk::production_verify_backend_tag(proof.backend.as_str())
-                == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
-            && !matches!(
-                self.zk.halo2.curve,
-                iroha_config::parameters::actual::ZkCurve::Pallas
-                    | iroha_config::parameters::actual::ZkCurve::Pasta
-            )
-        {
-            return crate::zk::PreverifyResult::CurveNotAllowed;
-        }
         crate::zk::preverify_with_budget(
             proof,
             vk,
@@ -40427,6 +40413,34 @@ impl StateTransaction<'_, '_> {
     /// Returns [`Error`] if any confidential proof quota would be exceeded or counters overflow.
     pub fn register_confidential_proof(&mut self, proof_bytes: usize) -> Result<(), Error> {
         self.register_confidential_usage(proof_bytes, 1)
+    }
+    /// Reserve all native proof verification work for one KAGEMUSHA package.
+    ///
+    /// The actual package selects one sigma verification plus one Omega verification
+    /// when lineage is carried. Both fixed-width accumulator originals are included
+    /// in the lineage transport byte count. One package remains one confidential
+    /// operation, and all existing transaction/block/aggregate-byte ceilings apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] without changing accounting when any byte/count arithmetic
+    /// overflows or a confidential quota refuses the whole reservation. The existing
+    /// output owner retains completed-work accounting after later business rollback.
+    pub(crate) fn register_kagemusha_package_proof(
+        &mut self,
+        package: &iroha_data_model::kagemusha::KagemushaWalletPackageV1,
+    ) -> Result<(), Error> {
+        let lineage = package.lineage.lineage();
+        let proof_bytes = package
+            .step_proof
+            .bytes
+            .len()
+            .checked_add(lineage.map_or(0, |value| value.proof.len()))
+            .ok_or_else(|| {
+                Error::InvariantViolation("KAGEMUSHA package proof-byte count overflow".into())
+            })?;
+        let verify_calls = if lineage.is_some() { 2 } else { 1 };
+        self.register_confidential_usage(proof_bytes, verify_calls)
     }
     /// Return the exact index required by the next privacy proof in this transaction.
     #[must_use]

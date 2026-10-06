@@ -103,6 +103,7 @@ impl KagemushaWalletTerminalReasonV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletMarkerStateV1"
 )]
+#[repr(align(16))]
 pub enum KagemushaWalletMarkerStateV1 {
     /// Generation-0 enrollment marker, written before the credential request.
     #[codec(index = 1)]
@@ -154,6 +155,7 @@ impl KagemushaWalletMarkerStateV1 {
 /// generation-0 enrollment marker (design C3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletMarkerV1")]
+#[repr(align(16))]
 pub struct KagemushaWalletMarkerV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,
@@ -1097,6 +1099,7 @@ impl KagemushaWalletCompletionRecordV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletFoldRecordV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletFoldRecordV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,

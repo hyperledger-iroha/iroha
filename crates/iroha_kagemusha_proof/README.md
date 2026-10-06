@@ -18,6 +18,12 @@ The implementation follows G1 revision 4 and owner decisions B1, B5–B8 in
 `specs/kagemusha_wallet_wire_v1.md`. Shared vectors in
 `fixtures/kagemusha/wallet_v1_vectors.json` pin each field and digest.
 
+Wallet framing now pins direct `u128` records/enums to 16-byte archived alignment,
+with enclosing fields and inline arrays inheriting it. Shipping assertions preserve
+all 26 existing frame padding values and retained-original layouts without changing
+Norito primitives, decoders or frozen vectors. Actual host checks are running; no result is established;
+ARMv7 runtime and physical-device byte parity remain separate qualification gates.
+
 - The core has 33 fields and the rest has 8. The head is
   `P(kgwcore1, core || P(kgwrest1, rest))`; σ carries the rest digest.
 - Poseidon digests are single canonical field elements. SHA-256 identifiers
@@ -208,11 +214,29 @@ qualification are separate gates. `select_shape` synthesizes candidates and
 can impose a byte budget. Keys, descriptors and proof bytes are independent
 of the Rayon pool size and optional commitment tables.
 
-`SigmaProver` generates keys and rejects invalid witnesses. `SigmaVerifier`
+`SigmaProver` generates producer keys or imports an original proving key with
+`from_original_artifact`, then rejects invalid witnesses. `SigmaVerifier`
 rebuilds from descriptor/key bytes and pinned parameters. `SigmaAllowlist`
-selects by `(operation tag, mask)`. Freezing the production artifact set and
-integrating Λ/Ω with wallet and node paths remain separate G3–G5 work; this
-crate's σ implementation alone does not establish complete protocol readiness.
+selects by `(operation tag, mask)`. Sigma and Q imports check bounded originals
+against the independently selected descriptor, verifying key and compiled source;
+they regenerate no key and reject substitutions. Default and explicit serialized
+Q profiles never fall back to another profile. Original/domain bounds do not
+qualify total synthesis or prover memory.
+
+`q_signature::native::QSignatureProver` imports the original k16/Pallas/V2
+signature key against an independently installed immutable slot plan, descriptor,
+VK and compiled source. It derives low-S P-256 verdicts from raw signatures,
+refuses invalid hard slots and proves false verdicts for invalid soft slots,
+then fully self-verifies the proof. It generates no runtime key. A still binds
+original tapes, signature roles and the global branch; this leaf does not grant
+complete producer-catalog admission, a Native wallet owner or wallet open.
+
+The installation owner must authenticate the signed scheme and complete producer
+inventory before import. These constructors supply proving components only;
+they supply no `NativeProofs` owner or wallet-open grant. Freezing the production
+artifact set and integrating Λ/Ω with wallet and node paths remain separate
+G3–G5 work; this crate's σ implementation alone does not establish complete
+protocol readiness.
 
 ## Validation
 
@@ -237,9 +261,31 @@ composed operation or runtime qualification.
   wrong-head and consistent-forgery attacks, and release per-cell tampering.
 - `shapes`: exact shapes, row counts, joint byte budget and verifier rebuilds.
 - `real_proofs`: real valid and rejected proofs, selector binding, byte
-  tampering and deterministic keys/proofs; quota shapes use k14.
+  tampering and deterministic keys/proofs; quota shapes use k14. The two
+  `installed_sigma_originals_` release cases exercise imported Send/Receive keys
+  on both Pasta curves, actual proofs, public-input tampering and import refusals.
+- `q_sigma`: `actual_two_sigma_q_proof_verifies` and
+  `installed_serialized_q_originals_prove_and_reject_default_profile` exercise
+  original-key continuity, explicit profile refusals and genuine imported Q
+  proofs. All four selected import cases passed. Fixture producers generate the
+  originals; the import path does not. The default Q's 10,496-byte proof is a
+  local component, not a final Payment/Ω size or wallet/device qualification.
+- `q_signature::native` and `q_signature`: one selected Native verdict case and
+  three explicitly selected release cases passed. Two release cases generate
+  and fully verify genuine imported hard/soft signature proofs, retain their
+  openings and reject changed inputs/verdicts; the third checks key, fixed-slot
+  source and original bounds refusals. Each of the two runs retained its 1,700
+  inputs and 17 local dependency packages unchanged. The earlier unapplied
+  zero-case attempt contributes no passes. The hard signature Q's 8,576 bytes
+  qualify this local component only, with Payment/Ω and wallet/device gates open.
+
 - `measure`: ignored diagnostic throughput/footprint workloads. They are not
   the fresh-process qualification procedure in the design record.
+
+Together these Sigma/Q and signature runs passed eight selected Native component
+cases across their separate guarded cuts. This count includes refusal and Native
+verdict cases; it is neither eight proof-generation cases nor one unchanged
+current release. Fixture producers generate original keys; Native imports do not.
 
 ```sh
 cargo test -p iroha_kagemusha_proof

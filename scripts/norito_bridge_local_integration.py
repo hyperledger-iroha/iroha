@@ -1,9 +1,10 @@
-"""Constrain explicitly requested, non-release Apple output to one ignored lane."""
+"""Authenticate explicit local mobile output and private diagnostic configuration."""
 from __future__ import annotations
 
 import argparse
 import importlib.util
 import os
+import json
 from pathlib import Path
 import stat
 import subprocess
@@ -79,16 +80,82 @@ def cargo_home(root: Path, path: Path, *, local_integration: bool = False) -> Pa
     return path
 
 
+
+ANDROID_ARMV7_CONFIGURATION_SCHEMA = "iroha.android-armv7-diagnostic-configuration.v1"
+
+
+def android_armv7_diagnostic_configuration(
+    root: Path, cache: Path, invocation: Path, *, local_integration: bool,
+) -> dict[str, object]:
+    """Authenticate the actual diagnostic Cargo configuration without editing it.
+
+    Cache and cwd are explicit, existing private directories outside source.
+    The same strict config owner used by production authenticates every effective
+    ancestor/config candidate, including absent candidates. This role grants no
+    production route or release admission and does not create/copy a cache.
+    """
+    if not local_integration:
+        raise ValueError("Android armv7 diagnostic configuration requires local integration")
+    cache = cargo_home(root, cache)
+    if cache == root or cache in root.parents or root in cache.parents:
+        raise ValueError("Android diagnostic Cargo home must be disjoint from source")
+    metadata = cache.lstat()
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise ValueError("Android diagnostic Cargo home must have mode 0700")
+    if cache == invocation or cache in invocation.parents or invocation in cache.parents:
+        raise ValueError("Android diagnostic Cargo home and invocation directory must be disjoint")
+    specification = importlib.util.spec_from_file_location(
+        "android_diagnostic_cargo_configuration_owner",
+        Path(__file__).with_name("run_mobile_hermetic_command.py"),
+    )
+    if specification is None or specification.loader is None:
+        raise ValueError("Android diagnostic Cargo configuration owner is unavailable")
+    owner = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(owner)
+    observation = owner.authenticate_cargo_invocation_directory(root, invocation)
+    configuration = owner.authenticate_build_cargo_configuration(invocation, cache)
+    owner.recheck_build_cargo_configuration(configuration)
+    owner.recheck_cargo_invocation_directory(root, observation)
+    current = cache.lstat()
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_mode,
+                              value.st_uid, value.st_gid)
+    if cache.resolve(strict=True) != cache or identity(current) != identity(metadata):
+        raise ValueError("Android diagnostic Cargo home changed during authentication")
+    return {
+        "schema": ANDROID_ARMV7_CONFIGURATION_SCHEMA,
+        "artifact_scope": "android-local-diagnostic",
+        "release_admitted": False,
+        "source_root": str(root),
+        "cargo_home": str(cache),
+        "cargo_home_identity": list(identity(current)),
+        "cargo_invocation_directory": str(invocation),
+        "cargo_invocation_directory_identity": list(observation[1]),
+        "configuration_inputs": {
+            str(path): None if value is None else list(value)
+            for path, value in sorted(configuration.items())
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--path", required=True)
-    parser.add_argument("--role", choices=("cargo", "build", "artifact", "projection", "cargo-home", "cargo-invocation"), required=True)
+    parser.add_argument("--role", choices=("cargo", "build", "artifact", "projection", "cargo-home", "cargo-invocation", "android-armv7-diagnostic"), required=True)
     parser.add_argument("--local-integration", action="store_true")
+    parser.add_argument("--cargo-home")
     arguments = parser.parse_args()
     try:
         path = Path(arguments.path)
-        if arguments.role == "cargo-home":
+        if arguments.role == "android-armv7-diagnostic":
+            if (arguments.path != str(path) or arguments.cargo_home is None
+                    or arguments.cargo_home != str(Path(arguments.cargo_home))):
+                raise ValueError("Android armv7 diagnostic requires explicit canonical cache and cwd")
+            print(json.dumps(android_armv7_diagnostic_configuration(
+                arguments.root, Path(arguments.cargo_home), path,
+                local_integration=arguments.local_integration,
+            ), sort_keys=True, separators=(",", ":")))
+        elif arguments.role == "cargo-home":
             if arguments.path != str(path):
                 raise ValueError("MOBILE_SDK_CARGO_HOME must be an absolute canonical directory")
             print(cargo_home(arguments.root, path, local_integration=arguments.local_integration))

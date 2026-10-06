@@ -174,10 +174,16 @@ Canonical bytes are one complete `norito::encode_canonical` frame ([Norito](../n
   vectors pin the name and schema hash of all 26 framed types (envelope:
   `f03a9dc47142299cad9ffe0b2115fd42`).
 - `p` is a property of the type, never inferred from the bytes. It is 8 when a
-  `u128` is reachable without passing through a sequence (archived alignment 16;
-  the envelope payload starts at byte 48), and 0 otherwise. The table below lists
-  it per type. `armv7` is not an admitted native target: its `u128` alignment would
-  change the padding.
+  `u128` is reachable without passing through indirect Vec-backed storage (archived
+  alignment 16;
+  the envelope payload starts at byte 48), and 0 otherwise. The wallet model pins
+  every record or enum with a direct `u128` field to `repr(align(16))`; enclosing
+  records, enums and inline fixed arrays inherit that alignment, while indirect
+  Vec-backed storage does not inherit its elements' alignment. All 26 frame padding values below are compile-time
+  assertions. `armv7`, `aarch64` and `x86_64` use this one layout and the existing
+  canonical bytes, schemas, flags and payload encodings. There is no target-specific
+  decoder or alternate-padding acceptance. Native runtime and physical-device
+  qualification remain separate from the frame contract.
 - Payload (Norito derived layout under `COMPACT_LEN`): a record is its fields in
   declaration order, each `varint len ‖ payload`; integers are little-endian fixed
   width; a `bool` is one byte; a digest field is `0x20 ‖ 32 bytes`, a key

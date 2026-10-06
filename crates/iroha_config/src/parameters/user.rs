@@ -1250,7 +1250,39 @@ impl Root {
     ) -> Result<actual::Root, ParseError> {
         self.parse_with_files(&ConfigFiles::Supplied(files))
     }
+    /// Whether this complete input claims an inline or referenced runtime genesis identity.
+    /// This reports structural presence only. The strict runtime parser validates the claim;
+    /// any claimed identity prevents selection of the unpublished signing context.
+    pub fn has_genesis_identity(&self) -> bool {
+        self.genesis.expected_hash.is_some() || self.genesis.expected_hash_file.is_some()
+    }
+    /// Validate complete unpublished policy without inventing a runtime genesis identity.
+    /// # Errors
+    /// Rejects either expected-identity field and preserves every ordinary node validator,
+    /// including both required private publisher originals.
+    pub fn parse_for_genesis_signing(self) -> Result<actual::GenesisSigningContext, ParseError> {
+        self.parse_with_genesis(&ConfigFiles::Native, Genesis::parse_for_signing)
+            .map(actual::GenesisSigningContext::new)
+    }
+    /// Validate complete unpublished policy from one explicit retained file source.
+    /// Source errors are final; there is no filesystem or schema fallback.
+    /// # Errors
+    /// Refuses a claimed runtime identity, invalid policy or unavailable required file.
+    pub fn parse_for_genesis_signing_with_file_source(
+        self,
+        files: &dyn ConfigFileSource,
+    ) -> Result<actual::GenesisSigningContext, ParseError> {
+        self.parse_with_genesis(&ConfigFiles::Supplied(files), Genesis::parse_for_signing)
+            .map(actual::GenesisSigningContext::new)
+    }
     fn parse_with_files(self, files: &ConfigFiles<'_>) -> Result<actual::Root, ParseError> {
+        self.parse_with_genesis(files, Genesis::parse_with_file_source)
+    }
+    fn parse_with_genesis<G>(
+        self,
+        files: &ConfigFiles<'_>,
+        parse_genesis: impl FnOnce(Genesis, &ConfigFiles<'_>, &mut Emitter<ParseError>) -> Option<G>,
+    ) -> Result<actual::Root<G>, ParseError> {
         let mut emitter = Emitter::new();
         let _account_address_scope =
             AccountAddressParseScope::enter(*self.chain_discriminant.value());
@@ -1362,7 +1394,7 @@ impl Root {
             Self::validate_trusted_peer_pops(&trusted, &mut emitter);
             trusted
         });
-        let genesis = self.genesis.parse_with_file_source(files, &mut emitter);
+        let genesis = parse_genesis(self.genesis, files, &mut emitter);
         let data_dir = Self::parse_data_dir(self.data_dir, &mut emitter);
         let kura = self.kura.parse(&mut emitter);
         let sccp = self.sccp.parse(&kura.store_dir, &mut emitter);
@@ -6172,6 +6204,24 @@ pub struct Genesis {
     pub expected_hash_file: Option<WithOrigin<PathBuf>>,
 }
 impl Genesis {
+    fn parse_for_signing(
+        self,
+        _files: &ConfigFiles<'_>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::GenesisForSigning> {
+        if self.expected_hash.is_some() || self.expected_hash_file.is_some() {
+            emitter.emit(
+                Report::new(ParseError::InvalidGenesisConfig)
+                    .attach("unpublished signing context cannot claim a runtime genesis identity"),
+            );
+            return None;
+        }
+        Some(actual::GenesisForSigning {
+            public_key: self.public_key.into_value(),
+            file: self.file,
+            manifest_json: self.manifest_json,
+        })
+    }
     fn parse_with_file_source(
         self,
         files: &ConfigFiles<'_>,

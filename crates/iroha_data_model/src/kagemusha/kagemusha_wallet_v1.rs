@@ -42,15 +42,19 @@
 //!
 //! # Canonical frames
 //!
-//! Canonical bytes are complete `norito::encode_canonical` frames: the 40-byte header, the
-//! zero padding required by the type's archived alignment (8 bytes for types whose own fields
-//! or nested structs hold a `u128`, including the envelope, and 0 bytes when a `u128` occurs
-//! only inside a sequence, on the admitted `aarch64` and `x86_64` native targets), then the
-//! payload. Every byte bound
-//! counts the complete frame and is checked before decoding. `armv7` is not an admitted native
-//! target: its `u128` alignment would change that padding. Decoding follows one order: byte
-//! cap, canonical decode under payload-derived resource limits, version fields, expected
-//! scheme, then structural validation.
+//! Canonical bytes are complete `norito::encode_canonical` frames: the 40-byte header,
+//! fixed type padding and payload. Every wallet record or enum with a direct `u128` field
+//! pins its archived storage alignment with `repr(align(16))`; enclosing values inherit it.
+//! This preserves the same 8-byte padding on `armv7`, `aarch64` and `x86_64`, independently
+//! of the target's primitive `u128` alignment. A `u128` reached only through indirect
+//! Vec-backed storage adds no top-level padding; inline fixed arrays inherit their
+//! elements' alignment. The 26 standalone frame padding values and retained Request,
+//! Lineage, state and statement alignment are asserted at compile time in `frame_alignment`.
+//! Payload fields, schemas, flags and existing canonical vectors are unchanged; actual
+//! native runtime and physical-device qualification remain separate.
+//! Every byte bound counts the complete frame and is checked before decoding. Decoding
+//! follows one order: byte cap, canonical decode under payload-derived resource limits,
+//! version fields, expected scheme, then structural validation.
 //!
 //! Decoding or validating a value never grants monetary authority by itself. A signature
 //! confers only the authority of its named role (§2.3); monetary admission also requires the
@@ -60,6 +64,7 @@ use crate::nexus::AxtAssetIncarnationValidationError;
 
 mod custody;
 mod digest;
+mod frame_alignment;
 mod identity;
 mod keys;
 mod ledger;

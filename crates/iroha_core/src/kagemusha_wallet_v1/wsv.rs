@@ -141,18 +141,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
         &mut self,
         package: &KagemushaWalletPackageV1,
     ) -> Result<()> {
-        let bytes = package
-            .step_proof
-            .bytes
-            .len()
-            .checked_add(
-                package
-                    .lineage
-                    .lineage()
-                    .map_or(0, |lineage| lineage.proof.len()),
-            )
-            .ok_or(Error::Overflow)?;
-        self.state.register_confidential_proof(bytes)?;
+        self.state.register_kagemusha_package_proof(package)?;
         Ok(())
     }
     /// Retain original native verifier material only after exact reserve consent and

@@ -106,6 +106,7 @@ pub const KAGEMUSHA_WALLET_LEDGER_CONTROL_BODY_TRANSCRIPT_BYTES_V1: usize =
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletLoadVoucherBodyV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletLoadVoucherBodyV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,
@@ -400,6 +401,7 @@ impl KagemushaWalletLoadVoucherV1 {
 
 /// Payout of one verified unload claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(16))]
 pub struct KagemushaWalletUnloadPayoutV1 {
     /// Unload nullifier; the ledger pays it exactly once.
     pub nullifier: [u8; 32],
@@ -647,6 +649,7 @@ impl KagemushaWalletUnloadClaimV1 {
 
 /// Payout of one verified fee claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(16))]
 pub struct KagemushaWalletFeePayoutV1 {
     /// Credit identity; the ledger pays one fee per credit.
     pub credit_id: [u8; 32],
@@ -806,6 +809,7 @@ impl KagemushaWalletFeeClaimV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletLedgerControlActionV1"
 )]
+#[repr(align(16))]
 pub enum KagemushaWalletLedgerControlActionV1 {
     /// Record the complete Bootstrap package and enable load issuance (§3.2).
     #[codec(index = 1)]

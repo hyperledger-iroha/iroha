@@ -120,7 +120,7 @@ macro_rules! impl_default {
 }
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
-pub struct Root {
+pub struct Root<G = Genesis> {
     /// Common options shared across components.
     pub common: Common,
     /// Authenticated local runtime-provider broker endpoint.
@@ -128,7 +128,7 @@ pub struct Root {
     /// Network configuration.
     pub network: Network,
     /// Genesis configuration.
-    pub genesis: Genesis,
+    pub genesis: G,
     /// Torii API configuration.
     pub torii: Torii,
     /// Embedded Soracloud runtime-manager configuration.
@@ -1022,6 +1022,96 @@ impl Root {
             .parse()
             .change_context(FromTomlSourceError)
     }
+}
+impl<G> Root<G> {
+    fn map_genesis<H>(self, transform: impl FnOnce(G) -> H) -> Root<H> {
+        let Self {
+            common,
+            runtime_provider_broker,
+            network,
+            genesis,
+            torii,
+            soracloud_runtime,
+            musubi_publication,
+            kagemusha_load_authorizer,
+            kura,
+            sumeragi,
+            block_sync,
+            transaction_gossiper,
+            live_query_store,
+            logger,
+            queue,
+            nexus,
+            snapshot,
+            telemetry_profile,
+            telemetry,
+            telemetry_integrity,
+            dev_telemetry,
+            pipeline,
+            tiered_state,
+            compute,
+            content,
+            oracle,
+            ivm,
+            norito,
+            fraud_monitoring,
+            zk,
+            gov,
+            nts,
+            accel,
+            concurrency,
+            confidential,
+            crypto,
+            settlement,
+            streaming,
+            sccp,
+            data_dir,
+            lifecycle,
+        } = self;
+        Root {
+            common,
+            runtime_provider_broker,
+            network,
+            genesis: transform(genesis),
+            torii,
+            soracloud_runtime,
+            musubi_publication,
+            kagemusha_load_authorizer,
+            kura,
+            sumeragi,
+            block_sync,
+            transaction_gossiper,
+            live_query_store,
+            logger,
+            queue,
+            nexus,
+            snapshot,
+            telemetry_profile,
+            telemetry,
+            telemetry_integrity,
+            dev_telemetry,
+            pipeline,
+            tiered_state,
+            compute,
+            content,
+            oracle,
+            ivm,
+            norito,
+            fraud_monitoring,
+            zk,
+            gov,
+            nts,
+            accel,
+            concurrency,
+            confidential,
+            crypto,
+            settlement,
+            streaming,
+            sccp,
+            data_dir,
+            lifecycle,
+        }
+    }
     /// Check whether the configuration already enables Sora/Nexus-only features.
     #[cfg(test)]
     #[must_use]
@@ -1203,7 +1293,7 @@ pub(crate) struct NexusStorageConfiguredComponentCaps {
     sorafs_max_capacity_bytes: Bytes,
 }
 impl NexusStorageConfiguredComponentCaps {
-    fn capture(root: &Root) -> Self {
+    fn capture<G>(root: &Root<G>) -> Self {
         Self {
             kura_max_disk_usage_bytes: root.kura.max_disk_usage_bytes,
             wsv_cold_max_bytes: root.tiered_state.max_cold_bytes,
@@ -2861,6 +2951,91 @@ pub struct Genesis {
     ///
     /// Configuration normalization requires this value independently of the signed artifact.
     pub expected_hash: HashOf<BlockHeader>,
+}
+/// Complete validated node policy before a genesis identity exists.
+///
+/// This authoring context has no runtime decoder or implicit conversion to [`Root`]. Every
+/// ordinary schema, policy and required private-custody validator still runs. Binding requires
+/// an original signed genesis block; daemon startup independently authenticates its final
+/// expected hash against the prepared bundle.
+#[derive(Debug)]
+pub struct GenesisSigningContext {
+    policy: Root<GenesisForSigning>,
+}
+/// Genesis public identity in an unpublished signing context. No expected hash is fabricated.
+#[derive(Debug)]
+pub(crate) struct GenesisForSigning {
+    pub(crate) public_key: PublicKey,
+    pub(crate) file: Option<WithOrigin<PathBuf>>,
+    pub(crate) manifest_json: Option<WithOrigin<PathBuf>>,
+}
+impl GenesisSigningContext {
+    pub(crate) fn new(policy: Root<GenesisForSigning>) -> Self {
+        Self { policy }
+    }
+    /// Read complete unpublished policy with the canonical validators and native private files.
+    /// Ambient environment variables cannot replace these authoring inputs.
+    /// # Errors
+    /// Refuses a claimed runtime identity, invalid policy, or missing required private custody.
+    pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
+        ConfigReader::new()
+            .without_env()
+            .with_toml_source(src)
+            .read_and_complete::<user::Root>()
+            .change_context(FromTomlSourceError)?
+            .parse_for_genesis_signing()
+            .change_context(FromTomlSourceError)
+    }
+    /// Exact validated Nexus policy used by native genesis execution.
+    pub fn nexus(&self) -> &Nexus {
+        &self.policy.nexus
+    }
+    /// Exact validated confidential-verifier policy used by native genesis execution.
+    pub fn zk(&self) -> &Zk {
+        &self.policy.zk
+    }
+    /// Required original private publisher custody and finite service limits.
+    pub fn publisher(&self) -> &KagemushaLoadAuthorizer {
+        &self.policy.kagemusha_load_authorizer
+    }
+    /// Bind this authoring policy to a genuine signed genesis-header identity.
+    ///
+    /// A provisional block may be used only for local policy execution. The final generator
+    /// must parse every final config and authenticate its publisher against the final network
+    /// before publication; a provisional context is never a deployment admission receipt.
+    /// # Errors
+    /// Refuses a non-genesis block, missing or extra signatures, a wrong signer, or invalid
+    /// original block and transaction signatures.
+    pub fn bind_signed_genesis(
+        self,
+        block: &iroha_data_model::block::SignedBlock,
+    ) -> core::result::Result<Root, &'static str> {
+        if block.header().height().get() != 1 {
+            return Err("signing context requires an original signed genesis block");
+        }
+        let mut signatures = block.signatures();
+        let signature = signatures
+            .next()
+            .ok_or("signing context genesis has no signature")?;
+        if signature.index() != 0 || signatures.next().is_some() {
+            return Err("signing context genesis must have one signature at index zero");
+        }
+        signature
+            .signature()
+            .verify_hash(&self.policy.genesis.public_key, block.hash())
+            .map_err(|_| "signing context genesis signature does not match its public key")?;
+        for transaction in block.external_transactions() {
+            transaction
+                .verify_signature()
+                .map_err(|_| "signing context genesis has an invalid transaction signature")?;
+        }
+        Ok(self.policy.map_genesis(|genesis| Genesis {
+            public_key: genesis.public_key,
+            file: genesis.file,
+            manifest_json: genesis.manifest_json,
+            expected_hash: block.hash(),
+        }))
+    }
 }
 /// Transaction queue settings.
 #[derive(Debug, Clone, Copy)]
