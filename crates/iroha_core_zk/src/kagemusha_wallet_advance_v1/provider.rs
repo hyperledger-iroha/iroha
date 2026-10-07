@@ -117,6 +117,10 @@ pub struct KagemushaWalletProviderV1<
     pub(super) options: KagemushaWalletProviderOptionsV1,
     pub(super) cache: BTreeMap<KagemushaWalletSlotIdV1, CachedSlotV1>,
     pub(super) pending_reasons: BTreeMap<KagemushaWalletSlotIdV1, KagemushaWalletProviderErrorV1>,
+    pub(super) generation_results:
+        BTreeMap<KagemushaWalletSlotIdV1, super::enrollment::RetainedGeneratedKeyV1>,
+    pub(super) generation_dispatches:
+        BTreeMap<KagemushaWalletSlotIdV1, super::enrollment::RetainedGenerationDispatchV1>,
     sentinel: KagemushaWalletRootSentinelV1,
     _lock: F::Lock,
     _frames: PhantomData<fn() -> (C, R)>,
@@ -188,6 +192,8 @@ where
             options,
             cache: BTreeMap::new(),
             pending_reasons: BTreeMap::new(),
+            generation_results: BTreeMap::new(),
+            generation_dispatches: BTreeMap::new(),
             sentinel,
             _lock: lock,
             _frames: PhantomData,

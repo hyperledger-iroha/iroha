@@ -406,6 +406,19 @@ pub mod isi {
         policy: &IdentifierPolicy,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        validate_phone_retail_policy(
+            policy,
+            state_transaction
+                .world
+                .ram_lfe_program_policies
+                .get(&policy.program_id),
+        )
+    }
+    /// Enforce the same phone policy contract on registration, claims and restored state.
+    pub(crate) fn validate_phone_retail_policy(
+        policy: &IdentifierPolicy,
+        program: Option<&RamLfeProgramPolicy>,
+    ) -> Result<(), Error> {
         let is_phone = policy.id.kind.as_ref() == "phone"
             || policy.normalization == IdentifierNormalization::PhoneE164
             || policy.program_id.to_string() == "phone_retail";
@@ -435,17 +448,13 @@ pub mod isi {
                     .into(),
             ));
         }
-        let program = state_transaction
-            .world
-            .ram_lfe_program_policies
-            .get(&policy.program_id)
-            .ok_or_else(|| {
-                Error::InvariantViolation(
-                    "phone#retail requires its pinned RAM-LFE program to be registered first"
-                        .to_owned()
-                        .into(),
-                )
-            })?;
+        let program = program.ok_or_else(|| {
+            Error::InvariantViolation(
+                "phone#retail requires its pinned RAM-LFE program to be registered first"
+                    .to_owned()
+                    .into(),
+            )
+        })?;
         // Preserve early rejection of diagnostic backends before HKDF metadata.
         program
             .backend
@@ -456,7 +465,8 @@ pub mod isi {
             .backend
             .require_production_support()
             .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
-        if program.owner != policy.owner
+        if program.program_id != policy.program_id
+            || program.owner != policy.owner
             || program.backend != RamLfeBackend::HkdfSha3_512PrfV1
             || program.commitment.backend != program.backend
             || program.verification_mode != RamLfeVerificationMode::Signed
@@ -486,12 +496,7 @@ pub mod isi {
                     .into(),
             ));
         }
-        crate::smartcontracts::isi::ram_lfe::validate_program_policy(program)?;
-        program
-            .backend
-            .require_production_support()
-            .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
-        Ok(())
+        crate::smartcontracts::isi::ram_lfe::validate_program_policy(program)
     }
     fn evict_expired_identifier_binding(
         state_transaction: &mut StateTransaction<'_, '_>,

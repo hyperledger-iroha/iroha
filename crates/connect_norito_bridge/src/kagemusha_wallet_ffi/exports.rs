@@ -402,6 +402,12 @@ mod setup_boundary_tests {
                     assert_eq!(original, [0, 255, 7]);
                     (12, 0, vec![kind, u8::from(wrap), 0, 255])
                 }
+                setup::Setup::LedgerLoad { .. } => panic!("unexpected ledger load fixture"),
+                setup::Setup::LoadFinality { .. } => panic!("unexpected load finality fixture"),
+                setup::Setup::LedgerInstruction { .. } => panic!("unexpected ledger instruction fixture"),
+                setup::Setup::ConfirmUnload { .. } => panic!("unexpected unload confirmation fixture"),
+                setup::Setup::LoadProofProgress(_) => panic!("unexpected load proof progress fixture"),
+                setup::Setup::LoadProofStep { .. } => panic!("unexpected load proof step fixture"),
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
             };
             Ok(Response {

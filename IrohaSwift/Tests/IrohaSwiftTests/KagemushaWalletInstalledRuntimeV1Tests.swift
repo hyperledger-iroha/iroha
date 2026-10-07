@@ -67,6 +67,18 @@ final class KagemushaWalletInstalledRuntimeV1Tests: XCTestCase {
     admission.failed()
     XCTAssertThrowsError(try admission.start(exact))
   }
+  func testPersistedResultRetryCannotSwitchAccountOrIntakeRepresentation() throws {
+    let admission = KagemushaWalletInstalledAdmissionV1()
+    let frames = [Data([1, 2, 3]), Data([4, 5])]
+    try admission.start(frames)
+    admission.failed()
+    XCTAssertFalse(admission.canTransferToEnrollment)
+    XCTAssertThrowsError(try admission.start([frames[0], Data([4, 6])]))
+    XCTAssertThrowsError(try admission.start(frames + [Data([7]), Data([8])]))
+    try admission.start(frames)
+    try admission.completed()
+    XCTAssertThrowsError(try admission.start(frames))
+  }
   func testSignatureOriginalIsBoundedFrozenAndRetainedAcrossOrdinaryFailure() throws {
     let admission=KagemushaWalletInstalledAdmissionV1()
     let frames=Array(repeating: Data([7]), count: 4)

@@ -859,3 +859,108 @@ fn interrupted_open_response_recovers_same_live_handle_and_closed_is_final() {
     assert_eq!(open::finish(id, &[]).unwrap_err().status, CLOSED);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn callback_generation_recovery_preserves_original_none_unavailable_and_bounds() {
+    let state = CallbackState::default();
+    let adapter = unsafe { CallbackPlatform::new(callbacks(&state)) }.unwrap();
+    let slot = advance::KagemushaWalletSlotIdV1([9; 32]);
+    let request = advance::KagemushaWalletKeyGenerationRequestV1 {
+        challenge_digest: [10; 32],
+        profile: advance::KagemushaWalletKeyProfileV1::SecureElementOrTee,
+    };
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Err(U::Platform(0))
+    );
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 3,
+            length: 0,
+            ..PlatformReply::default()
+        },
+        vec![],
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Ok(None)
+    );
+    // No held return is independent of an unknown current key probe.
+    assert_eq!(adapter.key_probe(&slot), Probe::Unavailable(U::Platform(0)));
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 2,
+            reason: 0,
+            length: 0,
+            ..PlatformReply::default()
+        },
+        vec![],
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Err(U::Locked)
+    );
+    assert_eq!(adapter.key_probe(&slot), Probe::Unavailable(U::Locked));
+    let payment = p256::ecdsa::SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+    let bytes = payment
+        .verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec();
+    let expected =
+        iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1::from_sec1_bytes(&bytes).unwrap();
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 0,
+            length: 65,
+            ..PlatformReply::default()
+        },
+        bytes,
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Ok(Some(expected))
+    );
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 0,
+            length: 65,
+            ..PlatformReply::default()
+        },
+        vec![0; 65],
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Err(U::KeyUnusable)
+    );
+    for (tag, length) in [(0, 66), (3, 1), (2, 1), (1, 0), (99, 0)] {
+        *state.answer.lock().unwrap() = (
+            PlatformReply {
+                tag,
+                length,
+                ..PlatformReply::default()
+            },
+            vec![0; length],
+        );
+        assert_eq!(
+            adapter.key_recover_generation_reply(&slot, &request),
+            Err(U::Platform(0))
+        );
+    }
+    assert_eq!(
+        state
+            .invocations
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(op, _, _)| *op == 1)
+            .count(),
+        0
+    );
+    for (op, bytes, capacity) in state.invocations.lock().unwrap().iter() {
+        if *op == 13 {
+            assert_eq!(bytes.as_slice(), &request.challenge_digest[..]);
+            assert_eq!(*capacity, 65);
+        }
+    }
+}

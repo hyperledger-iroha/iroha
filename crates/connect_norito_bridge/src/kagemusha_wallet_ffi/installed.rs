@@ -30,6 +30,7 @@ pub use attempt::WalletInstallationAttempt;
 pub use exports::*;
 use originals::CatalogOriginals;
 use selection::Selection;
+pub(super) use selection::Session;
 
 pub(crate) const APP_MANIFEST_MAX: usize = 8 * 1024 * 1024;
 pub(crate) const ENVELOPE_MAX: usize = 2048;
@@ -138,6 +139,18 @@ pub(super) struct BoundOriginals {
     android: bool,
 }
 impl BoundOriginals {
+    pub(super) fn enrollment_session(&self, originals: [&[u8]; 3]) -> Result<Session> {
+        self.selected.enrollment_session(self.android, originals)
+    }
+    pub(super) fn enrollment_projection(&self) -> Vec<u8> {
+        let mut bytes = self.selected.asset.scale.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&self.selected.asset_original);
+        bytes
+    }
+    pub(super) fn asset_original(&self) -> &[u8] {
+        &self.selected.asset_original
+    }
+
     pub(super) fn require(&self, originals: [&[u8]; 4]) -> Result<()> {
         let [credential, _, _, asset] = originals;
         if asset != self.selected.asset_original {

@@ -46,11 +46,13 @@ fn mutate(value: &mut Value, key: &str, replacement: Value) {
 }
 fn application() -> Value {
     // Signed public metadata DATA. These values never qualify a Native graph or device.
-    norito::json!({"schema":("cbsi.iroha-application-release.v1"),"source":{"commit":("77".repeat(20)),"tree":("78".repeat(20)),"cargo_lock_sha256":("79".repeat(32)),"cargo_lock_size_bytes":(1),"javascript_tree":("7a".repeat(20)),"iroha_js_tree":("7b".repeat(20)),"iroha_js_host_tree":("7c".repeat(20)),"android_source_fingerprint_sha256":("7d".repeat(32)),"apple_source_fingerprint_sha256":("7e".repeat(32))},"protocol":{"kagemusha_wallet_version":(1),"kagemusha_text_prefix":("kgm1:"),"kagemusha_wallet_types":{"scheme":("KagemushaWalletSchemeV1"),"signer_certificate":("KagemushaWalletSignerCertificateV1"),"artifact_manifest":("KagemushaWalletArtifactManifestV1"),"verifier_pack":("VerifierPackV1"),"producer_inventory":("ProducerInventoryV1")},"native_bridge_abi_version":(crate::CONNECT_NORITO_BRIDGE_ABI_VERSION),"native_prebuilt_provenance_schemas":{"android":("iroha.android-native-build-provenance.v1"),"apple":("cbsi.iroha-apple-xcframework-release.v1")}},"toolchain_closure":null,"artifacts":{"javascript_browser":null,"android_sdk":null,"apple_xcframework":null,"kagemusha_mobile":{"mode":("enabled"),"service_release_scope":("10".repeat(32)),"scheme_id":("11".repeat(32)),"artifact_manifest_digest":("12".repeat(32)),"producer_catalog_digest":("13".repeat(32)),"trust_assets":[],"native_installation":{"schema":("cbsi.kagemusha.native-installation.v1"),"ledger":null,"consensus":null,"asset":null,"firstDeviceAuthentication":(first_device_authentication_selection())}}}})
-}
-fn first_device_authentication_selection() -> Value {
-    // Public metadata fixtures confer no authenticated-original or wallet authority.
-    norito::json!({"schema":("cbsi.first-device-auth-runtime-selection.v1"),"googleOAuthClientId":("fixture-client.apps.googleusercontent.com"),"googleOAuthIssuer":("https://accounts.google.com"),"integrityCloudProjectNumber":(123456789),"originalAuthPolicySha256":("11".repeat(32)),"verifierConfigurationSha256":("22".repeat(32)),"googlePolicySha256":("33".repeat(32))})
+    let mut value = norito::json!({"schema":("cbsi.iroha-application-release.v1"),"source":{"commit":("77".repeat(20)),"tree":("78".repeat(20)),"cargo_lock_sha256":("79".repeat(32)),"cargo_lock_size_bytes":(1),"javascript_tree":("7a".repeat(20)),"iroha_js_tree":("7b".repeat(20)),"iroha_js_host_tree":("7c".repeat(20)),"android_source_fingerprint_sha256":("7d".repeat(32)),"apple_source_fingerprint_sha256":("7e".repeat(32))},"protocol":{"kagemusha_wallet_version":(1),"kagemusha_text_prefix":("kgm1:"),"kagemusha_wallet_types":{"scheme":("KagemushaWalletSchemeV1"),"signer_certificate":("KagemushaWalletSignerCertificateV1"),"artifact_manifest":("KagemushaWalletArtifactManifestV1"),"verifier_pack":("VerifierPackV1"),"producer_inventory":("ProducerInventoryV1")},"native_bridge_abi_version":(crate::CONNECT_NORITO_BRIDGE_ABI_VERSION),"native_prebuilt_provenance_schemas":{"android":("iroha.android-native-build-provenance.v1"),"apple":("cbsi.iroha-apple-xcframework-release.v1")}},"toolchain_closure":null,"artifacts":{"javascript_browser":null,"android_sdk":null,"apple_xcframework":null,"kagemusha_mobile":{"mode":("enabled"),"service_release_scope":("10".repeat(32)),"scheme_id":("11".repeat(32)),"artifact_manifest_digest":("12".repeat(32)),"producer_catalog_digest":("13".repeat(32)),"trust_assets":[],"native_installation":{"schema":("cbsi.kagemusha.native-installation.v1"),"ledger":null,"consensus":null,"asset":null}}}});
+    native_installation_mut(&mut value).insert("fiSessionEnrollment".into(), session_selection());
+    mobile_mut(&mut value).insert(
+        "service_release_scope".into(),
+        Value::String(hex::encode(session_release_digest())),
+    );
+    value
 }
 fn sign(key: &KeyPair, app: &[u8]) -> Vec<u8> {
     let mut message = DOMAIN.to_vec();
@@ -106,151 +108,21 @@ fn even_genuinely_signed_unknown_fields_and_noncanonical_originals_refuse() {
     envelope.insert(1, b' ');
     assert!(signed_app(&trust, &bytes, &envelope).is_err());
 }
-fn accepts_signed_authentication_selection(selection: Value) -> bool {
+#[test]
+fn cbsi_installation_uses_fi_session_enrollment_and_rejects_retired_pre_fi_selection() {
     let key = KeyPair::from_seed(vec![15; 32], Algorithm::Ed25519);
     let trust = RuntimeTrust::test(key.public_key().clone());
     let mut app = application();
-    mutate(&mut app, "firstDeviceAuthentication", selection);
     let bytes = canonical(&app);
-    signed_app(&trust, &bytes, &sign(&key, &bytes)).is_ok()
-}
-#[test]
-fn signed_authentication_selection_requires_exact_current_fields_and_types() {
-    let selection = first_device_authentication_selection();
-    assert!(accepts_signed_authentication_selection(selection.clone()));
-    let Value::Object(map) = &selection else {
-        panic!("fixture object")
-    };
-    for field in map.keys() {
-        let mut changed = map.clone();
-        changed.remove(field);
-        assert!(!accepts_signed_authentication_selection(Value::Object(
-            changed
-        )));
-    }
-    let mut changed = selection.clone();
-    mutate(&mut changed, "authorized", Value::Bool(true));
-    assert!(!accepts_signed_authentication_selection(changed));
-    for invalid in [
+    signed_app(&trust, &bytes, &sign(&key, &bytes)).unwrap();
+    for retired in [
         Value::Null,
         Value::Bool(true),
-        Value::String("selection".into()),
-        Value::Array(vec![]),
+        norito::json!({"schema":("cbsi.first-device-auth-runtime-selection.v1")}),
     ] {
-        assert!(!accepts_signed_authentication_selection(invalid));
-    }
-    for invalid in [
-        Value::String("cbsi.first-device-auth-runtime-selection.v2".into()),
-        Value::from(1_u64),
-        Value::Null,
-    ] {
-        let mut changed = selection.clone();
-        mutate(&mut changed, "schema", invalid);
-        assert!(!accepts_signed_authentication_selection(changed));
-    }
-    let key = KeyPair::from_seed(vec![15; 32], Algorithm::Ed25519);
-    let mut missing = application();
-    native_installation_mut(&mut missing).remove("firstDeviceAuthentication");
-    let bytes = canonical(&missing);
-    assert!(
-        signed_app(
-            &RuntimeTrust::test(key.public_key().clone()),
-            &bytes,
-            &sign(&key, &bytes)
-        )
-        .is_err()
-    );
-}
-#[test]
-fn signed_authentication_oauth_strings_enforce_exact_issuer_and_ascii_client_bounds() {
-    for (field, valid) in [
-        ("googleOAuthClientId", "!".into()),
-        ("googleOAuthClientId", "~".repeat(1024)),
-        ("googleOAuthIssuer", "accounts.google.com".into()),
-        ("googleOAuthIssuer", "https://accounts.google.com".into()),
-    ] {
-        let mut selection = first_device_authentication_selection();
-        mutate(&mut selection, field, Value::String(valid));
-        assert!(accepts_signed_authentication_selection(selection));
-    }
-    for (field, invalid) in [
-        ("googleOAuthClientId", "".into()),
-        ("googleOAuthClientId", "x".repeat(1025)),
-        ("googleOAuthClientId", "client id".into()),
-        ("googleOAuthClientId", "client\n".into()),
-        ("googleOAuthClientId", "\u{7f}".into()),
-        ("googleOAuthClientId", "é".into()),
-        ("googleOAuthIssuer", "http://accounts.google.com".into()),
-        ("googleOAuthIssuer", "https://accounts.google.com/".into()),
-        (
-            "googleOAuthIssuer",
-            "https://accounts.google.com.evil".into(),
-        ),
-        ("googleOAuthIssuer", " accounts.google.com".into()),
-    ] {
-        let mut selection = first_device_authentication_selection();
-        mutate(&mut selection, field, Value::String(invalid));
-        assert!(!accepts_signed_authentication_selection(selection));
-    }
-    for field in ["googleOAuthClientId", "googleOAuthIssuer"] {
-        for invalid in [
-            Value::from(123_u64),
-            Value::Bool(true),
-            Value::Null,
-            Value::Array(vec![]),
-        ] {
-            let mut selection = first_device_authentication_selection();
-            mutate(&mut selection, field, invalid);
-            assert!(!accepts_signed_authentication_selection(selection));
-        }
-    }
-}
-#[test]
-fn signed_authentication_project_requires_a_positive_safe_json_integer() {
-    for valid in [1_u64, 9_007_199_254_740_991] {
-        let mut selection = first_device_authentication_selection();
-        mutate(
-            &mut selection,
-            "integrityCloudProjectNumber",
-            Value::from(valid),
-        );
-        assert!(accepts_signed_authentication_selection(selection));
-    }
-    for invalid in [
-        Value::from(-1_i64),
-        Value::from(0_u64),
-        Value::from(1.5_f64),
-        Value::from(9_007_199_254_740_992_u64),
-        Value::String("1".into()),
-        Value::Bool(true),
-        Value::Null,
-    ] {
-        let mut selection = first_device_authentication_selection();
-        mutate(&mut selection, "integrityCloudProjectNumber", invalid);
-        assert!(!accepts_signed_authentication_selection(selection));
-    }
-}
-#[test]
-fn signed_authentication_original_pins_require_typed_nonzero_lowercase_digests() {
-    for field in [
-        "originalAuthPolicySha256",
-        "verifierConfigurationSha256",
-        "googlePolicySha256",
-    ] {
-        for invalid in [
-            Value::String("0".repeat(64)),
-            Value::String("A".repeat(64)),
-            Value::String("g".repeat(64)),
-            Value::String("a".repeat(63)),
-            Value::String("a".repeat(65)),
-            Value::from(123_u64),
-            Value::Bool(false),
-            Value::Null,
-        ] {
-            let mut selection = first_device_authentication_selection();
-            mutate(&mut selection, field, invalid);
-            assert!(!accepts_signed_authentication_selection(selection));
-        }
+        native_installation_mut(&mut app).insert("firstDeviceAuthentication".into(), retired);
+        let bytes = canonical(&app);
+        assert!(signed_app(&trust, &bytes, &sign(&key, &bytes)).is_err());
     }
 }
 #[test]
@@ -406,11 +278,11 @@ impl BaseFixture {
                 app_policy: app.policy_digest().unwrap(),
                 platform: if apple {
                     KagemushaWalletEnrollmentPlatformV1::Apple {
-                        attestation_root_sha256: [4; 32],
+                        attestation_root_sha256: BlobV1::of(SESSION_ROOT).sha256,
                     }
                 } else {
                     KagemushaWalletEnrollmentPlatformV1::Android {
-                        attestation_root_sha256: [4; 32],
+                        attestation_root_sha256: BlobV1::of(SESSION_ROOT).sha256,
                         hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
                         patch_floor_yyyymm: 202610,
                         play_integrity_maximum_age_ms: 120000,
@@ -758,14 +630,14 @@ fn cbsi_signed_release_requires_exact_mobile_selection_and_all_seven_inventory_r
     let fixture = BaseFixture::new();
     let selected = fixture.load().unwrap();
     let ApplicationBinding::CbsiReleaseV1 {
-        _service_release_scope,
+        service_release_scope,
         producer_catalog_digest,
         ..
     } = selected.application
     else {
         panic!("CBSI authority")
     };
-    assert_eq!(_service_release_scope, [0x10; 32]);
+    assert_eq!(service_release_scope, session_release_digest());
     assert_eq!(producer_catalog_digest, [0x13; 32]);
     for field_name in [
         "service_release_scope",
@@ -872,12 +744,9 @@ fn cbsi_authority_rejects_bpng_signature_domain_and_runtime_grammar() {
     );
     assert!(fixture.load().is_err());
     let mut fixture = BaseFixture::new();
-    mutate(
-        native_installation_mut(&mut fixture.app)
-            .get_mut("firstDeviceAuthentication")
-            .unwrap(),
-        "schema",
-        Value::String("bpng.first-device-auth-runtime-selection.v1".into()),
+    native_installation_mut(&mut fixture.app).insert(
+        "firstDeviceAuthentication".into(),
+        norito::json!({"schema":("bpng.first-device-auth-runtime-selection.v1")}),
     );
     assert!(fixture.load().is_err());
 }
@@ -1072,3 +941,157 @@ fn renewed_issuer_original_is_left_to_genuine_intake_and_never_replaced_by_curre
 }
 
 mod bpng_tests;
+
+// Public DATA signatures only; these fixture roots never qualify a physical device.
+const SESSION_ROOT: &[u8] = b"public component root DER placeholder";
+const SESSION_RELEASE: &[u8] = b"public component service release original";
+fn session_release_digest() -> [u8; 32] {
+    kagemusha_enrollment_permit_scope_digest_v1(
+        KagemushaEnrollmentPermitScopeRoleV1::Release,
+        SESSION_RELEASE,
+    )
+    .unwrap()
+}
+fn session_key(index: u8) -> KeyPair {
+    KeyPair::from_seed(vec![150 + index; 32], Algorithm::Ed25519)
+}
+fn session_selection() -> Value {
+    let sessions: Vec<Value> = ["anz", "bred", "bsp", "ezipei", "m-selen", "pob"].iter().enumerate().map(|(index,fi)| {
+        let namespace = format!("{fi}.cbsi");
+        let key = session_key(index as u8);
+        let (_,public) = key.public_key().to_bytes();
+        norito::json!({"schema":("iroha.fi-session-authentication-original.v1"), "algorithm":("EdDSA"),
+            "verificationKeyEd25519Base64":(STANDARD.encode(public)), "issuer":(format!("cbsi-fi-core-{fi}")),
+            "audience":(namespace.clone()), "fiOriginalBase64":(STANDARD.encode(namespace.as_bytes())), "dataspaceId":(namespace),
+            "androidClientApp":("com.soramitsu.bokolocash"), "appleClientApp":("jp.co.soramitsu.bokolo"),
+            "requestOrigin":(format!("https://bokolo-{fi}.soramitsu.io")), "externalPathPrefix":("/api"),
+            "enrollmentChallengePath":("/v1/retail/kagemusha/enrollment/challenge"), "releaseOriginalBase64":(STANDARD.encode(SESSION_RELEASE))})
+    }).collect();
+    norito::json!({"schema":("cbsi.fi-session-enrollment-selection.v1"), "sessions":(sessions),
+        "enrollmentCollection":{"androidAttestationRootDERBase64":(STANDARD.encode(SESSION_ROOT)),
+            "appleAttestationRootDERBase64":(STANDARD.encode(SESSION_ROOT)),
+            "androidPlayIntegrityCloudProjectNumber":("123456789")}})
+}
+fn session_originals(android: bool) -> [Vec<u8>; 3] {
+    let proof_key = g1_key(31);
+    let point = proof_key.verifying_key().to_encoded_point(false);
+    let x = URL_SAFE_NO_PAD.encode(point.x().unwrap());
+    let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
+    let jwk = format!("{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{x}\",\"y\":\"{y}\"}}");
+    let encode =
+        |value: Value| URL_SAFE_NO_PAD.encode(norito::json::to_json(&value).unwrap().as_bytes());
+    let header = encode(norito::json!({"alg":("EdDSA"),"typ":("JWT")}));
+    let claims = encode(
+        norito::json!({"sub":("alice@example.test"), "dataspace_id":("anz.cbsi"), "roles":["RETAIL_USER"],
+        "iat":(1000), "nbf":(1000), "exp":(2000), "iss":("cbsi-fi-core-anz"), "aud":("anz.cbsi"),
+        "device_id":("00000000-0000-4000-8000-000000000001"), "client_app":(if android { "com.soramitsu.bokolocash" } else { "jp.co.soramitsu.bokolo" }),
+        "cnf":{"jkt":(URL_SAFE_NO_PAD.encode(BlobV1::of(jwk.as_bytes()).sha256))}}),
+    );
+    let message = format!("{header}.{claims}");
+    let signature = Signature::try_new(session_key(0).private_key(), message.as_bytes()).unwrap();
+    let token = format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature.payload())).into_bytes();
+    let header = encode(
+        norito::json!({"typ":("dpop+jwt"), "alg":("ES256"), "jwk":{"kty":("EC"),"crv":("P-256"),"x":(x),"y":(y)}}),
+    );
+    let claims = encode(
+        norito::json!({"htm":("POST"),"htu":("https://bokolo-anz.soramitsu.io/api/v1/retail/kagemusha/enrollment/challenge"),
+        "iat":(1500),"jti":("00000000-0000-4000-8000-000000000002"),"ath":(URL_SAFE_NO_PAD.encode(BlobV1::of(&token).sha256))}),
+    );
+    let message = format!("{header}.{claims}");
+    let signature: G1Signature = proof_key.sign(message.as_bytes());
+    let proof = format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes())).into_bytes();
+    [token, proof, SESSION_ROOT.to_vec()]
+}
+#[test]
+fn enrolled_session_requires_signed_fi_token_bound_proof_and_exact_root() {
+    let selection = BaseFixture::new().load().unwrap();
+    for android in [true, false] {
+        let originals = session_originals(android);
+        let session = selection
+            .enrollment_session(android, originals.each_ref().map(Vec::as_slice))
+            .unwrap();
+        assert!(session.matches(originals.each_ref().map(Vec::as_slice)));
+        assert_eq!(session.config.actor, b"alice@example.test");
+        assert_eq!(session.config.fi, b"anz.cbsi");
+        assert_eq!(session.config.release, SESSION_RELEASE);
+        assert_eq!(session.config.session_valid_from_ms, 1_440_000);
+        assert_eq!(session.config.session_expires_at_ms, 1_561_000);
+        assert!(
+            selection
+                .enrollment_session(!android, originals.each_ref().map(Vec::as_slice))
+                .is_err()
+        );
+        for field in 0..3 {
+            let mut changed = originals.clone();
+            changed[field][0] ^= 1;
+            assert!(
+                selection
+                    .enrollment_session(android, changed.each_ref().map(Vec::as_slice))
+                    .is_err()
+            );
+        }
+    }
+}
+#[test]
+fn fi_selection_rejects_missing_duplicate_reordered_and_release_alias_rows() {
+    for field in 0..4 {
+        let mut fixture = BaseFixture::new();
+        let selection = native_installation_mut(&mut fixture.app)
+            .get_mut("fiSessionEnrollment")
+            .unwrap();
+        let Value::Array(rows) = object_mut(selection).get_mut("sessions").unwrap() else {
+            panic!("rows")
+        };
+        match field {
+            0 => {
+                rows.pop();
+            }
+            1 => {
+                rows[1] = rows[0].clone();
+            }
+            2 => rows.swap(0, 1),
+            _ => {
+                object_mut(&mut rows[0]).insert(
+                    "releaseOriginalBase64".into(),
+                    Value::String(STANDARD.encode(session_release_digest())),
+                );
+            }
+        }
+        assert!(fixture.load().is_err());
+    }
+}
+
+#[test]
+fn fi_collection_requires_policy_bound_roots_and_positive_canonical_project() {
+    for field in [
+        "androidAttestationRootDERBase64",
+        "appleAttestationRootDERBase64",
+    ] {
+        let mut fixture = BaseFixture::new();
+        let selection = native_installation_mut(&mut fixture.app)
+            .get_mut("fiSessionEnrollment")
+            .unwrap();
+        let collection = object_mut(selection)
+            .get_mut("enrollmentCollection")
+            .unwrap();
+        object_mut(collection).insert(
+            field.into(),
+            Value::String(STANDARD.encode(b"foreign root")),
+        );
+        assert!(fixture.load().is_err());
+    }
+    for project in ["", "0", "01", "+1", "1.0", " 1", "9223372036854775808"] {
+        let mut fixture = BaseFixture::new();
+        let selection = native_installation_mut(&mut fixture.app)
+            .get_mut("fiSessionEnrollment")
+            .unwrap();
+        let collection = object_mut(selection)
+            .get_mut("enrollmentCollection")
+            .unwrap();
+        object_mut(collection).insert(
+            "androidPlayIntegrityCloudProjectNumber".into(),
+            Value::String(project.into()),
+        );
+        assert!(fixture.load().is_err());
+    }
+}

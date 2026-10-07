@@ -12,7 +12,8 @@ public struct KagemushaWalletCallV1: Sendable {
   /// idle6, caught up7, checkpoint8, folded9, CreditStatus10, preparing11, setup12,
   /// timeChallenge13, timeRetained14, accountChallenge15, opened16, activation17;
   /// background29, closure30, retainedFee31, noFee32, ledgerTip33, noTip34, payoutRecorded35,
-  /// feeClaimTransport36; enrollment18...28 is projected by the separate enrollment owner.
+  /// feeClaimTransport36, authenticatedEnrollmentSelection37, appleOriginals38, appleCustodyAcknowledged39, ledgerInstruction40, recursiveLoadFinality41, confirmedUnload42, receiptProofProgress43; enrollment18...28 is projected by the separate enrollment owner.
+  static let statusRange: ClosedRange<Int32> = 0...43
   public let status: Int32
   public let sequenceLow: UInt64
   public let sequenceHigh: UInt64
@@ -23,15 +24,16 @@ public struct KagemushaWalletCallV1: Sendable {
   public let bytes: Data
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
-    guard (0...36).contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
-      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
-      ![12, 14, 17, 30, 31, 32, 34, 35, 36].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
-      !([13, 15, 16].contains(status) || (18...28).contains(status))
+    guard Self.statusRange.contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
+      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 41, 42, 43].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
+      ![12, 14, 17, 30, 31, 32, 34, 35, 36, 40, 41].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
+      !([13, 15, 16].contains(status) || (18...28).contains(status) || (37...39).contains(status))
         || (sequenceLow > 0 && sequenceLow <= UInt64(Int64.max) && sequenceHigh == 0 && detail == 0),
       ![13, 15, 18, 23].contains(status) || bytes.count == 32,
       status != 13 || bytes.contains(where: { $0 != 0 }),
       status != 19 || bytes.count == 161,
-      status != 33 || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
+      status != 43 || (sequenceLow > 1 && sequenceHigh == 0 && detail == 0 && bytes.count == 8 && bytes.reduce(UInt64(0), { ($0 << 8) | UInt64($1) }) <= sequenceLow),
+      ![33, 42].contains(status) || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     self.status = status
     self.sequenceLow = sequenceLow
@@ -70,7 +72,7 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
       input.withRequest { request in driver.execute(value, request, out) }
     }.completion()
   }
-  private func setup(_ input: KagemushaWalletSetupInputV1) throws -> KagemushaWalletCallV1 {
+  func setup(_ input: KagemushaWalletSetupInputV1) throws -> KagemushaWalletCallV1 {
     let value = try handle()
     return try driver.result { out in input.withRequest { driver.setup(value, $0, out) } }
   }
@@ -478,7 +480,7 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     let status = action(&value)
     defer { if let bytes = value.bytes { free(bytes) } }
     try Self.check(status, reason: value.reason, platform: value.platform_code)
-    guard (0...28).contains(value.status), value.length >= 0,
+    guard KagemushaWalletCallV1.statusRange.contains(value.status), value.length >= 0,
       value.length <= kagemushaWalletOutputBoundV1(value.status), value.length == 0 || value.bytes != nil
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return try KagemushaWalletCallV1(
@@ -594,6 +596,18 @@ func kagemushaWalletCallbacksV1(_ platform: KagemushaWalletApplePlatformV1)
       case .alreadyPresent: reply.pointee.tag = 3
       case .unavailable(let reason): failure(reason)
       }
+    case 13:
+      guard
+        let profile = KagemushaWalletAppleKeyProfileV1(rawValue: UInt8(exactly: auxiliary) ?? 0),
+        let request = KagemushaWalletAppleKeyGenerationRequestV1(
+          challengeDigest: bytes, profile: profile)
+      else { return }
+      switch platform.recoverGenerationReply(parsed, request) {
+      case .some(.generated(let key)): success(key)
+      case .some(.unavailable(let reason)): failure(reason)
+      case .none: reply.pointee.tag = 3 // No held successful return, never key absence.
+      case .some(.alreadyPresent): break // Recovery cannot generate or claim a new result.
+      }
     case 2:
       switch platform.keySign(parsed, message: bytes) {
       case .success(let signature): success(signature)
@@ -615,5 +629,5 @@ func kagemushaWalletCallbacksV1(_ platform: KagemushaWalletApplePlatformV1)
 }
 
 func kagemushaWalletOutputBoundV1(_ status: Int32) -> Int {
-  switch status { case 17, 27, 30, 36: return 16_384; case 24: return 131_072; case 25: return 262_144; case 28: return 1024; case 31: return 21_024; case 33: return 32; default: return 10_000 }
+  switch status { case 17, 27, 30, 36, 41: return 16_384; case 40: return 65_536; case 24: return KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; case 25: return 262_144; case 28: return 1024; case 37: return 1028; case 38: return 73_740; case 31: return 21_024; case 33, 42: return 32; case 43: return 8; default: return 10_000 }
 }

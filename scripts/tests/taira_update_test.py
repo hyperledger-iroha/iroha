@@ -2828,5 +2828,49 @@ class BackingRecordAuthoringTests(unittest.TestCase):
                 author.assert_not_called()
 
 
+class NativeReplayTokenBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def events(error='error=NativeExecutionReplayRequired', separator=' ', suffix='', height_separator=' '):
+        return [
+            {'time_us': 1, 'message': 'Failed to load state snapshot' + separator + error + suffix},
+            {'time_us': 2, 'message': 'Kura retains the configured-primary replay floor; rebuilding state from blocks'},
+            {'time_us': 3, 'message': 'Sumeragi rebuilt the state from genesis and Kura' + height_separator + 'height=146'},
+        ]
+
+    def test_every_rust_unicode_whitespace_boundary_and_suffix_is_accepted(self):
+        guest = fresh_guest()
+        spaces = ' \t\n\r\v\f\u0085\u00a0\u1680' + ''.join(chr(n) for n in range(0x2000, 0x200b)) + '\u2028\u2029\u202f\u205f\u3000'
+        for value in spaces:
+            with self.subTest(codepoint=ord(value)):
+                self.assertEqual(guest.authenticated_kura_replay_height(self.events(separator=value, suffix=value, height_separator=value)), 146)
+
+    def test_prefixed_quoted_extended_or_nonfinal_error_tokens_are_rejected(self):
+        guest = fresh_guest()
+        for error in ['other:error=NativeExecutionReplayRequired', 'xerror=NativeExecutionReplayRequired',
+                      '"error=NativeExecutionReplayRequired"', 'error=NativeExecutionReplayRequired.extra',
+                      'error=NativeExecutionReplayRequired trailing=1']:
+            with self.subTest(error=error), self.assertRaises(RuntimeError):
+                guest.authenticated_kura_replay_height(self.events(error=error))
+
+    def test_python_only_c0_spaces_and_bom_are_not_rust_boundaries(self):
+        guest = fresh_guest()
+        for value in ['\x1c', '\x1d', '\x1e', '\x1f', '\ufeff', '\u200b']:
+            for selection in ['separator', 'suffix', 'height_separator']:
+                with self.subTest(codepoint=ord(value), selection=selection), self.assertRaises(RuntimeError):
+                    guest.authenticated_kura_replay_height(self.events(**{selection: value}))
+
+    def test_exact_token_and_existing_order_and_positive_height_guards_remain(self):
+        guest = fresh_guest()
+        self.assertTrue(guest.native_replay_required_error('error=NativeExecutionReplayRequired'))
+        self.assertFalse(guest.native_replay_required_error(''))
+        for mutation in ['order', 'zero-height', 'duplicate-height']:
+            events = self.events()
+            if mutation == 'order': events[1]['time_us'] = 4
+            if mutation == 'zero-height': events[2]['message'] = events[2]['message'].replace('height=146', 'height=0')
+            if mutation == 'duplicate-height': events[2]['message'] += ' height=146'
+            with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                guest.authenticated_kura_replay_height(events)
+
+
 if __name__ == '__main__':
     unittest.main()

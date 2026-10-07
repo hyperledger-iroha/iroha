@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 from iroha_app_attestation.attestation import AttestationRejected
 from iroha_app_attestation.wallet_enrollment_worker import (
-    CONFIG_SCHEMA, PREPARATION_SCHEMA, SCHEMA, MAX_PACKET, MAX_REQUEST, MAX_ORIGINAL, EXCHANGE_WINDOW, VerifierOwner,
+    CONFIG_SCHEMA, PREPARATION_SCHEMA, SCHEMA, MAX_PACKET, MAX_REQUEST, MAX_ORIGINAL, EXCHANGE_WINDOW, VerifierOwner, DispatchClock,
     E1CounterStore, configured_policy, encode, exact_json, read_packet, serve,
 )
 from iroha_app_attestation.wallet_enrollment import WalletEnrollmentScope
@@ -89,6 +89,12 @@ class WorkerTests(unittest.TestCase):
         if binary is None:
             self.skipTest("OpenSSL3 unavailable")
         self.openssl = Path(binary).resolve()
+        # Simulated clocks only: this suite runs on macOS and uses certificates
+        # whose synthetic verification time is one minute ahead of wall time.
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns",
+                                side_effect=time.monotonic_ns))
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns",
+                                side_effect=lambda: time.time_ns() + 61_000_000_000))
 
     def owner_fixture(self, directory, challenge_lifetime_ms=120000, *, initialize=True):
         directory = directory.resolve(strict=True)
@@ -127,6 +133,42 @@ class WorkerTests(unittest.TestCase):
         open_owner.config = config
         return open_owner, request, selected, key_id
 
+    def test_expiry_during_real_apple_assertion_never_commits_counter_or_result(self):
+        from iroha_app_attestation import wallet_enrollment_worker as worker
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, key_id = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            source = exact_json(request, MAX_REQUEST)
+            wall = [source["trusted_time_ms"] * 1_000_000]
+            original_verify = worker._verify_apple_assertion_with_hash
+            def delayed_assertion(*args, **kwargs):
+                result = original_verify(*args, **kwargs)
+                wall[0] = source["expires_at_ms"] * 1_000_000
+                return result
+            with patch.object(worker, "_realtime_ns", side_effect=lambda: wall[0]), \
+                    patch.object(worker, "_verify_apple_assertion_with_hash", side_effect=delayed_assertion):
+                with self.assertRaisesRegex(AttestationRejected, "expired"):
+                    dispatch(owner, request, "complete")
+            self.assertIsNone(dispatch(owner, request, "recover"))
+            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (0,))
+                self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (0,))
+                self.assertIsNone(connection.execute("SELECT result FROM wallet_e1_attempts").fetchone()[0])
+
+    def test_stale_first_dispatch_is_rejected_before_claiming_prepared_row(self):
+        from iroha_app_attestation import wallet_enrollment_worker as worker
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            source = exact_json(request, MAX_REQUEST)
+            arguments = self.prepared(owner, request)
+            with patch.object(worker, "_realtime_ns", return_value=source["expires_at_ms"] * 1_000_000), \
+                    patch.object(worker, "verify_apple_wallet_attestation_raw", side_effect=AssertionError("must not verify")):
+                with self.assertRaisesRegex(AttestationRejected, "expired"):
+                    owner.perform(request, "recover", **arguments)
+            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                self.assertEqual(connection.execute("SELECT request_sha256, result FROM wallet_e1_attempts").fetchone(), (None, None))
+
     def test_selected_lifetime_has_no_unconfigured_ten_minute_ceiling(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, selected, _ = self.owner_fixture(Path(temporary), 600001)
@@ -138,6 +180,69 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(dispatch(owner, request, "recover"), original)
             finally:
                 owner.close()
+
+    def test_shortened_issuer_deadline_verifies_real_apple_and_recovers_exact_winner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, selected, key_id = self.owner_fixture(Path(temporary))
+            value = exact_json(request, MAX_REQUEST)
+            value["expires_at_ms"] = value["issued_at_ms"] + 30000
+            shortened = encode(value)
+            owner = open_owner()
+            try:
+                original = dispatch(owner, shortened, "complete")
+                self.assertEqual(exact_json(original, MAX_PACKET)["challenge_digest"],
+                                 selected.challenge_digest().hex())
+                exact_preparation = preparation_original(owner, shortened)
+                with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                    self.assertEqual(connection.execute("SELECT preparation FROM wallet_e1_attempts").fetchone(),
+                                     (exact_preparation,))
+                    self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (1,))
+                # Even a still policy-bounded extension may not replace the retained original.
+                extended = encode(dict(value, expires_at_ms=value["expires_at_ms"] + 1))
+                with self.assertRaisesRegex(AttestationRejected, "already differs"):
+                    owner.prepare(owner.journal(), preparation_original(owner, extended))
+            finally:
+                owner.close()
+            restored = open_owner()
+            try:
+                self.assertEqual(dispatch(restored, shortened, "recover"), original)
+            finally:
+                restored.close()
+
+    def test_shortened_window_keeps_positive_exact_integer_and_policy_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            value = exact_json(request, MAX_REQUEST)
+            for expires in (value["issued_at_ms"] + 1, value["issued_at_ms"] + 30000, value["expires_at_ms"]):
+                candidate = encode(dict(value, expires_at_ms=expires, trusted_time_ms=value["issued_at_ms"]))
+                self.assertEqual(owner.request(candidate)[0]["expires_at_ms"], expires)
+                self.assertEqual(owner.preparation(preparation_original(owner, candidate))[0]["expires_at_ms"], expires)
+            for expires in (0, value["issued_at_ms"] - 1, value["issued_at_ms"], value["expires_at_ms"] + 1, 1 << 64, True):
+                candidate = encode(dict(value, expires_at_ms=expires))
+                with self.subTest(expires=expires):
+                    with self.assertRaises(AttestationRejected):
+                        owner.request(candidate)
+                    with self.assertRaises(AttestationRejected):
+                        owner.preparation(preparation_original(owner, candidate))
+
+    def test_shortened_first_dispatch_deadline_is_not_extended_by_policy_maximum(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            value = exact_json(request, MAX_REQUEST)
+            value["expires_at_ms"] = value["issued_at_ms"] + 30000
+            shortened = encode(value)
+            preparation = preparation_original(owner, shortened)
+            incarnation = owner.journal()
+            owner.prepare(incarnation, preparation)
+            with self.assertRaisesRegex(AttestationRejected, "first dispatch expired"):
+                owner.perform(shortened, "complete", incarnation=incarnation,
+                    preparation=preparation, account_signature=ACCOUNT_SIGNATURE,
+                    dispatch_time_ms=value["expires_at_ms"])
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT request_sha256, result FROM wallet_e1_attempts").fetchone(), (None, None))
+            self.assertIsNotNone(dispatch(owner, shortened, "complete"))
 
     def test_selected_lifetime_keeps_strict_u64_and_half_open_time_bounds(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -341,7 +446,7 @@ class WorkerTests(unittest.TestCase):
                     open_owner(encode(value))
                 self.assertFalse((Path(temporary) / "wallet-e1.sqlite3").exists())
 
-    def test_request_requires_exact_selected_lifetime_scheme_asset_and_raw_integer_time(self):
+    def test_request_requires_bounded_selected_lifetime_scheme_asset_and_raw_integer_time(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, _ = self.owner_fixture(Path(temporary))
             owner = open_owner(); self.addCleanup(owner.close)
@@ -723,6 +828,12 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
                                  "-pkeyopt", "rsa_keygen_bits:2048"], capture_output=True, check=True)
         cls.pem = result.stdout.decode("ascii")
 
+    def setUp(self):
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns",
+                                side_effect=time.monotonic_ns))
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns",
+                                side_effect=lambda: time.time_ns() + 61_000_000_000))
+
     def fixture(self, directory, level=2):
         directory = directory.resolve(strict=True); directory.chmod(0o700)
         fixture = SignedEnvelope(directory, self.openssl)
@@ -953,3 +1064,40 @@ class UnsignedArchiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DispatchClockTests(unittest.TestCase):
+    """Simulated OS samples exercise timing semantics, never production admission."""
+    def test_fresh_wall_and_sleep_inclusive_elapsed_both_bound_the_window(self):
+        wall, elapsed = [100_000_000], [3_000_000_000]
+        with patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns", side_effect=lambda: wall[0]), \
+                patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns", side_effect=lambda: elapsed[0]):
+            clock = DispatchClock(90, 90, 200)
+            self.assertEqual(clock.sample().endpoints(), (100, 100))
+            wall[0] += 20_000_001
+            self.assertEqual(clock.sample().endpoints(), (120, 121))
+            elapsed[0] += 100_000_000
+            with self.assertRaisesRegex(AttestationRejected, "expired"):
+                clock.sample()
+
+    def test_wall_or_elapsed_regression_is_unavailable(self):
+        for changed in ("wall", "elapsed"):
+            wall, elapsed = [100_000_000], [3_000_000_000]
+            with patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns", side_effect=lambda: wall[0]), \
+                    patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns", side_effect=lambda: elapsed[0]):
+                clock = DispatchClock(100, 90, 200)
+                (wall if changed == "wall" else elapsed)[0] -= 1
+                with self.assertRaises(VerificationUnavailable):
+                    clock.sample()
+
+    def test_core_dispatch_ahead_of_actual_worker_clock_is_unavailable(self):
+        with patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns", return_value=99_999_999), \
+                patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns", return_value=3_000_000_000):
+            with self.assertRaises(VerificationUnavailable):
+                DispatchClock(100, 90, 200)
+
+    def test_missing_sleep_inclusive_os_clock_has_no_monotonic_fallback(self):
+        from iroha_app_attestation import wallet_enrollment_worker as worker
+        with patch.object(worker.sys, "platform", "darwin"):
+            with self.assertRaises(VerificationUnavailable):
+                worker._sleep_inclusive_ns()

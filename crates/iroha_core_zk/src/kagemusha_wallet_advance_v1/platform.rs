@@ -543,6 +543,21 @@ pub trait KagemushaWalletPlatformV1: Send + Sync {
         request: &KagemushaWalletKeyGenerationRequestV1,
     ) -> KagemushaWalletKeyGenerationV1;
 
+    /// Retry validation of an actual successful generation return retained by this same
+    /// platform owner. This method never generates or restores a key. `None` means no such
+    /// return was retained; it is not a key-absence verdict. The provider must still perform
+    /// its ordinary protected-storage/key probe before any definitive-absence continuation.
+    ///
+    /// # Errors
+    /// Unsupported recovery or unavailable original/KeyInfo/attestation readback stays unavailable.
+    fn key_recover_generation_reply(
+        &self,
+        _slot: &KagemushaWalletSlotIdV1,
+        _request: &KagemushaWalletKeyGenerationRequestV1,
+    ) -> Result<Option<KagemushaDevicePublicKeyV1>, KagemushaWalletUnavailableV1> {
+        Err(KagemushaWalletUnavailableV1::Platform(0))
+    }
+
     /// Creation policy of this platform. The default preserves platforms with definitive
     /// absence; Android keystore1 selects fresh enrollment only. Query errors never select
     /// the fresh path as a fallback.

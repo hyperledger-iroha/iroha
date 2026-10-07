@@ -30,15 +30,43 @@ impl VerifierPreparationV1 {
         created_at_ms: u64,
         configuration: [u8; 32],
     ) -> Result<Self, Error> {
+        let expires_at_ms = created_at_ms
+            .checked_add(dispatch.policy.challenge_lifetime_ms)
+            .ok_or(Error("challenge expiry overflow"))?;
+        Self::from_selected_bounded(
+            dispatch,
+            challenge,
+            created_at_ms,
+            expires_at_ms,
+            configuration,
+        )
+    }
+
+    /// Retain a shorter deadline selected by authenticated issuer session/proof authority.
+    /// This trusted source constructor accepts no longer lifetime than the exact policy.
+    /// # Errors
+    /// Invalid dispatch/subject/configuration, nonpositive interval or a policy lifetime extension.
+    pub fn from_selected_bounded(
+        dispatch: &PreKeyDispatchV1,
+        challenge: KagemushaWalletEnrollmentChallengeV1,
+        created_at_ms: u64,
+        expires_at_ms: u64,
+        configuration: [u8; 32],
+    ) -> Result<Self, Error> {
         dispatch.validate().map_err(Error)?;
         dispatch.originals_digest(&challenge).map_err(Error)?;
         dispatch
             .policy
             .require_live_challenge(created_at_ms, created_at_ms)
             .map_err(|_| Error("retained challenge time"))?;
-        let expires_at_ms = created_at_ms
-            .checked_add(dispatch.policy.challenge_lifetime_ms)
-            .ok_or(Error("challenge expiry overflow"))?;
+        if expires_at_ms
+            .checked_sub(created_at_ms)
+            .is_none_or(|duration| {
+                duration == 0 || duration > dispatch.policy.challenge_lifetime_ms
+            })
+        {
+            return Err(Error("selected challenge expiry"));
+        }
         if configuration == [0; 32] {
             return Err(Error("approved configuration binding"));
         }

@@ -76,6 +76,18 @@ class KagemushaWalletInstalledRuntimeV1Test {
         assertFailsWith<IllegalStateException> { admission.failed() }
     }
 
+    @Test fun `persisted result retry cannot switch account or intake representation`() {
+        val admission = KagemushaWalletInstalledAdmissionV1 { }
+        val frames = listOf(byteArrayOf(1, 2, 3), byteArrayOf(4, 5))
+        admission.start(frames)
+        admission.failed()
+        assertFalse(admission.canTransferToEnrollment())
+        assertFailsWith<IllegalStateException> { admission.start(listOf(frames[0], byteArrayOf(4, 6))) }
+        assertFailsWith<IllegalStateException> { admission.start(frames + listOf(byteArrayOf(7), byteArrayOf(8))) }
+        admission.start(frames)
+        admission.completed()
+        assertFailsWith<IllegalStateException> { admission.start(frames) }
+    }
     @Test fun `retired installed owner cannot start admission`() {
         var retired = false
         val admission = KagemushaWalletInstalledAdmissionV1 { check(!retired) { "retired" } }

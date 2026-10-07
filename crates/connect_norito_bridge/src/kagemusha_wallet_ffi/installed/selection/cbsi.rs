@@ -84,13 +84,12 @@ pub(super) fn application(document: &Value) -> Result<&Map> {
             "ledger",
             "consensus",
             "asset",
-            "firstDeviceAuthentication",
+            "fiSessionEnrollment",
         ],
     )?;
     if text(app, "schema")? != "cbsi.kagemusha.native-installation.v1" {
         return Err(invalid());
     }
-    first_device_authentication(app, "cbsi.first-device-auth-runtime-selection.v1")?;
     Ok(app)
 }
 

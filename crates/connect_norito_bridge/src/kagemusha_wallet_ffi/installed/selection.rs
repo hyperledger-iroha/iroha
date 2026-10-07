@@ -31,6 +31,8 @@ const APP_FIELDS: &[&str] = &[
 
 mod bpng;
 mod cbsi;
+mod session;
+pub(crate) use session::Session;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeAuthority {
@@ -96,7 +98,7 @@ struct RetainedBaseOriginals {
 /// The BPNG runtime does not invent a CBSI service scope or a foreign catalog pin.
 enum ApplicationBinding {
     CbsiReleaseV1 {
-        _service_release_scope: [u8; 32],
+        service_release_scope: [u8; 32],
         scheme_id: [u8; 32],
         manifest_digest: [u8; 32],
         producer_catalog_digest: [u8; 32],
@@ -118,6 +120,17 @@ pub(super) struct Selection {
     pub asset: KagemushaWalletAssetScopeV1,
     pub asset_original: Vec<u8>,
     pub android_app_policy: [u8; 32],
+    android_enrollment: (
+        KagemushaWalletAppPolicyV1,
+        KagemushaWalletEnrollmentPolicyV1,
+    ),
+    apple_enrollment: (
+        KagemushaWalletAppPolicyV1,
+        KagemushaWalletEnrollmentPolicyV1,
+    ),
+    enrollment_certificate: KagemushaWalletSignerCertificateV1,
+    fi_sessions: Vec<session::FiAuthority>,
+    bpng_session: Option<session::BpngAuthority>,
     pub apple_app_policy: [u8; 32],
     pub genesis: Arc<SumeragiFinalityVerifier>,
 }
@@ -385,7 +398,7 @@ impl Selection {
                 (
                     selected.app,
                     ApplicationBinding::CbsiReleaseV1 {
-                        _service_release_scope: selected.service_release_scope,
+                        service_release_scope: selected.service_release_scope,
                         scheme_id: selected.scheme_id,
                         manifest_digest: selected.artifact_manifest_digest,
                         producer_catalog_digest: selected.producer_catalog_digest,
@@ -431,6 +444,7 @@ impl Selection {
             RuntimeAuthority::CbsiReleaseV1 => "cbsi.kagemusha.wallet-runtime.v1",
             RuntimeAuthority::BpngTairaV7 => {
                 runtime_fields.extend([
+                    "enrollment_session",
                     "python_path",
                     "python_sha256",
                     "openssl_path",
@@ -527,7 +541,10 @@ impl Selection {
             )
             .map_err(|_| invalid())?;
         regulatory_policy.validate().map_err(|_| invalid())?;
-        let platform_policy = |name| -> Result<[u8; 32]> {
+        let platform_policy = |name| -> Result<(
+            KagemushaWalletAppPolicyV1,
+            KagemushaWalletEnrollmentPolicyV1,
+        )> {
             let mut fields = vec![
                 "app_policy_hex",
                 "enrollment_policy_hex",
@@ -536,6 +553,7 @@ impl Selection {
             ];
             if trust.authority == RuntimeAuthority::BpngTairaV7 {
                 fields.push("verifier_configuration_path");
+                fields.push("attestation_root_der_base64");
             }
             let platform = exact(field(runtime, name)?, &fields)?;
             if trust.authority == RuntimeAuthority::BpngTairaV7
@@ -556,6 +574,21 @@ impl Selection {
                 KagemushaWalletEnrollmentPolicyV1::decode_canonical(&original, &scheme.scheme_id())
                     .map_err(|_| invalid())?;
             enrollment.validate_for_app(&app).map_err(|_| invalid())?;
+            if trust.authority == RuntimeAuthority::BpngTairaV7 {
+                let root = raw(platform, "attestation_root_der_base64", 16_384)?;
+                let expected = match enrollment.platform {
+                    KagemushaWalletEnrollmentPlatformV1::Android {
+                        attestation_root_sha256,
+                        ..
+                    }
+                    | KagemushaWalletEnrollmentPlatformV1::Apple {
+                        attestation_root_sha256,
+                    } => attestation_root_sha256,
+                };
+                if BlobV1::of(&root).sha256 != expected {
+                    return Err(invalid());
+                }
+            }
             if app.policy_digest().map_err(|_| invalid())? != app_digest
                 || enrollment.policy_digest().map_err(|_| invalid())? != enrollment_digest
                 || enrollment.asset_digest != asset.asset_digest()
@@ -572,7 +605,7 @@ impl Selection {
             {
                 return Err(invalid());
             }
-            Ok(app_digest)
+            Ok((app, enrollment))
         };
         let android = platform_policy("android")?;
         let apple = platform_policy("apple")?;
@@ -711,7 +744,41 @@ impl Selection {
         {
             return Err(invalid());
         }
+        let fi_sessions = match &application {
+            ApplicationBinding::CbsiReleaseV1 {
+                service_release_scope,
+                ..
+            } => session::authorities(
+                field(app, "fiSessionEnrollment")?,
+                service_release_scope,
+                &android.1,
+                &apple.1,
+            )?,
+            ApplicationBinding::BpngTairaV7 { .. } => Vec::new(),
+        };
+        let bpng_session = match &application {
+            ApplicationBinding::BpngTairaV7 { .. } => Some(session::bpng_authority(
+                field(runtime, "enrollment_session")?,
+                input.app_manifest,
+                [
+                    raw(
+                        object(field(runtime, "android")?)?,
+                        "attestation_root_der_base64",
+                        16_384,
+                    )?,
+                    raw(
+                        object(field(runtime, "apple")?)?,
+                        "attestation_root_der_base64",
+                        16_384,
+                    )?,
+                ],
+            )?),
+            ApplicationBinding::CbsiReleaseV1 { .. } => None,
+        };
         Ok(Self {
+            fi_sessions,
+            bpng_session,
+            enrollment_certificate,
             application,
             financial,
             _originals: RetainedBaseOriginals {
@@ -729,8 +796,10 @@ impl Selection {
             },
             asset,
             asset_original,
-            android_app_policy: android,
-            apple_app_policy: apple,
+            android_app_policy: android.0.policy_digest().map_err(|_| invalid())?,
+            apple_app_policy: apple.0.policy_digest().map_err(|_| invalid())?,
+            android_enrollment: android,
+            apple_enrollment: apple,
             genesis: Arc::new(native),
         })
     }

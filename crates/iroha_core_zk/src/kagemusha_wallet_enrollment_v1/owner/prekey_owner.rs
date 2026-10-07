@@ -5,6 +5,7 @@ use crate::kagemusha_wallet_enrollment_v1::prekey::{
 };
 use rand::rand_core::TryRngCore as _;
 
+#[derive(Clone)]
 pub(super) enum Pending {
     Dispatch {
         dispatch: Box<PreKeyDispatchV1>,
@@ -125,6 +126,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         account: &[u8],
         asset: &[u8],
     ) -> Result<Vec<u8>, Error> {
+        self.flush_apple_returned()?;
         self.pending = None;
         self.request = None;
         self.selected = None;
@@ -214,6 +216,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     /// Admit an issuer-signed permit for this live dispatch, then expose the exact existing-
     /// account signing challenge. No decoded permit or persisted clock becomes live authority.
     pub fn accept_permit(&mut self, bytes: &[u8]) -> Result<[u8; 32], Error> {
+        let retained = self.pending.clone();
+        let result = self.accept_permit_retained(bytes);
+        // Unavailable storage, clock or hardware keeps the exact live dispatch/account
+        // challenge. Invalid authenticated inputs intentionally consume it.
+        if matches!(result, Err(Error::Provider(_))) {
+            self.pending = retained;
+        }
+        result
+    }
+    fn accept_permit_retained(&mut self, bytes: &[u8]) -> Result<[u8; 32], Error> {
         if let Some(Pending::Account {
             original, message, ..
         }) = &self.pending
@@ -238,11 +250,19 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         {
             return Err(Error::Original("pre-key live dispatch"));
         }
+        if permit.body.observed_at_ms < self.config.session_valid_from_ms
+            || permit.body.observed_at_ms >= self.config.session_expires_at_ms
+        {
+            return Err(Error::Original("authenticated session observation"));
+        }
         require_elapsed(
             &started,
             &self.provider.monotonic_reading()?,
             permit.body.observed_at_ms,
-            permit.body.expires_at_ms,
+            permit
+                .body
+                .expires_at_ms
+                .min(self.config.session_expires_at_ms),
         )
         .map_err(Error::Original)?;
         let selected = match &dispatch.previous_permit {
@@ -307,6 +327,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     }
     /// Consume exact account authorization and recheck the permit at actual key generation.
     pub fn authorize(&mut self, signature: &[u8]) -> Result<EnrollmentProgressV1, Error> {
+        let retained = self.pending.clone();
+        let result = self.authorize_retained(signature);
+        // Unavailable storage, clock or hardware keeps the exact live dispatch/account
+        // challenge. Invalid authenticated inputs intentionally consume it.
+        if matches!(result, Err(Error::Provider(_))) {
+            self.pending = retained;
+        }
+        result
+    }
+    fn authorize_retained(&mut self, signature: &[u8]) -> Result<EnrollmentProgressV1, Error> {
         let Some(Pending::Account {
             dispatch,
             started,
@@ -318,11 +348,35 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             return Err(Error::Phase);
         };
         authorize(&dispatch.account, &message, signature)?;
+        // Complete custody of this owner's actual vendor reply before any elapsed-time
+        // refusal. The following session/permit checks still refuse expired authorization;
+        // this branch cannot create a key, change an attempt, or refresh its dates.
+        if let Some((scope, slot)) = &self.selected {
+            if self.provider.has_retained_generation(slot) {
+                if scope.challenge != permit.body.challenge
+                    || scope.dates.issued_at_ms != permit.body.created_at_ms
+                    || scope.dates.expires_at_ms != permit.body.expires_at_ms
+                    || scope.account != dispatch.account
+                    || scope.asset != dispatch.asset
+                {
+                    return Err(Error::Original("retained generation selection changed"));
+                }
+                self.provider.status(slot)?;
+            }
+        }
+        if permit.body.observed_at_ms < self.config.session_valid_from_ms
+            || permit.body.observed_at_ms >= self.config.session_expires_at_ms
+        {
+            return Err(Error::Original("authenticated session observation"));
+        }
         require_elapsed(
             &started,
             &self.provider.monotonic_reading()?,
             permit.body.observed_at_ms,
-            permit.body.expires_at_ms,
+            permit
+                .body
+                .expires_at_ms
+                .min(self.config.session_expires_at_ms),
         )
         .map_err(Error::Original)?;
         let original = self
@@ -407,6 +461,14 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             selected,
         ));
         self.request = None;
+        self.apple_clock = Some(super::apple_collection::LiveClock {
+            started: started.clone(),
+            observed_at_ms: permit.body.observed_at_ms,
+            expires_at_ms: permit
+                .body
+                .expires_at_ms
+                .min(self.config.session_expires_at_ms),
+        });
         let authorization = GenerationAuthorizationV1::new(
             self.provider.prekey_root_identity(),
             &permit,
@@ -416,6 +478,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
                 .ok_or(Error::Original("pre-key creation policy"))?,
             fresh,
             started,
+            self.config.session_expires_at_ms,
         );
         authorization.check(&self.provider)?;
         if fresh {

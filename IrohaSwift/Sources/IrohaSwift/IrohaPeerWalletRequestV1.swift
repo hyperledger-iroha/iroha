@@ -45,7 +45,7 @@ public struct IrohaPeerWalletRequestV1: Sendable, Equatable {
         let accountLength = try length(12, maximumAccountBytes)
         guard bytes.count == headerBytes + envelopeLength + accountLength else { throw invalid() }
         return try .init(requestEnvelope: Data(bytes[headerBytes..<headerBytes + envelopeLength]),
-                         destinationAccountOriginal: Data(bytes[headerBytes + envelopeLength...]))
+                         destinationAccountOriginal: Data(bytes[(headerBytes + envelopeLength)...]))
     }
     private static func invalid() -> IrohaPeerWireMessageErrorV1 {
         .invalidCanonicalPayload(profile: .kagemushaWalletV1, kind: .request)

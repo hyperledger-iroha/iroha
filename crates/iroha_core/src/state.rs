@@ -19826,6 +19826,15 @@ impl World {
         proof_status_restore::rebuild(self);
     }
     fn validate_identifier_claims(&self) -> Result<(), String> {
+        let identifier_policies = self.identifier_policies.view();
+        for (policy_id, policy) in identifier_policies.iter() {
+            if policy_id != &policy.id {
+                return Err(format!(
+                    "Identifier policy key {policy_id} does not match embedded policy id {}",
+                    policy.id
+                ));
+            }
+        }
         let identifier_claims = self.identifier_claims.view();
         let opaque_uaids = self.opaque_uaids.view();
         let uaid_accounts = self.uaid_accounts.view();
@@ -19851,23 +19860,12 @@ impl World {
                         "Phone retail claim {opaque_id} has a zero nullifier"
                     ));
                 }
-                let policy = self
-                    .identifier_policies
-                    .view()
+                let policy = identifier_policies
                     .get(&claim.policy_id)
                     .cloned()
                     .ok_or_else(|| {
                         format!("Phone retail claim {opaque_id} lacks its pinned policy")
                     })?;
-                if policy.program_id.to_string() != "phone_retail"
-                    || policy.normalization
-                        != iroha_data_model::identifier::IdentifierNormalization::PhoneE164
-                    || policy.phone_retail_attestor_public_key.is_none()
-                {
-                    return Err(format!(
-                        "Phone retail claim {opaque_id} has untrusted policy metadata"
-                    ));
-                }
                 let program = self
                     .ram_lfe_program_policies
                     .view()
@@ -19876,15 +19874,13 @@ impl World {
                     .ok_or_else(|| {
                         format!("Phone retail claim {opaque_id} lacks its pinned program")
                     })?;
-                if program.owner != policy.owner
-                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedV1
-                    || program.commitment.backend != program.backend
-                    || program.verification_mode != iroha_crypto::RamLfeVerificationMode::Signed
-                {
-                    return Err(format!(
-                        "Phone retail claim {opaque_id} has untrusted program metadata"
-                    ));
-                }
+                crate::smartcontracts::isi::identifier::isi::validate_phone_retail_policy(
+                    &policy,
+                    Some(&program),
+                )
+                .map_err(|error| {
+                    format!("Phone retail claim {opaque_id} has untrusted policy or program metadata: {error}")
+                })?;
                 let program_id_bytes = norito::encode_canonical(&policy.program_id)
                     .map_err(|err| format!("Phone retail program encoding failed: {err}"))?;
                 let (expected_id, expected_receipt_hash) =
@@ -21525,18 +21521,30 @@ pub trait WorldReadOnly {
     /// Read an exact direct dataspace home from its protected native parameter.
     ///
     /// Absence remains absence. Malformed, stale-incarnation or contradictory state fails.
-    fn asset_definition_dataspace(&self, id: &AssetDefinitionId) -> Result<Option<DataSpaceId>, ParseError> {
+    fn asset_definition_dataspace(
+        &self,
+        id: &AssetDefinitionId,
+    ) -> Result<Option<DataSpaceId>, ParseError> {
         let registry = asset_definition_registry_from_parameters(self.parameters())?;
         asset_definition_dataspace_from_registry(
-            registry.as_ref(), id, self.asset_definitions().get(id), self.axt_asset_incarnations().get(id),
+            registry.as_ref(),
+            id,
+            self.asset_definitions().get(id),
+            self.axt_asset_incarnations().get(id),
         )
     }
     /// Resolve domain, global or direct dataspace ownership without consulting aliases.
-    fn asset_definition_home(&self, id: &AssetDefinitionId) -> Result<Option<iroha_data_model::asset::AssetDefinitionHome>, ParseError> {
+    fn asset_definition_home(
+        &self,
+        id: &AssetDefinitionId,
+    ) -> Result<Option<iroha_data_model::asset::AssetDefinitionHome>, ParseError> {
         let dataspace = self.asset_definition_dataspace(id)?;
-        self.asset_definitions().get(id).map(|definition| {
-            iroha_data_model::asset::AssetDefinitionHome::from_definition(definition, dataspace)
-        }).transpose()
+        self.asset_definitions()
+            .get(id)
+            .map(|definition| {
+                iroha_data_model::asset::AssetDefinitionHome::from_definition(definition, dataspace)
+            })
+            .transpose()
     }
     /// Returns reference for asset definitions map
     #[inline]
@@ -32062,12 +32070,15 @@ impl State {
         attempted_aliases: &BTreeSet<String>,
         attempted_ids: &BTreeSet<DataSpaceId>,
     ) -> Result<(), LaneLifecycleError> {
-        if let Some(registry) = asset_definition_registry_from_parameters(&self.world.parameters.view())
-            .map_err(|error| LaneLifecycleError::RuntimeCatalog(error.to_string()))? {
+        if let Some(registry) =
+            asset_definition_registry_from_parameters(&self.world.parameters.view())
+                .map_err(|error| LaneLifecycleError::RuntimeCatalog(error.to_string()))?
+        {
             for (asset_definition_id, binding) in registry.bindings {
                 if binding.active && !attempted_ids.contains(&binding.dataspace_id) {
                     return Err(LaneLifecycleError::AssetDefinitionDataspaceInUse {
-                        dataspace_id: binding.dataspace_id, asset_definition_id,
+                        dataspace_id: binding.dataspace_id,
+                        asset_definition_id,
                     });
                 }
             }
@@ -41349,7 +41360,9 @@ impl StateTransaction<'_, '_> {
             || !self.fastpq_source_quota.allows_apply()
             || !self.pending_transfer_transcripts.is_empty()
             || self.pending_asset_definition_registry.is_some()
-            || self.validate_asset_definition_registry_transaction().is_err()
+            || self
+                .validate_asset_definition_registry_transaction()
+                .is_err()
         {
             *self.block_execution_output_plan =
                 Some(output_capacity::ExecutionOutputPlanState::Poisoned);
@@ -41400,7 +41413,10 @@ impl StateTransaction<'_, '_> {
             Some("transaction FASTPQ source preparation does not authorize application")
         } else if !self.execution_effects_allow_apply() {
             Some("transaction execution-effect owner does not authorize application")
-        } else if self.validate_asset_definition_registry_transaction().is_err() {
+        } else if self
+            .validate_asset_definition_registry_transaction()
+            .is_err()
+        {
             Some("protected asset-definition home changed outside its native transaction")
         } else if self.world.execution_deferral.borrow().is_some() {
             Some("transaction execution was locally deferred")
@@ -43690,6 +43706,10 @@ mod tests;
 #[path = "state/world_initial_supply_tests.rs"]
 mod world_initial_supply_tests;
 
+#[cfg(test)]
+#[path = "state/identifier_claim_restore_tests.rs"]
+mod identifier_claim_restore_tests;
+
 mod telemetry_status;
 pub(crate) use telemetry_status::{
     TelemetryStatusSourceError, TelemetryStatusTarget, write_telemetry_journal_prefix,
@@ -44249,8 +44269,7 @@ mod direct_asset_home_tests {
             .set_parameter(iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::custom::CustomParameter::new(
                     AssetDefinitionDataspaceRegistryV1::parameter_id(),
-                    iroha_primitives::json::Json::from_norito_value_ref(&norito::json::json!({}))
-                        .unwrap(),
+                    iroha_primitives::json::Json::from_raw_json("{}".to_owned()).unwrap(),
                 ),
             ));
         parameters.commit();

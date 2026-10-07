@@ -33,6 +33,7 @@ privacy-production-enabled = []
 cuda = ["ivm/cuda"]
 
 [dependencies]
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 iroha_core_privacy = { workspace = true, default-features = false, features = ["zk-stark"] }
 iroha_core_timed_ovn = { workspace = true }
 iroha_model_base = { workspace = true }
@@ -68,8 +69,6 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 tempfile = { workspace = true }
 
 [dev-dependencies]
-# Public fixed delegated-signature fixtures remain test-only.
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_core_privacy = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_core_timed_ovn = { workspace = true, features = ["test-utils"] }

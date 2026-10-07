@@ -34,7 +34,6 @@ mod closing;
 pub(crate) mod enrollment;
 mod exports;
 mod installed;
-pub use enrollment::{NativeEnrollmentRuntime, retain_native_enrollment};
 pub use installed::{WalletInstallationAttempt, WalletRuntimeOriginals};
 pub use installed::{
     connect_norito_kagemusha_wallet_installation_begin_v1,

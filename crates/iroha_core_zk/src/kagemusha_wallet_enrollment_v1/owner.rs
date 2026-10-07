@@ -1,9 +1,11 @@
 //! Native E2-E6 orchestration over one exclusive retained hardware/provider owner.
 
 use super::carrier::*;
+use super::prekey::PreKeyDispatchV1;
 use crate::kagemusha_wallet_advance_v1::*;
 use iroha_crypto::{Algorithm, Signature};
 use iroha_data_model::{account::AccountId, kagemusha::*};
+mod apple_collection;
 mod prekey_owner;
 use sha2::{Digest as _, Sha256};
 
@@ -30,6 +32,10 @@ pub struct EnrollmentConfigV1 {
     pub actor: Vec<u8>,
     /// Exact independently approved release-selection original.
     pub release: Vec<u8>,
+    /// Independently authenticated session lower bound, in Unix milliseconds.
+    pub session_valid_from_ms: u64,
+    /// Exclusive session/proof deadline, carried through the immediate key-effect check.
+    pub session_expires_at_ms: u64,
 }
 /// Refusal without converting unavailable custody to absence or issuer rejection.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
@@ -113,6 +119,8 @@ pub struct EnrollmentOwnerV1<F: KagemushaWalletFsV1, P> {
     pending: Option<prekey_owner::Pending>,
     selected: Option<(Scope, KagemushaWalletSlotIdV1)>,
     request: Option<RequestBodyV1>,
+    apple_clock: Option<apple_collection::LiveClock>,
+    apple_returned: Option<(u8, Vec<u8>)>,
 }
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, P> {
     /// Bind existing exclusive custody to independently provisioned deployment originals.
@@ -124,6 +132,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         let checked = (|| {
             original(config.scheme.validate())?;
             config.verify_prekey()?;
+            if config.session_valid_from_ms >= config.session_expires_at_ms {
+                return Err(Error::Original("authenticated session time window"));
+            }
             original(config.policy.validate_for_app(&config.app))?;
             let pinned_root = match config.policy.platform {
                 KagemushaWalletEnrollmentPlatformV1::Android {
@@ -156,6 +167,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             pending: None,
             selected: None,
             request: None,
+            apple_clock: None,
+            apple_returned: None,
         })
     }
     /// Release this opaque enrollment owner to the native artifact loader/open path.
@@ -179,6 +192,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             pending,
             selected,
             request,
+            apple_clock,
+            apple_returned,
         } = self;
         match load(provider) {
             Ok(value) => Ok(value),
@@ -189,6 +204,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
                     pending,
                     selected,
                     request,
+                    apple_clock,
+                    apple_returned,
                 },
                 error,
             )),
@@ -277,6 +294,78 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             *marker.payment_key(),
         ))
     }
+    /// Exact authenticated retained E5, if already durable. A begun dispatch with no
+    /// selected slot can establish request absence only from its actual pre-key records;
+    /// this is not payment-key absence, freshness or permission to generate anything.
+    pub fn retained_request(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        if self.selected.is_some() {
+            return self.retained();
+        }
+        let Some(prekey_owner::Pending::Dispatch { dispatch, .. }) = &self.pending else {
+            return Err(Error::Phase);
+        };
+        let client_original = self
+            .provider
+            .prekey_read(&dispatch.request_id, PreKeyRecordV1::Client)?
+            .ok_or(Error::Original("selected pre-key client lost"))?;
+        let client = PreKeyDispatchV1::decode(&client_original).map_err(Error::Original)?;
+        if client.purpose != KagemushaEnrollmentPermitPurposeV1::Fresh
+            || client.previous_permit.is_some()
+            || client.stable_selection().map_err(Error::Original)?
+                != dispatch.stable_selection().map_err(Error::Original)?
+        {
+            return Err(Error::Original("pre-key request changed originals"));
+        }
+        let accepted = self
+            .provider
+            .prekey_read(&dispatch.request_id, PreKeyRecordV1::Accepted)?;
+        if accepted != dispatch.previous_permit
+            || self
+                .provider
+                .prekey_read(&dispatch.request_id, PreKeyRecordV1::Slot)?
+                .is_some()
+        {
+            return Err(Error::Original("pre-key retained selection changed"));
+        }
+        if let Some(original) = &accepted {
+            // Accepted is published before Slot. That interruption is resumable, but an
+            // existing matching intent with its Slot association erased is custody loss.
+            let permit = KagemushaEnrollmentPermitV1::decode_canonical(
+                original,
+                &self.config.scheme,
+                &self.config.enrollment_certificate,
+            )
+            .map_err(|_| Error::Original("pre-key retained permit"))?;
+            for slot in self.provider.slots()? {
+                let intent = self
+                    .provider
+                    .read_intent(&slot)?
+                    .ok_or(Error::Original("unselected custody intent lost"))?;
+                if intent.challenge == permit.body.challenge {
+                    return Err(Error::Original("selected pre-key slot lost"));
+                }
+            }
+        }
+        // Recheck storage and immutable records after inventory reads. No uncertain or
+        // replaced original is converted to absence, even before any payment key exists.
+        if self
+            .provider
+            .prekey_read(&dispatch.request_id, PreKeyRecordV1::Client)?
+            .as_deref()
+            != Some(client_original.as_slice())
+            || self
+                .provider
+                .prekey_read(&dispatch.request_id, PreKeyRecordV1::Accepted)?
+                != accepted
+            || self
+                .provider
+                .prekey_read(&dispatch.request_id, PreKeyRecordV1::Slot)?
+                .is_some()
+        {
+            return Err(Error::Original("pre-key retained selection changed"));
+        }
+        Ok(None)
+    }
     fn retained(&mut self) -> Result<Option<Vec<u8>>, Error> {
         let marker = self.selected_marker()?;
         let (scope, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
@@ -303,6 +392,28 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
                 .retain_enrollment_request(slot, &record.request)?,
         ))
     }
+    /// Recover the exact verified durable E6 winner without issuer/network input.
+    /// A credential without its selected result remains custody loss, never absence.
+    pub fn retained_result(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        let Some(request) = self.retained_request()? else {
+            return Ok(None);
+        };
+        let (_, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
+        let slot = *slot;
+        let key = kagemusha_wallet_provider_digest_v1("enrollment-issuer-result", &request);
+        let retained = self
+            .provider
+            .with_archive(&slot, |archive| archive.read_record(&key, RESULT_MAX_BYTES))?;
+        let Some(bytes) = retained else {
+            if self.provider.credential(&slot, 0)?.is_some() {
+                return Err(Error::Original("selected enrollment result lost"));
+            }
+            return Ok(None);
+        };
+        // The same owner independently verifies and durably adopts its actual original.
+        self.accept_credential(&bytes).map(Some)
+    }
+
     /// Select exact E5 evidence before exposing its existing-account challenge. Retained requests always win.
     pub fn prepare_request(&mut self, evidence: &[u8]) -> Result<RequestPreparationV1, Error> {
         if let Some(bytes) = self.retained()? {
@@ -311,7 +422,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         let EnrollmentProgressV1::Evidence { marker, .. } = self.progress()? else {
             return Err(Error::Phase);
         };
-        PlatformEvidenceV1::decode(evidence, &self.config.policy).map_err(Error::Original)?;
+        let decoded =
+            PlatformEvidenceV1::decode(evidence, &self.config.policy).map_err(Error::Original)?;
+        if let PlatformEvidenceV1::Apple {
+            key_id,
+            attestation,
+            key_binding_assertion,
+        } = decoded
+        {
+            self.require_apple_originals(&key_id, &attestation, &key_binding_assertion)?;
+        }
         let (scope, _) = self.selected.as_ref().ok_or(Error::Phase)?;
         let body = RequestBodyV1 {
             version: 1,
@@ -342,6 +462,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         };
         let bytes = request.encode().map_err(Error::Original)?;
         let (_, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
+        if matches!(
+            self.config.policy.platform,
+            KagemushaWalletEnrollmentPlatformV1::Apple { .. }
+        ) {
+            self.require_apple_live()?;
+        }
         let exact = self.provider.retain_enrollment_request(slot, &bytes)?;
         if exact != bytes {
             return Err(Error::Original("concurrent enrollment request"));

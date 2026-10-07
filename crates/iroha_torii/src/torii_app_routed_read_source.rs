@@ -558,7 +558,7 @@ fn execute_torii_asset_definition_local_source_read_admitted(
     }
     let source = ToriiAssetDefinitionJsonSource {
         definition,
-        owning_dataspace: match routing::asset_definition_dataspace_for_read(&world, &definition_id)
+        owning_dataspace: match routing::asset_definition_dataspace_for_read(world, &definition_id)
         {
             Ok(home) => home,
             Err(error) => return error_response_with_format(error, ResponseFormat::Json),

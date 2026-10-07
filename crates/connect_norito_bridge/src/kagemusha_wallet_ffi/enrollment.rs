@@ -4,6 +4,7 @@ use iroha_core_zk::kagemusha_wallet_enrollment_v1 as native;
 
 /// Enrollment actions contain originals only; no policy, time, liveness or hardware verdict.
 pub(crate) enum Action<'a> {
+    Start([&'a [u8]; 3]),
     Begin([&'a [u8]; 3]),
     Authorize(&'a [u8]),
     AcceptPermit(&'a [u8]),
@@ -13,6 +14,13 @@ pub(crate) enum Action<'a> {
     AcceptResult(&'a [u8]),
     Load,
     BeginOpen,
+    BeginResult([&'a [u8]; 2]),
+    AppleOriginals,
+    BeginAppleEffect(u8),
+    RetainAppleEffect(u8, &'a [u8]),
+    RetainedRequest,
+    RetainedResult,
+    CompleteAppleCollection,
     Abandon,
 }
 impl From<native::Error> for Failure {
@@ -21,50 +29,6 @@ impl From<native::Error> for Failure {
             native::Error::Provider(error) => error.into(),
             native::Error::Original(_) => Self::code(INVALID),
             native::Error::Phase => Self::code(CONFLICT),
-        }
-    }
-}
-/// Native initialization retains the exclusive enrollment owner and real deployment material.
-/// No foreign call can construct this configuration or select the original source store.
-pub struct NativeEnrollmentRuntime<
-    P: advance::KagemushaWalletPlatformV1,
-    S: OriginalSourceV1 + Send,
-> {
-    owner: Option<native::EnrollmentOwnerV1<advance::KagemushaWalletStdFsV1, P>>,
-    installed: Option<open::Runtime<P, S>>,
-    config: state::NativeInstallationConfigV1,
-    verifier_pack: Vec<u8>,
-    inventory: Vec<u8>,
-    originals: Option<S>,
-    open_originals: Option<[Vec<u8>; 4]>,
-}
-impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
-    NativeEnrollmentRuntime<P, S>
-{
-    /// Retain native deployment inputs before E2. Artifact qualification remains mandatory at handoff.
-    /// # Errors
-    /// A mismatched enrollment/source installation returns every retained input unchanged.
-    pub fn new(
-        owner: native::EnrollmentOwnerV1<advance::KagemushaWalletStdFsV1, P>,
-        config: state::NativeInstallationConfigV1,
-        verifier_pack: Vec<u8>,
-        inventory: Vec<u8>,
-        originals: S,
-    ) -> std::result::Result<Self, Box<(Self, Failure)>> {
-        let valid = owner.installation() == config.installation;
-        let runtime = Self {
-            owner: Some(owner),
-            installed: None,
-            config,
-            verifier_pack,
-            inventory,
-            originals: Some(originals),
-            open_originals: None,
-        };
-        if valid {
-            Ok(runtime)
-        } else {
-            Err(Box::new((runtime, Failure::code(INVALID))))
         }
     }
 }
@@ -98,133 +62,63 @@ fn progress(value: native::EnrollmentProgressV1) -> Response {
         native::EnrollmentProgressV1::BootstrapSelected => response(22, Vec::new()),
     }
 }
-impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send + 'static>
-    open::Admission for NativeEnrollmentRuntime<P, S>
-{
-    fn enrollment(&mut self, action: Action<'_>) -> Result<Response> {
-        if let Some(runtime) = self.installed.as_mut() {
-            return match action {
-                Action::Load => Ok(response(26, Vec::new())),
-                Action::BeginOpen => {
-                    let originals = self
-                        .open_originals
-                        .as_ref()
-                        .ok_or(Failure::code(INTERNAL))?;
-                    Ok(response(
-                        15,
-                        runtime.begin(originals.each_ref().map(Vec::as_slice))?,
-                    ))
-                }
-                _ => Err(Failure::code(CONFLICT)),
-            };
+/// Execute against the enrollment phase of the SAME installed runtime.
+pub(super) fn perform<F: advance::KagemushaWalletFsV1, P: advance::KagemushaWalletPlatformV1>(
+    owner: &mut native::EnrollmentOwnerV1<F, P>,
+    action: Action<'_>,
+) -> Result<Response> {
+    Ok(match action {
+        Action::Begin([request_id, account, asset]) => {
+            response(27, owner.begin(request_id, account, asset)?)
         }
-        if matches!(action, Action::Load) {
-            // A selected verified E6 is required before provider transfer. Missing originals
-            // are not reconstructed from a supplied result during this action.
-            let selected_originals = self
-                .owner
-                .as_mut()
-                .ok_or(Failure::code(CLOSED))?
-                .open_originals()?;
-            let owner = self.owner.take().ok_or(Failure::code(CLOSED))?;
-            let Some(originals) = self.originals.take() else {
-                self.owner = Some(owner);
-                return Err(Failure::code(INTERNAL));
-            };
-            let loaded = owner.try_handoff(|provider| {
-                state::NativeWalletRuntimeV1::load(
-                    &self.config,
-                    provider,
-                    &self.verifier_pack,
-                    &self.inventory,
-                    originals,
-                )
-                .map_err(|error| {
-                    let (provider, originals, error) = error.into_parts();
-                    (provider, (originals, error))
-                })
-            });
-            match loaded {
-                Ok(runtime) => {
-                    self.open_originals = Some(selected_originals);
-                    self.installed = Some(open::Runtime::new(runtime));
-                    Ok(response(26, Vec::new()))
-                }
-                Err((owner, (originals, error))) => {
-                    self.owner = Some(owner);
-                    self.originals = Some(originals);
-                    Err(error.into())
+        Action::AcceptPermit(bytes) => response(18, owner.accept_permit(bytes)?.to_vec()),
+        Action::Authorize(signature) => progress(owner.authorize(signature)?),
+        Action::Progress => progress(owner.progress()?),
+        Action::Prepare(evidence) => {
+            let bytes = norito::encode_canonical(&evidence).map_err(|_| Failure::code(INVALID))?;
+            match owner.prepare_request(&bytes)? {
+                native::RequestPreparationV1::Retained(bytes) => response(24, bytes),
+                native::RequestPreparationV1::AccountChallenge(message) => {
+                    response(23, message.to_vec())
                 }
             }
-        } else {
-            let owner = self.owner.as_mut().ok_or(Failure::code(CLOSED))?;
-            match action {
-                Action::Begin([request_id, account, asset]) => {
-                    Ok(response(27, owner.begin(request_id, account, asset)?))
-                }
-                Action::AcceptPermit(bytes) => {
-                    Ok(response(18, owner.accept_permit(bytes)?.to_vec()))
-                }
-                Action::Authorize(signature) => Ok(progress(owner.authorize(signature)?)),
-                Action::Progress => Ok(progress(owner.progress()?)),
-                Action::Prepare(evidence) => {
-                    let bytes =
-                        norito::encode_canonical(&evidence).map_err(|_| Failure::code(INVALID))?;
-                    match owner.prepare_request(&bytes)? {
-                        native::RequestPreparationV1::Retained(bytes) => Ok(response(24, bytes)),
-                        native::RequestPreparationV1::AccountChallenge(message) => {
-                            Ok(response(23, message.to_vec()))
-                        }
-                    }
-                }
-                Action::RetainRequest(signature) => {
-                    Ok(response(24, owner.retain_request(signature)?))
-                }
-                Action::AcceptResult(bytes) => Ok(response(25, owner.accept_credential(bytes)?)),
-                Action::Abandon => Ok(response(28, owner.abandon()?)),
-                Action::BeginOpen => Err(Failure::code(ARTIFACTS_UNAVAILABLE)),
-                Action::Load => unreachable!("handled before borrowing owner"),
-            }
         }
-    }
-    fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>> {
-        self.installed
-            .as_mut()
-            .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?
-            .begin(originals)
-    }
-    fn finish(&mut self, signature: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)> {
-        self.installed
-            .as_mut()
-            .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?
-            .finish(signature)
-    }
-    fn cancel(&mut self) -> Result<()> {
-        self.installed
-            .as_mut()
-            .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?
-            .cancel()
-    }
-}
-/// Native enrollment registration failure retaining the actual sole runtime custody.
-pub type NativeEnrollmentRegistrationFailure<P, S> = Box<(NativeEnrollmentRuntime<P, S>, Failure)>;
-
-/// Register native enrollment startup. Every registration failure returns the exact owner.
-/// # Errors
-/// Registry capacity or poison; no provider, key or original source is discarded on failure.
-pub fn retain_native_enrollment<P, S>(
-    runtime: NativeEnrollmentRuntime<P, S>,
-) -> std::result::Result<u64, NativeEnrollmentRegistrationFailure<P, S>>
-where
-    P: advance::KagemushaWalletPlatformV1 + 'static,
-    S: OriginalSourceV1 + Send + 'static,
-{
-    open::retain_registration(registry(), runtime, |runtime| open::RuntimeOwner {
-        closing: Arc::new(closing::CloseState::default()),
-        admission: Mutex::new(Some(Box::new(runtime))),
-        finished: Mutex::new(None),
+        Action::RetainRequest(signature) => response(24, owner.retain_request(signature)?),
+        Action::AcceptResult(bytes) => response(25, owner.accept_credential(bytes)?),
+        Action::RetainedResult => match owner.retained_result()? {
+            Some(bytes) => response(25, bytes),
+            None => response(20, Vec::new()),
+        },
+        Action::Abandon => response(28, owner.abandon()?),
+        Action::AppleOriginals => {
+            let originals = owner.apple_collection_originals()?;
+            let mut bytes = Vec::new();
+            for original in originals {
+                bytes.extend_from_slice(&(original.len() as u32).to_be_bytes());
+                bytes.extend_from_slice(&original);
+            }
+            response(38, bytes)
+        }
+        Action::BeginAppleEffect(stage) => {
+            owner.begin_apple_effect(stage)?;
+            response(39, Vec::new())
+        }
+        Action::RetainAppleEffect(stage, bytes) => {
+            owner.retain_apple_effect(stage, bytes)?;
+            response(39, Vec::new())
+        }
+        Action::CompleteAppleCollection => {
+            owner.complete_apple_collection()?;
+            response(39, Vec::new())
+        }
+        Action::RetainedRequest => match owner.retained_request()? {
+            Some(bytes) => response(24, bytes),
+            None => response(20, Vec::new()),
+        },
+        Action::Start(_) | Action::Load | Action::BeginOpen | Action::BeginResult(_) => {
+            return Err(Failure::code(CONFLICT));
+        }
     })
-    .map_err(|(runtime, failure)| Box::new((runtime, failure)))
 }
 pub(crate) fn call(id: u64, action: Action<'_>) -> Result<Response> {
     open::enroll(id, action)
@@ -239,6 +133,11 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
         4 => [32, 65_536, 4096],
         6 => [native::RESULT_MAX_BYTES, 0, 0],
         9 => [2048, 0, 0],
+        11 => [16_384, 4096, 16_384],
+        12 => [native::RESULT_MAX_BYTES, 4096, 0],
+        13 | 16 | 17 | 18 => [0; 3],
+        14 => [1, 0, 0],
+        15 => [1, 65_536, 0],
         _ => return Err(Failure::code(INVALID)),
     })
 }
@@ -265,6 +164,18 @@ pub(crate) fn request<'a>(
         0 if first.len() == 32 && !second.is_empty() && !third.is_empty() => {
             Action::Begin(originals)
         }
+        // The authenticated product selection requires either genuine DPoP (CBSI)
+        // or an empty proof frame (BPNG). This boundary only checks frame bounds.
+        11 if !first.is_empty() && !third.is_empty() => Action::Start(originals),
+        12 if !first.is_empty() && !second.is_empty() => Action::BeginResult([first, second]),
+        13 => Action::AppleOriginals,
+        14 if first.len() == 1 && (1..=3).contains(&first[0]) => Action::BeginAppleEffect(first[0]),
+        15 if first.len() == 1 && (1..=3).contains(&first[0]) && !second.is_empty() => {
+            Action::RetainAppleEffect(first[0], second)
+        }
+        16 => Action::RetainedRequest,
+        18 => Action::RetainedResult,
+        17 => Action::CompleteAppleCollection,
         1 => Action::Authorize(first),
         2 => Action::Progress,
         3 if !first.is_empty() && chain.len() >= 2 => {
@@ -295,7 +206,7 @@ mod tests {
     use super::*;
     #[test]
     fn original_enrollment_bounds_are_per_role_and_unused_fields_are_rejected() {
-        for selector in 0..=10 {
+        for selector in 0..=18 {
             let limits = bounds(selector).unwrap();
             for slot in 0..3 {
                 let long = vec![0; limits[slot] + 1];
@@ -304,7 +215,21 @@ mod tests {
                 assert!(request(selector, originals, &[]).is_err());
             }
         }
-        assert!(request(11, [&[]; 3], &[]).is_err());
+        assert!(request(19, [&[]; 3], &[]).is_err());
+        assert!(matches!(
+            request(16, [&[]; 3], &[]).unwrap(),
+            Action::RetainedRequest
+        ));
+        assert!(matches!(
+            request(18, [&[]; 3], &[]).unwrap(),
+            Action::RetainedResult
+        ));
+        for selector in [16, 18] {
+            assert_eq!(bounds(selector).unwrap(), [0; 3]);
+            assert!(request(selector, [&[]; 3], &[b"foreign chain"]).is_err());
+        }
+        assert!(request(12, [b"result", b"account", &[]], &[]).is_ok());
+        assert!(request(12, [b"result", &[], &[]], &[]).is_err());
         assert!(request(2, [&[]; 3], &[b"foreign chain"]).is_err());
         assert!(request(3, [b"token", &[], &[]], &[b"leaf"]).is_err());
         assert!(request(3, [b"token", &[], &[]], &[b"leaf", b"ca"]).is_ok());

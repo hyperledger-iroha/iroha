@@ -6,7 +6,9 @@ package org.hyperledger.iroha.sdk.offline.wallet
 import android.content.pm.ApplicationInfo
 import android.security.keystore.KeyProperties
 import java.security.InvalidKeyException
+import java.security.KeyPair
 import java.security.PrivateKey
+import java.security.interfaces.ECPublicKey
 import java.security.SignatureException
 import java.security.cert.X509Certificate
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AndroidKeyAttestationOriginalV1
@@ -35,6 +37,38 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
 
     /** Aliases this process generated under, saw occupied or deleted; never generated under again. */
     private val usedAliases = HashSet<String>()
+    // Actual positive vendor returns belong to this platform owner before any readback can fail.
+    // Keeping a return never grants generation or treats an existing alias as a generated key.
+    private val generationReturns = HashMap<String, GenerationReturn>()
+    private class GenerationReturn(val pair: KeyPair, challenge: ByteArray,
+        val profile: KagemushaWalletAndroidKeyProfileV1, val level: KagemushaWalletAndroidSecurityLevelV1) {
+        val challenge = challenge.copyOf()
+    }
+
+    /** Read-only recovery of this owner's actual positive return, bound to the original request. */
+    fun recoverGeneration(slot: ByteArray, challengeDigest: ByteArray,
+        profile: KagemushaWalletAndroidKeyProfileV1): KagemushaWalletAndroidKeyGenerationV1? = synchronized(lock) {
+        val alias = kagemushaWalletAndroidAliasV1(slot)
+        val challenge = challengeDigest.copyOf()
+        require(challenge.size == 32 && challenge.any { it != 0.toByte() })
+        val returned = generationReturns[alias] ?: return@synchronized null
+        if (!returned.challenge.contentEquals(challenge) || returned.profile != profile) {
+            return@synchronized unavailableGeneration(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE)
+        }
+        if (kagemushaWalletAndroidCustodyRefusalV1(environment) != null) {
+            return@synchronized unavailableGeneration(KagemushaWalletAndroidUnavailableV1.platform(
+                KagemushaWalletAndroidUnavailableV1.PLATFORM_BACKUP_ENABLED))
+        }
+        try {
+            if (!environment.isUserUnlocked()) return@synchronized unavailableGeneration(
+                KagemushaWalletAndroidUnavailableV1.BEFORE_FIRST_UNLOCK)
+        } catch (error: Throwable) {
+            return@synchronized unavailableGeneration(KagemushaWalletAndroidUnavailableV1.platform(
+                KagemushaWalletAndroidUnavailableV1.PLATFORM_STORAGE))
+        }
+        readBack(alias, challenge, returned.level)
+    }
+
 
     // A provider's StrongBox refusal permits one separate, freshly authorized slot to use TEE.
     // This is a hardware-choice hint, never a generation grant, durable record or retry token.
@@ -141,7 +175,7 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
             KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_ONLY,
             KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE -> KagemushaWalletAndroidSecurityLevelV1.STRONGBOX
         }
-        when (val generated = attempt(alias, challenge, level == KagemushaWalletAndroidSecurityLevelV1.STRONGBOX)) {
+        when (val generated = attempt(alias, challenge, profile, level == KagemushaWalletAndroidSecurityLevelV1.STRONGBOX)) {
             Attempt.Generated -> readBack(alias, challenge, level)
             Attempt.StrongBoxUnavailable -> {
                 if (level == KagemushaWalletAndroidSecurityLevelV1.STRONGBOX &&
@@ -187,7 +221,7 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
             KagemushaWalletAndroidHardwarePlanV1.REFUSE -> return unavailableGeneration(
                 KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_STRONGBOX_UNAVAILABLE),
             )
-            KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY -> when (val tee = attempt(alias, challenge, strongBox = false)) {
+            KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY -> when (val tee = attempt(alias, challenge, profile, strongBox = false)) {
                 Attempt.Generated -> KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT
                 Attempt.StrongBoxUnavailable -> return unavailableGeneration(
                     KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_GENERATION_FAILED),
@@ -195,7 +229,7 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
                 is Attempt.Failed -> return unavailableGeneration(tee.reason)
             }
             KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_ONLY,
-            KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE -> when (val strong = attempt(alias, challenge, strongBox = true)) {
+            KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE -> when (val strong = attempt(alias, challenge, profile, strongBox = true)) {
                 Attempt.Generated -> KagemushaWalletAndroidSecurityLevelV1.STRONGBOX
                 is Attempt.Failed -> return unavailableGeneration(strong.reason)
                 Attempt.StrongBoxUnavailable -> {
@@ -210,7 +244,7 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
                         is Probed.Present -> return occupied(alias)
                         is Probed.Unavailable -> return unavailableGeneration(again.reason)
                     }
-                    when (val tee = attempt(alias, challenge, strongBox = false)) {
+                    when (val tee = attempt(alias, challenge, profile, strongBox = false)) {
                         Attempt.Generated -> KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT
                         Attempt.StrongBoxUnavailable -> return unavailableGeneration(
                             KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_GENERATION_FAILED),
@@ -313,8 +347,12 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
      * One provider generation call. The fresh-only caller already burned the alias; the API
      * 31+ caller may retry a failure only after definitive absence. Success marks the alias used.
      */
-    private fun attempt(alias: String, challenge: ByteArray, strongBox: Boolean): Attempt = try {
-        keyStore.generate(KagemushaWalletAndroidKeySpecV1(alias, challenge, strongBox))
+    private fun attempt(alias: String, challenge: ByteArray,
+        profile: KagemushaWalletAndroidKeyProfileV1, strongBox: Boolean): Attempt = try {
+        val pair = keyStore.generate(KagemushaWalletAndroidKeySpecV1(alias, challenge, strongBox))
+        generationReturns[alias] = GenerationReturn(pair, challenge, profile,
+            if (strongBox) KagemushaWalletAndroidSecurityLevelV1.STRONGBOX
+            else KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT)
         usedAliases += alias
         Attempt.Generated
     } catch (unavailable: KagemushaWalletAndroidStrongBoxUnavailableV1) {
@@ -341,6 +379,22 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
             )
             is Probed.Unavailable -> return unavailableGeneration(probed.reason)
         }
+        val returned = generationReturns[alias]
+            ?: return unavailableGeneration(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE)
+        // Validate the original vendor public key against the independently read attested leaf.
+        // Even a replacement key with a valid chain for the same challenge cannot be adopted.
+        val matches = try {
+            val original = returned.pair.public as? ECPublicKey
+            val current = present.chain.certificates.first().publicKey as? ECPublicKey
+            original != null && current != null && returned.pair.private.encoded == null &&
+                original.w == current.w &&
+                original.params.curve == current.params.curve &&
+                original.params.generator == current.params.generator &&
+                original.params.order == current.params.order &&
+                original.params.cofactor == current.params.cofactor &&
+                returned.challenge.contentEquals(challenge) && returned.level == level
+        } catch (error: Throwable) { false }
+        if (!matches) return unavailableGeneration(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE)
         val facts = try {
             keyStore.facts(present.key)
         } catch (error: Throwable) {

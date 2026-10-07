@@ -4836,6 +4836,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_i18n",
  "iroha_model_base",
+ "iroha_operation_journal",
  "iroha_petal",
  "iroha_primitives",
  "iroha_sccp",

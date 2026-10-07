@@ -56,8 +56,11 @@ pub struct PlatformCallbacks {
     /// Operations: 0 key probe, 1 key generate (input challenge32, auxiliary profile1/2/3 (3 Android TEE-only; Apple refuses)),
     /// 2 key sign (input exact domain-checked32), 3 delete key, 4 anchor read,
     /// 5 anchor create, 6 anchor update, 7 storage state, 8 boot UUID (UTF-8, 36 bytes), 9 prepared no-backup custody root (UTF-8, <=4096),
-    /// 10 complete key-slot inventory (ascending unique nonzero32, <=4096 slots).
-    /// Slot is exactly32 bytes for operations0..6, null otherwise. Results are key SEC1
+    /// 10 complete key-slot inventory (ascending unique nonzero32, <=4096 slots),
+    /// 13 readback of this owner's actual retained generation return (challenge32/profile1/2).
+    /// Operation13 never generates: tag0 is the original SEC1 key, tag3 is no held successful
+    /// return (not key absence), tag2 is unavailable; malformed answers remain unavailable.
+    /// Slot is exactly32 bytes for operations0..6 and13, null otherwise. Results are key SEC1
     /// (65 bytes), signature DER (8..72), anchor (<=256), or boot UUID, as appropriate.
     pub invoke: Option<
         unsafe extern "C" fn(
@@ -251,6 +254,28 @@ impl Platform for CallbackPlatform {
             3 if bytes.is_empty() => G::AlreadyPresent,
             2 if bytes.is_empty() => G::Unavailable(reason(reply)),
             _ => G::Unavailable(Unavailable::Platform(0)),
+        }
+    }
+    fn key_recover_generation_reply(
+        &self,
+        slot: &Slot,
+        request: &advance::KagemushaWalletKeyGenerationRequestV1,
+    ) -> std::result::Result<Option<PublicKey>, Unavailable> {
+        let (reply, bytes) = self.call(
+            13,
+            Some(slot),
+            &request.challenge_digest,
+            u32::from(request.profile.tag()),
+            65,
+        );
+        match reply.tag {
+            0 => PublicKey::from_sec1_bytes(&bytes)
+                .map(Some)
+                .map_err(|_| Unavailable::KeyUnusable),
+            // No held successful return is not a Keychain absence verdict.
+            3 if bytes.is_empty() => Ok(None),
+            2 if bytes.is_empty() => Err(reason(reply)),
+            _ => Err(Unavailable::Platform(0)),
         }
     }
     fn key_sign(

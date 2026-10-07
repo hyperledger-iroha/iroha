@@ -41,6 +41,7 @@ mod sumeragi;
 mod taira;
 mod taira_dataspace_deploy;
 mod taira_public_reset;
+mod transaction_journal;
 mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
@@ -1516,6 +1517,7 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     };
     let args = Args::from_arg_matches(&matches)
         .map_err(|err| Report::new(MainError::CliArgs(err.render().to_string())))?;
+    transaction_journal::validate_globals(&args).map_err(|error| command_error_report(&error))?;
     if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(command))) =
         &args.command
         && command.is_artifact_tool()
@@ -3079,7 +3081,7 @@ mod asset {
         #[derive(clap::Args, Debug)]
         pub struct Register {
             /// Immutable owning domain, independent from any alias.
-            #[arg(long, required_unless_present_any = ["dataspace", "global_home"], conflicts_with_all = ["dataspace", "global_home"])]
+            #[arg(long, value_parser = parse_domain_id_literal, required_unless_present_any = ["dataspace", "global_home"], conflicts_with_all = ["dataspace", "global_home"])]
             pub domain: Option<DomainId>,
             /// Exact nonzero dataspace ID for direct namespace ownership.
             #[arg(long, required_unless_present_any = ["domain", "global_home"], conflicts_with_all = ["domain", "global_home"])]
@@ -3410,6 +3412,16 @@ mod asset {
                 let global = Parser::try_parse_from(base.into_iter().chain(["--global-home"]))
                     .expect("explicit genesis global home");
                 assert!(global.registration.global_home);
+                let domain =
+                    Parser::try_parse_from(base.into_iter().chain(["--domain", "issuer.public"]))
+                        .expect("canonical fully-qualified domain home");
+                assert_eq!(
+                    domain.registration.domain,
+                    Some(DomainId::try_new("issuer", "public").expect("domain"))
+                );
+                let error = Parser::try_parse_from(base.into_iter().chain(["--domain", "issuer"]))
+                    .expect_err("an unqualified domain must fail during argument parsing");
+                assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
             }
         }
     }
@@ -4916,6 +4928,12 @@ mod transaction {
     };
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
+        /// Quote and sign stdin instructions into a new private journal without submitting.
+        Prepare(crate::transaction_journal::JournalArgs),
+        /// Dispatch the retained transaction once, or recover an earlier attempt read-only.
+        Submit(crate::transaction_journal::JournalArgs),
+        /// Read-only recovery of the exact retained transaction and committed envelope.
+        Resume(crate::transaction_journal::JournalArgs),
         /// Read the typed pipeline status of a submitted transaction
         Status(Status),
         /// Retrieve details of a specific transaction
@@ -4937,6 +4955,9 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
+                Prepare(args) => crate::transaction_journal::prepare(args, context),
+                Submit(args) => crate::transaction_journal::submit(args, context),
+                Resume(args) => crate::transaction_journal::resume(args, context),
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 List(cmd) => cmd.run(context),

@@ -233,6 +233,70 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }))
     }
 
+    /// Replay through the permanent credit index after old Receive output collection.
+    /// The exact original request and source-selected operation/capsule mapping must agree
+    /// with the first consumed credit; the latest covering native Ω supplies fresh evidence.
+    fn retry_prepared_intent(
+        &mut self,
+        request: &NativeIntentV1,
+        capsule: &[u8; 32],
+        operation: &[u8; 32],
+    ) -> Result<Option<Completion>, Error> {
+        let completion = self.retry(operation)?;
+        if completion != Some(Completion::Archived) {
+            return Ok(completion);
+        }
+        let Some(OperationActionV1::Receive { payment, .. }) =
+            request.user_request().map(|request| &request.action)
+        else {
+            return Ok(completion);
+        };
+        let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
+            payment,
+            &self.scheme_id,
+        ))?;
+        let identity = valid(payment.digests())?;
+        let (_, manifest) = self.sync_manifest()?;
+        let credit = self
+            .indexed_credit(&manifest, &identity.credit_id)?
+            .ok_or(Error::WitnessLost("archived Receive credit"))?;
+        if credit.payment_digest != identity.payment || credit.amount != payment.request.body.amount
+        {
+            return Err(Error::CreditConflict);
+        }
+        let step = self.step_entry(&manifest, credit.sequence)?;
+        if step.operation != *operation
+            || step.capsule != *capsule
+            || step.kind != KagemushaWalletOperationKindV1::Receive
+            || !step.collected
+        {
+            return Err(Error::WitnessLost("archived Receive request mapping"));
+        }
+        let status = self.credit_status(&identity.credit_id, &identity.payment)?;
+        Ok(Some(Completion::CreditStatus(archive::encode(&status)?)))
+    }
+
+    #[cfg(test)]
+    pub(in crate::kagemusha_wallet_state_v1) fn retain_collected_receive_test_request(
+        &mut self,
+        request: OperationRequestV1,
+        frozen: &FrozenTransition,
+    ) -> Result<(), Error> {
+        // Explicit simulator-only mapping: test proofs/custody cannot install a Native owner.
+        let request = NativeIntentV1::user(request);
+        require_frozen(&request, &frozen.capsule.predecessor_capsule_digest, frozen)?;
+        let (mut selected, mut manifest) = self.manifest()?;
+        let entry = Entry {
+            request: self
+                .archive
+                .write_object(&archive::encode(&request)?, REQUEST_MAX_BYTES)?,
+            plan: None,
+            capsule: Some(valid(frozen.capsule.capsule_digest())?),
+            operation: Some(frozen.capsule.operation_id),
+        };
+        self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)
+    }
+
     /// Resolve a local request identity through its source-selected actual operation mapping.
     /// An uncommitted preparation has no completion, even when its native plan is durable.
     ///
@@ -261,7 +325,13 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         match entry.operation {
             Some(operation) => Ok(self
-                .retry(&operation)?
+                .retry_prepared_intent(
+                    &request,
+                    &entry
+                        .capsule
+                        .ok_or(Error::WitnessLost("prepared capsule"))?,
+                    &operation,
+                )?
                 .map_or(RequestStatusV1::Preparing, RequestStatusV1::Outcome)),
             None => Ok(RequestStatusV1::Preparing),
         }
@@ -319,7 +389,13 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 return Err(Error::WitnessLost("prepared operation mapping"));
             }
             if let Some(operation) = entry.operation {
-                if let Some(completion) = self.retry(&operation)? {
+                if let Some(completion) = self.retry_prepared_intent(
+                    &request,
+                    &entry
+                        .capsule
+                        .ok_or(Error::WitnessLost("prepared capsule"))?,
+                    &operation,
+                )? {
                     return Ok(completion);
                 }
             }
@@ -354,7 +430,13 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             return Err(Error::WitnessLost("prepared operation mapping"));
         }
         if let Some(operation) = entry.operation {
-            if let Some(completion) = self.retry(&operation)? {
+            if let Some(completion) = self.retry_prepared_intent(
+                &request,
+                &entry
+                    .capsule
+                    .ok_or(Error::WitnessLost("prepared capsule"))?,
+                &operation,
+            )? {
                 return Ok(completion);
             }
         }

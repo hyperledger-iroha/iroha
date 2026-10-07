@@ -15,6 +15,27 @@ pub(crate) enum Setup {
         original: Vec<u8>,
         beneficiary: Vec<u8>,
     },
+    LedgerLoad {
+        id: [u8; 32],
+        amount: u128,
+    },
+    LoadFinality {
+        receipt: Vec<u8>,
+        event: Vec<u8>,
+    },
+    LedgerInstruction {
+        kind: u64,
+        original: Vec<u8>,
+    },
+    ConfirmUnload {
+        transaction: [u8; 32],
+        original: Vec<u8>,
+    },
+    LoadProofProgress(Vec<u8>),
+    LoadProofStep {
+        receipt: Vec<u8>,
+        original: Vec<u8>,
+    },
     LedgerFinality(Vec<u8>),
     LedgerStatus,
     FeePayout {
@@ -61,9 +82,21 @@ pub(crate) enum Setup {
         certificate: Vec<u8>,
     },
 }
+fn load_progress(value: state::LoadProofProgressV1) -> Response {
+    Response {
+        kind: 43,
+        sequence: u128::from(value.receipt_height),
+        bytes: value.verified_height.to_be_bytes().to_vec(),
+        ..Response::default()
+    }
+}
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 => [0; 3],
+        0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 | 27 => [0; 3],
+        28 => [512, state::LOAD_EVENT_PROOF_MAX_BYTES_V1, 0],
+        31 => [512, 0, 0],
+        32 => [512, state::LEDGER_PROOF_MAX_BYTES_V1, 0],
+        29 | 30 => [state::LEDGER_INSTRUCTION_MAX_BYTES_V1, 0, 0],
         21 | 22 => [state::FEE_CLAIM_MAX_BYTES_V1, 0, 0],
         23 => [state::LEDGER_PROOF_MAX_BYTES_V1, 0, 0],
         26 => [
@@ -107,9 +140,10 @@ pub(crate) fn request(
 ) -> Result<Setup> {
     let id: [u8; 32] = id.try_into().map_err(|_| Failure::code(INVALID))?;
     let bounds = bounds(selector)?;
-    if (matches!(selector, 1 | 2 | 19 | 20 | 25) != (id != [0; 32]))
-        || ((selector == 1) != (amount != 0))
-        || (matches!(selector, 5 | 6) != (token != 0))
+    if (matches!(selector, 1 | 2 | 19 | 20 | 25 | 27 | 30) != (id != [0; 32]))
+        || (matches!(selector, 1 | 27) != (amount != 0))
+        || (matches!(selector, 5 | 6 | 29) != (token != 0))
+        || (selector == 29 && !(1..=3).contains(&token))
         || originals
             .iter()
             .zip(bounds)
@@ -124,6 +158,24 @@ pub(crate) fn request(
         21 | 22 if !first.is_empty() => Setup::FeeOriginal {
             request: selector == 22,
             original: first.to_vec(),
+        },
+        27 => Setup::LedgerLoad { id, amount },
+        28 if !first.is_empty() && !second.is_empty() => Setup::LoadFinality {
+            receipt: first.to_vec(),
+            event: second.to_vec(),
+        },
+        29 if !first.is_empty() => Setup::LedgerInstruction {
+            kind: token,
+            original: first.to_vec(),
+        },
+        30 if !first.is_empty() => Setup::ConfirmUnload {
+            transaction: id,
+            original: first.to_vec(),
+        },
+        31 if !first.is_empty() => Setup::LoadProofProgress(first.to_vec()),
+        32 if !first.is_empty() && !second.is_empty() => Setup::LoadProofStep {
+            receipt: first.to_vec(),
+            original: second.to_vec(),
         },
         23 if !first.is_empty() => Setup::LedgerFinality(first.to_vec()),
         24 => Setup::LedgerStatus,
@@ -245,6 +297,45 @@ where
                     bytes: claim.ledger_claim_bytes(&scheme, &beneficiary)?,
                     ..Response::default()
                 });
+            }
+            Setup::LedgerLoad { id, amount } => {
+                return Ok(Response {
+                    kind: 40,
+                    bytes: self.wallet.prepare_ledger_load(id, amount)?,
+                    ..Response::default()
+                });
+            }
+            Setup::LoadFinality { receipt, event } => {
+                return Ok(Response {
+                    kind: 41,
+                    bytes: self.wallet.prove_load_finality(&receipt, &event)?,
+                    ..Response::default()
+                });
+            }
+            Setup::LedgerInstruction { kind, original } => {
+                return Ok(Response {
+                    kind: 40,
+                    bytes: self.wallet.ledger_instruction(kind, &original)?,
+                    ..Response::default()
+                });
+            }
+            Setup::ConfirmUnload {
+                transaction,
+                original,
+            } => {
+                let mut response = ledger_progress(Some(
+                    self.wallet.confirm_ledger_unload(transaction, &original)?,
+                ));
+                response.kind = 42;
+                return Ok(response);
+            }
+            Setup::LoadProofProgress(receipt) => {
+                return Ok(load_progress(self.wallet.load_finality_progress(&receipt)?));
+            }
+            Setup::LoadProofStep { receipt, original } => {
+                return Ok(load_progress(
+                    self.wallet.ingest_load_finality(&receipt, &original)?,
+                ));
             }
             Setup::LedgerFinality(original) => {
                 return Ok(ledger_progress(Some(

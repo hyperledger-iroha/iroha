@@ -1827,7 +1827,10 @@ typedef struct {
        3 key delete, 4 anchor read, 5 anchor create, 6 update, 7 storage state,
        8 boot UUID UTF8, 9 prepare non-backup custody root UTF8,
        10 complete ascending unique nonzero32 key slots (at most4096, no truncation).
-       slot32 is null for operations7..10. Never retain or exceed borrowed buffers. */
+       13 readback only of this owner's retained successful generation return (input32/aux profile1/2):
+       tag0 original SEC1 key, tag3 no held successful return (not key absence), tag2 unavailable.
+       slot32 is required for operations0..6 and13, null for operations7..10.
+       Never retain or exceed borrowed buffers. */
     void (*invoke)(void* context, uint32_t operation, const uint8_t* slot32,
                    const uint8_t* input, size_t input_len, uint32_t auxiliary,
                    uint8_t* output, size_t output_capacity,
@@ -1940,6 +1943,18 @@ typedef struct {
 // native selected-tip authentication and durable exact payout acknowledgement. No caller checkpoints/verdicts accepted.
 // FeeClaimTransport26(first retained pair <=21,024, second canonical beneficiary AccountId <=16,384)
 // returns kind36 canonical FeeClaim <=16,384 after exact schedule/beneficiary binding; DATA only, not payout confirmation.
+// LedgerLoad27(nonzero setup_id, positive amount, no originals) returns kind40 canonical instruction <=65536.
+// Native freezes its selected next ordinal and returns the same original on exact request retries.
+// ProveLoadFinality28(first unsigned receipt <=512, second counted event proof <=8192) returns kind41 <=16384
+// only after complete recursive proof production from the installed originals and selected native history.
+// LedgerInstruction29(token=1 Activate/2 Unload/3 CloseLoads, first original <=65536) returns kind40;
+// conversion does not confirm execution. Kinds40/41 have zero sequence/detail and nonempty bytes.
+// LedgerFinality23 also proves and atomically retains the complete recursive history under the same manifest.
+// ConfirmUnload30(nonzero transaction entrypoint hash in setup_id, first exact Unload original <=65536)
+// verifies successful input/output inclusion and saves its confirmation before returning kind42 (same geometry as kind33).
+// LoadProofProgress31(first receipt <=512) and IngestLoadProof32(first receipt <=512, second ordinary proof <=36MiB)
+// use a separate durable receipt-bound recursive cursor. Kind43: sequence_low=receipt proposed height>1,
+// sequence_high/detail=0, bytes8BE=verified height (0..receipt height). Completed proofs are retained before return.
 // CloseLoads19(nonzero setup_id retry identity, no originals) returns kind30, exact durable signed closure frame <=16,384 bytes;
 // Reuse an id for exact retries; a fresh id selects current native source after a preissued Load.
 // It does not confirm ledger closure or authorize key retirement.
@@ -1970,11 +1985,17 @@ int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_
 
 /* Enrollment originals only. Native startup selects approved policy/root and owns custody.
  * Actions:0 requestId32/account/asset,1 account signature,2 progress,3 Android(token+DER chain),
- * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6,9 signed pre-key permit<=2048,10 permanently abandon unused enrollment.
+ * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6,9 signed pre-key permit<=2048,10 permanently abandon unused enrollment,11 installed-session JWT<=16384/DPoP<=4096/rootDER<=16384,12 persisted E6<=262144/account<=4096 (Native-selected asset, ordinary original open),
+ * 13 retained Apple vendor originals,14 consume stage1..3 one-dispatch authorization,
+ * 15 retain actual stage1..3 vendor return,16 read retained E5,17 final Apple collection live check,
+ * 18 read/adopt exact durable E6 (25 original or20 verified absence).
+ * Selectors13/16/17/18 have no inputs; unavailable, lost or malformed custody remains an error.
+ * Apple originals result38 is three u32-BE length-prefixed DATA originals (keyID UTF8<=4096,
+ * attestation<=65536, assertion<=4096); result39 acknowledges custody, never monetary success.
  * Unused buffers/count must be zero. Android chain2..8, each item1..16384 bytes.
  * Output:18 local challenge32,19 fixed FFI target161(slot32,key65,challenge32,binding32),
- * 20 pending,21 abandoned,22 Bootstrap selected,23 E5 challenge32,24 exact E5<=131072,
- * 25 exact E6<=262144,26 complete-source runtime ready,27 issuer dispatch DATA<=16384,28 exact signed Abandon<=1024. All carry the same handle in sequence.
+ * 20 pending,21 abandoned,22 Bootstrap selected,23 E5 challenge32,24 exact E5<=524288,
+ * 25 exact E6<=262144,26 complete-source runtime ready,27 issuer dispatch DATA<=16384,28 exact signed Abandon<=1024,37 authenticated selection(scale:u32BE + asset original<=1024). All carry the same handle in sequence.
  * E6 is not ledger activation. Payment bounds remain10000. */
 typedef struct connect_norito_kagemusha_wallet_enrollment_item_v1 {
     const uint8_t* bytes;

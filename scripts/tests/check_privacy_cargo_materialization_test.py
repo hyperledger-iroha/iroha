@@ -187,6 +187,7 @@ IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$3" privacy_sdk_resolve_cargo_lockfile "$2" "
             "398cd15f1b51bc25d673acc766f98c8910446246a2ba33b0e97f17332bf57d40",
             "4ac28ef33c97060d246652c755e2cfb7780351e8cf1741c4e58c7712e82b9fdd",
             "4c038f2fa5625ac018c5e8b0cb96f0af6390025dab943b27896e37cb405254b4",
+            "5947516819f9e3a9a391ec61e432f9de98ef3614c384c0483c179a46ac1930f9",
         )
         for stale_digest in stale_digests:
             with self.subTest(stale_digest=stale_digest):

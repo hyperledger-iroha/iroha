@@ -35,7 +35,7 @@ class KagemushaWalletHostNativeV1Test {
         val id = ByteArray(32) { 1 }
         repeat(2) {
             val error = assertFailsWith<KagemushaWalletExceptionV1> {
-                KagemushaWalletRuntimeV1(Long.MAX_VALUE).begin(KagemushaWalletOpenOriginalsV1(id, id, id, id))
+                KagemushaWalletRuntimeV1(Long.MAX_VALUE, Any()).begin(KagemushaWalletOpenOriginalsV1(id, id, id, id))
             }
             assertEquals(KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE, error.status)
         }

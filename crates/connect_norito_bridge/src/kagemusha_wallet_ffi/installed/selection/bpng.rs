@@ -1,6 +1,6 @@
 //! Native projection of the whole authenticated BPNG v7 application original.
 //!
-//! Core's service and retail policy admission stays with Core. This module binds
+//! Core's service admission stays with Core. This module binds
 //! only the fields consumed by this installation owner; all other signed fields
 //! remain retained DATA and cannot grant a monetary or service capability.
 
@@ -22,7 +22,6 @@ const APP_FIELDS: &[&str] = &[
     "authentication",
     "kasumi",
     "mibankCentralPaymentAdapter",
-    "retailPolicy",
     "retailStageAnchorAuthority",
     "enrollment",
     "walletRuntime",
@@ -37,6 +36,7 @@ pub(super) const VALIDATOR_BASES: [&str; 4] = [
 ];
 
 pub(super) fn application(document: &Value) -> Result<&Map> {
+    // The retired retailPolicy field is forbidden, including null or signed offers.
     let app = exact(document, APP_FIELDS)?;
     if text(app, "schema")? != "bpng.taira-app-runtime-manifest.v7"
         || text(app, "environment")? != "taira-testnet"
@@ -50,7 +50,6 @@ pub(super) fn application(document: &Value) -> Result<&Map> {
         "authentication",
         "kasumi",
         "mibankCentralPaymentAdapter",
-        "retailPolicy",
         "retailStageAnchorAuthority",
         "enrollment",
         "evidence",
