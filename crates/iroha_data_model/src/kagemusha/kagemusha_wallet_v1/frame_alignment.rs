@@ -1,4 +1,4 @@
-//! Fixed G1 frame alignment on every native target, including ARMv7.
+//! Fixed G1 frame alignment on every native target, including `ARMv7`.
 //!
 //! Norito framing uses the Rust type's archived storage alignment. Wallet types
 //! containing a direct u128 pin that alignment to 16 bytes; ordinary enclosing

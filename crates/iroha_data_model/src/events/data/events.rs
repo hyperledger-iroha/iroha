@@ -138,7 +138,7 @@ mod model {
         #[codec(index = 23)]
         Sccp(crate::sccp::events::SccpEvent),
         /// Successful ordinary Load execution. Finality comes from the
-        /// authenticated execution-result event commitment and its CommitQC.
+        /// authenticated execution-result event commitment and its `CommitQC`.
         #[codec(index = 24)]
         KagemushaLoadCommitted(super::kagemusha::KagemushaLoadCommittedV1),
     }

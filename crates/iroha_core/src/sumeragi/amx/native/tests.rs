@@ -14,7 +14,7 @@ use iroha_data_model::{
         sumeragi_amx::{BeginAmxV1, RegisterAmxDataspaceV1, RelayAmxPreparedV1},
     },
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
-    sumeragi_amx::{AmxRecordKind, AmxTransactionV1, AmxVoteV1},
+    sumeragi_amx::{AmxRecordKind, AmxTransactionV1, AmxTransferLegV1, AmxVoteV1},
     sumeragi_finality::genesis_epoch,
 };
 use iroha_model_base::{chain::ChainId, domain::DomainId};
@@ -1492,3 +1492,105 @@ fn original_authenticated_native_amx_mv_cell_refusal_keeps_original_cut_graph_an
 
 #[path = "tests/paid_borrowed_custody.rs"]
 mod paid_borrowed_custody;
+
+#[test]
+fn native_leg_decode_refuses_occupied_original_pool_before_any_copy_and_retries_exact_source() {
+    let first = payer();
+    let second = receiver();
+    let transfer = AmxTransferLegV1 {
+        source: AssetId::with_scope(
+            principal(),
+            account(&first),
+            AssetBalanceScope::Dataspace(FIRST),
+        ),
+        destination: account(&second),
+        amount: Quantity::from(17_u32),
+    };
+    let bytes = norito::encode_canonical(&transfer).unwrap();
+    let source = (bytes.as_ptr(), bytes.len());
+    let first_layout = first.public_key().retained_allocation_layout();
+    let controls = norito::core::PreparedDecodeWorkspace::allocation_layouts();
+    let control_bytes = controls.iter().map(std::alloc::Layout::size).sum::<usize>();
+    let destination_layout = second.public_key().retained_allocation_layout();
+    let amount_layout = transfer.amount.admission_clone_layout().unwrap();
+    let exact_retained = first_layout.size() + destination_layout.size() + amount_layout.size();
+    let budget = AllocationBudget::new(control_bytes);
+    let blocker = iroha_allocation::ChargedBuffer::<u8>::new(control_bytes, &budget).unwrap();
+    let expected = budget.try_reserve_layouts(controls).unwrap_err();
+    assert!(matches!(
+        expected,
+        iroha_allocation::AllocationRefusal::Capacity { .. }
+    ));
+    let mut result = None;
+    let allocations = crate::test_allocations::allocations_during(|| {
+        result = Some(decode_leg(&bytes, &budget));
+    });
+    let result = result.expect("actual production decoder was called once");
+    let refusal =
+        result.expect_err("occupied original pool must refuse before copying a canonical leg");
+    assert_eq!(refusal.to_string(), expected.to_string());
+    let AmxLegDecodeErrorV1::Allocation(iroha_allocation::ChargedBufferError::Admission(actual)) =
+        refusal
+    else {
+        panic!("original pool refusal was erased");
+    };
+    assert_eq!(actual, expected, "includes the original release generation");
+    assert_eq!(
+        allocations, 0,
+        "no key, alignment, quantity or graph copy may precede original pool refusal"
+    );
+    assert_eq!(budget.reserved_bytes(), control_bytes);
+    assert_eq!((bytes.as_ptr(), bytes.len()), source);
+    drop(blocker);
+    assert_eq!(budget.reserved_bytes(), 0);
+    budget.set_limit_bytes(exact_retained + control_bytes);
+    let retry = decode_leg(&bytes, &budget).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        budget.reserved_bytes(),
+        exact_retained,
+        "both real compact keys and native digits stay physically funded"
+    );
+    assert_eq!((bytes.as_ptr(), bytes.len()), source);
+    budget.set_limit_bytes(0);
+    drop(retry);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn native_leg_destination_and_scope_invariants_defer_without_protocol_rejection() {
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
+    use iroha_data_model::block::BlockHeader;
+    use std::num::NonZeroU64;
+    for cause in [
+        AmxLegDecodeErrorV1::Invariant("populated native AMX leg destination"),
+        AmxLegDecodeErrorV1::Scope(norito::core::PreparedDecodeScopeError::ForeignPool),
+        AmxLegDecodeErrorV1::Scope(norito::core::PreparedDecodeScopeError::AttemptExhausted),
+    ] {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state
+            .try_block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0))
+            .unwrap();
+        let mut attempt = block.try_transaction().unwrap();
+        assert!(attempt.execution_deferral().is_none());
+        let diagnostic = leg_decode_error(cause, &mut attempt);
+        assert!(
+            matches!(diagnostic, Error::InvariantViolation(_)),
+            "model API carrier remains unchanged"
+        );
+        assert_eq!(
+            attempt.execution_deferral().unwrap().reason(),
+            ivm::error::ExecutionDeferral::LocalInvariantViolation
+        );
+        drop(attempt);
+        drop(block);
+        assert_eq!(
+            state.view().height(),
+            0,
+            "local bookkeeping failure grants no execution output"
+        );
+    }
+}

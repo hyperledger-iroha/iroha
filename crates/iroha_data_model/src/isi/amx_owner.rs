@@ -1,7 +1,7 @@
 //! Original AMX proof custody carried by the canonical instruction storage itself.
 //!
 //! The storage choice introduces no wire tag or alternate instruction type. A borrow is the
-//! actual registered Prepare, Relay or Settle value; cloning InstructionBox retains its original
+//! actual registered Prepare, Relay or Settle value; cloning `InstructionBox` retains its original
 //! graph and finite-pool charges. Ordinary envelope and receiving decoder allocations are separate.
 
 use std::{alloc::Layout, fmt, mem::ManuallyDrop};
@@ -297,12 +297,11 @@ fn into_instruction(
         drop(action);
         return Err(Error::Source);
     }
-    let proof = match job.source.take() {
-        Some(proof) => proof,
-        None => {
-            drop(action);
-            return Err(Error::Source);
-        }
+    let proof = if let Some(proof) = job.source.take() {
+        proof
+    } else {
+        drop(action);
+        return Err(Error::Source);
     };
     // The private mapper only changes the outer type. Retain additional credit conservatively
     // if this infallible move unwinds: captured destination fields must die before their ledger.

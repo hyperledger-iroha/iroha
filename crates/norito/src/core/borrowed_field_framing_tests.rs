@@ -257,7 +257,7 @@ fn archived_fixed_array_charges_its_actual_element_copy_once_and_keeps_original_
         let alignment = archived_payload_align::<[u16; 1]>();
         let mut original = vec![0xa5; framed.len() + alignment];
         let start = (0..alignment)
-            .find(|start| (original.as_ptr() as usize + start) % alignment == 0)
+            .find(|start| (original.as_ptr().addr() + start).is_multiple_of(alignment))
             .unwrap();
         original[start..start + framed.len()].copy_from_slice(&framed);
         let bytes = &original[start..start + framed.len()];
@@ -366,7 +366,7 @@ fn archived_and_slice_fixed_arrays_reject_an_overwide_element_with_its_actual_co
         let alignment = archived_payload_align::<[u16; 1]>();
         let mut original = vec![0xa5; framed.len() + alignment];
         let start = (0..alignment)
-            .find(|start| (original.as_ptr() as usize + start) % alignment == 0)
+            .find(|start| (original.as_ptr().addr() + start).is_multiple_of(alignment))
             .unwrap();
         original[start..start + framed.len()].copy_from_slice(&framed);
         let bytes = &original[start..start + framed.len()];

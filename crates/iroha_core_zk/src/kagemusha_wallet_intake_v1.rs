@@ -187,7 +187,11 @@ fn retain_originals(originals: [&[u8]; 4]) -> Option<[Vec<u8>; 4]> {
         ACCOUNT_ORIGINAL_MAX_BYTES_V1,
         ASSET_SCOPE_ORIGINAL_MAX_BYTES_V1,
     ];
-    if originals.iter().zip(bounds).any(|(original, bound)| original.len() > bound) {
+    if originals
+        .iter()
+        .zip(bounds)
+        .any(|(original, bound)| original.len() > bound)
+    {
         return None;
     }
     Some(originals.map(|original| original.to_vec()))
@@ -196,8 +200,10 @@ fn retain_originals(originals: [&[u8]; 4]) -> Option<[Vec<u8>; 4]> {
 // Move-only check boundary used by both genuine begin and finish. Checks may reconcile
 // provider custody; their actual owner is returned on refusal rather than rolled back,
 // fabricated or erased. It grants no authority independently of the supplied real checks.
-fn retain_checked<O, T>(mut owner: O, check: impl FnOnce(&mut O) -> Result<T, Error>)
-    -> Result<(O, T), (O, Error)> {
+fn retain_checked<O, T>(
+    mut owner: O,
+    check: impl FnOnce(&mut O) -> Result<T, Error>,
+) -> Result<(O, T), (O, Error)> {
     match check(&mut owner) {
         Ok(value) => Ok((owner, value)),
         Err(error) => Err((owner, error)),
@@ -205,7 +211,9 @@ fn retain_checked<O, T>(mut owner: O, check: impl FnOnce(&mut O) -> Result<T, Er
 }
 
 fn same_originals(held: &[Vec<u8>; 4], proposed: [&[u8]; 4]) -> bool {
-    held.iter().zip(proposed).all(|(before, after)| before.as_slice() == after)
+    held.iter()
+        .zip(proposed)
+        .all(|(before, after)| before.as_slice() == after)
 }
 
 fn pin_selected_source(
@@ -215,7 +223,10 @@ fn pin_selected_source(
     match retained {
         Some(original) if *original != selected => Err(Error::SourceChanged),
         Some(_) => Ok(()),
-        None => { *retained = Some(selected); Ok(()) },
+        None => {
+            *retained = Some(selected);
+            Ok(())
+        }
     }
 }
 
@@ -240,7 +251,9 @@ pub struct WalletOpenBeginFailureV1<F: KagemushaWalletFsV1, P> {
 impl<F: KagemushaWalletFsV1, P> WalletOpenBeginFailureV1<F, P> {
     /// Original refusal; reading it does not consume custody.
     #[must_use]
-    pub const fn error(&self) -> Error { self.error }
+    pub const fn error(&self) -> Error {
+        self.error
+    }
 
     /// Compare transport DATA with the four exact bounded originals already owned.
     /// A rejected oversized carrier never matches or permits replacement originals.
@@ -393,25 +406,40 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         asset_scope_original: &[u8],
     ) -> Result<Self, WalletOpenBeginFailureV1<F, P>> {
         let (originals, rejected_bound) = match retain_originals([
-            credential_original, certificate_set_original, account_original, asset_scope_original,
+            credential_original,
+            certificate_set_original,
+            account_original,
+            asset_scope_original,
         ]) {
             Some(originals) => (originals, false),
             None => (std::array::from_fn(|_| Vec::new()), true),
         };
         Self::begin_retained(WalletOpenIntakeV1 {
-            provider, installed, sources, originals, rejected_bound, selected_source: None,
+            provider,
+            installed,
+            sources,
+            originals,
+            rejected_bound,
+            selected_source: None,
         })
     }
 
-    fn begin_retained(intake: WalletOpenIntakeV1<F, P>)
-        -> Result<Self, WalletOpenBeginFailureV1<F, P>> {
+    fn begin_retained(
+        intake: WalletOpenIntakeV1<F, P>,
+    ) -> Result<Self, WalletOpenBeginFailureV1<F, P>> {
         let prepared = retain_checked(intake, |intake| {
-            if intake.rejected_bound { return Err(Error::Authority("original intake frame bound")); }
+            if intake.rejected_bound {
+                return Err(Error::Authority("original intake frame bound"));
+            }
             let provider = &mut intake.provider;
             let installed = &intake.installed;
             let sources = &intake.sources;
-            let [credential_original, certificate_set_original, account_original, asset_scope_original]
-                = &intake.originals;
+            let [
+                credential_original,
+                certificate_set_original,
+                account_original,
+                asset_scope_original,
+            ] = &intake.originals;
             require_installation(
                 (
                     installed.verifier().scheme().scheme_id(),
@@ -448,7 +476,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
             pin_selected_source(&mut intake.selected_source, (slot, marker_file_digest))?;
             let mut nonce = [0; 32];
             rand::rngs::OsRng.try_fill_bytes(&mut nonce).map_err(|_| {
-                KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
+                KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(
+                    0,
+                ))
             })?;
             if nonce == [0; 32] {
                 return Err(Error::Authority("zero Native nonce"));
@@ -463,20 +493,40 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
                 account_original,
                 asset_scope_original,
             );
-            Ok((slot, marker_file_digest, credential, account, asset_scope, challenge))
+            Ok((
+                slot,
+                marker_file_digest,
+                credential,
+                account,
+                asset_scope,
+                challenge,
+            ))
         });
-        let (intake, (slot, marker_file_digest, credential, account, asset_scope, challenge)) = match prepared {
-            Ok(selected) => selected,
-            Err((intake, error)) => return Err(WalletOpenBeginFailureV1 { intake, error }),
-        };
-        let [credential_original, certificate_set_original, account_original, asset_scope_original]
-            = intake.originals;
+        let (intake, (slot, marker_file_digest, credential, account, asset_scope, challenge)) =
+            match prepared {
+                Ok(selected) => selected,
+                Err((intake, error)) => return Err(WalletOpenBeginFailureV1 { intake, error }),
+            };
+        let [
+            credential_original,
+            certificate_set_original,
+            account_original,
+            asset_scope_original,
+        ] = intake.originals;
         Ok(Self {
             provider: intake.provider,
             installed: intake.installed,
             sources: intake.sources,
-            slot, marker_file_digest, credential, credential_original, certificate_set_original,
-            account, account_original, asset_scope, asset_scope_original, challenge,
+            slot,
+            marker_file_digest,
+            credential,
+            credential_original,
+            certificate_set_original,
+            account,
+            account_original,
+            asset_scope,
+            asset_scope_original,
+            challenge,
         })
     }
 
@@ -497,16 +547,22 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
     /// This check does not reselect a slot, alter source authority or sample a nonce.
     #[must_use]
     pub fn matches_originals(&self, proposed: [&[u8]; 4]) -> bool {
-        [self.credential_original.as_slice(), self.certificate_set_original.as_slice(),
-            self.account_original.as_slice(), self.asset_scope_original.as_slice()] == proposed
+        [
+            self.credential_original.as_slice(),
+            self.certificate_set_original.as_slice(),
+            self.account_original.as_slice(),
+            self.asset_scope_original.as_slice(),
+        ] == proposed
     }
 
     /// Consume one authorization and recheck the exact source and actual payment key.
     /// Every refusal returns the SAME pending owner, preserving its exact original challenge.
     /// # Errors
     /// Wrong account signature, stale/changed source, unknown key/storage or lost custody.
-    pub fn finish(self, account_signature: &[u8])
-        -> Result<AdmittedWalletV1<F, P>, WalletOpenFinishFailureV1<F, P>> {
+    pub fn finish(
+        self,
+        account_signature: &[u8],
+    ) -> Result<AdmittedWalletV1<F, P>, WalletOpenFinishFailureV1<F, P>> {
         let checked = retain_checked(self, |pending| {
             authorize_account(&pending.account, &pending.challenge, account_signature)?;
             let marker = source(

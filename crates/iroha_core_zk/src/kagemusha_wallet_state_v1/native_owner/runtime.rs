@@ -1,7 +1,9 @@
 //! Move-only native installation and account-admission ownership.
 
 use super::*;
-use crate::kagemusha_wallet_intake_v1::{self as intake, PendingWalletOpenV1, WalletOpenBeginFailureV1};
+use crate::kagemusha_wallet_intake_v1::{
+    self as intake, PendingWalletOpenV1, WalletOpenBeginFailureV1,
+};
 mod enrollment;
 
 /// Authenticated installation and sole original store retained across account retries.
@@ -112,35 +114,65 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         account: &[u8],
         asset: &[u8],
     ) -> Result<PendingNativeWalletOpenV1<F, P, S>, NativeOpenFailureV1<F, P, S>> {
-        let Self { custody, installed, sources, genesis, originals, read, budget } = self;
+        let Self {
+            custody,
+            installed,
+            sources,
+            genesis,
+            originals,
+            read,
+            budget,
+        } = self;
         let proposed = [credential, certificates, account, asset];
-        let pending = match custody {
-            RuntimeCustodyV1::BeginFailed(failed) => {
-                if !failed.matches_originals(proposed) {
-                    return Err(NativeOpenFailureV1 {
-                        runtime: Self { custody: RuntimeCustodyV1::BeginFailed(failed),
-                            installed, sources, genesis, originals, read, budget },
-                        error: intake::Error::Authority("retained original intake changed").into(),
-                    });
+        let pending =
+            match custody {
+                RuntimeCustodyV1::BeginFailed(failed) => {
+                    if !failed.matches_originals(proposed) {
+                        return Err(NativeOpenFailureV1 {
+                            runtime: Self {
+                                custody: RuntimeCustodyV1::BeginFailed(failed),
+                                installed,
+                                sources,
+                                genesis,
+                                originals,
+                                read,
+                                budget,
+                            },
+                            error: intake::Error::Authority("retained original intake changed")
+                                .into(),
+                        });
+                    }
+                    failed.retry()
                 }
-                failed.retry()
-            }
-            RuntimeCustodyV1::Pending(pending) => {
-                if !pending.matches_originals(proposed) {
-                    return Err(NativeOpenFailureV1 {
-                        runtime: Self { custody: RuntimeCustodyV1::Pending(pending),
-                            installed, sources, genesis, originals, read, budget },
-                        error: intake::Error::Authority("pending original intake changed").into(),
-                    });
+                RuntimeCustodyV1::Pending(pending) => {
+                    if !pending.matches_originals(proposed) {
+                        return Err(NativeOpenFailureV1 {
+                            runtime: Self {
+                                custody: RuntimeCustodyV1::Pending(pending),
+                                installed,
+                                sources,
+                                genesis,
+                                originals,
+                                read,
+                                budget,
+                            },
+                            error: intake::Error::Authority("pending original intake changed")
+                                .into(),
+                        });
+                    }
+                    Ok(pending)
                 }
-                Ok(pending)
-            }
-            RuntimeCustodyV1::Exclusive(provider) => PendingWalletOpenV1::begin(
-                provider, Arc::clone(&installed), Arc::clone(&sources),
-                credential, certificates, account, asset,
-            ),
-            RuntimeCustodyV1::Shared(handle) => {
-                let provider = match handle.try_into_provider() {
+                RuntimeCustodyV1::Exclusive(provider) => PendingWalletOpenV1::begin(
+                    provider,
+                    Arc::clone(&installed),
+                    Arc::clone(&sources),
+                    credential,
+                    certificates,
+                    account,
+                    asset,
+                ),
+                RuntimeCustodyV1::Shared(handle) => {
+                    let provider = match handle.try_into_provider() {
                     Ok(provider) => provider,
                     Err(handle) => return Err(NativeOpenFailureV1 {
                         runtime: Self { custody: RuntimeCustodyV1::Shared(handle),
@@ -150,23 +182,43 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                         )).into(),
                     }),
                 };
-                PendingWalletOpenV1::begin(provider, Arc::clone(&installed), Arc::clone(&sources),
-                    credential, certificates, account, asset)
-            }
-        };
+                    PendingWalletOpenV1::begin(
+                        provider,
+                        Arc::clone(&installed),
+                        Arc::clone(&sources),
+                        credential,
+                        certificates,
+                        account,
+                        asset,
+                    )
+                }
+            };
         let pending = match pending {
             Ok(pending) => pending,
             Err(failed) => {
                 let error = failed.error();
                 return Err(NativeOpenFailureV1 {
-                    runtime: Self { custody: RuntimeCustodyV1::BeginFailed(failed),
-                        installed, sources, genesis, originals, read, budget },
+                    runtime: Self {
+                        custody: RuntimeCustodyV1::BeginFailed(failed),
+                        installed,
+                        sources,
+                        genesis,
+                        originals,
+                        read,
+                        budget,
+                    },
                     error: error.into(),
                 });
             }
         };
         Ok(PendingNativeWalletOpenV1 {
-            pending, installed, sources, genesis, originals, read, budget,
+            pending,
+            installed,
+            sources,
+            genesis,
+            originals,
+            read,
+            budget,
         })
     }
 
@@ -174,15 +226,36 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// This owns the same original challenge and provider; no DATA or identifier creates it.
     /// A runtime in another phase is returned unchanged without sampling or side effects.
     pub fn recover_pending(self) -> Result<PendingNativeWalletOpenV1<F, P, S>, Self> {
-        let Self { custody, installed, sources, genesis, originals, read, budget } = self;
+        let Self {
+            custody,
+            installed,
+            sources,
+            genesis,
+            originals,
+            read,
+            budget,
+        } = self;
         match custody {
             RuntimeCustodyV1::Pending(pending) => Ok(PendingNativeWalletOpenV1 {
-                pending, installed, sources, genesis, originals, read, budget,
+                pending,
+                installed,
+                sources,
+                genesis,
+                originals,
+                read,
+                budget,
             }),
-            custody => Err(Self { custody, installed, sources, genesis, originals, read, budget }),
+            custody => Err(Self {
+                custody,
+                installed,
+                sources,
+                genesis,
+                originals,
+                read,
+                budget,
+            }),
         }
     }
-
 }
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     PendingNativeWalletOpenV1<F, P, S>

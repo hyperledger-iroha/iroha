@@ -21,7 +21,7 @@ pub fn hkdf_identifier_request_payload_v1(
     }
     let mut input = (
         "iroha:identifier:v1:authenticated-owner-prf",
-        network.clone(),
+        *network,
         program.clone(),
         normalized_input.to_owned(),
     );
@@ -151,7 +151,7 @@ mod tests {
         assert!(hkdf_identifier_input_commitment_v1(&network, &program, "a", &[0; 32]).is_err());
         let owned = norito::encode_canonical(&(
             "iroha:identifier:v1:authenticated-owner-prf",
-            network.clone(),
+            network,
             program.clone(),
             "a".to_owned(),
         ))

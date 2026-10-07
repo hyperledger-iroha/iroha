@@ -3433,7 +3433,7 @@ impl MessageFixture {
 fn recorded_blacklist_proof(
     request: &KagemushaWalletRequestV1,
     history: &KagemushaWalletIndexedTreeV1,
-    gap: KagemushaWalletBlacklistGapOpeningV1,
+    gap: &KagemushaWalletBlacklistGapOpeningV1,
 ) -> KagemushaWalletRecordedBlacklistProofV1 {
     let key =
         kagemusha_wallet_field_from_u128_v1(u128::from(request.body.receiver_blacklist_version));
@@ -3441,7 +3441,7 @@ fn recorded_blacklist_proof(
     KagemushaWalletRecordedBlacklistProofV1 {
         history_leaf,
         history_opening,
-        gap,
+        gap: *gap,
     }
 }
 
@@ -3618,7 +3618,7 @@ fn kagemusha_wallet_v1_two_sided_blacklist_at_request_send_and_recorded_receive(
         f.send_package(&request, PAYMENT_LINEAGE_LEN, 64),
     )
     .expect("recorded Payment");
-    let proof = recorded_blacklist_proof(&request, &history, gap);
+    let proof = recorded_blacklist_proof(&request, &history, &gap);
     let payer_set = KagemushaWalletCertificateSetV1::new(vec![f.payer.enrollment_certificate])
         .expect("payer set");
     let payment_bytes = payment
@@ -3775,7 +3775,7 @@ fn kagemusha_wallet_v1_two_sided_blacklist_at_request_send_and_recorded_receive(
     // A newer list naming the payer cannot strand already committed original Payment bytes.
     let later_list = f.signed_blacklist(2, &[payer_account, other_account]);
     receiver_listing_other = f.commit_blacklist(receiver_listing_other, &mut history, &later_list);
-    let later_proof = recorded_blacklist_proof(&request, &history, gap);
+    let later_proof = recorded_blacklist_proof(&request, &history, &gap);
     assert_eq!(later_proof.gap, proof.gap);
     assert_invalid(
         f.issue_request_at(&receiver_listing_other, Some(&later_list)),
@@ -3844,8 +3844,8 @@ fn kagemusha_wallet_v1_two_sided_blacklist_at_request_send_and_recorded_receive(
                 .is_ok(),
             send_ok
         );
-        let matrix_proof = recorded_blacklist_proof(&request, &history, gap);
-        let received = payment.prepare_receive(
+        let matrix_proof = recorded_blacklist_proof(&request, &history, &gap);
+        let outcome = payment.prepare_receive(
             &scheme,
             &f.payer.credential,
             &payer_set,
@@ -3854,7 +3854,7 @@ fn kagemusha_wallet_v1_two_sided_blacklist_at_request_send_and_recorded_receive(
             &receiver,
             Some(&matrix_proof),
         );
-        assert_eq!(received.is_ok(), request_ok);
+        assert_eq!(outcome.is_ok(), request_ok);
     }
 }
 

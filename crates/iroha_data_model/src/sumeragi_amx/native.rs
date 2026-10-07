@@ -139,7 +139,7 @@ mod tests {
     DeriveJsonDeserialize,
     norito::NoritoSchema,
 )]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 #[norito_schema(name = "iroha_data_model::sumeragi_amx::AmxTransferLegV1")]
 pub struct AmxTransferLegV1 {
     /// Exact local account, asset definition and restricted balance partition to debit.
@@ -280,3 +280,8 @@ impl NativeAmxParticipantStateV1 {
         Ok(())
     }
 }
+
+mod leg_decode;
+pub use leg_decode::{
+    AllocatedAmxTransferLegV1, AmxLegDecodeErrorV1, PendingAmxTransferLegDecodeV1,
+};

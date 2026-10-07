@@ -104,10 +104,9 @@ least three more intermittently in a full parallel run; all five
 `agent_alias` tests of `torii_protocols` fail. `irohad_lib`: a full lib-test run
 aborts on a stack overflow in `beacon_bootstrap::seat_attempt::aggregate_tests`
 after five `durable::tests` failures, and two
-`musubi_publication_service::finality` tests fail. `iroha_core`:
-`sumeragi::node::tests::every_committed_block_contains_work_before_and_after_restart`
-(second transaction not committed within 30 s), three `sumeragi::executor`
-archive, publication and replay tests and `state` reserve-account tests fail.
+`musubi_publication_service::finality` tests fail. The rebuilt `iroha_core`
+restart/progress regression and complete archive, publication, replay and
+reserve-account selections now pass; the full Core suite remains unqualified.
 `fastpq_prover`: three lib tests and the
 four-quadrant tree capacity test (124 retained nodes against 127) fail. Four
 `ivm` Metal vector tests fail intermittently in a loaded full run and pass

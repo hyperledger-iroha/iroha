@@ -769,6 +769,9 @@ CORE_MUTATIONS = [
     m("HC148", "native AMX record acquisition: drop the acquired original archive after decode refusal",
       ["sumeragi::amx::proof_tests::persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal"]),
 
+    m("HC149", "native AMX leg decode: substitute a foreign pool for the actual execution owner",
+      ["sumeragi::amx::native::tests::native_leg_decode_refuses_occupied_original_pool_before_any_copy_and_retries_exact_source"]),
+
 
 ]
 

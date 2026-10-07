@@ -626,6 +626,6 @@ pub(crate) use tests::allocated_amx_instruction_fixture;
 
 mod native;
 pub use native::{
-    AmxTransferEscrowV1, AmxTransferLegV1, NativeAmxParticipantStateV1,
-    native_transfer_effects_hash,
+    AllocatedAmxTransferLegV1, AmxLegDecodeErrorV1, AmxTransferEscrowV1, AmxTransferLegV1,
+    NativeAmxParticipantStateV1, PendingAmxTransferLegDecodeV1, native_transfer_effects_hash,
 };

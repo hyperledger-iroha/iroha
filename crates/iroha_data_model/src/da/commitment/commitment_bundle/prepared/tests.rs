@@ -12,7 +12,7 @@ fn record(i: u8, tag: String, payload: &[u8]) -> DaCommitmentRecord {
         ManifestDigest::new([i.wrapping_add(1); 32]),
         DaProofScheme::MerkleSha256,
         Hash::new([i; 32]),
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             Some(Hash::new([i.wrapping_add(2); 32]))
         } else {
             None
@@ -162,13 +162,12 @@ fn da_commitment_generated_children_reject_truncated_wire_bad_utf8_and_original_
             let mut source = ChargedBuffer::new(end, &pool).unwrap();
             source.append(&wire[..end]).unwrap();
             let floor = pool.reserved_bytes();
-            match PreparedDaCommitmentBundle::from_source(
+            if let Ok(mut pending) = PreparedDaCommitmentBundle::from_source(
                 &source,
                 SequenceSpan { start: 0, end },
                 &pool,
             ) {
-                Ok(mut pending) => assert!(pending.prepare(&source).is_err()),
-                Err(_) => {}
+                assert!(pending.prepare(&source).is_err());
             }
             assert_eq!(pool.reserved_bytes(), floor);
             drop(source);
@@ -321,9 +320,9 @@ fn da_commitment_payload_refusal_keeps_planned_phase_and_original_backings_until
 
 #[test]
 fn da_commitment_inline_digest_fields_keep_exact_raw_wire_and_zero_decode_charges() {
+    type DigestDecoder = fn(&[u8]) -> Result<[u8; 32], norito::Error>;
     for flags in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(flags);
-        type DigestDecoder = fn(&[u8]) -> Result<[u8; 32], norito::Error>;
         let cases: [(DigestDecoder, Vec<u8>, [u8; 32]); 3] = [
             (
                 fixed_tuple::<BlobDigest>,
@@ -397,7 +396,7 @@ fn da_commitment_inline_digest_fields_reject_wrong_width_framed_arrays_and_origi
             for width in [31_u64, 33] {
                 let mut wrong_width = Vec::new();
                 norito::core::write_len_to_vec_with_flags(&mut wrong_width, width, flags);
-                wrong_width.extend(std::iter::repeat_n(0x53, width as usize));
+                wrong_width.extend(std::iter::repeat_n(0x53, usize::try_from(width).unwrap()));
                 let (rejected, usage) =
                     norito::core::with_decode_limits_measured(zero, || decode(&wrong_width));
                 assert!(matches!(rejected, Err(norito::Error::LengthMismatch)));

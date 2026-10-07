@@ -67,9 +67,11 @@ impl KagemushaWalletQuotaRefreshWitnessV1 {
                 return Err(invalid_v1("quota_refresh_witness.interval"));
             }
             if previous.is_some_and(|old| {
-                (old.window_kind, old.window_start_ms) >= (leaf.window_kind, leaf.window_start_ms)
-                    || (old.window_kind == leaf.window_kind
-                        && old.window_end_ms > leaf.window_start_ms)
+                let previous_key = (old.window_kind, old.window_start_ms);
+                let current_key = (leaf.window_kind, leaf.window_start_ms);
+                let same_kind = old.window_kind == leaf.window_kind;
+                let overlaps_previous = leaf.window_start_ms < old.window_end_ms;
+                previous_key >= current_key || (same_kind && overlaps_previous)
             }) {
                 return Err(invalid_v1("quota_refresh_witness.order"));
             }

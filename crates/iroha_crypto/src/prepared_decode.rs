@@ -6,7 +6,7 @@
 //! an exact destination. A geometry refusal here is a local planning error, not
 //! evidence that the offered bytes are protocol-invalid.
 
-use iroha_allocation::{AllocationBudget, AllocationCharge, ChargedBuffer};
+use iroha_allocation::{AllocationBudget, AllocationCharge, ChargedBuffer, ChargedBufferError};
 use norito::core::{Encoder, Error, SerializePayload};
 
 use crate::{
@@ -54,6 +54,40 @@ impl std::error::Error for PreparedCryptoDecodeError {
             Self::Codec(error) => Some(error),
             Self::Signature(error) => Some(error),
             Self::Geometry { .. } => None,
+        }
+    }
+}
+
+/// A canonical key failure or original-pool refusal at its retained-backing boundary.
+///
+/// Logical decode work is consumed before physical admission and is never rolled
+/// back. This preserves the exact codec cause or original pool release observation;
+/// diagnostic formatting is not performed while constructing either error.
+#[derive(Debug)]
+pub enum PublicKeyDecodeAdmissionError {
+    /// Original canonical framing, key validation or cumulative decode-work failure.
+    Codec(Error),
+    /// Exact compact backing could not be admitted or physically allocated.
+    Allocation(ChargedBufferError),
+}
+impl From<Error> for PublicKeyDecodeAdmissionError {
+    fn from(error: Error) -> Self {
+        Self::Codec(error)
+    }
+}
+impl std::fmt::Display for PublicKeyDecodeAdmissionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Codec(error) => error.fmt(formatter),
+            Self::Allocation(error) => error.fmt(formatter),
+        }
+    }
+}
+impl std::error::Error for PublicKeyDecodeAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Codec(error) => Some(error),
+            Self::Allocation(error) => Some(error),
         }
     }
 }
@@ -190,6 +224,40 @@ impl SerializePayload for PreparedSignatureDecode {
 pub struct PreparedPublicKeyDecode(InitializedBytes);
 
 impl PreparedPublicKeyDecode {
+    /// Decode once and admit the exact compact backing from the original pool.
+    ///
+    /// Sequence work, tag/point validity and nominal retained-byte admission run
+    /// at the same points as the ordinary key decoder. Only then is the exact
+    /// physical layout prepaid and allocated. No geometry preview, second parse,
+    /// alignment copy, counter reset or quota refund occurs. The completed owner
+    /// destroys its canonical key before returning its original physical credit.
+    ///
+    /// The caller supplies the original advertised flags and canonical field
+    /// context and retains the source bytes, enclosing frame and decode controls.
+    /// This method funds only the compact key, not those enclosing owners. A
+    /// refusal retains no prepared backing; retrying the same borrowed source
+    /// consumes additional work in the same cumulative decode context.
+    ///
+    /// # Errors
+    /// Returns the original codec/refusal cause or exact physical allocation
+    /// failure. Successful prefix work remains consumed on every failure.
+    pub fn try_decode_payload(
+        bytes: &[u8],
+        budget: &AllocationBudget,
+    ) -> Result<ChargedPublicKey, PublicKeyDecodeAdmissionError> {
+        public_key_decode::with_decoded_compact(bytes, true, |algorithm, payload| {
+            let exact_bytes = public_key_decode::reserve_compact_decode_backing(payload.len())?;
+            let mut backing = ChargedBuffer::new(exact_bytes, budget)
+                .map_err(PublicKeyDecodeAdmissionError::Allocation)?;
+            backing.push_reserved(PublicKeyCompact::algorithm_tag(algorithm));
+            for &byte in payload {
+                backing.push_reserved(byte);
+            }
+            Ok::<_, PublicKeyDecodeAdmissionError>(PublicKey::bind_compact_allocation(backing))
+        })
+        .map(|(owner, _)| owner)
+    }
+
     /// Allocate and initialize the exact compact allocation, including its tag.
     ///
     /// # Errors

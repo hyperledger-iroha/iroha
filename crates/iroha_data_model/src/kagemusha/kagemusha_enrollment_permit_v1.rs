@@ -43,7 +43,7 @@ fn nonzero(field: &'static str, value: &[u8; 32]) -> Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha.kagemusha.enrollment.permit.platform.v1")]
 pub enum KagemushaEnrollmentPermitPlatformV1 {
-    /// Android KeyMint TEE/StrongBox policy; it is not a finite-use-key requirement.
+    /// Android `KeyMint` TEE/`StrongBox` policy; it is not a finite-use-key requirement.
     #[codec(index = 1)]
     Android,
     /// Apple production App Attest policy, distinct from Android DER evidence.
@@ -124,7 +124,7 @@ pub fn kagemusha_enrollment_permit_scope_digest_v1(
 }
 
 /// Bind the exact seven original canonical frames in this fixed order: E1, Scheme, app
-/// policy, enrollment policy, Enrollment certificate, existing AccountId, asset scope.
+/// policy, enrollment policy, Enrollment certificate, existing `AccountId`, asset scope.
 /// No DER root, Play token, private key or bearer credential is carried here.
 /// # Errors
 /// Rejects missing or oversized originals. This does not decode or authenticate a frame.
@@ -140,11 +140,11 @@ pub fn kagemusha_enrollment_permit_originals_digest_v1(originals: [&[u8]; 7]) ->
     ];
     let mut hash = Sha256::new();
     hash.update(ORIGINALS_DOMAIN);
-    for (index, (original, bound)) in originals.into_iter().zip(bounds).enumerate() {
+    for (tag, (original, bound)) in (1u8..=7).zip(originals.into_iter().zip(bounds)) {
         if original.is_empty() || original.len() > bound {
             return Err(invalid("permit.original_bound"));
         }
-        hash.update([index as u8 + 1]);
+        hash.update([tag]);
         hash.update((original.len() as u64).to_le_bytes());
         hash.update(original);
     }
@@ -165,7 +165,7 @@ pub struct KagemushaEnrollmentPermitBodyV1 {
     pub purpose: KagemushaEnrollmentPermitPurposeV1,
     /// The unchanged original issuer E1, including original issuer nonce and all six digests.
     pub challenge: KagemushaWalletEnrollmentChallengeV1,
-    /// Raw genesis NetworkId, independently selected through the held Scheme.
+    /// Raw genesis `NetworkId`, independently selected through the held Scheme.
     pub network_id: [u8; 32],
     /// Actual immutable installed manifest identity.
     pub manifest_digest: [u8; 32],
@@ -229,7 +229,7 @@ impl KagemushaEnrollmentPermitBodyV1 {
         Ok(())
     }
 
-    /// New exact transcript: LE16version, platform/purpose tags,194-byte E1 transcript,
+    /// New exact transcript: `LE16version`, platform/purpose tags,194-byte E1 transcript,
     /// eleven32-byte scope/nonce/original/certificate values in field order, then threeLE64times.
     /// # Errors
     /// Rejects invalid body before creating a signing message.

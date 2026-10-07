@@ -19,9 +19,9 @@ use iroha_data_model::{
         },
     },
     sumeragi_amx::{
-        AmxError, AmxEscrow, AmxForeignInstanceV1, AmxLegV1, AmxOutcomeV1, AmxParticipantError,
-        AmxParticipantStateV1, AmxRecordV1, AmxTransferLegV1, MAX_AMX_DEADLINE_WINDOW,
-        NativeAmxParticipantStateV1,
+        AllocatedAmxTransferLegV1, AmxError, AmxEscrow, AmxForeignInstanceV1, AmxLegDecodeErrorV1,
+        AmxLegV1, AmxOutcomeV1, AmxParticipantError, AmxParticipantStateV1, AmxRecordV1,
+        MAX_AMX_DEADLINE_WINDOW, NativeAmxParticipantStateV1, PendingAmxTransferLegDecodeV1,
     },
 };
 use iroha_model_base::topology::DataSpaceId;
@@ -401,19 +401,65 @@ impl Intent {
     }
 }
 
-fn decode_leg(bytes: &[u8]) -> Result<AmxTransferLegV1, AmxError> {
-    if bytes.is_empty()
-        || bytes.len() > iroha_data_model::sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES
+fn decode_leg(
+    bytes: &[u8],
+    budget: &AllocationBudget,
+) -> Result<AllocatedAmxTransferLegV1, AmxLegDecodeErrorV1> {
+    // HC149 substitutes only the original allocation source, preserving the
+    // same finite policy and canonical traversal. It is absent from node code.
+    #[cfg(all(test, sumeragi_core_mutation = "HC149"))]
     {
-        return Err(AmxError::Record(
-            "native AMX transfer payload exceeds its canonical bound",
-        ));
+        let foreign = AllocationBudget::new(budget.limit_bytes());
+        PendingAmxTransferLegDecodeV1::new(bytes, &foreign).try_decode()
     }
-    norito::decode_canonical::<AmxTransferLegV1>(bytes).map_err(|error| {
-        error
-            .decode_resource_error()
-            .map_or_else(|| AmxError::Proof(error.to_string()), AmxError::Resource)
-    })
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC149")))]
+    PendingAmxTransferLegDecodeV1::new(bytes, budget).try_decode()
+}
+
+fn leg_decode_bookkeeping_error(state: &mut StateTransaction<'_, '_>) -> Error {
+    state.attempt_error_to_instruction_error(
+        crate::execution_attempt::ExecutionAttemptError::Deferred(
+            ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+        ),
+    )
+}
+
+fn leg_decode_error(error: AmxLegDecodeErrorV1, state: &mut StateTransaction<'_, '_>) -> Error {
+    match error {
+        AmxLegDecodeErrorV1::Allocation(error) => graph_error(error.into(), state),
+        AmxLegDecodeErrorV1::Decode(error) => {
+            let original =
+                crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+                    // Diagnostics are an existing separate allocation boundary; the
+                    // original classifier decides local refusal before this branch.
+                    invalid(error.to_string())
+                });
+            state.attempt_error_to_instruction_error(original)
+        }
+        AmxLegDecodeErrorV1::Codec(error) => invalid(error.to_string()),
+        AmxLegDecodeErrorV1::Scope(error) => match error {
+            norito::core::PreparedDecodeScopeError::Allocation(
+                iroha_allocation::PrepaidSharedError::Allocator { requested_bytes },
+            ) => graph_error(
+                GraphError::Allocator {
+                    bytes: requested_bytes,
+                },
+                state,
+            ),
+            norito::core::PreparedDecodeScopeError::ForeignPool => {
+                leg_decode_bookkeeping_error(state)
+            }
+            norito::core::PreparedDecodeScopeError::Reservation(_)
+            | norito::core::PreparedDecodeScopeError::Allocation(
+                iroha_allocation::PrepaidSharedError::Reservation(_),
+            ) => leg_decode_bookkeeping_error(state),
+            norito::core::PreparedDecodeScopeError::AttemptExhausted => {
+                leg_decode_bookkeeping_error(state)
+            }
+        },
+        AmxLegDecodeErrorV1::Record(message) => super::amx_error(AmxError::Record(message), state),
+        AmxLegDecodeErrorV1::Invariant(_) => leg_decode_bookkeeping_error(state),
+    }
 }
 
 impl Execute for PrepareAmxV1 {
@@ -438,7 +484,10 @@ pub(crate) fn execute_prepare_original(
         .transaction
         .leg(instruction.dataspace)
         .ok_or_else(|| invalid("native AMX transaction has no exact local leg"))?;
-    let transfer = decode_leg(&leg.payload).map_err(|error| super::amx_error(error, state))?;
+    let budget = state.pipeline_ivm_prepared_cache.execution_budget().clone();
+    let transfer_owner =
+        decode_leg(&leg.payload, &budget).map_err(|error| leg_decode_error(error, state))?;
+    let transfer = transfer_owner.canonical();
     if (!cfg!(all(test, sumeragi_core_mutation = "HC95")) && transfer.source.account() != authority)
         || transfer.source.scope() != &AssetBalanceScope::Dataspace(instruction.dataspace)
         || transfer.source.account() == &transfer.destination
@@ -474,16 +523,15 @@ pub(crate) fn execute_prepare_original(
         &transfer.destination,
     )
     .map_err(|error| state.attempt_error_to_instruction_error(error.map_rejection(invalid)))?;
-    let effects = iroha_data_model::sumeragi_amx::native_transfer_effects_hash(&transfer)
+    let effects = iroha_data_model::sumeragi_amx::native_transfer_effects_hash(transfer)
         .map_err(|error| super::amx_error(error, state))?;
     let record = (!held && available && supported).then_some(EscrowInput {
         tx,
         effects_hash: effects,
-        leg: &transfer,
+        leg: transfer,
         custody: &source.custody,
         settled: None,
     });
-    let budget = state.pipeline_ivm_prepared_cache.execution_budget().clone();
     let mut candidate = Candidate::copy(source, &budget, 1, 0, record, None)
         .map_err(|error| graph_error(error, state))?;
     let mut intent = Intent {

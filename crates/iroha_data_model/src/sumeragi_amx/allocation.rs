@@ -101,7 +101,7 @@ impl AllocatedAmxRecordProofV1 {
         }
         demand.finish()?;
         ncore::reserve_decode_allocation(demand.bytes)?;
-        let mut construction = Construction::new(demand, budget)?;
+        let mut construction = Construction::new(&demand, budget)?;
         let record = match &original.record {
             AmxRecordV1::Begin(begin) => {
                 let mut participants = ChargedBuffer::from_reservation(
@@ -211,7 +211,7 @@ impl AllocatedAmxRecordProofV1 {
         demand.finish()?;
         // Construction precedes every detached field, including partial record materialization.
         ncore::reserve_decode_allocation(demand.bytes)?;
-        let mut construction = Construction::new(demand, budget)?;
+        let mut construction = Construction::new(&demand, budget)?;
         let record = raw.materialize(&mut construction)?;
         record
             .validate()
@@ -306,7 +306,7 @@ impl Drop for Construction {
     }
 }
 impl Construction {
-    fn new(demand: Demand, budget: &AllocationBudget) -> Result<Self, Error> {
+    fn new(demand: &Demand, budget: &AllocationBudget) -> Result<Self, Error> {
         let mut reservation = budget.try_reserve_bytes(demand.bytes)?;
         let charges = ChargedBuffer::from_reservation(demand.count, &mut reservation)?;
         Ok(Self {
@@ -576,11 +576,13 @@ fn lookup<'a>(nodes: &'a [Node], path: &[u8; 32]) -> Option<&'a Node> {
         .ok()
         .map(|index| &nodes[index])
 }
+type OriginalPath = ([u8; 32], [[u8; 32]; 256], Hash);
+
 fn original_path(
     witness: &ExecWitness,
     key: &[u8],
     budget: &AllocationBudget,
-) -> Result<([u8; 32], [[u8; 32]; 256], Hash), Error> {
+) -> Result<OriginalPath, Error> {
     let count = witness.writes.len();
     let capacity = count
         .checked_mul(2)

@@ -1699,7 +1699,7 @@ fn amx_intrinsic_codec_limit_without_caller_scope_remains_a_proof_error() {
 /// Construct the actual allocation owner from the existing exact-quorum BLS AMX fixture.
 /// The producer grants no authority; native source authentication and paid execution remain
 /// independently exercised by Core. All fixture input allocation predates its finite pool.
-pub(crate) fn allocated_amx_instruction_fixture() -> (
+pub fn allocated_amx_instruction_fixture() -> (
     AmxTransactionV1,
     AllocatedAmxRecordProofV1,
     iroha_allocation::AllocationBudget,

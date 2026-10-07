@@ -251,7 +251,6 @@ fn account_authorization_rejects_wrong_length_mutations_and_non_ed_owner() {
     assert!(authorize_account(&secp, &message, signature.payload()).is_err());
 }
 
-
 #[test]
 fn refused_check_retains_same_move_only_allocation_and_reconciled_data() {
     // DATA exercises the SAME private move-only check boundary used by genuine begin
@@ -263,7 +262,9 @@ fn refused_check_retains_same_move_only_allocation_and_reconciled_data() {
             data.1 += 1; // Genuine checks may reconcile custody before later refusal.
             Err::<(), _>(Error::SourceChanged)
         });
-        let Err((returned, Error::SourceChanged)) = refused else { panic!("custody must return"); };
+        let Err((returned, Error::SourceChanged)) = refused else {
+            panic!("custody must return");
+        };
         owner = returned;
         assert_eq!(std::ptr::from_ref(owner.as_ref()), address);
         assert_eq!(owner.0, [1, 2, 3]);
@@ -279,19 +280,31 @@ fn refused_check_retains_same_move_only_allocation_and_reconciled_data() {
 #[test]
 fn account_refusal_and_retry_reuse_exact_original_challenge() {
     let (key, account, account_original) = existing_account(71, Algorithm::Ed25519);
-    let challenge = open_message(&[73; 32], &[79; 32], &KagemushaWalletSlotIdV1([83; 32]),
-        &[89; 32], &[1, 2], &[3, 4], &account_original, &[5, 6]);
+    let challenge = open_message(
+        &[73; 32],
+        &[79; 32],
+        &KagemushaWalletSlotIdV1([83; 32]),
+        &[89; 32],
+        &[1, 2],
+        &[3, 4],
+        &account_original,
+        &[5, 6],
+    );
     let signature = Signature::try_new(key.private_key(), &challenge).unwrap();
     let owner = Box::new((account, challenge.clone()));
     let address = std::ptr::from_ref(owner.as_ref());
     let Err((owner, Error::Authority(_))) = retain_checked(owner, |data| {
         authorize_account(&data.0, &data.1, &signature.payload()[..63])
-    }) else { panic!("invalid original signature must retain owner"); };
+    }) else {
+        panic!("invalid original signature must retain owner");
+    };
     assert_eq!(std::ptr::from_ref(owner.as_ref()), address);
     assert_eq!(owner.1, challenge);
     let Ok((owner, ())) = retain_checked(owner, |data| {
         authorize_account(&data.0, &data.1, signature.payload())
-    }) else { panic!("same original challenge/signature must verify"); };
+    }) else {
+        panic!("same original challenge/signature must verify");
+    };
     assert_eq!(std::ptr::from_ref(owner.as_ref()), address);
     assert_eq!(owner.1, challenge);
 }
@@ -303,10 +316,16 @@ fn original_retry_carrier_is_bounded_exact_and_role_separated() {
     assert!(same_originals(&retained, original));
     // Same concatenation never permits role repartitioning or replacement DATA.
     assert!(!same_originals(&retained, [&[1], &[2, 3], &[4, 5], &[6]]));
-    assert!(!same_originals(&retained, [&[1, 2], &[3], &[4, 5], &[6, 0]]));
-    let bounds = [KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1,
-        KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, ACCOUNT_ORIGINAL_MAX_BYTES_V1,
-        ASSET_SCOPE_ORIGINAL_MAX_BYTES_V1];
+    assert!(!same_originals(
+        &retained,
+        [&[1, 2], &[3], &[4, 5], &[6, 0]]
+    ));
+    let bounds = [
+        KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1,
+        KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
+        ACCOUNT_ORIGINAL_MAX_BYTES_V1,
+        ASSET_SCOPE_ORIGINAL_MAX_BYTES_V1,
+    ];
     for (index, bound) in bounds.into_iter().enumerate() {
         let excessive = vec![1; bound + 1];
         let mut proposed = original;
@@ -320,16 +339,20 @@ fn original_retry_carrier_is_bounded_exact_and_role_separated() {
     assert!(retain_originals([&[]; 4]).is_some());
 }
 
-
 #[test]
 fn refused_late_begin_never_reselects_the_validated_source() {
     let original = (KagemushaWalletSlotIdV1([97; 32]), [101; 32]);
     let mut retained = None;
     pin_selected_source(&mut retained, original).unwrap();
     pin_selected_source(&mut retained, original).unwrap();
-    for changed in [(KagemushaWalletSlotIdV1([103; 32]), original.1),
-        (original.0, [107; 32])] {
-        assert!(matches!(pin_selected_source(&mut retained, changed), Err(Error::SourceChanged)));
+    for changed in [
+        (KagemushaWalletSlotIdV1([103; 32]), original.1),
+        (original.0, [107; 32]),
+    ] {
+        assert!(matches!(
+            pin_selected_source(&mut retained, changed),
+            Err(Error::SourceChanged)
+        ));
         assert_eq!(retained, Some(original));
     }
 }
