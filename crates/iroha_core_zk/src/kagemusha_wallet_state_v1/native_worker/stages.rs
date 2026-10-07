@@ -10,7 +10,11 @@ macro_rules! chain {
     ($worker:expr, $route:expr, $owner:expr, $inputs:expr, $checkpoints:expr,
      $originals:expr, $cancel:expr, $public:expr, $order:ident) => {{
         let owner = $owner;
-        let session = proof(owner.prepare($inputs, $worker.budget))?;
+        let session = proof(owner.prepare_cancellable(
+            $inputs,
+            $worker.budget,
+            Some($cancel.prover_token()),
+        ))?;
         let layouts = proof(owner.checkpoint_layouts())?;
         let originals = $originals;
         let checkpoints = $checkpoints;
@@ -25,29 +29,34 @@ macro_rules! chain {
                 return Err(Error::Proof("native checkpoint length"));
             }
             if position == 0 {
-                a = Some(proof(
-                    session.restore_first_checkpoint(original, $worker.budget),
-                )?);
+                a = Some(proof(session.restore_first_checkpoint_cancellable(
+                    original,
+                    $worker.budget,
+                    Some($cancel.prover_token()),
+                ))?);
             } else if position % 2 == 1 {
-                w = Some(proof(session.restore_wrapper_checkpoint(
+                w = Some(proof(session.restore_wrapper_checkpoint_cancellable(
                     a.as_ref().ok_or(Error::Proof("native A source"))?,
                     original,
                     $worker.budget,
+                    Some($cancel.prover_token()),
                 ))?);
             } else {
-                a = Some(proof(session.restore_a_checkpoint(
+                a = Some(proof(session.restore_a_checkpoint_cancellable(
                     w.as_ref().ok_or(Error::Proof("native W source"))?,
                     original,
                     $worker.budget,
+                    Some($cancel.prover_token()),
                 ))?);
             }
         }
         $cancel.check()?;
         let position = checkpoints.len();
         if position == layouts.len() {
-            let terminal = proof(session.terminal(
+            let terminal = proof(session.terminal_cancellable(
                 a.as_ref().ok_or(Error::Proof("native terminal source"))?,
                 $worker.budget,
+                Some($cancel.prover_token()),
             ))?;
             NativeStageProgressV1::Terminal(omega::Input {
                 key: proof($worker.sources.route($route))?
@@ -63,12 +72,18 @@ macro_rules! chain {
                 pallas: terminal.pallas,
             })
         } else {
-            let fold = $worker.fold_config();
-            let config = $worker.prover_config();
+            let fold = $worker.fold_config($cancel);
+            let config = $worker.prover_config($cancel);
             let encoded = if position == 0 {
                 let key = $worker
                     .sources
-                    .import_a($route, 0, originals, $worker.read)
+                    .import_a_cancellable(
+                        $route,
+                        0,
+                        originals,
+                        $worker.read,
+                        Some($cancel.prover_token()),
+                    )
                     .map_err(artifact)?;
                 $cancel.check()?;
                 let source = proof(session.first(
@@ -78,25 +93,49 @@ macro_rules! chain {
                     ProverRandomness::os(),
                     config,
                 ))?;
-                proof(session.encode_a_checkpoint(&source, $worker.budget))?
+                proof(session.encode_a_checkpoint_cancellable(
+                    &source,
+                    $worker.budget,
+                    Some($cancel.prover_token()),
+                ))?
             } else if position % 2 == 1 {
                 let key = $worker
                     .sources
-                    .import_w($route, position / 2, originals, $worker.read)
+                    .import_w_cancellable(
+                        $route,
+                        position / 2,
+                        originals,
+                        $worker.read,
+                        Some($cancel.prover_token()),
+                    )
                     .map_err(artifact)?;
                 $cancel.check()?;
                 let source = a.as_ref().ok_or(Error::Proof("native A source"))?;
                 let next = proof(call_wrapper!($order, session, source, key, fold, config))?;
-                proof(session.encode_wrapper_checkpoint(&next, $worker.budget))?
+                proof(session.encode_wrapper_checkpoint_cancellable(
+                    &next,
+                    $worker.budget,
+                    Some($cancel.prover_token()),
+                ))?
             } else {
                 let key = $worker
                     .sources
-                    .import_a($route, position / 2, originals, $worker.read)
+                    .import_a_cancellable(
+                        $route,
+                        position / 2,
+                        originals,
+                        $worker.read,
+                        Some($cancel.prover_token()),
+                    )
                     .map_err(artifact)?;
                 $cancel.check()?;
                 let source = w.as_ref().ok_or(Error::Proof("native W source"))?;
                 let next = proof(call_advance!($order, session, source, key, fold, config))?;
-                proof(session.encode_a_checkpoint(&next, $worker.budget))?
+                proof(session.encode_a_checkpoint_cancellable(
+                    &next,
+                    $worker.budget,
+                    Some($cancel.prover_token()),
+                ))?
             };
             if encoded.len() != layouts[position].payload_bytes() {
                 return Err(Error::Proof("native output length"));
@@ -173,7 +212,11 @@ impl NativeFoldWorkerV1 {
                 if checkpoints.len() > layouts.len() {
                     return Err(Error::Proof("extra Bootstrap checkpoint"));
                 }
-                let session = proof(owner.prepare(input, self.budget))?;
+                let session = proof(owner.prepare_cancellable(
+                    input,
+                    self.budget,
+                    Some(cancellation.prover_token()),
+                ))?;
                 let mut first = None;
                 let mut wrapper = None;
                 let mut terminal = None;
@@ -184,21 +227,27 @@ impl NativeFoldWorkerV1 {
                     }
                     match position {
                         0 => {
-                            first = Some(proof(
-                                session.restore_first_checkpoint(original, self.budget),
-                            )?)
-                        }
-                        1 => {
-                            wrapper = Some(proof(
-                                session.restore_wrapper_checkpoint(original, self.budget),
-                            )?)
-                        }
-                        2 => {
-                            terminal = Some(proof(session.restore_terminal_checkpoint(
-                                wrapper.as_ref().ok_or(Error::Proof("Bootstrap W source"))?,
+                            first = Some(proof(session.restore_first_checkpoint_cancellable(
                                 original,
                                 self.budget,
+                                Some(cancellation.prover_token()),
                             ))?)
+                        }
+                        1 => {
+                            wrapper = Some(proof(session.restore_wrapper_checkpoint_cancellable(
+                                original,
+                                self.budget,
+                                Some(cancellation.prover_token()),
+                            ))?)
+                        }
+                        2 => {
+                            terminal =
+                                Some(proof(session.restore_terminal_checkpoint_cancellable(
+                                    wrapper.as_ref().ok_or(Error::Proof("Bootstrap W source"))?,
+                                    original,
+                                    self.budget,
+                                    Some(cancellation.prover_token()),
+                                ))?)
                         }
                         _ => return Err(Error::Proof("Bootstrap stage")),
                     }
@@ -217,23 +266,39 @@ impl NativeFoldWorkerV1 {
                     })
                 } else {
                     let position = checkpoints.len();
-                    let fold = self.fold_config();
-                    let config = self.prover_config();
+                    let fold = self.fold_config(cancellation);
+                    let config = self.prover_config(cancellation);
                     let encoded = match position {
                         0 => {
                             let key = self
                                 .sources
-                                .import_a(route, 0, originals, self.read)
+                                .import_a_cancellable(
+                                    route,
+                                    0,
+                                    originals,
+                                    self.read,
+                                    Some(cancellation.prover_token()),
+                                )
                                 .map_err(artifact)?;
                             cancellation.check()?;
                             let source =
                                 proof(session.first(&key, ProverRandomness::os(), config))?;
-                            proof(session.encode_first_checkpoint(&source, self.budget))?
+                            proof(session.encode_first_checkpoint_cancellable(
+                                &source,
+                                self.budget,
+                                Some(cancellation.prover_token()),
+                            ))?
                         }
                         1 => {
                             let key = self
                                 .sources
-                                .import_w(route, 0, originals, self.read)
+                                .import_w_cancellable(
+                                    route,
+                                    0,
+                                    originals,
+                                    self.read,
+                                    Some(cancellation.prover_token()),
+                                )
                                 .map_err(artifact)?;
                             cancellation.check()?;
                             let source = proof(session.wrapper(
@@ -244,12 +309,22 @@ impl NativeFoldWorkerV1 {
                                 ProverRandomness::os(),
                                 config,
                             ))?;
-                            proof(session.encode_wrapper_checkpoint(&source, self.budget))?
+                            proof(session.encode_wrapper_checkpoint_cancellable(
+                                &source,
+                                self.budget,
+                                Some(cancellation.prover_token()),
+                            ))?
                         }
                         2 => {
                             let key = self
                                 .sources
-                                .import_a(route, 1, originals, self.read)
+                                .import_a_cancellable(
+                                    route,
+                                    1,
+                                    originals,
+                                    self.read,
+                                    Some(cancellation.prover_token()),
+                                )
                                 .map_err(artifact)?;
                             cancellation.check()?;
                             let prior =
@@ -263,11 +338,12 @@ impl NativeFoldWorkerV1 {
                                 ProverRandomness::os(),
                                 config,
                             ))?;
-                            proof(session.encode_terminal_checkpoint(
+                            proof(session.encode_terminal_checkpoint_cancellable(
                                 prior,
                                 &source,
                                 salt,
                                 self.budget,
+                                Some(cancellation.prover_token()),
                             ))?
                         }
                         _ => return Err(Error::Proof("Bootstrap stage")),

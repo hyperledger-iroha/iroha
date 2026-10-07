@@ -493,20 +493,19 @@ fn spawn_with_launch_fence(
         ));
     }
     let marker = format!("peer{index}.launch");
-    let fresh = match directory.read(&marker, 1) {
-        Ok(bytes) if bytes.as_slice() == b"1" => false,
-        Ok(bytes) if bytes.as_slice() == b"0" => {
+    let fresh = match directory.read_optional(&marker, 1)? {
+        Some(bytes) if bytes.as_slice() == b"1" => false,
+        Some(bytes) if bytes.as_slice() == b"0" => {
             directory.write_atomic(&marker, b"1", PublishMode::Replace)?;
             true
         }
-        Ok(_) => return Err(Error::Invalid("invalid retained key launch marker".into())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Some(_) => return Err(Error::Invalid("invalid retained key launch marker".into())),
+        None => {
             // Persist before exec. A lost controller must never repeat the assertion for keys
             // that might have signed. Only a definite spawn failure below can undo this fence.
             directory.write_atomic(&marker, b"1", PublishMode::CreateNew)?;
             true
         }
-        Err(error) => return Err(error.into()),
     };
     if fresh {
         command.arg("--sumeragi-assert-fresh-key");

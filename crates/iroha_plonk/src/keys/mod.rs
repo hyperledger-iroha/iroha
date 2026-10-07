@@ -139,6 +139,8 @@ impl DescriptorBinding {
 /// Key generation or proving-key construction failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyError {
+    /// The caller cancelled key arithmetic before completion.
+    Cancelled,
     /// The circuit failed to configure or synthesize.
     Synthesis(frontend::Error),
     /// The constraint system is unusable.
@@ -188,9 +190,23 @@ pub enum KeyError {
     },
 }
 
+impl KeyError {
+    /// Whether this failure is cooperative cancellation, never an invalid proof.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled => true,
+            Self::Synthesis(error) => matches!(error, frontend::Error::Cancelled),
+            Self::Msm(error) => matches!(error, MsmError::Cancelled),
+            Self::Fft(error) => matches!(error, FftError::Cancelled),
+            _ => false,
+        }
+    }
+}
+
 impl fmt::Display for KeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("operation cancelled"),
             Self::Synthesis(error) => write!(f, "synthesis: {error}"),
             Self::ConstraintSystem(error) => write!(f, "constraint system: {error}"),
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
@@ -219,10 +235,19 @@ impl fmt::Display for KeyError {
 }
 
 impl std::error::Error for KeyError {}
+impl From<iroha_pasta::Cancelled> for KeyError {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
 
 impl From<frontend::Error> for KeyError {
     fn from(error: frontend::Error) -> Self {
-        Self::Synthesis(error)
+        if matches!(error, frontend::Error::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Synthesis(error)
+        }
     }
 }
 
@@ -258,13 +283,21 @@ impl From<VkError> for KeyError {
 
 impl From<FftError> for KeyError {
     fn from(error: FftError) -> Self {
-        Self::Fft(error)
+        if matches!(error, FftError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Fft(error)
+        }
     }
 }
 
 impl From<MsmError> for KeyError {
     fn from(error: MsmError) -> Self {
-        Self::Msm(error)
+        if matches!(error, MsmError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Msm(error)
+        }
     }
 }
 

@@ -83,7 +83,7 @@ class KagemushaWalletV1Test {
         assertEquals(1, value.frames()[0][0].toInt())
         value.frames()[0][0] = 3
         assertEquals(1, value.frames()[0][0].toInt())
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletRuntimeV1(0) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletRuntimeV1(0, Any()) }
     }
     @Test fun `account challenge and opened handle keep fixed reply shapes`() {
         KagemushaWalletCallV1(15, -1, 0, 1, 0, 0, ByteArray(32))
@@ -96,7 +96,7 @@ class KagemushaWalletV1Test {
     }
     @Test fun `native API contains only opaque state machine calls`() {
         val type = JvmApiInventory.read(KagemushaWalletNativeV1::class.java)
-        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup", "review", "executeReviewed", "discardReview"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup", "enrollment", "review", "executeReviewed", "discardReview"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
         assertEquals(-4, KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE)
     }
     @Test fun `typed lifecycle inputs bound originals and preserve unsigned scalar bits`() {

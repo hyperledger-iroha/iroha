@@ -443,9 +443,12 @@ def clone(source: Path, destination: Path):
     require((a.st_dev, a.st_ino) != (b.st_dev, b.st_ino) and digest(source) == digest(destination), "COW retention changed bytes/aliased source")
 
 
-def external_root(root: Path, output: Path):
+def artifact_root(root: Path, output: Path):
+    """Keep create-only retained artifacts in the original checkout's qualification lane."""
     require(output.is_absolute() and str(output) == os.path.abspath(output), "output must be an absolute canonical path")
-    require(root != output and root not in output.parents, "unit output cannot be in source checkout")
+    qualification = root / "target" / "qualification"
+    require(output != qualification and output.is_relative_to(qualification),
+            "unit output must be below the original checkout target/qualification")
     require(not os.path.lexists(output), "unit output must be create-only")
     parent = output.parent
     metadata = parent.lstat()
@@ -476,12 +479,28 @@ def consumer_source(root: Path):
             + "    return iroha_original_crypto_main();\n}\n")
 
 
+def child_environment(root: Path, output: Path, config: dict):
+    """Bind native packaging scratch to its private original-checkout capture."""
+    qualification = root / "target/qualification"
+    require(output.is_absolute() and str(output) == os.path.abspath(output)
+            and output != qualification and output.is_relative_to(qualification),
+            "native scratch must belong to an original qualification capture")
+    temporary = output / "temporary"
+    for directory in (output, temporary):
+        metadata = directory.lstat()
+        require(directory.resolve(strict=True) == directory and stat.S_ISDIR(metadata.st_mode)
+                and metadata.st_uid == os.geteuid() and stat.S_IMODE(metadata.st_mode) == 0o700,
+                "native scratch directory must be owned canonical mode0700")
+    return {"HOME": str(Path.home()), "PATH": "/usr/bin:/bin", "TMPDIR": str(temporary),
+            "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "DEVELOPER_DIR": config["developer_dir"]}
+
+
 def produce(root: Path, pins: dict, output: Path, config: dict, acknowledge_recipe: bool):
     """Assemble a real thin host artifact after all genuine-input guards pass."""
     require(acknowledge_recipe, "native packaging requires explicit local-unit recipe acknowledgement")
     host_policy(SCOPE, "macos", "debug", os.environ.get("MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT") == "1")
     require("MOBILE_SDK_APPLE_ARTIFACT_DIR" not in os.environ, "release/external artifact selector must be absent")
-    external_root(root, output)
+    artifact_root(root, output)
     admitted = admit(root, pins)
     require(set(config) == {"python", "clang", "ranlib", "xcodebuild", "developer_dir", "sdk", "deployment_target"}, "native tool configuration is not exact")
     extra_tools = validate_tool_config(config)
@@ -495,9 +514,9 @@ def produce(root: Path, pins: dict, output: Path, config: dict, acknowledge_reci
     config = dict(config, actual_archive_original=admitted["capture"]["archive_original"],
                   messages_path=str(admitted["messages_path"]))
     swift = swift_sources(root)
-    environment = {"HOME": str(Path.home()), "PATH": "/usr/bin:/bin", "TMPDIR": "/tmp",
-                   "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "DEVELOPER_DIR": config["developer_dir"]}
     output.mkdir(mode=0o700)
+    (output / "temporary").mkdir(mode=0o700)
+    environment = child_environment(root, output, config)
     stage = output / "staging"
     stage.mkdir(mode=0o700)
     commands = []
@@ -620,8 +639,7 @@ def verify_artifact(root: Path, output: Path, producer_pin: str):
     expected_tools |= {str(Path(__file__).resolve()), str(Path(source_custody.__file__).resolve())}
     expected_tools |= validate_tool_config(config)
     require(set(record["tool_inputs"]) == expected_tools, "producer tool/code input membership is pruned or substituted")
-    require(record["environment"] == {"HOME": str(Path.home()), "PATH": "/usr/bin:/bin", "TMPDIR": "/tmp",
-                                       "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "DEVELOPER_DIR": config["developer_dir"]},
+    require(record["environment"] == child_environment(root, output, config),
             "child environment is not the fixed unit recipe")
     require(record["policy"] == admitted["policy"], "current native symbol policy differs")
     verify_commands(root, output, admitted["target"], config, record["environment"], record["commands"], record["tool_inputs"])

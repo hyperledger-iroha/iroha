@@ -14,6 +14,7 @@ pub(crate) mod artifacts;
 mod committed;
 pub(crate) mod custody;
 pub(crate) mod event_evidence;
+pub mod enrollment_journal;
 pub use committed::{CommittedLoadEventEvidenceV1, CommittedLoadReceipts};
 pub use event_evidence::KagemushaLoadEventPathV1;
 mod ledger;

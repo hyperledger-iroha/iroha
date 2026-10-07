@@ -6149,6 +6149,62 @@ mod tests {
         );
     }
     #[test]
+    fn direct_dataspace_registration_preserves_exact_native_id_and_definition() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            for id in [9_007_199_254_740_993, u64::MAX] {
+                let dataspace = pyo3::types::PyInt::new(py, id);
+                for policy in ["Global", "DataspaceRestricted"] {
+                    let instruction = Instruction::register_dataspace_asset_definition(
+                        &instruction_type,
+                        py,
+                        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                        dataspace.as_any(),
+                        policy,
+                        "coin",
+                        Some("direct namespace"),
+                        None,
+                        Some(2),
+                        Some("Once"),
+                        None,
+                    )
+                    .expect("explicit direct home builds");
+                    let decoded = json::from_str::<InstructionBox>(
+                        &instruction.to_json().expect("native instruction JSON"),
+                    )
+                    .expect("native instruction JSON decodes");
+                    let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+                    let direct = instruction_ref
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::RegisterDataspaceAssetDefinition>()
+                        .expect("standalone direct-dataspace registration");
+                    assert_eq!(direct.dataspace_id.as_u64(), id);
+                    assert_eq!(
+                        direct.object.balance_scope_policy,
+                        parse_balance_scope_policy(policy).expect("policy")
+                    );
+                    assert!(direct.object.owning_domain.is_none());
+                    assert_eq!(direct.object.name, "coin");
+                    assert_eq!(
+                        direct.object.description.as_deref(),
+                        Some("direct namespace")
+                    );
+                    assert_eq!(
+                        direct.object.spec,
+                        numeric_spec_from_optional_scale(Some(2)).unwrap()
+                    );
+                    assert_eq!(direct.object.mintable, Mintable::Once);
+                    assert_eq!(
+                        instruction.to_json().expect("original instruction JSON"),
+                        json::to_json(&decoded).expect("decoded instruction JSON")
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
     fn transfer_rwa_instruction_classmethod_serializes_canonical_quantity_payload() {
         ensure_python();
         Python::attach(|py| {
@@ -9603,6 +9659,79 @@ impl Instruction {
             Mintable::Not => new_asset.with_mintable(Mintable::Not),
         };
         let instruction = Register::<AssetDefinition>::asset_definition(new_asset);
+        Ok(Instruction::new(instruction.into()))
+    }
+    #[classmethod]
+    #[pyo3(signature = (definition_id, *, dataspace_id, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, metadata=None))]
+    #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
+    fn register_dataspace_asset_definition<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        definition_id: &str,
+        dataspace_id: &Bound<'py, PyAny>,
+        balance_scope_policy: &str,
+        name: &str,
+        description: Option<&str>,
+        alias: Option<&str>,
+        scale: Option<u32>,
+        mintable: Option<&str>,
+        metadata: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        if dataspace_id.is_instance_of::<PyBool>()
+            || !dataspace_id.is_instance_of::<pyo3::types::PyInt>()
+        {
+            return Err(PyTypeError::new_err(
+                "dataspace_id must be an exact integer",
+            ));
+        }
+        let dataspace_id = dataspace_id
+            .extract::<u64>()
+            .map_err(|_| PyValueError::new_err("dataspace_id must be a nonzero u64"))?;
+        if dataspace_id == 0 {
+            return Err(PyValueError::new_err("dataspace_id must be a nonzero u64"));
+        }
+        let definition_id: AssetDefinitionId = definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{definition_id}`: {err}"
+            ))
+        })?;
+        let parsed_balance_scope_policy = parse_balance_scope_policy(balance_scope_policy)?;
+        validate_asset_name(name).map_err(|err| {
+            PyValueError::new_err(format!("invalid asset definition name `{name}`: {err}"))
+        })?;
+        let spec = numeric_spec_from_optional_scale(scale)?;
+        let mut new_asset = AssetDefinition::new(
+            definition_id,
+            name.to_owned(),
+            spec,
+            parsed_balance_scope_policy,
+            None,
+        );
+        if let Some(description) = description {
+            new_asset = new_asset.with_description(Some(description.to_owned()));
+        }
+        if let Some(alias) = alias {
+            let alias = alias.parse::<AssetDefinitionAlias>().map_err(|err| {
+                PyValueError::new_err(format!("invalid asset definition alias `{alias}`: {err}"))
+            })?;
+            new_asset = new_asset.with_alias(Some(alias));
+        }
+        if let Some(meta) = metadata {
+            let metadata = py_to_metadata(py, Some(meta))?;
+            new_asset = new_asset.with_metadata(metadata);
+        }
+        let mintable_mode = parse_mintable(mintable)?;
+        new_asset = match mintable_mode {
+            Mintable::Infinitely => new_asset,
+            Mintable::Once => new_asset.mintable_once(),
+            Mintable::Limited(tokens) => new_asset.mintable_limited(tokens),
+            Mintable::Not => new_asset.with_mintable(Mintable::Not),
+        };
+        let instruction = iroha_data_model::isi::RegisterDataspaceAssetDefinition::new(
+            DataSpaceId::new(dataspace_id),
+            new_asset,
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]

@@ -24,9 +24,15 @@ public struct KagemushaWalletOpenOriginalsV1: Sendable {
   }
 }
 
+/// Sole release acknowledgement from the same Native owner, retained before wrapper destruction.
+protocol KagemushaWalletCleanupLeaseV1: AnyObject {
+  var isReleased: Bool { get }
+  func close() throws
+}
+
 /// A cleanup view of the one actual Native owner, never a second admission registry.
 protocol KagemushaWalletCleanupResourceV1: AnyObject {
-  var cleanupLease: KagemushaWalletNativeLeaseV1? { get }
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { get }
 }
 
 /// Only close is injectable for cleanup fault tests; this interface cannot admit or spend.
@@ -41,7 +47,7 @@ extension KagemushaWalletNativeDriverV1: KagemushaWalletNativeCloseDriverV1 {
 /// Strongly owns the actual Native ID, its driver and its callback platform until close joins.
 /// Wrappers already own this lease before their deinit starts. A failed close quarantines
 /// the lease itself; it never publishes a wrapper whose destruction has begun.
-final class KagemushaWalletNativeLeaseV1: KagemushaWalletCleanupResourceV1, @unchecked Sendable {
+final class KagemushaWalletNativeLeaseV1: KagemushaWalletCleanupResourceV1, KagemushaWalletCleanupLeaseV1, @unchecked Sendable {
   private let condition = NSCondition()
   private var owner: UInt64
   private let driver: any KagemushaWalletNativeCloseDriverV1
@@ -52,10 +58,13 @@ final class KagemushaWalletNativeLeaseV1: KagemushaWalletCleanupResourceV1, @unc
     precondition(owner > 0 && owner <= UInt64(Int64.max))
     self.owner = owner; self.driver = driver; self.platformOwner = platformOwner
   }
-  var cleanupLease: KagemushaWalletNativeLeaseV1? { self }
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { self }
   /// True only after this exact Native ID returned close status zero.
   var isReleased: Bool {
     condition.lock(); defer { condition.unlock() }; return owner == 0
+  }
+  func ownsPlatform(_ platform: AnyObject) -> Bool {
+    condition.lock(); defer { condition.unlock() }; return platformOwner === platform && !fenced && owner != 0
   }
   func handle() throws -> UInt64 {
     condition.lock(); defer { condition.unlock() }
@@ -105,8 +114,25 @@ public final class KagemushaWalletRuntimeV1: KagemushaWalletCleanupResourceV1, @
     lease = .init(owner: nativeRuntimeHandle, driver: cleanupDriver ?? driver, platformOwner: platformOwner)
     self.driver = driver
   }
-  var cleanupLease: KagemushaWalletNativeLeaseV1? {
+  init(lease: KagemushaWalletNativeLeaseV1, driver: KagemushaWalletNativeDriverV1) {
+    self.lease = lease; self.driver = driver
+  }
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? {
     lock.lock(); defer { lock.unlock() }; return lease
+  }
+  /// Transfer the existing Native lease only after it authenticates the live session originals.
+  func startEnrollment(_ session: KagemushaWalletEnrollmentSessionOriginalsV1) throws -> KagemushaWalletEnrollmentV1 {
+    lock.lock(); defer { lock.unlock() }
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let owner = try lease.handle(), originals = session.originals
+    let input = try KagemushaWalletEnrollmentInputV1(11, originals[0], originals[1], originals[2])
+    let reply = try driver.result { out in input.withRequest { driver.enrollment(owner, $0, out) } }
+    guard reply.status == 37, reply.sequenceLow == owner, reply.sequenceHigh == 0,
+      reply.detail == 0, (5...1028).contains(reply.bytes.count)
+    else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    let enrollment = KagemushaWalletEnrollmentV1(lease: lease, driver: driver, assetScope: reply.bytes.dropFirst(4), assetScale: reply.bytes.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) })
+    self.lease = nil
+    return enrollment
   }
   /// Begin with original issuer/account frames. Native reconciles before sampling its challenge.
   public func begin(_ originals: KagemushaWalletOpenOriginalsV1) throws -> KagemushaWalletPendingOpenV1 {
@@ -117,6 +143,30 @@ public final class KagemushaWalletRuntimeV1: KagemushaWalletCleanupResourceV1, @
     guard result.status == 15 && result.sequenceLow == owner && result.sequenceHigh == 0 && result.detail == 0 && result.bytes.count == 32 && result.bytes.contains(where: { $0 != 0 }) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return try pending.select(result.bytes){identity in
       KagemushaWalletPendingOpenV1(runtime:self,identity:identity,challenge:result.bytes)
+    }
+  }
+  /// Begin admission with exact Native-retained E5/E6 originals after enrollment handoff.
+  public func beginEnrolled() throws -> KagemushaWalletPendingOpenV1 {
+    lock.lock(); defer { lock.unlock() }
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let owner = try lease.handle()
+    let input = try KagemushaWalletEnrollmentInputV1(8)
+    let result = try driver.result { out in input.withRequest { driver.enrollment(owner, $0, out) } }
+    guard result.status == 15 && result.sequenceLow == owner && result.sequenceHigh == 0 && result.detail == 0 && result.bytes.count == 32 && result.bytes.contains(where: { $0 != 0 }) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return try pending.select(result.bytes) { identity in
+      KagemushaWalletPendingOpenV1(runtime: self, identity: identity, challenge: result.bytes)
+    }
+  }
+  /// Reopen persisted full E6 DATA through the same original-account/custody boundary.
+  func beginEnrolledResult(_ original: Data, account: Data) throws -> KagemushaWalletPendingOpenV1 {
+    lock.lock(); defer { lock.unlock() }
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let owner = try lease.handle()
+    let input = try KagemushaWalletEnrollmentInputV1(12, original, account)
+    let result = try driver.result { out in input.withRequest { driver.enrollment(owner, $0, out) } }
+    guard result.status == 15 && result.sequenceLow == owner && result.sequenceHigh == 0 && result.detail == 0 && result.bytes.count == 32 && result.bytes.contains(where: { $0 != 0 }) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return try pending.select(result.bytes) { identity in
+      KagemushaWalletPendingOpenV1(runtime: self, identity: identity, challenge: result.bytes)
     }
   }
   // Called exclusively under this Runtime's lock.

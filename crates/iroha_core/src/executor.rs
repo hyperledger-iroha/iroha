@@ -8048,6 +8048,11 @@ impl Executor {
                 ));
             }
         }
+        if let Some(reg) = extract_register_dataspace_asset_definition(instruction) {
+            crate::smartcontracts::isi::domain::isi::ensure_dataspace_asset_definition_registration_allowed(
+                state_transaction, authority, &reg,
+            ).map_err(ValidationFail::InstructionFailed)?;
+        }
         if let Some(reg_asset_definition) = extract_register_asset_definition(instruction) {
             ensure_asset_definition_registration_allowed(
                 state_transaction,
@@ -9016,6 +9021,27 @@ pub(crate) fn extract_register_asset_definition(
     iroha_panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Register::<AssetDefinition>::decode(&mut slice).ok()
+    })
+    .ok()
+    .flatten()
+}
+/// Extract only the distinct direct-dataspace registration wire instruction.
+pub(crate) fn extract_register_dataspace_asset_definition(
+    instruction: &InstructionBox,
+) -> Option<iroha_data_model::isi::RegisterDataspaceAssetDefinition> {
+    use iroha_data_model::isi::RegisterDataspaceAssetDefinition;
+    if let Some(reg) = instruction
+        .as_any()
+        .downcast_ref::<RegisterDataspaceAssetDefinition>()
+    {
+        return Some(reg.clone());
+    }
+    if !instruction_has_concrete_type::<RegisterDataspaceAssetDefinition>(instruction) {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    iroha_panic_hook::catch_unwind_suppressed(|| {
+        RegisterDataspaceAssetDefinition::decode(&mut &bytes[..]).ok()
     })
     .ok()
     .flatten()
@@ -19127,6 +19153,32 @@ mod tests {
             extract_transfer_asset_definition(&instruction).is_none(),
             "register asset-definition instruction must not decode as transfer"
         );
+    }
+    #[test]
+    fn direct_dataspace_registration_extracts_only_its_distinct_instruction() {
+        let id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("defs", "universal").expect("domain id"),
+            "bond".parse().expect("name"),
+        );
+        let object = AssetDefinition::numeric(
+            id,
+            "Bond".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            None,
+        );
+        let direct = iroha_data_model::isi::RegisterDataspaceAssetDefinition::new(
+            DataSpaceId::new(7),
+            object.clone(),
+        )
+        .expect("direct registration");
+        let instruction = InstructionBox::from(direct.clone());
+        assert_eq!(
+            extract_register_dataspace_asset_definition(&instruction),
+            Some(direct)
+        );
+        assert!(extract_register_asset_definition(&instruction).is_none());
+        let original = InstructionBox::from(Register::asset_definition(object));
+        assert!(extract_register_dataspace_asset_definition(&original).is_none());
     }
     #[test]
     fn extract_register_asset_definition_accepts_register_asset_definition_instruction() {

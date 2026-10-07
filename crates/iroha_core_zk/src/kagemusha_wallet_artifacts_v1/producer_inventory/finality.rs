@@ -77,7 +77,14 @@ struct TrackedRead<'a> {
 impl Read for TrackedRead<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.reader.read(buffer).inspect_err(|error| {
-            if error.kind() != std::io::ErrorKind::Interrupted {
+            // A retained original marks failed identity/ancestry checks with a
+            // private typed cause. This is an integrity refusal, even when the
+            // underlying native operation reports NotFound or PermissionDenied.
+            if error.kind() != std::io::ErrorKind::Interrupted
+                && !error
+                    .get_ref()
+                    .is_some_and(|cause| cause.is::<OriginalCustodyFailure>())
+            {
                 self.unavailable.set(true);
             }
         })
@@ -211,6 +218,34 @@ mod tests {
             };
             assert!(reader.open(&[1; 32]).is_err());
             assert_eq!(reader.unavailable.get(), error == Error::Unavailable);
+        }
+    }
+
+    #[test]
+    fn metadata_late_custody_failure_never_becomes_reinstallable_unavailability() {
+        struct Changed(std::io::ErrorKind);
+        impl Read for Changed {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other(OriginalCustodyFailure(self.0.into())))
+            }
+        }
+        for native_kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::InvalidData,
+        ] {
+            let unavailable = std::cell::Cell::new(false);
+            let mut reader = TrackedRead {
+                reader: Box::new(Changed(native_kind)),
+                unavailable: &unavailable,
+            };
+            let error = reader.read(&mut [0]).unwrap_err();
+            assert!(
+                error
+                    .get_ref()
+                    .is_some_and(|cause| cause.is::<OriginalCustodyFailure>())
+            );
+            assert!(!unavailable.get());
         }
     }
 

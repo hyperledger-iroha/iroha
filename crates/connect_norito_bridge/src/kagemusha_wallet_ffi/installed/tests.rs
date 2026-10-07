@@ -1,4 +1,4 @@
-//! Mandatory original bounds; DATA fixtures cannot install a financial runtime.
+//! Mandatory base and closed financial original bounds; DATA cannot install a runtime.
 use super::*;
 fn base() -> RuntimeOriginals<'static> {
     RuntimeOriginals {
@@ -12,7 +12,7 @@ fn base() -> RuntimeOriginals<'static> {
     }
 }
 #[test]
-fn every_installation_original_is_mandatory_before_decode_or_platform_acquisition() {
+fn missing_base_or_partial_financial_original_refuses_before_platform_acquisition() {
     base().validate_bounds().unwrap();
     for field in 0..7 {
         let mut input = base();
@@ -30,7 +30,7 @@ fn every_installation_original_is_mandatory_before_decode_or_platform_acquisitio
     }
 }
 #[test]
-fn complete_financial_absence_and_every_partial_offer_refuse() {
+fn complete_financial_absence_is_bounded_data_and_partial_offers_refuse() {
     for mask in 0..8 {
         let mut input = base();
         if mask & 1 == 0 {
@@ -44,7 +44,7 @@ fn complete_financial_absence_and_every_partial_offer_refuse() {
         }
         assert_eq!(
             input.validate_bounds(),
-            if mask == 7 {
+            if mask == 0 || mask == 7 {
                 Ok(())
             } else {
                 Err(Failure::code(INVALID))
@@ -72,4 +72,40 @@ fn original_extents_are_refused_before_decode_or_platform_acquisition() {
     }
     assert_eq!(read_config().maximum_bytes, PROVING_KEY_MAX_BYTES_V1);
     assert_eq!(read_config().maximum_rows, 1 << 16);
+}
+
+#[test]
+fn financial_offer_classification_never_grants_an_owner() {
+    let mut absent = base();
+    absent.verifier_pack = b"";
+    absent.producer_inventory = b"";
+    absent.originals_root = b"";
+    absent.validate_bounds().unwrap();
+    assert_eq!(
+        financial_offer(&absent),
+        Err(Failure::code(ARTIFACTS_UNAVAILABLE))
+    );
+    absent.verifier_pack = b"pack";
+    assert_eq!(absent.validate_bounds(), Err(Failure::code(INVALID)));
+    assert_eq!(financial_offer(&absent), Err(Failure::code(INVALID)));
+    assert_eq!(financial_offer(&base()), Ok(()));
+}
+
+#[test]
+fn complete_metadata_extent_is_separate_from_process_scratch_and_original_limits() {
+    // Exact encoded D/V extent of the retained graph reconstructed by the production
+    // receipt qualifier. This regression is a sizing check, not graph or phone admission.
+    let observed_metadata_bytes = 406_815_883;
+    let limits = finality_limits();
+    assert!(observed_metadata_bytes > 64 << 20);
+    assert!(observed_metadata_bytes <= limits.maximum_verifier_bytes);
+    assert_eq!(limits.maximum_verifier_bytes, 512 << 20);
+    assert_eq!(limits.maximum_artifacts, 65_536);
+    assert_eq!(limits.msm_budget, MemoryBudget::DEFAULT);
+    assert_eq!(read_config().maximum_bytes, PROVING_KEY_MAX_BYTES_V1);
+    assert_eq!(read_config().maximum_rows, 1 << 16);
+    assert_eq!(
+        iroha_pasta::msm::SharedMemoryBudget::process_default().limit_bytes(),
+        64 << 20
+    );
 }

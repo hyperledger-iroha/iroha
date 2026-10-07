@@ -10,7 +10,18 @@ fn dataspace_id_for_alias_segment(
 fn asset_definition_home_dataspace_id(
     state_transaction: &StateTransaction<'_, '_>,
     definition: &AssetDefinition,
-) -> Option<DataSpaceId> {
+) -> Result<Option<DataSpaceId>, Error> {
+    if let Some(dataspace) = state_transaction
+        .world
+        .asset_definition_dataspace(definition.id())
+        .map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid asset-definition home: {error}").into(),
+            )
+        })?
+    {
+        return Ok(Some(dataspace));
+    }
     let dataspace_alias = state_transaction
         .world
         .asset_definition_domains
@@ -22,7 +33,7 @@ fn asset_definition_home_dataspace_id(
                 .as_ref()
                 .map(|domain| domain.dataspace().as_ref().to_owned())
         });
-    match dataspace_alias {
+    Ok(match dataspace_alias {
         Some(alias) => {
             dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
         }
@@ -30,7 +41,7 @@ fn asset_definition_home_dataspace_id(
             Some(DataSpaceId::UNIVERSAL)
         }
         None => None,
-    }
+    })
 }
 fn coherent_execution_dataspace(
     state_transaction: &StateTransaction<'_, '_>,
@@ -124,7 +135,7 @@ fn bare_restricted_asset_home_dataspace_hint(
         return Ok(None);
     }
     Ok(
-        asset_definition_home_dataspace_id(state_transaction, &definition)
+        asset_definition_home_dataspace_id(state_transaction, &definition)?
             .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL),
     )
 }
@@ -140,7 +151,7 @@ fn ensure_global_asset_write_on_authoritative_route(
     if definition.balance_scope_policy() != AssetBalancePolicy::Global {
         return Ok(());
     }
-    let home_dataspace = asset_definition_home_dataspace_id(state_transaction, &definition)
+    let home_dataspace = asset_definition_home_dataspace_id(state_transaction, &definition)?
         .unwrap_or(DataSpaceId::UNIVERSAL);
     let route_dataspace = state_transaction
         .current_dataspace_id
@@ -159,4 +170,75 @@ fn ensure_global_asset_write_on_authoritative_route(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod direct_dataspace_home_tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    use iroha_data_model::block::BlockHeader;
+    use iroha_model_base::domain::DomainId;
+    use iroha_test_samples::ALICE_ID;
+
+    #[test]
+    fn direct_home_resolves_bare_restricted_balance_without_rewriting_explicit_bucket() {
+        let home = DataSpaceId::new(10);
+        let foreign_bucket = DataSpaceId::new(12);
+        let domain = DomainId::try_new("cash", "universal").expect("id seed");
+        let id = AssetDefinitionId::derive_from_components(
+            domain.clone(),
+            "kina".parse().expect("name"),
+        );
+        let definition = AssetDefinition::numeric(
+            id.clone(),
+            "Kina",
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(domain.clone()),
+        )
+        .build(&ALICE_ID);
+        let mut world = World::with(
+            [Domain::new(domain).build(&ALICE_ID)],
+            [],
+            [definition.clone()],
+        );
+        world
+            .set_asset_definition_dataspace_for_testing(id.clone(), home)
+            .expect("direct home fixture");
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(
+            std::num::NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let transaction = block.transaction();
+        let bare = AssetId::of(id.clone(), ALICE_ID.clone());
+        assert_eq!(
+            asset_definition_home_dataspace_id(&transaction, &definition).unwrap(),
+            Some(home)
+        );
+        assert_eq!(
+            bare_restricted_asset_home_dataspace_hint(&transaction, &bare).unwrap(),
+            Some(home)
+        );
+        assert!(
+            validate_committed_public_balance_scope(
+                &transaction,
+                &id,
+                AssetBalanceScope::Dataspace(foreign_bucket),
+                "bilateral settlement",
+            )
+            .is_ok(),
+            "definition namespace and explicit settlement bucket are independent"
+        );
+    }
 }

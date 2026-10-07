@@ -294,10 +294,12 @@ pub(super) fn import(
     bytes: &OriginalBytesV1,
     pallas: &PinnedParams<Ep>,
     config: ReadConfig,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<ImportedQV1, QQualificationErrorV1> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
     Ok(if index == 0 {
         ImportedQV1::Sigma(Box::new(
-            QSigmaProver::from_original_artifact_serialized_foreign(
+            QSigmaProver::from_original_artifact_serialized_foreign_cancellable(
                 source,
                 pallas.clone(),
                 &bytes.descriptor,
@@ -305,18 +307,22 @@ pub(super) fn import(
                 &bytes.proving_key,
                 config,
                 2,
+                cancellation,
             )?,
         ))
     } else {
         let plan = signatures.get(index - 1).ok_or(Error::Inventory)?.clone();
-        ImportedQV1::Signature(Box::new(QSignatureProver::from_original_artifact(
-            plan,
-            pallas.clone(),
-            &bytes.descriptor,
-            &bytes.verifying_key,
-            &bytes.proving_key,
-            config,
-        )?))
+        ImportedQV1::Signature(Box::new(
+            QSignatureProver::from_original_artifact_cancellable(
+                plan,
+                pallas.clone(),
+                &bytes.descriptor,
+                &bytes.verifying_key,
+                &bytes.proving_key,
+                config,
+                cancellation,
+            )?,
+        ))
     })
 }
 
@@ -350,7 +356,8 @@ impl AuthenticatedProducerInventoryV1 {
         let mut keys = Vec::with_capacity(record.q.len());
         for (index, original) in record.q.iter().copied().enumerate() {
             let bytes = self.read_original(original, originals, config.maximum_bytes)?;
-            let key = import(index, &source, &signatures, &bytes, &pallas, config)?.metadata()?;
+            let key =
+                import(index, &source, &signatures, &bytes, &pallas, config, None)?.metadata()?;
             drop(bytes);
             keys.push(key);
         }

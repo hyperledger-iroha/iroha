@@ -12,7 +12,7 @@
 //!   [`ProofRelation`] it needs and returns actionable verification errors.
 //! - Stable proof/verifying-key hash helpers (`hash_proof`, `hash_vk`).
 //! - Batch-local de-duplication cache (`DedupCache`) and a light pre-verifier.
-//! - Closed dispatch for supported Halo2 IPA and STARK relations. A backend
+//! - Closed dispatch for supported native PIPA-R and STARK relations. A backend
 //!   label is not a privacy or execution-correctness guarantee. Incomplete IVM
 //!   execution relations are not admitted through generic verification.
 //! - A unified ZK envelope (`ZK1 | TLV*`) reader/writer helpers for tests and
@@ -68,6 +68,9 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
+// Oracle-only transcript and randomness hooks must never enter a shipping consumer.
+const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+
 /// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
 #[cfg(feature = "zk-stark")]
 pub mod stark;
@@ -92,6 +95,7 @@ pub mod kagemusha_wallet_artifacts_v1;
 /// Native authenticated global genesis policy for ordinary Load history.
 pub mod kagemusha_wallet_finality_v1;
 /// Actual enrolled custody, issuer/account originals and fresh existing-account admission.
+pub mod kagemusha_wallet_enrollment_v1;
 pub mod kagemusha_wallet_intake_v1;
 /// Canonical G1 preparation and typed real native sigma/A/W inputs.
 pub mod kagemusha_wallet_preparation_v1;

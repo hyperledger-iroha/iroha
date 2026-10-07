@@ -15,7 +15,7 @@ class KagemushaWalletOpenOriginalsV1(credential: ByteArray, enrollmentCertificat
 }
 
 /** A handle returned by the embedding app's trusted native startup loader, never trust pins. */
-class KagemushaWalletRuntimeV1 internal constructor(nativeRuntimeHandle: Long) : Closeable, KagemushaWalletCleanupResourceV1 {
+class KagemushaWalletRuntimeV1 internal constructor(nativeRuntimeHandle: Long, private val platformOwner: Any) : Closeable, KagemushaWalletCleanupResourceV1 {
     private var owner = nativeRuntimeHandle
     private var closeFailure:Throwable?=null
     private var retired=false
@@ -30,33 +30,17 @@ class KagemushaWalletRuntimeV1 internal constructor(nativeRuntimeHandle: Long) :
         if (result.status < 0) throw KagemushaWalletExceptionV1(result.status, result.reason, result.platformCode)
         return result
     }
-    private fun enroll(input:KagemushaWalletEnrollmentInputV1):KagemushaWalletEnrollmentReplyV1 {
-        val frames=input.frames()
-        val result=try{KagemushaWalletEnrollmentNativeV1.enroll(handle(),input.selector,
-            frames[0],frames[1],frames[2],frames[3],frames[4],input.issuedAtMs,input.expiresAtMs)}
-        catch(_:LinkageError){throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)}
-        return (result?:throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)).checked()
-    }
-    /** Native persists the original durable intent before its one-shot generation grant. */
-    @Synchronized fun beginEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1):KagemushaWalletEnrollmentProgressV1 =
-        enroll(KagemushaWalletEnrollmentInputV1(0,originals)).progress()
-    /** Locate/resume only the retained exact intent. Restore cannot create or regenerate. */
-    @Synchronized fun resumeEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1):KagemushaWalletEnrollmentProgressV1 =
-        enroll(KagemushaWalletEnrollmentInputV1(1,originals)).progress()
-    /** Native verifies and retains the complete request before authenticated HTTP dispatch.
-     * An earlier durable request wins over a newly offered PI request after interrupted delivery.
-     * Always dispatch these returned whole bytes; never replace or reassemble the retained original. */
-    @Synchronized fun retainEnrollmentRequest(originals:KagemushaWalletEnrollmentOriginalsV1,request:ByteArray):ByteArray {
-        val input=KagemushaWalletEnrollmentInputV1(2,originals,request)
-        return enroll(input).original(3)
-    }
-    /** Store the exact initial credential under the same actual Native intent/E1/issuer. */
-    @Synchronized fun storeEnrollmentCredential(originals:KagemushaWalletEnrollmentOriginalsV1,
-        credential:ByteArray,certificates:ByteArray):ByteArray {
-        val input=KagemushaWalletEnrollmentInputV1(3,originals,credential,certificates)
-        val retained=enroll(input).original(4)
-        if(!retained.contentEquals(input.frames()[3]))throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-        return retained
+    /** Transfer the existing owner only after Native authenticates exact live session originals. */
+    @Synchronized internal fun startEnrollment(session: KagemushaWalletEnrollmentSessionOriginalsV1): KagemushaWalletEnrollmentV1 {
+        val id = handle()
+        val frames = session.frames()
+        val result = reply(KagemushaWalletNativeV1.enrollment(id, 11, frames[0], frames[1], frames[2], emptyArray()))
+        if (result.status != 37 || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size !in 5..1028) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+        val enrollment = KagemushaWalletEnrollmentV1(id, NativeEnrollmentDriver, result.bytes().copyOfRange(4,result.bytes().size), platformOwner, java.nio.ByteBuffer.wrap(result.bytes(),0,4).int)
+        owner = 0
+        return enrollment
     }
     /** Reconcile these originals, retaining the same challenge and pending owner on retry. */
     @Synchronized fun begin(originals: KagemushaWalletOpenOriginalsV1): KagemushaWalletPendingOpenV1 {
@@ -66,6 +50,24 @@ class KagemushaWalletRuntimeV1 internal constructor(nativeRuntimeHandle: Long) :
         if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size != 32 || result.bytes().all { it==0.toByte() }) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         val challenge = result.bytes()
         return pending.select(challenge) { KagemushaWalletPendingOpenV1(this, challenge) }
+    }
+    /** Begin admission using exact native-retained E5/E6 originals after enrollment handoff. */
+    @Synchronized fun beginEnrolled(): KagemushaWalletPendingOpenV1 {
+        val id = handle()
+        val result = reply(KagemushaWalletNativeV1.enrollment(id, 8, byteArrayOf(), byteArrayOf(), byteArrayOf(), emptyArray()))
+        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size != 32 || result.bytes().all { it == 0.toByte() }) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+        val challenge = result.bytes()
+        return pending.select(challenge) { KagemushaWalletPendingOpenV1(this, challenge) }
+    }
+    /** Reopen persisted full E6 DATA through ordinary Native account/journal admission. */
+    @Synchronized internal fun beginEnrolledResult(original: ByteArray, account: ByteArray): KagemushaWalletPendingOpenV1 {
+        require(original.size in 1..KagemushaWalletEnrollmentV1.RESULT_MAX_BYTES && account.size in 1..4096)
+        val id = handle()
+        val result = reply(KagemushaWalletNativeV1.enrollment(id, 12, original.copyOf(), account.copyOf(), byteArrayOf(), emptyArray()))
+        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size != 32 || result.bytes().all { it == 0.toByte() }) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        return pending.select(result.bytes()) { KagemushaWalletPendingOpenV1(this, result.bytes()) }
     }
     private fun finishNative(signature: ByteArray): KagemushaWalletV1 {
         val id = handle()

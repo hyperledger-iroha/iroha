@@ -20,12 +20,13 @@ import os
 import sqlite3
 import stat
 import sys
+import time
 from contextlib import closing
 from collections import deque
 from pathlib import Path
 
 from .attestation import (
-    AttestationRejected, VerificationUnavailable, DurableAppleAssertionCounterStore,
+    AttestationRejected, VerificationUnavailable,
     _verify_apple_assertion_with_hash, require, verify_apple_wallet_attestation_raw,
 )
 from .wallet_enrollment import (
@@ -40,6 +41,7 @@ from .wallet_policy import (
 from .play_integrity import GooglePlayIntegrityVerifier, PlayIntegrityEnrollmentPolicy, _unique
 from .google_oauth import GoogleServiceAccountTokenProvider
 from .native_time_interval import NativeTimeInterval
+from .wallet_enrollment_store import E1CounterStore
 
 SCHEMA = "iroha.kagemusha.wallet-e1-verifier.v1"
 CONFIG_SCHEMA = "iroha.kagemusha.wallet-e1-verifier-config.v1"
@@ -195,128 +197,46 @@ def configured_policy(value: dict, platform: str) -> ConfiguredWalletEnrollmentP
     return ConfiguredWalletEnrollmentPolicyV1(app, enrollment, root)
 
 
-class E1CounterStore(DurableAppleAssertionCounterStore):
-    """Retain the existing actual Apple register with a protected E1 attempt journal.
+def _realtime_ns() -> int:
+    return time.time_ns()
 
-    One existing SQLite transaction commits the verified assertion counter, consumed
-    client-data hash and exact evidence result. There is no monetary state or signer here.
+
+def _sleep_inclusive_ns() -> int:
+    # This worker is a Linux-only private release executable. A clock excluding
+    # suspend would let a sleeping process reuse an expired enrollment window.
+    if not sys.platform.startswith("linux") or not hasattr(time, "CLOCK_BOOTTIME"):
+        raise VerificationUnavailable("sleep-inclusive private clock unavailable")
+    return time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+
+
+class DispatchClock:
+    """Fresh worker clock anchored to the exact Core dispatch and Linux boottime.
+
+    Neither a request field nor a caller callback supplies elapsed time. Realtime
+    and the retained sleep-inclusive reference must both stay within the original
+    challenge window. Clock loss or regression leaves the claimed result unknown.
     """
-    def __init__(self, directory: Path, directory_fd: int):
-        self.directory, self.directory_fd = directory, directory_fd
-        held = os.fstat(directory_fd)
-        self.directory_identity = (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_gid)
-        self.recheck_directory()
-        self.path = directory / "wallet-e1.sqlite3"
-        try:
-            created = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except FileExistsError:
-            new_database = False
-        else:
-            new_database = True
-            os.fsync(created)
-            os.close(created)
-            os.fsync(self.directory_fd)
-        self.file_identity = self.database_identity()
-        # Existing databases must already have an intact incarnation and exact schema.
-        # Never migrate a legacy/empty journal or infer freshness from missing metadata.
-        if not new_database:
-            with closing(self._connect()) as connection:
-                self.incarnation = self.read_incarnation(connection)
-                self.check_schema(connection)
-        super().__init__(self.path)
-        with closing(self._connect()) as connection:
-            if new_database:
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    self.incarnation = os.urandom(32)
-                    require(any(self.incarnation), "invalid journal incarnation")
-                    connection.execute("""CREATE TABLE wallet_e1_journal (
-                        singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
-                        incarnation BLOB NOT NULL CHECK(length(incarnation)=32))""")
-                    connection.execute("INSERT INTO wallet_e1_journal VALUES (1, ?)", (self.incarnation,))
-                    connection.execute("""CREATE TABLE wallet_e1_attempts (
-                        operation_id BLOB PRIMARY KEY NOT NULL,
-                        preparation BLOB NOT NULL,
-                        config_sha256 BLOB NOT NULL,
-                        request_sha256 BLOB UNIQUE,
-                        key_binding BLOB UNIQUE,
-                        original BLOB,
-                        account_signature BLOB,
-                        result BLOB,
-                        CHECK ((request_sha256 IS NULL AND key_binding IS NULL AND original IS NULL
-                                AND account_signature IS NULL AND result IS NULL)
-                            OR (length(request_sha256)=32 AND length(key_binding)=32
-                                AND original IS NOT NULL AND length(account_signature)=64)))""")
-                    connection.execute("COMMIT")
-                except Exception:
-                    if connection.in_transaction:
-                        connection.execute("ROLLBACK")
-                    raise
-            self.check_schema(connection)
-            require(self.read_incarnation(connection) == self.incarnation, "journal incarnation changed")
-        os.fsync(self.directory_fd)
+    def __init__(self, dispatch_ms: int, issued_ms: int, expires_ms: int):
+        self.dispatch_ms, self.issued_ms, self.expires_ms = dispatch_ms, issued_ms, expires_ms
+        self.elapsed_start = self.elapsed_last = _sleep_inclusive_ns()
+        self.wall_start = self.wall_last = _realtime_ns()
+        if self.wall_start // 1_000_000 < dispatch_ms:
+            raise VerificationUnavailable("private clock predates Core dispatch")
+        self.sample()
 
-    @staticmethod
-    def read_incarnation(connection):
-        rows = connection.execute("SELECT singleton, incarnation FROM wallet_e1_journal").fetchall()
-        require(len(rows) == 1 and rows[0][0] == 1 and type(rows[0][1]) is bytes
-                and len(rows[0][1]) == 32 and any(rows[0][1]), "invalid journal incarnation")
-        return rows[0][1]
-
-    @staticmethod
-    def check_schema(connection):
-        for table, expected in (
-            ("apple_keys", [("key_id", "BLOB", 1, 1), ("point", "BLOB", 1, 0),
-                ("app_id", "TEXT", 1, 0), ("environment", "TEXT", 1, 0), ("counter", "INTEGER", 1, 0)]),
-            ("apple_client_data", [("client_data_sha256", "BLOB", 1, 1), ("key_id", "BLOB", 1, 0)]),
-            ("wallet_e1_journal", [("singleton", "INTEGER", 1, 1), ("incarnation", "BLOB", 1, 0)]),
-            ("wallet_e1_attempts", [("operation_id", "BLOB", 1, 1), ("preparation", "BLOB", 1, 0),
-                ("config_sha256", "BLOB", 1, 0), ("request_sha256", "BLOB", 0, 0),
-                ("key_binding", "BLOB", 0, 0), ("original", "BLOB", 0, 0),
-                ("account_signature", "BLOB", 0, 0), ("result", "BLOB", 0, 0)])):
-            columns = connection.execute("PRAGMA table_info(" + table + ")").fetchall()
-            require([(r[1], r[2], r[3], r[5]) for r in columns] == expected,
-                    "invalid E1 journal schema")
-
-    def require_incarnation(self, connection, incarnation):
-        require(type(incarnation) is bytes and incarnation == self.incarnation
-                and self.read_incarnation(connection) == incarnation, "journal incarnation differs")
-
-    def recheck_directory(self):
-        require(self.directory.is_absolute() and self.directory.resolve(strict=True) == self.directory,
-                "invalid private store path")
-        held, path = os.fstat(self.directory_fd), self.directory.stat()
-        require(stat.S_ISDIR(held.st_mode) and held.st_uid == os.getuid() and held.st_mode & 0o077 == 0
-                and (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_gid) == self.directory_identity
-                and (path.st_dev, path.st_ino, path.st_mode, path.st_uid, path.st_gid) == self.directory_identity,
-                "private store directory changed")
-
-    def database_identity(self):
-        value = self.path.lstat()
-        require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid()
-                and value.st_mode & 0o077 == 0 and value.st_nlink == 1,
-                "private E1 journal custody unavailable")
-        return value.st_dev, value.st_ino
-
-    def recheck(self):
-        self.recheck_directory()
-        require(self.database_identity() == self.file_identity, "private E1 journal replaced")
-        sidecar = self.path.with_name(self.path.name + "-journal")
-        if sidecar.exists() or sidecar.is_symlink():
-            value = sidecar.lstat()
-            require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid()
-                    and value.st_mode & 0o077 == 0 and value.st_nlink == 1,
-                    "private E1 journal sidecar custody unavailable")
-
-    def _connect(self):
-        self.recheck()
-        connection = super()._connect()
-        try:
-            self.recheck()
-            return connection
-        except Exception:
-            connection.close()
-            raise
+    def sample(self) -> NativeTimeInterval:
+        elapsed, wall = _sleep_inclusive_ns(), _realtime_ns()
+        if elapsed < self.elapsed_last or wall < self.wall_last:
+            raise VerificationUnavailable("private clock regressed")
+        self.elapsed_last, self.wall_last = elapsed, wall
+        delta = elapsed - self.elapsed_start
+        # Anchor elapsed duration to the actual worker sample, not the older
+        # Core dispatch. Socket or queue latency must never extend this window.
+        lower = max(wall, self.wall_start + delta) // 1_000_000
+        upper = (max(wall, self.wall_start + delta) + 999_999) // 1_000_000
+        interval = NativeTimeInterval(lower, upper)
+        interval.require_window(self.issued_ms, self.expires_ms)
+        return interval
 
 
 class VerifierOwner:
@@ -343,11 +263,11 @@ class VerifierOwner:
                 and self.policy.enrollment.policy_digest() == self.enrollment_policy,
                 "private policy projection differs from Native pins")
         self.directory = Path(config["store_directory"])
-        self.current_time: int | None = None
-        self.google, self.oauth = None, None
+        self.dispatch_clock: DispatchClock | None = None
+        self.google, self.oauth, self.counters = None, None, None
         self.directory_fd = os.dup(directory_fd)
         try:
-            # Validate the actual protected directory before reading OAuth or creating a DB.
+            # Validate the protected directory before reading OAuth or opening retained storage.
             held, path = os.fstat(self.directory_fd), self.directory.stat()
             require(self.directory.is_absolute() and self.directory.resolve(strict=True) == self.directory
                     and stat.S_ISDIR(held.st_mode) and held.st_uid == os.getuid() and held.st_mode & 0o077 == 0
@@ -370,6 +290,8 @@ class VerifierOwner:
             self.counters = E1CounterStore(self.directory, self.directory_fd)
             self.recheck()
         except Exception:
+            if self.counters is not None:
+                self.counters.close()
             if self.oauth is not None:
                 self.oauth.close()
             os.close(self.directory_fd)
@@ -377,14 +299,19 @@ class VerifierOwner:
             raise
 
     def _clock(self):
-        require(type(self.current_time) is int, "private Native time unavailable")
-        return NativeTimeInterval(self.current_time, self.current_time)
+        if self.dispatch_clock is None:
+            raise VerificationUnavailable("private dispatch clock unavailable")
+        return self.dispatch_clock.sample()
 
     def recheck(self):
-        self.crypto.recheck()
-        if self.configuration is not None:
-            self.configuration.recheck()
-        self.counters.recheck()
+        try:
+            self.crypto.recheck()
+            if self.configuration is not None:
+                self.configuration.recheck()
+            self.counters.recheck()
+        except (AttestationRejected, OSError):
+            # A lost or substituted process original is not a platform-evidence rejection.
+            raise VerificationUnavailable("private verifier custody unavailable") from None
 
     def request(self, original: bytes):
         value = exact_json(original, MAX_REQUEST)
@@ -398,12 +325,15 @@ class VerifierOwner:
                 and scope.challenge_transcript[130:162] == self.enrollment_policy,
                 "E1 differs from selected private policy")
         issued, expires, now = (value[k] for k in ("issued_at_ms", "expires_at_ms", "trusted_time_ms"))
+        # The authenticated issuer may narrow its selected policy lifetime to its
+        # session/proof deadline. Retain those exact endpoints; the worker adds no
+        # independent ceiling and cannot extend the original half-open interval.
         require(all(type(t) is int for t in (issued, expires, now))
-                and 0 < issued <= now < expires < 1 << 64 and expires - issued <= 600000,
+                and 0 < issued <= now < expires < 1 << 64,
                 "private E1 time outside original window")
         require(type(value["evidence"]) is dict, "invalid private platform evidence")
-        require(expires == issued + self.policy.enrollment.challenge_lifetime_ms,
-                "private E1 lifetime differs from selected policy")
+        require(expires <= issued + self.policy.enrollment.challenge_lifetime_ms,
+                "private E1 lifetime exceeds selected policy")
         self.policy.validate_scope(scope.challenge_transcript, issued, now)
         return value, scope
 
@@ -438,7 +368,7 @@ class VerifierOwner:
         require(any(hex32(value["account_owner_public_hex"])), "invalid private account owner")
         issued, expires = value["issued_at_ms"], value["expires_at_ms"]
         require(type(issued) is int and type(expires) is int and 0 < issued < expires < 1 << 64
-                and expires == issued + self.policy.enrollment.challenge_lifetime_ms,
+                and expires <= issued + self.policy.enrollment.challenge_lifetime_ms,
                 "invalid preparation window")
         self.policy.validate_scope(transcript, issued, issued)
         return value, operation
@@ -499,8 +429,12 @@ class VerifierOwner:
                 row = connection.execute("""SELECT preparation, config_sha256, request_sha256,
                     key_binding, original, account_signature, result
                     FROM wallet_e1_attempts WHERE operation_id=?""", (operation,)).fetchone()
-                require(row is not None and row[:2] == (preparation, self.config_digest),
-                        "private prepared original absent or differs")
+                # Missing custody cannot establish a definitive evidence rejection or
+                # authorize a new preparation: this row may have been claimed before loss.
+                if row is None:
+                    raise VerificationUnavailable("private prepared original unavailable")
+                require(row[:2] == (preparation, self.config_digest),
+                        "private prepared original differs")
                 if row[2] is not None:
                     require(row[2:6] == (digest, scope.enrollment_key_binding(), original, account_signature),
                             "private recovery scope differs")
@@ -509,6 +443,7 @@ class VerifierOwner:
                     return row[6]  # Claimed NULL is unknown; neither action repeats verification.
                 require(all(item is None for item in row[2:]), "invalid prepared journal state")
                 require(dispatch_time_ms < value["expires_at_ms"], "private first dispatch expired")
+                clock = DispatchClock(dispatch_time_ms, value["issued_at_ms"], value["expires_at_ms"])
                 changed = connection.execute("""UPDATE wallet_e1_attempts SET request_sha256=?,
                     key_binding=?, original=?, account_signature=?
                     WHERE operation_id=? AND request_sha256 IS NULL""",
@@ -522,7 +457,8 @@ class VerifierOwner:
                 raise
         # Only the transaction winner reaches external verification. Its fresh trusted Core
         # time is separate from the immutable captured request and becomes evidence time.
-        self.current_time = dispatch_time_ms
+        self.dispatch_clock = clock
+        self._clock()
         offered = value["evidence"]
         if self.platform == "android":
             require(set(offered) == {"chain_base64", "play_integrity_token"}
@@ -533,24 +469,35 @@ class VerifierOwner:
             chain = [b64(item, 16384) for item in offered["chain_base64"]]
             evidence = verify_android_wallet_enrollment(chain, offered["play_integrity_token"],
                 scope, self.policy, self.google, dispatch_time_ms, self.openssl,
-                challenge_created_at_ms=value["issued_at_ms"])
+                challenge_created_at_ms=value["issued_at_ms"], trusted_time_interval=self._clock)
             result = encode(self.projection(scope, evidence))
             require(0 < len(result) <= MAX_ORIGINAL, "private evidence result outside bound")
             self.recheck()
             with closing(self.counters._connect()) as connection:
-                self.counters.require_incarnation(connection, incarnation)
-                changed = connection.execute("UPDATE wallet_e1_attempts SET result=? WHERE request_sha256=? AND result IS NULL",
-                                             (result, digest)).rowcount
-                require(changed == 1, "private result changed concurrently")
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self.counters.require_incarnation(connection, incarnation)
+                    self._clock()
+                    changed = connection.execute("UPDATE wallet_e1_attempts SET result=? WHERE request_sha256=? AND result IS NULL",
+                                                 (result, digest)).rowcount
+                    require(changed == 1, "private result changed concurrently")
+                    self._clock()
+                    connection.execute("COMMIT")
+                except Exception:
+                    if connection.in_transaction:
+                        connection.execute("ROLLBACK")
+                    raise
         else:
             require(set(offered) == {"attestation_base64", "assertion_base64", "key_id_hex"},
                     "invalid private Apple evidence")
             attestation = b64(offered["attestation_base64"], 65536)
             assertion = b64(offered["assertion_base64"], 4096)
             key_id = hex32(offered["key_id_hex"])
+            verification_time = self._clock().upper_at_ms
             raw = verify_apple_wallet_attestation_raw(attestation, key_id, self.policy.app.identity.app_id,
                 "production", scope.challenge_digest(), self.policy.attestation_root_der,
-                self.policy.enrollment.platform.attestation_root_sha256, dispatch_time_ms, self.openssl)
+                self.policy.enrollment.platform.attestation_root_sha256, verification_time, self.openssl)
+            self._clock()
             self.counters.register_verified_key(raw, self.policy.app.identity.app_id, "production")
             # Counter/challenge consumption and the exact recoverable verified original are
             # one FULL-synchronous transaction in the existing counter database.
@@ -562,6 +509,7 @@ class VerifierOwner:
                                              (key_id,)).fetchone()
                     require(row is not None and row[1:] and row[1] == self.policy.app.identity.app_id
                             and row[2] == "production", "private Apple key scope differs")
+                    self._clock()
                     checked = _verify_apple_assertion_with_hash(assertion, scope.enrollment_key_binding(),
                         row[0], key_id, self.policy.app.identity.app_id, row[3], self.openssl,
                         expected_validation_category=None, expected_bundle_version=None)
@@ -574,6 +522,7 @@ class VerifierOwner:
                     result = encode(self.projection(scope, evidence))
                     require(0 < len(result) <= MAX_ORIGINAL, "private evidence result outside bound")
                     self.recheck()
+                    self._clock()
                     connection.execute("INSERT INTO apple_client_data VALUES (?, ?)",
                                        (checked.client_data_sha256, key_id))
                     require(connection.execute("UPDATE apple_keys SET counter=? WHERE key_id=? AND counter=?",
@@ -581,15 +530,19 @@ class VerifierOwner:
                             "private Apple counter changed concurrently")
                     require(connection.execute("UPDATE wallet_e1_attempts SET result=? WHERE request_sha256=? AND result IS NULL",
                                                (result, digest)).rowcount == 1, "private result changed concurrently")
+                    self._clock()
                     connection.execute("COMMIT")
                 except Exception:
                     if connection.in_transaction:
                         connection.execute("ROLLBACK")
                     raise
         self.recheck()
+        self._clock()
         return result
 
     def close(self):
+        if self.counters is not None:
+            self.counters.close()
         if self.oauth is not None:
             self.oauth.close()
         if self.directory_fd >= 0:
@@ -644,7 +597,7 @@ def serve(owner: VerifierOwner, input_stream, output_stream):
             response.update({"outcome": "unavailable", "evidence_base64": None})
         except (AttestationRejected, sqlite3.IntegrityError):
             response.update({"outcome": "rejected", "evidence_base64": None})
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             response.update({"outcome": "unavailable", "evidence_base64": None})
         write_packet(output_stream, response)
 

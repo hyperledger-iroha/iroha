@@ -350,7 +350,7 @@ mod owner_prf_mounted_tests {
             .await;
             assert_eq!(
                 status,
-                StatusCode::BAD_REQUEST,
+                StatusCode::PAYLOAD_TOO_LARGE,
                 "a larger configured limit must not weaken the owner-input bound"
             );
         }

@@ -27,12 +27,15 @@
 //! permutation runs in time that depends on the (secret) values, like the
 //! vendored one.
 
+use crate::secret::SecretPolynomial;
 use ff::Field;
+use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
 use rand_core_06::RngCore;
 
 use super::{
-    ProverError, batch::invert_column, quotient::CompiledExpressions, random_values, write_point,
+    ProverError, batch::invert_column_cancellable, quotient::CompiledExpressions, random_values,
+    write_point,
 };
 use crate::{
     keys::ProvingKey,
@@ -42,7 +45,7 @@ use crate::{
 };
 
 /// A lookup after its permuted columns are committed.
-pub(super) struct Permuted<F> {
+pub(super) struct Permuted<F: iroha_pasta::PastaField> {
     compressed_input: Vec<F>,
     compressed_table: Vec<F>,
     input_values: Vec<F>,
@@ -50,9 +53,27 @@ pub(super) struct Permuted<F> {
     input_blind: F,
     table_blind: F,
 }
+impl<F: iroha_pasta::PastaField> Drop for Permuted<F> {
+    fn drop(&mut self) {
+        self.compressed_input
+            .iter_mut()
+            .for_each(crate::secret::wipe_one);
+        self.compressed_table
+            .iter_mut()
+            .for_each(crate::secret::wipe_one);
+        self.input_values
+            .iter_mut()
+            .for_each(crate::secret::wipe_one);
+        self.table_values
+            .iter_mut()
+            .for_each(crate::secret::wipe_one);
+        self.input_blind.zeroize();
+        self.table_blind.zeroize();
+    }
+}
 
 /// A lookup after its product is committed.
-pub(super) struct Committed<F> {
+pub(super) struct Committed<F: iroha_pasta::PastaField> {
     /// `A'` in coefficient form.
     pub(super) input_poly: Vec<F>,
     /// The blind of `A'`.
@@ -65,6 +86,18 @@ pub(super) struct Committed<F> {
     pub(super) product_poly: Vec<F>,
     /// The blind of `z`.
     pub(super) product_blind: F,
+}
+impl<F: iroha_pasta::PastaField> Drop for Committed<F> {
+    fn drop(&mut self) {
+        self.input_poly.iter_mut().for_each(crate::secret::wipe_one);
+        self.table_poly.iter_mut().for_each(crate::secret::wipe_one);
+        self.product_poly
+            .iter_mut()
+            .for_each(crate::secret::wipe_one);
+        self.input_blind.zeroize();
+        self.table_blind.zeroize();
+        self.product_blind.zeroize();
+    }
 }
 
 /// How the prover permutes one lookup's usable rows into `(A', S')`, padded
@@ -132,15 +165,17 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     // Field ordering converts both operands out of Montgomery form on each
     // comparison. Convert once, then sort compact integer keys in precisely
     // the same canonical order, without a tree allocation for every group.
-    let mut sorted_input: Vec<_> = input.iter().map(canonical_key).collect();
+    let mut sorted_input =
+        zeroize::Zeroizing::new(input.iter().map(canonical_key).collect::<Vec<_>>());
     sorted_input.sort_unstable();
-    let mut sorted_table: Vec<_> = table.iter().map(canonical_key).collect();
+    let mut sorted_table =
+        zeroize::Zeroizing::new(table.iter().map(canonical_key).collect::<Vec<_>>());
     sorted_table.sort_unstable();
     let mut groups = sorted_input
         .chunk_by(|left, right| left == right)
         .peekable();
-    let mut leftover = Vec::with_capacity(usable_rows);
-    for value in sorted_table {
+    let mut leftover = zeroize::Zeroizing::new(Vec::with_capacity(usable_rows));
+    for value in sorted_table.iter().copied() {
         if let Some(group) = groups.peek() {
             if group[0] < value {
                 return Err(missing());
@@ -157,9 +192,9 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     if groups.next().is_some() {
         return Err(missing());
     }
-    let mut permuted_input = Vec::with_capacity(n);
-    let mut permuted_table = Vec::with_capacity(n);
-    let mut leftover = leftover.into_iter();
+    let mut permuted_input = SecretPolynomial::new(Vec::with_capacity(n));
+    let mut permuted_table = SecretPolynomial::new(Vec::with_capacity(n));
+    let mut leftover = leftover.iter().copied();
     for group in sorted_input.chunk_by(|left, right| left == right) {
         let value = canonical_value::<F>(group[0]);
         permuted_input.push(value);
@@ -172,9 +207,11 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     if leftover.next().is_some() || permuted_input.len() != usable_rows {
         return Err(missing());
     }
-    permuted_input.extend(random_values::<F, _>(rng, pad));
-    permuted_table.extend(random_values::<F, _>(rng, pad));
-    Ok((permuted_input, permuted_table))
+    let input_pad = SecretPolynomial::new(random_values::<F, _>(rng, pad));
+    permuted_input.extend_from_slice(&input_pad);
+    let table_pad = SecretPolynomial::new(random_values::<F, _>(rng, pad));
+    permuted_table.extend_from_slice(&table_pad);
+    Ok((permuted_input.into_vec(), permuted_table.into_vec()))
 }
 
 /// Most-significant limb first, so array ordering equals field ordering.
@@ -209,6 +246,7 @@ pub(super) fn commit_permuted<C, T, R, P>(
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<Permuted<C::ScalarExt>>, ProverError>
 where
     C: PastaCurve,
@@ -219,16 +257,21 @@ where
     if shape.lookups == 0 {
         return Ok(Vec::new());
     }
-    let compressed = compiled.compress_lookups(
+    let compressed = compiled.compress_lookups_cancellable(
         pk.fixed_values(),
         advice_values,
         instance_values,
         theta,
         shape.n,
+        cancellation,
     )?;
+    let mut compressed = crate::secret::SecretLookupColumns::new(compressed);
     let tables = pk.commitment_tables();
     let mut permuted = Vec::with_capacity(compressed.len());
-    for (lookup, (compressed_input, compressed_table)) in compressed.into_iter().enumerate() {
+    for (lookup, (compressed_input, compressed_table)) in compressed.iter_mut().enumerate() {
+        CancellationToken::checkpoint(cancellation)?;
+        let compressed_input = SecretPolynomial::new(core::mem::take(compressed_input));
+        let compressed_table = SecretPolynomial::new(core::mem::take(compressed_table));
         let (permuted_input, permuted_table) = permutation.permute(
             &compressed_input,
             &compressed_table,
@@ -237,33 +280,37 @@ where
             lookup,
             rng,
         )?;
+        let permuted_input = SecretPolynomial::new(permuted_input);
+        let permuted_table = SecretPolynomial::new(permuted_table);
         let input_blind = C::ScalarExt::random(&mut *rng);
         let table_blind = C::ScalarExt::random(&mut *rng);
         let input_commitment = tables
-            .commit_lagrange(
+            .commit_lagrange_cancellable(
                 params.params(),
                 &permuted_input,
                 &input_blind,
                 Secrecy::Secret,
                 budget,
+                cancellation,
             )?
             .to_affine();
         let table_commitment = tables
-            .commit_lagrange(
+            .commit_lagrange_cancellable(
                 params.params(),
                 &permuted_table,
                 &table_blind,
                 Secrecy::Secret,
                 budget,
+                cancellation,
             )?
             .to_affine();
         write_point(transcript, &input_commitment)?;
         write_point(transcript, &table_commitment)?;
         permuted.push(Permuted {
-            compressed_input,
-            compressed_table,
-            input_values: permuted_input,
-            table_values: permuted_table,
+            compressed_input: compressed_input.into_vec(),
+            compressed_table: compressed_table.into_vec(),
+            input_values: permuted_input.into_vec(),
+            table_values: permuted_table.into_vec(),
             input_blind,
             table_blind,
         });
@@ -288,6 +335,7 @@ pub(super) fn commit_products<C, T, R>(
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<Committed<C::ScalarExt>>, ProverError>
 where
     C: PastaCurve,
@@ -298,6 +346,7 @@ where
     let u = shape.usable_rows;
     let mut committed = Vec::with_capacity(permuted.len());
     for mut lookup in permuted {
+        CancellationToken::checkpoint(cancellation)?;
         // The compressed values have no consumer after these numerators are
         // formed. Reuse their two allocations for the numerator and inverse
         // denominator columns instead of allocating fractions and a product.
@@ -313,8 +362,8 @@ where
             *numerator = (*numerator + beta) * (*denominator + gamma);
             *denominator = (*a + beta) * (*s + gamma);
         }
-        invert_column(&mut lookup.compressed_table[..u]);
-        let mut product = lookup.compressed_input;
+        invert_column_cancellable(&mut lookup.compressed_table[..u], cancellation)?;
+        let mut product = SecretPolynomial::new(core::mem::take(&mut lookup.compressed_input));
         let mut running = C::ScalarExt::ONE;
         for (value, inverse) in product[..u].iter_mut().zip(&lookup.compressed_table[..u]) {
             let fraction = *inverse * *value;
@@ -323,36 +372,41 @@ where
         }
         product[u] = running;
         // No later phase needs this scratch, including the commitment MSM.
-        drop(lookup.compressed_table);
-        product[u + 1..].copy_from_slice(&random_values::<C::ScalarExt, _>(
+        crate::secret::wipe(&mut lookup.compressed_table);
+        lookup.compressed_table.clear();
+        let random = SecretPolynomial::new(random_values::<C::ScalarExt, _>(
             rng,
             shape.blinding_factors,
         ));
+        product[u + 1..].copy_from_slice(&random);
         let product_blind = C::ScalarExt::random(&mut *rng);
         let commitment = tables
-            .commit_lagrange(
+            .commit_lagrange_cancellable(
                 params.params(),
                 &product,
                 &product_blind,
                 Secrecy::Secret,
                 budget,
+                cancellation,
             )?
             .to_affine();
         write_point(transcript, &commitment)?;
-        pk.domain().ifft(&mut product)?;
+        pk.domain().ifft_cancellable(&mut product, cancellation)?;
         // The grand product is the last consumer of the evaluations. Move
         // their allocations into coefficient form instead of retaining an
         // extra pair of n-element vectors for every pending lookup.
-        let mut input_poly = lookup.input_values;
-        let mut table_poly = lookup.table_values;
-        pk.domain().ifft(&mut input_poly)?;
-        pk.domain().ifft(&mut table_poly)?;
+        let mut input_poly = SecretPolynomial::new(core::mem::take(&mut lookup.input_values));
+        let mut table_poly = SecretPolynomial::new(core::mem::take(&mut lookup.table_values));
+        pk.domain()
+            .ifft_cancellable(&mut input_poly, cancellation)?;
+        pk.domain()
+            .ifft_cancellable(&mut table_poly, cancellation)?;
         committed.push(Committed {
-            input_poly,
+            input_poly: input_poly.into_vec(),
             input_blind: lookup.input_blind,
-            table_poly,
+            table_poly: table_poly.into_vec(),
             table_blind: lookup.table_blind,
-            product_poly: product,
+            product_poly: product.into_vec(),
             product_blind,
         });
     }
@@ -657,6 +711,7 @@ mod tests {
             &mut rng,
             &mut transcript,
             BUDGET,
+            None,
         )
         .expect("product");
         assert_eq!(committed.len(), 1);

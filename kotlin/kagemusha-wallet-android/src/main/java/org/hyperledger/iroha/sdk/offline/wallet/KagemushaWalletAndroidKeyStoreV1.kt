@@ -11,6 +11,7 @@ import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import java.security.Key
 import java.security.KeyFactory
+import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -120,8 +121,8 @@ internal interface KagemushaWalletAndroidKeyStoreV1 {
     /** Attestation chain (leaf first) of an entry [getKey] reported present; null is an error. */
     fun getCertificateChain(alias: String): List<Certificate>?
 
-    /** Generate under [spec]; throws [KagemushaWalletAndroidStrongBoxUnavailableV1] when StrongBox is unavailable. */
-    fun generate(spec: KagemushaWalletAndroidKeySpecV1)
+    /** Return the actual generated key pair under [spec]; throws [KagemushaWalletAndroidStrongBoxUnavailableV1] when StrongBox is unavailable. */
+    fun generate(spec: KagemushaWalletAndroidKeySpecV1): KeyPair
 
     /** `KeyInfo` readback of a present key. */
     fun facts(key: PrivateKey): KagemushaWalletAndroidKeyFactsV1
@@ -158,11 +159,11 @@ internal class KagemushaWalletAndroidSystemKeyStoreV1 : KagemushaWalletAndroidKe
     override fun getCertificateChain(alias: String): List<Certificate>? =
         keyStore().getCertificateChain(alias)?.toList()
 
-    override fun generate(spec: KagemushaWalletAndroidKeySpecV1) {
+    override fun generate(spec: KagemushaWalletAndroidKeySpecV1): KeyPair {
         val builder = KagemushaWalletAndroidSystemKeyGenBuilderV1(KeyGenParameterSpec.Builder(spec.alias, spec.purposes))
         kagemushaWalletAndroidConfigureKeyGenV1(spec, builder)
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
-        if (spec.strongBox) {
+        return if (spec.strongBox) {
             KagemushaWalletAndroidStrongBoxApi28V1.generate(generator, builder.build())
         } else {
             generator.initialize(builder.build())
@@ -242,8 +243,8 @@ private object KagemushaWalletAndroidStrongBoxApi28V1 {
         builder.setIsStrongBoxBacked(true)
     }
 
-    fun generate(generator: KeyPairGenerator, spec: KeyGenParameterSpec) {
-        try {
+    fun generate(generator: KeyPairGenerator, spec: KeyGenParameterSpec): KeyPair {
+        return try {
             generator.initialize(spec)
             generator.generateKeyPair()
         } catch (unavailable: StrongBoxUnavailableException) {

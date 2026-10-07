@@ -118,11 +118,14 @@ impl PreparationV1<'_> {
         }
         self.statement_fields(owner, input.statement)?;
         let frozen = assemble(owner.credential, input, proof)?;
-        self.installed.verifier().verify_capsule_proofs(
-            &frozen.capsule,
-            &frozen.credential,
-            budget,
-        )?;
+        self.installed
+            .verifier()
+            .verify_capsule_proofs_cancellable(
+                &frozen.capsule,
+                &frozen.credential,
+                budget,
+                self.cancellation,
+            )?;
         Ok(frozen)
     }
 

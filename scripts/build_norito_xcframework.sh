@@ -4,6 +4,12 @@ umask 077
 PATH=/usr/bin:/bin
 export PATH
 # One independently selected public signer root is embedded in every Native slice.
+WALLET_RUNTIME_AUTHORITY="${MOBILE_SDK_WALLET_RUNTIME_AUTHORITY:-}"
+case "$WALLET_RUNTIME_AUTHORITY" in bpng-taira-v7|cbsi-release-v1) ;; *)
+  echo "[-] MOBILE_SDK_WALLET_RUNTIME_AUTHORITY must be bpng-taira-v7 or cbsi-release-v1" >&2
+  exit 1
+  ;;
+esac
 WALLET_RUNTIME_TRUST_PUBLIC_HEX="${MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX:-}"
 if [[ ! "$WALLET_RUNTIME_TRUST_PUBLIC_HEX" =~ ^[0-9a-f]{64}$ || "$WALLET_RUNTIME_TRUST_PUBLIC_HEX" == "0000000000000000000000000000000000000000000000000000000000000000" ]]; then
   echo "[-] MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX must be one nonzero lowercase 32-byte public key" >&2
@@ -1204,6 +1210,7 @@ if [[ -n "$CI_APPLE_SLICE" || -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
     "hermetic_runner_sha256": "$HERMETIC_RUNNER_SHA256",
+    "wallet_runtime_authority": "$WALLET_RUNTIME_AUTHORITY",
     "wallet_runtime_trust_ed25519_hex": "$WALLET_RUNTIME_TRUST_PUBLIC_HEX",
     "cargo_build_jobs": 1,
     "cargo_incremental": 0,
@@ -1479,6 +1486,7 @@ run_hermetic_apple_cargo() {
       --set "IROHA_GIT_COMMIT_HASH=$EMBEDDED_SOURCE_COMMIT" \
       --set "LANG=C.UTF-8" \
       --set "LC_ALL=C.UTF-8" \
+      --set "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY=$WALLET_RUNTIME_AUTHORITY" \
       --set "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX=$WALLET_RUNTIME_TRUST_PUBLIC_HEX" \
       --set "NORITO_SKIP_BINDINGS_SYNC=1" \
       --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:/usr/bin:/bin" \
@@ -1798,6 +1806,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
     "hermetic_runner_sha256": "$HERMETIC_RUNNER_SHA256",
+    "wallet_runtime_authority": "$WALLET_RUNTIME_AUTHORITY",
     "wallet_runtime_trust_ed25519_hex": "$WALLET_RUNTIME_TRUST_PUBLIC_HEX",
     "environment_profiles": {
       "apple-ios-device": [
@@ -1814,6 +1823,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
+        "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY",
         "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX",
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
@@ -1839,6 +1849,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
+        "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY",
         "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX",
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
@@ -1863,6 +1874,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "LANG",
         "LC_ALL",
         "MACOSX_DEPLOYMENT_TARGET",
+        "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY",
         "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX",
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
@@ -1967,7 +1979,9 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_kagemusha_wallet_review_v1",
     "connect_norito_kagemusha_wallet_execute_reviewed_v1",
     "connect_norito_kagemusha_wallet_discard_review_v1",
-    "connect_norito_kagemusha_wallet_install_runtime_v1",
+    "connect_norito_kagemusha_wallet_installation_begin_v1",
+    "connect_norito_kagemusha_wallet_installation_register_v1",
+    "connect_norito_kagemusha_wallet_installation_close_v1",
     "connect_norito_kagemusha_wallet_enrollment_v1"
   ],
   "forbidden_symbols": [

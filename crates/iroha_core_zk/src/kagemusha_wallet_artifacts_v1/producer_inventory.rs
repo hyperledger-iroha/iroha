@@ -25,6 +25,8 @@ pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};
 
 #[path = "producer_inventory/compiler.rs"]
 mod compiler;
+#[cfg(test)]
+pub(crate) use compiler::open_pinned_engineering_wallet_sources;
 pub use compiler::{
     CompilationErrorV1, CompilationPhaseV1, CompiledKeyV1, CompiledOmegaV1, CompiledOperationV1,
     CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1,
@@ -34,6 +36,10 @@ pub use compiler::{
 #[path = "producer_inventory/finality.rs"]
 mod finality;
 pub use finality::{FinalityQualificationErrorV1, QualifiedReceiptSourceV1};
+
+#[path = "producer_inventory/finality_producer.rs"]
+mod finality_producer;
+pub use finality_producer::{FinalityProducerErrorV1, QualifiedFinalityProducerV1};
 
 #[path = "producer_inventory/sigma.rs"]
 mod sigma;
@@ -442,19 +448,79 @@ impl InstalledVerifierPackV1 {
 }
 
 fn read(source: &mut dyn OriginalSourceV1, blob: BlobV1, cap: usize) -> Result<Vec<u8>, Error> {
+    read_cancellable(source, blob, cap, None)
+}
+
+// Preserve a native retained reader's integrity refusal across std::io::Read.
+// An ordinary I/O error cannot acquire this marker from an error message or kind.
+#[derive(Debug)]
+struct OriginalCustodyFailure(std::io::Error);
+
+impl std::fmt::Display for OriginalCustodyFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "original custody refused: {}", self.0)
+    }
+}
+
+impl std::error::Error for OriginalCustodyFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+fn read_cancellable(
+    source: &mut dyn OriginalSourceV1,
+    blob: BlobV1,
+    cap: usize,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<Vec<u8>, Error> {
+    let check =
+        || iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled);
+    check()?;
     let length = blob.length(cap)?;
     let maximum = blob.bytes.checked_add(1).ok_or(Error::Inventory)?;
+    // The original source retains its locator/inode checks; this layer bounds each
+    // read and hashes those exact bytes without a second uncancellable whole-PK pass.
+    let opened = source.open(blob.sha256);
+    check()?;
+    let mut reader = opened?.take(maximum);
     let mut bytes = Vec::with_capacity(length);
-    source
-        .open(blob.sha256)?
-        .take(maximum)
-        .read_to_end(&mut bytes)
-        .map_err(|_| Error::Unavailable)?;
-    if bytes.len() != length || BlobV1::of(&bytes) != blob {
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        check()?;
+        let result = reader.read(&mut buffer);
+        // A signal observed while I/O completed is cancellation, not an artifact
+        // outage or invalid hash. A blocked OS read itself cannot be interrupted here.
+        check()?;
+        let count = match result {
+            Err(error)
+                if error
+                    .get_ref()
+                    .is_some_and(|cause| cause.is::<OriginalCustodyFailure>()) =>
+            {
+                return Err(Error::Inventory);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(|_| Error::Unavailable)?,
+        };
+        if count == 0 {
+            break;
+        }
+        if count > length.saturating_sub(bytes.len()) {
+            return Err(Error::Inventory);
+        }
+        hash.update(&buffer[..count]);
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    check()?;
+    let actual: [u8; 32] = hash.finalize().into();
+    if bytes.len() != length || actual != blob.sha256 {
         return Err(Error::Inventory);
     }
     Ok(bytes)
 }
+
 impl AuthenticatedProducerInventoryV1 {
     /// Signed immutable inventory metadata; reading it grants no source capability.
     #[must_use]
@@ -491,15 +557,46 @@ impl AuthenticatedProducerInventoryV1 {
         source: &mut dyn OriginalSourceV1,
         maximum_pk_bytes: usize,
     ) -> Result<OriginalBytesV1, Error> {
+        self.read_original_cancellable(index, source, maximum_pk_bytes, None)
+    }
+
+    /// Read one exact original with cooperative checks between bounded reads and hashes.
+    /// The source retains all descriptor-relative custody checks. This cannot interrupt
+    /// a blocked operating-system read, and never returns a partial original.
+    /// # Errors
+    /// As [`Self::read_original`], or caller cancellation without an artifact verdict.
+    pub fn read_original_cancellable(
+        &self,
+        index: u32,
+        source: &mut dyn OriginalSourceV1,
+        maximum_pk_bytes: usize,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<OriginalBytesV1, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         if maximum_pk_bytes == 0 || maximum_pk_bytes > PROVING_KEY_MAX_BYTES_V1 {
             return Err(Error::Inventory);
         }
         let original = *self.inventory.member(index)?;
         original.proving_key.length(maximum_pk_bytes)?;
         Ok(OriginalBytesV1 {
-            descriptor: read(source, original.descriptor, DESCRIPTOR_MAX_BYTES_V1)?,
-            verifying_key: read(source, original.verifying_key, VERIFYING_KEY_MAX_BYTES_V1)?,
-            proving_key: read(source, original.proving_key, maximum_pk_bytes)?,
+            descriptor: read_cancellable(
+                source,
+                original.descriptor,
+                DESCRIPTOR_MAX_BYTES_V1,
+                cancellation,
+            )?,
+            verifying_key: read_cancellable(
+                source,
+                original.verifying_key,
+                VERIFYING_KEY_MAX_BYTES_V1,
+                cancellation,
+            )?,
+            proving_key: read_cancellable(
+                source,
+                original.proving_key,
+                maximum_pk_bytes,
+                cancellation,
+            )?,
         })
     }
 }

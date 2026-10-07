@@ -202,8 +202,8 @@ pub(crate) fn prepare_private_root_at(
     })?;
     if directory.exists() {
         let root = iroha_fs::PrivateDirectory::open(directory)?;
-        match root.read(PREPARED, 1024 * 1024) {
-            Ok(bytes) => {
+        match root.read_optional(PREPARED, 1024 * 1024)? {
+            Some(bytes) => {
                 if publication_root.is_some() {
                     return Err(Error::Invalid(
                         "publication stage already contains a prepared identity".into(),
@@ -219,8 +219,7 @@ pub(crate) fn prepare_private_root_at(
                 verify_retained(root.path(), &retained.prepared, spec)?;
                 return Ok(retained.prepared);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            None => {}
         }
     }
     let mut prepared = prepare_fresh(name, directory, ports, spec, publication_root)

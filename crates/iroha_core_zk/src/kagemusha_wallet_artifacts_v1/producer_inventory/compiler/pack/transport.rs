@@ -10,11 +10,12 @@ use super::{BlobV1, WalletArtifactOriginalsV1};
 use crate::kagemusha_wallet_artifacts_v1::producer_inventory::DirectoryOriginalsV1;
 
 const TRANSPORT_MAX_BYTES: usize = 32 * 1024 * 1024;
+const FINANCIAL_MAX_BYTES: usize = 2048;
 const PACK_MAX_BYTES: usize = 16 * 1024 * 1024 + 64 * 1024;
 const CATALOG_MAX_BYTES: usize = 16 * 1024 * 1024;
 const ORIGINAL_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 const WALLET_MAX_ROWS: usize = 3 * 4096;
-const FINALITY_MAX_ROWS: usize = 3 * 65536;
+const FINALITY_MAX_ROWS: usize = 2 * 65536;
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -55,9 +56,17 @@ fn rows(output: &mut String, originals: &[BlobV1], maximum: usize) -> io::Result
     Ok(())
 }
 
-fn verify_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> io::Result<()> {
+fn verify_metadata(
+    directory: &PrivateDirectory,
+    name: &str,
+    bytes: &[u8],
+) -> io::Result<Option<()>> {
     directory.revalidate()?;
-    let mut original = directory.open_retained_read_only(name, bytes.len())?;
+    // Only the first native child open can establish absence. A later NotFound
+    // from retained-file or directory validation must never authorize publication.
+    let Some(mut original) = directory.open_retained_read_only_optional(name, bytes.len())? else {
+        return Ok(None);
+    };
     if original.len()? != bytes.len() as u64 {
         return Err(invalid("existing metadata extent differs"));
     }
@@ -92,17 +101,16 @@ fn verify_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> io
         return Err(invalid("existing metadata original differs"));
     }
     directory.sync()?;
-    directory.revalidate()
+    directory.revalidate()?;
+    Ok(Some(()))
 }
 
 fn publish_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> io::Result<()> {
     if bytes.is_empty() {
         return Err(invalid("empty metadata original"));
     }
-    match verify_metadata(directory, name, bytes) {
-        Ok(()) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    if verify_metadata(directory, name, bytes)?.is_some() {
+        return Ok(());
     }
     let mut nonce = [0_u8; 16];
     rand::rngs::OsRng
@@ -119,7 +127,7 @@ fn publish_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> i
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error),
     }
-    verify_metadata(directory, name, bytes)
+    verify_metadata(directory, name, bytes)?.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
 }
 
 impl WalletArtifactOriginalsV1 {
@@ -142,9 +150,44 @@ impl WalletArtifactOriginalsV1 {
         Ok(output.into_bytes())
     }
 
-    /// Export the three whole metadata originals into an existing private bundle root.
+    /// Exact bounded DATA for the signed application's financial-original selection.
+    /// Derived only from this completed Native owner; never chooses a signature,
+    /// installation ID, trust key or Ready state. Canonical JSON with one LF.
+    /// # Errors
+    /// Whole pack/catalog bounds, catalog commitment mismatch or transport closure failure.
+    pub fn financial_originals_json(&self) -> io::Result<Vec<u8>> {
+        if self.verifier_pack.is_empty()
+            || self.verifier_pack.len() > PACK_MAX_BYTES
+            || self.producer_inventory.is_empty()
+            || self.producer_inventory.len() > CATALOG_MAX_BYTES
+            || self.producer_catalog_digest == [0; 32]
+            || self.producer_catalog_digest
+                != crate::kagemusha_wallet_artifacts_v1::artifact_digest(
+                    b"producer-catalog",
+                    &self.producer_inventory,
+                )
+        {
+            return Err(invalid("completed financial originals are inconsistent"));
+        }
+        let transport = self.transport_json()?;
+        let pack = BlobV1::of(&self.verifier_pack);
+        let catalog = BlobV1::of(&self.producer_inventory);
+        let transport = BlobV1::of(&transport);
+        let mut output = String::new();
+        write!(&mut output, "{{\"producerCatalogDigest\":\"{}\",\"producerInventory\":{{\"bytes\":{},\"sha256\":\"{}\"}},\"schema\":\"iroha.kagemusha.wallet-financial-originals.v1\",\"transport\":{{\"bytes\":{},\"sha256\":\"{}\"}},\"verifierPack\":{{\"bytes\":{},\"sha256\":\"{}\"}}}}\n",
+            hex::encode(self.producer_catalog_digest), catalog.bytes, hex::encode(catalog.sha256),
+            transport.bytes, hex::encode(transport.sha256), pack.bytes, hex::encode(pack.sha256))
+            .map_err(|_| invalid("financial original encoding failed"))?;
+        if output.len() > FINANCIAL_MAX_BYTES {
+            return Err(invalid("financial original byte ceiling exceeded"));
+        }
+        Ok(output.into_bytes())
+    }
+
+    /// Export the four whole metadata originals into an existing private bundle root.
     /// The genuine compiler sink must be its `wallet-originals` child; the separately
-    /// supplied finality graph must be its `finality-originals` child. Every referenced
+    /// supplied finality descriptor/VK graph must be its `finality-originals` child.
+    /// Server finality proving tables are not required or read. Every referenced
     /// original is reauthenticated by a 64 KiB stream before metadata publication.
     /// Files are sealed 0400 before atomic no-replace publication. Exact retries retain
     /// original inodes; conflicts and partial publication evidence are preserved.
@@ -167,6 +210,7 @@ impl WalletArtifactOriginalsV1 {
             return Err(invalid("whole metadata original byte ceiling exceeded"));
         }
         let transport = self.transport_json()?;
+        let financial = self.financial_originals_json()?;
         let directory = PrivateDirectory::open_exact(root)?;
         if wallet.root()? != directory.path().join("wallet-originals")
             || finality.root()? != directory.path().join("finality-originals")
@@ -189,6 +233,7 @@ impl WalletArtifactOriginalsV1 {
             &self.producer_inventory,
         )?;
         publish_metadata(&directory, "transport.json", &transport)?;
+        publish_metadata(&directory, "financial-originals.json", &financial)?;
         wallet.root()?;
         finality.root()?;
         directory.sync()?;
@@ -220,18 +265,39 @@ mod tests {
         let mut finality =
             DirectoryOriginalsV1::open_existing(root.join("finality-originals"), 1024).unwrap();
         let one = BlobV1::of(b"actual wallet original");
-        let two = BlobV1::of(b"independent finality original");
+        let two = BlobV1::of(b"independent finality descriptor original");
+        let vk = BlobV1::of(b"independent finality verifier original");
+        let pk = BlobV1::of(b"server finality proving original");
+        let finality_record = iroha_kagemusha_proof::finality::catalog::ArtifactRecord {
+            name: vec![1],
+            lengths: [two.bytes, vk.bytes, pk.bytes],
+            sha256: [two.sha256, vk.sha256, pk.sha256],
+        };
         wallet
             .store_original(one, b"actual wallet original")
             .unwrap();
         finality
-            .store_original(two, b"independent finality original")
+            .store_original(two, b"independent finality descriptor original")
             .unwrap();
+        finality
+            .store_original(vk, b"independent finality verifier original")
+            .unwrap();
+        // The server PK remains deliberately absent from this wallet transport fixture.
+        assert!(
+            !root
+                .join("finality-originals")
+                .join(hex::encode(pk.sha256))
+                .exists()
+        );
         let originals = WalletArtifactOriginalsV1 {
+            producer_catalog_digest: crate::kagemusha_wallet_artifacts_v1::artifact_digest(
+                b"producer-catalog",
+                b"transport fixture whole inventory",
+            ),
             verifier_pack: b"transport fixture whole pack".to_vec(),
             producer_inventory: b"transport fixture whole inventory".to_vec(),
             wallet_originals: vec![one],
-            finality_originals: vec![two],
+            finality_originals: super::super::finality_verifier_blobs(&[finality_record]).unwrap(),
         };
         (temp, root, wallet, finality, originals)
     }
@@ -265,6 +331,29 @@ mod tests {
             std::fs::read(root.join("transport.json")).unwrap(),
             originals.transport_json().unwrap()
         );
+        assert_eq!(
+            std::fs::read(root.join("financial-originals.json")).unwrap(),
+            originals.financial_originals_json().unwrap()
+        );
+    }
+
+    #[test]
+    fn metadata_initial_absence_never_masks_changed_directory_custody() {
+        let (temp, root, _wallet, _finality, _originals) = fixture();
+        let directory = PrivateDirectory::open_exact(&root).unwrap();
+        let name = "metadata.norito";
+        let bytes = b"exact retained metadata";
+        assert_eq!(verify_metadata(&directory, name, bytes).unwrap(), None);
+        publish_metadata(&directory, name, bytes).unwrap();
+        assert_eq!(verify_metadata(&directory, name, bytes).unwrap(), Some(()));
+
+        let retained = temp.path().join("retained-bundle");
+        std::fs::rename(&root, &retained).unwrap();
+        PrivateDirectory::open_or_create(&root).unwrap();
+        assert!(verify_metadata(&directory, name, bytes).is_err());
+        assert!(publish_metadata(&directory, name, bytes).is_err());
+        assert!(!root.join(name).exists());
+        assert_eq!(std::fs::read(retained.join(name)).unwrap(), bytes);
     }
 
     #[test]
@@ -278,6 +367,60 @@ mod tests {
         );
         assert!(!root.join("verifier-pack.norito").exists());
         assert!(!root.join("transport.json").exists());
+    }
+
+    #[test]
+    fn missing_server_pk_is_allowed_but_each_required_original_remains_mandatory() {
+        let (_temp, root, wallet, finality, originals) = fixture();
+        assert_eq!(originals.wallet_originals.len(), 1);
+        assert_eq!(originals.finality_originals.len(), 2);
+        originals
+            .write_bundle_metadata(&root, &wallet, &finality)
+            .unwrap();
+        for role in [0_usize, 1, 2] {
+            let (_temp, root, wallet, finality, originals) = fixture();
+            let (directory, blob) = match role {
+                0 => ("wallet-originals", originals.wallet_originals[0]),
+                1 => (
+                    "finality-originals",
+                    BlobV1::of(b"independent finality descriptor original"),
+                ),
+                _ => (
+                    "finality-originals",
+                    BlobV1::of(b"independent finality verifier original"),
+                ),
+            };
+            std::fs::remove_file(root.join(directory).join(hex::encode(blob.sha256))).unwrap();
+            assert!(
+                originals
+                    .write_bundle_metadata(&root, &wallet, &finality)
+                    .is_err()
+            );
+            assert!(!root.join("verifier-pack.norito").exists());
+        }
+    }
+
+    #[test]
+    fn changed_required_verifier_original_refuses_before_metadata_publication() {
+        let (_temp, root, wallet, finality, originals) = fixture();
+        let blob = BlobV1::of(b"independent finality verifier original");
+        let path = root
+            .join("finality-originals")
+            .join(hex::encode(blob.sha256));
+        std::fs::remove_file(&path).unwrap();
+        // Equal extent and private permissions cannot authorize a changed preimage.
+        let directory = PrivateDirectory::open_exact(root.join("finality-originals")).unwrap();
+        let mut writer = directory
+            .create_retained_private(hex::encode(blob.sha256), blob.bytes as usize)
+            .unwrap();
+        writer.write_all(&vec![0; blob.bytes as usize]).unwrap();
+        writer.seal_read_only().unwrap();
+        assert!(
+            originals
+                .write_bundle_metadata(&root, &wallet, &finality)
+                .is_err()
+        );
+        assert!(!root.join("verifier-pack.norito").exists());
     }
 
     #[test]
@@ -327,6 +470,82 @@ mod tests {
         assert_eq!(
             std::fs::read(root.join("producer-inventory.norito")).unwrap(),
             b"conflict"
+        );
+    }
+    #[test]
+    fn financial_data_is_exact_native_commitment_and_whole_transport_identity() {
+        let (_temp, _root, _wallet, _finality, originals) = fixture();
+        let bytes = originals.financial_originals_json().unwrap();
+        let value: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(object.len(), 5);
+        assert_eq!(
+            object["schema"].as_str(),
+            Some("iroha.kagemusha.wallet-financial-originals.v1")
+        );
+        assert_eq!(
+            object["producerCatalogDigest"].as_str(),
+            Some(hex::encode(originals.producer_catalog_digest).as_str())
+        );
+        for (name, actual) in [
+            ("verifierPack", originals.verifier_pack.clone()),
+            ("producerInventory", originals.producer_inventory.clone()),
+            ("transport", originals.transport_json().unwrap()),
+        ] {
+            let blob = BlobV1::of(&actual);
+            let row = object[name].as_object().unwrap();
+            assert_eq!(row.len(), 2);
+            assert_eq!(row["bytes"].as_u64(), Some(blob.bytes));
+            assert_eq!(
+                row["sha256"].as_str(),
+                Some(hex::encode(blob.sha256).as_str())
+            );
+        }
+        let mut canonical = norito::json::to_json_bounded(&value, 2048)
+            .unwrap()
+            .into_bytes();
+        canonical.push(b'\n');
+        assert_eq!(canonical, bytes);
+    }
+    #[test]
+    fn changed_catalog_cannot_export_a_retained_native_commitment() {
+        let (_temp, root, wallet, finality, mut originals) = fixture();
+        originals.producer_inventory[0] ^= 1;
+        assert!(originals.financial_originals_json().is_err());
+        assert!(
+            originals
+                .write_bundle_metadata(&root, &wallet, &finality)
+                .is_err()
+        );
+        assert!(!root.join("financial-originals.json").exists());
+        assert!(!root.join("verifier-pack.norito").exists());
+    }
+    #[test]
+    fn conflicting_fourth_original_is_refused_without_replacing_its_inode() {
+        let (_temp, root, wallet, finality, originals) = fixture();
+        let directory = PrivateDirectory::open_exact(&root).unwrap();
+        let mut writer = directory
+            .create_retained_private("financial-originals.json", 8)
+            .unwrap();
+        writer.write_all(b"conflict").unwrap();
+        let sealed = writer.seal_read_only().unwrap();
+        let before = sealed.identity().unwrap();
+        assert!(
+            originals
+                .write_bundle_metadata(&root, &wallet, &finality)
+                .is_err()
+        );
+        let existing = directory
+            .open_retained_read_only("financial-originals.json", 8)
+            .unwrap();
+        assert_eq!(existing.identity().unwrap(), before);
+        assert_eq!(
+            std::fs::read(root.join("financial-originals.json")).unwrap(),
+            b"conflict"
+        );
+        assert_eq!(
+            std::fs::read(root.join("transport.json")).unwrap(),
+            originals.transport_json().unwrap()
         );
     }
 }

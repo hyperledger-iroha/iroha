@@ -5,8 +5,6 @@ use iroha_kagemusha_proof::{
     q_sigma::{SigmaSlotWitness, native::IncomingSigma},
     q_signature::SignatureWitness,
 };
-use iroha_pasta::Eq;
-use iroha_plonk::pcs::ipa::PinnedParams;
 use iroha_plonk_gadgets::bytes::p_bytes_native;
 
 use super::*;
@@ -45,7 +43,8 @@ impl NativeFoldWorkerV1 {
         {
             return Err(Error::Proof("Q source schedule"));
         }
-        let params = proof(PinnedParams::<Eq>::derive(16))?;
+        let params = proof(self.installed.verifier().vesta_parameters(16))?;
+        let q_params = self.installed.verifier().pallas_parameters();
         // Repeating the same released capsule uses the same public local-fold
         // nonce. Proof hiding still uses fresh OS randomness; the retained exact
         // proof wins after checkpoint publication and is never regenerated there.
@@ -53,9 +52,9 @@ impl NativeFoldWorkerV1 {
         let sigma = proof(q.sigma().prepare(
             input.own.clone(),
             input.incoming.clone(),
-            &params,
+            params,
             salt,
-            &self.fold_config(),
+            &self.fold_config(cancellation),
         ))?;
         let mut expected = vec![sigma.instances().to_vec()];
         for (plan, witnesses) in q.signatures().iter().zip(&input.signatures) {
@@ -67,11 +66,13 @@ impl NativeFoldWorkerV1 {
             cancellation.check()?;
             checked.push(q_checkpoint::restore(
                 &q.keys()[stage],
+                q_params,
                 stage,
                 source,
                 bytes,
                 &expected[stage],
                 self.budget,
+                cancellation,
             )?);
         }
         cancellation.check()?;
@@ -82,13 +83,22 @@ impl NativeFoldWorkerV1 {
         let original = {
             let owner = self
                 .sources
-                .import_q(route, stage, originals, self.read)
+                .import_q_cancellable(
+                    route,
+                    stage,
+                    originals,
+                    self.read,
+                    Some(cancellation.prover_token()),
+                )
                 .map_err(artifact)?;
             cancellation.check()?;
             match owner {
                 ImportedQV1::Sigma(owner) if stage == 0 => {
-                    let output =
-                        proof(owner.prove(&sigma, ProverRandomness::os(), self.prover_config()))?;
+                    let output = proof(owner.prove(
+                        &sigma,
+                        ProverRandomness::os(),
+                        self.prover_config(cancellation),
+                    ))?;
                     q_checkpoint::Original {
                         proof: output.bytes,
                         instances: output.instances,
@@ -98,7 +108,7 @@ impl NativeFoldWorkerV1 {
                     let output = proof(owner.prove(
                         &input.signatures[stage - 1],
                         ProverRandomness::os(),
-                        self.prover_config(),
+                        self.prover_config(cancellation),
                     ))?;
                     q_checkpoint::Original {
                         proof: output.bytes,
@@ -111,7 +121,15 @@ impl NativeFoldWorkerV1 {
         if original.instances != expected[stage] {
             return Err(Error::Proof("Q native source values"));
         }
-        let bytes = q_checkpoint::encode(&q.keys()[stage], stage, source, &original, self.budget)?;
+        let bytes = q_checkpoint::encode(
+            &q.keys()[stage],
+            q_params,
+            stage,
+            source,
+            &original,
+            self.budget,
+            cancellation,
+        )?;
         cancellation.check()?;
         Ok(QProgressV1::Checkpoint(bytes))
     }

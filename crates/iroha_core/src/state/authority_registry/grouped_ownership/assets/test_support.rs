@@ -50,9 +50,12 @@ pub(in crate::state) fn fixture(context: bool) -> Box<World> {
 }
 
 pub(in crate::state) fn check(world: &World, work: u64) -> Result<(), GroupedOwnershipError> {
+    let budget = iroha_allocation::AllocationBudget::new(16_777_216);
     let mut result = None;
     assert_eq!(
-        allocations_during(|| result = Some(CheckedAssets::capture(world, work).map(|_| ()))),
+        allocations_during(
+            || result = Some(CheckedAssets::capture(world, &budget, work).map(|_| ()))
+        ),
         0
     );
     result.unwrap()

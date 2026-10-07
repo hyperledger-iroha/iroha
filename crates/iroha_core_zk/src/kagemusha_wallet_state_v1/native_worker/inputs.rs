@@ -437,7 +437,8 @@ impl NativeFoldWorkerV1 {
         if checkpoints.len() > schedule.len() {
             return Err(Error::Proof("native checkpoint count"));
         }
-        let preparation = proof(PreparationV1::new(&self.installed))?;
+        let preparation = proof(PreparationV1::new(&self.installed))?
+            .with_cancellation(cancellation.prover_token());
         let owner = self.owner(&preparation, custody, false)?;
         let current = if predecessor.is_some() {
             Some(self.owner(&preparation, custody, true)?)
@@ -528,6 +529,7 @@ impl NativeFoldWorkerV1 {
                     &mut public,
                     custody,
                     route,
+                    cancellation,
                 )?;
                 incoming = proposal;
                 Fields::Receive(fields)
@@ -544,6 +546,7 @@ impl NativeFoldWorkerV1 {
                     &mut public,
                     custody,
                     route,
+                    cancellation,
                 )?;
                 incoming = proposal;
                 Fields::Archive(fields)
@@ -644,11 +647,11 @@ impl NativeFoldWorkerV1 {
                     public,
                     proof: proof_bytes,
                 };
-                proof(
-                    self.installed
-                        .verifier()
-                        .verify_lineage(&lineage, self.budget),
-                )?;
+                proof(self.installed.verifier().verify_lineage_cancellable(
+                    &lineage,
+                    self.budget,
+                    Some(cancellation.prover_token()),
+                ))?;
                 let burned =
                     route.variant == Variant::Receive || route.variant == Variant::ReceiveRenewed;
                 let burned = burned

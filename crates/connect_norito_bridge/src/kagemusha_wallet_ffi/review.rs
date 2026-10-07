@@ -213,10 +213,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_review_v1(
             Ok(result)
         })
     };
-    if status < 0 {
-        if let Some(token) = retained {
-            let _ = run(|| discard_review(handle, token));
-        }
+    if status < 0
+        && let Some(token) = retained
+    {
+        let _ = run(|| discard_review(handle, token));
     }
     status
 }

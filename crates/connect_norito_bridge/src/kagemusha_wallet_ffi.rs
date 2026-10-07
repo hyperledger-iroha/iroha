@@ -29,15 +29,17 @@ mod android;
     windows
 ))]
 pub use android::AndroidPlatform;
+mod background;
 mod closing;
-mod enrollment;
+pub(crate) mod enrollment;
 mod exports;
 mod installed;
-pub use enrollment::{
-    WalletEnrollmentRequest, WalletEnrollmentResult, connect_norito_kagemusha_wallet_enrollment_v1,
+pub use installed::{WalletInstallationAttempt, WalletRuntimeOriginals};
+pub use installed::{
+    connect_norito_kagemusha_wallet_installation_begin_v1,
+    connect_norito_kagemusha_wallet_installation_close_v1,
+    connect_norito_kagemusha_wallet_installation_register_v1,
 };
-pub use installed::WalletRuntimeOriginals;
-pub use installed::connect_norito_kagemusha_wallet_install_runtime_v1;
 pub(crate) mod open;
 pub use open::{
     NativeRegistrationRetry, NativeStartupFailure, retain_native_runtime, start_native_wallet,
@@ -230,11 +232,7 @@ trait Wallet: Send {
     fn credit(&mut self, credit: &[u8; 32], payment: &[u8; 32]) -> Result<Response>;
 }
 struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
-    wallet: state::Coordinator<
-        state::AdvanceHandle<advance::KagemushaWalletStdFsV1, P>,
-        state::ProviderArchive<advance::KagemushaWalletStdFsV1, P>,
-        state::NativeWalletProofsV1<advance::KagemushaWalletStdFsV1, P, S>,
-    >,
+    wallet: state::NativeWalletCoordinatorV1<advance::KagemushaWalletStdFsV1, P, S>,
     times: BTreeMap<u64, state::DirectTimeExchangeV1>,
     next_time: u64,
     reviews: review::Tokens<state::ReviewedOperationV1>,
@@ -311,6 +309,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     }
 }
 struct Owner {
+    background: background::Background,
     closing: Arc<closing::CloseState>,
     scheduler: state::Scheduler,
     // The shared closing state blocks new calls; this owner remains registered until
@@ -342,6 +341,7 @@ fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> 
     registry.owners.insert(
         id,
         Arc::new(Owner {
+            background: background::Background::default(),
             closing: Arc::new(closing::CloseState::default()),
             scheduler,
             wallet: Mutex::new(Some(wallet)),
@@ -370,6 +370,10 @@ pub(crate) fn activity(id: u64, foreground: bool, charging: bool) -> Result<()> 
     let owner = selected.owners.get(&id).ok_or(Failure::code(CLOSED))?;
     owner.closing.require_open()?;
     owner.scheduler.set_activity(foreground, charging);
+    if let Err(error) = owner.background.activity(owner, foreground || charging) {
+        owner.scheduler.set_activity(false, false);
+        return Err(error);
+    }
     Ok(())
 }
 fn with_wallet<T>(
@@ -387,7 +391,7 @@ fn with_wallet_owner<T>(
 ) -> Result<T> {
     owner.closing.require_open()?;
     // Signal and join before the owner lock. Reversing these locks deadlocks against proving.
-    let _priority = payment.then(|| owner.scheduler.payment());
+    let _priority = payment.then(|| owner.background.payment(&owner.scheduler));
     let mut guard = owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?;
     owner.closing.require_open()?;
     action(guard.as_deref_mut().ok_or(Failure::code(CLOSED))?)
@@ -397,6 +401,9 @@ pub(crate) fn snapshot(id: u64) -> Result<state::Snapshot> {
     with_wallet(id, false, |wallet| wallet.snapshot())
 }
 pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
+    if matches!(input, setup::Setup::BackgroundStatus) {
+        return owner(id)?.background.status();
+    }
     with_wallet(id, true, |wallet| wallet.setup(input))
 }
 pub(crate) fn execute(id: u64, request: state::OperationRequestV1) -> Result<Response> {

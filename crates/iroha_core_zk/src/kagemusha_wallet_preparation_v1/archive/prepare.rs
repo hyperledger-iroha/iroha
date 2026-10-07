@@ -99,11 +99,16 @@ impl PreparationV1<'_> {
             KagemushaWalletCreditedEvidenceV1::Receive { package } => self
                 .installed
                 .verifier()
-                .verify_package_proofs(package, Some(&request.body), budget)?,
+                .verify_package_proofs_cancellable(
+                    package,
+                    Some(&request.body),
+                    budget,
+                    self.cancellation,
+                )?,
             KagemushaWalletCreditedEvidenceV1::Status { status } => self
                 .installed
                 .verifier()
-                .verify_lineage(&status.lineage, budget)?,
+                .verify_lineage_cancellable(&status.lineage, budget, self.cancellation)?,
         }
         self.restore_archive(owner, source, intent, removal, nonce, budget)
     }

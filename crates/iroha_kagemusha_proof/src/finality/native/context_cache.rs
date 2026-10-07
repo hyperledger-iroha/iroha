@@ -49,13 +49,21 @@ impl ProvedContext {
         source: &SourceVerifier,
         vesta: &PinnedParams<Eq>,
         budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Option<SourceNodeEvidence>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let Some(evidence) = self.candidate(input)? else {
             return Ok(None);
         };
         let _opening = source
-            .verify_native(evidence, vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .verify_native_cancellable(evidence, vesta, budget, cancellation)
+            .map_err(|error| {
+                if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(Some(evidence.clone()))
     }
 }

@@ -1,6 +1,7 @@
 //! One complete authenticated source grant for native wallet proving.
 //!
-//! Metadata remains resident; each active import reads one exact signed original.
+//! Metadata and installed public generators remain resident; each active import
+//! reads one exact signed original.
 //! There is no constructor from an Omega-only grant, readiness flag or subset.
 
 use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
@@ -9,6 +10,7 @@ use iroha_kagemusha_proof::{
     finality::{catalog::VerifierLimits, native::Parameters},
 };
 use iroha_plonk::{ProvingKey, keys::pk::artifact::ReadConfig, pcs::ipa::PinnedParams};
+use std::sync::Arc;
 
 use super::*;
 
@@ -24,6 +26,9 @@ pub enum WalletSourcesErrorV1 {
     /// The complete ordinary receipt graph differs from native genesis or its sources.
     #[error(transparent)]
     Finality(#[from] FinalityQualificationErrorV1),
+    /// The actual full finality producer or one of its original proving tables failed.
+    #[error(transparent)]
+    FinalityProducer(#[from] FinalityProducerErrorV1),
     /// A Q source or exact signature policy did not qualify.
     #[error(transparent)]
     Q(#[from] QQualificationErrorV1),
@@ -36,6 +41,55 @@ pub enum WalletSourcesErrorV1 {
 }
 
 impl WalletSourcesErrorV1 {
+    /// Whether caller cancellation interrupted source work without a proof verdict.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Original(error) => error.is_cancelled(),
+            Self::Sigma(error) => match error {
+                SigmaQualificationErrorV1::Original(error) => error.is_cancelled(),
+                SigmaQualificationErrorV1::Monetary(error) => error.is_cancelled(),
+                SigmaQualificationErrorV1::Administrative(error) => error.is_cancelled(),
+                SigmaQualificationErrorV1::Parameters | SigmaQualificationErrorV1::Metadata(_) => {
+                    false
+                }
+            },
+            Self::Finality(error) => match error {
+                FinalityQualificationErrorV1::Original(error) => error.is_cancelled(),
+                FinalityQualificationErrorV1::Source(error) => error.is_cancelled(),
+                FinalityQualificationErrorV1::Anchor(_)
+                | FinalityQualificationErrorV1::AnchorMismatch => false,
+            },
+            Self::FinalityProducer(error) => match error {
+                FinalityProducerErrorV1::Original(error) => error.is_cancelled(),
+                FinalityProducerErrorV1::Source(error) => error.is_cancelled(),
+            },
+            Self::Q(error) => match error {
+                QQualificationErrorV1::Original(error) => error.is_cancelled(),
+                QQualificationErrorV1::Sigma(error) => error.is_cancelled(),
+                QQualificationErrorV1::Signature(error) => error.is_cancelled(),
+                QQualificationErrorV1::Source | QQualificationErrorV1::Metadata(_) => false,
+            },
+            Self::Operation(error) => match error {
+                OperationQualificationErrorV1::Cancelled => true,
+                OperationQualificationErrorV1::Original(error) => error.is_cancelled(),
+                OperationQualificationErrorV1::Bootstrap(error) => match error {
+                    BootstrapQualificationErrorV1::Original(error) => error.is_cancelled(),
+                    BootstrapQualificationErrorV1::Native(error) => error.is_cancelled(),
+                    BootstrapQualificationErrorV1::Source => false,
+                },
+                OperationQualificationErrorV1::Source
+                | OperationQualificationErrorV1::A(_)
+                | OperationQualificationErrorV1::W(_) => false,
+            },
+            Self::Omega(error) => match error {
+                OmegaQualificationErrorV1::Original(error) => error.is_cancelled(),
+                OmegaQualificationErrorV1::Native(error) => error.is_cancelled(),
+                OmegaQualificationErrorV1::Routes | OmegaQualificationErrorV1::Catalog => false,
+            },
+        }
+    }
+
     /// Whether the failure is missing or unreadable reinstallable source material.
     /// Cryptographic, length, hash, installation and source mismatches remain false.
     pub const fn is_unavailable(&self) -> bool {
@@ -44,6 +98,7 @@ impl WalletSourcesErrorV1 {
             Self::Original(Error::Unavailable)
                 | Self::Sigma(SigmaQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Finality(FinalityQualificationErrorV1::Original(Error::Unavailable))
+                | Self::FinalityProducer(FinalityProducerErrorV1::Original(Error::Unavailable))
                 | Self::Q(QQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Operation(OperationQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Operation(OperationQualificationErrorV1::Bootstrap(
@@ -63,9 +118,12 @@ pub struct QualifiedWalletSourcesV1 {
     scope: SourceScopeV1,
     sigmas: QualifiedSigmasV1,
     finality: QualifiedReceiptSourceV1,
+    finality_producer: QualifiedFinalityProducerV1,
     q: Vec<QualifiedQProgramV1>,
     routes: Vec<QualifiedOperationRouteV1>,
     omega: QualifiedOmegaProgramV1,
+    sigma_parameters: [Arc<PinnedParams<Eq>>; 2],
+    q_parameters: Arc<PinnedParams<Ep>>,
 }
 
 fn route_index(route: OperationRoute) -> Result<usize, Error> {
@@ -110,9 +168,27 @@ impl AuthenticatedProducerInventoryV1 {
             ),
         )?;
         let scope = SourceScopeV1::from_scheme(installed.verifier().scheme())?;
+        // These transparent generators already belong to the exact authenticated
+        // installation. Retain shared ownership for the grant's complete lifetime.
+        let sigma_parameters = [
+            Arc::clone(installed.verifier().vesta_parameters(12)?),
+            Arc::clone(installed.verifier().vesta_parameters(14)?),
+        ];
+        let q_parameters = Arc::clone(installed.verifier().pallas_parameters());
         // Native genesis binding happens before any source-original read.
-        let finality =
-            self.qualify_finality(native_finality, originals, finality_params, finality_limits)?;
+        let finality = self.qualify_finality(
+            native_finality,
+            originals,
+            finality_params.clone(),
+            finality_limits,
+        )?;
+        let finality_producer = QualifiedFinalityProducerV1::mount(
+            &self,
+            *finality.anchor(),
+            originals,
+            finality_params,
+            config,
+        )?;
         let sigmas = self.qualify_sigmas(originals, config)?;
         let mut q = Vec::with_capacity(self.inventory.operations.len());
         for program in 0..self.inventory.operations.len() {
@@ -144,9 +220,12 @@ impl AuthenticatedProducerInventoryV1 {
             scope,
             sigmas,
             finality,
+            finality_producer,
             q,
             routes,
             omega,
+            sigma_parameters,
+            q_parameters,
         })
     }
 }
@@ -171,6 +250,10 @@ impl QualifiedWalletSourcesV1 {
     /// Complete receipt source bound to independently authenticated native genesis.
     pub const fn finality(&self) -> &QualifiedReceiptSourceV1 {
         &self.finality
+    }
+    /// Complete actual finality producer selected by the same authenticated catalog.
+    pub const fn finality_producer(&self) -> &QualifiedFinalityProducerV1 {
+        &self.finality_producer
     }
     /// Complete sole Omega source; partial owners cannot construct this grant.
     pub const fn omega(&self) -> &QualifiedOmegaProgramV1 {
@@ -208,17 +291,39 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<ImportedSigmaV1, WalletSourcesErrorV1> {
+        self.import_sigma_cancellable(selector, originals, config, None)
+    }
+
+    /// Import the same exact source with a caller-owned cancellation signal.
+    /// # Errors
+    /// The ordinary source errors, or cancellation without an imported key.
+    pub fn import_sigma_cancellable(
+        &self,
+        selector: u8,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ImportedSigmaV1, WalletSourcesErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let index = *self
             .inventory()
             .sigma
             .get(usize::from(selector))
             .ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
-        let k12 = PinnedParams::derive(12).map_err(|_| SigmaQualificationErrorV1::Parameters)?;
-        let k14 = PinnedParams::derive(14).map_err(|_| SigmaQualificationErrorV1::Parameters)?;
-        let owner = sigma::import_prover(usize::from(selector), &original, &k12, &k14, config)?;
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
+        )?;
+        let owner = sigma::import_prover(
+            usize::from(selector),
+            &original,
+            &self.sigma_parameters[0],
+            &self.sigma_parameters[1],
+            config,
+            cancellation,
+        )?;
         let actual = owner.metadata()?;
         let expected = self.sigmas.key(selector).ok_or(Error::Inventory)?;
         if actual.binding() != expected.binding()
@@ -238,20 +343,60 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<ImportedQV1, WalletSourcesErrorV1> {
+        self.import_q_cancellable(route, stage, originals, config, None)
+    }
+
+    /// Import the same exact source with a caller-owned cancellation signal.
+    /// # Errors
+    /// The ordinary source errors, or cancellation without an imported key.
+    pub fn import_q_cancellable(
+        &self,
+        route: OperationRoute,
+        stage: usize,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ImportedQV1, WalletSourcesErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let record = self.record(route)?;
         let index = *record.q.get(stage).ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
-        let (source, signatures) = q_source_recipe(
-            self.scope,
-            route.variant,
-            &record.own_class,
-            &record.incoming_class,
-            self.sigmas.metadata(),
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
         )?;
-        let pallas = PinnedParams::derive(16).map_err(|_| QQualificationErrorV1::Source)?;
-        let owner = q::import(stage, &source, &signatures, &original, &pallas, config)?;
+        let q = self.q(route)?;
+        // Reuse the source-qualified plan, including its exact generator owners.
+        // Reconstructing the offline recipe here would derive generators and the
+        // fixed trivial claim again without an operation cancellation boundary.
+        let representative = |selectors: &[u8]| {
+            selectors
+                .first()
+                .and_then(|selector| self.sigmas.key(*selector))
+                .map(|key| key.key().clone())
+                .ok_or(Error::Inventory)
+        };
+        let incoming = if record.incoming_class.is_empty() {
+            None
+        } else {
+            Some(representative(&record.incoming_class)?)
+        };
+        let source = iroha_kagemusha_proof::q_sigma::native::QSigmaSource::new(
+            q.sigma().clone(),
+            representative(&record.own_class)?,
+            incoming,
+        )
+        .map_err(QQualificationErrorV1::from)?;
+        let owner = q::import(
+            stage,
+            &source,
+            q.signatures(),
+            &original,
+            &self.q_parameters,
+            config,
+            cancellation,
+        )?;
         let actual = owner.metadata()?;
         let expected = self.q(route)?.keys().get(stage).ok_or(Error::Inventory)?;
         if actual.binding() != expected.binding()
@@ -271,14 +416,34 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<ProvingKey<Eq>, WalletSourcesErrorV1> {
+        self.import_a_cancellable(route, stage, originals, config, None)
+    }
+
+    /// Import the same exact source with a caller-owned cancellation signal.
+    /// # Errors
+    /// The ordinary source errors, or cancellation without an imported key.
+    pub fn import_a_cancellable(
+        &self,
+        route: OperationRoute,
+        stage: usize,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Eq>, WalletSourcesErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let index = *self.record(route)?.a.get(stage).ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
-        Ok(self
-            .route(route)?
-            .owner()
-            .import_a(stage, &original.proving_key, config)?)
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
+        )?;
+        Ok(self.route(route)?.owner().import_a(
+            stage,
+            &original.proving_key,
+            config,
+            cancellation,
+        )?)
     }
     /// Import the original key for one selected native W continuation stage.
     /// # Errors
@@ -290,14 +455,34 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<ProvingKey<Ep>, WalletSourcesErrorV1> {
+        self.import_w_cancellable(route, stage, originals, config, None)
+    }
+
+    /// Import the same exact source with a caller-owned cancellation signal.
+    /// # Errors
+    /// The ordinary source errors, or cancellation without an imported key.
+    pub fn import_w_cancellable(
+        &self,
+        route: OperationRoute,
+        stage: usize,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Ep>, WalletSourcesErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let index = *self.record(route)?.w.get(stage).ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
-        Ok(self
-            .route(route)?
-            .owner()
-            .import_w(stage, &original.proving_key, config)?)
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
+        )?;
+        Ok(self.route(route)?.owner().import_w(
+            stage,
+            &original.proving_key,
+            config,
+            cancellation,
+        )?)
     }
     /// Import the sole complete final Omega original for one active terminal proof.
     /// # Errors
@@ -307,7 +492,22 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<iroha_kagemusha_proof::omega::native::Prover, WalletSourcesErrorV1> {
-        Ok(self.omega.import_prover(originals, config)?)
+        self.import_omega_cancellable(originals, config, None)
+    }
+
+    /// Import the same exact source with a caller-owned cancellation signal.
+    /// # Errors
+    /// The ordinary source errors, or cancellation without an imported key.
+    pub fn import_omega_cancellable(
+        &self,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<iroha_kagemusha_proof::omega::native::Prover, WalletSourcesErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        Ok(self
+            .omega
+            .import_prover_cancellable(originals, config, cancellation)?)
     }
 }
 
@@ -382,5 +582,35 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+impl crate::kagemusha_wallet_proofs_v1::NativeProofError for WalletSourcesErrorV1 {
+    fn is_cancelled(&self) -> bool {
+        WalletSourcesErrorV1::is_cancelled(self)
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    #[test]
+    fn source_cancellation_never_becomes_invalid_or_unavailable_material() {
+        let cases = [
+            WalletSourcesErrorV1::Original(Error::Cancelled),
+            WalletSourcesErrorV1::Operation(OperationQualificationErrorV1::Cancelled),
+            WalletSourcesErrorV1::Q(QQualificationErrorV1::Original(Error::Cancelled)),
+            WalletSourcesErrorV1::Omega(OmegaQualificationErrorV1::Original(Error::Cancelled)),
+            WalletSourcesErrorV1::Finality(FinalityQualificationErrorV1::Original(
+                Error::Cancelled,
+            )),
+            WalletSourcesErrorV1::Sigma(SigmaQualificationErrorV1::Original(Error::Cancelled)),
+        ];
+        for error in cases {
+            assert!(error.is_cancelled());
+            assert!(!error.is_unavailable());
+        }
+        assert!(!WalletSourcesErrorV1::Original(Error::Unavailable).is_cancelled());
+        assert!(!WalletSourcesErrorV1::Original(Error::Proof).is_cancelled());
     }
 }

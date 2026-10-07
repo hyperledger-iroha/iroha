@@ -72,7 +72,14 @@ impl Request {
                 account.inspect_stream_token_custody_enroll_preparation(path, request)
             }
         }
-        .map_err(|_| invalid("custody wallet preparation differs from original request"))
+        .map_err(|_error| {
+            #[cfg(test)]
+            crate::managed::native_operation::deadline_diagnostics::wallet_error(
+                "wallet preparation inspection",
+                &_error,
+            );
+            invalid("custody wallet preparation differs from original request")
+        })
     }
     pub(super) fn retain(
         &self,

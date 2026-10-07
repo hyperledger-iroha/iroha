@@ -7531,6 +7531,13 @@ pub mod isi {
                 state.prepare_quantity_retirement_candidate(self.authority, hash, context, id)
             });
             state.apply_with_quantity_candidate(prepared, |state| {
+                state
+                    .retire_direct_asset_definition_home(id)
+                    .map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("direct asset home retirement failed: {error}").into(),
+                        )
+                    })?;
                 Ok(state.world.remove_asset_definition_entry(id))
             })
         }

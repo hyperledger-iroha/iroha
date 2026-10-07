@@ -103,15 +103,18 @@ pub(super) fn import_prover(
     k12: &PinnedParams<Eq>,
     k14: &PinnedParams<Eq>,
     config: ReadConfig,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<ImportedSigmaV1, SigmaQualificationErrorV1> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
     macro_rules! administrative {
         ($owner:ty, $variant:ident) => {{
-            ImportedSigmaV1::$variant(Box::new(<$owner>::from_original_artifact(
+            ImportedSigmaV1::$variant(Box::new(<$owner>::from_original_artifact_cancellable(
                 k12.clone(),
                 &original.descriptor,
                 &original.verifying_key,
                 &original.proving_key,
                 config,
+                cancellation,
             )?))
         }};
     }
@@ -121,14 +124,17 @@ pub(super) fn import_prover(
         2..=11 => {
             let shape = monetary_shape(selector)?;
             let params = if shape.k == 12 { k12 } else { k14 };
-            ImportedSigmaV1::Monetary(Box::new(SigmaProver::<Eq>::from_original_artifact(
-                shape,
-                params.clone(),
-                &original.descriptor,
-                &original.verifying_key,
-                &original.proving_key,
-                config,
-            )?))
+            ImportedSigmaV1::Monetary(Box::new(
+                SigmaProver::<Eq>::from_original_artifact_cancellable(
+                    shape,
+                    params.clone(),
+                    &original.descriptor,
+                    &original.verifying_key,
+                    &original.proving_key,
+                    config,
+                    cancellation,
+                )?,
+            ))
         }
         12 => administrative!(ArchiveProver, Archive),
         13 => administrative!(UnloadProver, Unload),
@@ -145,7 +151,7 @@ pub(super) fn import(
     k14: &PinnedParams<Eq>,
     config: ReadConfig,
 ) -> Result<KeyArtifact<Eq>, SigmaQualificationErrorV1> {
-    import_prover(selector, original, k12, k14, config)?.metadata()
+    import_prover(selector, original, k12, k14, config, None)?.metadata()
 }
 
 impl AuthenticatedProducerInventoryV1 {

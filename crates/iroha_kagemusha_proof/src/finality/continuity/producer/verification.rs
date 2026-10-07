@@ -55,9 +55,51 @@ pub(in crate::finality) fn derive_wrapper(
     let (binding, key) =
         keygen_vk_with_binding_v2(pallas, &circuit, &config).map_err(|_| Error::Artifact)?;
     let source = SourceVerifier {
-        verifier: VerifierPlan::new(binding.clone(), pallas.clone())
-            .map_err(|_| Error::Artifact)?,
-        key: key.clone(),
+        verifier: Arc::new(
+            VerifierPlan::new(binding.clone(), pallas.clone()).map_err(|_| Error::Artifact)?,
+        ),
+        key: Arc::new(key.clone()),
     };
     Ok((source, binding, key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::finality::history::{GenesisSourceCircuit, HistoryAnchor};
+
+    #[test]
+    #[ignore = "actual k16 sealed Genesis and wrapper VK derivation; optimized explicitly"]
+    fn source_clones_share_qualified_storage_and_keep_exact_original_identity() {
+        let pallas = PinnedParams::derive(16).unwrap();
+        let vesta = PinnedParams::derive(16).unwrap();
+        let layout = GenesisSourceCircuit::for_source(HistoryAnchor {
+            network: [1; 32],
+            instance: [2; 32],
+            initial_context: [3; 32],
+            initial_epoch: 0,
+            parameters: [1000, 2000, 3000, 4000, 1 << 20, 100],
+        });
+        let derived = DerivedSource::derive(&layout, &vesta, MemoryBudget::DEFAULT).unwrap();
+        let (source, binding, key) =
+            derive_wrapper(&[derived], &pallas, &vesta, MemoryBudget::DEFAULT).unwrap();
+        let original_digest = source.key_digest().unwrap();
+        let shared = source.clone();
+        assert!(Arc::ptr_eq(&source.verifier, &shared.verifier));
+        assert!(Arc::ptr_eq(&source.key, &shared.key));
+        assert_eq!(shared.binding().encoded(), binding.encoded());
+        assert_eq!(shared.verifying_key().to_bytes(), key.to_bytes());
+        // Independent input still undergoes strict decoding; sharing is only by ownership.
+        let decoded = VerifyingKey::<Ep>::read(key.to_bytes(), &binding).unwrap();
+        assert_eq!(&decoded, shared.verifying_key());
+        let mut changed = key.to_bytes().to_vec();
+        changed[0] ^= 1;
+        assert!(VerifyingKey::<Ep>::read(&changed, &binding).is_err());
+        let mut changed = key.to_bytes().to_vec();
+        changed.push(0);
+        assert!(VerifyingKey::<Ep>::read(&changed, &binding).is_err());
+        drop(source);
+        assert_eq!(shared.key_digest().unwrap(), original_digest);
+        assert_eq!(shared.verifying_key().to_bytes(), key.to_bytes());
+    }
 }

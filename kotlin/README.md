@@ -310,12 +310,13 @@ class output with `--classes MODULE=DIR`, where MODULE is `core-jvm`,
 method descriptors after a successful check. `--help` describes the arguments.
 
 For Android release inputs, add `--platform android --android-abi arm64-v8a`
-(or `x86_64`), `--symbol-tool PATH`, `--symbol-tool-sha256 SHA256`,
+(or `armeabi-v7a` or `x86_64`), `--symbol-tool PATH`, `--symbol-tool-sha256 SHA256`,
 `--symbol-tool-size-bytes SIZE`, and `--inspection-output NEW_DIRECTORY`.
 The tool path must be the canonical absolute reviewed NDK `llvm-nm` executable;
 the checker verifies its exact hash, size and file identity around the fixed
-dynamic-export inspection. The library must be an ELF64 shared object for the
-selected ABI. The fresh output directory retains the actual argv, clean
+dynamic-export inspection. The library must match the selected ABI: ARMv7 uses
+ELF32/machine40; ARM64 and x86_64 use their corresponding ELF64 identities.
+The fresh output directory retains the actual argv, clean
 environment, stdout, stderr and result before file-drift checks, including
 failed attempts. Host mode discovers platform tooling and reports that
 inspection as unpinned. Neither mode executes native code.
@@ -360,6 +361,19 @@ begin; closing the pending challenge cancels it. `cancelPendingOpen` handles an
 interrupted begin response, and `retryOpenCompletion` recovers the same live
 admitted handle after interrupted finish delivery without reauthorization. Foreign callers provide no trust
 pins, proof verdicts or payment-key replacement.
+
+Native artifact builds select their application release authority with the paired
+public inputs `MOBILE_SDK_WALLET_RUNTIME_AUTHORITY` and
+`MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX`. The authority is exactly
+`bpng-taira-v7` or `cbsi-release-v1`; the key is the independently selected,
+nonzero lowercase Ed25519 public-key hex. Provenance retains
+`wallet_runtime_authority` and `wallet_runtime_trust_ed25519_hex`. Authenticated
+artifact builds require both and the embedding app verifies its exact product
+selection. Partial or unknown selections fail. With both absent, managed-only
+configuration remains possible and Native original installation is unavailable.
+This build selection supplies no runtime or monetary authority by itself;
+installation still verifies the product's genuine signed originals and complete
+proof inventory through the same wallet engine.
 
 Typed setup and lifecycle APIs retain exact native bytes and expose durable status
 separately from fold backlog. Offer/Request setup bytes are canonical object
@@ -1026,11 +1040,16 @@ state remains disabled.
 | ABI | File |
 |-----|------|
 | arm64-v8a | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/arm64-v8a/libconnect_norito_bridge.so` |
+| armeabi-v7a | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/armeabi-v7a/libconnect_norito_bridge.so` |
 | x86_64 | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/x86_64/libconnect_norito_bridge.so` |
 
 `<mode>` is always `production`. There is no disabled native profile.
 
-> **Note:** `armeabi-v7a` (32-bit ARM) is not supported due to an upstream `rkyv` crate incompatibility with 32-bit targets.
+The production source contract requires all three ABIs, including 32-bit
+`armeabi-v7a`. The local ARMv7 diagnostic checks its dedicated build and ELF
+contract; it does not qualify a production artifact or device. Canonical
+32/64-bit runtime parity, ELF/page alignment and physical firmware qualification
+remain required for every supported target.
 
 ### Step 3: Publish to local Maven
 
@@ -1335,3 +1354,26 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 |-----------|---------|---------|------|
 | `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` crypto, connect, and deterministic key export | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that force a different BC version may hit linkage errors at runtime. The SDK links the pinned provider directly and fails clearly when the mandatory implementation is broken; it never probes BouncyCastle through reflection. |
 | `com.github.luben:zstd-jni` | 1.5.7-7 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |
+
+
+`KagemushaWalletEnrollmentV1` is the thin Android E2–E6 handle registered by trusted
+native startup. `begin` retains the retry identity and returns native-selected issuer dispatch
+DATA; `acceptPermit` verifies the rooted signed pre-key permit before returning the
+existing-account challenge. Native rechecks the same-boot elapsed deadline at hardware
+generation and preserves the original server attempt on retry. `KagemushaWalletAndroidPlatformV1.enrollmentCertificates(target)`
+exports the original DER for the exact native-selected payment key without a
+hardware verdict or signing operation. Enrollment supplies that chain and the opaque Play Integrity token;
+the issuer obtains and verifies its own Google response. Native creates/selects the
+hardware slot, binds existing-account authorization to exact E5 originals, and retains
+E5/E6 before returning bytes. TEE-only policy uses the TEE even on StrongBox devices.
+`loadRuntime()` performs complete native artifact qualification and transfers to
+`KagemushaWalletRuntimeV1.beginEnrolled()` for a fresh account challenge. This does not
+establish issuer-service, ledger activation or phone qualification. `activation()`
+returns exact retained Activate bytes for ledger submission after Bootstrap.
+
+The enrollment handle's explicit `abandon` action permanently closes an unused enrollment
+before runtime handoff and returns its exact retained signed ledger control. Native refuses
+once Bootstrap commits. Closing the handle only releases ownership. Abandon output is published
+before an immutable digest selection, and nothing is returned until both are durable; a missing
+selected original is refused. Recovery may complete a missing selection for a present valid
+original. This local mechanism does not establish protection against complete filesystem rollback.

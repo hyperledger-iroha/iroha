@@ -374,6 +374,7 @@ fn measure_in_pool<C, Ci>(
             randomness,
             ProverConfig {
                 msm_budget: MSM_BUDGET,
+                cancellation: None,
             },
             &mut quotient_workspace,
         )

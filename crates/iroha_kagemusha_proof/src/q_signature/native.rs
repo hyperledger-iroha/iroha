@@ -23,7 +23,6 @@ use iroha_plonk::{
     frontend::{Circuit, Error as LayoutError},
     keys::pk::artifact::{Error as ArtifactError, ReadConfig},
     pcs::ipa::PinnedParams,
-    verifier::verify_full,
 };
 use iroha_plonk_gadgets::{
     p256::{
@@ -68,6 +67,18 @@ impl fmt::Display for QSignatureError {
     }
 }
 impl std::error::Error for QSignatureError {}
+impl QSignatureError {
+    /// Whether this is cancellation, never an invalid incoming proof or burn witness.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Layout(error) => matches!(error, iroha_plonk::frontend::Error::Cancelled),
+            Self::Artifact(error) => error.is_cancelled(),
+            Self::Prover(error) => error.is_cancelled(),
+            Self::Verify(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
 
 /// One immutable installed signature-Q source and its original imported key.
 /// Private fields prevent a witness from changing slot policy or fixed roots.
@@ -116,6 +127,30 @@ impl QSignatureProver {
         original: &[u8],
         config: ReadConfig,
     ) -> Result<Self, QSignatureError> {
+        Self::from_original_artifact_cancellable(
+            plan,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            None,
+        )
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn from_original_artifact_cancellable(
+        plan: QSignaturePlan,
+        params: PinnedParams<Ep>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, QSignatureError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| QSignatureError::Prover(iroha_plonk::ProverError::Cancelled))?;
         if params.k() != 16 {
             return Err(QSignatureError::Parameters);
         }
@@ -150,8 +185,15 @@ impl QSignatureProver {
             QSignatureError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error)))
         })?;
         let circuit = plan.source_circuit()?;
-        let key = ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
-            .map_err(QSignatureError::Artifact)?;
+        let key = ProvingKey::from_artifact_v2_cancellable(
+            original,
+            &binding,
+            &params,
+            &circuit,
+            config,
+            cancellation,
+        )
+        .map_err(QSignatureError::Artifact)?;
         if key.vk().to_bytes() != installed_vk {
             return Err(QSignatureError::UnauthorizedKey);
         }
@@ -205,17 +247,19 @@ impl QSignatureProver {
         let instances = self.plan.native_instances(witnesses)?;
         let circuit = QSignatureCircuit::new(self.plan.clone(), witnesses.to_vec())
             .map_err(QSignatureError::Layout)?;
-        let witness = Witness::from_circuit(&self.key, &circuit, &instances)
-            .map_err(QSignatureError::Prover)?;
+        let witness =
+            Witness::from_circuit_cancellable(&self.key, &circuit, &instances, config.cancellation)
+                .map_err(QSignatureError::Prover)?;
         let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
             .map_err(QSignatureError::Prover)?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.params,
             self.binding(),
             self.verifying_key(),
             &instances,
             &bytes,
             config.msm_budget,
+            config.cancellation,
         )
         .map_err(QSignatureError::Verify)?;
         Ok(QSignatureProof { bytes, instances })

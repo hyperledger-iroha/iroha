@@ -60,6 +60,20 @@ private object NativeBridgeBuildContract {
     const val sourceSealSchema = "iroha.norito-bridge-source-seal.v1"
     const val buildEnvironmentSchema = "iroha.mobile-native-build-environment.v1"
     const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
+    const val walletRuntimeAuthorityInput = "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY"
+    fun validateWalletRuntimeAuthority(value: String?): String {
+        require(value == "bpng-taira-v7" || value == "cbsi-release-v1") {
+            "$walletRuntimeAuthorityInput must be bpng-taira-v7 or cbsi-release-v1"
+        }
+        return value
+    }
+    fun validateWalletRuntimeSelection(authority: String?, publicKey: String?) {
+        require((authority == null) == (publicKey == null)) { "Native runtime authority and public trust must be supplied together" }
+        if (authority != null) {
+            validateWalletRuntimeAuthority(authority)
+            validateWalletRuntimeTrust(publicKey)
+        }
+    }
     const val walletRuntimeTrustInput = "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX"
     fun validateWalletRuntimeTrust(value: String?): String {
         require(value != null && Regex("^[0-9a-f]{64}$").matches(value) && value.any { it != '0' }) {
@@ -114,6 +128,7 @@ private object NativeBridgeBuildContract {
         val cargoHome: java.nio.file.Path,
         val cargoInvocationDirectory: java.nio.file.Path,
         val diagnosticConfiguration: ByteArray?,
+        val walletRuntimeAuthority: String,
         val walletRuntimeTrustPublicKeyHex: String,
         val cargoRelease: String,
         val cargoCommitHash: String,
@@ -489,8 +504,11 @@ private object NativeBridgeBuildContract {
         androidNdkDirectory: File,
         cargoTargetDirectory: File,
         armv7Diagnostic: Boolean = false,
+        walletRuntimeAuthority: String? = null,
         walletRuntimeTrustPublicKeyHex: String? = null,
     ): BuildTools {
+        validateWalletRuntimeSelection(walletRuntimeAuthority, walletRuntimeTrustPublicKeyHex)
+        val runtimeAuthority = validateWalletRuntimeAuthority(walletRuntimeAuthority)
         val walletRuntimeTrust = validateWalletRuntimeTrust(walletRuntimeTrustPublicKeyHex)
         val python = trustedPython(execOperations, irohaRoot)
         val homeText = commandOutput(
@@ -818,6 +836,7 @@ private object NativeBridgeBuildContract {
             cargoHome = cargoHome,
             cargoInvocationDirectory = cargoInvocationDirectory,
             diagnosticConfiguration = diagnosticConfiguration,
+            walletRuntimeAuthority = runtimeAuthority,
             walletRuntimeTrustPublicKeyHex = walletRuntimeTrust,
             cargoRelease = cargoRelease,
             cargoCommitHash = cargoCommitHash,
@@ -843,7 +862,8 @@ private object NativeBridgeBuildContract {
         "hermetic_runner_sha256" to sha256Hex(tools.hermeticRunner),
         "environment_profile" to if (tools.diagnosticConfiguration == null) "android-cargo"
             else "android-armv7-diagnostic-cargo",
-        "environment_allowlist" to (androidCargoEnvironmentAllowlist + walletRuntimeTrustInput).sorted(),
+        "environment_allowlist" to (androidCargoEnvironmentAllowlist + listOf(walletRuntimeAuthorityInput, walletRuntimeTrustInput)).sorted(),
+        "wallet_runtime_authority" to tools.walletRuntimeAuthority,
         "wallet_runtime_trust_ed25519_hex" to tools.walletRuntimeTrustPublicKeyHex,
         "cargo_build_jobs" to 1,
         "rust_toolchain_channel" to pinnedRustToolchain,
@@ -1069,6 +1089,9 @@ abstract class CompileNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
+    abstract val walletRuntimeAuthority: Property<String>
+
+    @get:Input
     abstract val walletRuntimeTrustPublicKeyHex: Property<String>
 
     @get:Input
@@ -1132,6 +1155,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             androidNdkDirectory.get().asFile,
             cargoTargetRoot,
             armv7Diagnostic = platform == NativeBridgeBuildContract.armv7DiagnosticPlatform,
+            walletRuntimeAuthority = walletRuntimeAuthority.orNull,
             walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         val sourceSeal = NativeBridgeBuildContract.captureSourceSeal(
@@ -1261,7 +1285,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         "RUSTUP_HOME=${tools.home.resolve(".rustup")}",
                         "--set",
                         "TMPDIR=${tools.temporaryDirectory.absolutePath}",
-                    ) + listOf("--set", "${NativeBridgeBuildContract.walletRuntimeTrustInput}=${tools.walletRuntimeTrustPublicKeyHex}") + listOf(
+                    ) + listOf("--set", "${NativeBridgeBuildContract.walletRuntimeAuthorityInput}=${tools.walletRuntimeAuthority}", "--set", "${NativeBridgeBuildContract.walletRuntimeTrustInput}=${tools.walletRuntimeTrustPublicKeyHex}") + listOf(
                         "--",
                         tools.cargo.toString(),
                         "ndk",
@@ -1380,6 +1404,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             androidNdkDirectory.get().asFile,
             cargoTargetDirectory.get().asFile,
             armv7Diagnostic = sourceSealPlatform.get() == NativeBridgeBuildContract.armv7DiagnosticPlatform,
+            walletRuntimeAuthority = walletRuntimeAuthority.orNull,
             walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         NativeBridgeBuildContract.requireLibraries(outputRoot, NativeBridgeBuildContract.buildAbis(sourceSealPlatform.get()))
@@ -1409,6 +1434,9 @@ abstract class CompileNativeBridgeTask @Inject constructor(
 abstract class InspectArmv7DiagnosticTask @Inject constructor(
     private val execOperations: ExecOperations,
 ) : DefaultTask() {
+    @get:Input
+    abstract val walletRuntimeAuthority: Property<String>
+
     @get:Input
     abstract val walletRuntimeTrustPublicKeyHex: Property<String>
 
@@ -1440,6 +1468,7 @@ abstract class InspectArmv7DiagnosticTask @Inject constructor(
             execOperations, root, hermeticRunner.get().asFile,
             androidNdkDirectory.get().asFile, cargoTargetDirectory.get().asFile,
             armv7Diagnostic = true,
+            walletRuntimeAuthority = walletRuntimeAuthority.orNull,
             walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         val profile = NativeBridgeBuildContract.armv7DiagnosticPlatform
@@ -1546,6 +1575,9 @@ abstract class StripNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
+    abstract val walletRuntimeAuthority: Property<String>
+
+    @get:Input
     abstract val walletRuntimeTrustPublicKeyHex: Property<String>
 
     @get:Input
@@ -1596,6 +1628,7 @@ abstract class StripNativeBridgeTask @Inject constructor(
             hermeticRunner.get().asFile,
             androidNdkDirectory.get().asFile,
             cargoTargetDirectory.get().asFile,
+            walletRuntimeAuthority = walletRuntimeAuthority.orNull,
             walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         require(Files.isRegularFile(sealFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
@@ -2028,11 +2061,12 @@ require(!providers.gradleProperty("privacyProductionEnabled").isPresent) {
     "privacyProductionEnabled has been removed; the native bridge always includes privacy support"
 }
 val nativeBuildMode = "production"
+val walletRuntimeAuthorityInput = providers.environmentVariable(NativeBridgeBuildContract.walletRuntimeAuthorityInput)
 val walletRuntimeTrustPublicKeyInput =
     providers.environmentVariable(NativeBridgeBuildContract.walletRuntimeTrustInput)
 // Selection is public build DATA. Release admission independently joins the
 // emitted original to the committed app runtime signer; this grants no Ready.
-walletRuntimeTrustPublicKeyInput.orNull?.let { NativeBridgeBuildContract.validateWalletRuntimeTrust(it) }
+NativeBridgeBuildContract.validateWalletRuntimeSelection(walletRuntimeAuthorityInput.orNull, walletRuntimeTrustPublicKeyInput.orNull)
 // Native app and instrumentation packages always include the sealed bridge.
 // The ordinary JVM unit-test task graph does not execute these packaging owners.
 require(!providers.gradleProperty("irohaDebugNativeBridge").isPresent) {
@@ -2380,6 +2414,8 @@ tasks.register("verifyAndroidNdkIdentityContract") {
 }
 
 val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLibs") {
+    walletRuntimeAuthority.set(walletRuntimeAuthorityInput)
+    walletRuntimeAuthority.disallowChanges()
     walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
     walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"
@@ -2412,6 +2448,8 @@ val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLi
 // Explicit development-only armv7 lane. It shares the pinned native recipe but
 // never supplies generated JNI directories, AAR contents or admitted provenance.
 val compileArmv7DiagnosticRaw = tasks.register<CompileNativeBridgeTask>("compileArmv7DiagnosticRaw") {
+    walletRuntimeAuthority.set(walletRuntimeAuthorityInput)
+    walletRuntimeAuthority.disallowChanges()
     walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
     walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"
@@ -2433,6 +2471,8 @@ val compileArmv7DiagnosticRaw = tasks.register<CompileNativeBridgeTask>("compile
     dependsOn(requireAndroidArtifactDirectory)
 }
 val compileArmv7Diagnostic = tasks.register<InspectArmv7DiagnosticTask>("compileArmv7Diagnostic") {
+    walletRuntimeAuthority.set(walletRuntimeAuthorityInput)
+    walletRuntimeAuthority.disallowChanges()
     walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
     walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"
@@ -2471,6 +2511,8 @@ tasks.register("verifyArmv7DiagnosticContract") {
 }
 
 val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
+    walletRuntimeAuthority.set(walletRuntimeAuthorityInput)
+    walletRuntimeAuthority.disallowChanges()
     walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
     walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"

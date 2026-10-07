@@ -397,10 +397,8 @@ impl ManagedProviderCapacity {
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
         journal::admit_selection_inputs(partition, credit, self.plan()?.declaration())?;
-        let directory = match self.authority.directory.open_child("declare") {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Some(directory) = self.authority.directory.open_child_optional("declare")? else {
+            return Ok(None);
         };
         let Some(original) = journal::read_intent(&directory)? else {
             require_empty(&directory)?;

@@ -30,6 +30,15 @@ from iroha_app_attestation.attestation import (
 )
 
 
+def archive_builder():
+    """Load the current package's archive owner without external test selectors."""
+    path = Path(__file__).resolve().parents[1] / 'tools/build_retail_auth_verifier_zipapp.py'
+    spec = importlib.util.spec_from_file_location('auth_archive_builder_under_test', path)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    return builder
+
+
 def der(tag, content):
     size = len(content)
     length = bytes([size]) if size < 128 else bytes([0x80 | ((size.bit_length()+7)//8)]) + size.to_bytes((size.bit_length()+7)//8, 'big')
@@ -577,24 +586,27 @@ class ProtocolTests(unittest.TestCase):
         result=auth.exact_json(auth.read_packet(io.BytesIO(output.getvalue())),auth.MAX_PACKET)
         self.assertEqual(result['outcome'],'rejected');self.assertIsNone(result['result_base64'])
     def test_archive_is_exact_auth_only_closure(self):
-        archive=Path(os.environ['BPNG_AUTH_TEST_ARCHIVE'])
-        with zipfile.ZipFile(archive) as content:
-            self.assertEqual(set(content.namelist()),{'__main__.py','iroha_app_attestation/__init__.py',
-                'iroha_app_attestation/attestation.py','iroha_app_attestation/revocation.py',
-                'iroha_app_attestation/play_integrity.py','iroha_app_attestation/google_oauth.py',
-                'iroha_app_attestation/openssl_private_rsa.py','iroha_app_attestation/native_time_interval.py',
-                'iroha_app_attestation/retail_auth_worker.py'})
-            self.assertFalse(any('wallet_enrollment' in name or 'apple_receipt' in name for name in content.namelist()))
-            self.assertTrue(all(info.date_time==(1980,1,1,0,0,0) and info.compress_type==zipfile.ZIP_STORED for info in content.infolist()))
-            self.assertEqual(content.read('iroha_app_attestation/retail_auth_worker.py'),Path(os.environ['BPNG_AUTH_TEST_WORKER']).read_bytes())
+        package=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix='bpng-auth-current-archive-') as temporary:
+            archive=Path(temporary).resolve()/'iroha-retail-auth-verifier.pyz'
+            inventory=archive_builder().build(package,package,archive)
+            self.assertIs(inventory['signed_runtime_admission'],False)
+            with zipfile.ZipFile(archive) as content:
+                self.assertEqual(set(content.namelist()),{'__main__.py','iroha_app_attestation/__init__.py',
+                    'iroha_app_attestation/attestation.py','iroha_app_attestation/revocation.py',
+                    'iroha_app_attestation/play_integrity.py','iroha_app_attestation/google_oauth.py',
+                    'iroha_app_attestation/openssl_private_rsa.py','iroha_app_attestation/native_time_interval.py',
+                    'iroha_app_attestation/retail_auth_worker.py'})
+                self.assertFalse(any('wallet_enrollment' in name or 'apple_receipt' in name for name in content.namelist()))
+                self.assertTrue(all(info.date_time==(1980,1,1,0,0,0) and info.compress_type==zipfile.ZIP_STORED for info in content.infolist()))
+                self.assertEqual(content.read('iroha_app_attestation/retail_auth_worker.py'),
+                                 (package/'src/iroha_app_attestation/retail_auth_worker.py').read_bytes())
 
 
 class ArchiveBuilderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        path=Path(os.environ['BPNG_AUTH_TEST_BUILDER'])
-        spec=importlib.util.spec_from_file_location('auth_archive_builder_under_test',path)
-        cls.builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.builder)
+        cls.builder=archive_builder()
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='bpng-auth-archive-tests-')
         self.root=Path(self.temporary.name).resolve()

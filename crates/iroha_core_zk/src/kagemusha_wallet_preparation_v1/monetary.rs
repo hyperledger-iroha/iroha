@@ -754,7 +754,7 @@ impl PreparationV1<'_> {
         // The post-Advance A producer remains the canonical total soft verifier/burn engine.
         self.installed
             .verifier()
-            .verify_package_proofs(&payment.send, None, budget)?;
+            .verify_package_proofs_cancellable(&payment.send, None, budget, self.cancellation)?;
         self.derive_receive(
             owner,
             source,

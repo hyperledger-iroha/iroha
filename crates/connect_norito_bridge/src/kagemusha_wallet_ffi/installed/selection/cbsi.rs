@@ -21,6 +21,8 @@ pub(super) struct Selected<'a> {
     pub artifact_manifest_digest: [u8; 32],
     pub producer_catalog_digest: [u8; 32],
     pub transport: BlobV1,
+    pub pack: BlobV1,
+    pub catalog: BlobV1,
 }
 
 pub(super) fn signed_document(bytes: &[u8]) -> Result<Value> {
@@ -82,13 +84,12 @@ pub(super) fn application(document: &Value) -> Result<&Map> {
             "ledger",
             "consensus",
             "asset",
-            "firstDeviceAuthentication",
+            "fiSessionEnrollment",
         ],
     )?;
     if text(app, "schema")? != "cbsi.kagemusha.native-installation.v1" {
         return Err(invalid());
     }
-    first_device_authentication(app)?;
     Ok(app)
 }
 
@@ -245,5 +246,7 @@ pub(super) fn current<'a>(
         artifact_manifest_digest: sha(text(mobile, "artifact_manifest_digest")?)?,
         producer_catalog_digest: sha(text(mobile, "producer_catalog_digest")?)?,
         transport,
+        pack: rows["kagemusha/verifier-pack.norito"],
+        catalog: rows["kagemusha/producer-inventory.norito"],
     })
 }

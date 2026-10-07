@@ -4,7 +4,7 @@ use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
 use iroha_plonk::{
-    pcs::ipa::{PinnedParams, commit::msm_complete, fold_scalars},
+    pcs::ipa::{PinnedParams, commit::msm_complete_cancellable, fold_scalars},
     transcript::{decode_point, decode_scalar, encode_point},
 };
 
@@ -87,7 +87,19 @@ impl<C: PastaCurve> AccumulatorT<C> {
     /// # Errors
     /// Insufficient pinned parameters or an undecidable claim.
     pub fn decide(&self, params: &PinnedParams<C>, budget: MemoryBudget) -> Result<(), Error> {
-        self.as_input().decide(params, budget)
+        self.decide_cancellable(params, budget, None)
+    }
+    /// Decide with an explicit operation signal; cancellation has no verdict.
+    /// # Errors
+    /// As [`Self::decide`], or cancellation.
+    pub fn decide_cancellable(
+        &self,
+        params: &PinnedParams<C>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        self.as_input()
+            .decide_cancellable(params, budget, cancellation)
     }
 
     /// Constructs the pinned trivial claim `(sum g_i, [1;16])` explicitly.
@@ -95,8 +107,19 @@ impl<C: PastaCurve> AccumulatorT<C> {
     /// # Errors
     /// Insufficient pinned parameters or an identity commitment.
     pub fn trivial(params: &PinnedParams<C>, budget: MemoryBudget) -> Result<Self, Error> {
+        Self::trivial_cancellable(params, budget, None)
+    }
+    /// Construct the pinned trivial claim with an explicit operation signal.
+    /// # Errors
+    /// As [`Self::trivial`], or cooperative cancellation.
+    pub fn trivial_cancellable(
+        params: &PinnedParams<C>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let challenges = [C::ScalarExt::ONE; K];
-        let g = expected_generator(params, &challenges, budget)?;
+        let g = expected_generator(params, &challenges, budget, cancellation)?;
         Self::new(g, challenges)
     }
 }
@@ -192,8 +215,20 @@ impl<C: PastaCurve> FoldInput<C> {
     /// # Errors
     /// Insufficient pinned parameters or an undecidable source claim.
     pub fn decide(&self, params: &PinnedParams<C>, budget: MemoryBudget) -> Result<(), Error> {
+        self.decide_cancellable(params, budget, None)
+    }
+    /// Decide with an explicit operation signal; cancellation has no verdict.
+    /// # Errors
+    /// As [`Self::decide`], or cancellation.
+    pub fn decide_cancellable(
+        &self,
+        params: &PinnedParams<C>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let source = &self.challenges[K - self.source_k as usize..];
-        if expected_generator(params, source, budget)? == self.g {
+        if expected_generator(params, source, budget, cancellation)? == self.g {
             Ok(())
         } else {
             Err(Error::Undecidable)
@@ -211,8 +246,20 @@ impl<C: PastaCurve> FoldInput<C> {
         params: &PinnedParams<C>,
         budget: MemoryBudget,
     ) -> Result<CorrectedInput<C>, Error> {
+        self.corrected_cancellable(params, budget, None)
+    }
+    /// Correct with an explicit signal; cancellation never proves invalidity.
+    /// # Errors
+    /// As [`Self::corrected`], or cancellation.
+    pub fn corrected_cancellable(
+        &self,
+        params: &PinnedParams<C>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<CorrectedInput<C>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let source = &self.challenges[K - self.source_k as usize..];
-        let corrected = expected_generator(params, source, budget)?;
+        let corrected = expected_generator(params, source, budget, cancellation)?;
         if corrected == self.g {
             return Err(Error::NotCorrected);
         }
@@ -247,7 +294,9 @@ fn expected_generator<C: PastaCurve>(
     params: &PinnedParams<C>,
     challenges: &[C::ScalarExt],
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<C::AffineExt, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     params
         .require_k(u32::try_from(challenges.len()).map_err(|_| Error::SourceK)?)
         .map_err(Error::Parameters)?;
@@ -257,7 +306,14 @@ fn expected_generator<C: PastaCurve>(
         .g()
         .get(..coefficients.len())
         .ok_or(Error::SourceK)?;
-    Ok(msm_complete::<C>(&coefficients, generators, budget).to_affine())
+    Ok(msm_complete_cancellable::<C>(
+        &coefficients,
+        generators,
+        budget,
+        &iroha_pasta::msm::SharedMemoryBudget::process_default(),
+        cancellation,
+    )?
+    .to_affine())
 }
 
 pub fn message(bytes: &[u8], offset: usize) -> Result<[u8; 32], Error> {

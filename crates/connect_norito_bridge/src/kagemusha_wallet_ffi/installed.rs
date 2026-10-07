@@ -8,7 +8,6 @@ use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
         BlobV1, CATALOG_MAX_BYTES_V1, PROVING_KEY_MAX_BYTES_V1, QualifiedWalletSourcesV1,
     },
 };
-use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
 use iroha_kagemusha_proof::finality::{catalog::VerifierLimits, native::Parameters};
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::{
@@ -16,6 +15,7 @@ use iroha_plonk::{
     pcs::ipa::PinnedParams,
 };
 
+mod attempt;
 mod exports;
 #[cfg(any(
     target_os = "android",
@@ -26,9 +26,11 @@ mod exports;
 mod jni;
 mod originals;
 mod selection;
+pub use attempt::WalletInstallationAttempt;
 pub use exports::*;
 use originals::CatalogOriginals;
 use selection::Selection;
+pub(super) use selection::Session;
 
 pub(crate) const APP_MANIFEST_MAX: usize = 8 * 1024 * 1024;
 pub(crate) const ENVELOPE_MAX: usize = 2048;
@@ -68,11 +70,57 @@ impl RuntimeOriginals<'_> {
         .into_iter()
         .zip(RUNTIME_BOUNDS)
         {
-            if original.is_empty() || original.len() > maximum {
+            if original.len() > maximum {
                 return Err(Failure::code(INVALID));
             }
         }
+        for original in [
+            self.app_manifest,
+            self.envelope,
+            self.wallet_runtime,
+            self.signed_genesis,
+        ] {
+            if original.is_empty() {
+                return Err(Failure::code(INVALID));
+            }
+        }
+        let financial = [
+            self.verifier_pack,
+            self.producer_inventory,
+            self.originals_root,
+        ];
+        if financial.iter().any(|original| original.is_empty())
+            && financial.iter().any(|original| !original.is_empty())
+        {
+            return Err(Failure::code(INVALID));
+        }
         Ok(())
+    }
+}
+/// Called only after Selection authenticates the whole signed base and native genesis.
+fn financial_offer(input: &RuntimeOriginals<'_>) -> Result<()> {
+    let absent = [
+        input.verifier_pack.is_empty(),
+        input.producer_inventory.is_empty(),
+        input.originals_root.is_empty(),
+    ];
+    if absent.iter().all(|value| *value) {
+        return Err(Failure::code(ARTIFACTS_UNAVAILABLE));
+    }
+    if absent.iter().any(|value| *value) {
+        return Err(Failure::code(INVALID));
+    }
+    Ok(())
+}
+// The authenticated engineering source graph contains 406,815,883 encoded descriptor/VK
+// bytes. This cumulative intake ceiling is separate from per-original limits, live RSS and
+// the process-wide 64 MiB MSM scratch cap. It is not physical-phone qualification.
+const FINALITY_METADATA_MAX_BYTES: usize = 512 << 20;
+fn finality_limits() -> VerifierLimits {
+    VerifierLimits {
+        maximum_artifacts: 65_536,
+        maximum_verifier_bytes: FINALITY_METADATA_MAX_BYTES,
+        msm_budget: MemoryBudget::DEFAULT,
     }
 }
 fn read_config() -> ReadConfig {
@@ -91,95 +139,16 @@ pub(super) struct BoundOriginals {
     android: bool,
 }
 impl BoundOriginals {
-    pub(super) fn enrollment(
-        &self,
-        input: &super::enrollment::Input<'_>,
-    ) -> Result<super::enrollment::Scope> {
-        input.validate()?;
-        let invalid = || Failure::code(INVALID);
-        let challenge: KagemushaWalletEnrollmentChallengeV1 = norito::decode_canonical_with_limits(
-            input.challenge,
-            norito::canonical_decode_limits(input.challenge.len()),
-        )
-        .map_err(|_| invalid())?;
-        challenge.validate().map_err(|_| invalid())?;
-        let policy = KagemushaWalletEnrollmentPolicyV1::decode_canonical(
-            input.policy,
-            &self.selected.scheme.scheme_id(),
-        )
-        .map_err(|_| invalid())?;
-        let account: iroha_data_model::account::AccountId = norito::decode_canonical_with_limits(
-            input.account,
-            norito::canonical_decode_limits(input.account.len()),
-        )
-        .map_err(|_| invalid())?;
-        let app = if self.android {
-            self.selected.android_app_policy
-        } else {
-            self.selected.apple_app_policy
-        };
-        let enrollment = if self.android {
-            self.selected.android_enrollment_policy
-        } else {
-            self.selected.apple_enrollment_policy
-        };
-        let retained_policy = if self.android {
-            &self.selected.android_enrollment_original
-        } else {
-            &self.selected.apple_enrollment_original
-        };
-        if input.expires_at_ms.checked_sub(input.issued_at_ms) != Some(policy.challenge_lifetime_ms)
-            || challenge.scheme_id != self.selected.scheme.scheme_id()
-            || input.policy != retained_policy
-            || challenge.asset_digest != self.selected.asset.asset_digest()
-            || challenge.app_policy != app
-            || challenge.enrollment_policy != enrollment
-            || policy.policy_digest().map_err(|_| invalid())? != enrollment
-            || policy.app_policy != app
-            || policy.asset_digest != challenge.asset_digest
-            || policy.regulatory_policy != self.selected.regulatory_policy
-            || account
-                .try_signatory()
-                .is_none_or(|key| key.algorithm() != iroha_crypto::Algorithm::Ed25519)
-            || kagemusha_wallet_account_digest_v1(&account).map_err(|_| invalid())?
-                != challenge.account_digest
-        {
-            return Err(invalid());
-        }
-        use advance::KagemushaWalletKeyProfileV1 as Profile;
-        let profile = match (self.android, policy.platform) {
-            (
-                true,
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::StrongBox,
-                    ..
-                },
-            ) => Profile::SecureElement,
-            (
-                true,
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
-                    ..
-                },
-            ) => Profile::SecureElementOrTee,
-            (
-                true,
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::Tee,
-                    ..
-                },
-            ) => Profile::TeeOnly,
-            (false, KagemushaWalletEnrollmentPlatformV1::Apple { .. }) => Profile::SecureElement,
-            _ => return Err(invalid()),
-        };
-        Ok(super::enrollment::Scope {
-            challenge,
-            profile,
-            policy,
-            network: self.selected.scheme.network_id,
-            account_key: account.try_signatory().ok_or_else(invalid)?.clone(),
-            android: self.android,
-        })
+    pub(super) fn enrollment_session(&self, originals: [&[u8]; 3]) -> Result<Session> {
+        self.selected.enrollment_session(self.android, originals)
+    }
+    pub(super) fn enrollment_projection(&self) -> Vec<u8> {
+        let mut bytes = self.selected.asset.scale.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&self.selected.asset_original);
+        bytes
+    }
+    pub(super) fn asset_original(&self) -> &[u8] {
+        &self.selected.asset_original
     }
 
     pub(super) fn require(&self, originals: [&[u8]; 4]) -> Result<()> {
@@ -222,9 +191,17 @@ impl PreparedInstallation {
         Self::from_selected(input, selected)
     }
     fn from_selected(input: RuntimeOriginals<'_>, selected: Arc<Selection>) -> Result<Self> {
-        // Every installation includes the complete signed base and financial originals.
-        // A caller cannot select an installation without the monetary proof sources.
+        // Both closed application adapters have authenticated their whole base here.
+        // Complete financial absence never acquires a platform, custody root or owner.
         input.validate_bounds()?;
+        match (selected.financial.as_ref(), input.verifier_pack.is_empty()) {
+            (None, true) => return Err(Failure::code(ARTIFACTS_UNAVAILABLE)),
+            (Some(financial), false)
+                if financial.pack_identity == BlobV1::of(input.verifier_pack)
+                    && financial.catalog_identity == BlobV1::of(input.producer_inventory) => {}
+            _ => return Err(Failure::code(INVALID)),
+        }
+        financial_offer(&input)?;
         let installed = InstalledVerifierPackV1::load(input.verifier_pack, selected.installation)
             .map_err(|_| Failure::code(INVALID))?;
         if installed.originals().scheme.to_vec()
@@ -234,10 +211,10 @@ impl PreparedInstallation {
                 .map_err(|_| Failure::code(INVALID))?
             || installed.originals().signer_certificate != selected.artifact_certificate
             || installed.originals().manifest != selected.artifact_manifest
-            || installed.originals().producer_catalog_digest != selected.producer_catalog_digest
         {
             return Err(Failure::code(INVALID));
         }
+        selected.require_producer_selection(&installed)?;
         let inventory = installed
             .authenticate_producer_inventory(input.producer_inventory)
             .map_err(|_| Failure::code(INVALID))?;
@@ -259,11 +236,7 @@ impl PreparedInstallation {
                 &mut originals,
                 read_config(),
                 parameters,
-                VerifierLimits {
-                    maximum_artifacts: 65_536,
-                    maximum_verifier_bytes: 64 << 20,
-                    msm_budget: MemoryBudget::DEFAULT,
-                },
+                finality_limits(),
             )
             .map_err(|error| {
                 Failure::code(if error.is_unavailable() {
@@ -279,12 +252,12 @@ impl PreparedInstallation {
             originals,
         })
     }
-    fn register<P: advance::KagemushaWalletPlatformV1 + 'static>(
+    fn runtime<P: advance::KagemushaWalletPlatformV1 + 'static>(
         self,
         platform: P,
         custody_root: std::path::PathBuf,
         android: bool,
-    ) -> Result<u64> {
+    ) -> Result<Arc<open::RuntimeOwner>> {
         let fs = advance::KagemushaWalletStdFsV1::open(custody_root)
             .map_err(|error| Failure::unavailable(UNAVAILABLE, error))?;
         let provider = advance::KagemushaWalletProviderV1::open(
@@ -306,10 +279,7 @@ impl PreparedInstallation {
             selected: self.selected,
             android,
         };
-        open::retain_native_runtime_bound(runtime, binding).map_err(|failure| match failure {
-            open::NativeStartupFailure::Registration { failure, .. } => failure,
-            open::NativeStartupFailure::Load(_) => Failure::code(INTERNAL),
-        })
+        Ok(open::bound_runtime_owner(runtime, binding))
     }
 }
 

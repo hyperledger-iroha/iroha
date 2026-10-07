@@ -64,11 +64,21 @@ pub(crate) enum NativeStageProgressV1 {
     Terminal(omega::Input),
 }
 
-fn proof<T, E>(result: Result<T, E>) -> Result<T, Error> {
-    result.map_err(|_| Error::Proof("native fold source or proof"))
+fn proof<T, E: crate::kagemusha_wallet_proofs_v1::NativeProofError>(
+    result: Result<T, E>,
+) -> Result<T, Error> {
+    result.map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof("native fold source or proof")
+        }
+    })
 }
 fn artifact(error: WalletSourcesErrorV1) -> Error {
-    if error.is_unavailable() {
+    if error.is_cancelled() {
+        Error::Cancelled
+    } else if error.is_unavailable() {
         Error::ArtifactsUnavailable("native proving original")
     } else {
         Error::Proof("native proving source")
@@ -195,15 +205,17 @@ impl NativeFoldWorkerV1 {
         Ok(result)
     }
 
-    fn fold_config(&self) -> FoldConfig {
+    fn fold_config(&self, cancellation: &Cancellation) -> FoldConfig {
         FoldConfig {
             kernel_budget: self.budget,
+            cancellation: Some(cancellation.prover_token().clone()),
             ..FoldConfig::default()
         }
     }
-    fn prover_config(&self) -> ProverConfig {
+    fn prover_config<'a>(&self, cancellation: &'a Cancellation) -> ProverConfig<'a> {
         ProverConfig {
             msm_budget: self.budget,
+            cancellation: Some(cancellation.prover_token()),
         }
     }
 
@@ -217,15 +229,25 @@ impl NativeFoldWorkerV1 {
         cancellation.check()?;
         let owner = self
             .sources
-            .import_omega(originals, self.read)
+            .import_omega_cancellable(originals, self.read, Some(cancellation.prover_token()))
             .map_err(artifact)?;
         cancellation.check()?;
         let salt = rand::random::<[u8; 32]>();
-        let session = proof(owner.prepare(input, salt, self.budget))?;
+        let session = proof(owner.prepare_cancellable(
+            input,
+            salt,
+            self.budget,
+            Some(cancellation.prover_token()),
+        ))?;
         cancellation.check()?;
-        let output = proof(session.prove(ProverRandomness::os(), self.prover_config()))?;
+        let output =
+            proof(session.prove(ProverRandomness::os(), self.prover_config(cancellation)))?;
         let bytes = output.transport();
-        proof(session.restore_transport(&bytes, self.budget))?;
+        proof(session.restore_transport_cancellable(
+            &bytes,
+            self.budget,
+            Some(cancellation.prover_token()),
+        ))?;
         cancellation.check()?;
         Ok(bytes)
     }

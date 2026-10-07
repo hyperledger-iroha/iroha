@@ -55,6 +55,7 @@ iroha_primitives = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance", "http"] }
 iroha_sumeragi = { workspace = true }
+iroha_version = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc"] }
 ivm_abi = { workspace = true }
 fastpq_prover = { workspace = true, optional = true }

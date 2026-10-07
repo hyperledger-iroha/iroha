@@ -133,7 +133,7 @@ impl History {
         params: &Parameters,
         limits: ImportLimits,
     ) -> Result<Self, Error> {
-        let prover = Self::import(anchor, body.clone(), artifacts, params, limits)?;
+        let prover = Self::import(anchor, body.clone(), artifacts, params, limits, None)?;
         Ok(Self {
             source: prover.qualified_source()?,
             body,
@@ -145,11 +145,13 @@ impl History {
         artifacts: &mut dyn ArtifactSource,
         params: &Parameters,
         limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<HistoryProver, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let genesis = artifacts.load(&ArtifactId::Source(NodeId::Genesis))?;
         let append = artifacts.load(&ArtifactId::Source(NodeId::Append))?;
         let wrapper = artifacts.load(&ArtifactId::HistoryWrapper)?;
-        HistoryProver::from_original_artifacts(
+        HistoryProver::from_original_artifacts_cancellable(
             anchor,
             body,
             HistoryArtifacts {
@@ -160,6 +162,7 @@ impl History {
             params.pallas.clone(),
             params.vesta.clone(),
             limits.key,
+            cancellation,
         )
     }
     pub(super) fn reload(
@@ -168,8 +171,17 @@ impl History {
         artifacts: &mut dyn ArtifactSource,
         params: &Parameters,
         limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<HistoryProver, Error> {
-        let prover = Self::import(anchor, self.body.clone(), artifacts, params, limits)?;
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        let prover = Self::import(
+            anchor,
+            self.body.clone(),
+            artifacts,
+            params,
+            limits,
+            cancellation,
+        )?;
         if identity(&prover.qualified_source()?)? != identity(&self.source)? {
             return Err(Error::Artifact);
         }

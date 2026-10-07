@@ -15,13 +15,13 @@ final class KagemushaWalletInstalledRuntimeV1Tests: XCTestCase {
     var returned = r.originals[0]; returned[1] = 0
     XCTAssertEqual(r.originals[0], Data([7, 8])); XCTAssertEqual(e.originals[0], Data([7, 8]))
   }
-  func testEveryFinancialInputCombinationRequiresAllOriginals() {
+  func testFinancialOriginalsAreWhollyPresentOrAbsentBeforeNativeAuthentication() {
     for offered in 0..<8 {
       let inputs = [Data([1]), Data([2]), Data([3]),
         offered & 1 == 0 ? Data() : Data([4]),
         offered & 2 == 0 ? Data() : Data([5]), Data([6])]
       let root = offered & 4 == 0 ? "" : "/selected/originals"
-      if offered == 7 { XCTAssertNoThrow(try runtime(inputs, root: root)) }
+      if offered == 0 || offered == 7 { XCTAssertNoThrow(try runtime(inputs, root: root)) }
       else { XCTAssertThrowsError(try runtime(inputs, root: root)) }
     }
   }
@@ -66,6 +66,18 @@ final class KagemushaWalletInstalledRuntimeV1Tests: XCTestCase {
     try admission.completed()
     admission.failed()
     XCTAssertThrowsError(try admission.start(exact))
+  }
+  func testPersistedResultRetryCannotSwitchAccountOrIntakeRepresentation() throws {
+    let admission = KagemushaWalletInstalledAdmissionV1()
+    let frames = [Data([1, 2, 3]), Data([4, 5])]
+    try admission.start(frames)
+    admission.failed()
+    XCTAssertFalse(admission.canTransferToEnrollment)
+    XCTAssertThrowsError(try admission.start([frames[0], Data([4, 6])]))
+    XCTAssertThrowsError(try admission.start(frames + [Data([7]), Data([8])]))
+    try admission.start(frames)
+    try admission.completed()
+    XCTAssertThrowsError(try admission.start(frames))
   }
   func testSignatureOriginalIsBoundedFrozenAndRetainedAcrossOrdinaryFailure() throws {
     let admission=KagemushaWalletInstalledAdmissionV1()

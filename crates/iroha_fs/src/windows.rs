@@ -768,6 +768,34 @@ impl Directory {
         exclusive: bool,
         private: bool,
     ) -> io::Result<Self> {
+        match self.child_admission(name, create, exclusive, private)? {
+            NativeChildOutcome::Present(child) => Ok(child),
+            NativeChildOutcome::InitialAbsence(error) => Err(error),
+        }
+    }
+
+    pub(super) fn child_optional(&self, name: &OsStr) -> io::Result<Option<Self>> {
+        let result = match self.child_admission(name, false, false, true) {
+            // The admitted child already closed its complete retained ancestry.
+            Ok(NativeChildOutcome::Present(child)) => return Ok(Some(child)),
+            Ok(NativeChildOutcome::InitialAbsence(_)) => Ok(None),
+            Err(error) => Err(error),
+        };
+        // No body failure or initial absence may skip the original parent exit.
+        if let Err(error) = self.revalidate() {
+            drop(result);
+            return Err(error);
+        }
+        result
+    }
+
+    fn child_admission(
+        &self,
+        name: &OsStr,
+        create: bool,
+        exclusive: bool,
+        private: bool,
+    ) -> io::Result<NativeChildOutcome<Self>> {
         self.revalidate()?;
         let path = self.path().join(name);
         if create {
@@ -777,14 +805,20 @@ impl Directory {
                 Err(error) => return Err(error),
             }
         }
-        let file = open_file(
+        let file = match open_file(
             &path,
             FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             OPEN_EXISTING,
             true,
             false,
-        )?;
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(NativeChildOutcome::InitialAbsence(error));
+            }
+            Err(error) => return Err(error),
+        };
         snapshot(&file, private, true)?;
         validate_current_owner(&file)?;
         sync_directory_metadata(&file)?;
@@ -799,7 +833,7 @@ impl Directory {
         }));
         let result = Self { links };
         result.revalidate()?;
-        Ok(result)
+        Ok(NativeChildOutcome::Present(result))
     }
 
     pub(super) fn open_readonly(&self, name: &OsStr) -> io::Result<File> {
@@ -860,8 +894,29 @@ impl Directory {
         })
     }
 
-    // Sole native per-file body. Its original file and snapshot owners remain live until
-    // the internal consumer returns; standalone success-exit therefore keeps native custody.
+    pub(super) fn read_optional(
+        &self,
+        name: &OsStr,
+        maximum: usize,
+        private: bool,
+    ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
+        self.revalidate()?;
+        let mut exit_checked = false;
+        let result = checked_name(name).and_then(|name| {
+            self.read_optional_native(name, maximum, private, |bytes| {
+                exit_checked = true;
+                self.revalidate()?;
+                Ok(bytes)
+            })
+        });
+        if !exit_checked {
+            self.revalidate()?;
+        }
+        result
+    }
+
+    // Required admission over the sole native leaf recipe. Initial absence retains the
+    // original native error; file/snapshot owners remain live through the internal consumer.
     // No consumer or file descriptor is exposed by the closed public comparison API.
     pub(super) fn read_native<T>(
         &self,
@@ -870,20 +925,54 @@ impl Directory {
         private: bool,
         consume: impl FnOnce(Zeroizing<Vec<u8>>) -> io::Result<T>,
     ) -> io::Result<T> {
-        let mut file = open_file(
+        match self.read_leaf_native(name, maximum, private, consume)? {
+            NativeReadOutcome::InitialAbsence(error) => Err(error),
+            NativeReadOutcome::Present(value) => Ok(value),
+        }
+    }
+
+    pub(super) fn read_optional_native<T>(
+        &self,
+        name: &OsStr,
+        maximum: usize,
+        private: bool,
+        consume: impl FnOnce(Zeroizing<Vec<u8>>) -> io::Result<T>,
+    ) -> io::Result<Option<T>> {
+        match self.read_leaf_native(name, maximum, private, consume)? {
+            NativeReadOutcome::InitialAbsence(_) => Ok(None),
+            NativeReadOutcome::Present(value) => Ok(Some(value)),
+        }
+    }
+
+    // Sole leaf recipe: every error after the first open remains a native refusal.
+    // Its original held/named owners stay live through the internal consumer.
+    fn read_leaf_native<T>(
+        &self,
+        name: &OsStr,
+        maximum: usize,
+        private: bool,
+        consume: impl FnOnce(Zeroizing<Vec<u8>>) -> io::Result<T>,
+    ) -> io::Result<NativeReadOutcome<T>> {
+        let mut file = match open_file(
             &self.path().join(name),
             GENERIC_READ,
             FILE_SHARE_READ,
             OPEN_EXISTING,
             false,
             false,
-        )?;
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(NativeReadOutcome::InitialAbsence(error));
+            }
+            Err(error) => return Err(error),
+        };
         let before = snapshot(&file, private, false)?;
         let bytes = bounded_read(&mut file, before.length, maximum)?;
         if before != snapshot(&file, private, false)? {
             return Err(changed());
         }
-        consume(bytes)
+        consume(bytes).map(NativeReadOutcome::Present)
     }
 
     pub(super) fn write_atomic(

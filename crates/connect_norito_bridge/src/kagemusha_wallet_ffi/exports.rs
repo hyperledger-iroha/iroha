@@ -9,7 +9,11 @@ pub struct WalletResult {
     /// 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss,
     /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing;
     /// setup only: 12 original, 13 owned time challenge, 14 time exchange retained.
-    /// Open only: 15 account challenge, 16 admitted wallet handle. Negative is failure.
+    /// Open: 15 account challenge,16 admitted handle;17 retained Activation.
+    /// Enrollment18..28 are typed challenge/evidence/retained-original/runtime statuses.
+    /// CloseLoads30; FeeClaim31/absent32; selected ledger tip33/absent34; fee payout acknowledged35.
+    /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
+    /// Negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
     pub reason: i32,
@@ -353,7 +357,18 @@ mod setup_boundary_tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(!self.panic, "contained setup boundary panic");
             let (kind, sequence, bytes) = match input {
+                setup::Setup::BackgroundStatus => panic!("status bypasses wallet lock"),
                 setup::Setup::Bootstrap => (1, 0, vec![0, 255, 1]),
+                setup::Setup::FeeClaim { .. } => (31, 0, vec![1; state::FEE_CLAIM_MAX_BYTES_V1]),
+                setup::Setup::FeeOriginal { original, .. } => (12, 0, original),
+                setup::Setup::FeeClaimTransport { .. } => {
+                    (36, 0, vec![0xf1; KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1])
+                }
+                setup::Setup::LedgerFinality(_) | setup::Setup::LedgerStatus => {
+                    (33, u128::from(u64::MAX), vec![7; 32])
+                }
+                setup::Setup::FeePayout { .. } => (35, 0, vec![]),
+                setup::Setup::CloseLoads { .. } => (30, 0, vec![0xc1; 16_384]),
                 setup::Setup::Activation => (17, 0, vec![0xa1; 16_384]),
                 setup::Setup::Offer { id, amount } => {
                     assert_eq!(id, [7; 32]);
@@ -370,6 +385,10 @@ mod setup_boundary_tests {
                     assert_eq!(bytes, [0, 255, 7]);
                     (4, 0, vec![])
                 }
+                setup::Setup::CreditedOriginal { status, original } => {
+                    assert_eq!(original, [0, 255, 7]);
+                    (12, 0, vec![u8::from(status), 0, 255])
+                }
                 setup::Setup::BeginTime => (13, 19, vec![0, 255, 4]),
                 setup::Setup::CancelTime { token } => {
                     assert_eq!(token, 19);
@@ -383,6 +402,17 @@ mod setup_boundary_tests {
                     assert_eq!(original, [0, 255, 7]);
                     (12, 0, vec![kind, u8::from(wrap), 0, 255])
                 }
+                setup::Setup::LedgerLoad { .. } => panic!("unexpected ledger load fixture"),
+                setup::Setup::LoadFinality { .. } => panic!("unexpected load finality fixture"),
+                setup::Setup::LedgerInstruction { .. } => panic!("unexpected ledger instruction fixture"),
+                setup::Setup::ConfirmUnload { .. } => panic!("unexpected unload confirmation fixture"),
+                setup::Setup::LoadProofProgress(_) => panic!("unexpected load proof progress fixture"),
+                setup::Setup::LoadProofStep { .. } => panic!("unexpected load proof step fixture"),
+                setup::Setup::UnloadProofProgress { .. } => panic!("unexpected unload proof progress fixture"),
+                setup::Setup::UnloadProofStep { .. } => panic!("unexpected unload proof step fixture"),
+                setup::Setup::ConfirmActivation(_) => panic!("unexpected activation confirmation fixture"),
+                setup::Setup::ActivationProofProgress(_) => panic!("unexpected activation progress fixture"),
+                setup::Setup::ActivationProofStep { .. } => panic!("unexpected activation step fixture"),
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
             };
             Ok(Response {
@@ -478,9 +508,24 @@ mod setup_boundary_tests {
             (3, 4, 0, vec![]),
             (4, 13, 19, vec![0, 255, 4]),
             (15, 17, 0, vec![0xa1; 16_384]),
+            (16, 12, 0, vec![0, 0, 255]),
+            (17, 12, 0, vec![1, 0, 255]),
+            (19, 30, 0, vec![0xc1; 16_384]),
+            (20, 31, 0, vec![1; state::FEE_CLAIM_MAX_BYTES_V1]),
+            (21, 12, 0, vec![0, 255, 7]),
+            (22, 12, 0, vec![0, 255, 7]),
+            (23, 33, u64::MAX, vec![7; 32]),
+            (24, 33, u64::MAX, vec![7; 32]),
+            (25, 35, 0, vec![]),
+            (
+                26,
+                36,
+                0,
+                vec![0xf1; KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1],
+            ),
         ] {
             let mut request = request(
-                if (1..=2).contains(&selector) {
+                if matches!(selector, 1 | 2 | 19 | 20 | 25) {
                     &id
                 } else {
                     &zero
@@ -493,9 +538,13 @@ mod setup_boundary_tests {
                     high: u64::MAX,
                 };
             }
-            if selector == 2 || selector == 3 {
+            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26) {
                 request.first = original.as_ptr();
                 request.first_length = original.len();
+            }
+            if matches!(selector, 25 | 26) {
+                request.second = original.as_ptr();
+                request.second_length = original.len();
             }
             let mut out = WalletResult::default();
             assert_eq!(
@@ -517,10 +566,24 @@ mod setup_boundary_tests {
                 crate::connect_norito_free(out.bytes);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 16);
+        let mut status = WalletResult::default();
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_wallet_setup_v1(handle, &request(&zero, 18), &mut status)
+            },
+            0
+        );
+        assert_eq!((status.status, status.detail, status.length), (29, 0, 0));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            16,
+            "worker status does not acquire the wallet"
+        );
+        assert_failure(handle, &request(&zero, 19), INVALID);
         close(handle).unwrap();
         assert_failure(handle, &request(&zero, 0), CLOSED);
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 16);
     }
     #[test]
     fn setup_c_routes_cancellation_and_every_envelope_form_to_the_same_owner() {
@@ -878,4 +941,96 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_snapshot_v1(
     // SAFETY: admitted complete output storage; all fields are initialized, no heap ownership.
     unsafe { out.write(value) };
     status
+}
+
+/// One original certificate in an enrollment request; no decoded platform facts.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletEnrollmentItem {
+    /// Exactly `length` readable original bytes.
+    pub bytes: *const u8,
+    /// Bounded by 16,384.
+    pub length: usize,
+}
+/// Typed native enrollment actions. Unused fields must be empty.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletEnrollmentRequest {
+    /// 0 begin(E1/account/asset),1 authorize(signature),2 status,3 Android(token+chain),
+    /// 4 Apple(keyid/attestation/assertion),5 retain E5(signature),6 E6(result),7 load runtime,8 original open from retained E5/E6.
+    pub selector: u32,
+    /// First exact original according to selector.
+    pub first: *const u8,
+    /// Exact first length.
+    pub first_length: usize,
+    /// Second exact original according to selector.
+    pub second: *const u8,
+    /// Exact second length.
+    pub second_length: usize,
+    /// Third exact original according to selector.
+    pub third: *const u8,
+    /// Exact third length.
+    pub third_length: usize,
+    /// Android certificate items only, leaf first; null when count is zero.
+    pub certificates: *const WalletEnrollmentItem,
+    /// 2..8 for Android selector3; zero otherwise.
+    pub certificate_count: usize,
+}
+/// Drive original enrollment under a native-provisioned exclusive owner.
+/// Results18 local challenge32,19 target161(slot32,key65,challenge32,binding32),20 pending,
+/// 21 abandoned,22 Bootstrap selected,23 E5 challenge32,24 exact E5,25 exact E6,26 runtime ready.
+/// The same opaque runtime handle is returned in sequence. E6 does not imply ledger activation.
+/// # Safety
+/// Request and each bounded item/input must be readable; output writable and unallocated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_enrollment_v1(
+    runtime: u64,
+    request: *const WalletEnrollmentRequest,
+    out: *mut WalletResult,
+) -> i32 {
+    unsafe {
+        output(out, || {
+            let request = request.as_ref().ok_or(Failure::code(INVALID))?;
+            let bounds = enrollment::bounds(request.selector)?;
+            if request.certificate_count > 8
+                || (request.certificate_count != 0 && request.certificates.is_null())
+                || (request.selector != 3 && request.certificate_count != 0)
+                || [
+                    request.first_length,
+                    request.second_length,
+                    request.third_length,
+                ]
+                .into_iter()
+                .zip(bounds)
+                .any(|(length, bound)| length > bound)
+            {
+                return Err(Failure::code(INVALID));
+            }
+            let certificates = if request.certificate_count == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(request.certificates, request.certificate_count)
+            };
+            if certificates
+                .iter()
+                .any(|item| item.length == 0 || item.length > 16_384)
+            {
+                return Err(Failure::code(INVALID));
+            }
+            let chain = certificates
+                .iter()
+                .map(|item| input(item.bytes, item.length, 16_384))
+                .collect::<Result<Vec<_>>>()?;
+            let action = enrollment::request(
+                request.selector,
+                [
+                    input(request.first, request.first_length, bounds[0])?,
+                    input(request.second, request.second_length, bounds[1])?,
+                    input(request.third, request.third_length, bounds[2])?,
+                ],
+                &chain,
+            )?;
+            enrollment::call(runtime, action)
+        })
+    }
 }

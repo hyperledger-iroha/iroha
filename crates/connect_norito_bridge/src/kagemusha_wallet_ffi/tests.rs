@@ -49,6 +49,20 @@ impl Wallet for TestWallet {
             }),
         })
     }
+    fn review(&mut self, input: review::Input) -> Result<Response> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let review::Input::Unload { amount, charge } = input else {
+            panic!("expected Unload review fixture")
+        };
+        assert_eq!(
+            state::OperationActionV1::Unload { amount, charge },
+            self.expected_request
+                .as_ref()
+                .expect("expected review originals")
+                .action,
+        );
+        Err(Failure::code(PROOF_REJECTED))
+    }
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(expected) = &self.expected_request {
@@ -108,7 +122,7 @@ fn installed() -> (u64, Arc<AtomicUsize>, Arc<AtomicUsize>) {
 fn handles_never_repeat_close_releases_owner_and_stale_captures_cannot_act() {
     let (id, calls, drops) = installed();
     let stale = owner(id).unwrap();
-    activity(id, true, false).unwrap();
+    activity(id, false, false).unwrap();
     assert_eq!(retry(id, &[1; 32]).unwrap().bytes, [0, 255, 0, 7]);
     close(id).unwrap();
     assert!(stale.wallet.lock().unwrap().is_none());
@@ -650,7 +664,7 @@ fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
 }
 
 #[test]
-fn c_operation_request_layout_and_unsigned_amount_reach_the_exact_typed_owner() {
+fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed_owner() {
     use std::mem::{align_of, offset_of, size_of};
     // Derive the C field placement from primitive platform ABI alignment. In particular,
     // the amount is two u64 limbs, not compiler-specific u128 or an opaque byte codec.
@@ -729,9 +743,23 @@ fn c_operation_request_layout_and_unsigned_amount_reach_the_exact_typed_owner() 
         third_length: 0,
     };
     let mut result = WalletResult::default();
-    // The stand-in owner deliberately rejects proof admission after asserting every field.
+    // Unload must first pass review; direct execution never reaches the owner.
     assert_eq!(
         unsafe { connect_norito_kagemusha_wallet_execute_v1(handle, &request, &mut result) },
+        INVALID
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let review = WalletReviewRequest {
+        selector: request.selector,
+        amount: request.amount,
+        first: request.first,
+        first_length: request.first_length,
+        second: request.second,
+        second_length: request.second_length,
+    };
+    // The stand-in review owner asserts the exact unsigned amount and charge originals.
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_review_v1(handle, &review, &mut result) },
         PROOF_REJECTED
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -830,4 +858,109 @@ fn interrupted_open_response_recovers_same_live_handle_and_closed_is_final() {
     close(id).unwrap();
     assert_eq!(open::finish(id, &[]).unwrap_err().status, CLOSED);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn callback_generation_recovery_preserves_original_none_unavailable_and_bounds() {
+    let state = CallbackState::default();
+    let adapter = unsafe { CallbackPlatform::new(callbacks(&state)) }.unwrap();
+    let slot = advance::KagemushaWalletSlotIdV1([9; 32]);
+    let request = advance::KagemushaWalletKeyGenerationRequestV1 {
+        challenge_digest: [10; 32],
+        profile: advance::KagemushaWalletKeyProfileV1::SecureElementOrTee,
+    };
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Err(U::Platform(0))
+    );
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 3,
+            length: 0,
+            ..PlatformReply::default()
+        },
+        vec![],
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Ok(None)
+    );
+    // No held return is independent of an unknown current key probe.
+    assert_eq!(adapter.key_probe(&slot), Probe::Unavailable(U::Platform(0)));
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 2,
+            reason: 0,
+            length: 0,
+            ..PlatformReply::default()
+        },
+        vec![],
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Err(U::Locked)
+    );
+    assert_eq!(adapter.key_probe(&slot), Probe::Unavailable(U::Locked));
+    let payment = p256::ecdsa::SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+    let bytes = payment
+        .verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec();
+    let expected =
+        iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1::from_sec1_bytes(&bytes).unwrap();
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 0,
+            length: 65,
+            ..PlatformReply::default()
+        },
+        bytes,
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Ok(Some(expected))
+    );
+    *state.answer.lock().unwrap() = (
+        PlatformReply {
+            tag: 0,
+            length: 65,
+            ..PlatformReply::default()
+        },
+        vec![0; 65],
+    );
+    assert_eq!(
+        adapter.key_recover_generation_reply(&slot, &request),
+        Err(U::KeyUnusable)
+    );
+    for (tag, length) in [(0, 66), (3, 1), (2, 1), (1, 0), (99, 0)] {
+        *state.answer.lock().unwrap() = (
+            PlatformReply {
+                tag,
+                length,
+                ..PlatformReply::default()
+            },
+            vec![0; length],
+        );
+        assert_eq!(
+            adapter.key_recover_generation_reply(&slot, &request),
+            Err(U::Platform(0))
+        );
+    }
+    assert_eq!(
+        state
+            .invocations
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(op, _, _)| *op == 1)
+            .count(),
+        0
+    );
+    for (op, bytes, capacity) in state.invocations.lock().unwrap().iter() {
+        if *op == 13 {
+            assert_eq!(bytes.as_slice(), &request.challenge_digest[..]);
+            assert_eq!(*capacity, 65);
+        }
+    }
 }

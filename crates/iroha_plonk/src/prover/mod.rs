@@ -65,7 +65,7 @@ use crate::{
         CircuitDescriptorV1, CsError, DescriptorConfig, DescriptorError, ProtocolDescriptor,
         descriptor::{Blake2bPersonal, blake2b_personal},
     },
-    frontend::{self, Circuit, synthesize},
+    frontend::{self, Circuit},
     keys::{KeyError, ProvingKey},
     pcs::{ipa::PinnedParams, multiopen::MultiopenError},
     protocol::{AllTerms, ConstraintFilter, Protocol, ProtocolError},
@@ -82,6 +82,8 @@ mod multiopen;
 mod permutation;
 pub mod quotient;
 pub use quotient::{QuotientWorkspace, WorkspaceError};
+#[cfg(test)]
+mod cancellation_tests;
 #[cfg(test)]
 mod tests;
 mod vanishing;
@@ -105,6 +107,8 @@ pub const RECOVERY_PURPOSE: &[u8] = b"iroha_plonk:pipa-v1:prover-randomness";
 /// Proving failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProverError {
+    /// The caller cancelled this operation; it has no completed proof result.
+    Cancelled,
     /// The circuit failed to synthesize its witness.
     Synthesis(frontend::Error),
     /// The circuit's constraint system, fixed columns, selectors or copy
@@ -177,9 +181,25 @@ pub enum ProverError {
     Multiopen(MultiopenError),
 }
 
+impl ProverError {
+    /// Whether this failure is cooperative cancellation, never an invalid proof.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled => true,
+            Self::Msm(error) => matches!(error, MsmError::Cancelled),
+            Self::Fft(error) => matches!(error, FftError::Cancelled),
+            Self::Key(error) => error.is_cancelled(),
+            Self::Synthesis(error) => matches!(error, frontend::Error::Cancelled),
+            Self::Multiopen(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
+
 impl fmt::Display for ProverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("operation cancelled"),
             Self::InstanceType { column, row } => {
                 write!(f, "instance ({column}, {row}) is outside its declared type")
             }
@@ -223,9 +243,19 @@ impl fmt::Display for ProverError {
 
 impl std::error::Error for ProverError {}
 
+impl From<iroha_pasta::Cancelled> for ProverError {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+
 impl From<frontend::Error> for ProverError {
     fn from(error: frontend::Error) -> Self {
-        Self::Synthesis(error)
+        if matches!(error, frontend::Error::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Synthesis(error)
+        }
     }
 }
 
@@ -249,19 +279,31 @@ impl From<DescriptorError> for ProverError {
 
 impl From<KeyError> for ProverError {
     fn from(error: KeyError) -> Self {
-        Self::Key(error)
+        if matches!(error, KeyError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Key(error)
+        }
     }
 }
 
 impl From<MsmError> for ProverError {
     fn from(error: MsmError) -> Self {
-        Self::Msm(error)
+        if matches!(error, MsmError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Msm(error)
+        }
     }
 }
 
 impl From<FftError> for ProverError {
     fn from(error: FftError) -> Self {
-        Self::Fft(error)
+        if matches!(error, FftError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Fft(error)
+        }
     }
 }
 
@@ -273,7 +315,11 @@ impl From<TranscriptError> for ProverError {
 
 impl From<MultiopenError> for ProverError {
     fn from(error: MultiopenError) -> Self {
-        Self::Multiopen(error)
+        if matches!(error, MultiopenError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Multiopen(error)
+        }
     }
 }
 
@@ -624,10 +670,29 @@ impl<F: PastaField> Witness<F> {
         C: PastaCurve<ScalarExt = F>,
         Ci: Circuit<F>,
     {
+        Self::from_circuit_cancellable(pk, circuit, instances, None)
+    }
+
+    /// Synthesizes and validates a witness with the caller's cancellation signal.
+    ///
+    /// # Errors
+    /// As [`Self::from_circuit`], or [`ProverError::Cancelled`].
+    pub fn from_circuit_cancellable<C, Ci>(
+        pk: &ProvingKey<C>,
+        circuit: &Ci,
+        instances: &[Vec<F>],
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, ProverError>
+    where
+        C: PastaCurve<ScalarExt = F>,
+        Ci: Circuit<F>,
+    {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let descriptor = pk.binding().descriptor();
         check_instances(descriptor, instances)?;
         let k = u32::from(descriptor.k);
-        let mut synthesized = synthesize(circuit, k, Some(instances))?;
+        let mut synthesized =
+            frontend::synthesize_cancellable(circuit, k, Some(instances), cancellation)?;
         let advice = synthesized
             .tables
             .take_advice()
@@ -668,6 +733,7 @@ impl<F: PastaField> Witness<F> {
             return Err(ProverError::CircuitMismatch);
         }
         witness.check_shape(pk)?;
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         Ok(witness)
     }
 
@@ -731,7 +797,11 @@ impl<F: PastaField> Witness<F> {
     /// The witness digest over the usable rows of every advice column,
     /// streamed value by value (no copy of the advice is built; each
     /// encoded value is wiped after it is absorbed).
-    fn digest(&self, usable_rows: usize) -> [u8; 32] {
+    fn digest(
+        &self,
+        usable_rows: usize,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<[u8; 32], ProverError> {
         let mut hasher = Blake2bPersonal::<32>::new(WITNESS_PERSONA);
         hasher.update(
             &u32::try_from(self.advice.len())
@@ -740,13 +810,16 @@ impl<F: PastaField> Witness<F> {
         );
         hasher.update(&u32::try_from(usable_rows).unwrap_or(u32::MAX).to_le_bytes());
         for column in &self.advice {
-            for value in column.iter().take(usable_rows) {
+            for (index, value) in column.iter().take(usable_rows).enumerate() {
+                if index % 1024 == 0 {
+                    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+                }
                 let mut repr = value.to_repr();
                 hasher.update(repr.as_ref());
                 repr.as_mut().fill(0);
             }
         }
-        hasher.finalize()
+        Ok(hasher.finalize())
     }
 }
 
@@ -780,16 +853,19 @@ fn statement_digest_bytes<F: PastaField>(
 }
 
 /// Resources of one proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ProverConfig {
+#[derive(Clone, Copy, Debug)]
+pub struct ProverConfig<'a> {
     /// Budget of each prover MSM.
     pub msm_budget: MemoryBudget,
+    /// Per-proof cooperative cancellation; no signal means run to completion.
+    pub cancellation: Option<&'a iroha_pasta::CancellationToken>,
 }
 
-impl Default for ProverConfig {
+impl Default for ProverConfig<'_> {
     fn default() -> Self {
         Self {
             msm_budget: MemoryBudget::DEFAULT,
+            cancellation: None,
         }
     }
 }
@@ -973,7 +1049,7 @@ where
     C::ScalarExt: PoseidonField,
     C::Base: PoseidonField,
 {
-    let witness = Witness::from_circuit(pk, circuit, instances)?;
+    let witness = Witness::from_circuit_cancellable(pk, circuit, instances, config.cancellation)?;
     create_proof_owned(params, pk, witness, randomness, config)
 }
 
@@ -1077,6 +1153,8 @@ where
     C::Base: PoseidonField,
     P: lookup::LookupPermutation<C::ScalarExt>,
 {
+    let cancellation = config.cancellation;
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let witness = input.witness();
     let descriptor = pk.binding().descriptor();
     if params.k() != u32::from(descriptor.k) || params.curve() != descriptor.curve {
@@ -1105,14 +1183,18 @@ where
     }
     check_instances(descriptor, &witness.instances)?;
 
-    let binding = randomness.needs_binding().then(|| Binding {
-        statement: statement_digest_bytes(
-            pk.binding().digest(),
-            &mode.transcript_repr.to_repr(),
-            &witness.instances,
-        ),
-        witness: witness.digest(shape.usable_rows),
-    });
+    let binding = if randomness.needs_binding() {
+        Some(Binding {
+            statement: statement_digest_bytes(
+                pk.binding().digest(),
+                &mode.transcript_repr.to_repr(),
+                &witness.instances,
+            ),
+            witness: witness.digest(shape.usable_rows, config.cancellation)?,
+        })
+    } else {
+        None
+    };
     let mut rng = randomness.into_stream(binding)?;
     let budget = config.msm_budget;
 
@@ -1147,8 +1229,8 @@ where
     }
 
     // The instances, then row 1.
-    let mut instance = advice::InstanceColumns::new(pk, witness.instances())?;
-    instance.absorb(params, &shape, &mut transcript, budget)?;
+    let mut instance = advice::InstanceColumns::new(pk, witness.instances(), cancellation)?;
+    instance.absorb(params, &shape, &mut transcript, budget, cancellation)?;
     let mut advice = advice::commit(
         params,
         pk,
@@ -1157,7 +1239,9 @@ where
         &mut rng,
         &mut transcript,
         budget,
+        cancellation,
     )?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let theta = transcript.squeeze_challenge();
 
     // Row 2.
@@ -1174,6 +1258,7 @@ where
         &mut rng,
         &mut transcript,
         budget,
+        cancellation,
     )?;
     // Lookup inputs have been materialized. Do not retain this DAG while
     // constructing the products or the larger quotient expression table.
@@ -1193,6 +1278,7 @@ where
         &mut rng,
         &mut transcript,
         budget,
+        cancellation,
     )?;
     let lookups = lookup::commit_products(
         params,
@@ -1204,16 +1290,26 @@ where
         &mut rng,
         &mut transcript,
         budget,
+        cancellation,
     )?;
 
     // Products are the final consumers of evaluations. Reuse the advice
     // allocation for its coefficient form instead of retaining both copies
     // through the quotient and IPA, and release padded public instances.
-    advice.interpolate_in_place(pk)?;
+    advice.interpolate_in_place(pk, cancellation)?;
     instance.values.clear();
 
     // Row 5.
-    let random = vanishing::commit_random(params, pk, &shape, &mut rng, &mut transcript, budget)?;
+    let random = vanishing::commit_random(
+        params,
+        pk,
+        &shape,
+        &mut rng,
+        &mut transcript,
+        budget,
+        cancellation,
+    )?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let y = transcript.squeeze_challenge();
 
     // Row 6.
@@ -1238,17 +1334,41 @@ where
         y,
     };
     let h = if let Some(workspace) = workspace {
-        quotient::evaluate_with_workspace(
-            pk, &protocol, &compiled, &inputs, challenges, filter, workspace,
+        quotient::evaluate_with_workspace_cancellable(
+            pk,
+            &protocol,
+            &compiled,
+            &inputs,
+            challenges,
+            filter,
+            workspace,
+            cancellation,
         )?
     } else {
-        quotient::evaluate(pk, &protocol, &compiled, &inputs, challenges, filter)?
+        quotient::evaluate_cancellable(
+            pk,
+            &protocol,
+            &compiled,
+            &inputs,
+            challenges,
+            filter,
+            cancellation,
+        )?
     };
     // The quotient evaluations are owned by `h`; no later phase reads the
     // compiled DAG, including quotient commitments and the opening proof.
     drop(compiled);
-    let quotient =
-        vanishing::commit_quotient(params, pk, &shape, h, &mut rng, &mut transcript, budget)?;
+    let quotient = vanishing::commit_quotient(
+        params,
+        pk,
+        &shape,
+        h,
+        &mut rng,
+        &mut transcript,
+        budget,
+        cancellation,
+    )?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let x = transcript.squeeze_challenge();
     let xn = x.pow_vartime([u64::try_from(shape.n).map_err(|_| ProtocolError::Overflow)?]);
     if bool::from(x.is_zero()) || xn == C::ScalarExt::ONE {
@@ -1265,10 +1385,20 @@ where
         quotient: quotient.combine(xn),
     };
     opened.write_evaluations(pk, &protocol, x, &mut transcript)?;
-    let folded = opened.open(params, pk, &protocol, x, &mut rng, &mut transcript, budget)?;
+    let folded = opened.open(
+        params,
+        pk,
+        &protocol,
+        x,
+        &mut rng,
+        &mut transcript,
+        budget,
+        cancellation,
+    )?;
     if shape.folded_generator_suffix {
         transcript.append_unabsorbed_point(folded.g())?;
     }
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     Ok(ProverOutput {
         proof: transcript.finish(),
         opening: folded,

@@ -58,6 +58,13 @@ that workflow for local release verification.
 - Swift toolchain 5.9 or newer.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
 
+Authenticated native builds also require `MOBILE_SDK_WALLET_RUNTIME_AUTHORITY`
+to select `bpng-taira-v7` or `cbsi-release-v1`, together with
+`MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX` containing the independently
+selected, nonzero lowercase 32-byte public signer key. The same pair is embedded
+in every slice and bound into its build evidence; retired authority identifiers
+are rejected.
+
 ## Versioning model
 
 1. Select the canonical Swift package/archive SemVer in `IrohaSwift/VERSION`.
@@ -386,7 +393,13 @@ pin, archive, and CI handoff owners retain the five-triple/three-slice contract.
 `--target-dir` under an exclusive emitter lock. Omit `--jobs` for Cargo's native
 jobserver. A warm artifact retains Cargo's actual freshness observation and must
 pass all existing source, tool, dep-info, archive custody and ABI checks. Its
-external evidence directory remains create-only; the target lane is preserved.
+evidence directory remains create-only below the original checkout's
+`target/qualification/`; the target lane is preserved. The guarded host builder
+and local-unit package producer both require this artifact location. Create an
+owned canonical mode-0700 parent there and select a new child for each capture.
+Symbolic ancestors, existing destinations, source directories and external
+outputs are refused. Retained artifacts remain separate from the warm Cargo
+lane, with all source, inode and admission checks enforced.
 
 The current KAGEMUSHA wallet inventory includes the C
 `connect_norito_kagemusha_wallet_snapshot_v1` export and the JNI

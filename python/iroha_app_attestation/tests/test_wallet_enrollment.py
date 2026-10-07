@@ -4,6 +4,7 @@ Synthetic roots and scripted server Google responses qualify component code only
 They are never physical-device, distributed app, production issuer or deployment evidence.
 """
 import hashlib
+from dataclasses import replace
 import os
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ from iroha_app_attestation.play_integrity import (
     DecodedPlayIntegrityEvidence, GooglePlayIntegrityVerifier,
     PlayIntegrityEnrollmentPolicy, PlayIntegrityProof,
 )
+from iroha_app_attestation.native_time_interval import NativeTimeInterval
 from iroha_app_attestation.wallet_enrollment import (
     VerifiedWalletEnrollmentEvidence, WalletEnrollmentScope,
     verify_android_wallet_enrollment, verify_apple_wallet_enrollment,
@@ -218,13 +220,32 @@ class WalletEnrollmentTests(unittest.TestCase):
             with (patch("iroha_app_attestation.wallet_enrollment.verify_google_chain_not_revoked") as revocation,
                   patch.object(google, "decode", return_value=decoded) as decoder):
                 record = verify_android_wallet_enrollment([leaf, root], "opaque-mobile-token", selected,
-                                                         policy, google, now, self.openssl, challenge_created_at_ms=now - 1)
+                                                         policy, google, now, self.openssl, challenge_created_at_ms=now - 1,
+                                                         trusted_time_interval=lambda: NativeTimeInterval(now, now))
                 revocation.assert_called_once_with([leaf, root])
                 decoder.assert_called_once_with("opaque-mobile-token", pi, selected.enrollment_key_binding(), now)
+                # Fresh interval is mandatory around each external stage. A response
+                # can age out while its decoder is running without expiring the challenge.
+                shorter = replace(policy, enrollment=replace(policy.enrollment,
+                    platform=replace(policy.enrollment.platform, play_integrity_maximum_age_ms=1_000)))
+                shorter_scope = policy_scope(shorter, fixture.point)
+                # Scope changes bind the attestation, so exercise this temporal check
+                # against the already selected raw verifier DATA in isolation.
+                with patch("iroha_app_attestation.wallet_enrollment.verify_android_wallet_payment_key_raw") as raw:
+                    raw.return_value.attested_public_key_sec1 = shorter_scope.payment_key_sec1
+                    samples = iter([now, now, now, now, now + 1_001])
+                    def fresh_interval():
+                        current = next(samples)
+                        return NativeTimeInterval(current, current)
+                    with self.assertRaisesRegex(AttestationRejected, "expired during verification"):
+                        verify_android_wallet_enrollment([leaf, root], "opaque-mobile-token", shorter_scope,
+                            shorter, google, now, self.openssl, challenge_created_at_ms=now - 1,
+                            trusted_time_interval=fresh_interval)
                 self.assertEqual(record.original_items, (leaf, root, body))
                 self.assertTrue(record.facts & (1 << 9))
                 self.assertTrue(record.facts & (1 << 10))
                 self.assertTrue(record.facts & (1 << 4))
                 with self.assertRaisesRegex(AttestationRejected, "another payment key"):
                     verify_android_wallet_enrollment([leaf, root], "opaque-mobile-token", policy_scope(policy, GENERATOR),
-                                                     policy, google, now, self.openssl, challenge_created_at_ms=now - 1)
+                                                     policy, google, now, self.openssl, challenge_created_at_ms=now - 1,
+                                                         trusted_time_interval=lambda: NativeTimeInterval(now, now))

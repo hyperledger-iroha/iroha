@@ -62,14 +62,15 @@ use super::{
     },
     layout::{
         KAGEMUSHA_WALLET_ABANDONED_NAME_V1, KAGEMUSHA_WALLET_ABANDONMENT_NAME_V1,
-        KAGEMUSHA_WALLET_ARCHIVE_DIR_NAME_V1, KAGEMUSHA_WALLET_CAPSULES_DIR_NAME_V1,
-        KAGEMUSHA_WALLET_COMPLETION_DIR_NAME_V1, KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1,
-        KAGEMUSHA_WALLET_INTENT_NAME_V1, KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1,
-        KAGEMUSHA_WALLET_MARKERS_DIR_NAME_V1, KAGEMUSHA_WALLET_OPS_DIR_NAME_V1,
-        KagemushaWalletCopyV1, KagemushaWalletCustodyDirV1, KagemushaWalletSlotIdV1,
-        kagemusha_wallet_capsule_name_v1, kagemusha_wallet_capsules_dir_v1,
-        kagemusha_wallet_completion_dir_v1, kagemusha_wallet_is_staging_name_v1,
-        kagemusha_wallet_list_dir_v1, kagemusha_wallet_markers_dir_v1, kagemusha_wallet_ops_dir_v1,
+        KAGEMUSHA_WALLET_ABANDONMENT_SELECTION_NAME_V1, KAGEMUSHA_WALLET_ARCHIVE_DIR_NAME_V1,
+        KAGEMUSHA_WALLET_CAPSULES_DIR_NAME_V1, KAGEMUSHA_WALLET_COMPLETION_DIR_NAME_V1,
+        KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1, KAGEMUSHA_WALLET_INTENT_NAME_V1,
+        KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1, KAGEMUSHA_WALLET_MARKERS_DIR_NAME_V1,
+        KAGEMUSHA_WALLET_OPS_DIR_NAME_V1, KagemushaWalletCopyV1, KagemushaWalletCustodyDirV1,
+        KagemushaWalletSlotIdV1, kagemusha_wallet_capsule_name_v1,
+        kagemusha_wallet_capsules_dir_v1, kagemusha_wallet_completion_dir_v1,
+        kagemusha_wallet_is_staging_name_v1, kagemusha_wallet_list_dir_v1,
+        kagemusha_wallet_markers_dir_v1, kagemusha_wallet_ops_dir_v1,
         kagemusha_wallet_parse_credential_name_v1, kagemusha_wallet_probe_dir_v1,
         kagemusha_wallet_require_removed_v1, kagemusha_wallet_slot_dir_v1,
         kagemusha_wallet_slots_dir_v1,
@@ -134,8 +135,32 @@ where
     C: KagemushaWalletAdvanceCapsuleV1,
     R: KagemushaWalletCompletionFrameV1,
 {
-    /// Reconcile `slot`, finishing a selected head with `owner` when one is given.
+    /// Reconcile only after preserving any successful generation reply held by this owner.
     pub(super) fn reconcile_slot(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        owner: Option<&dyn KagemushaWalletTransitionOwnerV1<C, R>>,
+    ) -> Result<KagemushaWalletSlotStatusV1, KagemushaWalletProviderErrorV1> {
+        self.recover_generated_key(slot)?;
+        self.reconcile_slot_after_generation(slot, owner)
+    }
+
+    /// A genuine in-memory reply cannot revive an abandoned slot or conceal prior journals.
+    pub(super) fn require_recoverable_generation_slot(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<(), KagemushaWalletProviderErrorV1> {
+        let files = self.slot_files(slot)?;
+        if !files.intent || files.abandoned || files.journal {
+            return Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                object: "generation slot custody",
+            });
+        }
+        Ok(())
+    }
+
+    /// Ordinary reconciliation after generation reply custody; never invokes generation.
+    pub(super) fn reconcile_slot_after_generation(
         &mut self,
         slot: &KagemushaWalletSlotIdV1,
         owner: Option<&dyn KagemushaWalletTransitionOwnerV1<C, R>>,
@@ -640,7 +665,9 @@ where
                         files.generation_attempt = true
                     }
                     KAGEMUSHA_WALLET_ABANDONED_NAME_V1 => files.abandoned = true,
-                    KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1 | KAGEMUSHA_WALLET_ABANDONMENT_NAME_V1 => {
+                    KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1
+                    | KAGEMUSHA_WALLET_ABANDONMENT_NAME_V1
+                    | KAGEMUSHA_WALLET_ABANDONMENT_SELECTION_NAME_V1 => {
                         files.journal = true;
                     }
                     name if kagemusha_wallet_parse_credential_name_v1(name).is_some() => {

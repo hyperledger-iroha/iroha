@@ -201,6 +201,7 @@ pub(crate) fn capture_assets_once(
     let budget = state.ivm_execution_budget();
     let checked = CheckedAssets::capture(
         &state.world,
+        &budget,
         limits.max_rows.saturating_mul(ASSET_BALANCE_WORK_PER_ROW),
     );
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
@@ -260,6 +261,7 @@ pub(crate) fn capture_asset_definitions_once(
     let budget = state.ivm_execution_budget();
     let checked = CheckedAssetDefinitions::capture(
         &state.world,
+        &budget,
         limits
             .max_rows
             .saturating_mul(ASSET_DEFINITION_WORK_PER_ROW),
@@ -468,3 +470,61 @@ grouped_capture!(
 #[cfg(test)]
 #[path = "grouped_capture/nfts_rwas_fence_tests.rs"]
 mod nfts_rwas_fence_tests;
+
+#[cfg(test)]
+mod direct_home_admission_tests {
+    use super::*;
+    use crate::{
+        kura::Kura, query::store::LiveQueryStore,
+        state::authority_registry::grouped_ownership::asset_balance_test_support as fixture,
+    };
+    use iroha_model_base::topology::DataSpaceId;
+
+    #[test]
+    fn committed_readers_retry_in_the_same_state_allocation_pool() {
+        let _pin = crossbeam_epoch::pin();
+        let mut world = *fixture::fixture(false);
+        world
+            .set_asset_definition_dataspace_for_testing(
+                fixture::definition("coin"),
+                DataSpaceId::new(7),
+            )
+            .unwrap();
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let pool = state.ivm_execution_budget();
+        let original_limit = pool.limit_bytes();
+        let generation = state.state_view_generation();
+        let baseline = pool.reserved_bytes();
+        let limits = LeafLimits {
+            max_tables: 1,
+            max_rows: 64,
+            max_payload_bytes: 65536,
+            max_ordered_table_bytes: 131072,
+            max_streamed_value_bytes: 131072,
+        };
+        type Capture =
+            fn(&State, LeafLimits) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError>;
+        let captures: [Capture; 2] = [capture_assets_once, capture_asset_definitions_once];
+        for capture in captures {
+            pool.set_limit_bytes(0);
+            assert!(matches!(
+                capture(&state, limits),
+                Err(LeafError::GroupedOwnership(
+                    GroupedOwnershipError::Admission(_)
+                ))
+            ));
+            assert_eq!(pool.reserved_bytes(), baseline);
+            assert_eq!(state.state_view_generation(), generation);
+            pool.set_limit_bytes(original_limit);
+            let snapshot = capture(&state, limits).unwrap().unwrap();
+            assert!(pool.reserved_bytes() > baseline);
+            drop(snapshot);
+            assert_eq!(pool.reserved_bytes(), baseline);
+            assert_eq!(state.state_view_generation(), generation);
+        }
+    }
+}

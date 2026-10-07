@@ -26,17 +26,22 @@ fn project<'a>(
     assets: impl Iterator<Item = (&'a AssetId, &'a AssetValue)>,
     domain_exists: impl Fn(&DomainId) -> bool,
     definition_exists: impl Fn(&AssetDefinitionId) -> bool,
+    registry: Option<&iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1>,
+    incarnation: impl Fn(&AssetDefinitionId) -> Option<AxtAssetIncarnationV1>,
 ) -> Result<Image, String> {
     let mut image = Image::default();
     for (id, definition) in definitions {
         let domain = definition.owning_domain().as_ref();
-        if definition.balance_scope_policy() == AssetBalancePolicy::DataspaceRestricted
-            && domain.is_none()
-        {
-            return Err(format!(
-                "restricted asset definition {id} has no authoritative owning domain"
-            ));
-        }
+        let incarnation = incarnation(id);
+        let direct = asset_definition_dataspace_from_registry(
+            registry,
+            id,
+            Some(definition),
+            incarnation.as_ref(),
+        )
+        .map_err(|error| error.to_string())?;
+        iroha_data_model::asset::AssetDefinitionHome::from_definition(definition, direct)
+            .map_err(|error| error.to_string())?;
         if let Some(domain) = domain {
             if !domain_exists(domain) {
                 return Err(format!(
@@ -175,17 +180,80 @@ pub(super) fn assets(world: &mut World) -> Result<(), String> {
     let definitions = world.asset_definitions.history();
     let domains = world.domains.history();
     let balances = world.assets.history();
+    let incarnations = world.axt_asset_incarnations.history();
+    let parameters = world
+        .parameters
+        .try_committed_view()
+        .map_err(|error| format!("cannot retain direct-home parameters: {error:?}"))?;
+    let current_registry = asset_definition_registry_from_parameters(parameters.current())
+        .map_err(|error| error.to_string())?;
+    let previous_registry = asset_definition_registry_from_parameters(
+        parameters.undo().as_ref().unwrap_or(parameters.current()),
+    )
+    .map_err(|error| error.to_string())?;
+    validate_asset_definition_registry_transition(
+        previous_registry.as_ref(),
+        current_registry.as_ref(),
+    )
+    .map_err(|error| error.to_string())?;
+    if let Some(next) = &current_registry {
+        for (id, binding) in &next.bindings {
+            if binding.active
+                && definitions.get_before_block(id).is_some()
+                && incarnations.get_before_block(id) == Some(&binding.incarnation)
+                && previous_registry
+                    .as_ref()
+                    .and_then(|registry| registry.bindings.get(id))
+                    != Some(binding)
+            {
+                return Err(
+                    "direct home changed for an existing snapshot-predecessor incarnation".into(),
+                );
+            }
+        }
+    }
+    // Check every binding, including orphans and tombstones absent from the definition iterator.
+    for (previous, registry) in [
+        (false, current_registry.as_ref()),
+        (true, previous_registry.as_ref()),
+    ] {
+        if let Some(registry) = registry {
+            for id in registry.bindings.keys() {
+                let definition = if previous {
+                    definitions.get_before_block(id)
+                } else {
+                    definitions.current().get(id)
+                };
+                let incarnation = if previous {
+                    incarnations.get_before_block(id)
+                } else {
+                    incarnations.current().get(id)
+                };
+                asset_definition_dataspace_from_registry(
+                    Some(registry),
+                    id,
+                    definition,
+                    incarnation,
+                )
+                .map_err(|error| error.to_string())?;
+            }
+        }
+    }
     let current = project(
         definitions.current().iter(),
         balances.current().iter(),
         |id| domains.current().get(id).is_some(),
         |id| definitions.current().get(id).is_some(),
+        current_registry.as_ref(),
+        |id| incarnations.current().get(id).copied(),
     )?;
     let previous = project(
         definitions.iter_before_block(),
         balances.iter_before_block(),
         |id| domains.get_before_block(id).is_some(),
         |id| definitions.get_before_block(id).is_some(),
+        previous_registry.as_ref(),
+        |id| incarnations.get_before_block(id).copied(),
     )?;
     let touched = Touches::sources(&definitions, &balances);
     drop((definitions, domains, balances));

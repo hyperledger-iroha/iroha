@@ -67,7 +67,7 @@ impl LineageCache {
         if self.verified.as_ref() == Some(&bytes) {
             return Ok(true);
         }
-        native.verify_lineage(lineage)?;
+        native.verify_lineage(lineage, None)?;
         self.verified = Some(bytes);
         Ok(false)
     }
@@ -139,7 +139,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         &mut self,
         step: &ReleasedStep,
         bytes: &[u8],
+        cancellation: Option<&Cancellation>,
     ) -> Result<RecordedFold, Error> {
+        if let Some(token) = cancellation {
+            token.check()?;
+        }
         let c = &step.frozen.capsule;
         let fold: RecordedFold = archive::decode(bytes)?;
         valid(fold.record.to_canonical_bytes())?;
@@ -167,7 +171,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             .map(Vec::as_slice)
             != Some(bytes)
         {
-            self.proofs.verify_lineage(&r.lineage)?;
+            self.proofs.verify_lineage(&r.lineage, cancellation)?;
         }
         // Only the most recently used Ω is cached; history must not accumulate in RAM.
         self.verified_folds.clear();
@@ -176,6 +180,16 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(fold)
     }
     pub(super) fn read_fold(&mut self, step: &ReleasedStep) -> Result<Option<RecordedFold>, Error> {
+        self.read_fold_cancellable(step, None)
+    }
+    pub(super) fn read_fold_cancellable(
+        &mut self,
+        step: &ReleasedStep,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<Option<RecordedFold>, Error> {
+        if let Some(token) = cancellation {
+            token.check()?;
+        }
         let (_, manifest) = self.manifest()?;
         let sequence = step.frozen.capsule.statement.sequence;
         let expected = manifest
@@ -197,7 +211,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if expected != digest("wallet-recorded-fold", &bytes) {
             return Err(Error::WitnessLost("source-bound Ω identity"));
         }
-        let fold = self.verify_fold_bytes(step, &bytes)?;
+        let fold = self.verify_fold_bytes(step, &bytes, cancellation)?;
         Ok(Some(fold))
     }
     fn record_credit(
@@ -299,7 +313,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             .transpose()?;
         let predecessor = if let Some(step) = predecessor_step.as_ref() {
             let fold = self
-                .read_fold(step)?
+                .read_fold_cancellable(step, Some(&guard.token))?
                 .ok_or(Error::WitnessLost("fold predecessor"))?;
             if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root() {
                 return Err(Error::WitnessLost("credit tree root"));
@@ -348,7 +362,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             None
         };
         let result = if let Some(bytes) = existing_fold.as_ref() {
-            let fold = self.verify_fold_bytes(&step, bytes)?;
+            let fold = self.verify_fold_bytes(&step, bytes, Some(&guard.token))?;
             FoldProgress::Complete {
                 lineage: fold.record.lineage,
                 burned: fold.burned,
@@ -413,7 +427,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 if usize::try_from(ordinal).ok() != Some(schedule.len()) {
                     return Err(Error::Proof("premature final Ω"));
                 }
-                self.proofs.verify_lineage(&lineage)?;
+                self.proofs.verify_lineage(&lineage, Some(&guard.token))?;
                 if let Some(seed) = &seed {
                     let mut view =
                         seed.view(&mut self.archive, predecessor_step.as_ref(), &step)?;
@@ -463,7 +477,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     lineage,
                 };
                 let bytes = archive::encode(&RecordedFold { record, burned })?;
-                self.verify_fold_bytes(&step, &bytes)?;
+                self.verify_fold_bytes(&step, &bytes, Some(&guard.token))?;
                 if existing_fold
                     .as_ref()
                     .is_some_and(|existing| *existing != bytes)

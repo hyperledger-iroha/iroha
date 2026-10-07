@@ -65,7 +65,7 @@ pub struct ProvingContext<'a, 'r> {
         ProofRequest,
     )
         -> Result<super::continuity::tree::NodeRandomness<'r>, Error>,
-    proof: ProverConfig,
+    proof: ProverConfig<'a>,
     fold: &'a FoldConfig,
     sequence: u64,
     checkpoints: Option<&'a mut dyn ProofCheckpointStore>,
@@ -78,9 +78,13 @@ impl<'a, 'r> ProvingContext<'a, 'r> {
             ProofRequest,
         )
             -> Result<super::continuity::tree::NodeRandomness<'r>, Error>,
-        proof: ProverConfig,
+        proof: ProverConfig<'a>,
         fold: &'a FoldConfig,
     ) -> Self {
+        let proof = ProverConfig {
+            cancellation: proof.cancellation.or(fold.cancellation.as_ref()),
+            ..proof
+        };
         Self {
             artifacts,
             randomness,
@@ -104,9 +108,14 @@ impl<'a, 'r> ProvingContext<'a, 'r> {
         params: &PinnedParams<Eq>,
     ) -> Result<Option<SourceNodeEvidence>, Error> {
         match &mut self.checkpoints {
-            Some(store) => {
-                checkpoint::restore(*store, source, endpoints, params, self.proof.msm_budget)
-            }
+            Some(store) => checkpoint::restore_cancellable(
+                *store,
+                source,
+                endpoints,
+                params,
+                self.proof.msm_budget,
+                self.proof.cancellation,
+            ),
             None => Ok(None),
         }
     }
@@ -117,7 +126,14 @@ impl<'a, 'r> ProvingContext<'a, 'r> {
         params: &PinnedParams<Eq>,
     ) -> Result<(), Error> {
         match &mut self.checkpoints {
-            Some(store) => checkpoint::retain(*store, source, proof, params, self.proof.msm_budget),
+            Some(store) => checkpoint::retain_cancellable(
+                *store,
+                source,
+                proof,
+                params,
+                self.proof.msm_budget,
+                self.proof.cancellation,
+            ),
             None => Ok(()),
         }
     }
@@ -125,6 +141,7 @@ impl<'a, 'r> ProvingContext<'a, 'r> {
         &mut self,
         node: NodeId,
     ) -> Result<super::continuity::tree::NodeRandomness<'r>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(self.proof.cancellation)?;
         let sequence = self.sequence;
         self.sequence = sequence.checked_add(1).ok_or(Error::Input)?;
         (self.randomness)(ProofRequest { node, sequence })
@@ -132,7 +149,13 @@ impl<'a, 'r> ProvingContext<'a, 'r> {
 }
 
 fn circuit<T>(result: Result<T, iroha_plonk::frontend::Error>) -> Result<T, Error> {
-    result.map_err(|_| Error::Input)
+    result.map_err(|error| {
+        if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+            Error::Cancelled
+        } else {
+            Error::Input
+        }
+    })
 }
 
 #[cfg(test)]
@@ -178,6 +201,43 @@ mod tests {
             .map(|(node, sequence)| ProofRequest { node, sequence })
             .collect();
         assert_eq!(*requests.borrow(), expected);
+    }
+
+    #[test]
+    fn operation_token_normalization_preserves_single_signals_and_proof_precedence() {
+        let cancelled = iroha_pasta::CancellationToken::new();
+        cancelled.cancel();
+        let live = iroha_pasta::CancellationToken::new();
+        for (proof_signal, fold_signal, expected) in [
+            (None, Some(cancelled.clone()), true),
+            (Some(&cancelled), None, true),
+            (Some(&live), Some(cancelled.clone()), false),
+            (None, None, false),
+        ] {
+            let calls = RefCell::new(0);
+            let mut provider = |_| {
+                *calls.borrow_mut() += 1;
+                Err(Error::Input)
+            };
+            let mut artifacts = NoArtifacts;
+            let fold = FoldConfig {
+                cancellation: fold_signal,
+                ..FoldConfig::default()
+            };
+            let mut context = ProvingContext::new(
+                &mut artifacts,
+                &mut provider,
+                ProverConfig {
+                    cancellation: proof_signal,
+                    ..ProverConfig::default()
+                },
+                &fold,
+            );
+            let error = context.entropy(NodeId::Genesis).err().unwrap();
+            assert_eq!(error.is_cancelled(), expected);
+            assert_eq!(context.sequence, u64::from(!expected));
+            assert_eq!(*calls.borrow(), usize::from(!expected));
+        }
     }
 
     #[test]

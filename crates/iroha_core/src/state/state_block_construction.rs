@@ -245,6 +245,7 @@ impl State {
                 pending_da_commitments: None,
                 pending_da_pin_intents: None,
                 pending_autoscale_lifecycle: None,
+                pending_asset_definition_registry: None,
                 autoscale_sample_history: projection.samples,
                 autoscale_sample_history_dirty: false,
                 autoscale_evaluated_committed_fragment_count: None,

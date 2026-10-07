@@ -380,6 +380,7 @@ impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
 // Allow direct boxing of consensus key lifecycle instructions.
 impl_direct_instruction_box!(crate::isi::register::RegisterCommitteePeerWithPop);
+impl_direct_instruction_box!(crate::isi::register_dataspace_asset_definition::RegisterDataspaceAssetDefinition);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RegisterConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RotateConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);
@@ -1999,6 +2000,8 @@ pub mod private_settlement;
 pub mod ram_lfe;
 /// Registration-related instructions (accounts, assets, domains, etc.).
 pub mod register;
+/// Asset definitions registered directly in an explicit dataspace namespace.
+pub mod register_dataspace_asset_definition;
 /// Instruction registries shared across instruction families.
 pub mod registry;
 mod registry_install;
@@ -2053,6 +2056,7 @@ pub use oracle::*;
 pub use privacy::*;
 pub use ram_lfe::*;
 pub use register::*;
+pub use register_dataspace_asset_definition::*;
 pub use repo::*;
 pub use settlement::*;
 pub use soradns::*;
@@ -2863,6 +2867,7 @@ pub mod prelude {
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
         register::{Register, RegisterBox, Unregister, UnregisterBox},
+        register_dataspace_asset_definition::RegisterDataspaceAssetDefinition,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         retail_daily_limit::{
             ActivateRetailDailyLimitV1, BindRetailIdentityV1, RetailMonetaryMovementV1,

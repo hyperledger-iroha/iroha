@@ -10,7 +10,7 @@ use iroha_kagemusha_proof::{
     q_sigma::native::{IncomingMode, incoming_proof_failure as invalid_proof},
 };
 use iroha_pasta::{Ep, Eq, PastaAffine, PastaCurve, poseidon::hash_with_domain};
-use iroha_plonk::{Protocol, pcs::ipa::PinnedParams, verifier::accumulate_generator};
+use iroha_plonk::{Protocol, pcs::ipa::PinnedParams, verifier::accumulate_generator_cancellable};
 use iroha_plonk_gadgets::statement::foreign_limbs;
 use iroha_plonk_recursion::{ACCUMULATOR_BYTES, AccumulatorT, FoldInput};
 
@@ -65,31 +65,50 @@ fn opening<C: PastaCurve>(
     instances: &[Vec<C::ScalarExt>],
     bytes: &[u8],
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<Option<FoldInput<C>>, Error> {
-    match accumulate_generator(params, key.binding(), key.key(), instances, bytes, budget) {
+    match accumulate_generator_cancellable(
+        params,
+        key.binding(),
+        key.key(),
+        instances,
+        bytes,
+        budget,
+        cancellation,
+    ) {
         Ok(value) => Ok(Some(proof(FoldInput::from_opening(
             *value.g(),
             value.challenges(),
         ))?)),
+        Err(error) if error.is_cancelled() => Err(Error::Cancelled),
         Err(error) if invalid_proof(&error) => Ok(None),
         Err(_) => Err(Error::Proof("incoming verifier resources or profile")),
     }
 }
 
 pub(super) fn transport(
+    pparams: &PinnedParams<Ep>,
+    vparams: &PinnedParams<Eq>,
     key: &KeyArtifact<Ep>,
     original: &[u8],
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<TransportV1, Error> {
     let proof_bytes = proof(Protocol::new(key.binding().descriptor()))?.proof_length();
     let total = 320usize
         .checked_add(proof_bytes)
         .and_then(|n| n.checked_add(2 * ACCUMULATOR_BYTES))
         .ok_or(Error::Proof("incoming transport bounds"))?;
-    let pparams = proof(PinnedParams::<Ep>::derive(16))?;
-    let vparams = proof(PinnedParams::<Eq>::derive(16))?;
-    let trivial_p = proof(AccumulatorT::trivial(&pparams, budget))?;
-    let trivial_v = proof(AccumulatorT::trivial(&vparams, budget))?;
+    let trivial_p = proof(AccumulatorT::trivial_cancellable(
+        pparams,
+        budget,
+        cancellation,
+    ))?;
+    let trivial_v = proof(AccumulatorT::trivial_cancellable(
+        vparams,
+        budget,
+        cancellation,
+    ))?;
     let key_digest = proof(key.key().kagemusha_digest(key.binding()))?;
     let (public, public_valid) = public(original, total, key_digest);
     let pallas =
@@ -131,7 +150,7 @@ pub(super) fn transport(
     let bytes = (0..proof_bytes)
         .map(|i| original.get(320 + i).copied().unwrap_or(0))
         .collect::<Vec<_>>();
-    let actual = opening(&pparams, key, &instances, &bytes, budget)?;
+    let actual = opening(pparams, key, &instances, &bytes, budget, cancellation)?;
     let valid = public_valid && claims_valid && actual.is_some();
     Ok(TransportV1 {
         public,
@@ -149,8 +168,9 @@ fn corrected_point<C: PastaCurve>(
     original: &FoldInput<C>,
     params: &PinnedParams<C>,
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<C::AffineExt, Error> {
-    let correction = proof(original.corrected(params, budget))?;
+    let correction = proof(original.corrected_cancellable(params, budget, cancellation))?;
     let replacement = correction.replacement();
     if replacement.g() == original.g()
         || replacement.source_k() != original.source_k()
@@ -158,17 +178,20 @@ fn corrected_point<C: PastaCurve>(
     {
         return Err(Error::Proof("incoming correction binding"));
     }
-    proof(replacement.decide(params, budget))?;
+    proof(replacement.decide_cancellable(params, budget, cancellation))?;
     Ok(*replacement.g())
 }
 
 /// Select exactly one correction if all succinct predicates pass but a deferred
 /// obligation fails. Any false predicate takes the all-Trivial branch instead.
 pub(super) fn modes(
+    p: &PinnedParams<Ep>,
+    v: &PinnedParams<Eq>,
     soft: bool,
     transport: &TransportV1,
     sigma: Option<&FoldInput<Eq>>,
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<
     (
         [IncomingMode; 4],
@@ -177,13 +200,14 @@ pub(super) fn modes(
     ),
     Error,
 > {
-    let (transport_modes, pc, vc) = status_modes(soft, transport, budget)?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+    let (transport_modes, pc, vc) = status_modes(p, v, soft, transport, budget, cancellation)?;
     let mut selected = [IncomingMode::Trivial; 4];
     selected[..3].copy_from_slice(&transport_modes);
     if !soft || transport_modes.contains(&IncomingMode::Corrected) {
         return Ok((selected, pc, vc));
     }
-    selected[3] = sigma_mode(true, sigma, budget)?;
+    selected[3] = sigma_mode(v, true, sigma, budget, cancellation)?;
     if selected[3] == IncomingMode::Corrected {
         selected[..3].fill(IncomingMode::Trivial);
     }
@@ -192,9 +216,12 @@ pub(super) fn modes(
 
 /// Archive Status has exactly the three original Omega obligations and no sigma.
 pub(super) fn status_modes(
+    p: &PinnedParams<Ep>,
+    v: &PinnedParams<Eq>,
     soft: bool,
     transport: &TransportV1,
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<
     (
         [IncomingMode; 3],
@@ -203,10 +230,8 @@ pub(super) fn status_modes(
     ),
     Error,
 > {
-    let p = proof(PinnedParams::<Ep>::derive(16))?;
-    let v = proof(PinnedParams::<Eq>::derive(16))?;
-    let trivial_p = proof(AccumulatorT::trivial(&p, budget))?;
-    let trivial_v = proof(AccumulatorT::trivial(&v, budget))?;
+    let trivial_p = proof(AccumulatorT::trivial_cancellable(p, budget, cancellation))?;
+    let trivial_v = proof(AccumulatorT::trivial_cancellable(v, budget, cancellation))?;
     let mut corrections = [*trivial_p.g(); 2];
     let mut vcorrection = *trivial_v.g();
     if !soft {
@@ -217,24 +242,30 @@ pub(super) fn status_modes(
         .iter()
         .enumerate()
     {
-        match claim.decide(&p, budget) {
+        match claim.decide_cancellable(p, budget, cancellation) {
             Ok(()) => {}
             Err(iroha_plonk_recursion::Error::Undecidable) => {
-                corrections[index] = corrected_point(claim, &p, budget)?;
+                corrections[index] = corrected_point(claim, p, budget, cancellation)?;
                 selected.fill(IncomingMode::Trivial);
                 selected[index] = IncomingMode::Corrected;
                 return Ok((selected, corrections, vcorrection));
             }
+            Err(error) if error.is_cancelled() => return Err(Error::Cancelled),
             Err(_) => return Err(Error::Proof("incoming decide resources")),
         }
     }
-    match transport.vesta.as_input().decide(&v, budget) {
+    match transport
+        .vesta
+        .as_input()
+        .decide_cancellable(v, budget, cancellation)
+    {
         Ok(()) => {}
         Err(iroha_plonk_recursion::Error::Undecidable) => {
-            vcorrection = corrected_point(&transport.vesta.as_input(), &v, budget)?;
+            vcorrection = corrected_point(&transport.vesta.as_input(), v, budget, cancellation)?;
             selected.fill(IncomingMode::Trivial);
             selected[2] = IncomingMode::Corrected;
         }
+        Err(error) if error.is_cancelled() => return Err(Error::Cancelled),
         Err(_) => return Err(Error::Proof("incoming decide resources")),
     }
     Ok((selected, corrections, vcorrection))
@@ -243,21 +274,24 @@ pub(super) fn status_modes(
 /// Archive Receive has one sigma obligation and no transported Omega claims.
 /// The actual Q_sigma producer derives and proves its same-challenge correction.
 pub(super) fn sigma_mode(
+    params: &PinnedParams<Eq>,
     soft: bool,
     sigma: Option<&FoldInput<Eq>>,
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<IncomingMode, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
     if !soft {
         return Ok(IncomingMode::Trivial);
     }
     let sigma = sigma.ok_or(Error::Proof("incoming sigma obligation"))?;
-    let params = proof(PinnedParams::<Eq>::derive(16))?;
-    match sigma.decide(&params, budget) {
+    match sigma.decide_cancellable(params, budget, cancellation) {
         Ok(()) => Ok(IncomingMode::Accept),
         Err(iroha_plonk_recursion::Error::Undecidable) => {
-            corrected_point(sigma, &params, budget)?;
+            corrected_point(sigma, params, budget, cancellation)?;
             Ok(IncomingMode::Corrected)
         }
+        Err(error) if error.is_cancelled() => Err(Error::Cancelled),
         Err(_) => Err(Error::Proof("incoming decide resources")),
     }
 }
@@ -271,6 +305,21 @@ mod tests {
     };
 
     use super::*;
+    #[test]
+    fn cancellation_cannot_become_a_trivial_burn_branch() {
+        let params = PinnedParams::<Eq>::derive(1).unwrap();
+        let token = iroha_pasta::CancellationToken::new();
+        token.cancel();
+        assert!(matches!(
+            sigma_mode(&params, false, None, MemoryBudget::DEFAULT, Some(&token)),
+            Err(Error::Cancelled)
+        ));
+        assert!(matches!(
+            sigma_mode(&params, false, None, MemoryBudget::DEFAULT, None),
+            Ok(IncomingMode::Trivial)
+        ));
+    }
+
     #[test]
     fn total_failure_classification_keeps_nested_proof_errors_soft_and_profiles_hard() {
         for error in [
@@ -289,6 +338,9 @@ mod tests {
             assert!(invalid_proof(&error), "{error:?}");
         }
         for error in [
+            VerifyError::Cancelled,
+            VerifyError::Ipa(IpaError::Cancelled),
+            VerifyError::Multiopen(MultiopenError::Cancelled),
             VerifyError::KeyMismatch,
             VerifyError::ParamsMismatch,
             VerifyError::SuffixRequired,
@@ -321,11 +373,15 @@ mod tests {
         };
         let sigma = v.as_input();
         assert_eq!(
-            modes(true, &input, Some(&sigma), budget).unwrap().0,
+            modes(&pp, &vp, true, &input, Some(&sigma), budget, None)
+                .unwrap()
+                .0,
             [IncomingMode::Accept; 4]
         );
         assert_eq!(
-            modes(false, &input, None, budget).unwrap().0,
+            modes(&pp, &vp, false, &input, None, budget, None)
+                .unwrap()
+                .0,
             [IncomingMode::Trivial; 4]
         );
         let bad_p =
@@ -361,7 +417,8 @@ mod tests {
             } else {
                 v.as_input()
             };
-            let (actual, pc, vc) = modes(true, &input, Some(&sigma), budget).unwrap();
+            let (actual, pc, vc) =
+                modes(&pp, &vp, true, &input, Some(&sigma), budget, None).unwrap();
             let mut expected = [IncomingMode::Trivial; 4];
             expected[selected] = IncomingMode::Corrected;
             assert_eq!(actual, expected);
@@ -376,7 +433,9 @@ mod tests {
         input.pallas = bad_p;
         input.vesta = bad_v;
         assert_eq!(
-            modes(false, &input, None, budget).unwrap().0,
+            modes(&pp, &vp, false, &input, None, budget, None)
+                .unwrap()
+                .0,
             [IncomingMode::Trivial; 4]
         );
     }
@@ -398,11 +457,15 @@ mod tests {
             valid: true,
         };
         assert_eq!(
-            status_modes(true, &input, budget).unwrap().0,
+            status_modes(&pp, &vp, true, &input, budget, None)
+                .unwrap()
+                .0,
             [IncomingMode::Accept; 3]
         );
         assert_eq!(
-            status_modes(false, &input, budget).unwrap().0,
+            status_modes(&pp, &vp, false, &input, budget, None)
+                .unwrap()
+                .0,
             [IncomingMode::Trivial; 3]
         );
         for k in [12, 14] {
@@ -412,23 +475,25 @@ mod tests {
             let correction = bad.corrected(&vp, budget).unwrap();
             let good = correction.replacement();
             assert_eq!(
-                sigma_mode(true, Some(good), budget).unwrap(),
+                sigma_mode(&vp, true, Some(good), budget, None).unwrap(),
                 IncomingMode::Accept
             );
             assert_eq!(
-                sigma_mode(true, Some(&bad), budget).unwrap(),
+                sigma_mode(&vp, true, Some(&bad), budget, None).unwrap(),
                 IncomingMode::Corrected
             );
         }
-        assert!(sigma_mode(true, None, budget).is_err());
+        assert!(sigma_mode(&vp, true, None, budget, None).is_err());
         assert_eq!(
-            sigma_mode(false, None, budget).unwrap(),
+            sigma_mode(&vp, false, None, budget, None).unwrap(),
             IncomingMode::Trivial
         );
         input.vesta =
             AccumulatorT::new(iroha_pasta::EqAffine::generator(), *v.challenges()).unwrap();
         assert_eq!(
-            status_modes(true, &input, budget).unwrap().0,
+            status_modes(&pp, &vp, true, &input, budget, None)
+                .unwrap()
+                .0,
             [
                 IncomingMode::Trivial,
                 IncomingMode::Trivial,
@@ -457,8 +522,16 @@ mod tests {
             opening: bad_p.as_input(),
             valid: true,
         };
-        let (selected, corrections, _) =
-            modes(true, &transport, Some(&bad_v.as_input()), budget).unwrap();
+        let (selected, corrections, _) = modes(
+            &p,
+            &v,
+            true,
+            &transport,
+            Some(&bad_v.as_input()),
+            budget,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             selected,
             [
@@ -478,13 +551,15 @@ mod tests {
         assert_eq!(replacement.challenges(), bad_p.challenges());
         replacement.decide(&p, budget).unwrap();
         assert_eq!(
-            modes(false, &transport, None, budget).unwrap().0,
+            modes(&p, &v, false, &transport, None, budget, None)
+                .unwrap()
+                .0,
             [IncomingMode::Trivial; 4]
         );
     }
 
     #[test]
-    fn correction_retains_actual_source_prefix_and_insufficient_parameters_refuse() {
+    fn correction_retains_actual_source_prefix_with_minimal_scratch() {
         use p256::elliptic_curve::group::prime::PrimeCurveAffine;
         let params = PinnedParams::<Eq>::derive(16).unwrap();
         let insufficient = PinnedParams::<Eq>::derive(3).unwrap();
@@ -498,7 +573,7 @@ mod tests {
                 original.decide(&params, MemoryBudget::DEFAULT),
                 Err(iroha_plonk_recursion::Error::Undecidable)
             ));
-            let point = corrected_point(&original, &params, MemoryBudget::DEFAULT).unwrap();
+            let point = corrected_point(&original, &params, MemoryBudget::DEFAULT, None).unwrap();
             let selected =
                 FoldInput::from_normalized(point, original.source_k(), *original.challenges())
                     .unwrap();
@@ -506,8 +581,7 @@ mod tests {
             assert_eq!(selected.challenges(), original.challenges());
             assert_ne!(selected.g(), original.g());
             selected.decide(&params, MemoryBudget::DEFAULT).unwrap();
-            // Parameter coverage is a real fallible contract. Scratch budget zero
-            // selects the complete-kernel fallback and is not a resource refusal.
+            // Parameter coverage is a real fallible contract for each source prefix.
             for budget in [MemoryBudget::DEFAULT, MemoryBudget::new(0)] {
                 assert!(matches!(original.decide(&insufficient, budget),
                     Err(iroha_plonk_recursion::Error::Parameters(IpaError::ParamsTooSmall {
@@ -518,10 +592,20 @@ mod tests {
                         needed, available: 3
                     })) if needed == k as u32));
                 assert!(matches!(
-                    corrected_point(&original, &insufficient, budget),
+                    corrected_point(&original, &insufficient, budget, None),
                     Err(Error::Proof("native fold source or proof"))
                 ));
             }
+            // The complete MSM narrows its window when scratch is unavailable;
+            // the budget is not an artificial proof-validation failure.
+            assert_eq!(
+                corrected_point(&original, &params, MemoryBudget::new(0), None).unwrap(),
+                point
+            );
+            assert_eq!(
+                sigma_mode(&params, true, Some(&original), MemoryBudget::new(0), None).unwrap(),
+                IncomingMode::Corrected
+            );
         }
         let deciding = AccumulatorT::<Eq>::trivial(&params, MemoryBudget::DEFAULT).unwrap();
         assert!(matches!(
@@ -530,7 +614,34 @@ mod tests {
                 .corrected(&params, MemoryBudget::DEFAULT),
             Err(iroha_plonk_recursion::Error::NotCorrected)
         ));
-        assert!(corrected_point(&deciding.as_input(), &params, MemoryBudget::DEFAULT).is_err());
+        assert!(
+            corrected_point(&deciding.as_input(), &params, MemoryBudget::DEFAULT, None).is_err()
+        );
+    }
+
+    #[test]
+    fn correction_parameter_failures_abort_without_a_replacement() {
+        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        let params = PinnedParams::<Eq>::derive(12).unwrap();
+        let original =
+            FoldInput::<Eq>::from_opening(iroha_pasta::EqAffine::generator(), &[Fp::ONE; 14])
+                .unwrap();
+        for budget in [MemoryBudget::DEFAULT, MemoryBudget::new(0)] {
+            assert!(matches!(
+                original.corrected(&params, budget),
+                Err(iroha_plonk_recursion::Error::Parameters(
+                    IpaError::ParamsTooSmall {
+                        needed: 14,
+                        available: 12,
+                    }
+                ))
+            ));
+            assert!(corrected_point(&original, &params, budget, None).is_err());
+            assert!(matches!(
+                sigma_mode(&params, true, Some(&original), budget, None),
+                Err(Error::Proof(_))
+            ));
+        }
     }
 
     #[test]
@@ -547,12 +658,12 @@ mod tests {
             original.decide(&params, zero),
             Err(iroha_plonk_recursion::Error::Undecidable)
         ));
-        // Small source k exercises the real allocation-free path without repeating
-        // the large-k scalar-multiplication diagnostic that failed on its assumption.
-        let point = corrected_point(&original, &params, zero).unwrap();
+        // The small source also checks exact Accept/Corrected mode selection through
+        // the allocation-free fallback on the same retained parameter owner.
+        let point = corrected_point(&original, &params, zero, None).unwrap();
         assert_eq!(
             point,
-            corrected_point(&original, &params, MemoryBudget::DEFAULT).unwrap()
+            corrected_point(&original, &params, MemoryBudget::DEFAULT, None).unwrap()
         );
         let selected =
             FoldInput::<Eq>::from_normalized(point, original.source_k(), *original.challenges())
@@ -562,11 +673,11 @@ mod tests {
         assert_ne!(selected.g(), original.g());
         selected.decide(&params, zero).unwrap();
         assert_eq!(
-            sigma_mode(true, Some(&original), zero).unwrap(),
+            sigma_mode(&params, true, Some(&original), zero, None).unwrap(),
             IncomingMode::Corrected
         );
         assert_eq!(
-            sigma_mode(true, Some(&selected), zero).unwrap(),
+            sigma_mode(&params, true, Some(&selected), zero, None).unwrap(),
             IncomingMode::Accept
         );
         // An already deciding source cannot supply the distinct correction witness.
@@ -574,7 +685,7 @@ mod tests {
             selected.corrected(&params, zero),
             Err(iroha_plonk_recursion::Error::NotCorrected)
         ));
-        assert!(corrected_point(&selected, &params, zero).is_err());
+        assert!(corrected_point(&selected, &params, zero, None).is_err());
     }
 
     #[test]

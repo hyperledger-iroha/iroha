@@ -109,6 +109,40 @@ impl<'view, 'state> CommittedLoadReceipts<'view, 'state> {
             .with(|| self.read_receipt(payer, scheme, wallet, request))
     }
 
+    /// Read bounded original counted event-path DATA for the payer's committed Load.
+    /// The returned path carries no finality authority. A consumer must independently
+    /// verify the original block and event commitment before producing a recursive receipt.
+    /// # Errors
+    /// Wrong payer/scope, missing or changed retained path, mismatched height or decode limits.
+    pub fn event_path_for(
+        &self,
+        payer: &AccountId,
+        scheme: &Digest,
+        wallet: &Digest,
+        request: &Digest,
+    ) -> Result<KagemushaLoadEventPathV1> {
+        self.decode_budget.with(|| {
+            let receipt = self.read_receipt(payer, scheme, wallet, request)?;
+            let digest = receipt.receipt_digest()?;
+            let key = event_evidence::key(digest);
+            let bytes = self
+                .view
+                .world
+                .kagemusha_wallet_ledger
+                .get(&key)
+                .ok_or(Error::Unavailable)?;
+            if bytes.len() > self.record_bytes.min(event_evidence::CAP) {
+                return Err(Error::Unavailable);
+            }
+            validate_row(&key, bytes)?;
+            let path: KagemushaLoadEventPathV1 = storage::decode(bytes, event_evidence::CAP)?;
+            if path.height() != receipt.block_height || path.receipt_digest() != &digest {
+                return Err(Error::Binding);
+            }
+            Ok(path)
+        })
+    }
+
     /// Recover the original event evidence at one independently verified native height.
     ///
     /// This performs bounded indexed World reads and one counted Merkle check. The

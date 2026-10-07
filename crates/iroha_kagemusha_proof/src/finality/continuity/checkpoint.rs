@@ -55,6 +55,21 @@ pub fn restore(
     params: &PinnedParams<Eq>,
     budget: MemoryBudget,
 ) -> Result<Option<SourceNodeEvidence>, Error> {
+    restore_cancellable(store, source, endpoints, params, budget, None)
+}
+
+/// Restore exact checkpoint evidence with the caller's cancellation signal.
+/// # Errors
+/// As [`restore`], or cancellation before publishing any success.
+pub fn restore_cancellable(
+    store: &mut dyn ProofCheckpointStore,
+    source: &SourceVerifier,
+    endpoints: [Fp; 6],
+    params: &PinnedParams<Eq>,
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<Option<SourceNodeEvidence>, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let identity = ProofIdentity::new(source, endpoints)?;
     let Some(proof) = store.load(&identity)? else {
         return Ok(None);
@@ -63,8 +78,14 @@ pub fn restore(
         return Err(Error::Input);
     }
     let _opening = source
-        .verify_native(&proof, params, budget)
-        .map_err(|_| Error::Proof)?;
+        .verify_native_cancellable(&proof, params, budget, cancellation)
+        .map_err(|error| {
+            if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
     Ok(Some(proof))
 }
 
@@ -78,9 +99,31 @@ pub fn retain(
     params: &PinnedParams<Eq>,
     budget: MemoryBudget,
 ) -> Result<(), Error> {
+    retain_cancellable(store, source, proof, params, budget, None)
+}
+
+/// Retain exact checkpoint evidence with the caller's cancellation signal.
+/// # Errors
+/// As [`retain`], or cancellation before publishing any success.
+pub fn retain_cancellable(
+    store: &mut dyn ProofCheckpointStore,
+    source: &SourceVerifier,
+    proof: &SourceNodeEvidence,
+    params: &PinnedParams<Eq>,
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<(), Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let _opening = source
-        .verify_native(proof, params, budget)
-        .map_err(|_| Error::Proof)?;
+        .verify_native_cancellable(proof, params, budget, cancellation)
+        .map_err(|error| {
+            if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     store.store(&ProofIdentity::new(source, proof.endpoints)?, proof)
 }
 
@@ -118,6 +161,27 @@ pub(crate) fn exercise_actual_checkpoint(
             .unwrap()
             .is_none()
     );
+    let cancelled = iroha_pasta::CancellationToken::new();
+    cancelled.cancel();
+    assert_eq!(
+        retain_cancellable(&mut store, source, proof, params, budget, Some(&cancelled)),
+        Err(Error::Cancelled)
+    );
+    assert!(
+        store.value.is_none(),
+        "cancelled verification cannot publish a checkpoint"
+    );
+    assert!(matches!(
+        restore_cancellable(
+            &mut store,
+            source,
+            proof.endpoints,
+            params,
+            budget,
+            Some(&cancelled)
+        ),
+        Err(Error::Cancelled)
+    ));
     retain(&mut store, source, proof, params, budget).unwrap();
     let restored = restore(&mut store, source, proof.endpoints, params, budget)
         .unwrap()

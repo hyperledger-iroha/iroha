@@ -169,14 +169,7 @@ fn operation_directory(
         if create {
             return parent.ensure_child(name).map(Some).map_err(Into::into);
         }
-        match parent.open_child(name) {
-            Ok(directory) => Ok(Some(directory)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                parent.revalidate()?;
-                Ok(None)
-            }
-            Err(error) => Err(error.into()),
-        }
+        parent.open_child_optional(name).map_err(Into::into)
     };
     let Some(operations) = child(runtime, "service-operations")? else {
         return Ok(None);

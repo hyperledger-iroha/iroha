@@ -1,4 +1,5 @@
-//! Explicit full-route source construction from a pinned complete finality metadata snapshot.
+//! Explicit full-route source construction from a pinned unqualified finality metadata snapshot.
+//! The complete fixed verifier graph must be reconstructed before wallet key construction.
 //! Unsigned original construction is followed by explicit engineering signing and
 //! the production complete-source acceptance path. It proves no receipt or payment
 //! and grants no deployment authority.
@@ -29,15 +30,17 @@ use super::*;
 
 #[path = "full_catalog/acceptance.rs"]
 mod acceptance;
+#[path = "full_catalog/transport.rs"]
+mod transport;
+pub(crate) use acceptance::open_pinned_engineering_wallet_sources;
 
 const RECORDS: usize = 4_096;
 const INVENTORY_BYTES: usize = RECORDS * 2_048 + 4_096;
-const VERIFIER_BYTES: usize = 64 << 20;
+// Engineering intake ceiling, not RSS or the separate 64 MiB MSM scratch budget.
+// The current source graph's actual encoded D/V originals total 406,815,883 bytes.
+// Each qualifier receives the checked exact record sum, bounded by this ceiling.
+const VERIFIER_BYTES: usize = 512 << 20;
 const OUTPUT_BYTES: u64 = 128 << 30;
-const FIXTURE: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/kagemusha/ordinary_first_load_receipt_v1.json"
-));
 
 #[derive(Clone, Copy)]
 struct Pins {
@@ -91,19 +94,21 @@ fn pinned_file(path: &Path, cap: usize, expected: [u8; 32]) -> Result<Vec<u8>, E
     }
     Ok(bytes)
 }
-fn records(root: &Path, pins: Pins) -> Result<Vec<ArtifactRecord>, Error> {
+fn records(root: &Path, pins: Pins) -> Result<(Vec<ArtifactRecord>, Vec<u8>), Error> {
     regular_directory(root)?;
     // Only a separate immutable metadata snapshot is accepted; never reopen the
     // live streaming catalog, its lock or its regenerable server proving keys.
     if bounded_file(&root.join("snapshot-kind"), 128)?
-        != b"KAGEMUSHA completed finality metadata snapshot v1\n"
+        != b"KAGEMUSHA unqualified finality metadata snapshot v1\n"
         || bounded_file(&root.join("binary.sha256"), 32)? != pins.producer
         || pins.producer == [0; 32]
         || pins.sources == [0; 32]
-        || pinned_file(&root.join("fixture.json"), 1 << 20, pins.fixture)? != FIXTURE
     {
         return Err(Error::Inventory);
     }
+    // The independently pinned producer fixture selects the signed genesis.
+    // A mutable repository fixture must never substitute a different anchor.
+    let fixture = pinned_file(&root.join("fixture.json"), 1 << 20, pins.fixture)?;
     let provenance = bounded_file(&root.join("provenance.norito"), 8_192)?;
     let provenance: SourceProvenance = norito::decode_canonical_with_limits(
         &provenance,
@@ -125,11 +130,18 @@ fn records(root: &Path, pins: Pins) -> Result<Vec<ArtifactRecord>, Error> {
     if records.is_empty() || records.len() > RECORDS {
         return Err(Error::Inventory);
     }
-    Ok(records)
+    Ok((records, fixture))
 }
 struct VerifierFiles {
     files: BTreeMap<[u8; 32], (PathBuf, usize)>,
     reads: usize,
+    bytes: usize,
+}
+fn accumulate_verifier_bytes(total: usize, length: usize) -> Result<usize, Error> {
+    total
+        .checked_add(length)
+        .filter(|sum| *sum <= VERIFIER_BYTES)
+        .ok_or(Error::Inventory)
 }
 impl VerifierFiles {
     fn new(root: &Path, records: &[ArtifactRecord]) -> Result<Self, Error> {
@@ -152,10 +164,7 @@ impl VerifierFiles {
                     sha256: record.sha256[index],
                 };
                 let length = blob.length(cap)?;
-                total = total
-                    .checked_add(length)
-                    .filter(|n| *n <= VERIFIER_BYTES)
-                    .ok_or(Error::Inventory)?;
+                total = accumulate_verifier_bytes(total, length)?;
                 if let Some((_, previous_length)) = files.get(&blob.sha256) {
                     if *previous_length != length {
                         return Err(Error::Inventory);
@@ -165,8 +174,26 @@ impl VerifierFiles {
                 }
             }
         }
-        Ok(Self { files, reads: 0 })
+        Ok(Self {
+            files,
+            reads: 0,
+            bytes: total,
+        })
     }
+}
+#[test]
+fn finality_metadata_bound_admits_actual_graph_and_rejects_excess_and_overflow() {
+    // Actual measured descriptor and VK encodings; these are input bytes only.
+    assert_eq!(
+        accumulate_verifier_bytes(105_944_181, 300_871_702).unwrap(),
+        406_815_883,
+    );
+    assert_eq!(
+        accumulate_verifier_bytes(VERIFIER_BYTES - 1, 1).unwrap(),
+        VERIFIER_BYTES
+    );
+    assert!(accumulate_verifier_bytes(VERIFIER_BYTES, 1).is_err());
+    assert!(accumulate_verifier_bytes(usize::MAX, 1).is_err());
 }
 impl VerifierBlobSource for VerifierFiles {
     fn open(&mut self, digest: &[u8; 32]) -> Result<Box<dyn Read + '_>, FinalityError> {
@@ -179,8 +206,8 @@ impl VerifierBlobSource for VerifierFiles {
         Ok(Box::new(std::io::Cursor::new(bytes)))
     }
 }
-fn native_finality() -> SumeragiFinalityVerifier {
-    let capture: norito::json::Value = norito::json::from_slice(FIXTURE).unwrap();
+fn native_finality(fixture: &[u8]) -> SumeragiFinalityVerifier {
+    let capture: norito::json::Value = norito::json::from_slice(fixture).unwrap();
     let wire = hex::decode(capture["signed_genesis_wire_hex"].as_str().unwrap()).unwrap();
     let genesis = decode_framed_signed_block(&wire).unwrap();
     let epoch = genesis_epoch(&genesis).unwrap();
@@ -296,7 +323,7 @@ impl OriginalSinkV1 for Originals {
 }
 
 #[test]
-#[ignore = "explicit full52 source construction from independently pinned completed finality metadata; engineering source qualification, no deployment authority"]
+#[ignore = "explicit full52 source construction after actual complete graph reconstruction from pinned unqualified finality metadata; no deployment authority"]
 fn complete_wallet_catalog_from_pinned_finality_metadata() {
     let snapshot = PathBuf::from(
         std::env::var_os("KAGEMUSHA_FINALITY_METADATA_SNAPSHOT")
@@ -313,13 +340,15 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
         inventory: pin("KAGEMUSHA_FINALITY_INVENTORY_SHA256"),
     };
     let compiler_sources = pin("KAGEMUSHA_WALLET_SOURCE_SHA256");
-    let records = records(&snapshot, pins).unwrap();
-    let native = native_finality();
+    let (records, fixture) = records(&snapshot, pins).unwrap();
+    let native = native_finality(&fixture);
     let anchor = crate::kagemusha_wallet_finality_v1::derive_history_anchor(&native).unwrap();
     let mut metadata = VerifierFiles::new(&snapshot.join("originals"), &records).unwrap();
+    let metadata_bytes = metadata.bytes;
     eprintln!(
-        "WALLET_SOURCE_PHASE complete_receipt_metadata records={} pk_reads=0",
-        records.len()
+        "WALLET_SOURCE_PHASE unqualified_receipt_metadata records={} descriptor_vk_bytes={} pk_reads=0",
+        records.len(),
+        metadata_bytes,
     );
     let receipt = qualify_receipt(
         anchor,
@@ -331,11 +360,17 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
         },
         VerifierLimits {
             maximum_artifacts: RECORDS,
-            maximum_verifier_bytes: VERIFIER_BYTES,
+            maximum_verifier_bytes: metadata_bytes,
             msm_budget: MemoryBudget::DEFAULT,
         },
     )
     .unwrap();
+    eprintln!(
+        "WALLET_SOURCE_PHASE receipt_graph_reconstructed records={} descriptor_vk_bytes={} exact_original_reads={} missing_unused_duplicate_records_rejected=true server_pk_reads=0 genuine_receipt=false",
+        records.len(),
+        metadata_bytes,
+        metadata.reads,
+    );
     fs::create_dir(&output).expect("fresh output; no replacement or implicit resume");
     fs::create_dir(output.join("originals")).unwrap();
     let executable = std::env::current_exe().unwrap();
@@ -373,7 +408,9 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
         coset_cache: CosetCachePolicy::OnDemand,
         msm_budget: MemoryBudget::DEFAULT,
     };
-    eprintln!("WALLET_SOURCE_PHASE all52_compiled_routes signed=false wallet_grant=false");
+    eprintln!(
+        "WALLET_SOURCE_PHASE all52_route_compilation_started signed=false wallet_grant=false"
+    );
     let draft = OfflineCompilerV1::new(scope, &mut originals, config, OUTPUT_BYTES)
         .unwrap()
         .wallet_pack(
@@ -459,4 +496,28 @@ fn output_preserves_exact_content_and_refuses_changed_address_or_replacement() {
         fs::read(directory.path().join(hex::encode(identity.sha256))).unwrap(),
         [3, 2, 1]
     );
+}
+
+#[test]
+fn native_finality_binds_each_supplied_signed_genesis_without_repository_substitution() {
+    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    let mut anchors = Vec::new();
+    for chain in ["catalog-pinned-alpha", "catalog-pinned-beta"] {
+        let original = NativeFinalityFixture::start_with_explicit_parameters(chain);
+        let input = norito::json::to_vec(&norito::json!({
+            "chain_id": (chain),
+            "signed_genesis_wire_hex": (hex::encode(original.genesis().encode_wire().unwrap())),
+        }))
+        .unwrap();
+        let selected = native_finality(&input);
+        let anchor = crate::kagemusha_wallet_finality_v1::derive_history_anchor(&selected).unwrap();
+        assert_eq!(
+            anchor,
+            crate::kagemusha_wallet_finality_v1::derive_history_anchor(&original.verifier())
+                .unwrap(),
+        );
+        assert_eq!(selected.chain_id(), chain);
+        anchors.push(anchor);
+    }
+    assert_ne!(anchors[0], anchors[1]);
 }

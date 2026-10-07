@@ -128,6 +128,22 @@ final class KagemushaWalletNativeLeaseV1Tests: XCTestCase {
     XCTAssertNil(dyingRuntime); XCTAssertNil(retainedPlatform); XCTAssertEqual(driver.ids, [101])
     try KagemushaWalletInstalledRuntimeV1.requireNoUnreleasedAdmissions()
   }
+  func testRuntimeAdoptsExactExistingLeaseAndReleasesItsPlatform() throws {
+    let driver = CloseDriver([0])
+    var platform: PlatformLifetime? = .init()
+    weak var retainedPlatform = platform
+    let lease = KagemushaWalletNativeLeaseV1(owner: 102, driver: driver, platformOwner: platform!)
+    let runtime = KagemushaWalletRuntimeV1(lease: lease, driver: try KagemushaWalletNativeDriverV1())
+    platform = nil
+    XCTAssertTrue(runtime.cleanupLease === lease)
+    XCTAssertNotNil(retainedPlatform)
+    try runtime.close()
+    XCTAssertEqual(driver.ids, [102])
+    XCTAssertTrue(lease.isReleased)
+    XCTAssertNil(retainedPlatform)
+    try runtime.close()
+    XCTAssertEqual(driver.ids, [102])
+  }
   func testCancellationCleanupProviderFailureKeepsPlatformUntilSameIDRetryZero() async throws {
     let driver = CloseDriver([-5, 0])
     var platform: PlatformLifetime? = .init()

@@ -285,7 +285,7 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
         return entries[alias]?.chain
     }
 
-    override fun generate(spec: KagemushaWalletAndroidKeySpecV1) {
+    override fun generate(spec: KagemushaWalletAndroidKeySpecV1): KeyPair {
         generated += spec
         generateFailure?.let { throw it }
         if (spec.strongBox && !strongBoxAvailable) throw KagemushaWalletAndroidStrongBoxUnavailableV1(null)
@@ -294,6 +294,7 @@ internal class TestKeyStoreV1 : KagemushaWalletAndroidKeyStoreV1 {
         entries[spec.alias] = Entry(pair, TestNonExportableKeyV1(pair.private),
             chain(pair, challenge, spec.strongBox), factsEdit(facts(spec.strongBox)), spec.strongBox)
         generateFailureAfterWrite?.let { throw it }
+        return KeyPair(pair.public, entries.getValue(spec.alias).key)
     }
 
     override fun facts(key: PrivateKey): KagemushaWalletAndroidKeyFactsV1 {

@@ -1,6 +1,7 @@
 //! Native Receive input, exact original digest and deciding-selection rejection tests.
 
 use super::*;
+use crate::a_relation::native::support::{select_pallas, select_vesta};
 use crate::a_relation::schedule::OperationTask;
 use iroha_plonk_recursion::K;
 

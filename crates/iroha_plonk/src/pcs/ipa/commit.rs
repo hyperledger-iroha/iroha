@@ -46,8 +46,11 @@
 use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
 use iroha_pasta::{
-    PastaAffine, PastaCurve, PastaField,
-    msm::{FixedBaseTable, MemoryBudget, MsmError, SharedMemoryBudget, msm_public, msm_secret},
+    CancellationToken, PastaAffine, PastaCurve, PastaField,
+    msm::{
+        FixedBaseTable, MemoryBudget, MsmError, SharedMemoryBudget, msm_public_cancellable,
+        msm_secret_cancellable,
+    },
     params::ParamsIpa,
 };
 use rayon::prelude::*;
@@ -65,6 +68,7 @@ pub enum Secrecy {
 }
 
 /// `sum_i scalars[i] * bases[i] + blind * w` with `scalars.len() <= bases.len()`.
+#[allow(clippy::too_many_arguments)]
 fn commit_with_bases<C: PastaCurve>(
     bases: &[C::AffineExt],
     table: Option<&FixedBaseTable<C>>,
@@ -73,7 +77,10 @@ fn commit_with_bases<C: PastaCurve>(
     w: &C::AffineExt,
     secrecy: Secrecy,
     budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<C, MsmError> {
+    CancellationToken::checkpoint(cancellation)?;
+    let shared = SharedMemoryBudget::process_default();
     let bases = bases.get(..scalars.len()).ok_or(MsmError::LengthMismatch(
         iroha_pasta::LengthMismatch {
             left: scalars.len(),
@@ -82,17 +89,22 @@ fn commit_with_bases<C: PastaCurve>(
     ))?;
     let sum = match (table, secrecy) {
         (Some(table), Secrecy::Public) if table.len() == scalars.len() => {
-            table.msm_public(scalars, budget)?
+            table.msm_public_cancellable(scalars, budget, &shared, cancellation)?
         }
         (Some(table), Secrecy::Secret) if table.len() == scalars.len() => {
-            table.msm_secret(scalars, budget)?
+            table.msm_secret_cancellable(scalars, budget, &shared, cancellation)?
         }
-        (_, Secrecy::Public) => msm_public::<C>(scalars, bases, budget)?,
-        (_, Secrecy::Secret) => msm_secret::<C>(scalars, bases, budget)?,
+        (_, Secrecy::Public) => {
+            msm_public_cancellable::<C>(scalars, bases, budget, &shared, cancellation)?
+        }
+        (_, Secrecy::Secret) => {
+            msm_secret_cancellable::<C>(scalars, bases, budget, &shared, cancellation)?
+        }
     };
     // The constant-time multiplication is stack-only; the variable-time
     // GLV helper allocates wNAF vectors outside MSM admission.
     let blind_term = w.to_curve() * *blind;
+    CancellationToken::checkpoint(cancellation)?;
     Ok(sum + blind_term)
 }
 
@@ -109,6 +121,21 @@ pub fn commit<C: PastaCurve>(
     secrecy: Secrecy,
     budget: MemoryBudget,
 ) -> Result<C, MsmError> {
+    commit_cancellable(params, coeffs, blind, secrecy, budget, None)
+}
+
+/// Commits with a caller-owned cancellation signal, joining every task.
+///
+/// # Errors
+/// As [`commit`], or [`MsmError::Cancelled`].
+pub fn commit_cancellable<C: PastaCurve>(
+    params: &ParamsIpa<C>,
+    coeffs: &[C::ScalarExt],
+    blind: &C::ScalarExt,
+    secrecy: Secrecy,
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
     commit_with_bases(
         params.g(),
         None,
@@ -117,6 +144,7 @@ pub fn commit<C: PastaCurve>(
         &params.w(),
         secrecy,
         budget,
+        cancellation,
     )
 }
 
@@ -132,6 +160,21 @@ pub fn commit_lagrange<C: PastaCurve>(
     secrecy: Secrecy,
     budget: MemoryBudget,
 ) -> Result<C, MsmError> {
+    commit_lagrange_cancellable(params, values, blind, secrecy, budget, None)
+}
+
+/// Commits with a caller-owned cancellation signal, joining every task.
+///
+/// # Errors
+/// As [`commit_lagrange`], or [`MsmError::Cancelled`].
+pub fn commit_lagrange_cancellable<C: PastaCurve>(
+    params: &ParamsIpa<C>,
+    values: &[C::ScalarExt],
+    blind: &C::ScalarExt,
+    secrecy: Secrecy,
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
     commit_with_bases(
         params.g_lagrange(),
         None,
@@ -140,6 +183,7 @@ pub fn commit_lagrange<C: PastaCurve>(
         &params.w(),
         secrecy,
         budget,
+        cancellation,
     )
 }
 
@@ -198,6 +242,22 @@ impl<C: PastaCurve> CommitmentTables<C> {
         secrecy: Secrecy,
         budget: MemoryBudget,
     ) -> Result<C, MsmError> {
+        self.commit_cancellable(params, coeffs, blind, secrecy, budget, None)
+    }
+
+    /// Commits with a caller-owned cancellation signal, joining every task.
+    ///
+    /// # Errors
+    /// As [`Self::commit`], or [`MsmError::Cancelled`].
+    pub fn commit_cancellable(
+        &self,
+        params: &ParamsIpa<C>,
+        coeffs: &[C::ScalarExt],
+        blind: &C::ScalarExt,
+        secrecy: Secrecy,
+        budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<C, MsmError> {
         commit_with_bases(
             params.g(),
             self.g.as_ref(),
@@ -206,6 +266,7 @@ impl<C: PastaCurve> CommitmentTables<C> {
             &params.w(),
             secrecy,
             budget,
+            cancellation,
         )
     }
 
@@ -223,6 +284,22 @@ impl<C: PastaCurve> CommitmentTables<C> {
         secrecy: Secrecy,
         budget: MemoryBudget,
     ) -> Result<C, MsmError> {
+        self.commit_lagrange_cancellable(params, values, blind, secrecy, budget, None)
+    }
+
+    /// Commits with a caller-owned cancellation signal, joining every task.
+    ///
+    /// # Errors
+    /// As [`Self::commit_lagrange`], or [`MsmError::Cancelled`].
+    pub fn commit_lagrange_cancellable(
+        &self,
+        params: &ParamsIpa<C>,
+        values: &[C::ScalarExt],
+        blind: &C::ScalarExt,
+        secrecy: Secrecy,
+        budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<C, MsmError> {
         commit_with_bases(
             params.g_lagrange(),
             self.g_lagrange.as_ref(),
@@ -231,6 +308,7 @@ impl<C: PastaCurve> CommitmentTables<C> {
             &params.w(),
             secrecy,
             budget,
+            cancellation,
         )
     }
 }
@@ -283,9 +361,13 @@ fn complete_window_sum<C: PastaCurve>(
     bases: &[C::AffineExt],
     start: usize,
     width: usize,
+    cancellation: Option<&CancellationToken>,
 ) -> C {
     let mut buckets = vec![C::identity(); (1_usize << width) - 1];
-    for (scalar, base) in limbs.iter().zip(bases) {
+    for (index, (scalar, base)) in limbs.iter().zip(bases).enumerate() {
+        if index % 256 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+            return C::identity();
+        }
         let digit = window_digit(scalar, start, width);
         if let Some(bucket) = digit
             .checked_sub(1)
@@ -435,6 +517,7 @@ fn glv_chunk_terms<C: PastaCurve>(budget: MemoryBudget) -> usize {
 fn glv_terms<C: PastaCurve>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
+    cancellation: Option<&CancellationToken>,
 ) -> Option<GlvTerms<C::AffineExt>> {
     let beta = <C::AffineExt as PastaAffine>::endo_beta();
     let terms = scalars.len().min(bases.len());
@@ -450,6 +533,9 @@ fn glv_terms<C: PastaCurve>(
         .zip(split.images.par_iter_mut())
         .zip(scalars.par_iter().zip(bases))
         .try_for_each(|(((halves, signs), image), (scalar, base))| {
+            if CancellationToken::checkpoint(cancellation).is_err() {
+                return None;
+            }
             let decomposition = C::glv_decompose(scalar)?;
             // phi(x, y) = (beta x, y) = [ZETA] (x, y); the identity (0, 0)
             // maps to itself.
@@ -469,6 +555,7 @@ fn signed_window_sum<C: PastaCurve>(
     bases: &[C::AffineExt],
     window: usize,
     width: usize,
+    cancellation: Option<&CancellationToken>,
 ) -> C {
     let recoder = SignedWindow::new(width, window);
     let mut buckets = vec![C::identity(); 1_usize << (width - 1)];
@@ -478,7 +565,10 @@ fn signed_window_sum<C: PastaCurve>(
         .zip(&terms.signs)
         .zip(&terms.images)
         .zip(bases);
-    for (((halves, signs), image), base) in split {
+    for (index, (((halves, signs), image), base)) in split.enumerate() {
+        if index % 256 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+            return C::identity();
+        }
         for (half, point, negative) in [
             (halves[0], base, signs & 1 != 0),
             (halves[1], image, signs & 2 != 0),
@@ -517,11 +607,18 @@ fn combine_windows<C: PastaCurve>(
     width: usize,
     concurrency: usize,
     window_sum: impl Fn(usize) -> C + Sync,
+    cancellation: Option<&CancellationToken>,
 ) -> C {
     let concurrency = concurrency.clamp(1, windows.max(1));
     let mut sums = vec![C::identity(); windows];
     for (wave, slots) in sums.chunks_mut(concurrency).enumerate() {
+        if CancellationToken::checkpoint(cancellation).is_err() {
+            return C::identity();
+        }
         slots.par_iter_mut().enumerate().for_each(|(slot, sum)| {
+            if CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
             *sum = window_sum(wave * concurrency + slot);
         });
     }
@@ -563,13 +660,19 @@ fn window_scratch<C: PastaCurve>(
 
 /// Complete scalar multiplication uses a stack-only fixed window. Scarce scratch
 /// changes performance, never the verifier's accepted group equation.
-fn complete_without_scratch<C: PastaCurve>(scalars: &[C::ScalarExt], bases: &[C::AffineExt]) -> C {
-    scalars
-        .iter()
-        .zip(bases)
-        .fold(C::identity(), |sum, (scalar, base)| {
-            sum + base.to_curve() * *scalar
-        })
+fn complete_without_scratch<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    cancellation: Option<&CancellationToken>,
+) -> C {
+    let mut sum = C::identity();
+    for (scalar, base) in scalars.iter().zip(bases) {
+        if CancellationToken::checkpoint(cancellation).is_err() {
+            return C::identity();
+        }
+        sum += base.to_curve() * *scalar;
+    }
+    sum
 }
 
 /// [`msm_complete`] on GLV-split, signed-digit windows, or `None` when a
@@ -581,11 +684,15 @@ fn msm_complete_glv<C: PastaCurve>(
     bases: &[C::AffineExt],
     budget: MemoryBudget,
     shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Option<C> {
     let n = scalars.len().min(bases.len());
     let mut total = C::identity();
     let mut start = 0;
     while start < n {
+        if CancellationToken::checkpoint(cancellation).is_err() {
+            return Some(C::identity());
+        }
         let available = MemoryBudget::new(budget.bytes().min(shared.available_bytes()));
         let count = glv_chunk_terms::<C>(available).min(n - start);
         let split_bytes = count.saturating_mul(glv_term_bytes::<C>());
@@ -598,20 +705,36 @@ fn msm_complete_glv<C: PastaCurve>(
         });
         let Some((width, windows, concurrency, bytes)) = plan else {
             return Some(
-                total + complete_without_scratch::<C>(&scalars[start..n], &bases[start..n]),
+                total
+                    + complete_without_scratch::<C>(
+                        &scalars[start..n],
+                        &bases[start..n],
+                        cancellation,
+                    ),
             );
         };
         // Never wait while a Rayon task may own another reservation.
         let Some(_scratch) = shared.try_reserve(bytes) else {
             return Some(
-                total + complete_without_scratch::<C>(&scalars[start..n], &bases[start..n]),
+                total
+                    + complete_without_scratch::<C>(
+                        &scalars[start..n],
+                        &bases[start..n],
+                        cancellation,
+                    ),
             );
         };
         let end = start + count;
-        let terms = glv_terms::<C>(&scalars[start..end], &bases[start..end])?;
-        total += combine_windows(windows, width, concurrency, |window| {
-            signed_window_sum::<C>(&terms, &bases[start..end], window, width)
-        });
+        let terms = glv_terms::<C>(&scalars[start..end], &bases[start..end], cancellation)?;
+        total += combine_windows(
+            windows,
+            width,
+            concurrency,
+            |window| {
+                signed_window_sum::<C>(&terms, &bases[start..end], window, width, cancellation)
+            },
+            cancellation,
+        );
         start = end;
     }
     Some(total)
@@ -654,14 +777,35 @@ pub fn msm_complete_with_shared_budget<C: PastaCurve>(
     budget: MemoryBudget,
     shared: &SharedMemoryBudget,
 ) -> C {
+    msm_complete_cancellable(scalars, bases, budget, shared, None).expect("no cancellation signal")
+}
+
+/// Complete-formula public MSM with explicit cooperative cancellation.
+///
+/// # Errors
+/// Returns cancellation only after all Rayon tasks join and scratch permits
+/// release; no partial group equation is exposed to verifier callers.
+pub fn msm_complete_cancellable<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, iroha_pasta::Cancelled> {
+    CancellationToken::checkpoint(cancellation)?;
     debug_assert_eq!(scalars.len(), bases.len());
     let n = scalars.len().min(bases.len());
     if n == 0 {
-        return C::identity();
+        return Ok(C::identity());
     }
     let (scalars, bases) = (&scalars[..n], &bases[..n]);
-    msm_complete_glv::<C>(scalars, bases, budget, shared)
-        .unwrap_or_else(|| msm_complete_unsigned::<C>(scalars, bases, budget, shared))
+    let candidate = msm_complete_glv::<C>(scalars, bases, budget, shared, cancellation);
+    CancellationToken::checkpoint(cancellation)?;
+    let result = candidate.unwrap_or_else(|| {
+        msm_complete_unsigned::<C>(scalars, bases, budget, shared, cancellation)
+    });
+    CancellationToken::checkpoint(cancellation)?;
+    Ok(result)
 }
 
 /// [`msm_complete`] on unsigned full-width windows: the fallback when a GLV
@@ -671,6 +815,7 @@ fn msm_complete_unsigned<C: PastaCurve>(
     bases: &[C::AffineExt],
     budget: MemoryBudget,
     shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> C {
     let n = scalars.len().min(bases.len());
     if n == 0 {
@@ -687,10 +832,10 @@ fn msm_complete_unsigned<C: PastaCurve>(
             .map(|(concurrency, bytes)| (width, windows, concurrency, bytes))
     });
     let Some((width, windows, concurrency, bytes)) = plan else {
-        return complete_without_scratch::<C>(scalars, bases);
+        return complete_without_scratch::<C>(scalars, bases, cancellation);
     };
     let Some(_scratch) = shared.try_reserve(bytes) else {
-        return complete_without_scratch::<C>(scalars, bases);
+        return complete_without_scratch::<C>(scalars, bases, cancellation);
     };
     let limbs: Vec<[u64; 4]> = scalars[..n]
         .par_iter()
@@ -706,9 +851,13 @@ fn msm_complete_unsigned<C: PastaCurve>(
         })
         .collect();
     let bases = &bases[..n];
-    combine_windows(windows, width, concurrency, |window| {
-        complete_window_sum::<C>(&limbs, bases, window * width, width)
-    })
+    combine_windows(
+        windows,
+        width,
+        concurrency,
+        |window| complete_window_sum::<C>(&limbs, bases, window * width, width, cancellation),
+        cancellation,
+    )
 }
 
 /// A linear combination of points `sum_i scalars[i] * bases[i]` (public
@@ -787,6 +936,23 @@ impl<C: PastaCurve> Msm<C> {
         msm_complete::<C>(&self.scalars, &self.bases, budget)
     }
 
+    /// Evaluate with an explicit signal, preserving complete group operations.
+    /// # Errors
+    /// Cancellation after all admitted kernel tasks join and scratch is released.
+    pub fn evaluate_cancellable(
+        &self,
+        budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<C, iroha_pasta::Cancelled> {
+        msm_complete_cancellable::<C>(
+            &self.scalars,
+            &self.bases,
+            budget,
+            &SharedMemoryBudget::process_default(),
+            cancellation,
+        )
+    }
+
     /// Whether the combination is the identity.
     #[must_use]
     pub fn is_identity(&self, budget: MemoryBudget) -> bool {
@@ -808,6 +974,7 @@ pub(crate) fn default_blind<F: PastaField>() -> F {
 #[cfg(test)]
 mod tests {
     use group::{Curve, Group};
+    use iroha_pasta::msm::msm_public;
     use iroha_pasta::{Ep, Eq, Fq, msm::msm_naive};
     use rand_chacha::ChaCha20Rng;
     use rand_core_06::SeedableRng;
@@ -996,6 +1163,7 @@ mod tests {
                     &bases,
                     budget,
                     &SharedMemoryBudget::process_default(),
+                    None
                 ),
                 Some(expected),
                 "{terms} terms per chunk"
@@ -1147,6 +1315,7 @@ mod tests {
                         &bases,
                         budget,
                         &SharedMemoryBudget::process_default(),
+                        None
                     ),
                     Some(expected),
                     "n = {n}"
@@ -1157,6 +1326,7 @@ mod tests {
                         &bases,
                         budget,
                         &SharedMemoryBudget::process_default(),
+                        None
                     ),
                     expected
                 );
@@ -1191,12 +1361,14 @@ mod tests {
                     &bases,
                     MemoryBudget::DEFAULT,
                     &SharedMemoryBudget::process_default(),
+                    None
                 ),
                 Some(msm_complete_unsigned::<Ep>(
                     &scalars,
                     &bases,
                     MemoryBudget::DEFAULT,
                     &SharedMemoryBudget::process_default(),
+                    None
                 )),
                 "round {round}"
             );
@@ -1278,7 +1450,7 @@ mod tests {
                 expected
             );
             assert_eq!(
-                msm_complete_unsigned::<C>(&scalars, &bases, MemoryBudget::DEFAULT, &blocked),
+                msm_complete_unsigned::<C>(&scalars, &bases, MemoryBudget::DEFAULT, &blocked, None),
                 expected
             );
         });

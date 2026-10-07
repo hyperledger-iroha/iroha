@@ -4836,6 +4836,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_i18n",
  "iroha_model_base",
+ "iroha_operation_journal",
  "iroha_petal",
  "iroha_primitives",
  "iroha_sccp",
@@ -4986,6 +4987,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_file_mmap",
+ "iroha_fs",
  "iroha_futures",
  "iroha_genesis",
  "iroha_logger",
@@ -5109,6 +5111,7 @@ dependencies = [
  "iroha_plonk_recursion",
  "iroha_primitives",
  "iroha_sumeragi",
+ "iroha_version",
  "iroha_zkp_halo2",
  "iroha_zkp_poseidon",
  "ivm_abi",
@@ -5742,6 +5745,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rayon",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]

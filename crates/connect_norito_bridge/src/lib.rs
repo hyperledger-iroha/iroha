@@ -2,6 +2,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
 
+// Oracle-only transcript and randomness hooks must never enter a shipping consumer.
+const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+
 // The locked pqcrypto-internals build emits both static and unqualified links.
 // With the current Rust toolchain its rlib does not retain the common/Keccak
 // objects. Own their Apple static bundling explicitly so this bridge archive is
@@ -5995,6 +5998,10 @@ fn account_read_permission_multisig_builder(
     builder.set_ttl(Duration::from_millis(120_000));
     Ok(builder)
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Projects the exact C ABI pointer/length pairs into native owners."
+)]
 unsafe fn account_read_permission_multisig_builder_from_c(
     network_id_ptr: *const c_char,
     network_id_len: c_ulong,

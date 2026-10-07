@@ -20,9 +20,10 @@
 //! attestation lease in `sigma_send`, and the receiver's blacklist in
 //! `sigma_recv`. The shared vectors of
 //! `fixtures/kagemusha/wallet_v1_vectors.json` pin them
-//! (`tests/digest_parity.rs`). No protocol path uses them yet, and the
-//! artifact set (verifying keys and the frozen proof lengths) remains release
-//! qualification work. Keys use V2 descriptors and the `kgwvkey1` digest.
+//! (`tests/digest_parity.rs`). The native wallet provider and ledger verifier
+//! consume these relations. The complete installed artifact set, actual proof
+//! lengths and end-to-end acceptance remain release qualification work.
+//! Keys use V2 descriptors and the `kgwvkey1` digest.
 //!
 //! # Contents
 //!
@@ -84,6 +85,9 @@
 //! [`iroha_plonk::ProverRandomness`]; the Rayon pool size changes no key or
 //! proof byte (`tests/real_proofs.rs` checks 1, 2, 4 and 7 threads).
 #![forbid(unsafe_code)]
+
+// Oracle-only transcript and randomness hooks must never enter a shipping consumer.
+const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
 
 pub mod a_relation;
 pub mod admin_sigma;

@@ -25,6 +25,14 @@ impl core::fmt::Display for ArtifactError {
     }
 }
 impl std::error::Error for ArtifactError {}
+impl ArtifactError {
+    /// Identity-only metadata checks do not run cancellable computation.
+    pub const fn is_cancelled(self) -> bool {
+        match self {
+            Self::Identity => false,
+        }
+    }
+}
 
 /// Authenticated verifier metadata without proving polynomials or original PK bytes.
 ///

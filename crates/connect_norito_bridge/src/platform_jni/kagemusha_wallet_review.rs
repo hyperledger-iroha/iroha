@@ -36,10 +36,10 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         result,
         "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletReviewReplyV1",
     );
-    if object.is_null() {
-        if let Some(token) = token {
-            let _ = wallet::run(|| review::discard_review(handle as u64, token));
-        }
+    if object.is_null()
+        && let Some(token) = token
+    {
+        let _ = wallet::run(|| review::discard_review(handle as u64, token));
     }
     object
 }

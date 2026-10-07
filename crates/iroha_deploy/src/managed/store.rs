@@ -129,6 +129,26 @@ impl ManagedStore {
         self.root.path()
     }
 
+    /// Open the optional owner-private attachments container under the retained store root.
+    /// Existing containers must keep private custody; this does not create or repair them.
+    pub(super) fn attachments_directory(&self) -> Result<Option<PrivateDirectory>> {
+        Ok(self.root.open_child_optional("attachments")?)
+    }
+
+    /// Publish a complete attachment through the original retained private store root.
+    /// Validate its managed name before creating the private attachments container.
+    pub(super) fn publish_attachment(
+        &self,
+        name: &str,
+        files: &[(&str, &[u8])],
+    ) -> Result<PrivateDirectory> {
+        validate_name(name)?;
+        Ok(self
+            .root
+            .ensure_child("attachments")?
+            .publish_private_child(name, files)?)
+    }
+
     pub(super) fn directory(&self, name: &str) -> Result<PrivateDirectory> {
         validate_name(name)?;
         Ok(self.networks.open_child(name)?)
@@ -252,8 +272,8 @@ impl ManagedStore {
         let directory = self.networks.ensure_child(&request.name)?;
         let _operation = acquire(&directory, "operation.lock", &request.name)?;
         let mut reservations = None;
-        let retained = match generation::read(&directory) {
-            Ok(retained) => {
+        let retained = match generation::read_optional(&directory)? {
+            Some(retained) => {
                 if matches!(generation_policy, GenerationPolicy::CreateOnly) {
                     return Err(Error::Invalid(format!(
                         "managed environment `{}` already exists; select or start it explicitly",
@@ -283,7 +303,7 @@ impl ManagedStore {
                 }
                 retained
             }
-            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            None => {
                 if matches!(generation_policy, GenerationPolicy::RetainOnly) {
                     return Err(Error::Invalid(
                         "retained managed generation disappeared; refusing to replace its identity"
@@ -296,7 +316,6 @@ impl ManagedStore {
                 reservations = Some(ports);
                 retained
             }
-            Err(error) => return Err(error),
         };
         // Binding is serialized with this exact validated generation, before spawn and before
         // any reset can acquire operation.lock. No callback may activate parent operations.
@@ -432,8 +451,8 @@ impl ManagedStore {
         if runtime_owned(&directory)? {
             return Err(Error::Busy(name.into()));
         }
-        match directory.read(STATUS, MAX_METADATA) {
-            Ok(bytes) => {
+        match directory.read_optional(STATUS, MAX_METADATA)? {
+            Some(bytes) => {
                 let mut last: ManagedStatus = decode(&bytes)?;
                 if last.context != retained.prepared.context {
                     return Err(Error::Invalid(
@@ -457,8 +476,7 @@ impl ManagedStore {
                     return Ok(last);
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            None => {}
         }
         Ok(ManagedStatus {
             context: retained.prepared.context,
@@ -534,14 +552,8 @@ impl ManagedStore {
         } else {
             let bytes = self
                 .root
-                .read("active.json", MAX_METADATA)
-                .map_err(|error| {
-                    if error.kind() == std::io::ErrorKind::NotFound {
-                        Error::NoSelection
-                    } else {
-                        error.into()
-                    }
-                })?;
+                .read_optional("active.json", MAX_METADATA)?
+                .ok_or(Error::NoSelection)?;
             selected = decode(&bytes)?;
             &selected
         };

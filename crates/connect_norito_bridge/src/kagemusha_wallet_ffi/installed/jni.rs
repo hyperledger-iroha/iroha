@@ -1,4 +1,4 @@
-//! One Android install export feeding the same existing C/JNI runtime registry.
+//! Android receives the same move-only installation attempt before registry refusal.
 
 use super::*;
 use ::jni::{
@@ -8,7 +8,7 @@ use ::jni::{
 };
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     platform: JObject<'_>,
@@ -31,11 +31,14 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             &originals_root,
         ];
         // Check every original extent before copying any Java array or invoking platform.
-        for (array, bound) in arrays.into_iter().zip(RUNTIME_BOUNDS) {
+        for (index, (array, bound)) in arrays.into_iter().zip(RUNTIME_BOUNDS).enumerate() {
             let length = env
                 .get_array_length(array)
                 .map_err(|_| Failure::code(INVALID))?;
-            if length < 0 || length as usize > bound {
+            if length < 0
+                || length as usize > bound
+                || (length == 0 && matches!(index, 0 | 1 | 2 | 5))
+            {
                 return Err(Failure::code(INVALID));
             }
         }
@@ -59,10 +62,43 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         let root = platform
             .custody_root()
             .map_err(|error| Failure::unavailable(UNAVAILABLE, error))?;
-        prepared.register(platform, root, true)
+        let owner = prepared.runtime(platform, root, true)?;
+        Ok(Box::new(WalletInstallationAttempt::new(owner)))
     });
     match result {
-        Ok(handle) => handle as jlong,
+        Ok(attempt) => Box::into_raw(attempt) as usize as jlong,
         Err(error) => error.status as jlong,
     }
+}
+
+/// Consumes the exact unique Native pointer only on positive actual registry ID.
+/// A negative status retains that same opaque pointer; JNI allocates no response object.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    attempt: jlong,
+) -> jlong {
+    let mut original = attempt as usize as *mut WalletInstallationAttempt;
+    let mut runtime = 0;
+    // SAFETY: private managed Native binding serializes and retains the unique original pointer.
+    let status = unsafe {
+        connect_norito_kagemusha_wallet_installation_register_v1(&mut original, &mut runtime)
+    };
+    if status == 0 {
+        runtime as jlong
+    } else {
+        status as jlong
+    }
+}
+/// Zero acknowledges consuming close of the same attempt; all other statuses retain it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_closeInstallation(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    attempt: jlong,
+) -> ::jni::sys::jint {
+    let mut original = attempt as usize as *mut WalletInstallationAttempt;
+    // SAFETY: same private managed pointer contract; close retry keeps the original on refusal.
+    unsafe { connect_norito_kagemusha_wallet_installation_close_v1(&mut original) }
 }

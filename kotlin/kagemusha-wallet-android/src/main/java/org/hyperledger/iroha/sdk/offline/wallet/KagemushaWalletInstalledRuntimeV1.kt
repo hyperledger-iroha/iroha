@@ -7,7 +7,6 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.Executors
-import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 
 /**
  * Exact public installation originals, retained as bounded DATA until Native authenticates them.
@@ -18,8 +17,9 @@ import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
  * finality-originals/. Native opens the original files without following links and verifies the
  * complete authenticated catalog. This constructor neither reads nor creates that directory.
  *
- * All seven originals are mandatory, matching Native installation input validation. Missing
- * authenticated financial originals cannot produce an installed owner.
+ * The four signed base originals are mandatory. The financial trio is all present or all absent.
+ * Complete absence still enters Native base authentication, then ArtifactsUnavailable (-4)
+ * with no installed owner. Partial financial offers are invalid.
  */
 class KagemushaWalletInstallationOriginalsV1(
     appManifest: ByteArray,
@@ -40,7 +40,13 @@ class KagemushaWalletInstallationOriginalsV1(
         require(values.indices.all { values[it].size <= bounds[it] }) {
             "installation original exceeds its native input bound"
         }
-        require(values.all { it.isNotEmpty() }) { "all seven installation originals are required" }
+        require(listOf(appManifest, signatureEnvelope, walletRuntime, signedGenesis).all { it.isNotEmpty() }) {
+            "four signed base originals are required"
+        }
+        val financial = listOf(verifierPack, producerInventory, originalsRoot)
+        require(financial.all { it.isEmpty() } || financial.all { it.isNotEmpty() }) {
+            "financial originals must be all present or all absent"
+        }
         originals = values.map { it.copyOf() }
     }
 
@@ -67,8 +73,8 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
     private val admission = KagemushaWalletInstalledAdmissionV1 { requireLive() }
     private var pendingOriginal: KagemushaWalletPendingOpenV1? = null
     private var accountSignatureOriginal: ByteArray? = null
-    private fun startOpen(originals: KagemushaWalletOpenOriginalsV1) = synchronized(gate) {
-        admission.start(originals.frames())
+    private fun startOpen(frames: List<ByteArray>) = synchronized(gate) {
+        admission.start(frames)
     }
     private fun failedOpen() = synchronized(gate) { admission.failed() }
     private fun completedOpen() = synchronized(gate) {
@@ -77,25 +83,32 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
         accountSignatureOriginal?.fill(0)
         accountSignatureOriginal = null
     }
-    private fun <T> enrollment(action: () -> T): T = synchronized(gate) { admission.enrollment(action) }
-
-    /** Actual Native begin-or-resume of the same original intent; no app freshness flag or slot. */
-    fun beginEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1,requireCurrent:()->Unit):KagemushaWalletEnrollmentProgressV1 =
-        enrollment {requireNoUnreleasedAdmissions();requireCurrent();runtime.beginEnrollment(originals).also{requireCurrent()}}
-    /** Existing-intent-only restoration cannot create an original generation grant. */
-    fun resumeEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1,requireCurrent:()->Unit):KagemushaWalletEnrollmentProgressV1 =
-        enrollment {requireNoUnreleasedAdmissions();requireCurrent();runtime.resumeEnrollment(originals).also{requireCurrent()}}
-    /** The first Native whole request wins over later offered PI DATA after interrupted delivery. */
-    fun retainEnrollmentRequest(originals:KagemushaWalletEnrollmentOriginalsV1,request:ByteArray,requireCurrent:()->Unit):ByteArray =
-        enrollment {requireCurrent();runtime.retainEnrollmentRequest(originals,request).also{requireCurrent()}}
-    fun storeEnrollmentCredential(originals:KagemushaWalletEnrollmentOriginalsV1,
-        credential:ByteArray,certificates:ByteArray,requireCurrent:()->Unit):ByteArray =
-        enrollment {requireCurrent();runtime.storeEnrollmentCredential(originals,credential,certificates).also{requireCurrent()}}
-
+    /** Worker-only. Authenticate the FI session and transfer the SAME installed Native owner. */
+    fun startEnrollment(session: KagemushaWalletEnrollmentSessionOriginalsV1): KagemushaWalletEnrollmentV1 = synchronized(gate) {
+        requireLive()
+        check(admission.canTransferToEnrollment()) { "account admission already started" }
+        val enrollment = runtime.startEnrollment(session)
+        closing = CompletableFuture.completedFuture(null)
+        enrollment
+    }
     /** Retry ordinary refusal using the same originals, Native challenge and account signature.
      * Explicit future cancellation retires custody; successful admission transfers it once.
      */
     fun openAsync(originals: KagemushaWalletOpenOriginalsV1,
+        signExistingAccount: (ByteArray) -> CompletableFuture<ByteArray>,
+        requireCurrent: () -> Unit): CompletableFuture<KagemushaWalletV1> =
+        openFrames(originals.frames(), { runtime.begin(originals) }, signExistingAccount, requireCurrent)
+
+    /** Reopen exact persisted E6 DATA using Native-selected asset and ordinary account/journal
+     * admission. It does not replay or require the expired enrollment session/permit. */
+    fun openEnrolledResult(resultOriginal: ByteArray, accountOriginal: ByteArray,
+        signExistingAccount: (ByteArray) -> CompletableFuture<ByteArray>,
+        requireCurrent: () -> Unit): CompletableFuture<KagemushaWalletV1> {
+        require(resultOriginal.size in 1..KagemushaWalletEnrollmentV1.RESULT_MAX_BYTES && accountOriginal.size in 1..4096)
+        val original = resultOriginal.copyOf(); val account = accountOriginal.copyOf()
+        return openFrames(listOf(original, account), { runtime.beginEnrolledResult(original, account) }, signExistingAccount, requireCurrent)
+    }
+    private fun openFrames(frames: List<ByteArray>, begin: () -> KagemushaWalletPendingOpenV1,
         signExistingAccount: (ByteArray) -> CompletableFuture<ByteArray>,
         requireCurrent: () -> Unit): CompletableFuture<KagemushaWalletV1> {
         val result = CompletableFuture<KagemushaWalletV1>()
@@ -106,9 +119,9 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
             var started = false
             try {
                 if (result.isCancelled) return@execute
-                requireNoUnreleasedAdmissions(); requireCurrent(); startOpen(originals)
+                requireNoUnreleasedAdmissions(); requireCurrent(); startOpen(frames)
                 started = true
-                val pending = pendingOriginal ?: runtime.begin(originals).also { pendingOriginal = it }
+                val pending = pendingOriginal ?: begin().also { pendingOriginal = it }
                 requireCurrent(); requireLive()
                 if (result.isCancelled) throw java.util.concurrent.CancellationException()
                 val challenge = pending.challenge()
@@ -194,18 +207,16 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
             try { release() } catch (failure: Throwable) { if(primary !== failure)primary.addSuppressed(failure); retainFailure(resource,failure) }; return primary
         }
         private fun unwrap(error: Throwable): Throwable = if(error is CompletionException && error.cause != null) error.cause!! else error
-        /** Require all seven originals and authenticate the complete installation before enrollment. */
-        @JvmStatic fun install(platform: KagemushaWalletAndroidPlatformV1, originals: KagemushaWalletInstallationOriginalsV1): KagemushaWalletInstalledRuntimeV1 {
+        /** Authenticate the signed base, then return retained financial custody before registry registration.
+         * The caller retains this attempt and explicitly invokes register(); ordinary refusal retries it.
+         */
+        @JvmStatic fun install(platform: KagemushaWalletAndroidPlatformV1, originals: KagemushaWalletInstallationOriginalsV1): KagemushaWalletInstallationAttemptV1 {
             requireNoUnreleasedAdmissions()
-            if (!PrivacyNativeBridge.isNativeAvailable()) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
-            val handle = try {
-                if(KagemushaWalletNativeV1.revision()!=1) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
-                val b=originals.frames()
-                KagemushaWalletInstalledRuntimeNativeV1.installRuntime(platform,b[0],b[1],b[2],b[3],b[4],b[5],b[6])
-            } catch (_: LinkageError) { throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
-            val admitted=installationRuntimeHandle(handle)
-            return KagemushaWalletInstalledRuntimeV1(KagemushaWalletRuntimeV1(admitted),platform)
+            return KagemushaWalletInstallationAttemptV1.begin(platform,originals)
         }
+        internal fun adoptRegistered(handle:Long,platform:KagemushaWalletAndroidPlatformV1):KagemushaWalletInstalledRuntimeV1 =
+            KagemushaWalletInstalledRuntimeV1(KagemushaWalletRuntimeV1(handle,platform),platform)
+
     }
 }
 
@@ -219,6 +230,7 @@ internal fun <T> completeInstalledOpenFailureV1(result: CompletableFuture<T>, fa
 /** Managed sequencing only; callbacks retain all Native authority. Caller serializes its gate. */
 internal class KagemushaWalletInstalledAdmissionV1(private val requireLive: () -> Unit) {
     private var originalFrames: List<ByteArray>? = null
+    fun canTransferToEnrollment(): Boolean = originalFrames == null
     private var active = false
     private var transferred = false
     fun start(frames: List<ByteArray>) {
@@ -233,11 +245,7 @@ internal class KagemushaWalletInstalledAdmissionV1(private val requireLive: () -
     }
     fun failed() { check(active && !transferred); active = false }
     fun completed() { check(active && !transferred); transferred = true; active = false }
-    fun <T> enrollment(action: () -> T): T {
-        requireLive()
-        check(originalFrames == null) { "enrollment must finish before account admission" }
-        return action()
-    }
+
 }
 /** JNI returns one positive registry owner or a negative i32 Native failure, never a verdict. */
 internal fun installationRuntimeHandle(result: Long): Long {
@@ -247,8 +255,10 @@ internal fun installationRuntimeHandle(result: Long): Long {
 }
 
 internal object KagemushaWalletInstalledRuntimeNativeV1 {
-    @JvmStatic external fun installRuntime(platform: KagemushaWalletAndroidPlatformV1,appManifest: ByteArray,envelope: ByteArray,
+    @JvmStatic external fun beginInstallation(platform: KagemushaWalletAndroidPlatformV1,appManifest: ByteArray,envelope: ByteArray,
         walletRuntime: ByteArray,verifierPack: ByteArray,producerInventory: ByteArray,signedGenesis: ByteArray,originalsRoot: ByteArray): Long
+    @JvmStatic external fun registerInstallation(attempt: Long): Long
+    @JvmStatic external fun closeInstallation(attempt: Long): Int
 }
 
 /** Cleanup quarantine only; no owner lookup, raw ID, admission or monetary capability. */

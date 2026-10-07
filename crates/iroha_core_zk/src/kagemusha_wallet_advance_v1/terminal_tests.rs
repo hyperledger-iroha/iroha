@@ -122,7 +122,7 @@ fn wallet_advance_v1_terminal_abandonment_retains_one_signed_control() {
             Err(KagemushaWalletProviderErrorV1::Terminal)
         );
         assert_eq!(
-            provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
+            provider.test_resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
             Err(KagemushaWalletProviderErrorV1::Invalid {
                 field: "enrollment.finished"
             })
@@ -346,4 +346,111 @@ fn wallet_advance_v1_terminal_deletion_cases_and_file_removal() {
     provider
         .finish_terminal_markers(&durable, &[])
         .expect("nothing to retire");
+}
+
+#[test]
+fn abandonment_selected_original_loss_never_resigns_after_retry_or_restart() {
+    for (policy, seed) in [(ANDROID, 0xb1), (IOS, 0xb2)] {
+        let (device, _, slot) = enrolled_device(policy, seed);
+        let mut provider = device.open();
+        provider.abandon_enrollment(&slot).unwrap();
+        let calls = device.platform.with(|state| state.sign_calls);
+        let dir = kagemusha_wallet_slot_dir_v1(&slot);
+        device
+            .fs
+            .unlink(&dir, KAGEMUSHA_WALLET_ABANDONMENT_NAME_V1)
+            .unwrap();
+        device.fs.sync_dir(&dir).unwrap();
+        assert_eq!(
+            provider.abandon_enrollment(&slot),
+            Err(abandonment_custody_error())
+        );
+        drop(provider);
+        device.fs.restart();
+        let mut provider = device.open();
+        assert_eq!(
+            provider.abandon_enrollment(&slot),
+            Err(abandonment_custody_error())
+        );
+        device
+            .platform
+            .with(|state| assert_eq!(state.sign_calls, calls));
+    }
+}
+
+#[test]
+fn abandonment_selection_recovers_without_resigning_and_rejects_substitution() {
+    let (device, _, slot) = enrolled_device(ANDROID, 0xb3);
+    let mut provider = device.open();
+    let original = provider.abandon_enrollment(&slot).unwrap();
+    let calls = device.platform.with(|state| state.sign_calls);
+    let dir = kagemusha_wallet_slot_dir_v1(&slot);
+    device.fs.unlink(&dir, ABANDONMENT_SELECTION_NAME).unwrap();
+    device.fs.sync_dir(&dir).unwrap();
+    assert_eq!(provider.abandon_enrollment(&slot).unwrap(), original);
+    device
+        .platform
+        .with(|state| assert_eq!(state.sign_calls, calls));
+    let bytes = device
+        .fs
+        .visible_file(&dir, ABANDONMENT_SELECTION_NAME)
+        .unwrap();
+    let mut selected: AbandonmentSelectionV1 =
+        decode_envelope_v1(&bytes, ABANDONMENT_SELECTION_MAX).unwrap();
+    selected.original[0] ^= 1;
+    device.fs.place_unsynced(
+        &dir,
+        ABANDONMENT_SELECTION_NAME,
+        &encode_envelope_v1(&selected, ABANDONMENT_SELECTION_MAX).unwrap(),
+    );
+    assert_eq!(
+        provider.abandon_enrollment(&slot),
+        Err(abandonment_custody_error())
+    );
+    device
+        .platform
+        .with(|state| assert_eq!(state.sign_calls, calls));
+}
+
+#[test]
+fn abandonment_selection_partial_write_and_uncertain_publication_recover_exact_original() {
+    let (device, _, slot) = enrolled_device(ANDROID, 0xb4);
+    let original = {
+        let mut provider = device.open();
+        provider.abandon_enrollment(&slot).unwrap()
+    };
+    let dir = kagemusha_wallet_slot_dir_v1(&slot);
+    device.fs.unlink(&dir, ABANDONMENT_SELECTION_NAME).unwrap();
+    device.fs.sync_dir(&dir).unwrap();
+    let baseline = device.fork();
+    let mut provider = baseline.open();
+    let start = baseline.fs.steps();
+    assert_eq!(provider.abandon_enrollment(&slot).unwrap(), original);
+    let trace = baseline.fs.trace_since(start);
+    let write = trace
+        .iter()
+        .rposition(|step| *step == KagemushaWalletSimStepV1::Write)
+        .unwrap();
+    let sync = trace
+        .iter()
+        .rposition(|step| *step == KagemushaWalletSimStepV1::SyncDir)
+        .unwrap();
+    for (offset, fault) in [
+        (write, KagemushaWalletSimFaultV1::PartialWrite),
+        (sync, KagemushaWalletSimFaultV1::Error),
+    ] {
+        let trial = device.fork();
+        let mut provider = trial.open();
+        let calls = trial.platform.with(|state| state.sign_calls);
+        trial.fs.inject(trial.fs.steps() + offset as u64, fault);
+        assert!(provider.abandon_enrollment(&slot).is_err());
+        trial.fs.clear_faults();
+        drop(provider);
+        trial.fs.restart();
+        let mut provider = trial.open();
+        assert_eq!(provider.abandon_enrollment(&slot).unwrap(), original);
+        trial
+            .platform
+            .with(|state| assert_eq!(state.sign_calls, calls));
+    }
 }

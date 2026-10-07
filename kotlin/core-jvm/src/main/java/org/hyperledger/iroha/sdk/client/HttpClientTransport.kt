@@ -727,11 +727,79 @@ class HttpClientTransport private constructor(
         return result
     }
 
+    /** Original event-path DATA for the same payer and Load; Native alone verifies inclusion. */
+    fun getKagemushaWalletLoadEventProofOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: Runnable,
+    ): CompletableFuture<ByteArray> {
+        requireCurrentOwner.run()
+        config.requireLocalSigningContext()
+        val request = buildKagemushaWalletLedgerOriginalRequestV1(selection.path + "/event-proof", 8192, canonicalAuth)
+        return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
+    }
+
+    /** One original ordinary finality proof. Height is a locator, never a verified checkpoint. */
+    fun getKagemushaWalletLedgerFinalityOriginalV1(
+        height: BigInteger,
+        requireCurrentOwner: Runnable,
+    ): CompletableFuture<ByteArray> {
+        requireCurrentOwner.run()
+        require(height.signum() > 0 && height.bitLength() <= 64) { "positive u64 finality height required" }
+        config.requireLocalSigningContext()
+        val request = buildKagemushaWalletLedgerOriginalRequestV1("/v1/bridge/finality/$height", 36 * 1024 * 1024, null)
+        return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
+    }
+
+    private fun readKagemushaWalletLedgerOriginalV1(request: TransportRequest,
+        requireCurrentOwner: Runnable): CompletableFuture<ByteArray> {
+        val result = CompletableFuture<ByteArray>()
+        val upstream = try {
+            requireCurrentOwner.run()
+            notifyRequest(request)
+            requireCurrentOwner.run()
+            executor.execute(request)
+        } catch (error: Throwable) {
+            result.completeExceptionally(error)
+            return result
+        }
+        result.whenComplete { _, _ -> if (result.isCancelled) upstream.cancel(false) }
+        upstream.whenComplete { response, failure ->
+            if (result.isDone) return@whenComplete
+            if (upstream.isCancelled) { result.cancel(false); return@whenComplete }
+            try {
+                if (failure != null) throw unwrapCompletion(failure)
+                requireCurrentOwner.run()
+                requireExactSignedResponseProvenance(request, response, "KAGEMUSHA ledger original")
+                val body = response.body
+                require(body.isNotEmpty() && body.size.toLong() <= requireNotNull(request.maximumResponseBytes))
+                requireExactOptionalContentLength(response.headers, body.size, "KAGEMUSHA ledger original")
+                if (response.statusCode != 200) throw ToriiApiException.fromResponse(
+                    response.statusCode, response.headers, body, "KAGEMUSHA ledger original")
+                requireExactHeader(response.headers, "Content-Type", APPLICATION_NORITO, "KAGEMUSHA ledger original")
+                requireAbsentOrIdentityEncoding(response.headers, "KAGEMUSHA ledger original")
+                notifyResponse(request, ClientResponse(response.statusCode, body, response.message))
+                requireCurrentOwner.run()
+                result.complete(body.copyOf())
+            } catch (error: Throwable) {
+                try { notifyFailure(request, error) } catch (observerError: Throwable) {
+                    if (observerError !== error) error.addSuppressed(observerError)
+                }
+                result.completeExceptionally(error)
+            }
+        }
+        return result
+    }
+
     /** Build one exact account-signed Load read; retained headers cannot replace its signer. */
     internal fun buildKagemushaWalletLoadIssuanceRequestV1(
         selection: ToriiKagemushaWalletLoadSelectionV1,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): TransportRequest {
+    ): TransportRequest = buildKagemushaWalletLedgerOriginalRequestV1(
+        selection.path, ToriiKagemushaWalletLoadIssuanceOriginalV1.MAXIMUM_BYTES, canonicalAuth)
+
+    private fun buildKagemushaWalletLedgerOriginalRequestV1(path: String, maximumBytes: Int,
+        canonicalAuth: ToriiCanonicalRequestAuth?): TransportRequest {
         require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
             "KAGEMUSHA issuance requires an HTTPS Torii endpoint"
         }
@@ -740,7 +808,7 @@ class HttpClientTransport private constructor(
             "KAGEMUSHA issuance base URI must not contain user information, query or fragment"
         }
         require(!config.requestTimeout().isZero) { "KAGEMUSHA issuance requires a positive request timeout" }
-        require(!CanonicalRequestSigner.isCanonicalAsciiAccountAlias(canonicalAuth.accountId)) {
+        require(canonicalAuth == null || !CanonicalRequestSigner.isCanonicalAsciiAccountAlias(canonicalAuth.accountId)) {
             "KAGEMUSHA issuance requires the expected canonical payer account, not an alias"
         }
         val forbiddenHeaders = CANONICAL_AUTH_HEADERS + setOf(
@@ -752,8 +820,7 @@ class HttpClientTransport private constructor(
             forbiddenHeaders.any { it.equals(name, ignoreCase = true) }
         }) { "KAGEMUSHA issuance request authentication, encoding and cache headers are owned by the transport" }
         return buildExactNoritoGetRequest(
-            selection.path, ToriiKagemushaWalletLoadIssuanceOriginalV1.MAXIMUM_BYTES.toLong(),
-            canonicalAuth, requestNoStore = true,
+            path, maximumBytes.toLong(), canonicalAuth, requestNoStore = true,
         )
     }
 

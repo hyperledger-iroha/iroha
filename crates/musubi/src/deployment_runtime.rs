@@ -629,10 +629,8 @@ impl DeploymentSlot {
     }
 
     pub(crate) fn current_journal(&self) -> Result<Option<PathBuf>> {
-        let bytes = match self.writer.read("active-journal", 64) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Some(bytes) = self.writer.read_optional("active-journal", 64)? else {
+            return Ok(None);
         };
         let id = std::str::from_utf8(&bytes)?;
         validate_journal_id(id)?;
@@ -1459,6 +1457,30 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         assert!(session.ensure_previous_terminal(&service).is_err());
         drop(session);
         assert!(DeploymentSlot::open(&path).is_ok());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_retained_slot_cannot_hide_an_active_deployment() -> Result<()> {
+        let temp = TempDir::new()?;
+        let path = temp.path().join("slot");
+        let moved = temp.path().join("original-slot");
+        let session = DeploymentSlot::open(&path)?;
+        assert!(session.current_journal()?.is_none());
+        let id = hex::encode(iroha::crypto::Hash::new(b"retained active deployment").as_ref());
+        session
+            .writer
+            .write_atomic("active-journal", id.as_bytes(), PublishMode::CreateNew)?;
+        assert_eq!(session.current_journal()?, Some(path.join(&id)));
+        fs::rename(&path, &moved)?;
+        let result = session.current_journal();
+        fs::rename(&moved, &path)?;
+        assert!(matches!(
+            result.unwrap_err().downcast_ref::<std::io::Error>(),
+            Some(error) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+        assert_eq!(session.current_journal()?, Some(path.join(id)));
         Ok(())
     }
 

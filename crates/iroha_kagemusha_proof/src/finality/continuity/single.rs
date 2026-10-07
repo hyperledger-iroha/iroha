@@ -2,7 +2,7 @@
 
 use super::*;
 use iroha_pasta::{Fq, msm::MemoryBudget};
-use iroha_plonk::verifier::{accumulate_generator, verify_full};
+use iroha_plonk::verifier::{accumulate_generator_cancellable, verify_full_cancellable};
 use iroha_plonk_recursion::{AccumulatorT, FoldInput};
 
 /// Original source claims bound by its fixed wrapper's hard verifier.
@@ -72,50 +72,91 @@ pub fn verify_key_cells(
     ))
 }
 
-/// Verify the exact original proof and decide both carried generator claims.
-pub fn verify_key_native(
+/// Verify every source obligation with an explicit caller cancellation signal.
+/// # Errors
+/// Wrong key, endpoints, proof or carried claims, or cancellation with no proof verdict.
+pub fn verify_key_native_cancellable(
     plan: &VerifierPlan<Ep>,
     key: &VerifyingKey<Ep>,
     evidence: &SourceNodeEvidence,
     vesta: &PinnedParams<Eq>,
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<FoldInput<Ep>, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
     if vesta.k() != 16 || evidence.proof.len() != plan.proof_length() {
         return Err(Error::Synthesis);
     }
     leaf_frame_native(evidence.endpoints)?;
     evidence
         .pallas
-        .decide(plan.params(), budget)
-        .map_err(|_| Error::Synthesis)?;
+        .decide_cancellable(plan.params(), budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Synthesis
+            }
+        })?;
     evidence
         .vesta
-        .decide(vesta, budget)
-        .map_err(|_| Error::Synthesis)?;
+        .decide_cancellable(vesta, budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Synthesis
+            }
+        })?;
     let instances = evidence.instances()?;
-    verify_full(
+    verify_full_cancellable(
         plan.params(),
         plan.binding(),
         key,
         &instances,
         &evidence.proof,
         budget,
+        cancellation,
     )
-    .map_err(|_| Error::Synthesis)?;
-    let claim = accumulate_generator(
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Synthesis
+        }
+    })?;
+    let claim = accumulate_generator_cancellable(
         plan.params(),
         plan.binding(),
         key,
         &instances,
         &evidence.proof,
         budget,
+        cancellation,
     )
-    .map_err(|_| Error::Synthesis)?;
-    let opening =
-        FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Synthesis)?;
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Synthesis
+        }
+    })?;
+    let opening = FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Synthesis
+        }
+    })?;
     opening
-        .decide(plan.params(), budget)
-        .map_err(|_| Error::Synthesis)?;
+        .decide_cancellable(plan.params(), budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Synthesis
+            }
+        })?;
     Ok(opening)
 }
 
@@ -126,7 +167,7 @@ impl SourceVerifier {
     }
     /// Exact immutable wrapper verifier from this sealed source qualification.
     /// Reading metadata does not permit construction or substitution of a source owner.
-    pub const fn verifying_key(&self) -> &VerifyingKey<Ep> {
+    pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
         &self.key
     }
     /// Complete digest of the original qualified wrapper key.
@@ -139,7 +180,7 @@ impl SourceVerifier {
     }
     #[cfg(test)]
     pub(crate) fn layout_metadata(&self) -> (VerifierPlan<Ep>, VerifyingKey<Ep>) {
-        (self.verifier.clone(), self.key.clone())
+        ((*self.verifier).clone(), (*self.key).clone())
     }
     /// Hard verify the exact source endpoint/P binding and original V columns.
     pub(crate) fn verify_cells(
@@ -161,7 +202,23 @@ impl SourceVerifier {
         vesta: &PinnedParams<Eq>,
         budget: MemoryBudget,
     ) -> Result<FoldInput<Ep>, Error> {
-        verify_key_native(&self.verifier, &self.key, evidence, vesta, budget)
+        self.verify_native_cancellable(evidence, vesta, budget, None)
+    }
+    pub(crate) fn verify_native_cancellable(
+        &self,
+        evidence: &SourceNodeEvidence,
+        vesta: &PinnedParams<Eq>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<FoldInput<Ep>, Error> {
+        verify_key_native_cancellable(
+            &self.verifier,
+            &self.key,
+            evidence,
+            vesta,
+            budget,
+            cancellation,
+        )
     }
 
     /// Untrusted exact-size filler, used only by witnessless source import.

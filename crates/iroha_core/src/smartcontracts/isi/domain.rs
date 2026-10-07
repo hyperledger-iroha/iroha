@@ -2253,24 +2253,102 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let asset_definition = self.object().clone().build(authority);
-            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+            register_asset_definition(self.object().clone(), None, authority, state_transaction)
+        }
+    }
+    impl Execute for iroha_data_model::isi::RegisterDataspaceAssetDefinition {
+        #[metrics(+"register_dataspace_asset_definition")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_dataspace_asset_definition_registration_allowed(
                 state_transaction,
-                asset_definition.metadata(),
+                authority,
+                &self,
             )?;
-            ensure_asset_definition_human_fields(&asset_definition)?;
-            validate_asset_definition_alias_route(
+            register_asset_definition(
+                self.object,
+                Some(self.dataspace_id),
+                authority,
                 state_transaction,
-                asset_definition.alias().as_ref(),
+            )
+        }
+    }
+    /// Authorize an immutable direct namespace against current on-chain SNS ownership.
+    /// This does not grant the namespace owner access to any existing monetary balance.
+    pub(crate) fn ensure_dataspace_asset_definition_registration_allowed(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: &iroha_data_model::isi::RegisterDataspaceAssetDefinition,
+    ) -> Result<(), InstructionExecutionError> {
+        instruction.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid direct-dataspace asset definition: {error}").into(),
+            )
+        })?;
+        let dataspace_id = instruction.dataspace_id;
+        if dataspace_id == DataSpaceId::UNIVERSAL {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "direct-dataspace registration requires a non-Universal dataspace".into(),
+            ));
+        }
+        let owner = crate::sns::active_dataspace_owner_by_id(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            dataspace_id,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .map_err(|error| error.retain_in_instruction(state_transaction))?;
+        if owner.as_ref() != Some(authority) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "only the current active SNS dataspace owner may register a direct-dataspace asset definition".into(),
+            ));
+        }
+        if state_transaction.current_dataspace_id != Some(dataspace_id)
+            || state_transaction.world.current_dataspace_id != Some(dataspace_id)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "direct-dataspace asset definition must register on its exact authoritative route"
+                    .into(),
+            ));
+        }
+        // The protected Parameters registry is publicly readable. Private homes require
+        // a separately retained storage and disclosure capability before admission.
+        if !dataspace_is_public_or_universal(state_transaction, dataspace_id) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "direct-dataspace registration currently requires a public home dataspace".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// Register the existing definition payload and its optional direct namespace atomically.
+    fn register_asset_definition(
+        object: iroha_data_model::asset::NewAssetDefinition,
+        dataspace_id: Option<DataSpaceId>,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let asset_definition = object.build(authority);
+        crate::smartcontracts::limits::enforce_metadata_value_sizes(
+            state_transaction,
+            asset_definition.metadata(),
+        )?;
+        ensure_asset_definition_human_fields(&asset_definition)?;
+        validate_asset_definition_alias_route(
+            state_transaction,
+            asset_definition.alias().as_ref(),
+        )?;
+        if let Some(alias) = asset_definition.alias().as_ref() {
+            ensure_authority_can_manage_asset_definition_alias(
+                state_transaction,
+                authority,
+                asset_definition.id(),
+                alias,
             )?;
-            if let Some(alias) = asset_definition.alias().as_ref() {
-                ensure_authority_can_manage_asset_definition_alias(
-                    state_transaction,
-                    authority,
-                    asset_definition.id(),
-                    alias,
-                )?;
-            }
+        }
+        if dataspace_id.is_none() {
             ensure_asset_definition_domain_context(
                 state_transaction,
                 authority,
@@ -2280,73 +2358,86 @@ pub mod isi {
                 state_transaction,
                 &asset_definition,
             )?;
-            let asset_definition_id = asset_definition.id().clone();
-            if state_transaction
+        }
+        let asset_definition_id = asset_definition.id().clone();
+        if state_transaction
+            .world
+            .asset_definition(&asset_definition_id)
+            .is_ok()
+        {
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::AssetDefinitionId(asset_definition_id),
+            }
+            .into());
+        }
+        if let Some(alias) = asset_definition.alias()
+            && let Some(existing) = state_transaction
                 .world
-                .asset_definition(&asset_definition_id)
-                .is_ok()
-            {
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::AssetDefinitionId(asset_definition_id),
-                }
-                .into());
-            }
-            if let Some(alias) = asset_definition.alias()
-                && let Some(existing) = state_transaction
-                    .world
-                    .asset_definition_aliases
-                    .get(alias)
-                    .cloned()
-                && existing != asset_definition_id
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!("asset definition alias `{alias}` is already bound").into(),
+                .asset_definition_aliases
+                .get(alias)
+                .cloned()
+            && existing != asset_definition_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("asset definition alias `{alias}` is already bound").into(),
+            )
+            .into());
+        }
+        let mut stored_definition = asset_definition.clone();
+        stored_definition.alias = None;
+        let registration_header_hash = state_transaction._curr_block.hash();
+        let (execution_identity, lifecycle_ordinal) = state_transaction
+            .next_lifecycle_transition_seed()
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "asset-definition registration lacks deterministic execution identity: {error}"
+                    )
+                    .into(),
                 )
-                .into());
-            }
-            let mut stored_definition = asset_definition.clone();
-            stored_definition.alias = None;
-            let registration_header_hash = state_transaction._curr_block.hash();
-            let (execution_identity, lifecycle_ordinal) = state_transaction
-                .next_lifecycle_transition_seed()
+            })?;
+        let incarnation = AxtAssetIncarnationV1::derive(
+            state_transaction.network_id(),
+            &asset_definition_id,
+            &registration_header_hash,
+            &execution_identity,
+            lifecycle_ordinal,
+        );
+        state_transaction
+            .world
+            .insert_asset_definition_entry(asset_definition_id.clone(), stored_definition);
+        state_transaction
+            .world
+            .axt_asset_incarnations
+            .insert(asset_definition_id.clone(), incarnation);
+        if let Some(dataspace_id) = dataspace_id {
+            state_transaction
+                .register_direct_asset_definition_home(
+                    &asset_definition_id,
+                    incarnation,
+                    dataspace_id,
+                )
                 .map_err(|error| {
                     InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "asset-definition registration lacks deterministic execution identity: {error}"
-                        )
-                        .into(),
+                        format!("direct asset home registration failed: {error}").into(),
                     )
                 })?;
-            let incarnation = AxtAssetIncarnationV1::derive(
-                state_transaction.network_id(),
-                &asset_definition_id,
-                &registration_header_hash,
-                &execution_identity,
-                lifecycle_ordinal,
-            );
-            state_transaction
-                .world
-                .insert_asset_definition_entry(asset_definition_id.clone(), stored_definition);
-            state_transaction
-                .world
-                .axt_asset_incarnations
-                .insert(asset_definition_id.clone(), incarnation);
-            if let Some(alias) = asset_definition.alias().as_ref().cloned() {
-                let bound_at_ms = state_transaction.block_unix_timestamp_ms();
-                state_transaction.world.bind_asset_definition_alias(
-                    &asset_definition_id,
-                    alias,
-                    None,
-                    None,
-                    bound_at_ms,
-                )?;
-            }
-            state_transaction
-                .world
-                .emit_asset_definition_event(AssetDefinitionEvent::Created(asset_definition));
-            Ok(())
         }
+        if let Some(alias) = asset_definition.alias().as_ref().cloned() {
+            let bound_at_ms = state_transaction.block_unix_timestamp_ms();
+            state_transaction.world.bind_asset_definition_alias(
+                &asset_definition_id,
+                alias,
+                None,
+                None,
+                bound_at_ms,
+            )?;
+        }
+        state_transaction
+            .world
+            .emit_asset_definition_event(AssetDefinitionEvent::Created(asset_definition));
+        Ok(())
     }
     impl Execute for Unregister<AssetDefinition> {
         #[metrics(+"unregister_asset_definition")]
@@ -9050,6 +9141,200 @@ mod tests {
         );
         tx.apply();
         block.commit_world_overlay_for_testing().unwrap();
+    }
+    #[test]
+    fn direct_dataspace_registration_checks_owner_route_and_balance_policy() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dataspace =
+            crate::sns::dataspace_id_for_sns_alias("paynet").expect("canonical SNS dataspace ID");
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut tx = block.transaction();
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace,
+                alias: "paynet".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("catalog");
+        tx.nexus.dataspace_catalog = catalog.clone();
+        tx.world.dataspace_catalog = catalog;
+        seed_dataspace_alias_lease(&mut tx, &authority, "paynet");
+        tx.current_dataspace_id = Some(dataspace);
+        tx.world.current_dataspace_id = Some(dataspace);
+        tx.nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: dataspace,
+                    alias: "paynet".to_owned(),
+                    visibility: LaneVisibility::Public,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("public lane");
+        let id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("fixture", "paynet").expect("synthetic identity seed"),
+            "unit".parse().expect("name"),
+        );
+        let mut instruction = iroha_data_model::isi::RegisterDataspaceAssetDefinition::new(
+            dataspace,
+            AssetDefinition::numeric(
+                id.clone(),
+                "Unit".to_owned(),
+                AssetBalancePolicy::DataspaceRestricted,
+                None,
+            ),
+        )
+        .expect("direct instruction");
+        isi::ensure_dataspace_asset_definition_registration_allowed(
+            &mut tx,
+            &authority,
+            &instruction,
+        )
+        .expect("exact current SNS owner and route");
+        assert!(
+            isi::ensure_dataspace_asset_definition_registration_allowed(
+                &mut tx,
+                &BOB_ID,
+                &instruction
+            )
+            .is_err()
+        );
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        assert!(
+            isi::ensure_dataspace_asset_definition_registration_allowed(
+                &mut tx,
+                &authority,
+                &instruction
+            )
+            .is_err()
+        );
+        tx.current_dataspace_id = Some(dataspace);
+        let public_lanes = tx.nexus.lane_catalog.clone();
+        tx.nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: dataspace,
+                    alias: "paynet".to_owned(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("private lane");
+        for policy in [
+            AssetBalancePolicy::Global,
+            AssetBalancePolicy::DataspaceRestricted,
+        ] {
+            instruction.object.balance_scope_policy = policy;
+            let error = isi::ensure_dataspace_asset_definition_registration_allowed(
+                &mut tx,
+                &authority,
+                &instruction,
+            )
+            .expect_err(
+                "publicly readable registry must reject private homes under either balance policy",
+            );
+            assert!(error.to_string().contains("public home dataspace"));
+        }
+        tx.nexus.lane_catalog = public_lanes;
+        instruction.object.balance_scope_policy = AssetBalancePolicy::Global;
+        isi::ensure_dataspace_asset_definition_registration_allowed(
+            &mut tx,
+            &authority,
+            &instruction,
+        )
+        .expect("Global balances may have exact non-Universal public dataspace home");
+        assert!(tx.world.asset_definitions.get(&id).is_none());
+        assert!(
+            tx.world
+                .asset_definition_dataspace(&id)
+                .expect("valid home registry")
+                .is_none()
+        );
+    }
+    #[test]
+    fn direct_dataspace_registration_persists_alias_independent_home() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dataspace =
+            crate::sns::dataspace_id_for_sns_alias("paynet").expect("canonical SNS dataspace ID");
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD7; Hash::LENGTH]));
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace,
+                alias: "paynet".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("catalog");
+        tx.nexus.dataspace_catalog = catalog.clone();
+        tx.world.dataspace_catalog = catalog;
+        seed_dataspace_alias_lease(&mut tx, &authority, "paynet");
+        tx.current_dataspace_id = Some(dataspace);
+        tx.world.current_dataspace_id = Some(dataspace);
+        tx.nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: dataspace,
+                    alias: "paynet".to_owned(),
+                    visibility: LaneVisibility::Public,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("public lane");
+        let id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("fixture", "paynet").expect("synthetic identity seed"),
+            "unit".parse().expect("name"),
+        );
+        let instruction = iroha_data_model::isi::RegisterDataspaceAssetDefinition::new(
+            dataspace,
+            AssetDefinition::numeric(
+                id.clone(),
+                "Unit".to_owned(),
+                AssetBalancePolicy::DataspaceRestricted,
+                None,
+            ),
+        )
+        .expect("direct instruction");
+        instruction
+            .clone()
+            .execute(&authority, &mut tx)
+            .expect("register");
+        let definition = tx.world.asset_definition(&id).expect("definition");
+        assert!(definition.owning_domain().is_none());
+        assert!(definition.alias().is_none());
+        assert_eq!(definition.owned_by(), &authority);
+        assert_eq!(
+            tx.world
+                .asset_definition_dataspace(&id)
+                .expect("valid home registry"),
+            Some(dataspace)
+        );
+        assert!(instruction.execute(&authority, &mut tx).is_err());
+        assert_eq!(
+            tx.world
+                .asset_definition_dataspace(&id)
+                .expect("valid home registry"),
+            Some(dataspace)
+        );
     }
     #[test]
     fn asset_registration_is_independent_of_pre_release_cash_metadata() {

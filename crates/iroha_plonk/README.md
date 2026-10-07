@@ -111,6 +111,22 @@ Stage ENGINE-3 (tasks T12 and T13) provides:
   (deterministic weights, one merged `g` MSM, suffixes as accumulator
   items). Rejections are typed `VerifyError`s.
 
+Proving and verification accept an explicit operation cancellation token from
+`iroha_pasta`. `ProverConfig::cancellation` and the `_cancellable` witness,
+original-key import, and verification entry points share this signal. Kernels
+check it at Rayon task boundaries and in bounded sequential batches. Every
+spawned task joins before `Cancelled` is returned; owned secret polynomials,
+blinding buffers, and quotient leases are wiped before resources are released.
+Cancellation has no proof verdict and must never authorize a corrected claim or
+burn. Original-key installation and pinned-parameter derivation are separate
+startup work; no cancellation bound is claimed for those noncancellable APIs.
+
+A cancelled operation consumes its witness and may have advanced its transcript
+and randomness. Retry with a fresh operation token, transcript, witness, and
+randomness owner. Do not continue or publish a partially written IPA transcript.
+The ordinary APIs invoke the same implementation with no token, and an
+uncancelled token preserves proof bytes and arithmetic ordering.
+
 In oracle mode (`--cfg iroha_plonk_oracle`) `create_proof_oracle` reproduces
 vendored halo2-axiom proof bytes, and `verify_full_oracle` accepts vendored
 proofs (checked for Committed and Direct instances on both curves, with and

@@ -193,6 +193,29 @@ impl Platform for AndroidPlatform {
             _ => G::Unavailable(U::Platform(0)),
         }
     }
+    fn key_recover_generation_reply(
+        &self,
+        slot: &Slot,
+        request: &advance::KagemushaWalletKeyGenerationRequestV1,
+    ) -> std::result::Result<Option<PublicKey>, U> {
+        let (reply, bytes) = self.call(
+            13,
+            Some(slot),
+            &request.challenge_digest,
+            i32::from(request.profile.tag()),
+            65,
+        );
+        match reply.tag {
+            0 => PublicKey::from_sec1_bytes(&bytes)
+                .map(Some)
+                .map_err(|_| U::KeyUnusable),
+            // This is no retained successful return, never a hardware key-absence verdict.
+            3 if bytes.is_empty() => Ok(None),
+            2 if bytes.is_empty() => Err(reason(reply)),
+            _ => Err(U::Platform(0)),
+        }
+    }
+
     fn key_generation_policy(
         &self,
     ) -> std::result::Result<advance::KagemushaWalletKeyGenerationPolicyV1, U> {

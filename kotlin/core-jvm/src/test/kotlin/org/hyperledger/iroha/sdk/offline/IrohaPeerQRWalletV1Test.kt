@@ -22,7 +22,7 @@ import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.Varint
 
-/** QR carries complete KAGEMUSHA wallet V1 envelopes up to the 10,000-byte message bound. */
+/** QR carries exact wallet envelopes and the mandatory Request account companion. */
 class IrohaPeerQRWalletV1Test {
     @Test
     fun `every wallet envelope vector round trips through QR under its own kind`() {
@@ -33,6 +33,7 @@ class IrohaPeerQRWalletV1Test {
             val message = IrohaPeerKagemushaWalletAdapterV1.wrap(
                 frame,
                 IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED,
+                destinationAccountOriginal = if (kind == IrohaPeerPayloadKind.REQUEST) IrohaPeerRequestFixtureV1.account() else null,
             )
             assertEquals(kind, message.canonicalPayload.kind)
             val session = IrohaPeerQRScanSessionV1(
@@ -69,6 +70,26 @@ class IrohaPeerQRWalletV1Test {
             .first { it.isComplete }
         assertEquals(1, result.recoveredDataFrames)
         assertContentEquals(frame, IrohaPeerKagemushaWalletAdapterV1.decode(assertNotNull(result.message)))
+    }
+
+    @Test
+    fun `maximum Request companion uses fifty six data shards and survives one lost shard`() {
+        val envelope = envelope(KagemushaWalletMessageKindV1.REQUEST, KagemushaWalletWireV1.MESSAGE_MAX_BYTES)
+        val account = ByteArray(4_096) { (it % 251).toByte() } // Bounded transport DATA, no account admission.
+        val message = IrohaPeerKagemushaWalletAdapterV1.wrap(envelope, destinationAccountOriginal = account)
+        assertEquals(14_112, message.encodedBody.size)
+        val texts = IrohaPeerQRCodecV1.animatedFrameTexts(message)
+        val frames = texts.map { IrohaPeerQRCodecV1.decodeFrame(it) }
+        assertEquals(56, frames.count { it.frameKind == IrohaPeerQRFrameKindV1.DATA })
+        assertEquals(setOf(56), frames.map { it.total }.toSet())
+        val lost = frames.indexOfFirst { it.frameKind == IrohaPeerQRFrameKindV1.DATA && it.index == 53 }
+        val session = IrohaPeerQRScanSessionV1(IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1, IrohaPeerPayloadKind.REQUEST, 1)
+        val result = texts.filterIndexed { index, _ -> index != lost }.asSequence()
+            .map { session.ingestAt(it, 0) }.first { it.isComplete }
+        assertEquals(1, result.recoveredDataFrames)
+        val decoded = assertNotNull(result.message)
+        assertContentEquals(envelope, IrohaPeerKagemushaWalletAdapterV1.decode(decoded))
+        assertContentEquals(account, IrohaPeerKagemushaWalletAdapterV1.destinationAccountOriginal(decoded))
     }
 
     @Test

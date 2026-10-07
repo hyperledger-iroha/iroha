@@ -44,7 +44,8 @@ fn partitions_use_any_nonzero_value_and_restore_the_actual_predecessor() {
             .get(&definition("coin"))
             .is_none()
     );
-    let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
+    let budget = iroha_allocation::AllocationBudget::new(16_777_216);
+    let checked = CheckedAssets::capture(&world, &budget, 16_777_216).unwrap();
     assert!(checked.rows().get(&id()).unwrap().as_ref().is_zero());
     assert_eq!(
         get_at(checked.rows(), GroupImage::Predecessor, &id())
@@ -351,7 +352,8 @@ fn predecessor_partition_search_charges_masked_current_and_absent_undo_rows() {
         BTreeMap::from([(id(), None), (absent, None)]),
     );
     world.rebuild_asset_definition_indexes().unwrap();
-    let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
+    let budget = iroha_allocation::AllocationBudget::new(16_777_216);
+    let checked = CheckedAssets::capture(&world, &budget, 16_777_216).unwrap();
     for nonzero in [false, true] {
         assert_eq!(
             has_partition(
@@ -382,7 +384,8 @@ fn predecessor_partition_search_charges_masked_current_and_absent_undo_rows() {
 fn all_eight_original_native_owners_remain_part_of_the_final_identity_check() {
     for index in 0..8 {
         let world = fixture(true);
-        let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
+        let budget = iroha_allocation::AllocationBudget::new(16_777_216);
+        let checked = CheckedAssets::capture(&world, &budget, 16_777_216).unwrap();
         match index {
             0 => world.assets.block().commit(),
             1 => world.asset_definitions.block().commit(),

@@ -104,7 +104,11 @@ pub(super) fn receive(
     public: &mut KagemushaWalletLineagePublicV1,
     custody: &mut FoldCustodyV1<'_>,
     route: OperationRoute,
+    cancellation: &Cancellation,
 ) -> Result<(ReceiveFoldFieldsV1, Option<IncomingSigma>), Error> {
+    cancellation.check()?;
+    let pallas_params = worker.installed.verifier().pallas_parameters();
+    let vesta_params = proof(worker.installed.verifier().vesta_parameters(16))?;
     let owner = prepared.owner();
     let monetary = prepared
         .monetary()
@@ -124,7 +128,14 @@ pub(super) fn receive(
     let omega = fixed
         .candidate_omega()
         .ok_or(Error::Proof("Receive Omega source"))?;
-    let incoming = super::incoming::transport(omega, &sources.objects[4], worker.budget)?;
+    let incoming = super::incoming::transport(
+        pallas_params,
+        vesta_params,
+        omega,
+        &sources.objects[4],
+        worker.budget,
+        Some(cancellation.prover_token()),
+    )?;
     let selector = route
         .incoming
         .ok_or(Error::Proof("Receive incoming selector"))?;
@@ -135,7 +146,12 @@ pub(super) fn receive(
         &sources.objects[5],
     )?;
     let q = proof(worker.sources.q(route))?;
-    let sigma = proof(q.sigma().incoming_original(&slot, selector, worker.budget))?;
+    let sigma = proof(q.sigma().incoming_original_cancellable(
+        &slot,
+        selector,
+        worker.budget,
+        Some(cancellation.prover_token()),
+    ))?;
     let (history_leaf, history_opening) = custody.blacklist_history()?;
     let (pp, pv) = predecessor_claims(predecessor)?;
     let root = worker.sources.scope().root();
@@ -166,10 +182,13 @@ pub(super) fn receive(
         bits[3],
     ];
     let (modes, pc, vc) = super::incoming::modes(
+        pallas_params,
+        vesta_params,
         results.iter().all(|v| *v),
         &incoming,
         sigma.as_ref(),
         worker.budget,
+        Some(cancellation.prover_token()),
     )?;
     let burned = modes.contains(&IncomingMode::Corrected) || !results.iter().all(|v| *v);
     let KagemushaWalletEffectV1::Receive { amount, .. } = step.frozen.capsule.statement.effect
@@ -261,7 +280,11 @@ pub(super) fn archive(
     public: &mut KagemushaWalletLineagePublicV1,
     custody: &mut FoldCustodyV1<'_>,
     route: OperationRoute,
+    cancellation: &Cancellation,
 ) -> Result<(ArchiveFoldFieldsV1, Option<IncomingSigma>), Error> {
+    cancellation.check()?;
+    let pallas_params = worker.installed.verifier().pallas_parameters();
+    let vesta_params = proof(worker.installed.verifier().vesta_parameters(16))?;
     let fixed = proof(worker.sources.route(route))?;
     let QualifiedOperationOwnerV1::Archive(prover) = fixed.owner() else {
         return Err(Error::Proof("Archive source route"));
@@ -276,16 +299,26 @@ pub(super) fn archive(
     ))?;
     let transport = match &credited.evidence {
         KagemushaWalletCreditedEvidenceV1::Status { status } => Some(super::incoming::transport(
+            pallas_params,
+            vesta_params,
             fixed
                 .candidate_omega()
                 .ok_or(Error::Proof("Archive Omega source"))?,
             &status.lineage.bytes(),
             worker.budget,
+            Some(cancellation.prover_token()),
         )?),
         KagemushaWalletCreditedEvidenceV1::Receive { .. } => None,
     };
     let initial = if let Some(t) = &transport {
-        let (m, p, v) = super::incoming::status_modes(false, t, worker.budget)?;
+        let (m, p, v) = super::incoming::status_modes(
+            pallas_params,
+            vesta_params,
+            false,
+            t,
+            worker.budget,
+            Some(cancellation.prover_token()),
+        )?;
         ArchiveIncomingWitnessV1::Status(Box::new(status_witness(t, m, p, v)))
     } else {
         ArchiveIncomingWitnessV1::Receive(Box::new(IncomingMode::Trivial))
@@ -315,7 +348,12 @@ pub(super) fn archive(
                 .ok_or(Error::Proof("Archive Receive selector"))?;
             let slot = sigma_slot(worker, selector, statement, sigma)?;
             let q = proof(worker.sources.q(route))?;
-            let claim = proof(q.sigma().incoming_original(&slot, selector, worker.budget))?;
+            let claim = proof(q.sigma().incoming_original_cancellable(
+                &slot,
+                selector,
+                worker.budget,
+                Some(cancellation.prover_token()),
+            ))?;
             (receipt, Some(slot), claim)
         }
         archive::Evidence::Status { receipt, .. } => (receipt, None, None),
@@ -345,14 +383,27 @@ pub(super) fn archive(
     ];
     let soft = results.iter().all(|v| *v);
     let (proposal, q_incoming, accepted) = if let Some(t) = transport {
-        let (m, p, v) = super::incoming::status_modes(soft, &t, worker.budget)?;
+        let (m, p, v) = super::incoming::status_modes(
+            pallas_params,
+            vesta_params,
+            soft,
+            &t,
+            worker.budget,
+            Some(cancellation.prover_token()),
+        )?;
         (
             ArchiveIncomingWitnessV1::Status(Box::new(status_witness(&t, m, p, v))),
             None,
             soft && m == [IncomingMode::Accept; 3],
         )
     } else {
-        let mode = super::incoming::sigma_mode(soft, sigma_claim.as_ref(), worker.budget)?;
+        let mode = super::incoming::sigma_mode(
+            vesta_params,
+            soft,
+            sigma_claim.as_ref(),
+            worker.budget,
+            Some(cancellation.prover_token()),
+        )?;
         (
             ArchiveIncomingWitnessV1::Receive(Box::new(mode)),
             Some(IncomingSigma {

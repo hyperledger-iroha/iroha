@@ -66,7 +66,7 @@ fn batched_coset_coefficients_validate_before_copying() {
         let before = values.clone();
         let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
         assert!(matches!(
-            evaluate_many(Some(&plan), &coefficients[..1], &mut columns),
+            evaluate_many(Some(&plan), &coefficients[..1], &mut columns, None),
             Err(KeyError::Shape {
                 what: "coset columns",
                 ..
@@ -77,7 +77,7 @@ fn batched_coset_coefficients_validate_before_copying() {
         malformed[1].pop();
         let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
         assert!(matches!(
-            evaluate_many(Some(&plan), &malformed, &mut columns),
+            evaluate_many(Some(&plan), &malformed, &mut columns, None),
             Err(KeyError::Shape {
                 what: "coset coefficients",
                 ..
@@ -86,12 +86,12 @@ fn batched_coset_coefficients_validate_before_copying() {
         assert_eq!(values, before);
         let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
         assert_eq!(
-            evaluate_many(None, &coefficients, &mut columns),
+            evaluate_many(None, &coefficients, &mut columns, None),
             Err(KeyError::CosetIndex)
         );
         assert_eq!(values, before);
         let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
-        evaluate_many(Some(&plan), &coefficients, &mut columns).unwrap();
+        evaluate_many(Some(&plan), &coefficients, &mut columns, None).unwrap();
         for (actual, mut expected) in values.into_iter().zip(coefficients) {
             domain.coset_fft(&mut expected, F::ONE).unwrap();
             assert_eq!(actual, expected);
@@ -151,6 +151,7 @@ fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
                         polynomial,
                         coset,
                         Some(&plan),
+                        None,
                     )
                     .expect("refresh");
                     for (index, column) in values.iter().enumerate() {
@@ -177,6 +178,7 @@ fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
                         &mut values,
                         polynomial,
                         pk.quotient_domain().pieces(),
+                        None,
                         None,
                     ),
                     Err(KeyError::CosetIndex)

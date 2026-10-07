@@ -2,6 +2,8 @@ import Foundation
 import NoritoBridge
 
 /// Whole bounded DATA. Only Native compiled trust authenticates the installation.
+/// Four signed base originals are mandatory; financial originals are wholly present or absent.
+/// Native authenticates an absent financial selection before reporting artifacts unavailable.
 public struct KagemushaWalletRuntimeOriginalsV1: Sendable, CustomStringConvertible {
   public var description: String { "KagemushaWalletRuntimeOriginalsV1(originals=[REDACTED])" }
   let originals: [Data]
@@ -10,9 +12,14 @@ public struct KagemushaWalletRuntimeOriginalsV1: Sendable, CustomStringConvertib
     let inputs = [appManifest, envelope, walletRuntime, verifierPack, producerInventory, signedGenesis]
     let caps = [8_388_608, 2048, 131_072, 16_842_752, 16_777_216, 67_108_864]
     for (index, value) in inputs.enumerated() {
-      guard !value.isEmpty, value.count <= caps[index] else { throw KagemushaWalletErrorV1.invalidInput }
+      guard value.count <= caps[index] else { throw KagemushaWalletErrorV1.invalidInput }
     }
-    guard !originalsRoot.isEmpty, originalsRoot.hasPrefix("/"), !originalsRoot.utf8.contains(0),
+    guard [appManifest, envelope, walletRuntime, signedGenesis].allSatisfy({ !$0.isEmpty })
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    let financialAbsent = [verifierPack.isEmpty, producerInventory.isEmpty, originalsRoot.isEmpty]
+    guard financialAbsent.allSatisfy({ $0 }) || financialAbsent.allSatisfy({ !$0 })
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    guard (originalsRoot.isEmpty || originalsRoot.hasPrefix("/")), !originalsRoot.utf8.contains(0),
       originalsRoot.utf8.count <= 4096 else { throw KagemushaWalletErrorV1.invalidInput }
     originals = inputs.map { Data($0) } + [Data(originalsRoot.utf8)]
   }
@@ -28,11 +35,11 @@ public final class KagemushaWalletAdmissionCleanupErrorV1: Error, @unchecked Sen
     if let lease=(resource as? KagemushaWalletCleanupResourceV1)?.cleanupLease { retainedResource=lease }
     else { retainedResource=resource }
   }
-  var resourceReleased: Bool { (retainedResource as? KagemushaWalletNativeLeaseV1)?.isReleased == true }
+  var resourceReleased: Bool { (retainedResource as? any KagemushaWalletCleanupLeaseV1)?.isReleased == true }
   /// Retry release of the same quarantined Native owner, including after wrapper destruction.
   /// No-owner/invalid status remains a failure; only actual Native zero acknowledges release.
   public func retryCleanup() throws {
-    guard let lease=retainedResource as? KagemushaWalletNativeLeaseV1 else { throw cleanup }
+    guard let lease=retainedResource as? any KagemushaWalletCleanupLeaseV1 else { throw cleanup }
     try lease.close()
   }
 }
@@ -49,30 +56,18 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
   private static let failuresLock=NSLock()
   private static var failedCleanup: [KagemushaWalletAdmissionCleanupErrorV1]=[]
   private init(runtime: KagemushaWalletRuntimeV1) { self.runtime=runtime }
-  var cleanupLease: KagemushaWalletNativeLeaseV1? { runtime.cleanupLease }
-  /// All seven originals are required; Native authenticates the complete installation before returning an owner.
-  public static func install(platform: KagemushaWalletApplePlatformV1, originals: KagemushaWalletRuntimeOriginalsV1) throws -> KagemushaWalletInstalledRuntimeV1 {
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { runtime.cleanupLease }
+  /// Native authenticates the signed base and complete financial custody before registration.
+  /// Retain the returned attempt and explicitly register/retry that same owner. Worker-only.
+  public static func install(platform: KagemushaWalletApplePlatformV1, originals: KagemushaWalletRuntimeOriginalsV1) throws -> KagemushaWalletInstallationAttemptV1 {
     try requireNoUnreleasedAdmissions()
-    // Resolve all actual wallet functions before Native custody registration, so later adoption cannot fail.
-    let walletDriver=try KagemushaWalletNativeDriverV1(), installDriver=try KagemushaWalletInstallDriverV1()
-    var handle: UInt64=0, callbacks=kagemushaWalletCallbacksV1(platform)
-    let status=withExtendedLifetime(platform) {
-      withPinnedWalletOriginalsV1(originals.originals) { ptr in
-        var value=connect_norito_kagemusha_wallet_runtime_originals_v1()
-        value.app_manifest=ptr[0]; value.app_manifest_length=originals.originals[0].count
-        value.envelope=ptr[1]; value.envelope_length=originals.originals[1].count
-        value.wallet_runtime=ptr[2]; value.wallet_runtime_length=originals.originals[2].count
-        value.verifier_pack=ptr[3]; value.verifier_pack_length=originals.originals[3].count
-        value.producer_inventory=ptr[4]; value.producer_inventory_length=originals.originals[4].count
-        value.signed_genesis=ptr[5]; value.signed_genesis_length=originals.originals[5].count
-        value.originals_root=ptr[6]; value.originals_root_length=originals.originals[6].count
-        return installDriver.install(&value,&callbacks,&handle)
-      }
-    }
-    try KagemushaWalletNativeDriverV1.check(status)
-    guard handle>0 && handle<=UInt64(Int64.max) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-    // Strong ownership survives begin, asynchronous Ed signing, finish and wallet close/quarantine.
-    return .init(runtime: try KagemushaWalletRuntimeV1(nativeRuntimeHandle:handle,driver:walletDriver,platformOwner:platform))
+    return try KagemushaWalletInstallationAttemptV1.begin(platform:platform,originals:originals)
+  }
+  static func adoptRegistered(handle: UInt64, driver: KagemushaWalletNativeDriverV1, platform: KagemushaWalletApplePlatformV1) throws -> KagemushaWalletInstalledRuntimeV1 {
+    .init(runtime:try KagemushaWalletRuntimeV1(nativeRuntimeHandle:handle,driver:driver,platformOwner:platform))
+  }
+  static func adoptEnrolled(_ runtime: KagemushaWalletRuntimeV1) -> KagemushaWalletInstalledRuntimeV1 {
+    .init(runtime: runtime)
   }
   public static func requireNoUnreleasedAdmissions() throws {
     failuresLock.lock(); defer{failuresLock.unlock()}
@@ -85,10 +80,10 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
   private func fenceCancellation() {
     condition.lock(); fenced=true; condition.unlock()
   }
-  private func startOpen(_ originals: KagemushaWalletOpenOriginalsV1) throws {
+  private func startOpen(_ frames: [Data]) throws {
     condition.lock(); defer { condition.unlock() }
     guard !fenced else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
-    try admission.start(originals.originals)
+    try admission.start(frames)
   }
   private func failedOpen() {
     condition.lock(); defer { condition.unlock() }; admission.failed()
@@ -97,7 +92,7 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     condition.lock(); defer { condition.unlock() }
     try admission.completed(); pendingOriginal=nil
   }
-  private func pendingForOpen(_ originals: KagemushaWalletOpenOriginalsV1) throws -> KagemushaWalletPendingOpenV1 {
+  private func pendingForOpen(_ begin: () throws -> KagemushaWalletPendingOpenV1) throws -> KagemushaWalletPendingOpenV1 {
     condition.lock()
     guard !fenced else {
       let failure=closeFailure ?? KagemushaWalletErrorV1.closed
@@ -106,7 +101,7 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     if let retained=pendingOriginal { condition.unlock(); return retained }
     condition.unlock()
     // No InstalledRuntime condition is held across Native I/O or another owner's close lock.
-    let selected=try runtime.begin(originals)
+    let selected=try begin()
     condition.lock(); defer { condition.unlock() }
     guard !fenced else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
     pendingOriginal=selected
@@ -122,18 +117,45 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     guard !fenced else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
     return try admission.retainSignature(original)
   }
+  /// Worker-only. Native authenticates the signed FI session and transfers this same installed lease.
+  /// On refusal this owner remains retained for retry with the exact original session.
+  public func startEnrollment(session: KagemushaWalletEnrollmentSessionOriginalsV1) throws -> KagemushaWalletEnrollmentV1 {
+    condition.lock(); defer { condition.unlock() }
+    guard !fenced, admission.canTransferToEnrollment else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
+    let enrollment = try runtime.startEnrollment(session)
+    fenced = true; closed = true
+    return enrollment
+  }
   /// Retry ordinary refusal with the same original frames, Native Pending and exact signature.
   /// Explicit Task cancellation retires custody; successful admission transfers it once.
   public func open(originals: KagemushaWalletOpenOriginalsV1,
+    signExistingAccount: @escaping @Sendable (Data) async throws -> Data,
+    requireCurrent: @escaping @Sendable () throws -> Void) async throws -> KagemushaWalletV1 {
+    try await openFrames(originals.originals, begin: { try self.runtime.begin(originals) },
+      signExistingAccount: signExistingAccount, requireCurrent: requireCurrent)
+  }
+  /// Reopen an exact persisted E6 result. Native selects the installed asset and authenticates
+  /// its credential/certificates with the original account and existing hardware/journal custody.
+  /// The expired enrollment session is neither replayed nor required for this fresh account open.
+  public func openEnrolledResult(resultOriginal: Data, accountOriginal: Data,
+    signExistingAccount: @escaping @Sendable (Data) async throws -> Data,
+    requireCurrent: @escaping @Sendable () throws -> Void) async throws -> KagemushaWalletV1 {
+    guard (1...KagemushaWalletEnrollmentV1.RESULT_MAX_BYTES).contains(resultOriginal.count),
+      (1...4096).contains(accountOriginal.count) else { throw KagemushaWalletErrorV1.invalidInput }
+    let result = Data([UInt8](resultOriginal)), account = Data([UInt8](accountOriginal))
+    return try await openFrames([result, account], begin: { try self.runtime.beginEnrolledResult(result, account: account) },
+      signExistingAccount: signExistingAccount, requireCurrent: requireCurrent)
+  }
+  private func openFrames(_ frames: [Data], begin: @escaping @Sendable () throws -> KagemushaWalletPendingOpenV1,
     signExistingAccount: @escaping @Sendable (Data) async throws -> Data,
     requireCurrent: @escaping @Sendable () throws -> Void) async throws -> KagemushaWalletV1 {
     try await withTaskCancellationHandler(operation:{
       var wallet: KagemushaWalletV1?
       var started=false
       do {
-        try Task.checkCancellation(); try Self.requireNoUnreleasedAdmissions(); try requireCurrent(); try startOpen(originals)
+        try Task.checkCancellation(); try Self.requireNoUnreleasedAdmissions(); try requireCurrent(); try startOpen(frames)
         started=true
-        let pending=try await walletAdmissionWorkerV1 { try requireCurrent(); return try self.pendingForOpen(originals) }
+        let pending=try await walletAdmissionWorkerV1 { try requireCurrent(); return try self.pendingForOpen(begin) }
         try Task.checkCancellation(); try requireCurrent(); try requireLive()
         guard pending.challenge.count==32 && pending.challenge.contains(where:{$0 != 0}) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
         let signature: Data
@@ -196,6 +218,7 @@ internal final class KagemushaWalletInstalledAdmissionV1 {
   private var originalFrames: [Data]?
   private var retainedSignature: Data?
   private var active=false, transferred=false
+  var canTransferToEnrollment: Bool { !active && !transferred && originalFrames == nil }
   func start(_ frames: [Data]) throws {
     guard !active && !transferred else { throw KagemushaWalletErrorV1.closed }
     if let retained=originalFrames {
@@ -221,14 +244,7 @@ internal final class KagemushaWalletInstalledAdmissionV1 {
     transferred=true; active=false; retainedSignature=nil
   }
 }
-private final class KagemushaWalletInstallDriverV1 {
-  typealias Install = @convention(c) (UnsafePointer<connect_norito_kagemusha_wallet_runtime_originals_v1>?,UnsafePointer<connect_norito_kagemusha_platform_v1>?,UnsafeMutablePointer<UInt64>?) -> Int32
-  let install: Install
-  init() throws {
-    guard let value=NoritoNativeBridge.shared.resolveNativeSymbol("connect_norito_kagemusha_wallet_install_runtime_v1",as:Install.self) else { throw KagemushaWalletErrorV1.bridgeUnavailable }; install=value
-  }
-}
-private func withPinnedWalletOriginalsV1<T>(_ originals:[Data],_ body:([UnsafePointer<UInt8>?])->T)->T {
+func withPinnedWalletOriginalsV1<T>(_ originals:[Data],_ body:([UnsafePointer<UInt8>?])->T)->T {
   func pin(_ index:Int,_ pointers:[UnsafePointer<UInt8>?])->T {
     if index==originals.count{return body(pointers)}
     return originals[index].withUnsafeBytes{pin(index+1,pointers+[$0.bindMemory(to:UInt8.self).baseAddress])}

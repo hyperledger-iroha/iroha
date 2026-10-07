@@ -28,28 +28,28 @@ pub(crate) struct StoppedOwnerMaintenance {
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
-struct MaintenanceRequest {
-    schema: String,
-    operation_directory: String,
-    owner: MaintenanceOwner,
+pub(super) struct MaintenanceRequest {
+    pub(super) schema: String,
+    pub(super) operation_directory: String,
+    pub(super) owner: MaintenanceOwner,
 }
 
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
-struct MaintenanceOwner {
-    pid: u32,
-    start_time_ticks: u64,
-    argv: Vec<String>,
-    lock: MaintenanceLock,
+pub(super) struct MaintenanceOwner {
+    pub(super) pid: u32,
+    pub(super) start_time_ticks: u64,
+    pub(super) argv: Vec<String>,
+    pub(super) lock: MaintenanceLock,
 }
 
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
-struct MaintenanceLock {
-    device: u64,
-    inode: u64,
+pub(super) struct MaintenanceLock {
+    pub(super) device: u64,
+    pub(super) inode: u64,
 }
 
 impl StoppedOwnerMaintenance {
@@ -88,21 +88,25 @@ fn text_field<'a>(value: &'a json::Value, field: &str) -> Result<&'a str> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-struct MaintenanceScope {
-    operation: String,
-    runtime: PathBuf,
-    config: PathBuf,
-    state: PathBuf,
-    previous_daemon: PathBuf,
-    candidate_cli: PathBuf,
-    units: Vec<Vec<u8>>,
+pub(super) struct MaintenanceScope {
+    pub(super) operation: String,
+    pub(super) runtime: PathBuf,
+    pub(super) config: PathBuf,
+    pub(super) state: PathBuf,
+    pub(super) previous_daemon: PathBuf,
+    pub(super) candidate_cli: PathBuf,
+    pub(super) units: Vec<Vec<u8>>,
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn maintenance_scope(request: &MaintenanceRequest, plan: &json::Value) -> Result<MaintenanceScope> {
+pub(super) fn maintenance_scope(
+    request: &MaintenanceRequest,
+    plan: &json::Value,
+) -> Result<MaintenanceScope> {
     let operation = text_field(plan, "operation")?;
     if request.schema != REQUEST_SCHEMA
-        || text_field(plan, "schema")? != "taira.daemon-update.plan.v1"
+        || text_field(plan, "schema")? != "taira.daemon-update.plan.v2"
+        || plan.get("failed_start").is_some()
         || !operation.strip_prefix("update-").is_some_and(|suffix| {
             suffix.len() == 32
                 && suffix
@@ -120,14 +124,15 @@ fn maintenance_scope(request: &MaintenanceRequest, plan: &json::Value) -> Result
     let deployment = plan
         .get("deployment")
         .ok_or_else(|| eyre!("maintenance deployment is absent"))?;
+    if text_field(deployment, "schema")? != "taira.runtime-deployment.v2" {
+        return Err(eyre!("maintenance deployment schema differs"));
+    }
     let runtime = PathBuf::from(text_field(deployment, "runtime_root")?);
     let config = PathBuf::from(text_field(deployment, "config_root")?);
     let state = PathBuf::from(text_field(deployment, "state_root")?);
-    let installed = match plan.get("failed_start") {
-        Some(failed) => failed.get("installed"),
-        None => deployment.get("current"),
-    }
-    .ok_or_else(|| eyre!("maintenance installed runtime is absent"))?;
+    let installed = deployment
+        .get("current")
+        .ok_or_else(|| eyre!("maintenance installed runtime is absent"))?;
     let previous_daemon = PathBuf::from(text_field(installed, "daemon")?);
     let commit = text_field(plan, "commit")?;
     if commit.len() != 40
@@ -195,7 +200,7 @@ fn maintenance_scope(request: &MaintenanceRequest, plan: &json::Value) -> Result
 }
 
 #[cfg(target_os = "linux")]
-fn public_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+pub(super) fn public_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     require_root_no_symlink_ancestors(path, "maintenance public evidence")?;
     let pinned = pin_owner_private_file(path, "maintenance public evidence")?;
     if pinned.snapshot.len > maximum {
@@ -272,10 +277,11 @@ fn require_updater_flock(bytes: &[u8], owner: &MaintenanceOwner) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn verify_owner(
+pub(super) fn verify_owner(
     request: &MaintenanceRequest,
     scope: &MaintenanceScope,
     deadline: Instant,
+    allow_failure: bool,
 ) -> Result<()> {
     if Instant::now() >= deadline {
         return Err(eyre!("maintenance deadline elapsed"));
@@ -288,6 +294,9 @@ fn verify_owner(
         "rollback.json",
         "start-intent.json",
     ] {
+        if allow_failure && terminal == "failure.json" {
+            continue;
+        }
         match fs::symlink_metadata(directory.join(terminal)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             _ => return Err(eyre!("maintenance operation has started or terminated")),
@@ -415,7 +424,7 @@ fn run_maintenance(request: &MaintenanceRequest) -> Result<json::Value> {
         ));
     }
     let vacant = || {
-        verify_owner(request, &scope, deadline)?;
+        verify_owner(request, &scope, deadline, false)?;
         if public_bytes(&directory.join("intent.json"), 8 * 1024 * 1024)? != plan_bytes {
             return Err(eyre!("maintenance public plan changed"));
         }
@@ -481,16 +490,18 @@ mod tests {
                     },
                 },
             },
-            norito::json!({"schema": "taira.daemon-update.plan.v1", "operation": operation,
+            norito::json!({"schema": "taira.daemon-update.plan.v2", "operation": operation,
                 "commit": ("b".repeat(40)), "units": units,
-                "deployment": {"runtime_root": "/private/runtime/taira", "config_root": "/srv/taira",
+                "deployment": {"schema": "taira.runtime-deployment.v2",
+                    "runtime_root": "/private/runtime/taira", "config_root": "/srv/taira",
                     "state_root": "/var/lib/taira", "roles": (super::super::super::VALIDATOR_SLUGS.to_vec()),
-                    "current": {"daemon": "/private/runtime/taira/selected/bin/iroha3d_taira"}}}),
+                    "current": {"kind": "completed-update",
+                        "daemon": "/private/runtime/taira/selected/bin/iroha3d_taira"}}}),
         )
     }
 
     #[test]
-    fn maintenance_scope_binds_all_four_units_and_failed_installed_runtime() -> Result<()> {
+    fn maintenance_scope_binds_v2_all_four_units_and_installed_runtime() -> Result<()> {
         let (request, mut plan) = fixture();
         let scope = maintenance_scope(&request, &plan)?;
         assert_eq!(scope.units.len(), 4);
@@ -498,14 +509,13 @@ mod tests {
             scope.previous_daemon,
             Path::new("/private/runtime/taira/selected/bin/iroha3d_taira")
         );
-        plan.as_object_mut().unwrap().insert(
-            "failed_start".into(),
-            norito::json!({"installed": {
-            "daemon": "/private/runtime/taira/failed/bin/iroha3d_taira"}}),
-        );
         assert_eq!(
-            maintenance_scope(&request, &plan)?.previous_daemon,
-            Path::new("/private/runtime/taira/failed/bin/iroha3d_taira")
+            scope.candidate_cli,
+            PathBuf::from(format!(
+                "/private/runtime/taira/release-{}-update-{}/bin/iroha",
+                "b".repeat(40),
+                "a".repeat(32)
+            ))
         );
         *plan
             .get_mut("units")
@@ -535,6 +545,35 @@ mod tests {
             .unwrap() = norito::json!("/private/runtime/taira");
         assert!(maintenance_scope(&request, &plan).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn maintenance_scope_rejects_unsupported_update_contracts() {
+        for schema in [
+            "taira.daemon-update.plan.v1",
+            "taira.daemon-update.plan.v3",
+            "taira.daemon-update.plan.v2\n",
+        ] {
+            let (request, mut plan) = fixture();
+            *plan.get_mut("schema").unwrap() = norito::json!(schema);
+            assert!(maintenance_scope(&request, &plan).is_err());
+        }
+        for schema in ["taira.runtime-deployment.v1", "taira.runtime-deployment.v3"] {
+            let (request, mut plan) = fixture();
+            *plan
+                .get_mut("deployment")
+                .unwrap()
+                .get_mut("schema")
+                .unwrap() = norito::json!(schema);
+            assert!(maintenance_scope(&request, &plan).is_err());
+        }
+        let (request, mut plan) = fixture();
+        plan.as_object_mut().unwrap().insert(
+            "failed_start".into(),
+            norito::json!({"installed": {
+                "daemon": "/private/runtime/taira/failed/bin/iroha3d_taira"}}),
+        );
+        assert!(maintenance_scope(&request, &plan).is_err());
     }
 
     #[test]

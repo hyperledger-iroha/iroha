@@ -104,15 +104,29 @@ impl InstalledFinality {
             self.history_endpoints(&state)?,
             &self.params.vesta,
         )? {
-            return self.restore_history(&state, evidence, context.proof.msm_budget);
+            return self.restore_history_cancellable(
+                &state,
+                evidence,
+                context.proof.msm_budget,
+                context.proof.cancellation,
+            );
         }
         let entropy = context.entropy(NodeId::Genesis)?;
-        let producer =
-            self.history
-                .reload(self.anchor, context.artifacts, &self.params, self.limits)?;
+        let producer = self.history.reload(
+            self.anchor,
+            context.artifacts,
+            &self.params,
+            self.limits,
+            context.proof.cancellation,
+        )?;
         let evidence = producer.genesis(entropy, context.proof)?;
         context.retain_source(&self.history.source, &evidence, &self.params.vesta)?;
-        self.restore_history(&state, evidence, context.proof.msm_budget)
+        self.restore_history_cancellable(
+            &state,
+            evidence,
+            context.proof.msm_budget,
+            context.proof.cancellation,
+        )
     }
 
     /// Restore only a fully verified complete prefix under this exact installation.
@@ -125,7 +139,16 @@ impl InstalledFinality {
         evidence: SourceNodeEvidence,
         budget: MemoryBudget,
     ) -> Result<HistoryPrefix, Error> {
-        self.verify_history(state, &evidence, budget)?;
+        self.restore_history_cancellable(state, evidence, budget, None)
+    }
+    fn restore_history_cancellable(
+        &self,
+        state: &HistoryState,
+        evidence: SourceNodeEvidence,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<HistoryPrefix, Error> {
+        self.verify_history(state, &evidence, budget, cancellation)?;
         Ok(HistoryPrefix {
             state: *state,
             evidence,
@@ -136,7 +159,9 @@ impl InstalledFinality {
         state: &HistoryState,
         evidence: &SourceNodeEvidence,
         budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         if !state.is_canonical()
             || state.next_height < 2
             || evidence.endpoints != self.history_endpoints(state)?
@@ -146,8 +171,14 @@ impl InstalledFinality {
         let _opening = self
             .history
             .source
-            .verify_native(evidence, &self.params.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .verify_native_cancellable(evidence, &self.params.vesta, budget, cancellation)
+            .map_err(|error| {
+                if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(())
     }
     fn history_endpoints(&self, state: &HistoryState) -> Result<[Fp; 6], Error> {
@@ -183,6 +214,7 @@ impl InstalledFinality {
             &previous.state,
             &previous.evidence,
             context.proof.msm_budget,
+            context.proof.cancellation,
         )?;
         let height = u64::from_be_bytes(core::array::from_fn(|i| input.message[85 + i]));
         if height != previous.state.next_height {
@@ -251,12 +283,21 @@ impl InstalledFinality {
             self.history_endpoints(&step_input.after)?,
             &self.params.vesta,
         )? {
-            return self.restore_history(&step_input.after, evidence, context.proof.msm_budget);
+            return self.restore_history_cancellable(
+                &step_input.after,
+                evidence,
+                context.proof.msm_budget,
+                context.proof.cancellation,
+            );
         }
         let entropy = context.entropy(NodeId::Append)?;
-        let producer =
-            self.history
-                .reload(self.anchor, context.artifacts, &self.params, self.limits)?;
+        let producer = self.history.reload(
+            self.anchor,
+            context.artifacts,
+            &self.params,
+            self.limits,
+            context.proof.cancellation,
+        )?;
         let evidence = producer.append(
             previous.evidence.clone(),
             step,
@@ -265,7 +306,12 @@ impl InstalledFinality {
             context.fold,
         )?;
         context.retain_source(&self.history.source, &evidence, &self.params.vesta)?;
-        self.restore_history(&step_input.after, evidence, context.proof.msm_budget)
+        self.restore_history_cancellable(
+            &step_input.after,
+            evidence,
+            context.proof.msm_budget,
+            context.proof.cancellation,
+        )
     }
 
     fn certify_result(
@@ -371,6 +417,7 @@ impl InstalledFinality {
                     &self.programs.context.source(),
                     &self.params.vesta,
                     context.proof.msm_budget,
+                    context.proof.cancellation,
                 )
             })
             .transpose()?
@@ -422,7 +469,12 @@ impl InstalledFinality {
         {
             return Err(Error::Input);
         }
-        self.verify_history(&prefix.state, &prefix.evidence, context.proof.msm_budget)?;
+        self.verify_history(
+            &prefix.state,
+            &prefix.evidence,
+            context.proof.msm_budget,
+            context.proof.cancellation,
+        )?;
         let height = u64::from_le_bytes(core::array::from_fn(|i| input.receipt[242 + i]));
         if height < 2 || height.checked_add(1) != Some(prefix.state.next_height) {
             return Err(Error::Input);

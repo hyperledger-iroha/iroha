@@ -1,5 +1,6 @@
 """Real synthetic AppAttest signatures and durable private-process protocol regressions."""
 import base64
+from dataclasses import replace
 import hashlib
 import io
 import importlib.util
@@ -23,8 +24,8 @@ from unittest.mock import patch
 
 from iroha_app_attestation.attestation import AttestationRejected
 from iroha_app_attestation.wallet_enrollment_worker import (
-    CONFIG_SCHEMA, PREPARATION_SCHEMA, SCHEMA, MAX_PACKET, MAX_REQUEST, MAX_ORIGINAL, EXCHANGE_WINDOW, VerifierOwner,
-    configured_policy, encode, exact_json, read_packet, serve,
+    CONFIG_SCHEMA, PREPARATION_SCHEMA, SCHEMA, MAX_PACKET, MAX_REQUEST, MAX_ORIGINAL, EXCHANGE_WINDOW, VerifierOwner, DispatchClock,
+    E1CounterStore, configured_policy, encode, exact_json, read_packet, serve,
 )
 from iroha_app_attestation.wallet_enrollment import WalletEnrollmentScope
 from test_wallet_enrollment import (GENERATOR, scope, assertion, apple_object,
@@ -88,18 +89,25 @@ class WorkerTests(unittest.TestCase):
         if binary is None:
             self.skipTest("OpenSSL3 unavailable")
         self.openssl = Path(binary).resolve()
+        # Simulated clocks only: this suite runs on macOS and uses certificates
+        # whose synthetic verification time is one minute ahead of wall time.
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns",
+                                side_effect=time.monotonic_ns))
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns",
+                                side_effect=lambda: time.time_ns() + 61_000_000_000))
 
-    def owner_fixture(self, directory):
+    def owner_fixture(self, directory, challenge_lifetime_ms=120000, *, initialize=True):
         directory = directory.resolve(strict=True)
         os.chmod(directory, 0o700)
         fixture = SignedEnvelope(directory, self.openssl)
         policy = fixture_policy(synthetic_root(fixture), True)
+        policy = replace(policy, enrollment=replace(policy.enrollment, challenge_lifetime_ms=challenge_lifetime_ms))
         selected = policy_scope(policy, GENERATOR)
         attestation, key_id, root = apple_object(fixture, selected)
         now = int(time.time() * 1000) + 60000
         request = encode({"challenge_transcript_base64": base64.b64encode(selected.challenge_transcript).decode(),
             "payment_key_base64": base64.b64encode(GENERATOR).decode(),
-            "issued_at_ms": now - 1, "expires_at_ms": now - 1 + 120000,
+            "issued_at_ms": now - 1, "expires_at_ms": now - 1 + challenge_lifetime_ms,
             "trusted_time_ms": now, "platform": "apple", "evidence": {
                 "attestation_base64": base64.b64encode(attestation).decode(),
                 "assertion_base64": base64.b64encode(assertion(fixture, selected.enrollment_key_binding(), 1)).decode(),
@@ -112,16 +120,151 @@ class WorkerTests(unittest.TestCase):
                 "scheme_id_hex": policy.enrollment.scheme_id.hex(), "asset_digest_hex": policy.enrollment.asset_digest.hex(),
                 "regulatory_policy": {"permitted_controls": 0, "blacklist_max_age_ms": 0,
                                       "time_anchor_max_response_ms": 0},
-                "challenge_lifetime_ms": 120000, "attestation_lease_lifetime_ms": 0,
+                "challenge_lifetime_ms": challenge_lifetime_ms, "attestation_lease_lifetime_ms": 0,
                 "root_base64": base64.b64encode(root).decode(), "root_sha256": hashlib.sha256(root).hexdigest()}})
         directory_fd = os.open(directory, os.O_RDONLY)
         crypto_fd = os.open(self.openssl, os.O_RDONLY)
         self.addCleanup(os.close, directory_fd)
         self.addCleanup(os.close, crypto_fd)
+        if initialize:
+            E1CounterStore.initialize(directory, directory_fd).close()
         def open_owner(original=config, **arguments):
             return VerifierOwner(original, directory_fd=directory_fd, crypto_fd=crypto_fd, **arguments)
         open_owner.config = config
         return open_owner, request, selected, key_id
+
+    def test_expiry_during_real_apple_assertion_never_commits_counter_or_result(self):
+        from iroha_app_attestation import wallet_enrollment_worker as worker
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, key_id = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            source = exact_json(request, MAX_REQUEST)
+            wall = [source["trusted_time_ms"] * 1_000_000]
+            original_verify = worker._verify_apple_assertion_with_hash
+            def delayed_assertion(*args, **kwargs):
+                result = original_verify(*args, **kwargs)
+                wall[0] = source["expires_at_ms"] * 1_000_000
+                return result
+            with patch.object(worker, "_realtime_ns", side_effect=lambda: wall[0]), \
+                    patch.object(worker, "_verify_apple_assertion_with_hash", side_effect=delayed_assertion):
+                with self.assertRaisesRegex(AttestationRejected, "expired"):
+                    dispatch(owner, request, "complete")
+            self.assertIsNone(dispatch(owner, request, "recover"))
+            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (0,))
+                self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (0,))
+                self.assertIsNone(connection.execute("SELECT result FROM wallet_e1_attempts").fetchone()[0])
+
+    def test_stale_first_dispatch_is_rejected_before_claiming_prepared_row(self):
+        from iroha_app_attestation import wallet_enrollment_worker as worker
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            source = exact_json(request, MAX_REQUEST)
+            arguments = self.prepared(owner, request)
+            with patch.object(worker, "_realtime_ns", return_value=source["expires_at_ms"] * 1_000_000), \
+                    patch.object(worker, "verify_apple_wallet_attestation_raw", side_effect=AssertionError("must not verify")):
+                with self.assertRaisesRegex(AttestationRejected, "expired"):
+                    owner.perform(request, "recover", **arguments)
+            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                self.assertEqual(connection.execute("SELECT request_sha256, result FROM wallet_e1_attempts").fetchone(), (None, None))
+
+    def test_selected_lifetime_has_no_unconfigured_ten_minute_ceiling(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, selected, _ = self.owner_fixture(Path(temporary), 600001)
+            owner = open_owner()
+            try:
+                original = dispatch(owner, request, "complete")
+                self.assertEqual(exact_json(original, MAX_PACKET)["challenge_digest"],
+                                 selected.challenge_digest().hex())
+                self.assertEqual(dispatch(owner, request, "recover"), original)
+            finally:
+                owner.close()
+
+    def test_shortened_issuer_deadline_verifies_real_apple_and_recovers_exact_winner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, selected, key_id = self.owner_fixture(Path(temporary))
+            value = exact_json(request, MAX_REQUEST)
+            value["expires_at_ms"] = value["issued_at_ms"] + 30000
+            shortened = encode(value)
+            owner = open_owner()
+            try:
+                original = dispatch(owner, shortened, "complete")
+                self.assertEqual(exact_json(original, MAX_PACKET)["challenge_digest"],
+                                 selected.challenge_digest().hex())
+                exact_preparation = preparation_original(owner, shortened)
+                with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                    self.assertEqual(connection.execute("SELECT preparation FROM wallet_e1_attempts").fetchone(),
+                                     (exact_preparation,))
+                    self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (1,))
+                # Even a still policy-bounded extension may not replace the retained original.
+                extended = encode(dict(value, expires_at_ms=value["expires_at_ms"] + 1))
+                with self.assertRaisesRegex(AttestationRejected, "already differs"):
+                    owner.prepare(owner.journal(), preparation_original(owner, extended))
+            finally:
+                owner.close()
+            restored = open_owner()
+            try:
+                self.assertEqual(dispatch(restored, shortened, "recover"), original)
+            finally:
+                restored.close()
+
+    def test_shortened_window_keeps_positive_exact_integer_and_policy_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            value = exact_json(request, MAX_REQUEST)
+            for expires in (value["issued_at_ms"] + 1, value["issued_at_ms"] + 30000, value["expires_at_ms"]):
+                candidate = encode(dict(value, expires_at_ms=expires, trusted_time_ms=value["issued_at_ms"]))
+                self.assertEqual(owner.request(candidate)[0]["expires_at_ms"], expires)
+                self.assertEqual(owner.preparation(preparation_original(owner, candidate))[0]["expires_at_ms"], expires)
+            for expires in (0, value["issued_at_ms"] - 1, value["issued_at_ms"], value["expires_at_ms"] + 1, 1 << 64, True):
+                candidate = encode(dict(value, expires_at_ms=expires))
+                with self.subTest(expires=expires):
+                    with self.assertRaises(AttestationRejected):
+                        owner.request(candidate)
+                    with self.assertRaises(AttestationRejected):
+                        owner.preparation(preparation_original(owner, candidate))
+
+    def test_shortened_first_dispatch_deadline_is_not_extended_by_policy_maximum(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            value = exact_json(request, MAX_REQUEST)
+            value["expires_at_ms"] = value["issued_at_ms"] + 30000
+            shortened = encode(value)
+            preparation = preparation_original(owner, shortened)
+            incarnation = owner.journal()
+            owner.prepare(incarnation, preparation)
+            with self.assertRaisesRegex(AttestationRejected, "first dispatch expired"):
+                owner.perform(shortened, "complete", incarnation=incarnation,
+                    preparation=preparation, account_signature=ACCOUNT_SIGNATURE,
+                    dispatch_time_ms=value["expires_at_ms"])
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT request_sha256, result FROM wallet_e1_attempts").fetchone(), (None, None))
+            self.assertIsNotNone(dispatch(owner, shortened, "complete"))
+
+    def test_selected_lifetime_keeps_strict_u64_and_half_open_time_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary), 1 << 63)
+            owner = open_owner()
+            try:
+                value = exact_json(request, MAX_PACKET)
+                for now in (value["issued_at_ms"], value["expires_at_ms"] - 1):
+                    original = encode(dict(value, trusted_time_ms=now))
+                    self.assertEqual(owner.request(original)[0]["trusted_time_ms"], now)
+                for changed in (
+                    dict(value, trusted_time_ms=value["issued_at_ms"] - 1),
+                    dict(value, trusted_time_ms=value["expires_at_ms"]),
+                    dict(value, issued_at_ms=1 << 63, expires_at_ms=1 << 64,
+                         trusted_time_ms=(1 << 63) + 1),
+                    dict(value, expires_at_ms=value["expires_at_ms"] + 1),
+                    dict(value, trusted_time_ms=True),
+                ):
+                    with self.assertRaises(AttestationRejected):
+                        owner.request(encode(changed))
+            finally:
+                owner.close()
 
     def test_real_apple_result_and_counter_commit_and_recover_after_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -160,6 +303,23 @@ class WorkerTests(unittest.TestCase):
             restarted = open_owner()
             self.assertIsNotNone(dispatch(restarted, request, "recover"))
             restarted.close()
+
+    def test_unprepared_recovery_is_refused_and_never_verifies_or_inserts_an_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner()
+            self.addCleanup(owner.close)
+            message = packet("recover", exchange="32" * 32, owner=owner, original=request)
+            output = io.BytesIO()
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("recovery must not dispatch verification")):
+                serve(owner, io.BytesIO(len(message).to_bytes(4, "little") + message), output)
+            response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+            self.assertEqual(response["outcome"], "unavailable")
+            self.assertIsNone(response["evidence_base64"])
+            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
+                self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (0,))
 
     def test_failed_apple_assertion_retains_attempt_without_counter_consumption(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -207,6 +367,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_private_error_replies_preserve_storage_retry_and_never_expose_secrets(self):
         for error, expected in ((sqlite3.OperationalError("private bearer"), "unavailable"),
+                                (FileNotFoundError("private bearer"), "unavailable"),
                                 (sqlite3.IntegrityError("private bearer"), "rejected"),
                                 (AttestationRejected("private bearer"), "rejected"),
                                 (VerificationUnavailable("private bearer"), "unavailable")):
@@ -219,6 +380,28 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(response["outcome"], expected)
             self.assertIsNone(response["evidence_base64"])
             self.assertNotIn(b"private bearer", output.getvalue())
+
+    def test_lost_journal_cannot_restart_or_reverify_consumed_apple_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            open_owner, request, _, _ = self.owner_fixture(directory)
+            owner = open_owner()
+            self.addCleanup(owner.close)
+            original = dispatch(owner, request, "complete")
+            self.assertIsNotNone(original)
+            (directory / "wallet-e1.sqlite3").unlink()
+            message = packet("recover", owner=owner, original=request)
+            output = io.BytesIO()
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("lost custody must never reverify")):
+                serve(owner, io.BytesIO(len(message).to_bytes(4, "little") + message), output)
+                response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+                self.assertEqual(response["outcome"], "unavailable")
+                self.assertIsNone(response["evidence_base64"])
+                owner.close()
+                with self.assertRaises(FileNotFoundError):
+                    open_owner()
+            self.assertFalse((directory / "wallet-e1.sqlite3").exists())
 
     def test_request_cannot_select_policy_or_future_time(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -246,7 +429,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_private_configuration_projection_cannot_select_a_foreign_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
-            open_owner, _, _, _ = self.owner_fixture(Path(temporary))
+            open_owner, _, _, _ = self.owner_fixture(Path(temporary), initialize=False)
             source = exact_json(open_owner.config, MAX_PACKET)
             for change in (lambda v: v.update({"signer": "forbidden"}),
                            lambda v: v.update({"version": True}),
@@ -263,7 +446,7 @@ class WorkerTests(unittest.TestCase):
                     open_owner(encode(value))
                 self.assertFalse((Path(temporary) / "wallet-e1.sqlite3").exists())
 
-    def test_request_requires_exact_selected_lifetime_scheme_asset_and_raw_integer_time(self):
+    def test_request_requires_bounded_selected_lifetime_scheme_asset_and_raw_integer_time(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, _ = self.owner_fixture(Path(temporary))
             owner = open_owner(); self.addCleanup(owner.close)
@@ -300,7 +483,7 @@ class WorkerTests(unittest.TestCase):
             path = Path(temporary) / "wallet-e1.sqlite3"
             replacement = Path(temporary) / "replacement.sqlite3"
             shutil.copyfile(path, replacement); replacement.chmod(0o600); replacement.replace(path)
-            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
+            with self.assertRaises(VerificationUnavailable): dispatch(owner, request, "recover")
 
     def test_recovery_rejects_hardlinked_database_and_shared_permissions(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -308,9 +491,9 @@ class WorkerTests(unittest.TestCase):
             owner = open_owner(); self.addCleanup(owner.close); dispatch(owner, request, "complete")
             path = Path(temporary) / "wallet-e1.sqlite3"
             link = Path(temporary) / "other.sqlite3"; os.link(path, link)
-            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
+            with self.assertRaises(VerificationUnavailable): dispatch(owner, request, "recover")
             link.unlink(); path.chmod(0o640)
-            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
+            with self.assertRaises(VerificationUnavailable): dispatch(owner, request, "recover")
 
     def test_held_configuration_original_is_rechecked_before_recovery(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -320,7 +503,7 @@ class WorkerTests(unittest.TestCase):
             owner = open_owner(configuration_fd=fd); self.addCleanup(owner.close)
             dispatch(owner, request, "complete")
             path.write_bytes(open_owner.config + b" ")
-            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
+            with self.assertRaises(VerificationUnavailable): dispatch(owner, request, "recover")
 
     def test_bound_exchanges_continue_past_4096_and_recent_tags_still_reject(self):
         def frame(n):
@@ -479,11 +662,21 @@ class WorkerTests(unittest.TestCase):
                 "account_signature": ACCOUNT_SIGNATURE,
                 "dispatch_time_ms": exact_json(request, MAX_REQUEST)["trusted_time_ms"]}
             for action in ("recover", "complete"):
-                with self.assertRaisesRegex(AttestationRejected, "prepared original absent"):
+                with self.assertRaisesRegex(VerificationUnavailable, "prepared original unavailable"):
                     owner.perform(request, action, **arguments)
             owner.prepare(epoch, original)
             owner.close()
             (Path(temporary) / "wallet-e1.sqlite3").unlink()
+            with self.assertRaises(FileNotFoundError):
+                open_owner()
+            # Only an explicit fresh installation creates a new generation. Serving
+            # startup must never reconstruct a missing journal or its prepared rows.
+            (Path(temporary) / "wallet-e1.generation").unlink()
+            directory_fd = os.open(temporary, os.O_RDONLY)
+            try:
+                E1CounterStore.initialize(Path(temporary).resolve(), directory_fd).close()
+            finally:
+                os.close(directory_fd)
             replacement = open_owner(); self.addCleanup(replacement.close)
             self.assertNotEqual(replacement.journal(), epoch)
             # A delayed pre-crash prepare cannot reconstruct the old epoch or its row.
@@ -495,6 +688,35 @@ class WorkerTests(unittest.TestCase):
             with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
                 self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
 
+    def test_lost_prepared_or_claimed_row_is_unavailable_without_reverification(self):
+        for claimed in (False, True):
+            with self.subTest(claimed=claimed), tempfile.TemporaryDirectory() as temporary:
+                open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+                owner = open_owner()
+                arguments = self.prepared(owner, request)
+                if claimed:
+                    with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                               side_effect=VerificationUnavailable("synthetic external interruption")):
+                        with self.assertRaises(VerificationUnavailable):
+                            owner.perform(request, "complete", **arguments)
+                owner.close()
+                with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                    self.assertEqual(connection.execute("DELETE FROM wallet_e1_attempts").rowcount, 1)
+                    connection.commit()
+                restarted = open_owner()
+                self.addCleanup(restarted.close)
+                message = packet("recover", owner=restarted, original=request)
+                output = io.BytesIO()
+                with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                           side_effect=AssertionError("missing custody cannot reverify")):
+                    serve(restarted, io.BytesIO(len(message).to_bytes(4, "little") + message), output)
+                result = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+                self.assertEqual(result["outcome"], "unavailable")
+                self.assertIsNone(result["evidence_base64"])
+                with closing(restarted.counters._connect()) as connection:
+                    self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
+                    self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (0,))
+
     def test_legacy_partial_or_missing_incarnation_is_never_backfilled(self):
         for state in ("empty", "legacy", "missing_epoch", "missing_counter"):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
@@ -503,17 +725,17 @@ class WorkerTests(unittest.TestCase):
                 if state in ("missing_epoch", "missing_counter"):
                     owner = open_owner(); self.prepared(owner, request); owner.close()
                     with closing(sqlite3.connect(path)) as connection:
-                        connection.execute("DELETE FROM wallet_e1_journal" if state == "missing_epoch"
+                        connection.execute("DELETE FROM wallet_e1_store" if state == "missing_epoch"
                                            else "DROP TABLE apple_client_data")
                         connection.commit()
                 else:
-                    path.touch(mode=0o600)
+                    path.write_bytes(b"")
                     if state == "legacy":
                         with closing(sqlite3.connect(path)) as connection:
                             connection.execute("CREATE TABLE wallet_e1_attempts (request_sha256 BLOB PRIMARY KEY, result BLOB)")
                             connection.commit()
                 before = path.read_bytes()
-                with self.assertRaises((AttestationRejected, sqlite3.Error)):
+                with self.assertRaises((VerificationUnavailable, sqlite3.Error)):
                     open_owner()
                 self.assertEqual(path.read_bytes(), before)
 
@@ -606,6 +828,12 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
                                  "-pkeyopt", "rsa_keygen_bits:2048"], capture_output=True, check=True)
         cls.pem = result.stdout.decode("ascii")
 
+    def setUp(self):
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns",
+                                side_effect=time.monotonic_ns))
+        self.enterContext(patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns",
+                                side_effect=lambda: time.time_ns() + 61_000_000_000))
+
     def fixture(self, directory, level=2):
         directory = directory.resolve(strict=True); directory.chmod(0o700)
         fixture = SignedEnvelope(directory, self.openssl)
@@ -649,9 +877,11 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
         path = directory / "synthetic-oauth.json"; path.write_bytes(encode(credential)); path.chmod(0o600)
         return config, request, selected, now, path
 
-    def actual_owner(self, config, directory, credential, stack):
+    def actual_owner(self, config, directory, credential, stack, *, initialize=True):
         descriptors = [os.open(x, os.O_RDONLY) for x in (directory, self.openssl, credential)]
         for fd in descriptors: stack.callback(os.close, fd)
+        if initialize:
+            E1CounterStore.initialize(directory, descriptors[0]).close()
         stack.enter_context(patch.object(crypto, "_HeldRootCodeOriginal", SyntheticCodeOriginal))
         def synthetic_credential_admission(**kwargs):
             self.assertEqual(kwargs["credential_owner_uid"], 0)
@@ -752,7 +982,7 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
                 with self.assertRaises(AttestationRejected): configured_policy(value["policy"], "android")
             with ExitStack() as stack:
                 changed = json.loads(json.dumps(source)); changed["policy"]["google_policy_base64"] = "e30="
-                with self.assertRaises(AttestationRejected): self.actual_owner(encode(changed), directory, directory / "synthetic-oauth.json", stack)
+                with self.assertRaises(AttestationRejected): self.actual_owner(encode(changed), directory, directory / "synthetic-oauth.json", stack, initialize=False)
                 self.assertFalse((directory / "wallet-e1.sqlite3").exists())
 
 
@@ -834,3 +1064,40 @@ class UnsignedArchiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DispatchClockTests(unittest.TestCase):
+    """Simulated OS samples exercise timing semantics, never production admission."""
+    def test_fresh_wall_and_sleep_inclusive_elapsed_both_bound_the_window(self):
+        wall, elapsed = [100_000_000], [3_000_000_000]
+        with patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns", side_effect=lambda: wall[0]), \
+                patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns", side_effect=lambda: elapsed[0]):
+            clock = DispatchClock(90, 90, 200)
+            self.assertEqual(clock.sample().endpoints(), (100, 100))
+            wall[0] += 20_000_001
+            self.assertEqual(clock.sample().endpoints(), (120, 121))
+            elapsed[0] += 100_000_000
+            with self.assertRaisesRegex(AttestationRejected, "expired"):
+                clock.sample()
+
+    def test_wall_or_elapsed_regression_is_unavailable(self):
+        for changed in ("wall", "elapsed"):
+            wall, elapsed = [100_000_000], [3_000_000_000]
+            with patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns", side_effect=lambda: wall[0]), \
+                    patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns", side_effect=lambda: elapsed[0]):
+                clock = DispatchClock(100, 90, 200)
+                (wall if changed == "wall" else elapsed)[0] -= 1
+                with self.assertRaises(VerificationUnavailable):
+                    clock.sample()
+
+    def test_core_dispatch_ahead_of_actual_worker_clock_is_unavailable(self):
+        with patch("iroha_app_attestation.wallet_enrollment_worker._realtime_ns", return_value=99_999_999), \
+                patch("iroha_app_attestation.wallet_enrollment_worker._sleep_inclusive_ns", return_value=3_000_000_000):
+            with self.assertRaises(VerificationUnavailable):
+                DispatchClock(100, 90, 200)
+
+    def test_missing_sleep_inclusive_os_clock_has_no_monotonic_fallback(self):
+        from iroha_app_attestation import wallet_enrollment_worker as worker
+        with patch.object(worker.sys, "platform", "darwin"):
+            with self.assertRaises(VerificationUnavailable):
+                worker._sleep_inclusive_ns()

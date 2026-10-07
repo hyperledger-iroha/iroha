@@ -25,10 +25,7 @@ use ff::{Field, PrimeField};
 use iroha_pasta::{
     Ep, EpAffine, Eq, EqAffine, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain,
 };
-use iroha_plonk::{
-    DescriptorBinding, VerifyingKey, cs::InstanceType, pcs::ipa::PinnedParams,
-    verifier::verify_full,
-};
+use iroha_plonk::{DescriptorBinding, VerifyingKey, cs::InstanceType, pcs::ipa::PinnedParams};
 use iroha_plonk_gadgets::{bytes::p_bytes_native, statement::foreign_limbs};
 use iroha_plonk_recursion::{
     AccumulatorT, FoldConfig, FoldInput, create_fold, obligation::ledger::Variant,
@@ -37,8 +34,9 @@ use iroha_plonk_recursion::{
 
 use super::support::{
     self, active_context, exact_context, frame, internal_public, mode_words, object_digest,
-    omega_instances, opening_pallas, opening_vesta, push_pallas, q_sigma_part, select_pallas,
-    select_vesta, stage_digest, terminal_digest, vesta_words,
+    omega_instances, opening_pallas_cancellable, opening_vesta_cancellable, push_pallas,
+    q_sigma_part, select_pallas_cancellable, select_vesta_cancellable, stage_digest,
+    terminal_digest, vesta_words,
 };
 use crate::{
     a_relation::{
@@ -70,6 +68,8 @@ pub const MAX_PAYMENT_ORIGINAL_BYTES: usize = 320 + PAYMENT_PROOF_BUDGET;
 /// Native source/artifact/proof error. No failure changes monetary state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// Explicit cancellation; no proof failure or burn verdict is produced.
+    Cancelled,
     /// An installed key, descriptor, parameter set or fixed schedule differs.
     Artifact,
     /// Exact source shape, canonical claim or admitted envelope is invalid.
@@ -85,9 +85,17 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl Error {
+    /// Whether the operation was cancelled instead of proving an invalid input.
+    pub fn is_cancelled(self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
+
 impl From<support::Error> for Error {
     fn from(error: support::Error) -> Self {
         match error {
+            support::Error::Cancelled => Self::Cancelled,
             support::Error::Input => Self::Input,
             support::Error::Proof => Self::Proof,
         }
@@ -280,6 +288,18 @@ impl Plan {
     /// # Errors
     /// Over-envelope input, wrong exact tape shape, hard proof or deciding obligation.
     pub fn prepare(&self, input: Inputs, budget: MemoryBudget) -> Result<Prepared, Error> {
+        self.prepare_cancellable(input, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn prepare_cancellable(
+        &self,
+        input: Inputs,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Prepared, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let program = self.context().operation();
         let omega = program.omega().ok_or(Error::Artifact)?;
         let sigma = &program.sigma;
@@ -306,11 +326,23 @@ impl Plan {
             AccumulatorT::from_bytes(&input.predecessor.pallas).map_err(|_| Error::Input)?;
         let vesta = AccumulatorT::from_bytes(&input.predecessor.vesta).map_err(|_| Error::Input)?;
         pallas
-            .decide(&self.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         vesta
-            .decide(&self.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let key_digest = self
             .predecessor_key
             .kagemusha_digest(omega.binding())
@@ -324,22 +356,30 @@ impl Plan {
             terminal_digest(&input.transition.before.lineage, &pallas.as_input())?,
             &vesta,
         )?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.pallas,
             omega.binding(),
             &self.predecessor_key,
             &public,
             &input.predecessor.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
-        let opening = opening_pallas(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+        let opening = opening_pallas_cancellable(
             &self.pallas,
             omega.binding(),
             &self.predecessor_key,
             &public,
             &input.predecessor.proof,
             budget,
+            cancellation,
         )?;
         let predecessor = Head {
             state: input.transition.before,
@@ -352,22 +392,30 @@ impl Plan {
         let mut q = Vec::with_capacity(3);
         for (index, source) in input.q.into_iter().enumerate() {
             let fixed = program.q(index).ok_or(Error::Artifact)?;
-            verify_full(
+            iroha_plonk::verifier::verify_full_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &source.instances,
                 &source.proof,
                 budget,
+                cancellation,
             )
-            .map_err(|_| Error::Proof)?;
-            let opening = opening_pallas(
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+            let opening = opening_pallas_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &source.instances,
                 &source.proof,
                 budget,
+                cancellation,
             )?;
             q.push(QSource {
                 plan: fixed.clone(),
@@ -377,32 +425,42 @@ impl Plan {
             });
         }
         let part = q_sigma_part(&q[0].instances, &program.sigma)?;
-        part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
+        part.decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         validate_modes(&input.incoming)?;
         let selected_pallas = [
-            select_pallas(
+            select_pallas_cancellable(
                 &self.pallas,
                 &input.incoming.pallas.as_input(),
                 input.incoming.modes[0],
                 input.incoming.pallas_corrections[0],
                 budget,
+                cancellation,
             )?,
-            select_pallas(
+            select_pallas_cancellable(
                 &self.pallas,
                 &input.incoming.opening,
                 input.incoming.modes[1],
                 input.incoming.pallas_corrections[1],
                 budget,
+                cancellation,
             )?,
         ];
         // The terminal exports original V and its mode, while native preparation
         // separately decides the exact selected replacement before any proof work.
-        let _selected_vesta = select_vesta(
+        let _selected_vesta = select_vesta_cancellable(
             &self.vesta,
             &input.incoming.vesta.as_input(),
             input.incoming.modes[2],
             input.incoming.vesta_correction,
             budget,
+            cancellation,
         )?;
         let commitments = object_commitments(specs, &input.objects)?;
         let incoming_head = Head {
@@ -525,10 +583,26 @@ impl Prepared {
             salt.to_repr(),
             config,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         pallas
-            .decide(&self.plan.pallas, config.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(
+                &self.plan.pallas,
+                config.kernel_budget,
+                config.cancellation.as_ref(),
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(Stage {
             source: self.source.clone(),
             continuation: None,

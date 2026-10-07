@@ -340,10 +340,8 @@ impl ManagedReserveTopUpApproval {
         self.authority.validate_profile()?;
         self.validate_history(history)?;
         self.validate_intent(history, intent)?;
-        let directory = match self.authority.directory.open_child("approval") {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Some(directory) = self.authority.directory.open_child_optional("approval")? else {
+            return Ok(None);
         };
         let Some(original) = journal::read_intent(&directory)? else {
             require_empty(&directory)?;

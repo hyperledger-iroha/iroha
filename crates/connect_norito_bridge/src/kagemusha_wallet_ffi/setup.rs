@@ -4,7 +4,65 @@ use super::*;
 
 pub(crate) enum Setup {
     Bootstrap,
+    FeeClaim {
+        credit: [u8; 32],
+    },
+    FeeOriginal {
+        request: bool,
+        original: Vec<u8>,
+    },
+    FeeClaimTransport {
+        original: Vec<u8>,
+        beneficiary: Vec<u8>,
+    },
+    LedgerLoad {
+        id: [u8; 32],
+        amount: u128,
+    },
+    LoadFinality {
+        receipt: Vec<u8>,
+        event: Vec<u8>,
+    },
+    LedgerInstruction {
+        kind: u64,
+        original: Vec<u8>,
+    },
+    ConfirmUnload {
+        transaction: [u8; 32],
+        original: Vec<u8>,
+    },
+    LoadProofProgress(Vec<u8>),
+    LoadProofStep {
+        receipt: Vec<u8>,
+        original: Vec<u8>,
+    },
+    UnloadProofProgress {
+        transaction: [u8; 32],
+        original: Vec<u8>,
+    },
+    UnloadProofStep {
+        transaction: [u8; 32],
+        original: Vec<u8>,
+        finality: Vec<u8>,
+    },
+    ConfirmActivation(Vec<u8>),
+    ActivationProofProgress(Vec<u8>),
+    ActivationProofStep {
+        signed: Vec<u8>,
+        original: Vec<u8>,
+    },
+    LedgerFinality(Vec<u8>),
+    LedgerStatus,
+    FeePayout {
+        credit: [u8; 32],
+        world: Vec<u8>,
+        payout: Vec<u8>,
+    },
+    BackgroundStatus,
     Activation,
+    CloseLoads {
+        id: [u8; 32],
+    },
     Transport {
         kind: u8,
         wrap: bool,
@@ -25,6 +83,10 @@ pub(crate) enum Setup {
         >,
     },
     Credited(Vec<u8>),
+    CreditedOriginal {
+        status: bool,
+        original: Vec<u8>,
+    },
     BeginTime,
     CancelTime {
         token: u64,
@@ -35,15 +97,60 @@ pub(crate) enum Setup {
         certificate: Vec<u8>,
     },
 }
+fn load_progress(value: state::LoadProofProgressV1) -> Response {
+    Response {
+        kind: 43,
+        sequence: u128::from(value.receipt_height),
+        bytes: value.verified_height.to_be_bytes().to_vec(),
+        ..Response::default()
+    }
+}
+fn activation_progress(value: state::ActivationFinalityProgressV1) -> Response {
+    let (kind, progress) = match value {
+        state::ActivationFinalityProgressV1::Confirmed(progress) => (44, Some(progress)),
+        state::ActivationFinalityProgressV1::Verifying(progress) => (45, Some(progress)),
+        state::ActivationFinalityProgressV1::NotStarted => (46, None),
+    };
+    let mut response = ledger_progress(progress);
+    response.kind = kind;
+    response
+}
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        0 | 1 | 4 | 6 | 15 => [0; 3],
+        0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 | 27 => [0; 3],
+        28 => [512, state::LOAD_EVENT_PROOF_MAX_BYTES_V1, 0],
+        31 => [512, 0, 0],
+        35 | 37 => [state::LEDGER_INSTRUCTION_MAX_BYTES_V1, 0, 0],
+        36 => [
+            state::LEDGER_INSTRUCTION_MAX_BYTES_V1,
+            state::LEDGER_PROOF_MAX_BYTES_V1,
+            0,
+        ],
+        32 => [512, state::LEDGER_PROOF_MAX_BYTES_V1, 0],
+        34 => [
+            state::LEDGER_INSTRUCTION_MAX_BYTES_V1,
+            state::LEDGER_PROOF_MAX_BYTES_V1,
+            0,
+        ],
+        29 | 30 | 33 => [state::LEDGER_INSTRUCTION_MAX_BYTES_V1, 0, 0],
+        21 | 22 => [state::FEE_CLAIM_MAX_BYTES_V1, 0, 0],
+        23 => [state::LEDGER_PROOF_MAX_BYTES_V1, 0, 0],
+        26 => [
+            state::FEE_CLAIM_MAX_BYTES_V1,
+            KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1,
+            0,
+        ],
+        25 => [
+            iroha_data_model::sumeragi_finality::MAX_WORLD_STATE_SNAPSHOT_BYTES_V1,
+            state::PAYOUT_RECORD_MAX_BYTES_V1,
+            0,
+        ],
         2 => [
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
         ],
-        3 | 7..=14 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
+        3 | 7..=14 | 16..=17 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
         5 => [
             KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
@@ -69,9 +176,10 @@ pub(crate) fn request(
 ) -> Result<Setup> {
     let id: [u8; 32] = id.try_into().map_err(|_| Failure::code(INVALID))?;
     let bounds = bounds(selector)?;
-    if ((1..=2).contains(&selector) != (id != [0; 32]))
-        || ((selector == 1) != (amount != 0))
-        || (matches!(selector, 5 | 6) != (token != 0))
+    if (matches!(selector, 1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34) != (id != [0; 32]))
+        || (matches!(selector, 1 | 27) != (amount != 0))
+        || (matches!(selector, 5 | 6 | 29) != (token != 0))
+        || (selector == 29 && !(1..=3).contains(&token))
         || originals
             .iter()
             .zip(bounds)
@@ -82,7 +190,58 @@ pub(crate) fn request(
     let [first, second, third] = originals;
     Ok(match selector {
         0 => Setup::Bootstrap,
+        20 => Setup::FeeClaim { credit: id },
+        21 | 22 if !first.is_empty() => Setup::FeeOriginal {
+            request: selector == 22,
+            original: first.to_vec(),
+        },
+        27 => Setup::LedgerLoad { id, amount },
+        28 if !first.is_empty() && !second.is_empty() => Setup::LoadFinality {
+            receipt: first.to_vec(),
+            event: second.to_vec(),
+        },
+        29 if !first.is_empty() => Setup::LedgerInstruction {
+            kind: token,
+            original: first.to_vec(),
+        },
+        30 if !first.is_empty() => Setup::ConfirmUnload {
+            transaction: id,
+            original: first.to_vec(),
+        },
+        31 if !first.is_empty() => Setup::LoadProofProgress(first.to_vec()),
+        32 if !first.is_empty() && !second.is_empty() => Setup::LoadProofStep {
+            receipt: first.to_vec(),
+            original: second.to_vec(),
+        },
+        33 if !first.is_empty() => Setup::UnloadProofProgress {
+            transaction: id,
+            original: first.to_vec(),
+        },
+        34 if !first.is_empty() && !second.is_empty() => Setup::UnloadProofStep {
+            transaction: id,
+            original: first.to_vec(),
+            finality: second.to_vec(),
+        },
+        35 if !first.is_empty() => Setup::ConfirmActivation(first.to_vec()),
+        36 if !first.is_empty() && !second.is_empty() => Setup::ActivationProofStep {
+            signed: first.to_vec(),
+            original: second.to_vec(),
+        },
+        37 if !first.is_empty() => Setup::ActivationProofProgress(first.to_vec()),
+        23 if !first.is_empty() => Setup::LedgerFinality(first.to_vec()),
+        24 => Setup::LedgerStatus,
+        26 if !first.is_empty() && !second.is_empty() => Setup::FeeClaimTransport {
+            original: first.to_vec(),
+            beneficiary: second.to_vec(),
+        },
+        25 if !first.is_empty() && !second.is_empty() => Setup::FeePayout {
+            credit: id,
+            world: first.to_vec(),
+            payout: second.to_vec(),
+        },
         15 => Setup::Activation,
+        18 => Setup::BackgroundStatus,
+        19 => Setup::CloseLoads { id },
         1 => Setup::Offer { id, amount },
         2 if !first.is_empty() && second.is_empty() == third.is_empty() => Setup::Request {
             id,
@@ -94,6 +253,10 @@ pub(crate) fn request(
             },
         },
         3 if !first.is_empty() => Setup::Credited(first.to_vec()),
+        16..=17 if !first.is_empty() => Setup::CreditedOriginal {
+            status: selector == 17,
+            original: first.to_vec(),
+        },
         4 => Setup::BeginTime,
         6 => Setup::CancelTime { token },
         7..=14 if !first.is_empty() => Setup::Transport {
@@ -128,6 +291,20 @@ fn take_time_response<T>(
     let exchange = take_time(times, token)?;
     Ok((exchange, decode(anchor)?, decode(certificate)?))
 }
+fn ledger_progress(progress: Option<state::LedgerProgressV1>) -> Response {
+    match progress {
+        Some(progress) => Response {
+            kind: 33,
+            sequence: u128::from(progress.height),
+            bytes: progress.block_hash.to_vec(),
+            ..Response::default()
+        },
+        None => Response {
+            kind: 34,
+            ..Response::default()
+        },
+    }
+}
 impl<P, S> NativeWallet<P, S>
 where
     P: advance::KagemushaWalletPlatformV1,
@@ -135,6 +312,137 @@ where
 {
     pub(super) fn setup_inner(&mut self, input: Setup) -> Result<Response> {
         let bytes = match input {
+            Setup::FeeClaim { credit } => {
+                let original = self.wallet.fee_claim(credit)?;
+                return Ok(match original {
+                    None => Response {
+                        kind: 32,
+                        ..Response::default()
+                    },
+                    Some(original) => Response {
+                        kind: 31,
+                        bytes: original.to_canonical_bytes(&self.wallet.snapshot()?.scheme_id)?,
+                        ..Response::default()
+                    },
+                });
+            }
+            Setup::FeeOriginal { request, original } => {
+                let claim = state::RetainedFeeClaim::decode_canonical(
+                    &original,
+                    &self.wallet.snapshot()?.scheme_id,
+                )?;
+                if request {
+                    claim.request
+                } else {
+                    claim.payment
+                }
+            }
+            Setup::FeeClaimTransport {
+                original,
+                beneficiary,
+            } => {
+                let scheme = self.wallet.snapshot()?.scheme_id;
+                let claim = state::RetainedFeeClaim::decode_canonical(&original, &scheme)?;
+                return Ok(Response {
+                    kind: 36,
+                    bytes: claim.ledger_claim_bytes(&scheme, &beneficiary)?,
+                    ..Response::default()
+                });
+            }
+            Setup::LedgerLoad { id, amount } => {
+                return Ok(Response {
+                    kind: 40,
+                    bytes: self.wallet.prepare_ledger_load(id, amount)?,
+                    ..Response::default()
+                });
+            }
+            Setup::LoadFinality { receipt, event } => {
+                return Ok(Response {
+                    kind: 41,
+                    bytes: self.wallet.prove_load_finality(&receipt, &event)?,
+                    ..Response::default()
+                });
+            }
+            Setup::LedgerInstruction { kind, original } => {
+                return Ok(Response {
+                    kind: 40,
+                    bytes: self.wallet.ledger_instruction(kind, &original)?,
+                    ..Response::default()
+                });
+            }
+            Setup::ConfirmUnload {
+                transaction,
+                original,
+            } => {
+                let mut response = ledger_progress(Some(
+                    self.wallet.confirm_ledger_unload(transaction, &original)?,
+                ));
+                response.kind = 42;
+                return Ok(response);
+            }
+            Setup::LoadProofProgress(receipt) => {
+                return Ok(load_progress(self.wallet.load_finality_progress(&receipt)?));
+            }
+            Setup::LoadProofStep { receipt, original } => {
+                return Ok(load_progress(
+                    self.wallet.ingest_load_finality(&receipt, &original)?,
+                ));
+            }
+            Setup::UnloadProofProgress {
+                transaction,
+                original,
+            } => {
+                return Ok(ledger_progress(
+                    self.wallet
+                        .unload_finality_progress(transaction, &original)?,
+                ));
+            }
+            Setup::UnloadProofStep {
+                transaction,
+                original,
+                finality,
+            } => {
+                return Ok(ledger_progress(Some(self.wallet.ingest_unload_finality(
+                    transaction,
+                    &original,
+                    &finality,
+                )?)));
+            }
+            Setup::ConfirmActivation(signed) => {
+                return Ok(activation_progress(
+                    state::ActivationFinalityProgressV1::Confirmed(
+                        self.wallet.confirm_ledger_activation(&signed)?,
+                    ),
+                ));
+            }
+            Setup::ActivationProofProgress(signed) => {
+                return Ok(activation_progress(
+                    self.wallet.activation_finality_progress(&signed)?,
+                ));
+            }
+            Setup::ActivationProofStep { signed, original } => {
+                return Ok(activation_progress(
+                    self.wallet.ingest_activation_finality(&signed, &original)?,
+                ));
+            }
+            Setup::LedgerFinality(original) => {
+                return Ok(ledger_progress(Some(
+                    self.wallet.ingest_ledger_finality(&original)?,
+                )));
+            }
+            Setup::LedgerStatus => return Ok(ledger_progress(self.wallet.ledger_progress()?)),
+            Setup::FeePayout {
+                credit,
+                world,
+                payout,
+            } => {
+                self.wallet
+                    .acknowledge_fee_payout_originals(credit, &world, &payout)?;
+                return Ok(Response {
+                    kind: 35,
+                    ..Response::default()
+                });
+            }
             Setup::Transport {
                 kind,
                 wrap,
@@ -143,7 +451,19 @@ where
                 let scheme = self.wallet.snapshot()?.scheme_id;
                 transport::convert(kind, wrap, &original, &scheme)?
             }
+            Setup::CreditedOriginal { status, original } => {
+                let scheme = self.wallet.snapshot()?.scheme_id;
+                transport::credited(status, &original, &scheme)?
+            }
+            Setup::BackgroundStatus => return Err(Failure::code(INTERNAL)),
             Setup::Bootstrap => return Ok(completion(Some(self.wallet.bootstrap()?))),
+            Setup::CloseLoads { id } => {
+                return Ok(Response {
+                    kind: 30,
+                    bytes: self.wallet.close_loads(id)?,
+                    ..Response::default()
+                });
+            }
             Setup::Activation => {
                 return Ok(Response {
                     kind: 17,
@@ -213,8 +533,12 @@ mod tests {
     use super::*;
     #[test]
     fn setup_intake_rejects_unused_authority_fields_and_wrong_bounds() {
-        for selector in [0, 1, 3, 4, 15] {
-            let id = if selector == 1 { [1; 32] } else { [0; 32] };
+        for selector in [0, 1, 3, 4, 15, 18, 19] {
+            let id = if matches!(selector, 1 | 19) {
+                [1; 32]
+            } else {
+                [0; 32]
+            };
             let amount = if selector == 1 { u128::MAX } else { 0 };
             let first: &[u8] = if selector == 3 { &[7] } else { &[] };
             assert!(request(&id, selector, amount, 0, [first, &[], &[]]).is_ok());
@@ -231,11 +555,109 @@ mod tests {
         assert!(request(&[1; 32], 6, 0, 1, [&[]; 3]).is_err());
         assert!(request(&[0; 32], 6, 1, 1, [&[]; 3]).is_err());
         assert!(request(&[0; 32], 6, 0, 1, [&[7], &[], &[]]).is_err());
-        for selector in 7..=14 {
+        for selector in (7..=14).chain(16..=17) {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(16).is_err());
+        assert!(bounds(38).is_err());
+    }
+    #[test]
+    fn activation_intake_and_progress_are_closed_and_exact() {
+        let zero = [0; 32];
+        for selector in [35, 36, 37] {
+            let second: &[u8] = if selector == 36 { &[2] } else { &[] };
+            assert!(request(&zero, selector, 0, 0, [&[1], second, &[]]).is_ok());
+            assert!(request(&zero, selector, 0, 0, [&[], second, &[]]).is_err());
+            assert!(request(&[1; 32], selector, 0, 0, [&[1], second, &[]]).is_err());
+            assert!(request(&zero, selector, 1, 0, [&[1], second, &[]]).is_err());
+            assert!(request(&zero, selector, 0, 1, [&[1], second, &[]]).is_err());
+            assert!(request(&zero, selector, 0, 0, [&[1], second, &[3]]).is_err());
+            assert!(request(&zero, selector, 0, 0, [&vec![0; 65_537], second, &[]]).is_err());
+        }
+        assert!(request(&zero, 36, 0, 0, [&[1], &[], &[]]).is_err());
+        for selector in [35, 37] {
+            assert!(request(&zero, selector, 0, 0, [&[1], &[2], &[]]).is_err());
+        }
+        let progress = state::LedgerProgressV1 {
+            height: u64::MAX,
+            block_hash: [9; 32],
+        };
+        for (value, kind) in [
+            (state::ActivationFinalityProgressV1::Confirmed(progress), 44),
+            (state::ActivationFinalityProgressV1::Verifying(progress), 45),
+        ] {
+            let output = activation_progress(value);
+            assert_eq!(
+                (output.kind, output.sequence, output.detail, output.bytes),
+                (kind, u128::from(u64::MAX), 0, vec![9; 32])
+            );
+        }
+        let output = activation_progress(state::ActivationFinalityProgressV1::NotStarted);
+        assert_eq!(
+            (output.kind, output.sequence, output.detail, output.bytes),
+            (46, 0, 0, vec![])
+        );
+    }
+    #[test]
+    fn ledger_and_fee_setup_enforce_bounds_identity_and_progress_shape() {
+        let zero = [0; 32];
+        let credit = [7; 32];
+        assert!(request(&credit, 20, 0, 0, [&[]; 3]).is_ok());
+        assert!(request(&zero, 20, 0, 0, [&[]; 3]).is_err());
+        for selector in 21..=23 {
+            assert!(request(&zero, selector, 0, 0, [&[1], &[], &[]]).is_ok());
+            assert!(request(&credit, selector, 0, 0, [&[1], &[], &[]]).is_err());
+            assert!(request(&zero, selector, 0, 0, [&[]; 3]).is_err());
+        }
+        assert_eq!(bounds(26).unwrap(), [21_024, 16_384, 0]);
+        assert!(request(&zero, 26, 0, 0, [&[1], &[2], &[]]).is_ok());
+        for originals in [[&[1][..], &[][..], &[][..]], [&[1][..], &[2][..], &[3][..]]] {
+            assert!(request(&zero, 26, 0, 0, originals).is_err());
+        }
+        assert!(request(&zero, 26, 0, 0, [&[1], &vec![0; 16_385], &[]]).is_err());
+        assert_eq!(bounds(21).unwrap()[0], 21_024);
+        assert_eq!(bounds(23).unwrap()[0], 36 * 1024 * 1024);
+        assert_eq!(bounds(25).unwrap(), [32 * 1024 * 1024, 1024, 0]);
+        assert!(request(&credit, 25, 0, 0, [&[1], &[2], &[]]).is_ok());
+        assert!(request(&zero, 25, 0, 0, [&[1], &[2], &[]]).is_err());
+        assert!(request(&credit, 25, 0, 0, [&[1], &[], &[]]).is_err());
+        assert!(request(&credit, 25, 0, 1, [&[1], &[2], &[]]).is_err());
+        assert!(request(&zero, 24, 0, 0, [&[]; 3]).is_ok());
+        let result = ledger_progress(Some(state::LedgerProgressV1 {
+            height: u64::MAX,
+            block_hash: [9; 32],
+        }));
+        assert_eq!(
+            (result.kind, result.sequence, result.detail, result.bytes),
+            (33, u128::from(u64::MAX), 0, vec![9; 32])
+        );
+        let absent = ledger_progress(None);
+        assert_eq!(
+            (absent.kind, absent.sequence, absent.detail, absent.bytes),
+            (34, 0, 0, vec![])
+        );
+    }
+    #[test]
+    fn ledger_producer_requests_keep_original_bounds_and_unused_authority_exact() {
+        let id = [7; 32];
+        let zero = [0; 32];
+        assert!(request(&id, 27, 1, 0, [&[]; 3]).is_ok());
+        assert!(request(&id, 27, 0, 0, [&[]; 3]).is_err());
+        for selector in [28, 32] {
+            assert!(request(&zero, selector, 0, 0, [&[1], &[2], &[]]).is_ok());
+            assert!(request(&zero, selector, 0, 0, [&vec![1; 513], &[2], &[]]).is_err());
+            assert!(request(&id, selector, 0, 0, [&[1], &[2], &[]]).is_err());
+        }
+        for selector in [30, 33] {
+            assert!(request(&id, selector, 0, 0, [&[1], &[], &[]]).is_ok());
+            assert!(request(&zero, selector, 0, 0, [&[1], &[], &[]]).is_err());
+            assert!(request(&id, selector, 0, 1, [&[1], &[], &[]]).is_err());
+            assert!(request(&id, selector, 0, 0, [&[1], &[2], &[]]).is_err());
+        }
+        assert!(request(&id, 34, 0, 0, [&[1], &[2], &[]]).is_ok());
+        assert!(request(&id, 34, 0, 0, [&[1], &[], &[]]).is_err());
+        assert!(request(&zero, 34, 0, 0, [&[1], &[2], &[]]).is_err());
+        assert_eq!(bounds(34).unwrap(), [65_536, 36 * 1024 * 1024, 0]);
     }
     #[test]
     fn malformed_time_response_retires_only_its_owned_exchange_before_decoding() {

@@ -1,9 +1,9 @@
-//! One original-only C install entry point. Existing open/finish/cancel/close own custody.
+//! Original-only installation attempt, consuming registration and explicit close acknowledgment.
 
 use super::*;
 
 /// Exact public originals selected by the authenticated application release.
-/// Empty financial trio is unavailable only after the mandatory signed base is verified.
+/// Four base originals are mandatory; the financial trio must be wholly present or absent.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct WalletRuntimeOriginals {
@@ -11,7 +11,7 @@ pub struct WalletRuntimeOriginals {
     pub app_manifest: *const u8,
     /// Exact whole application manifest extent.
     pub app_manifest_length: usize,
-    /// Whole fixed v6 signature envelope, at most 2048 bytes.
+    /// Whole authority-selected signature envelope, at most 2048 bytes.
     pub envelope: *const u8,
     /// Exact signature-envelope extent.
     pub envelope_length: usize,
@@ -83,46 +83,104 @@ impl WalletRuntimeOriginals {
         }
     }
 }
-/// Authenticate installation originals under immutable Native build trust and retain the
-/// actual platform/provider in the existing Native runtime registry. Supplies no loose IDs.
-/// All seven installation originals are mandatory; absent inputs return INVALID with no handle.
-/// Success performs no key generation, account admission, payment signing or monetary step.
+/// Authenticate the four base originals under immutable Native build trust.
+/// BPNG's signed null financial selection with an absent trio returns -4 before
+/// any platform upcall, retaining no attempt or runtime. Full signed selections
+/// require all three financial inputs and genuine financial graph qualification.
+/// Complete success retains the runtime/provider with its authenticated app binding.
+/// This creates no registry ID/reservation, key generation or account/monetary authority.
 /// # Safety
-/// Request and callbacks are readable and correctly aligned; declared original buffers
-/// remain initialized during this call. `out_runtime` is writable, aligned output. Callback
-/// context is retained/released exactly by Native and satisfies PlatformCallbacks lifetime.
+/// Readable aligned request/callbacks and initialized declared buffers are required.
+/// `out_attempt` is writable/aligned and initially owns no other attempt. The returned
+/// opaque pointer must be owned once and serialized until consuming registration/close.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_wallet_install_runtime_v1(
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_installation_begin_v1(
     request: *const WalletRuntimeOriginals,
     callbacks: *const PlatformCallbacks,
-    out_runtime: *mut u64,
+    out_attempt: *mut *mut WalletInstallationAttempt,
 ) -> i32 {
-    if out_runtime.is_null() {
+    if out_attempt.is_null() {
         return INVALID;
     }
-    // SAFETY: admitted caller output is initialized before any fallible work.
+    // SAFETY: caller provides one fresh writable output.
     unsafe {
-        out_runtime.write(0);
+        out_attempt.write(std::ptr::null_mut());
     }
     let result = run(|| {
-        // SAFETY: readable aligned original request is supplied by the caller.
+        // SAFETY: admitted C caller supplies aligned original request and callback table.
         let request = unsafe { request.as_ref() }.ok_or(Failure::code(INVALID))?;
         let prepared = PreparedInstallation::load(unsafe { request.originals()? })?;
-        // Runtime authentication/complete qualification precedes any platform upcall.
         let callbacks = *unsafe { callbacks.as_ref() }.ok_or(Failure::code(INVALID))?;
         let platform = unsafe { CallbackPlatform::new(callbacks)? };
         let root = platform
             .custody_root()
             .map_err(|error| Failure::unavailable(UNAVAILABLE, error))?;
-        prepared.register(platform, root, false)
+        let owner = prepared.runtime(platform, root, false)?;
+        Ok(Box::new(WalletInstallationAttempt::new(owner)))
     });
     match result {
-        Ok(handle) => {
+        Ok(attempt) => {
             unsafe {
-                out_runtime.write(handle);
+                out_attempt.write(Box::into_raw(attempt));
             }
             0
         }
         Err(error) => error.status,
     }
+}
+/// Register the SAME loaded attempt in the single existing Native registry.
+/// Ordinary refusal leaves `*attempt` unchanged. Zero transfers all custody/binding
+/// once to `out_runtime` and clears/frees the attempt. No reloading or platform upcall.
+/// # Safety
+/// `attempt` owns exactly the live unique pointer returned by installation_begin.
+/// Calls and close are serialized. Writable outputs are aligned and do not overlap.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_installation_register_v1(
+    attempt: *mut *mut WalletInstallationAttempt,
+    out_runtime: *mut u64,
+) -> i32 {
+    if out_runtime.is_null() {
+        return INVALID;
+    }
+    unsafe {
+        out_runtime.write(0);
+    }
+    let result = run(|| {
+        let slot = unsafe { attempt.as_mut() }.ok_or(Failure::code(INVALID))?;
+        // SAFETY: the unique live Native allocation is exclusively borrowed for this call.
+        let owner = unsafe { (*slot).as_mut() }.ok_or(Failure::code(INVALID))?;
+        let handle = owner.register(registry())?;
+        // SAFETY: unique live Native allocation, now transferred to the actual registry.
+        unsafe {
+            drop(Box::from_raw(*slot));
+            out_runtime.write(handle);
+        }
+        *slot = std::ptr::null_mut();
+        Ok(())
+    });
+    result.map_or_else(|error| error.status, |()| 0)
+}
+/// Irrevocably fence registration and join the SAME unadmitted custody owner.
+/// Only zero clears/frees the opaque allocation. A normal refusal retains the exact
+/// owner for close retry; no result implies key deletion or replacement permission.
+/// # Safety
+/// Exact unique live attempt from installation_begin; serialized with registration.
+/// The pointer-to-pointer is writable/aligned. Never use the consumed pointer again.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_installation_close_v1(
+    attempt: *mut *mut WalletInstallationAttempt,
+) -> i32 {
+    let result = run(|| {
+        let slot = unsafe { attempt.as_mut() }.ok_or(Failure::code(INVALID))?;
+        // SAFETY: the unique live Native allocation is exclusively borrowed for this call.
+        let owner = unsafe { (*slot).as_mut() }.ok_or(Failure::code(INVALID))?;
+        owner.close()?;
+        // SAFETY: same unique allocation, freed only after the existing join acknowledged zero.
+        unsafe {
+            drop(Box::from_raw(*slot));
+        }
+        *slot = std::ptr::null_mut();
+        Ok(())
+    });
+    result.map_or_else(|error| error.status, |()| 0)
 }

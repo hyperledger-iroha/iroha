@@ -839,3 +839,20 @@ fn retained_standard_profile_requires_original_signed_genesis_and_identity() {
         .unwrap();
     assert!(prepared.stream_token_authorities().unwrap().is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn optional_store_selection_refuses_lost_parent_and_restores_original_absence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("managed");
+    let store = ManagedStore::open(&path).unwrap();
+    assert!(matches!(store.context(None), Err(Error::NoSelection)));
+    let displaced = temporary.path().join("original-managed");
+    std::fs::rename(&path, &displaced).unwrap();
+    assert!(
+        matches!(store.context(None), Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+    );
+    std::fs::rename(&displaced, &path).unwrap();
+    assert!(matches!(store.context(None), Err(Error::NoSelection)));
+    assert!(!path.join("active.json").exists());
+}

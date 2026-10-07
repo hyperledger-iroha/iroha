@@ -5,7 +5,7 @@ Set: 2026-09-26. Execution resumed: 2026-09-30. Reviewed: 2026-10-04. Overall st
 This record owns the remediation requested after the current-source ZK critique.
 It supplements [first-release completion](first_release_completion_goals.md) and
 [privacy closure](privacy_first_release_closure.md). Implementation remains in the
-existing `/Users/takemiyamakoto/devstuff/iroha` checkout on `optimizations`.
+existing `/Users/takemiyamakoto/soramitsudev/iroha` checkout on `optimizations`.
 All further implementation and validation use this checkout; earlier separate
 candidates are historical evidence only. Unrelated changes remain.
 
@@ -308,9 +308,9 @@ the new local-Applied/height refusal control also passes. This establishes nativ
 finalized transcript custody, not the complete q77 relation or D7 source/spend
 admission.
 
-The rebuilt current host passes its loaded ABI-25 probe and all ten authentic
-fixture modes, each generated twice with identical paired bytes. All eight
-current Kotlin tasks pass: **2,498 tests**, zero failures or skips, including
+The recorded earlier ABI-25 host passed its loaded probe and all ten authentic
+fixture modes, each generated twice with identical paired bytes. Its eight
+Kotlin tasks passed: **2,498 tests**, zero failures or skips, including
 1,859 JVM, 30 tooling, 422 Android client managed, 91 wallet managed, 95 client
 host-JNI and one wallet host-JNI controls. The genuine native confidential
 redemption example and tooling distribution also pass. The native consumers
@@ -318,6 +318,10 @@ load the rebuilt host image. Android ELF audits were not run in this cohort;
 earlier ARM64/x86_64 132-method audits remain scoped to their recorded artifacts.
 The Darwin host's four Android-only absences are explicit. These results do not
 qualify physical devices or later source changes.
+Current KAGEMUSHA ABI-26 source, rebuilt component artifacts and later filesystem
+source refusals are tracked in [the evidence gate](kagemusha_evidence_gate.md) and
+[the native consumer inventory](native_prover_migration_inventory.md); the earlier
+ABI-25 cohort does not qualify those changed consumers.
 
 The physical Android main and instrumentation APKs are genuinely built and pass
 native ZIP, signature, package, permission and complete 3,276-class checks. They

@@ -51,6 +51,8 @@ pub const TERMINAL_RANGE_BUSES: usize = 3;
 /// Native Archive intake/proof failure; no failure changes a monetary head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// Explicit cancellation; no proof failure or burn verdict is produced.
+    Cancelled,
     /// The installed schema, key, source profile or parameters differ.
     Artifact,
     /// An exact original shape, envelope bound or canonical claim differs.
@@ -66,9 +68,17 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl Error {
+    /// Whether the operation was cancelled instead of proving an invalid input.
+    pub fn is_cancelled(self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
+
 impl From<super::support::Error> for Error {
     fn from(error: super::support::Error) -> Self {
         match error {
+            super::support::Error::Cancelled => Self::Cancelled,
             super::support::Error::Input => Self::Input,
             super::support::Error::Proof => Self::Proof,
         }

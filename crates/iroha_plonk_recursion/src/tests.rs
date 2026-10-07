@@ -115,6 +115,71 @@ fn canonical_encodings_and_padding_both_curves() {
     encoding_case::<Eq>();
 }
 
+fn cancellation_case<C: PastaCurve>()
+where
+    C::Base: PoseidonField,
+{
+    let params = PinnedParams::<C>::derive(4).expect("small pinned parameters");
+    let token = iroha_pasta::CancellationToken::default();
+    token.cancel();
+    let shared = SharedMemoryBudget::new(1 << 20);
+    let config = FoldConfig {
+        kernel_budget: MemoryBudget::DEFAULT,
+        shared_budget: shared.clone(),
+        cancellation: Some(token.clone()),
+    };
+    let salt = C::Base::from(7).to_repr();
+    let witness = FoldWitness::<C>::new(salt, &syntactic_body::<C>()).unwrap();
+    assert_eq!(
+        create_fold(&params, &[], salt, &config),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(
+        verify_fold(&params, &[], &witness, &config),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(
+        AccumulatorT::trivial_cancellable(&params, MemoryBudget::DEFAULT, Some(&token)),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(shared.in_use_bytes(), 0);
+    let challenges = [C::ScalarExt::from(3), C::ScalarExt::from(5)];
+    let coefficients = fold_scalars(&challenges, C::ScalarExt::ONE);
+    let generator = msm_complete::<C>(
+        &coefficients,
+        &params.params().g()[..4],
+        MemoryBudget::DEFAULT,
+    )
+    .to_affine();
+    let claim = FoldInput::<C>::from_opening(generator, &challenges).unwrap();
+    assert_eq!(
+        claim.decide_cancellable(&params, MemoryBudget::DEFAULT, Some(&token)),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(
+        claim.corrected_cancellable(&params, MemoryBudget::DEFAULT, Some(&token)),
+        Err(Error::Cancelled)
+    );
+    let fresh = iroha_pasta::CancellationToken::default();
+    assert_eq!(
+        claim.decide_cancellable(&params, MemoryBudget::DEFAULT, Some(&fresh)),
+        Ok(())
+    );
+    assert_eq!(
+        claim.corrected_cancellable(&params, MemoryBudget::DEFAULT, Some(&fresh)),
+        Err(Error::NotCorrected)
+    );
+    assert!(Error::from(iroha_pasta::msm::MsmError::Cancelled).is_cancelled());
+    assert!(!Error::FoldEquation.is_cancelled());
+    assert!(!Error::Undecidable.is_cancelled());
+}
+
+#[test]
+fn cancellation_returns_no_fold_or_correction_and_fresh_retry_decides_both_curves() {
+    cancellation_case::<Ep>();
+    cancellation_case::<Eq>();
+}
+
 fn exceptional_identity_case<C: PastaCurve>() {
     // A test-only known-relation basis demonstrates the algebraic exception;
     // no production pinned parameters or challenge generation are replaced.
@@ -230,14 +295,16 @@ fn generator_chunk_case<C: PastaCurve>() {
             FoldConfig {
                 kernel_budget: MemoryBudget::new(0),
                 shared_budget: SharedMemoryBudget::new(0),
+                cancellation: None,
             },
             FoldConfig {
                 kernel_budget: MemoryBudget::DEFAULT,
                 shared_budget: held.clone(),
+                cancellation: None,
             },
         ] {
             let mut actual = original.clone();
-            crate::accumulation::fold_generators::<C>(&mut actual, challenge, &config);
+            crate::accumulation::fold_generators::<C>(&mut actual, challenge, &config).unwrap();
             assert_eq!(&actual[..4], expected);
         }
         drop(guard);
@@ -416,6 +483,7 @@ where
     let no_scratch = FoldConfig {
         kernel_budget: MemoryBudget::new(0),
         shared_budget: SharedMemoryBudget::new(0),
+        cancellation: None,
     };
     assert_eq!(
         verify_fold(&params, &inputs, &proof, &no_scratch),

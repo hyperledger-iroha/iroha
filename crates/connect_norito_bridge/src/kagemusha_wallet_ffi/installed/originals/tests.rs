@@ -149,3 +149,131 @@ fn retired_project_transport_schema_is_rejected_even_with_exact_rows() {
     );
     assert!(require_transport(&fixture(), old.as_bytes()).is_err());
 }
+
+#[test]
+fn metadata_inventory_requires_the_four_current_originals_and_two_cas_children() {
+    // This owner-private namespace observation conveys no verifier or source authority.
+    let temp = tempfile::tempdir().unwrap();
+    let root = PrivateDirectory::open_or_create(temp.path().join("bundle")).unwrap();
+    for name in ["wallet-originals", "finality-originals"] {
+        root.ensure_child(name).unwrap();
+    }
+    for name in [
+        "verifier-pack.norito",
+        "producer-inventory.norito",
+        "transport.json",
+    ] {
+        root.write_atomic(name, b"DATA", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+    }
+    assert_eq!(
+        require_metadata_inventory(&root).unwrap_err().status,
+        INVALID
+    );
+    root.write_atomic(
+        "financial-originals.json",
+        b"DATA",
+        iroha_fs::PublishMode::CreateNew,
+    )
+    .unwrap();
+    require_metadata_inventory(&root).unwrap();
+    root.write_atomic(
+        "wallet-verifier-pack.norito",
+        b"AMBIGUOUS_DATA",
+        iroha_fs::PublishMode::CreateNew,
+    )
+    .unwrap();
+    assert_eq!(
+        require_metadata_inventory(&root).unwrap_err().status,
+        INVALID
+    );
+}
+
+/// Inert source DATA, not a signed inventory or qualified finality graph. This exercises
+/// the same private directory reader used after production inventory authentication.
+fn finality_data_fixture() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    ProducerInventoryV1,
+    [Vec<u8>; 3],
+) {
+    use iroha_kagemusha_proof::finality::catalog::ArtifactRecord;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let metadata = PrivateDirectory::open_or_create(&root).unwrap();
+    metadata.ensure_child("wallet-originals").unwrap();
+    metadata.ensure_child("finality-originals").unwrap();
+    let originals = [
+        b"inert finality descriptor DATA".to_vec(),
+        b"inert finality verifying key DATA".to_vec(),
+        b"inert finality proving key DATA".to_vec(),
+    ];
+    let blobs = originals.each_ref().map(|bytes| BlobV1::of(bytes));
+    let mut finality = DirectoryOriginalsV1::open_existing(
+        root.join("finality-originals"),
+        PROVING_KEY_MAX_BYTES_V1,
+    )
+    .unwrap();
+    for (blob, bytes) in blobs.iter().zip(&originals) {
+        finality.store_original(*blob, bytes).unwrap();
+    }
+    let mut inventory = fixture();
+    inventory.originals.clear();
+    inventory.finality.originals = vec![ArtifactRecord {
+        name: vec![], // No identity/authority claim: private routing DATA only.
+        lengths: blobs.map(|blob| blob.bytes),
+        sha256: blobs.map(|blob| blob.sha256),
+    }];
+    (temp, root, inventory, originals)
+}
+
+#[test]
+fn finality_catalog_reader_routes_pk_through_actual_original_source() {
+    let (_temp, root, inventory, originals) = finality_data_fixture();
+    let mut source = CatalogReader::load(
+        PrivateDirectory::open_exact(&root).unwrap(),
+        &root,
+        &inventory,
+    )
+    .unwrap();
+    for original in originals {
+        let digest = BlobV1::of(&original).sha256;
+        let mut bytes = Vec::new();
+        OriginalSourceV1::open(&mut source, digest)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, original);
+    }
+    assert!(matches!(
+        OriginalSourceV1::open(&mut source, [0x55; 32]),
+        Err(OriginalError::Inventory)
+    ));
+}
+
+#[test]
+fn finality_catalog_reader_refuses_changed_extent_hash_or_wrong_store() {
+    let (_temp, root, inventory, originals) = finality_data_fixture();
+    let load = |inventory: &ProducerInventoryV1| {
+        CatalogReader::load(
+            PrivateDirectory::open_exact(&root).unwrap(),
+            &root,
+            inventory,
+        )
+    };
+    let mut wrong_length = inventory.clone();
+    wrong_length.finality.originals[0].lengths[2] += 1;
+    assert!(load(&wrong_length).is_err_and(|error| error.status == INVALID));
+    let mut wrong_hash = inventory.clone();
+    wrong_hash.finality.originals[0].sha256[2] = [0x66; 32];
+    assert!(load(&wrong_hash).is_err_and(|error| error.status == INVALID));
+
+    // Identical bytes in the other directory do not satisfy the catalog's selected role.
+    let name = hex::encode(BlobV1::of(&originals[2]).sha256);
+    std::fs::rename(
+        root.join("finality-originals").join(&name),
+        root.join("wallet-originals").join(&name),
+    )
+    .unwrap();
+    assert!(load(&inventory).is_err_and(|error| error.status == INVALID));
+}
