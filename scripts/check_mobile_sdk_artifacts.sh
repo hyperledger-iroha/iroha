@@ -480,6 +480,8 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_kagemusha_wallet_close_v1
   connect_norito_kagemusha_wallet_activity_v1
   connect_norito_kagemusha_wallet_execute_v1
+  connect_norito_kagemusha_wallet_setup_v1
+  connect_norito_kagemusha_wallet_load_original_validate_v1
   connect_norito_kagemusha_wallet_request_status_v1
   connect_norito_kagemusha_wallet_retry_v1
   connect_norito_kagemusha_wallet_resume_v1
@@ -494,7 +496,11 @@ REQUIRED_WALLET_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_execute
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot
+)
+REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate
 )
 REQUIRED_AUTH_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve
@@ -536,7 +542,7 @@ check_binary_symbols() {
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
   if [[ "$nm_mode" == "elf" ]]; then
-    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}" "${REQUIRED_AUTH_JNI_SYMBOLS[@]}"; do
+    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}" "${REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS[@]}" "${REQUIRED_AUTH_JNI_SYMBOLS[@]}"; do
       if ! grep -Fxq "$symbol" <<<"$symbols"; then
         fail "$label is missing $symbol"
       fi
@@ -549,7 +555,7 @@ check_binary_symbols() {
       Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_; do
       while IFS= read -r symbol; do
         [[ -n "$symbol" ]] || continue
-        case " ${REQUIRED_WALLET_JNI_SYMBOLS[*]} " in
+        case " ${REQUIRED_WALLET_JNI_SYMBOLS[*]} ${REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS[*]} " in
           *" ${symbol} "*) ;;
           *) fail "$label exposes a retired KAGEMUSHA JNI namespace: $symbol" ;;
         esac

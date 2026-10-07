@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn a_genuine_root_signature_cannot_substitute_an_issuer_certificate() {
+    fn a_genuine_root_signature_cannot_substitute_an_enrollment_certificate() {
         let (draft, pack) = fixture();
         let mut body = KagemushaWalletSignerCertificateV1::decode_canonical(
             &pack.signer_certificate,
@@ -403,7 +403,7 @@ mod tests {
         )
         .unwrap()
         .body;
-        body.role = KagemushaWalletSignerRoleV1::Issuer;
+        body.role = KagemushaWalletSignerRoleV1::Enrollment;
         let root = SigningKey::from_bytes((&[0x11; 32]).into()).unwrap();
         let certificate = KagemushaWalletSignerCertificateV1::sign(
             body,

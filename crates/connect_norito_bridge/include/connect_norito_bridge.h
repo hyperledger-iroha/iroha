@@ -1875,6 +1875,18 @@ typedef struct {
 /* Fixed writable output, no allocated bytes to free. Call on a worker; it may verify Ω. */
 int32_t connect_norito_kagemusha_wallet_snapshot_v1(uint64_t handle, connect_norito_kagemusha_wallet_snapshot_v1_t* out);
 uint32_t connect_norito_kagemusha_wallet_revision_v1(void);
+
+/* Canonical Load transport DATA only. Does not verify finality/proofs or change value.
+ * Three selectors are exactly32 bytes; payer is strict canonical I105 UTF-8<=1024;
+ * unsigned canonical receipt<=512, canonical LoadFinality original<=16384.
+ * Zero means exact canonical data/selection/payer/receipt-digest binding only.
+ * No pointer is retained. Native wallet Load independently authorizes all value. */
+int32_t connect_norito_kagemusha_wallet_load_original_validate_v1(
+    const uint8_t *scheme, const uint8_t *wallet, const uint8_t *request,
+    const uint8_t *payer, size_t payer_length,
+    const uint8_t *receipt, size_t receipt_length,
+    const uint8_t *finality, size_t finality_length);
+
 int32_t connect_norito_kagemusha_wallet_open_v1(const connect_norito_kagemusha_platform_v1*, const uint8_t* slot32, const uint8_t* scheme32, const uint8_t* wallet32, const uint8_t* artifact32, uint64_t* out_handle);
 int32_t connect_norito_kagemusha_wallet_close_v1(uint64_t handle);
 int32_t connect_norito_kagemusha_wallet_activity_v1(uint64_t handle, uint8_t foreground, uint8_t charging);

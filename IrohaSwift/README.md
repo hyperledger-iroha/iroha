@@ -1760,8 +1760,8 @@ Inspect verifying keys via the Torii helpers:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let detail = try await torii.getVerifyingKey(backend: "halo2/ipa", name: "payments_v1")
-    let current = try await torii.listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: "halo2/ipa"))
+    let detail = try await torii.getVerifyingKey(backend: "pipa-r/pasta", name: "payments_v1")
+    let current = try await torii.listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: "pipa-r/pasta"))
     print("vk status:", detail.record.status, "count:", current.count)
 }
 ```
@@ -1864,15 +1864,15 @@ routes.
 
 ### Verifying key registry
 
-Interact with the Torii verifying-key endpoints to inspect and monitor Halo2 verifier metadata:
+Interact with the Torii verifying-key endpoints to inspect and monitor native PIPA-R verifier metadata. Verifying-key lists use one JSON array format, including `ids_only` responses:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let detail = try await torii.getVerifyingKey(backend: "halo2/ipa", name: "vk_main")
+    let detail = try await torii.getVerifyingKey(backend: "pipa-r/pasta", name: "vk_main")
     print("vk status:", detail.record.status)
 
     let idsOnly = try await torii.listVerifyingKeys(
-        query: ToriiVerifyingKeyListQuery(backend: "halo2/ipa", idsOnly: true)
+        query: ToriiVerifyingKeyListQuery(backend: "pipa-r/pasta", idsOnly: true)
     )
     print("known ids:", idsOnly.map(\.id.name))
 }
@@ -1895,12 +1895,12 @@ if #available(iOS 15, macOS 12, *) {
     let draft = try await torii.registerVerifyingKey(
         ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([1, 2, 3]),
             status: .active
         )
@@ -1946,7 +1946,7 @@ if #available(iOS 15, macOS 12, *) {
 
     // Proof outcomes, narrowed on Torii by backend and matched locally by proof hash.
     let proofs = torii.streamProofEvents(
-        filter: ToriiProofEventFilter(backend: "halo2/ipa", proofHashHex: String(repeating: "a", count: 64))
+        filter: ToriiProofEventFilter(backend: "pipa-r/pasta", proofHashHex: String(repeating: "a", count: 64))
     )
     Task.detached {
         do {

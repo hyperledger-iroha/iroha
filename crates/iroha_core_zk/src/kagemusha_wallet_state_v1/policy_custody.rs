@@ -73,6 +73,11 @@ impl BlacklistOriginalReferenceV1 {
         Ok(original)
     }
 
+    /// Existing immutable CAS address selected together with this exact original extent.
+    pub(super) const fn object_key(&self) -> [u8; 32] {
+        self.original_digest
+    }
+
     /// Independently bind every full-original byte, length, scheme, entry order and root.
     /// The existing PreparationV1 still verifies the actual issuer and signature afterward.
     pub(crate) fn verify_original(

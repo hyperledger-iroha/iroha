@@ -531,3 +531,97 @@ fn malformed_quote_or_certificate_originals_never_become_retained_authority() {
         );
     }
 }
+
+#[test]
+fn review_unload_uses_the_same_real_quote_and_adjusted_balance_as_the_producer() {
+    let source = Source::new();
+    let (quote, certificates) = source.quote(100);
+    let original = quote.to_canonical_bytes().unwrap();
+    let charge = UnloadChargeOriginalsV1 {
+        quote: &original,
+        certificate_set: &certificates,
+    };
+    let (fee, digest) = checked_unload_terms(
+        &source.scheme,
+        &source.before,
+        &source.lineage,
+        100,
+        Some(charge),
+    )
+    .unwrap();
+    assert_eq!(fee, 7);
+    assert_eq!(digest, quote.charge_quote_digest());
+    let insertion = source.insertion(100, fee);
+    let derived = source
+        .derive(ConsumingActionV1::Unload {
+            amount: 100,
+            insertion: &insertion,
+            charge: Some(charge),
+        })
+        .unwrap();
+    assert!(
+        matches!(derived.statement.effect, KagemushaWalletEffectV1::Unload { amount: 100, online_charge: 7, charge_quote, .. } if charge_quote == digest)
+    );
+    assert_eq!(derived.state.core.balance, source.before.core.balance - 100);
+    assert_eq!(
+        kagemusha_wallet_unload_account_payout_v1(100, fee).unwrap(),
+        93
+    );
+    let mut changed = source.lineage;
+    changed.burned_total = source.before.core.balance - 99;
+    assert!(
+        checked_unload_terms(&source.scheme, &source.before, &changed, 100, Some(charge)).is_err()
+    );
+}
+
+#[test]
+fn review_unload_rejects_quote_replay_and_validly_signed_foreign_terms() {
+    let source = Source::new();
+    let (quote, certificates) = source.quote(100);
+    let original = quote.to_canonical_bytes().unwrap();
+    let certificate: KagemushaWalletSignerCertificateV1 =
+        fixture("KagemushaWalletSignerCertificateV1");
+    let charge = UnloadChargeOriginalsV1 {
+        quote: &original,
+        certificate_set: &certificates,
+    };
+    let mut advanced = source.before;
+    advanced.core.next_redeem += 1;
+    let mut advanced_lineage = source.lineage;
+    advanced_lineage.head = advanced.commitment().unwrap();
+    assert!(
+        checked_unload_terms(
+            &source.scheme,
+            &advanced,
+            &advanced_lineage,
+            100,
+            Some(charge)
+        )
+        .is_err()
+    );
+    for mutation in 0..4 {
+        let mut body = quote.body;
+        match mutation {
+            0 => body.wallet_id[0] ^= 1,
+            1 => body.net_amount += 1,
+            2 => body.ordinal += 1,
+            _ => body.asset_digest[0] ^= 1,
+        }
+        let changed = Source::sign_quote(body, &certificate);
+        changed.verify(&source.scheme, &certificate).unwrap();
+        let bytes = changed.to_canonical_bytes().unwrap();
+        assert!(
+            checked_unload_terms(
+                &source.scheme,
+                &source.before,
+                &source.lineage,
+                100,
+                Some(UnloadChargeOriginalsV1 {
+                    quote: &bytes,
+                    certificate_set: &certificates
+                })
+            )
+            .is_err()
+        );
+    }
+}

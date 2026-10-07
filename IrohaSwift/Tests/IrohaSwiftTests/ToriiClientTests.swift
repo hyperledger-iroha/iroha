@@ -9739,12 +9739,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         domainOverride: Data? = nil,
         authority: String =
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-        backend: String = "halo2/ipa",
+        backend: String = "pipa-r/pasta",
         name: String = "vk_main",
         version: UInt32 = 1,
-        circuitId: String = "halo2/ipa::transfer_v1",
+        circuitId: String = "pipa-r/pasta/confidential-transfer-v1",
         schemaHash: Data = Data(repeating: 0xee, count: 32),
-        gasScheduleId: String? = "halo2_default",
+        gasScheduleId: String? = "native_pipa_r_default",
         keyBytes: Data? = Data([0x01, 0x02, 0x03]),
         recordVersion: UInt32? = nil
     ) -> Data {
@@ -10108,32 +10108,32 @@ final class ToriiClientHeaderTests: XCTestCase {
         let recordNorito = try canonicalVerifierRecordArchive(seed: 0x63)
         let payload = """
         {
-          "id": { "backend": "halo2/ipa", "name": "vk main" },
+          "id": { "backend": "pipa-r/pasta", "name": "vk main" },
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 2,
-            "circuit_id": "halo2/ipa::transfer_v2",
+            "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
             "owner_manifest_id": "manifest-v2",
             "namespace": "confidential",
-            "backend": "halo2/ipa",
+            "backend": "pipa-r/pasta",
             "curve": "pallas",
             "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
             "commitment": "20574662a58708e02e0000000000000000000000000000000000000000000000",
             "vk_len": 3,
             "max_proof_bytes": 8192,
-            "gas_schedule_id": "halo2_default",
+            "gas_schedule_id": "native_pipa_r_default",
             "metadata_uri_cid": "ipfs://vk-meta",
             "vk_bytes_cid": "ipfs://vk-bundle",
             "activation_height": 1024,
             "status": "Active",
-            "key": { "backend": "halo2/ipa", "bytes_b64": "AQID" }
+            "key": { "backend": "pipa-r/pasta", "bytes_b64": "AQID" }
           }
         }
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/vk/halo2%2Fipa/vk%20main"))
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/vk/pipa-r%2Fpasta/vk%20main"))
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 200,
@@ -10143,15 +10143,15 @@ final class ToriiClientHeaderTests: XCTestCase {
             return (response, payload)
         }
 
-        let detail = try await makeClient().getVerifyingKey(backend: "halo2/ipa", name: "vk main")
-        XCTAssertEqual(detail.id.backend, "halo2/ipa")
+        let detail = try await makeClient().getVerifyingKey(backend: "pipa-r/pasta", name: "vk main")
+        XCTAssertEqual(detail.id.backend, "pipa-r/pasta")
         XCTAssertEqual(detail.id.name, "vk main")
         XCTAssertEqual(detail.record.version, 2)
         XCTAssertEqual(detail.record.ownerManifestId, "manifest-v2")
         XCTAssertEqual(detail.record.namespace, "confidential")
         XCTAssertEqual(detail.record.publicInputsSchemaHashHex,
                        "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3")
-        XCTAssertEqual(detail.record.inlineKey?.backend, "halo2/ipa")
+        XCTAssertEqual(detail.record.inlineKey?.backend, "pipa-r/pasta")
         XCTAssertEqual(detail.record.inlineKey?.bytes, Data([0x01, 0x02, 0x03]))
         XCTAssertEqual(detail.recordNorito, recordNorito)
     }
@@ -10161,14 +10161,14 @@ final class ToriiClientHeaderTests: XCTestCase {
         let recordNorito = try canonicalVerifierRecordArchive(seed: 0x64)
         let payload = """
         {
-          "id": { "backend": "halo2/ipa", "name": "different-vk" },
+          "id": { "backend": "pipa-r/pasta", "name": "different-vk" },
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
             "circuit_id": "pipa-r/pasta/confidential-unshield-change-v1",
             "owner_manifest_id": "confidential-v3",
             "namespace": "confidential",
-            "backend": "halo2/ipa",
+            "backend": "pipa-r/pasta",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -10180,7 +10180,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/vk/halo2%2Fipa/unshield-v3"))
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/vk/pipa-r%2Fpasta/unshield-v3"))
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 200,
@@ -10192,7 +10192,7 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         do {
             _ = try await makeClient().getVerifyingKey(
-                backend: "halo2/ipa",
+                backend: "pipa-r/pasta",
                 name: "unshield-v3"
             )
             XCTFail("cross-wired verifier detail must be rejected")
@@ -10211,14 +10211,14 @@ final class ToriiClientHeaderTests: XCTestCase {
         let recordNorito = try canonicalVerifierRecordArchive(seed: 0x71)
         let payload = """
         {
-          "id": { "backend": "halo2/ipa", "name": "unshield-v3" },
+          "id": { "backend": "pipa-r/pasta", "name": "unshield-v3" },
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
             "circuit_id": "pipa-r/pasta/confidential-unshield-change-v1",
             "owner_manifest_id": "confidential-v3",
             "namespace": "confidential",
-            "backend": "halo2/ipa",
+            "backend": "pipa-r/pasta",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -10230,7 +10230,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         """.data(using: .utf8)!
 
         let detail = try JSONDecoder().decode(ToriiVerifyingKeyDetail.self, from: payload)
-        XCTAssertEqual(detail.id.backend, "halo2/ipa")
+        XCTAssertEqual(detail.id.backend, "pipa-r/pasta")
         XCTAssertEqual(detail.id.name, "unshield-v3")
         XCTAssertEqual(detail.recordNorito, recordNorito)
     }
@@ -10249,12 +10249,12 @@ final class ToriiClientHeaderTests: XCTestCase {
             } ?? ""
             return """
             {
-              "id": { "backend": "halo2/ipa", "name": "unshield-v3" },
+              "id": { "backend": "pipa-r/pasta", "name": "unshield-v3" },
               \(archiveField)
               "record": {
                 "version": 3,
                 "circuit_id": "unshield-v3",
-                "backend": "halo2/ipa",
+                "backend": "pipa-r/pasta",
                 "curve": "pallas",
                 "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -10288,19 +10288,19 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testListVerifyingKeysAsync() async throws {
         let payload = """
         [
-          { "backend": "halo2/ipa", "name": "vk_ids_only" },
+          { "backend": "pipa-r/pasta", "name": "vk_ids_only" },
           {
-            "id": { "backend": "halo2/ipa", "name": "vk_full" },
+            "id": { "backend": "pipa-r/pasta", "name": "vk_full" },
             "record": {
               "version": 5,
-              "circuit_id": "halo2/ipa::transfer_v5",
-              "backend": "halo2/ipa",
+              "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
+              "backend": "pipa-r/pasta",
               "curve": "pallas",
               "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
               "vk_len": 32,
               "max_proof_bytes": 4096,
-              "gas_schedule_id": "halo2_default",
+              "gas_schedule_id": "native_pipa_r_default",
               "status": "Active"
             }
           }
@@ -10314,7 +10314,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             let dictionary = Dictionary(uniqueKeysWithValues: items.compactMap { item in
                 item.value.map { (item.name, $0) }
             })
-            XCTAssertEqual(dictionary["backend"], "halo2/ipa")
+            XCTAssertEqual(dictionary["backend"], "pipa-r/pasta")
             XCTAssertEqual(dictionary["status"], "Active")
             XCTAssertEqual(dictionary["name_contains"], "vk")
             XCTAssertEqual(dictionary["limit"], "2")
@@ -10332,7 +10332,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
 
         let query = ToriiVerifyingKeyListQuery(
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             status: .active,
             nameContains: "vk",
             limit: 2,
@@ -10349,29 +10349,28 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testListVerifyingKeysHandlesEnvelope() async throws {
+    func testListVerifyingKeysDecodesCanonicalArrayAndRejectsObjectEnvelope() async throws {
         let payload = """
-        {
-          "items": [
+        [
             {
-              "id": { "backend": "halo2/ipa", "name": "vk_enveloped" },
+              "id": { "backend": "pipa-r/pasta", "name": "vk_record" },
               "record": {
                 "version": 1,
-                "circuit_id": "halo2/ipa::transfer_v1",
-                "backend": "halo2/ipa",
+                "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
+                "backend": "pipa-r/pasta",
                 "curve": "pallas",
                 "public_inputs_schema_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 "commitment": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "vk_len": 64,
                 "max_proof_bytes": 2048,
-                "gas_schedule_id": "halo2_default",
+                "gas_schedule_id": "native_pipa_r_default",
                 "status": "Active"
               }
             }
-          ]
-        }
+        ]
         """.data(using: .utf8)!
 
+        var responseBody = payload
         StubURLProtocol.handler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -10379,13 +10378,21 @@ final class ToriiClientHeaderTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: ["Content-Type": "application/json"]
             )!
-            return (response, payload)
+            return (response, responseBody)
         }
 
         let keys = try await makeClient().listVerifyingKeys()
         XCTAssertEqual(keys.count, 1)
-        XCTAssertEqual(keys[0].id.name, "vk_enveloped")
+        XCTAssertEqual(keys[0].id.name, "vk_record")
         XCTAssertEqual(keys[0].record?.verifyingKeyLength, 64)
+
+        responseBody = Data("{\"items\":\(String(decoding: payload, as: UTF8.self))}".utf8)
+        await XCTAssertThrowsErrorAsync(try await makeClient().listVerifyingKeys()) { error in
+            guard case let ToriiClientError.decoding(underlying) = error,
+                  case DecodingError.typeMismatch = underlying else {
+                return XCTFail("Expected the canonical array shape error, got \(error)")
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10403,6 +10410,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
 
         for backend in [
+            "halo2/ipa",
             " halo2/ipa",
             "halo2/ipa ",
             "\thalo2/ipa",
@@ -10448,8 +10456,8 @@ final class ToriiClientHeaderTests: XCTestCase {
         let record = """
         {
           "version": 1,
-          "circuit_id": "halo2/ipa::transfer_v1",
-          "backend": "halo2/ipa",
+          "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
+          "backend": "pipa-r/pasta",
           "curve": "pallas",
           "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -10459,17 +10467,18 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
         """
         let payloads = [
-            #"[{ "backend": " halo2/ipa", "name": "flat_vk" }]"#,
-            #"[{ "id": { "backend": "halo2/ipa ", "name": "object_vk" } }]"#,
+            #"[{ "backend": "halo2/ipa", "name": "retired_backend_vk" }]"#,
+            #"[{ "backend": " pipa-r/pasta", "name": "flat_vk" }]"#,
+            #"[{ "id": { "backend": "pipa-r/pasta ", "name": "object_vk" } }]"#,
             #"[{ "backend": "halo2\uFF0Fipa", "name": "fullwidth_slash_vk" }]"#,
             #"[{ "id": { "backend": "h\u0430lo2/ipa", "name": "cyrillic_a_vk" } }]"#,
             """
             [{
-              "id": { "backend": "halo2/ipa", "name": "record_vk" },
+              "id": { "backend": "pipa-r/pasta", "name": "record_vk" },
               "record": {
                 "version": 1,
-                "circuit_id": "halo2/ipa::transfer_v1",
-                "backend": "\\thalo2/ipa",
+                "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
+                "backend": "\\tpipa-r/pasta",
                 "curve": "pallas",
                 "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -10481,15 +10490,15 @@ final class ToriiClientHeaderTests: XCTestCase {
             """,
             """
             [{
-              "id": { "backend": "halo2/ipa", "name": "inline_vk" },
+              "id": { "backend": "pipa-r/pasta", "name": "inline_vk" },
               "record": \(record.dropLast()) ,
-                "key": { "backend": "halo2/ipa\\n", "bytes_b64": "AQID" }
+                "key": { "backend": "pipa-r/pasta\\n", "bytes_b64": "AQID" }
               }
             }]
             """,
             """
             [{
-              "id": { "backend": "halo2/ipa", "name": "zero_width_vk" },
+              "id": { "backend": "pipa-r/pasta", "name": "zero_width_vk" },
               "record": \(record.dropLast()) ,
                 "key": { "backend": "halo2/\\u200Bipa", "bytes_b64": "AQID" }
               }
@@ -10517,45 +10526,45 @@ final class ToriiClientHeaderTests: XCTestCase {
         let payloads = [
             """
             [{
-              "id": { "backend": "halo2/ipa", "name": " vk_main" },
+              "id": { "backend": "pipa-r/pasta", "name": " vk_main" },
               "record": {
                 "version": 1,
-                "circuit_id": "halo2/ipa::transfer_v1",
-                "backend": "halo2/ipa",
+                "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
+                "backend": "pipa-r/pasta",
                 "curve": "pallas",
                 "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "vk_len": 32,
                 "max_proof_bytes": 4096,
-                "gas_schedule_id": "halo2_default",
+                "gas_schedule_id": "native_pipa_r_default",
                 "status": "Active"
               }
             }]
             """,
             """
             [{
-              "id": { "backend": "halo2/ipa", "name": "vk_main" },
+              "id": { "backend": "pipa-r/pasta", "name": "vk_main" },
               "record": {
                 "version": 1,
-                "circuit_id": " halo2/ipa::transfer_v1",
-                "backend": "halo2/ipa",
+                "circuit_id": " pipa-r/pasta/confidential-transfer-v1",
+                "backend": "pipa-r/pasta",
                 "curve": "pallas",
                 "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "vk_len": 32,
                 "max_proof_bytes": 4096,
-                "gas_schedule_id": "halo2_default",
+                "gas_schedule_id": "native_pipa_r_default",
                 "status": "Active"
               }
             }]
             """,
             """
             [{
-              "id": { "backend": "halo2/ipa", "name": "vk_main" },
+              "id": { "backend": "pipa-r/pasta", "name": "vk_main" },
               "record": {
                 "version": 1,
-                "circuit_id": "halo2/ipa::transfer_v1",
-                "backend": "halo2/ipa",
+                "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
+                "backend": "pipa-r/pasta",
                 "curve": "pallas",
                 "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -10579,17 +10588,17 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testVerifyingKeyDetailDecodingRejectsWithdrawHeightBeforeActivationHeight() {
         let payload = """
         {
-          "id": { "backend": "halo2/ipa", "name": "vk_main" },
+          "id": { "backend": "pipa-r/pasta", "name": "vk_main" },
           "record": {
             "version": 2,
-            "circuit_id": "halo2/ipa::transfer_v2",
-            "backend": "halo2/ipa",
+            "circuit_id": "pipa-r/pasta/confidential-transfer-v1",
+            "backend": "pipa-r/pasta",
             "curve": "pallas",
             "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
             "commitment": "20574662a58708e02e0000000000000000000000000000000000000000000000",
             "vk_len": 96,
             "max_proof_bytes": 8192,
-            "gas_schedule_id": "halo2_default",
+            "gas_schedule_id": "native_pipa_r_default",
             "activation_height": 10,
             "withdraw_height": 9,
             "status": "Active"
@@ -10605,12 +10614,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyReturnsUnsignedTransactionDraft() async throws {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01, 0x02, 0x03])
         )
         var didSendRequest = false
@@ -10622,7 +10631,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["authority"] as? String, requestBody.authority)
             XCTAssertNil(body["private_key"])
-            XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
+            XCTAssertEqual(body["backend"] as? String, "pipa-r/pasta")
             XCTAssertEqual(body["name"] as? String, "vk_main")
             XCTAssertEqual(body["vk_bytes"] as? String, "AQID")
             XCTAssertEqual(body["vk_len"] as? Int, 3)
@@ -10642,12 +10651,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsInvalidSchemaHash() {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: "abc",
-            gasScheduleId: "halo2_default"
+            gasScheduleId: "native_pipa_r_default"
         )
         XCTAssertThrowsError(try JSONEncoder().encode(requestBody)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -10660,12 +10669,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testVerifyingKeyTransactionDraftRejectsMalformedOrRetiredFields() async throws {
         let request = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "e", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01, 0x02, 0x03])
         )
         let payload = canonicalVerifyingKeyTransactionPayload()
@@ -10759,12 +10768,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         )
         let request = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "e", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01, 0x02, 0x03])
         )
         var didDispatch = false
@@ -10799,12 +10808,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsSemanticallySubstitutedDrafts() async throws {
         let request = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "e", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01, 0x02, 0x03])
         )
         let cases: [(label: String, payload: Data, expectedReason: String)] = [
@@ -10868,12 +10877,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsGenesisUnknownLegacyAndUnmarkedTransactionDomains() async throws {
         let request = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "e", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01, 0x02, 0x03])
         )
         func domain(kind: UInt32, value: Data? = nil, trailing: Data = Data()) -> Data {
@@ -11437,12 +11446,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRequiresHttp200AndUniqueResponseFields() async throws {
         let request = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01])
         )
         StubURLProtocol.handler = { urlRequest in
@@ -11490,12 +11499,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsPaddedSelectorMetadata() {
         let base = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01, 0x02])
         )
 
@@ -11510,7 +11519,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
 
         var paddedCircuit = base
-        paddedCircuit.circuitId = "halo2/ipa::transfer_v1 "
+        paddedCircuit.circuitId = "pipa-r/pasta/confidential-transfer-v1 "
         XCTAssertThrowsError(try JSONEncoder().encode(paddedCircuit)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 return XCTFail("Expected invalidPayload error")
@@ -11529,7 +11538,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertTrue(reason.contains("surrounding whitespace"))
         }
 
-        XCTAssertThrowsError(try ToriiVerifyingKeyId(backend: "halo2/ipa", name: "vk_main ")) { error in
+        XCTAssertThrowsError(try ToriiVerifyingKeyId(backend: "pipa-r/pasta", name: "vk_main ")) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 return XCTFail("Expected invalidPayload error")
             }
@@ -11541,12 +11550,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsVkLengthMismatch() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([0x01, 0x02])
         )
         requestBody.verifyingKeyLength = 3
@@ -11560,12 +11569,12 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsLengthOnlyVerifierMaterial() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default"
+            gasScheduleId: "native_pipa_r_default"
         )
         requestBody.verifyingKeyLength = 3
         XCTAssertThrowsError(try JSONEncoder().encode(requestBody)) { error in
@@ -11580,12 +11589,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         let bytes = Data([0x01, 0x02, 0x03])
         var registerRequest = ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: bytes
         )
         registerRequest.commitmentHex = String(repeating: "0", count: 64)
@@ -11598,15 +11607,15 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         var updateRequest = ToriiVerifyingKeyUpdateRequest(
             authority: "alice",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 2,
-            circuitId: "halo2/ipa::transfer_v2",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "b", count: 64)
         )
         updateRequest.verifyingKeyBytes = bytes
         updateRequest.commitmentHex = matchingVerifyingKeyCommitmentHex(
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             bytes: bytes
         )
         XCTAssertNoThrow(try JSONEncoder().encode(updateRequest))
@@ -11616,12 +11625,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         let bytes = Data([0x01, 0x02, 0x03])
         var registerRequest = ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: bytes
         )
         registerRequest.activationHeight = 10
@@ -11635,10 +11644,10 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         var updateRequest = ToriiVerifyingKeyUpdateRequest(
             authority: "alice",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 2,
-            circuitId: "halo2/ipa::transfer_v2",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "b", count: 64)
         )
         updateRequest.verifyingKeyBytes = bytes
@@ -11657,6 +11666,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
             "stark/unknown-native-v1",
+            "halo2/ipa",
             " halo2/ipa",
             "halo2/ipa ",
             "\thalo2/ipa",
@@ -11679,9 +11689,9 @@ final class ToriiClientHeaderTests: XCTestCase {
                 backend: backend,
                 name: "vk_main",
                 version: 1,
-                circuitId: "halo2/ipa::transfer_v1",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-                gasScheduleId: "halo2_default"
+                gasScheduleId: "native_pipa_r_default"
             )
             XCTAssertThrowsError(try JSONEncoder().encode(registerRequest), backend) { error in
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
@@ -11695,7 +11705,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 backend: backend,
                 name: "vk_main",
                 version: 2,
-                circuitId: "halo2/ipa::transfer_v2",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 publicInputsSchemaHashHex: String(repeating: "b", count: 64)
             )
             XCTAssertThrowsError(try JSONEncoder().encode(updateRequest), backend) { error in
@@ -11713,12 +11723,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         for name in blankNames {
             let registerRequest = ToriiVerifyingKeyRegisterRequest(
                 authority: "alice",
-                backend: "halo2/ipa",
+                backend: "pipa-r/pasta",
                 name: name,
                 version: 1,
-                circuitId: "halo2/ipa::transfer_v1",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-                gasScheduleId: "halo2_default"
+                gasScheduleId: "native_pipa_r_default"
             )
             XCTAssertThrowsError(try JSONEncoder().encode(registerRequest),
                                  "register must reject blank VK name \(String(reflecting: name))") { error in
@@ -11730,10 +11740,10 @@ final class ToriiClientHeaderTests: XCTestCase {
 
             let updateRequest = ToriiVerifyingKeyUpdateRequest(
                 authority: "alice",
-                backend: "halo2/ipa",
+                backend: "pipa-r/pasta",
                 name: name,
                 version: 2,
-                circuitId: "halo2/ipa::transfer_v2",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 publicInputsSchemaHashHex: String(repeating: "b", count: 64)
             )
             XCTAssertThrowsError(try JSONEncoder().encode(updateRequest),
@@ -11752,12 +11762,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         for blank in blankValues {
             let registerWithBlankAuthority = ToriiVerifyingKeyRegisterRequest(
                 authority: blank,
-                backend: "halo2/ipa",
+                backend: "pipa-r/pasta",
                 name: "vk_main",
                 version: 1,
-                circuitId: "halo2/ipa::transfer_v1",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-                gasScheduleId: "halo2_default"
+                gasScheduleId: "native_pipa_r_default"
             )
             XCTAssertThrowsError(try JSONEncoder().encode(registerWithBlankAuthority),
                                  "register must reject blank authority \(String(reflecting: blank))") { error in
@@ -11769,10 +11779,10 @@ final class ToriiClientHeaderTests: XCTestCase {
 
             let updateWithBlankAuthority = ToriiVerifyingKeyUpdateRequest(
                 authority: blank,
-                backend: "halo2/ipa",
+                backend: "pipa-r/pasta",
                 name: "vk_main",
                 version: 2,
-                circuitId: "halo2/ipa::transfer_v2",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 publicInputsSchemaHashHex: String(repeating: "b", count: 64)
             )
             XCTAssertThrowsError(try JSONEncoder().encode(updateWithBlankAuthority),
@@ -11789,15 +11799,15 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testUpdateVerifyingKeyReturnsUnsignedTransactionDraft() async throws {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 2,
-            circuitId: "halo2/ipa::transfer_v2",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         )
         requestBody.verifyingKeyBytes = Data([0xAA])
         requestBody.commitmentHex = matchingVerifyingKeyCommitmentHex(
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             bytes: Data([0xAA])
         )
         var didSendRequest = false
@@ -11809,7 +11819,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["authority"] as? String, requestBody.authority)
             XCTAssertNil(body["private_key"])
-            XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
+            XCTAssertEqual(body["backend"] as? String, "pipa-r/pasta")
             XCTAssertEqual(body["name"] as? String, "vk_main")
             XCTAssertEqual(body["commitment_hex"] as? String, requestBody.commitmentHex)
             XCTAssertEqual(body["vk_bytes"] as? String, "qg==")
@@ -11821,7 +11831,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             let payload = self.canonicalVerifyingKeyTransactionPayload(
                 wireName: "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey",
                 version: 2,
-                circuitId: "halo2/ipa::transfer_v2",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 schemaHash: Data(repeating: 0xff, count: 32),
                 gasScheduleId: nil,
                 keyBytes: Data([0xAA])
@@ -11835,7 +11845,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             canonicalVerifyingKeyTransactionPayload(
                 wireName: "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey",
                 version: 2,
-                circuitId: "halo2/ipa::transfer_v2",
+                circuitId: "pipa-r/pasta/confidential-transfer-v1",
                 schemaHash: Data(repeating: 0xff, count: 32),
                 gasScheduleId: nil,
                 keyBytes: Data([0xAA])
@@ -11848,10 +11858,10 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testUpdateVerifyingKeyRejectsInvalidCommitmentHex() {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 2,
-            circuitId: "halo2/ipa::transfer_v2",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64)
         )
         requestBody.commitmentHex = "deadbeef"
@@ -11881,14 +11891,14 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertNil(triggerEvent)
 
         let proofFilter = ToriiProofEventFilter(
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             proofHashHex: String(repeating: "a", count: 64),
             includeVerified: false,
             includeRejected: true
         )
-        XCTAssertEqual(try proofFilter.serverFilter()?.description, #"proof_backend = "halo2/ipa""#)
+        XCTAssertEqual(try proofFilter.serverFilter()?.description, #"proof_backend = "pipa-r/pasta""#)
         expectCanonicalEventRequest(
-            queryItems: [URLQueryItem(name: "filter", value: #"proof_backend = "halo2/ipa""#)]
+            queryItems: [URLQueryItem(name: "filter", value: #"proof_backend = "pipa-r/pasta""#)]
         )
         var proofIterator = makeClient()
             .streamProofEvents(filter: proofFilter)
@@ -11909,7 +11919,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGenericEventStreamRemainsAnonymousWithoutDefaultCanonicalAuth() async throws {
         let filter = ToriiProofEventFilter(
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             proofHashHex: String(repeating: "b", count: 64),
             includeVerified: true,
             includeRejected: false
@@ -13155,16 +13165,16 @@ id: 41
 data: {"category":"Data","event":"Asset","summary":"Asset(Added(..))"}
 
 id: 42
-data: {"category":"Data","event":"ProofVerified","backend":"halo2/ipa","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","call_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","envelope_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","vk_ref":"halo2/ipa::vk_main","vk_commitment":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+data: {"category":"Data","event":"ProofVerified","backend":"pipa-r/pasta","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","call_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","envelope_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","vk_ref":"pipa-r/pasta::vk_main","vk_commitment":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 
 id: 43
-data: {"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_hash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","call_hash":null,"envelope_hash":null,"vk_ref":null,"vk_commitment":null}
+data: {"category":"Data","event":"ProofRejected","backend":"pipa-r/pasta","proof_hash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","call_hash":null,"envelope_hash":null,"vk_ref":null,"vk_commitment":null}
 
 id: 44
-data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_count":1,"remaining":9,"cap":10,"grace_blocks":2,"prune_batch":4,"pruned_at_height":77,"pruned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","origin":"Insert","removed":[{"backend":"halo2/ipa","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}
+data: {"category":"Data","event":"ProofPruned","backend":"pipa-r/pasta","removed_count":1,"remaining":9,"cap":10,"grace_blocks":2,"prune_batch":4,"pruned_at_height":77,"pruned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","origin":"Insert","removed":[{"backend":"pipa-r/pasta","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}
 
 id: 45
-data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_count":1,"remaining":9,"cap":10,"grace_blocks":2,"prune_batch":4,"pruned_at_height":78,"pruned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","origin":"Manual","removed":[{"backend":"halo2/ipa","proof_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}
+data: {"category":"Data","event":"ProofPruned","backend":"pipa-r/pasta","removed_count":1,"remaining":9,"cap":10,"grace_blocks":2,"prune_batch":4,"pruned_at_height":78,"pruned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","origin":"Manual","removed":[{"backend":"pipa-r/pasta","proof_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}
 
 """
             .data(using: .utf8)!
@@ -13180,7 +13190,7 @@ data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_co
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamProofEvents(filter: ToriiProofEventFilter(backend: "halo2/ipa",
+        let stream = makeClient().streamProofEvents(filter: ToriiProofEventFilter(backend: "pipa-r/pasta",
                                                                                   proofHashHex: String(repeating: "a", count: 64)))
         var iterator = stream.makeAsyncIterator()
 
@@ -13189,9 +13199,9 @@ data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_co
             return XCTFail("Expected verified proof event")
         }
         XCTAssertEqual(verified?.eventId, "42")
-        XCTAssertEqual(payload.id, ToriiProofId(backend: "halo2/ipa", proofHashHex: String(repeating: "a", count: 64)))
-        XCTAssertEqual(payload.verifyingKeyRef, "halo2/ipa::vk_main")
-        XCTAssertEqual(payload.verifyingKeyId?.backend, "halo2/ipa")
+        XCTAssertEqual(payload.id, ToriiProofId(backend: "pipa-r/pasta", proofHashHex: String(repeating: "a", count: 64)))
+        XCTAssertEqual(payload.verifyingKeyRef, "pipa-r/pasta::vk_main")
+        XCTAssertEqual(payload.verifyingKeyId?.backend, "pipa-r/pasta")
         XCTAssertEqual(payload.verifyingKeyId?.name, "vk_main")
         XCTAssertEqual(payload.verifyingKeyCommitmentHex, String(repeating: "b", count: 64))
         XCTAssertEqual(payload.callHashHex, String(repeating: "c", count: 64))
@@ -13225,7 +13235,7 @@ data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_co
     func testStreamProofEventsRejectsInvalidProofHashHex() async throws {
         let ssePayload = """
 id: 90
-data: {"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_hash":"abcd"}
+data: {"category":"Data","event":"ProofRejected","backend":"pipa-r/pasta","proof_hash":"abcd"}
 
 """
             .data(using: .utf8)!
@@ -13255,7 +13265,7 @@ data: {"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_ha
     func testStreamProofEventsRejectsInvalidCommitmentHex() async throws {
         let ssePayload = """
 id: 91
-data: {"category":"Data","event":"ProofVerified","backend":"halo2/ipa","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vk_commitment":"zzzz"}
+data: {"category":"Data","event":"ProofVerified","backend":"pipa-r/pasta","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vk_commitment":"zzzz"}
 
 """
             .data(using: .utf8)!
@@ -13315,7 +13325,7 @@ data: {"category":"Data","event":"ProofRejected","backend":"halo2:ipa","proof_ha
     func testStreamProofEventsDoesNotEmitLastEventIdHeader() async throws {
         let ssePayload = """
 id: 88
-data: {"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","call_hash":null,"envelope_hash":null,"vk_ref":null,"vk_commitment":null}
+data: {"category":"Data","event":"ProofRejected","backend":"pipa-r/pasta","proof_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","call_hash":null,"envelope_hash":null,"vk_ref":null,"vk_commitment":null}
 
 """
             .data(using: .utf8)!
@@ -13477,7 +13487,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
                 return XCTFail("Expected invalidPayload error")
             }
         }
-        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa", proofHashHex: "abc").serverFilter()) { error in
+        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "pipa-r/pasta", proofHashHex: "abc").serverFilter()) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }
@@ -13487,6 +13497,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
 
     func testProofEventFilterRejectsInvalidBackendOrHash() {
         for backend in [
+            "halo2/ipa",
             " halo2/ipa",
             "halo2/ipa ",
             "\thalo2/ipa",
@@ -13529,10 +13540,10 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
     func testProofEventFilterRendersEventStreamTextFilter() throws {
         let call = "0x" + String(repeating: "A", count: 64)
         let envelope = String(repeating: "b", count: 64)
-        let filter = ToriiProofEventFilter(backend: "halo2/ipa", callHashHex: call, envelopeHashHex: envelope)
+        let filter = ToriiProofEventFilter(backend: "pipa-r/pasta", callHashHex: call, envelopeHashHex: envelope)
         XCTAssertEqual(
             try filter.serverFilter()?.description,
-            "proof_backend = \"halo2/ipa\" and proof_call_hash = \"\(String(repeating: "a", count: 64))\" and proof_envelope_hash = \"\(envelope)\""
+            "proof_backend = \"pipa-r/pasta\" and proof_call_hash = \"\(String(repeating: "a", count: 64))\" and proof_envelope_hash = \"\(envelope)\""
         )
         XCTAssertNil(try ToriiProofEventFilter(proofHashHex: envelope).serverFilter())
     }

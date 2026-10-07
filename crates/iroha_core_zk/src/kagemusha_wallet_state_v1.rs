@@ -52,7 +52,7 @@ mod map_tree;
 mod native_owner;
 mod native_worker;
 mod policy_custody;
-pub use native_owner::NativeWalletProofsV1;
+pub use native_owner::{NativeOperationReviewV1, NativeWalletProofsV1, ReviewedOperationV1};
 mod preparation_custody;
 mod scheduling;
 mod session_custody;

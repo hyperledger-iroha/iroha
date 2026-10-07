@@ -558,6 +558,35 @@ impl ReceiveFoldFieldsV1 {
 }
 
 impl PreparationV1<'_> {
+    // The review and real Send producer share this complete original admission and whole
+    // control check. It derives no nonce, insertion, proof, signature or successor.
+    pub(crate) fn review_send_terms(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        predecessor: &FoldedStateV1,
+        request_original: &[u8],
+        controls: &SendControlsV1<'_>,
+    ) -> Result<(KagemushaWalletRequestV1, KagemushaWalletSendCheckV1), Error> {
+        self.credential_owner(owner)?;
+        if predecessor.manifest_digest != self.installed.verifier().manifest_digest()
+            || predecessor.credential != owner.credential
+        {
+            return Err(Error::Authority);
+        }
+        let request = request(request_original, self.installed.verifier().scheme())?;
+        let check = authority(request.check_send(&KagemushaWalletSendInputsV1 {
+            payer_credential: &owner.credential,
+            payer_state: &predecessor.source_state,
+            omega: &predecessor.lineage.public,
+            anchored: controls.anchored,
+            now: controls.now,
+            blacklist: controls.blacklist,
+            quota_share: controls.quota_share,
+            quota_usage: controls.quota_usage,
+        }))?;
+        Ok((request, check))
+    }
+
     /// Derive a Send sigma witness from the authenticated folded source, exact signed Request,
     /// actual local controls and actual map insertions. The existing G1/native engines derive
     /// every effect and successor; hardware preparation approval/head-lock/Advance remain Native.
@@ -573,25 +602,10 @@ impl PreparationV1<'_> {
         maps: SendMapsV1,
         successor_nonce: [u8; 32],
     ) -> Result<MonetaryStepV1, Error> {
-        self.credential_owner(owner)?;
-        if predecessor.manifest_digest != self.installed.verifier().manifest_digest()
-            || predecessor.credential != owner.credential
-        {
-            return Err(Error::Authority);
-        }
+        let (request, check) =
+            self.review_send_terms(owner, predecessor, request_original, &controls)?;
         let scheme = self.installed.verifier().scheme();
-        let request = request(request_original, scheme)?;
         let source = &predecessor.source_state;
-        let check = authority(request.check_send(&KagemushaWalletSendInputsV1 {
-            payer_credential: &owner.credential,
-            payer_state: source,
-            omega: &predecessor.lineage.public,
-            anchored: controls.anchored,
-            now: controls.now,
-            blacklist: controls.blacklist,
-            quota_share: controls.quota_share,
-            quota_usage: controls.quota_usage,
-        }))?;
         let body = request_fields(&request.body)?;
         let pending = KagemushaWalletPendingOutgoingLeafV1 {
             credit_id: request.credit_id(),

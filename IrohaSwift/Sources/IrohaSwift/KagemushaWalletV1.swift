@@ -39,6 +39,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
   private let lock = NSLock()
   private var owner: UInt64
   private let driver: KagemushaWalletNativeDriverV1
+  private let setupOrigin = KagemushaWalletSetupOriginV1()
   /// Open one enrolled incarnation with its authenticated native artifact identity.
   public init(
     platform: KagemushaWalletApplePlatformV1, slot: Data, scheme: Data, wallet: Data,
@@ -97,6 +98,47 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     return try driver.result { out in
       input.withRequest { request in driver.execute(value, request, out) }
     }
+  }
+  private func setup(_ input: KagemushaWalletSetupInputV1) throws -> KagemushaWalletSetupReplyV1 {
+    let value = try handle()
+    return try driver.setupResult { output in
+      input.withRequest { request in driver.setup(value, request, output) }
+    }
+  }
+  /// Prove and release the admitted enrollment's initial head through the sole Native owner.
+  public func bootstrap() throws -> KagemushaWalletCallV1 {
+    try setup(KagemushaWalletSetupInputV1(selector: 0)).completion()
+  }
+  /// Sign and durably retain an Offer for this exact identity and positive amount.
+  /// Retry with the same identity and amount; the SDK supplies no signer or source state.
+  public func offer(requestId: Data, amount: KagemushaWalletUInt128V1) throws -> Data {
+    try setup(KagemushaWalletSetupInputV1(selector: 1, requestId: requestId, amount: amount)).original()
+  }
+  /// Issue the exact receiver-signed Request. Native selects its current head, maps and key.
+  /// Optional fee schedule and signer certificate must be supplied together as originals.
+  public func issueRequest(requestId: Data, offer: Data, feeSchedule: Data? = nil,
+    feeCertificate: Data? = nil) throws -> Data {
+    try setup(KagemushaWalletSetupInputV1.request(requestId: requestId, offer: offer,
+      feeSchedule: feeSchedule, feeCertificate: feeCertificate)).original()
+  }
+  /// Verify delivery evidence and derive Archive from the permanent local Send index.
+  /// Credited never permits refund, retargeting or a managed balance update.
+  public func acceptCredited(_ credited: Data) throws -> KagemushaWalletCallV1 {
+    try setup(KagemushaWalletSetupInputV1(selector: 3, first: credited)).completion()
+  }
+  /// Begin a real Native direct-time exchange. No caller clock or nonce is accepted.
+  public func beginDirectTimeExchange() throws -> KagemushaWalletDirectTimeExchangeV1 {
+    try setup(KagemushaWalletSetupInputV1(selector: 4)).exchange(origin: setupOrigin)
+  }
+  /// Consume this wallet's one-use Native challenge and authenticate the signed reply.
+  /// Invalid local bounds fail before consumption; a dispatched exchange is never recycled.
+  public func finishDirectTimeExchange(_ exchange: KagemushaWalletDirectTimeExchangeV1,
+    anchor: Data, certificate: Data) throws {
+    let input = try KagemushaWalletSetupInputV1(selector: 5,
+      token: exchange.tokenFor(origin: setupOrigin), first: anchor, second: certificate)
+    _ = try handle()
+    try exchange.consume(origin: setupOrigin)
+    try setup(input).timeRetained()
   }
   /// Load exact ordinary-ledger receipt and compact finality originals.
   public func load(requestId: Data, receipt: Data, finality: Data) throws -> KagemushaWalletCallV1 {
@@ -181,6 +223,142 @@ public enum KagemushaWalletRefreshKindV1: UInt32, Sendable {
   case credential = 3, schemePolicy = 4, blacklist = 5, timeAnchor = 6, quotaShare = 7
 }
 
+/// One process origin, distinct even if another wallet selects the same opaque byte identities.
+/// No origin or time token is constructed by callers or used as financial authority.
+final class KagemushaWalletSetupOriginV1: @unchecked Sendable {}
+
+/// Opaque one-use challenge issued by the same open Native wallet. This object contains no
+/// wall clock, monetary signing body, state root or Native proof verdict.
+public final class KagemushaWalletDirectTimeExchangeV1: @unchecked Sendable,
+  CustomStringConvertible {
+  private let origin: KagemushaWalletSetupOriginV1
+  private let token: UInt64
+  private let originalNonce: Data
+  private let lock = NSLock()
+  private var consumed = false
+  init(origin: KagemushaWalletSetupOriginV1, token: UInt64, nonce: Data) {
+    self.origin = origin; self.token = token; originalNonce = kagemushaWalletSetupCopyV1(nonce)
+  }
+  /// Send these exact Native-generated challenge bytes to the selected signed time service.
+  public var nonce: Data { kagemushaWalletSetupCopyV1(originalNonce) }
+  func tokenFor(origin: KagemushaWalletSetupOriginV1) throws -> UInt64 {
+    lock.lock(); defer { lock.unlock() }
+    guard origin === self.origin, !consumed else { throw KagemushaWalletErrorV1.invalidInput }
+    return token
+  }
+  func consume(origin: KagemushaWalletSetupOriginV1) throws {
+    lock.lock(); defer { lock.unlock() }
+    guard origin === self.origin, !consumed else { throw KagemushaWalletErrorV1.invalidInput }
+    consumed = true
+  }
+  public var description: String { "KagemushaWalletDirectTimeExchangeV1(challenge=[REDACTED])" }
+}
+
+/// Internal C result envelope. Statuses12..14 cannot become monetary completion.
+struct KagemushaWalletSetupReplyV1 {
+  let status: Int32
+  let sequenceLow: UInt64
+  let sequenceHigh: UInt64
+  let detail: UInt32
+  private let retained: Data
+  init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws {
+    guard (0...14).contains(status), bytes.count <= 10_000 else {
+      throw KagemushaWalletErrorV1.invalidNativeOutput
+    }
+    self.status = status; self.sequenceLow = sequenceLow; self.sequenceHigh = sequenceHigh
+    self.detail = detail; retained = kagemushaWalletSetupCopyV1(bytes)
+  }
+  func completion() throws -> KagemushaWalletCallV1 {
+    try KagemushaWalletCallV1(status: status, sequenceLow: sequenceLow,
+      sequenceHigh: sequenceHigh, detail: detail, bytes: retained)
+  }
+  func original() throws -> Data {
+    guard status == 12, sequenceLow == 0, sequenceHigh == 0, detail == 0, !retained.isEmpty else {
+      throw KagemushaWalletErrorV1.invalidNativeOutput
+    }
+    return kagemushaWalletSetupCopyV1(retained)
+  }
+  func exchange(origin: KagemushaWalletSetupOriginV1) throws -> KagemushaWalletDirectTimeExchangeV1 {
+    guard status == 13, sequenceLow > 0, sequenceLow <= UInt64(Int64.max),
+      sequenceHigh == 0, detail == 0, retained.count == 32,
+      retained.contains(where: { $0 != 0 }) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return KagemushaWalletDirectTimeExchangeV1(origin: origin, token: sequenceLow, nonce: retained)
+  }
+  func timeRetained() throws {
+    guard status == 14, sequenceLow == 0, sequenceHigh == 0, detail == 0, retained.isEmpty else {
+      throw KagemushaWalletErrorV1.invalidNativeOutput
+    }
+  }
+}
+
+/// Allocation-bounded foreign intake only; Rust performs original decoding and signature/source checks.
+struct KagemushaWalletSetupInputV1 {
+  let selector: UInt32
+  let requestId: Data
+  let amount: KagemushaWalletUInt128V1
+  let token: UInt64
+  let first: Data
+  let second: Data
+  let third: Data
+  init(selector: UInt32, requestId: Data = Data(repeating: 0, count: 32),
+    amount: KagemushaWalletUInt128V1 = .init(low: 0, high: 0), token: UInt64 = 0,
+    first: Data = Data(), second: Data = Data(), third: Data = Data()) throws {
+    let limits: [Int]
+    switch selector {
+    case 0, 1, 4: limits = [0, 0, 0]
+    case 2: limits = [10_000, 1_024, 512]
+    case 3: limits = [10_000, 0, 0]
+    case 5: limits = [512, 512, 0]
+    default: throw KagemushaWalletErrorV1.invalidInput
+    }
+    let positive = amount.low != 0 || amount.high != 0
+    guard requestId.count == 32,
+      (selector == 1 || selector == 2) == requestId.contains(where: { $0 != 0 }),
+      (selector == 1) == positive, selector == 5 ? token > 0 : token == 0 else {
+      throw KagemushaWalletErrorV1.invalidInput
+    }
+    for (bytes, bound) in zip([first, second, third], limits) {
+      guard bytes.count <= bound else { throw KagemushaWalletErrorV1.invalidInput }
+    }
+    guard selector != 2 || (!first.isEmpty && second.isEmpty == third.isEmpty),
+      selector != 3 || !first.isEmpty,
+      selector != 5 || (!first.isEmpty && !second.isEmpty) else {
+      throw KagemushaWalletErrorV1.invalidInput
+    }
+    self.selector = selector; self.requestId = kagemushaWalletSetupCopyV1(requestId)
+    self.amount = amount; self.token = token
+    self.first = kagemushaWalletSetupCopyV1(first); self.second = kagemushaWalletSetupCopyV1(second)
+    self.third = kagemushaWalletSetupCopyV1(third)
+  }
+  static func request(requestId: Data, offer: Data, feeSchedule: Data?, feeCertificate: Data?) throws -> Self {
+    guard (feeSchedule == nil) == (feeCertificate == nil),
+      feeSchedule == nil || (!(feeSchedule?.isEmpty ?? true) && !(feeCertificate?.isEmpty ?? true)) else {
+      throw KagemushaWalletErrorV1.invalidInput
+    }
+    return try Self(selector: 2, requestId: requestId, first: offer,
+      second: feeSchedule ?? Data(), third: feeCertificate ?? Data())
+  }
+  func withRequest<T>(_ body: (UnsafePointer<connect_norito_kagemusha_wallet_setup_request_v1>) -> T) -> T {
+    requestId.withUnsafeBytes { identity in first.withUnsafeBytes { a in
+      second.withUnsafeBytes { b in third.withUnsafeBytes { c in
+        var request = connect_norito_kagemusha_wallet_setup_request_v1()
+        request.request_id = identity.bindMemory(to: UInt8.self).baseAddress
+        request.selector = selector; request.amount = .init(low: amount.low, high: amount.high)
+        request.token = token
+        request.first = a.bindMemory(to: UInt8.self).baseAddress; request.first_length = a.count
+        request.second = b.bindMemory(to: UInt8.self).baseAddress; request.second_length = b.count
+        request.third = c.bindMemory(to: UInt8.self).baseAddress; request.third_length = c.count
+        return body(&request)
+      }}
+    }}
+  }
+}
+
+private func kagemushaWalletSetupCopyV1(_ original: Data) -> Data {
+  guard !original.isEmpty else { return Data() }
+  return original.withUnsafeBytes { Data(bytes: $0.baseAddress!, count: $0.count) }
+}
+
 /// Fixed foreign intake only; Native performs canonical decoding and all monetary admission.
 struct KagemushaWalletOperationInputV1 {
   let requestId: Data
@@ -242,6 +420,8 @@ private final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
   typealias Activity = @convention(c) (UInt64, UInt8, UInt8) -> Int32
   typealias Execute =
     @convention(c) (UInt64, UnsafePointer<connect_norito_kagemusha_wallet_operation_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
+  typealias Setup =
+    @convention(c) (UInt64, UnsafePointer<connect_norito_kagemusha_wallet_setup_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
   typealias Retry =
     @convention(c) (UInt64, UnsafePointer<UInt8>?, UnsafeMutablePointer<Output>?) -> Int32
   typealias Simple = @convention(c) (UInt64, UnsafeMutablePointer<Output>?) -> Int32
@@ -255,6 +435,7 @@ private final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
   let close: Close
   let activity: Activity
   let execute: Execute
+  let setup: Setup
   let requestStatus: Retry
   let retry: Retry
   let resume: Simple
@@ -277,6 +458,7 @@ private final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     close = try symbol("connect_norito_kagemusha_wallet_close_v1", Close.self)
     activity = try symbol("connect_norito_kagemusha_wallet_activity_v1", Activity.self)
     execute = try symbol("connect_norito_kagemusha_wallet_execute_v1", Execute.self)
+    setup = try symbol("connect_norito_kagemusha_wallet_setup_v1", Setup.self)
     requestStatus = try symbol("connect_norito_kagemusha_wallet_request_status_v1", Retry.self)
     retry = try symbol("connect_norito_kagemusha_wallet_retry_v1", Retry.self)
     resume = try symbol("connect_norito_kagemusha_wallet_resume_v1", Simple.self)
@@ -300,13 +482,26 @@ private final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     let status = action(&value)
     defer { if let bytes = value.bytes { free(bytes) } }
     try Self.check(status, reason: value.reason, platform: value.platform_code)
-    guard value.status >= 0, value.length <= 10_000, value.length == 0 || value.bytes != nil
+    guard value.status >= 0, value.length >= 0, value.length <= 10_000, value.length == 0 || value.bytes != nil
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return try KagemushaWalletCallV1(
       status: value.status, sequenceLow: value.sequence_low, sequenceHigh: value.sequence_high,
       detail: value.detail,
       bytes: value.bytes.map { Data(bytes: $0, count: value.length) } ?? Data())
   }
+  func setupResult(_ action: (UnsafeMutablePointer<Output>) -> Int32) throws -> KagemushaWalletSetupReplyV1 {
+    var value = Output()
+    let status = action(&value)
+    defer { if let bytes = value.bytes { free(bytes) } }
+    try Self.check(status, reason: value.reason, platform: value.platform_code)
+    guard value.length >= 0, value.length <= 10_000, value.length == 0 || value.bytes != nil else {
+      throw KagemushaWalletErrorV1.invalidNativeOutput
+    }
+    return try KagemushaWalletSetupReplyV1(status: value.status, sequenceLow: value.sequence_low,
+      sequenceHigh: value.sequence_high, detail: value.detail,
+      bytes: value.bytes.map { Data(bytes: $0, count: value.length) } ?? Data())
+  }
+
 }
 
 func kagemushaWalletCallbacksV1(_ platform: KagemushaWalletApplePlatformV1)

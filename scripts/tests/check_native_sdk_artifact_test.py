@@ -72,7 +72,7 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
         required = MODULE.REQUIRED_SYMBOLS[sdk]
         assert RETIRED_KAGEMUSHA_C_SYMBOLS.isdisjoint(required)
         expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS + (
-            MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS if sdk == "c-jni" else ()
+            MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS if sdk == "c-jni" else ()
         )
         assert tuple(symbol for symbol in required if "kagemusha" in symbol.lower()) == expected
 
@@ -80,7 +80,7 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
 def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
     """Keep the independently reviewed publication and admission inventories exact."""
     expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS
-    assert len(expected) == len(set(expected)) == 11
+    assert len(expected) == len(set(expected)) == 13
     for relative, start, end in (
         ("scripts/build_norito_xcframework.sh", '"required_symbols": [', '"forbidden_symbols": ['),
         ("scripts/validate_norito_bridge_xcframework.py", "EXPECTED_REQUIRED_SYMBOLS = [", "EXPECTED_FORBIDDEN_SYMBOLS = ["),
@@ -96,13 +96,15 @@ def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
 
 
 def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() -> None:
-    current = MODULE.KAGEMUSHA_WALLET_C_EXPORTS + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
-    assert len(current) == len(set(current)) == 18
+    current = MODULE.KAGEMUSHA_WALLET_C_EXPORTS + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
+    assert len(current) == len(set(current)) == 22
     for sdk in ("c-jni", "csharp"):
         MODULE.validate_retired_protocol_symbols(current, sdk=sdk)
         for symbol in (*current, "connect_norito_free"):
             assert not MODULE.is_retired_kagemusha_export(symbol)
         for symbol in (
+            "connect_norito_kagemusha_wallet_load_original_validate_v1_optional",
+            "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate_optional",
             "connect_norito_kagemusha_wallet_unknown_v1",
             "connect_norito_kagemusha_wallet_sign_v1",
             "connect_norito_kagemusha_wallet_open_v2",
@@ -563,7 +565,7 @@ def test_current_inventory_is_exact_for_posix_and_windows() -> None:
             assert len(inventories[sdk]) == len(set(inventories[sdk]))
             assert "connect_norito_domain_id_validate_v1" in inventories[sdk]
             expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS + (
-                MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS if sdk == "c-jni" else ()
+                MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS if sdk == "c-jni" else ()
             )
             assert tuple(symbol for symbol in inventories[sdk] if "kagemusha" in symbol.lower()) == expected
 

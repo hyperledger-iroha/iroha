@@ -1509,23 +1509,23 @@ final class ToriiEventDecodingTests: XCTestCase {
     func testProofEventsDecode() throws {
         let hash = String(repeating: "a", count: 64)
         let verified = try decode("""
-        {"category":"Data","event":"ProofVerified","backend":"halo2/ipa","proof_hash":"\(hash)","call_hash":null,
-         "envelope_hash":null,"vk_ref":"halo2/ipa::vk_main","vk_commitment":null}
+        {"category":"Data","event":"ProofVerified","backend":"pipa-r/pasta","proof_hash":"\(hash)","call_hash":null,
+         "envelope_hash":null,"vk_ref":"pipa-r/pasta::vk_main","vk_commitment":null}
         """)
         XCTAssertEqual(verified, .proof(.verified(ToriiProofEventBody(
-            id: ToriiProofId(backend: "halo2/ipa", proofHashHex: hash),
-            verifyingKeyRef: "halo2/ipa::vk_main"
+            id: ToriiProofId(backend: "pipa-r/pasta", proofHashHex: hash),
+            verifyingKeyRef: "pipa-r/pasta::vk_main"
         ))))
         XCTAssertEqual(verified.name, "ProofVerified")
         guard case let .proof(.pruned(pruned)) = try decode("""
-        {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_count":0,"remaining":4,"cap":4,
+        {"category":"Data","event":"ProofPruned","backend":"pipa-r/pasta","removed_count":0,"remaining":4,"cap":4,
          "grace_blocks":0,"prune_batch":8,"pruned_at_height":2,"pruned_by":"a","origin":"Scheduled","removed":[]}
         """) else {
             return XCTFail("expected a pruning event")
         }
         XCTAssertEqual(pruned.origin, .other("Scheduled"))
         XCTAssertEqual(pruned.removed, [])
-        XCTAssertThrowsError(try decode(#"{"category":"Data","event":"ProofRejected","backend":"halo2/ipa"}"#))
+        XCTAssertThrowsError(try decode(#"{"category":"Data","event":"ProofRejected","backend":"pipa-r/pasta"}"#))
     }
 
     func testUnknownEventsDoNotFailTheStream() throws {
@@ -1554,7 +1554,7 @@ final class ToriiEventDecodingTests: XCTestCase {
     func testProofFilterMatchesPrunedEventsLikeTorii() throws {
         let removedHash = String(repeating: "e", count: 64)
         let pruned = ToriiProofEvent.pruned(ToriiProofPrunedEvent(
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             removedCount: 1,
             remaining: 0,
             cap: 1,
@@ -1563,10 +1563,10 @@ final class ToriiEventDecodingTests: XCTestCase {
             prunedAtHeight: 3,
             prunedBy: "a",
             origin: .manual,
-            removed: [ToriiProofId(backend: "halo2/ipa", proofHashHex: removedHash)]
+            removed: [ToriiProofId(backend: "pipa-r/pasta", proofHashHex: removedHash)]
         ))
         XCTAssertTrue(ToriiProofEventFilter().matches(pruned))
-        XCTAssertTrue(ToriiProofEventFilter(backend: "halo2/ipa", proofHashHex: removedHash).matches(pruned))
+        XCTAssertTrue(ToriiProofEventFilter(backend: "pipa-r/pasta", proofHashHex: removedHash).matches(pruned))
         XCTAssertFalse(ToriiProofEventFilter(proofHashHex: String(repeating: "f", count: 64)).matches(pruned))
         XCTAssertFalse(ToriiProofEventFilter(callHashHex: removedHash).matches(pruned))
         XCTAssertFalse(ToriiProofEventFilter(includePruned: false).matches(pruned))

@@ -2,6 +2,7 @@
 
 use super::*;
 mod bootstrap;
+mod review;
 mod sessions;
 use crate::{
     kagemusha_wallet_advance_v1::{KagemushaWalletFsV1, KagemushaWalletPlatformV1},
@@ -19,6 +20,7 @@ use crate::{
 use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::keys::pk::artifact::ReadConfig;
+pub use review::{NativeOperationReviewV1, ReviewedOperationV1};
 use std::sync::{Arc, Mutex};
 
 /// Concrete native owner constructed only by consuming actual original admission.

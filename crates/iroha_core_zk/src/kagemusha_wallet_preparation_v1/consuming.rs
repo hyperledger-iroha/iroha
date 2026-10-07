@@ -133,6 +133,17 @@ struct Derived {
     openings: Vec<Vec<u8>>,
 }
 
+fn checked_unload_terms(
+    scheme: &KagemushaWalletSchemeV1,
+    before: &KagemushaWalletStateV1,
+    lineage: &KagemushaWalletLineagePublicV1,
+    amount: u128,
+    charge: Option<UnloadChargeOriginalsV1<'_>>,
+) -> Result<(u128, [u8; 32]), Error> {
+    authority(before.check_unload(amount, lineage))?;
+    charge_terms(scheme, before, amount, charge)
+}
+
 // This arithmetic helper admits no source proof. The public owner accepts only
 // an opaque FoldedStateV1 whose exact original Omega and both claims verified.
 fn derive(
@@ -160,8 +171,8 @@ fn derive(
             insertion,
             charge,
         } => {
-            authority(before.check_unload(amount, lineage))?;
-            let (online_charge, charge_quote) = charge_terms(scheme, before, amount, charge)?;
+            let (online_charge, charge_quote) =
+                checked_unload_terms(scheme, before, lineage, amount, charge)?;
             let ordinal = before.core.next_redeem;
             let nullifier = kagemusha_wallet_unload_nullifier_v1(
                 &before.core.scheme_id,
@@ -241,6 +252,40 @@ fn derive(
 }
 
 impl PreparationV1<'_> {
+    // Reuse the genuine Unload amount/quote predicates without a recovery insertion,
+    // successor nonce, proving, signing or durable state change.
+    pub(crate) fn review_unload_terms(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        predecessor: &FoldedStateV1,
+        amount: u128,
+        charge: Option<UnloadChargeOriginalsV1<'_>>,
+    ) -> Result<(u128, [u8; 32]), Error> {
+        self.credential_owner(owner)?;
+        if predecessor.manifest_digest != self.installed.verifier().manifest_digest()
+            || predecessor.credential != owner.credential
+        {
+            return Err(Error::Authority);
+        }
+        self.state_fields(
+            owner,
+            &predecessor.source_state,
+            &predecessor.lineage.public,
+        )?;
+        authority(
+            predecessor
+                .source_state
+                .validate_for_credential(&owner.credential),
+        )?;
+        checked_unload_terms(
+            self.installed.verifier().scheme(),
+            &predecessor.source_state,
+            &predecessor.lineage.public,
+            amount,
+            charge,
+        )
+    }
+
     /// Derive Unload or Retiring from the exact authenticated folded source.
     /// Native supplies its own nonce and map paths, persists these originals,
     /// then rechecks the source under its exclusive commit lock before Advance.

@@ -1,0 +1,80 @@
+import Foundation
+
+/// Exact canonical Load receipt and finality originals bound to the authenticated read.
+/// Decoding grants no finality verdict, wallet admission, balance or Load permission.
+/// Native Load independently authenticates its installed history/source, proof, enrolled
+/// account, current ordinal, policy and durable operation before changing value.
+public struct KagemushaWalletLoadOriginalV1: Sendable {
+  private let input: KagemushaWalletLoadOriginalInputV1
+  /// Network retained from authenticated transport; never inferred from receipt data.
+  public let networkID: NetworkId
+  /// Exact payer literal retained from the signed original read.
+  public let payerAccountID: String
+  /// Exact original request selector bound to the canonical receipt DATA.
+  public var requestID: Data { input.requestID }
+  /// Whole original canonical receipt; never reconstructed from a managed projection.
+  public var receiptOriginal: Data { input.receipt }
+  /// Whole compact finality DATA. Proof authentication remains Native Load's obligation.
+  public var finalityOriginal: Data { input.finality }
+
+  /// Decode through the maintained Native canonical types and retain the exact input frames.
+  public static func decode(issuance: ToriiKagemushaWalletLoadIssuanceOriginalV1,
+    finalityOriginal: Data) throws -> Self {
+    let input = try KagemushaWalletLoadOriginalInputV1(selection: issuance.selection,
+      payer: issuance.payerAccountID, receipt: issuance.canonicalResponseOriginal,
+      finality: finalityOriginal)
+    typealias Revision = @convention(c) () -> UInt32
+    typealias Validate = @convention(c) (
+      UnsafePointer<UInt8>?, UnsafePointer<UInt8>?, UnsafePointer<UInt8>?,
+      UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
+    ) -> Int32
+    guard let revision = NoritoNativeBridge.shared.resolveNativeSymbol(
+      "connect_norito_kagemusha_wallet_revision_v1", as: Revision.self), revision() == 1,
+      let validate = NoritoNativeBridge.shared.resolveNativeSymbol(
+        "connect_norito_kagemusha_wallet_load_original_validate_v1", as: Validate.self)
+    else { throw KagemushaWalletErrorV1.bridgeUnavailable }
+    let status = input.schemeID.withUnsafeBytes { scheme in
+      input.walletID.withUnsafeBytes { wallet in
+        input.requestID.withUnsafeBytes { request in
+          input.payer.withUnsafeBytes { payer in
+            input.receipt.withUnsafeBytes { receipt in
+              input.finality.withUnsafeBytes { finality in
+                validate(scheme.bindMemory(to: UInt8.self).baseAddress,
+                  wallet.bindMemory(to: UInt8.self).baseAddress,
+                  request.bindMemory(to: UInt8.self).baseAddress,
+                  payer.bindMemory(to: UInt8.self).baseAddress, payer.count,
+                  receipt.bindMemory(to: UInt8.self).baseAddress, receipt.count,
+                  finality.bindMemory(to: UInt8.self).baseAddress, finality.count)
+              }
+            }
+          }
+        }
+      }
+    }
+    if status < 0 { throw KagemushaWalletErrorV1.native(status: status, reason: -1, platformCode: 0) }
+    guard status == 0 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return Self(input: input, networkID: issuance.networkID, payerAccountID: issuance.payerAccountID)
+  }
+}
+
+/// Finite owned input DATA only; construction confers no canonical/proof/authority verdict.
+struct KagemushaWalletLoadOriginalInputV1: Sendable {
+  let schemeID: Data
+  let walletID: Data
+  let requestID: Data
+  let payer: Data
+  let receipt: Data
+  let finality: Data
+  init(selection: ToriiKagemushaWalletLoadSelectionV1, payer: String, receipt: Data, finality: Data) throws {
+    let account = Data(payer.utf8)
+    guard !account.isEmpty, account.count <= 1024, account.allSatisfy({ (33...126).contains($0) }),
+      !receipt.isEmpty, receipt.count <= 512, !finality.isEmpty, finality.count <= 16384
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    self.schemeID = Data(selection.schemeID)
+    self.walletID = Data(selection.walletID)
+    self.requestID = Data(selection.requestID)
+    self.payer = account
+    self.receipt = Data(receipt)
+    self.finality = Data(finality)
+  }
+}

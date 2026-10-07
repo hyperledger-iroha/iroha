@@ -105,6 +105,7 @@ pub(super) struct SourceCustodyV1 {
     version: u16,
     pub(super) maps: SourceMapsV1,
     originals: [Option<[u8; 32]>; 6],
+    blacklist_reference: Option<BlacklistOriginalReferenceV1>,
 }
 
 impl SourceCustodyV1 {
@@ -119,6 +120,7 @@ impl SourceCustodyV1 {
             version: 1,
             maps: SourceMapsV1::default(),
             originals: [None; 6],
+            blacklist_reference: None,
         };
         value.maps.require(state)?;
         for (role, bytes) in [
@@ -141,14 +143,40 @@ impl SourceCustodyV1 {
         let expected = role.expected(state);
         let address = self.originals[role.index()];
         if expected == Some([0; 32]) {
-            return if address.is_none() {
+            return if address.is_none()
+                && (role != PreparationOriginalV1::Blacklist || self.blacklist_reference.is_none())
+            {
                 Ok(None)
             } else {
                 Err(Error::WitnessLost("unheld original is populated"))
             };
         }
         let address = address.ok_or(Error::WitnessLost("required original address"))?;
-        let bytes = store.read_object(&address, role.maximum())?;
+        let bytes = if role == PreparationOriginalV1::Blacklist {
+            let reference = self
+                .blacklist_reference
+                .as_ref()
+                .ok_or(Error::WitnessLost("selected blacklist reference"))?;
+            if reference.object_key() != address {
+                return Err(Error::WitnessLost("selected blacklist CAS address"));
+            }
+            let bytes = super::policy_custody::read_blacklist_original(
+                store,
+                reference,
+                &state.core.scheme_id,
+            )?;
+            let list = KagemushaWalletBlacklistV1::decode_canonical(&bytes, &state.core.scheme_id)
+                .map_err(|_| Error::WitnessLost("selected blacklist encoding"))?;
+            if list.body.list_version != state.core.blacklist_version
+                || list.body.entries_root != state.core.blacklist_root
+                || list.body.issued_at_ms != state.core.blacklist_issued_at_ms
+            {
+                return Err(Error::WitnessLost("selected blacklist state header"));
+            }
+            bytes
+        } else {
+            store.read_object(&address, role.maximum())?
+        };
         if role
             .digest(&bytes, &state.core.scheme_id)
             .map_err(|_| Error::WitnessLost("retained original encoding"))?
@@ -279,6 +307,7 @@ pub struct PreparationCustodyV1<'a> {
     source: SourceCustodyV1,
     state: KagemushaWalletStateV1,
     originals: [Option<[u8; 32]>; 6],
+    blacklist_reference: Option<BlacklistOriginalReferenceV1>,
     updated: [bool; 6],
     issued: IndexRoot,
     anchors: IndexRoot,
@@ -291,6 +320,7 @@ impl<'a> PreparationCustodyV1<'a> {
             version: 1,
             maps: self.maps.snapshot(),
             originals: self.originals,
+            blacklist_reference: self.blacklist_reference.clone(),
         }
     }
     pub(super) fn new(
@@ -309,6 +339,7 @@ impl<'a> PreparationCustodyV1<'a> {
             source: selected.clone(),
             state: *state,
             originals: selected.originals,
+            blacklist_reference: selected.blacklist_reference.clone(),
             updated: [false; 6],
             issued,
             anchors,
@@ -356,9 +387,30 @@ impl<'a> PreparationCustodyV1<'a> {
             return Err(Error::Invalid("successor original role"));
         }
         role.digest(bytes, &self.state.core.scheme_id)?;
-        let address = self.maps.store().write_object(bytes, role.maximum())?;
-        if self.updated[role.index()] && self.originals[role.index()] != Some(address) {
+        let reference = if role == R::Blacklist {
+            // The fixed full-list reference and existing CAS key are selected together.
+            // Publish and authenticate exact readback before changing this unpublished draft.
+            Some(publish_blacklist_original(
+                self.maps.store(),
+                &self.state.core.scheme_id,
+                bytes,
+            )?)
+        } else {
+            None
+        };
+        let address = if let Some(reference) = reference.as_ref() {
+            reference.object_key()
+        } else {
+            self.maps.store().write_object(bytes, role.maximum())?
+        };
+        if self.updated[role.index()]
+            && (self.originals[role.index()] != Some(address)
+                || (role == R::Blacklist && self.blacklist_reference != reference))
+        {
             return Err(Error::Invalid("conflicting successor original"));
+        }
+        if role == R::Blacklist {
+            self.blacklist_reference = reference;
         }
         self.originals[role.index()] = Some(address);
         self.updated[role.index()] = true;
@@ -442,6 +494,7 @@ impl<'a> PreparationCustodyV1<'a> {
         // Authenticate originals while the one archive borrow is still available.
         let mut value = self.source;
         value.originals = self.originals;
+        value.blacklist_reference = self.blacklist_reference;
         // Maps are checked after consuming the draft; original checks use their own roots.
         value.require_originals(self.maps.store(), successor)?;
         value.maps = self.maps.finish(successor)?;
