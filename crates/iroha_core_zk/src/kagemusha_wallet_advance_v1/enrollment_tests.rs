@@ -570,6 +570,85 @@ fn fresh_device(seed: u8) -> DeviceV1 {
 }
 
 #[test]
+fn wallet_advance_v1_enrollment_begin_or_resume_keeps_exact_intent_across_restart() {
+    let device = fresh_device(0xb1);
+    let challenge = enrollment_challenge(0xb1);
+    let mut provider = device.open();
+    let slot = enrolled_slot(
+        provider
+            .begin_or_resume_enrollment(&challenge, PROFILE)
+            .unwrap(),
+    );
+    assert_eq!(
+        enrolled_slot(
+            provider
+                .begin_or_resume_enrollment(&challenge, PROFILE)
+                .unwrap()
+        ),
+        slot
+    );
+    drop(provider);
+    device.fs.restart();
+    let mut provider = device.open();
+    assert_eq!(
+        enrolled_slot(
+            provider
+                .begin_or_resume_enrollment(&challenge, PROFILE)
+                .unwrap()
+        ),
+        slot
+    );
+    assert_eq!(provider.slots().unwrap(), vec![slot]);
+    assert_eq!(
+        device.platform.with(|state| state.fresh_generation_calls),
+        1
+    );
+    assert!(
+        provider
+            .begin_or_resume_enrollment(&challenge, KagemushaWalletKeyProfileV1::SecureElement)
+            .is_err()
+    );
+    assert_eq!(
+        device.platform.with(|state| state.fresh_generation_calls),
+        1
+    );
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_retry_after_unknown_fresh_generation_never_creates_another_slot() {
+    let device = fresh_device(0xb2);
+    let challenge = enrollment_challenge(0xb2);
+    device
+        .platform
+        .with(|state| state.generate_unavailable = Some(false));
+    let mut provider = device.open();
+    assert!(
+        provider
+            .begin_or_resume_enrollment(&challenge, PROFILE)
+            .is_err()
+    );
+    let slots = provider.slots().unwrap();
+    assert_eq!(slots.len(), 1);
+    drop(provider);
+    device.fs.restart();
+    device
+        .platform
+        .with(|state| state.generate_unavailable = None);
+    let mut provider = device.open();
+    assert_eq!(
+        provider
+            .begin_or_resume_enrollment(&challenge, PROFILE)
+            .unwrap(),
+        KagemushaWalletEnrollmentStepV1::Pending { slot: slots[0] }
+    );
+    assert_eq!(provider.slots().unwrap(), slots);
+    assert_eq!(
+        device.platform.with(|state| state.fresh_generation_calls),
+        1
+    );
+}
+
+#[test]
 fn wallet_advance_v1_enrollment_fresh_grant_is_bound_to_owner_slot_and_request() {
     let device = fresh_device(0xa0);
     let slot = KagemushaWalletSlotIdV1([0xa0; 32]);

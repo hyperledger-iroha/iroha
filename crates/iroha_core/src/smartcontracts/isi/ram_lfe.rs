@@ -223,7 +223,7 @@ pub fn validate_execution_receipt_at(
     receipt: &RamLfeExecutionReceipt,
     program_policy: &RamLfeProgramPolicy,
     now_ms: u64,
-    guardrails: crate::zk::ZkVerifyGuardrails,
+    _guardrails: crate::zk::ZkVerifyGuardrails,
 ) -> Result<(), String> {
     let payload = &receipt.payload;
     if payload.program_id != program_policy.program_id {
@@ -279,97 +279,44 @@ pub fn validate_execution_receipt_at(
             program_policy.program_id
         ));
     }
-    let public_parameters = match program_policy.backend {
-        RamLfeBackend::BfvProgrammedV1 => {
-            decode_bfv_programmed_public_parameters(&program_policy.commitment.public_parameters)
-                .map_err(|err| {
-                    format!(
-                        "RAM-LFE program policy {} has invalid programmed public parameters: {err}",
-                        program_policy.program_id
-                    )
-                })?
-        }
-        _ => {
-            return Err(format!(
-                "RAM-LFE program policy {} uses unsupported backend {} for stateless receipt verification",
-                program_policy.program_id,
-                program_policy.backend.as_str()
-            ));
-        }
-    };
-    if public_parameters.hidden_program_digest != payload.program_digest {
-        return Err(format!(
-            "RAM-LFE receipt program digest does not match program policy {}",
-            program_policy.program_id
-        ));
+    let expected = iroha_data_model::identifier::hkdf_identifier_execution_metadata_v1(
+        &program_policy.commitment,
+    )
+    .map_err(|error| error.to_string())?;
+    if (
+        payload.program_digest,
+        payload.parameter_digest,
+        payload.evaluation_key_digest,
+    ) != expected
+    {
+        return Err("RAM-LFE receipt metadata differs from the pinned HKDF policy".to_owned());
     }
-    if public_parameters.parameter_digest != payload.parameter_digest {
-        return Err(format!(
-            "RAM-LFE receipt parameter digest does not match program policy {}",
-            program_policy.program_id
-        ));
+    let expires = payload
+        .expires_at_ms
+        .ok_or_else(|| "RAM-LFE owner receipt requires an original bounded expiry".to_owned())?;
+    if now_ms == 0 || payload.executed_at_ms == 0 || expires - payload.executed_at_ms > 120_000 {
+        return Err(
+            "RAM-LFE owner receipt requires a positive original lease of at most 120000ms"
+                .to_owned(),
+        );
     }
-    if public_parameters.evaluation_key_digest != payload.evaluation_key_digest {
-        return Err(format!(
-            "RAM-LFE receipt evaluation-key digest does not match program policy {}",
-            program_policy.program_id
-        ));
-    }
-    if payload.output_hash != payload.output_ciphertext_hash {
-        return Err(format!(
-            "RAM-LFE receipt output_hash does not match output_ciphertext_hash for program {}",
-            program_policy.program_id
-        ));
-    }
-    if public_parameters.verification_mode != program_policy.verification_mode {
-        return Err(format!(
-            "RAM-LFE program policy {} verification metadata is inconsistent",
-            program_policy.program_id
-        ));
+    if payload.output_hash != payload.output_ciphertext_hash
+        || payload.output_hash == Hash::prehashed([0; Hash::LENGTH])
+        || payload.input_ciphertext_hash == Hash::prehashed([0; Hash::LENGTH])
+    {
+        return Err(
+            "RAM-LFE receipt differs from its opaque output or private input commitment".to_owned(),
+        );
     }
     if payload.associated_data_hash != expected_associated_data_hash(program_policy)? {
-        return Err(format!(
-            "RAM-LFE receipt associated_data_hash does not match program policy {}",
-            program_policy.program_id
-        ));
+        return Err("RAM-LFE receipt associated data differs from the current program".to_owned());
     }
-    match program_policy.verification_mode {
-        RamLfeVerificationMode::Signed => {
-            if !matches!(&receipt.attestation, RamLfeReceiptAttestation::Signed(_)) {
-                return Err(format!(
-                    "RAM-LFE receipt for program {} must carry a signed attestation",
-                    program_policy.program_id
-                ));
-            }
-            receipt
-                .verify_signature(&program_policy.resolver_public_key)
-                .map_err(|err| {
-                    format!(
-                        "RAM-LFE receipt signature is invalid for program {}: {err}",
-                        program_policy.program_id
-                    )
-                })?;
-        }
-        RamLfeVerificationMode::Proof => {
-            let RamLfeReceiptAttestation::Proof(proof) = &receipt.attestation else {
-                return Err(format!(
-                    "RAM-LFE receipt for program {} must carry a proof attestation",
-                    program_policy.program_id
-                ));
-            };
-            verify_execution_proof(
-                proof,
-                payload,
-                public_parameters.proof_verifier.as_ref().ok_or_else(|| {
-                    format!(
-                        "RAM-LFE program policy {} is missing proof verifier metadata",
-                        program_policy.program_id
-                    )
-                })?,
-                guardrails,
-            )?;
-        }
+    if !matches!(&receipt.attestation, RamLfeReceiptAttestation::Signed(_)) {
+        return Err("RAM-LFE owner receipt requires the pinned resolver signature".to_owned());
     }
+    receipt
+        .verify_signature(&program_policy.resolver_public_key)
+        .map_err(|error| format!("RAM-LFE receipt signature is invalid: {error}"))?;
     Ok(())
 }
 fn expected_associated_data_hash(program_policy: &RamLfeProgramPolicy) -> Result<Hash, String> {
@@ -791,5 +738,91 @@ mod tests {
             err.contains(PROOF_RELATION_UNAVAILABLE),
             "unexpected error: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod current_hkdf_execution_tests {
+    use super::*;
+    #[test]
+    fn native_hkdf_execution_signature_metadata_and_original_lease_validate() {
+        let signer =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x73; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        let secret = iroha_crypto::RamLfeSecret::try_from(vec![0x74; 32]).unwrap();
+        let commitment = iroha_crypto::policy_commitment(secret.as_ref(), Vec::new()).unwrap();
+        let program: iroha_data_model::ram_lfe::RamLfeProgramId = "current_owner".parse().unwrap();
+        let policy = RamLfeProgramPolicy::new(
+            program.clone(),
+            iroha_data_model::account::AccountId::new(signer.public_key().clone()),
+            RamLfeBackend::HkdfSha3_512PrfV1,
+            RamLfeVerificationMode::Signed,
+            commitment,
+            signer.public_key().clone(),
+        );
+        let request = iroha_crypto::ClientRequest {
+            normalized_input: b"native-hkdf-component-input".to_vec(),
+            associated_data: norito::encode_canonical(&program).unwrap(),
+        };
+        let evaluated = iroha_crypto::evaluate_commitment_with_hidden_program(
+            secret.as_ref(),
+            &policy.commitment,
+            &request,
+            None,
+        )
+        .unwrap();
+        let output = iroha_crypto::ram_lfe_output_hash(evaluated.opaque_id.as_ref());
+        let (program_digest, parameter_digest, evaluation_key_digest) =
+            iroha_data_model::identifier::hkdf_identifier_execution_metadata_v1(&policy.commitment)
+                .unwrap();
+        let payload = RamLfeExecutionReceiptPayload {
+            program_id: program,
+            program_digest,
+            backend: policy.backend,
+            verification_mode: policy.verification_mode,
+            input_ciphertext_hash: Hash::new(b"private-commitment"),
+            output_ciphertext_hash: output,
+            parameter_digest,
+            evaluation_key_digest,
+            output_hash: output,
+            associated_data_hash: Hash::new(&request.associated_data),
+            executed_at_ms: 1_000,
+            expires_at_ms: Some(31_000),
+        };
+        let receipt = RamLfeExecutionReceipt {
+            attestation: RamLfeReceiptAttestation::Signed(
+                iroha_crypto::SignatureOf::try_new(signer.private_key(), &payload)
+                    .unwrap()
+                    .into(),
+            ),
+            payload,
+        };
+        let guardrails = crate::zk::ZkVerifyGuardrails {
+            pipa_r_enabled: true,
+            pipa_r_max_envelope_bytes: usize::MAX,
+            pipa_r_max_proof_bytes: usize::MAX,
+            stark_enabled: true,
+            stark_max_envelope_bytes: usize::MAX,
+            stark_max_proof_bytes: usize::MAX,
+        };
+        validate_execution_receipt_at(&receipt, &policy, 1_001, guardrails).unwrap();
+        for expiry in [None, Some(1_000), Some(121_001)] {
+            let mut changed = receipt.clone();
+            changed.payload.expires_at_ms = expiry;
+            changed.attestation = RamLfeReceiptAttestation::Signed(
+                iroha_crypto::SignatureOf::try_new(signer.private_key(), &changed.payload)
+                    .unwrap()
+                    .into(),
+            );
+            assert!(validate_execution_receipt_at(&changed, &policy, 1_001, guardrails).is_err());
+        }
+        let mut changed = receipt.clone();
+        changed.payload.program_digest = Hash::new(b"other-program");
+        changed.attestation = RamLfeReceiptAttestation::Signed(
+            iroha_crypto::SignatureOf::try_new(signer.private_key(), &changed.payload)
+                .unwrap()
+                .into(),
+        );
+        assert!(validate_execution_receipt_at(&changed, &policy, 1_001, guardrails).is_err());
     }
 }

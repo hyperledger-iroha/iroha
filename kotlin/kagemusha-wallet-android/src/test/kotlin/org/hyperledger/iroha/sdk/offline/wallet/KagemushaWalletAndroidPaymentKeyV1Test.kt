@@ -641,6 +641,20 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(0))
     }
 
+    @Test fun `signed TEE-only policy generates TEE despite StrongBox availability`() {
+        for (api in listOf(26, 30, 31, 35)) {
+            apiLevel(api)
+            environment.strongBox = true
+            val next = slot()
+            val outcome = if (api < 31) fresh(next, KagemushaWalletAndroidKeyProfileV1.TEE_ONLY)
+                else paymentKey.generate(next, challenge, KagemushaWalletAndroidKeyProfileV1.TEE_ONLY)
+            assertEquals(KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT,
+                assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(outcome).securityLevel)
+            assertFalse(keyStore.generated.last().strongBox)
+        }
+        assertEquals(KagemushaWalletAndroidKeyProfileV1.TEE_ONLY, KagemushaWalletAndroidKeyProfileV1.fromTag(3))
+    }
+
     @Test fun `signing hands the exact 32-byte message to SHA256withECDSA and returns the platform DER`() {
         // Owner answer A1: the payment key signs the 32-byte Poseidon message with standard
         // ECDSA-P256-SHA256, so KeyMint hashes it once; DIGEST_NONE is never used.

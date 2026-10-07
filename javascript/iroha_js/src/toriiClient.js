@@ -21458,6 +21458,7 @@ function normalizeIdentifierResolutionPayload(
   assertSupportedOptionKeys(
     record,
     new Set([
+      "network_id",
       "policy_id",
       "execution",
       "opening",
@@ -21469,6 +21470,7 @@ function normalizeIdentifierResolutionPayload(
     context,
   );
   return {
+    network_id: requireExactReceiptNetwork(record.network_id, `${context}.network_id`),
     policy_id: requireIdentifierPolicyId(record.policy_id, `${context}.policy_id`),
     execution: normalizeIdentifierResolutionExecutionPayload(
       record.execution,
@@ -21480,6 +21482,14 @@ function normalizeIdentifierResolutionPayload(
     uaid: requireExactReceiptUaid(record.uaid, `${context}.uaid`),
     account_id: requireExactAccountId(record.account_id, `${context}.account_id`),
   };
+}
+
+function requireExactReceiptNetwork(value, name) {
+  const literal = requireExactLowerHex32String(value, name);
+  if (!/[13579bdf]$/u.test(literal)) {
+    throw createValidationError(ValidationErrorCode.INVALID_HEX, `${name} must be a marked genesis hash`, name);
+  }
+  return literal;
 }
 
 function requireExactReceiptHash(value, name) {
@@ -29166,6 +29176,7 @@ function identifierReceiptAttestationPayload(attestation) {
 
 function identifierReceiptPayload(payload) {
   return Buffer.concat([
+    identifierCanonicalSizedField(Buffer.from(requireExactReceiptNetwork(payload.network_id, "payload.network_id"), "hex")),
     identifierCanonicalSizedField(identifierPolicyIdPayload(payload.policy_id)),
     identifierCanonicalSizedField(identifierExecutionPayload(payload.execution)),
     identifierCanonicalSizedField(identifierOutputOpening(payload.opening)),

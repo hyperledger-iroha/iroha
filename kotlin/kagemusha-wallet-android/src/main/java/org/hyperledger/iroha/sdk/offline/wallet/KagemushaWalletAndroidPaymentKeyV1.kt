@@ -502,6 +502,7 @@ internal fun kagemushaWalletAndroidHardwarePlanV1(
             if (strongBox) KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_ONLY else KagemushaWalletAndroidHardwarePlanV1.REFUSE
         KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE ->
             if (strongBox) KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE else KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY
+        KagemushaWalletAndroidKeyProfileV1.TEE_ONLY -> KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY
     }
 }
 

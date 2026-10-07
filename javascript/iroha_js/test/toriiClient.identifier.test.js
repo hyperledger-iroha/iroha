@@ -498,6 +498,7 @@ function signedReceiptFixture(overrides = {}) {
   const der = publicKey.export({ format: "der", type: "spki" });
   const rawPublicKey = new Uint8Array(der.subarray(der.length - 32));
   const payload = {
+    network_id: "a5".repeat(32),
     policy_id: POLICY_ID,
     execution: sampleExecution(overrides.execution),
     opening: overrides.opening ?? sampleOutputOpening(),
@@ -2090,7 +2091,21 @@ test("identifier receipt encodes a valid multisig account with canonical compact
     "3c01dd01d401d901b40120011d019d010b020200",
     "hex",
   );
-  assert.equal(encoded.length, 1021);
-  assert.deepEqual(encoded.subarray(761), expectedAccountField);
-  assert.equal(sha256Hex(encoded), "B43BC15554F610D14AF5AD373F23FA7C14CED568217182231783E14CBB717AB8");
+  assert.equal(encoded.length, 1054);
+  assert.deepEqual(encoded.subarray(794), expectedAccountField);
+  assert.equal(sha256Hex(encoded.subarray(33)), "B43BC15554F610D14AF5AD373F23FA7C14CED568217182231783E14CBB717AB8");
+  assert.equal(encoded[0], 32);
+  assert.equal(encoded.subarray(1, 33).toString("hex"), IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.network_id);
+});
+
+test("current identifier signed payload requires one exact network field first", () => {
+  const payload = { ...IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload };
+  const encoded = encodeIdentifierResolutionReceiptPayload(payload);
+  assert.equal(encoded[0], 32);
+  assert.equal(Buffer.from(encoded.subarray(1, 33)).toString("hex"), payload.network_id);
+  for (const network of [undefined, null, "", "0".repeat(64), "A5".repeat(32), `0x${payload.network_id}`, ` ${payload.network_id}`, "a".repeat(63)]) {
+    assert.throws(() => encodeIdentifierResolutionReceiptPayload({ ...payload, network_id: network }));
+  }
+  const other = { ...payload, network_id: "a5".repeat(32) };
+  assert.notDeepEqual(encodeIdentifierResolutionReceiptPayload(other), encoded);
 });

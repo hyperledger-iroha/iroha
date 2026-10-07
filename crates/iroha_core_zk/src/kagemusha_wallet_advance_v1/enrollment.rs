@@ -361,6 +361,45 @@ where
     C: KagemushaWalletAdvanceCapsuleV1,
     R: KagemushaWalletCompletionFrameV1,
 {
+    /// Locate this exact issuer challenge before starting or retrying enrollment.
+    /// An existing durable intent always resumes its original slot; it never grants a new
+    /// fresh-only generation attempt. Unknown reads and duplicate intents refuse creation.
+    /// # Errors
+    /// Invalid challenge/profile binding, ambiguous retained intent, or provider unavailability.
+    pub fn begin_or_resume_enrollment(
+        &mut self,
+        challenge: &KagemushaWalletEnrollmentChallengeV1,
+        profile: KagemushaWalletKeyProfileV1,
+    ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        challenge
+            .validate()
+            .map_err(|_| KagemushaWalletProviderErrorV1::Invalid { field: "challenge" })?;
+        if challenge.scheme_id != self.scheme_id {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "challenge.scheme_id",
+            });
+        }
+        let mut selected = None;
+        for slot in self.slots()? {
+            let Some(intent) = self.read_intent(&slot)? else {
+                continue;
+            };
+            if intent.challenge != *challenge {
+                continue;
+            }
+            if intent.profile != profile.tag() || selected.replace(slot).is_some() {
+                return Err(KagemushaWalletProviderErrorV1::Invalid {
+                    field: "enrollment.retained_intent",
+                });
+            }
+        }
+        if let Some(slot) = selected {
+            self.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live)
+        } else {
+            self.begin_enrollment(challenge, profile)
+        }
+    }
+
     /// Begin an enrollment under `challenge` (E2-E4) in a fresh slot, generating the payment
     /// key under the issuer's hardware key `profile`.
     ///

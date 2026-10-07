@@ -1956,6 +1956,78 @@ int32_t connect_norito_kagemusha_wallet_resume_v1(uint64_t handle, connect_norit
 int32_t connect_norito_kagemusha_wallet_fold_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const uint8_t* credit32, const uint8_t* payment32, connect_norito_kagemusha_wallet_result_v1* out);
 
+/** Fixed Send/Unload Native intake: selector1/8; no foreign source identifiers. */
+typedef struct connect_norito_kagemusha_wallet_review_request_v1 {
+  uint32_t selector;
+  connect_norito_kagemusha_wallet_u128_v1 amount;
+  const uint8_t *first;
+  size_t first_length;
+  const uint8_t *second;
+  size_t second_length;
+} connect_norito_kagemusha_wallet_review_request_v1;
+/** Authenticate only: separate result18, positive owner-local one-use token in sequence_low,
+ * sequence_high/detail zero; exact491 DATA bytes KWORV1\0\0, operation1/8,
+ * four LE UInt128 amount/fee/grossDebit/netDestination; receiverPresence byte+receiver32;
+ * destinationAccount/request/charge/scheme/wallet/currentHead/sourceState/sourceCapsule/
+ * credential/artifactManifest32 each, then canonical SEC1 paymentKey65. Copyable DATA
+ * cannot reconstruct the actual retained Native review. Free with connect_norito_free. */
+int32_t connect_norito_kagemusha_wallet_review_v1(uint64_t handle,
+    const connect_norito_kagemusha_wallet_review_request_v1 *request,
+    connect_norito_kagemusha_wallet_result_v1 *out);
+/** Consume actual review after fresh hardware approval; current source and ordinary proofs
+ * remain mandatory before Advance. No financial input is reconstructed from projection DATA. */
+int32_t connect_norito_kagemusha_wallet_execute_reviewed_v1(uint64_t handle,
+    uint64_t token, const uint8_t *request_id32, connect_norito_kagemusha_wallet_result_v1 *out);
+/** Cancel an in-memory review only; no durable custody mutation. */
+int32_t connect_norito_kagemusha_wallet_discard_review_v1(uint64_t handle, uint64_t token);
+
+// Mandatory original base authenticated under public build-selected Ed25519 trust.
+// Whole app manifest <=8MiB; envelope <=2048; wallet runtime <=128KiB;
+// signed genesis <=64MiB; root UTF-8 <=4096. Verifier pack/catalog retain Native caps.
+// All seven installation originals are required; absent input returns -1/no handle.
+// Any nonempty financial offer must supply the complete genuine original graph.
+typedef struct {
+    const uint8_t* app_manifest; size_t app_manifest_length;
+    const uint8_t* envelope; size_t envelope_length;
+    const uint8_t* wallet_runtime; size_t wallet_runtime_length;
+    const uint8_t* verifier_pack; size_t verifier_pack_length;
+    const uint8_t* producer_inventory; size_t producer_inventory_length;
+    const uint8_t* signed_genesis; size_t signed_genesis_length;
+    const uint8_t* originals_root; size_t originals_root_length;
+} connect_norito_kagemusha_wallet_runtime_originals_v1;
+// Uses existing platform custody_root callback; retains actual provider in the existing
+// Native runtime registry. Begin/finish/cancel/close remain the sole existing open APIs.
+int32_t connect_norito_kagemusha_wallet_install_runtime_v1(
+    const connect_norito_kagemusha_wallet_runtime_originals_v1* originals,
+    const connect_norito_kagemusha_platform_v1* platform,
+    uint64_t* out_runtime);
+
+// Enrollment DATA in the existing installed runtime; no supplied freshness/profile flag.
+typedef struct connect_norito_kagemusha_wallet_enrollment_request_v1 {
+    uint32_t selector; // 0 begin/retry E1; 1 resume slot; 2 retain request; 3 store credential.
+    const uint8_t* slot; size_t slot_length;
+    const uint8_t* challenge; size_t challenge_length;
+    const uint8_t* policy; size_t policy_length;
+    const uint8_t* account; size_t account_length;
+    const uint8_t* original; size_t original_length;
+    const uint8_t* certificates; size_t certificates_length;
+} connect_norito_kagemusha_wallet_enrollment_request_v1;
+typedef struct connect_norito_kagemusha_wallet_enrollment_result_v1 {
+    // 0 Enrolled; 1 Pending; 2 SlotAbandoned; 3 RequestRetained; 4 CredentialStored.
+    // Negative values preserve the ordinary Native failure status, reason and OS code.
+    int32_t status;
+    int32_t reason;
+    int32_t platform_code;
+    uint8_t slot[32];
+    uint8_t payment_key[65];
+    size_t payment_key_length; // 65 only for Enrolled, zero otherwise.
+    uint8_t* bytes; // Exact marker/request/credential for 0/3/4; connect_norito_free owns free.
+    size_t length;
+} connect_norito_kagemusha_wallet_enrollment_result_v1;
+int32_t connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime,
+    const connect_norito_kagemusha_wallet_enrollment_request_v1* request,
+    connect_norito_kagemusha_wallet_enrollment_result_v1* result);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

@@ -23,6 +23,7 @@ mod first_device_auth_key_v1;
 mod gpu;
 #[cfg(unix)]
 mod kagemusha_wallet_advance;
+mod kagemusha_wallet_review;
 
 include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");

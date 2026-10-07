@@ -40,7 +40,10 @@ impl Default for WalletResult {
         }
     }
 }
-unsafe fn output(out: *mut WalletResult, action: impl FnOnce() -> Result<Response>) -> i32 {
+pub(super) unsafe fn output(
+    out: *mut WalletResult,
+    action: impl FnOnce() -> Result<Response>,
+) -> i32 {
     if out.is_null() {
         return INVALID;
     }
@@ -80,7 +83,11 @@ unsafe fn output(out: *mut WalletResult, action: impl FnOnce() -> Result<Respons
     unsafe { out.write(value) };
     status
 }
-unsafe fn input<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&'a [u8]> {
+pub(super) unsafe fn input<'a>(
+    pointer: *const u8,
+    length: usize,
+    bound: usize,
+) -> Result<&'a [u8]> {
     if length > bound || (pointer.is_null() && length != 0) {
         return Err(Failure::code(INVALID));
     }

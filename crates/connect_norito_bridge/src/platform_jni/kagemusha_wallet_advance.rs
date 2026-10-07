@@ -7,7 +7,11 @@ use jni::{
     sys::{jint, jlong, jobject},
 };
 
-fn read(env: &mut JNIEnv<'_>, bytes: &JByteArray<'_>, bound: usize) -> wallet::Result<Vec<u8>> {
+pub(super) fn read(
+    env: &mut JNIEnv<'_>,
+    bytes: &JByteArray<'_>,
+    bound: usize,
+) -> wallet::Result<Vec<u8>> {
     let length = env
         .get_array_length(bytes)
         .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
@@ -17,7 +21,18 @@ fn read(env: &mut JNIEnv<'_>, bytes: &JByteArray<'_>, bound: usize) -> wallet::R
     env.convert_byte_array(bytes)
         .map_err(|_| wallet::Failure::code(wallet::INVALID))
 }
-fn response(env: &mut JNIEnv<'_>, result: wallet::Result<wallet::Response>) -> jobject {
+pub(super) fn response(env: &mut JNIEnv<'_>, result: wallet::Result<wallet::Response>) -> jobject {
+    response_class(
+        env,
+        result,
+        "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCallV1",
+    )
+}
+pub(super) fn response_class(
+    env: &mut JNIEnv<'_>,
+    result: wallet::Result<wallet::Response>,
+    class: &str,
+) -> jobject {
     let (status, reason, code, sequence, detail, bytes) = match result {
         Ok(value) => (value.kind, -1, 0, value.sequence, value.detail, value.bytes),
         Err(error) => (
@@ -32,7 +47,7 @@ fn response(env: &mut JNIEnv<'_>, result: wallet::Result<wallet::Response>) -> j
     let result = (|| -> jni::errors::Result<JObject<'_>> {
         let bytes = env.byte_array_from_slice(&bytes)?;
         env.new_object(
-            "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCallV1",
+            class,
             "(IIIJJI[B)V",
             &[
                 JValue::Int(status),

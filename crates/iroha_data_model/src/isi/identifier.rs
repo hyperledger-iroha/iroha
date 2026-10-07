@@ -174,6 +174,11 @@ mod tests {
             payload: opening_payload,
         };
         let payload = crate::identifier::IdentifierResolutionReceiptPayload {
+            network_id: crate::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"identifier-component-network",
+                )),
+            ),
             policy_id: policy_id(),
             execution: RamLfeExecutionReceiptPayload {
                 program_id: program_id(),

@@ -1462,6 +1462,8 @@ export interface IdentifierResolutionRequestOptions {
 }
 
 export interface IdentifierResolutionReceiptPayload {
+  /** Exact genesis hash as mandatory lowercase raw32 hexadecimal, signed first. */
+  network_id: string;
   policy_id: string;
   execution: RamLfeExecutionReceiptPayload;
   opening: RamLfeOutputOpening;

@@ -107,6 +107,7 @@ path = "src/bin/attachment_sanitizer.rs"
 required-features = ["app_api"]
 
 [dependencies]
+zeroize = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }

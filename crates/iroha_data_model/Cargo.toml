@@ -41,6 +41,7 @@ governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 
 [dependencies]
+zeroize = { workspace = true }
 iroha_allocation = { workspace = true }
 # Protocol JSON is mandatory: custom parameters and retained ledger metadata use it.
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }

@@ -32,3 +32,10 @@
 
 # Native Load transport decoding; DATA binding only, no wallet or monetary permission.
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletLoadOriginalNativeV1 { *; }
+
+# Original installation loader; Native authenticates its immutable application trust root.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletInstalledRuntimeNativeV1 { *; }
+
+# Runtime-owned enrollment entry and its separate bounded result holder.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletEnrollmentNativeV1 { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletEnrollmentReplyV1 { *; }

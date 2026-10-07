@@ -20,6 +20,9 @@ impl From<state::NativeOpenErrorV1> for Failure {
     }
 }
 trait Admission: Send {
+    fn enrollment(&mut self, _input: enrollment::Input<'_>) -> Result<enrollment::Response> {
+        Err(Failure::code(ARTIFACTS_UNAVAILABLE))
+    }
     fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>>;
     fn finish(&mut self, signature: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)>;
     fn cancel(&mut self) -> Result<()>;
@@ -28,40 +31,62 @@ enum Phase<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     Ready(state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>),
     Pending(state::PendingNativeWalletOpenV1<advance::KagemushaWalletStdFsV1, P, S>),
 }
-struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>(
-    Option<Phase<P, S>>,
-);
+struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
+    phase: Option<Phase<P, S>>,
+    binding: Option<super::installed::BoundOriginals>,
+}
 impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send + 'static>
     Admission for Runtime<P, S>
 {
+    fn enrollment(&mut self, input: enrollment::Input<'_>) -> Result<enrollment::Response> {
+        let binding = self
+            .binding
+            .as_ref()
+            .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
+        let scope = binding.enrollment(&input)?;
+        let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
+            return Err(Failure::code(CONFLICT));
+        };
+        enrollment::execute(runtime, input, scope)
+    }
     fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>> {
         validate(originals)?;
-        let phase = self.0.take().ok_or(Failure::code(CLOSED))?;
-        let Phase::Ready(runtime) = phase else {
-            self.0 = Some(phase);
-            return Err(Failure::code(CONFLICT));
+        if let Some(binding) = &self.binding {
+            binding.require(originals)?;
+        }
+        let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;
+        let runtime = match phase {
+            Phase::Pending(pending) => {
+                // Lost transport replies do not replace an actual issued challenge.
+                let same = pending.matches_originals(originals);
+                let challenge = same.then(|| pending.challenge().to_vec());
+                self.phase = Some(Phase::Pending(pending));
+                return challenge.ok_or(Failure::code(CONFLICT));
+            }
+            Phase::Ready(runtime) => runtime,
         };
         let [credential, certificates, account, asset] = originals;
         match runtime.begin(credential, certificates, account, asset) {
             Ok(pending) => {
                 let challenge = pending.challenge().to_vec();
-                self.0 = Some(Phase::Pending(pending));
+                self.phase = Some(Phase::Pending(pending));
                 Ok(challenge)
             }
             Err(failure) => {
                 let (runtime, error) = failure.into_parts();
-                self.0 = Some(Phase::Ready(runtime));
+                self.phase = Some(Phase::Ready(runtime));
                 Err(error.into())
             }
         }
     }
     fn finish(&mut self, signature: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)> {
-        let phase = self.0.take().ok_or(Failure::code(CLOSED))?;
+        let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;
         let Phase::Pending(pending) = phase else {
-            self.0 = Some(phase);
+            self.phase = Some(phase);
             return Err(Failure::code(INVALID));
         };
-        // Even a wrong-length signature consumes this challenge; the account must begin again.
+        // Every ordinary intake/signature refusal retains this SAME actual challenge.
+        // Explicit cancellation alone selects the separate abandonment path.
         match pending.finish(signature) {
             Ok(wallet) => {
                 let scheduler = wallet.scheduler();
@@ -70,32 +95,39 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
                         wallet,
                         times: BTreeMap::new(),
                         next_time: 0,
+                        reviews: review::Tokens::default(),
                     }),
                     scheduler,
                 ))
             }
             Err(failure) => {
                 let (runtime, error) = failure.into_parts();
-                self.0 = Some(Phase::Ready(runtime));
+                self.phase = Some(match runtime.recover_pending() {
+                    Ok(pending) => Phase::Pending(pending),
+                    // Current later native coordinator failure remains an owned runtime;
+                    // it cannot be fabricated into an account Pending here.
+                    Err(runtime) => Phase::Ready(runtime),
+                });
                 Err(error.into())
             }
         }
     }
     fn cancel(&mut self) -> Result<()> {
-        let phase = self.0.take().ok_or(Failure::code(CLOSED))?;
+        let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;
         match phase {
             Phase::Pending(pending) => {
-                self.0 = Some(Phase::Ready(pending.abandon()));
+                self.phase = Some(Phase::Ready(pending.abandon()));
                 Ok(())
             }
             other => {
-                self.0 = Some(other);
+                self.phase = Some(other);
                 Err(Failure::code(INVALID))
             }
         }
     }
 }
 pub(super) struct RuntimeOwner {
+    pub(super) closing: Arc<closing::CloseState>,
     admission: Mutex<Option<Box<dyn Admission>>>,
     finished: Mutex<Option<(Box<dyn Wallet>, state::Scheduler)>>,
 }
@@ -110,13 +142,15 @@ fn validate(originals: [&[u8]; 4]) -> Result<()> {
     Ok(())
 }
 fn runtime(id: u64) -> Result<Arc<RuntimeOwner>> {
-    registry()
+    let owner = registry()
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?
         .runtimes
         .get(&id)
         .cloned()
-        .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))
+        .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
+    owner.closing.require_open()?;
+    Ok(owner)
 }
 pub(crate) fn begin(id: u64, originals: [&[u8]; 4]) -> Result<Response> {
     validate(originals)?;
@@ -125,6 +159,7 @@ pub(crate) fn begin(id: u64, originals: [&[u8]; 4]) -> Result<Response> {
         .admission
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?;
+    owner.closing.require_open()?;
     if owner
         .finished
         .lock()
@@ -147,7 +182,8 @@ pub(crate) fn begin(id: u64, originals: [&[u8]; 4]) -> Result<Response> {
 pub(crate) fn finish(id: u64, signature: &[u8]) -> Result<Response> {
     let owner = {
         let selected = registry().lock().map_err(|_| Failure::code(INTERNAL))?;
-        if selected.owners.contains_key(&id) {
+        if let Some(owner) = selected.owners.get(&id) {
+            owner.closing.require_open()?;
             return Ok(opened(id));
         }
         selected.runtimes.get(&id).cloned().ok_or(Failure::code(
@@ -177,18 +213,17 @@ fn finish_with(
         .admission
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?;
+    owner.closing.require_open()?;
     let mut retained = owner.finished.lock().map_err(|_| Failure::code(INTERNAL))?;
     if retained.is_none() && admission.is_none() {
         // Another finish may have promoted this same runtime while this caller waited.
-        return if registry
-            .lock()
-            .map_err(|_| Failure::code(INTERNAL))?
-            .owners
-            .contains_key(&id)
-        {
-            Ok(opened(id))
-        } else {
-            Err(Failure::code(CLOSED))
+        let selected = registry.lock().map_err(|_| Failure::code(INTERNAL))?;
+        return match selected.owners.get(&id) {
+            Some(active) => {
+                active.closing.require_open()?;
+                Ok(opened(id))
+            }
+            None => Err(Failure::code(CLOSED)),
         };
     }
     if retained.is_none() {
@@ -202,6 +237,7 @@ fn finish_with(
     // Preserve an initialized owner before touching the registry. A registration error
     // cannot drop custody or repeat account authorization on a later promotion attempt.
     let mut selected = registry.lock().map_err(|_| Failure::code(INTERNAL))?;
+    owner.closing.require_open()?;
     if !selected
         .runtimes
         .get(&id)
@@ -214,6 +250,7 @@ fn finish_with(
     selected.owners.insert(
         id,
         Arc::new(Owner {
+            closing: Arc::clone(&owner.closing),
             scheduler,
             wallet: Mutex::new(Some(wallet)),
         }),
@@ -222,26 +259,57 @@ fn finish_with(
 }
 pub(crate) fn cancel(id: u64) -> Result<()> {
     let owner = runtime(id)?;
-    owner
+    let mut admission = owner
         .admission
         .lock()
-        .map_err(|_| Failure::code(INTERNAL))?
+        .map_err(|_| Failure::code(INTERNAL))?;
+    owner.closing.require_open()?;
+    admission
         .as_deref_mut()
         .ok_or(Failure::code(CLOSED))?
         .cancel()
 }
-pub(super) fn close(owner: Arc<RuntimeOwner>) -> Result<()> {
-    owner
+pub(super) fn enroll(id: u64, input: enrollment::Input<'_>) -> Result<enrollment::Response> {
+    enroll_with(runtime(id)?, input)
+}
+fn enroll_with(
+    owner: Arc<RuntimeOwner>,
+    input: enrollment::Input<'_>,
+) -> Result<enrollment::Response> {
+    let mut admission = owner
         .admission
         .lock()
-        .map_err(|_| Failure::code(INTERNAL))?
-        .take();
-    owner
+        .map_err(|_| Failure::code(INTERNAL))?;
+    owner.closing.require_open()?;
+    if owner
         .finished
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?
-        .take();
-    Ok(())
+        .is_some()
+    {
+        return Err(Failure::code(CONFLICT));
+    }
+    admission
+        .as_deref_mut()
+        .ok_or(Failure::code(CLOSED))?
+        .enrollment(input)
+}
+pub(super) fn close(owner: Arc<RuntimeOwner>) -> Result<()> {
+    owner.closing.join(|| {
+        // Acquire both fallible locks before dropping either actual custody owner.
+        let mut admission = owner
+            .admission
+            .lock()
+            .map_err(|_| Failure::code(INTERNAL))?;
+        let mut finished = owner.finished.lock().map_err(|_| Failure::code(INTERNAL))?;
+        let _priority = finished.as_ref().map(|(_, scheduler)| {
+            scheduler.set_activity(false, false);
+            scheduler.payment()
+        });
+        drop(admission.take());
+        drop(finished.take());
+        Ok(())
+    })
 }
 
 /// Native deployment startup failure; custody and original-store ownership remain recoverable.
@@ -295,6 +363,28 @@ where
     P: advance::KagemushaWalletPlatformV1 + 'static,
     S: OriginalSourceV1 + Send + 'static,
 {
+    retain_runtime(runtime, None)
+}
+/// Retain the genuine native installation with its independently authenticated app scope.
+/// This function is private to the installed-original intake; foreign IDs cannot create it.
+pub(super) fn retain_native_runtime_bound<P, S>(
+    runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+    binding: super::installed::BoundOriginals,
+) -> std::result::Result<u64, NativeStartupFailure<P, S>>
+where
+    P: advance::KagemushaWalletPlatformV1 + 'static,
+    S: OriginalSourceV1 + Send + 'static,
+{
+    retain_runtime(runtime, Some(binding))
+}
+fn retain_runtime<P, S>(
+    runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+    binding: Option<super::installed::BoundOriginals>,
+) -> std::result::Result<u64, NativeStartupFailure<P, S>>
+where
+    P: advance::KagemushaWalletPlatformV1 + 'static,
+    S: OriginalSourceV1 + Send + 'static,
+{
     let mut registry = match registry().lock() {
         Ok(registry) => registry,
         Err(_) => {
@@ -324,7 +414,11 @@ where
     registry.runtimes.insert(
         id,
         Arc::new(RuntimeOwner {
-            admission: Mutex::new(Some(Box::new(Runtime(Some(Phase::Ready(runtime)))))),
+            closing: Arc::new(closing::CloseState::default()),
+            admission: Mutex::new(Some(Box::new(Runtime {
+                phase: Some(Phase::Ready(runtime)),
+                binding,
+            }))),
             finished: Mutex::new(None),
         }),
     );
@@ -361,6 +455,17 @@ mod tests {
         barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
     }
     impl Admission for TestAdmission {
+        fn enrollment(&mut self, _: enrollment::Input<'_>) -> Result<enrollment::Response> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some((entered, resume)) = &self.barriers {
+                entered.wait();
+                resume.wait();
+            }
+            Ok(enrollment::Response {
+                kind: 1,
+                ..enrollment::Response::default()
+            })
+        }
         fn begin(&mut self, _: [&[u8]; 4]) -> Result<Vec<u8>> {
             Err(Failure::code(INVALID))
         }
@@ -390,6 +495,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let drops = Arc::new(AtomicUsize::new(0));
         let owner = Arc::new(RuntimeOwner {
+            closing: Arc::new(closing::CloseState::default()),
             admission: Mutex::new(Some(Box::new(TestAdmission {
                 wallet: Some(Box::new(super::super::tests::TestWallet {
                     calls: Arc::new(AtomicUsize::new(0)),
@@ -451,8 +557,13 @@ mod tests {
             std::thread::spawn(move || finish_with(&registry, owner, 1, &[1; 64]))
         };
         entered.wait();
-        let removed = registry.lock().unwrap().runtimes.remove(&1).unwrap();
-        let closing = std::thread::spawn(move || close(removed));
+        let close_registry = Arc::clone(&registry);
+        let closing = std::thread::spawn(move || closing::close_with(&close_registry, 1));
+        let timeout = std::time::Instant::now();
+        while owner.closing.require_open().is_ok() {
+            assert!(timeout.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::yield_now();
+        }
         resume.wait();
         assert_eq!(finishing.join().unwrap().unwrap_err().status, CLOSED);
         closing.join().unwrap().unwrap();
@@ -460,5 +571,121 @@ mod tests {
         assert!(owner.finished.lock().unwrap().is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn close_refusal_retains_same_runtime_and_both_custody_owners_for_retry() {
+        let (registry, owner, calls, drops) = local_runtime(None);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = owner.finished.lock().unwrap();
+            panic!("injected retained-result lock refusal");
+        }));
+        for _ in 0..2 {
+            assert_eq!(
+                closing::close_with(&registry, 1).unwrap_err().status,
+                INTERNAL
+            );
+            assert!(
+                registry
+                    .lock()
+                    .unwrap()
+                    .runtimes
+                    .get(&1)
+                    .is_some_and(|actual| Arc::ptr_eq(actual, &owner))
+            );
+            assert!(owner.admission.lock().unwrap().is_some());
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                finish_with(&registry, Arc::clone(&owner), 1, &[1; 64])
+                    .unwrap_err()
+                    .status,
+                CLOSED
+            );
+        }
+        owner.finished.clear_poison(); // Test-only repair: production never invents cleanup success.
+        closing::close_with(&registry, 1).unwrap();
+        assert!(registry.lock().unwrap().runtimes.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+    fn enrollment_input() -> enrollment::Input<'static> {
+        enrollment::Input {
+            selector: 0,
+            slot: &[],
+            challenge: &[1],
+            policy: &[1],
+            account: &[1],
+            original: &[],
+            certificates: &[],
+        }
+    }
+    #[test]
+    fn enrollment_captured_before_close_refuses_after_the_actual_admission_lock() {
+        let (registry, owner, calls, drops) = local_runtime(None);
+        let registry = Arc::new(registry);
+        let held = owner.admission.lock().unwrap();
+        let (captured_send, captured) = std::sync::mpsc::channel();
+        let enrolling = {
+            let owner = Arc::clone(&owner);
+            std::thread::spawn(move || {
+                captured_send.send(()).unwrap();
+                enroll_with(owner, enrollment_input())
+            })
+        };
+        captured.recv().unwrap();
+        let closing = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || closing::close_with(&registry, 1))
+        };
+        let timeout = std::time::Instant::now();
+        while owner.closing.require_open().is_ok() {
+            assert!(timeout.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::yield_now();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(held);
+        assert_eq!(enrolling.join().unwrap().err().unwrap().status, CLOSED);
+        closing.join().unwrap().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(registry.lock().unwrap().runtimes.is_empty());
+    }
+    #[test]
+    fn close_joins_an_accepted_enrollment_before_releasing_the_same_actual_owner() {
+        let entered = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        let (registry, owner, calls, drops) =
+            local_runtime(Some((entered.clone(), resume.clone())));
+        let registry = Arc::new(registry);
+        let enrolling = {
+            let owner = Arc::clone(&owner);
+            std::thread::spawn(move || enroll_with(owner, enrollment_input()))
+        };
+        entered.wait();
+        let closing = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || closing::close_with(&registry, 1))
+        };
+        let timeout = std::time::Instant::now();
+        while owner.closing.require_open().is_ok() {
+            assert!(timeout.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::yield_now();
+        }
+        assert!(
+            registry
+                .lock()
+                .unwrap()
+                .runtimes
+                .get(&1)
+                .is_some_and(|active| Arc::ptr_eq(active, &owner))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        resume.wait();
+        assert_eq!(enrolling.join().unwrap().unwrap().kind, 1);
+        closing.join().unwrap().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(registry.lock().unwrap().runtimes.is_empty());
     }
 }

@@ -30,21 +30,24 @@ public final class KagemushaWalletRuntimeV1: @unchecked Sendable {
   private let lock = NSLock()
   private var owner: UInt64
   private let driver: KagemushaWalletNativeDriverV1
+  private let pending = KagemushaWalletAdmissionLifetimeV1<KagemushaWalletPendingOpenV1>()
   public init(nativeRuntimeHandle: UInt64) throws {
     guard nativeRuntimeHandle > 0 && nativeRuntimeHandle <= UInt64(Int64.max) else { throw KagemushaWalletErrorV1.invalidInput }
     owner = nativeRuntimeHandle
     driver = try KagemushaWalletNativeDriverV1()
   }
-  /// Begin with original issuer/account frames. Native reconciles before sampling its challenge.
+  /// Reconcile these originals, retaining the same challenge and pending owner on retry.
   public func begin(_ originals: KagemushaWalletOpenOriginalsV1) throws -> KagemushaWalletPendingOpenV1 {
     lock.lock(); defer { lock.unlock() }
     guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
     let result = try driver.result { out in originals.withRequest { driver.openBegin(owner, $0, out) } }
     guard result.status == 15 && result.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-    return KagemushaWalletPendingOpenV1(runtime: self, challenge: result.bytes)
+    return try pending.select(result.bytes) { identity in
+      KagemushaWalletPendingOpenV1(runtime: self, identity: identity, challenge: result.bytes)
+    }
   }
-  fileprivate func finish(_ signature: Data) throws -> KagemushaWalletV1 {
-    lock.lock(); defer { lock.unlock() }
+  // Called exclusively under this runtime's lock.
+  private func finishNative(_ signature: Data) throws -> KagemushaWalletV1 {
     guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
     let result = try driver.result { out in signature.withUnsafeBytes { driver.openFinish(owner, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, out) } }
     guard result.status == 16 && result.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
@@ -52,42 +55,105 @@ public final class KagemushaWalletRuntimeV1: @unchecked Sendable {
     owner = 0
     return wallet
   }
-  /// Discard a pending challenge after interrupted begin delivery, retaining native custody.
-  public func cancelPendingOpen() throws {
+  fileprivate func finish(_ identity: KagemushaWalletAdmissionIdentityV1, signature: Data) throws -> KagemushaWalletV1 {
     lock.lock(); defer { lock.unlock() }
+    return try pending.finish(identity) { try finishNative(signature) }
+  }
+  // Called exclusively under this runtime's lock.
+  private func cancelNative() throws {
     guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
     try KagemushaWalletNativeDriverV1.check(driver.openCancel(owner))
   }
-  /// Recover exact successful finish after interrupted output or registration delivery.
-  /// A rejected authorization requires a fresh begin, rather than reuse of its challenge.
-  public func retryOpenCompletion(accountSignature: Data) throws -> KagemushaWalletV1 {
-    try finish(accountSignature)
+  fileprivate func cancel(_ identity: KagemushaWalletAdmissionIdentityV1) throws {
+    lock.lock(); defer { lock.unlock() }
+    try pending.abandon(identity) { try cancelNative() }
   }
-  /// Close only unadmitted custody; a successful finish transfers ownership to its wallet.
+  /// Discard a pending challenge after interrupted begin delivery, retaining native custody.
+  public func cancelPendingOpen() throws {
+    lock.lock(); defer { lock.unlock() }
+    try pending.complete { try cancelNative() }
+  }
+  /// Retry the retained challenge or recover interrupted finish delivery/registration.
+  public func retryOpenCompletion(accountSignature: Data) throws -> KagemushaWalletV1 {
+    lock.lock(); defer { lock.unlock() }
+    return try pending.complete { try finishNative(accountSignature) }
+  }
+  /// Successful finish transfers ownership to the wallet; closing this runtime then does nothing.
   public func close() throws {
     lock.lock(); defer { lock.unlock() }
     let value = owner; owner = 0
+    pending.clear()
     if value != 0 { try KagemushaWalletNativeDriverV1.check(driver.close(value)) }
   }
   deinit { try? close() }
 }
 
-/// Single-use account challenge. The existing Ed25519 account signs these exact 32 bytes.
+/// Exact retained 32-byte account challenge. The existing Ed25519 account signs these bytes.
 public final class KagemushaWalletPendingOpenV1: @unchecked Sendable {
-  private let lock = NSLock()
-  private var runtime: KagemushaWalletRuntimeV1?
+  private let runtime: KagemushaWalletRuntimeV1
+  private let identity: KagemushaWalletAdmissionIdentityV1
   public let challenge: Data
-  fileprivate init(runtime: KagemushaWalletRuntimeV1, challenge: Data) { self.runtime = runtime; self.challenge = challenge }
-  /// Failed finish consumes this challenge; the retained runtime can begin afresh.
+  fileprivate init(runtime: KagemushaWalletRuntimeV1, identity: KagemushaWalletAdmissionIdentityV1, challenge: Data) {
+    self.runtime = runtime; self.identity = identity; self.challenge = challenge
+  }
+  /// Ordinary refusal retains this pending owner for retry; success transfers ownership.
   public func finish(accountSignature: Data) throws -> KagemushaWalletV1 {
-    lock.lock(); let selected = runtime; runtime = nil; lock.unlock()
-    guard let selected else { throw KagemushaWalletErrorV1.closed }
-    return try selected.finish(accountSignature)
+    try runtime.finish(identity, signature: accountSignature)
   }
-  /// Abandon without admitting an owner or releasing the runtime's custody.
-  public func cancel() throws {
-    lock.lock(); let selected = runtime; runtime = nil; lock.unlock()
-    if let selected { try selected.cancelPendingOpen() }
-  }
+  /// Abandon this challenge without admitting ownership or releasing native custody.
+  public func cancel() throws { try runtime.cancel(identity) }
   deinit { try? cancel() }
+}
+
+// Managed lifetime only. The token cannot select a native handle, trust pin or verdict.
+internal final class KagemushaWalletAdmissionIdentityV1 {}
+internal final class KagemushaWalletAdmissionLifetimeV1<P: AnyObject> {
+  // Pending owns its Runtime. A weak cache prevents the reverse edge from creating an ARC cycle.
+  // The separately retained identity also makes deinit cancellation safe after weak zeroing.
+  private weak var current: P?
+  private var identity: KagemushaWalletAdmissionIdentityV1?
+  private var challenge: Data?
+
+  // All production calls are serialized by the actual Runtime lock.
+  func select(_ original: Data, create: (KagemushaWalletAdmissionIdentityV1) -> P) throws -> P {
+    guard original.count == 32 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    let selectedIdentity: KagemushaWalletAdmissionIdentityV1
+    if identity != nil {
+      guard challenge == original else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+      if let selected = current { return selected }
+      // A prior Pending deinit may already be waiting on the Runtime lock. Give the
+      // replacement wrapper a fresh managed identity so that old cancellation is stale.
+      // The exact retained Native challenge remains unchanged.
+      selectedIdentity = KagemushaWalletAdmissionIdentityV1()
+    } else {
+      selectedIdentity = KagemushaWalletAdmissionIdentityV1()
+    }
+    let selected = create(selectedIdentity)
+    challenge = original
+    identity = selectedIdentity
+    current = selected
+    return selected
+  }
+
+  func finish<T>(_ selected: KagemushaWalletAdmissionIdentityV1, action: () throws -> T) throws -> T {
+    guard identity === selected else { throw KagemushaWalletErrorV1.closed }
+    return try complete(action)
+  }
+
+  func abandon(_ selected: KagemushaWalletAdmissionIdentityV1, action: () throws -> Void) throws {
+    // An old or completed wrapper must never cancel a subsequent challenge.
+    if identity === selected { try complete(action) }
+  }
+
+  func complete<T>(_ action: () throws -> T) rethrows -> T {
+    let result = try action()
+    clear()
+    return result
+  }
+
+  func clear() {
+    current = nil
+    identity = nil
+    challenge = nil
+  }
 }
