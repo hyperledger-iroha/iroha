@@ -46,16 +46,19 @@ mod folding;
 mod index;
 mod lifecycle;
 mod manifest;
+mod map_custody;
 mod map_tree;
 mod scheduling;
 mod snapshot;
 
 pub use archive::{ArchiveKey, ArchiveStore, FsArchive};
 pub use collection::{CollectionStatus, OutgoingAbsent};
+pub(crate) use custody::NativeObservationsV1;
 pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
 pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
+pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub use lifecycle::{
     ChargeOriginalsV1, NativePreparation, OperationActionV1, OperationRequestV1,
     PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES, RequestStatusV1,

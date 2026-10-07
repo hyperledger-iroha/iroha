@@ -200,6 +200,50 @@ fn signed_sixteen_sigmas_qualify_exact_sources_and_reject_substitutions() {
         assert_eq!(key.key().to_bytes(), step.artifact.verifying_key);
     }
     assert!(qualified.key(16).is_none());
+    // Real source-qualified sigmas cannot upgrade framing-only operations or
+    // a foreign native genesis into the complete wallet capability.
+    let native = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
+    let params = iroha_kagemusha_proof::finality::native::Parameters {
+        pallas: PinnedParams::derive(16).unwrap(),
+        vesta: PinnedParams::derive(16).unwrap(),
+    };
+    let finality_limits = iroha_kagemusha_proof::finality::catalog::VerifierLimits {
+        maximum_artifacts: 4_096,
+        maximum_verifier_bytes: 16 << 20,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let mut foreign = AuthenticatedProducerInventoryV1 {
+        inventory: authenticated.inventory.clone(),
+        scheme_id: authenticated.scheme_id,
+        manifest_digest: authenticated.manifest_digest,
+    };
+    foreign.manifest_digest[0] ^= 1;
+    assert!(matches!(
+        foreign.qualify_wallet(
+            &installed,
+            &native.verifier(),
+            &mut disk,
+            config(),
+            params.clone(),
+            finality_limits,
+        ),
+        Err(WalletSourcesErrorV1::Original(Error::Authority))
+    ));
+    assert_eq!(disk.opens, 48, "installation mismatch must precede reads");
+    assert!(matches!(
+        authenticated.qualify_wallet(
+            &installed,
+            &native.verifier(),
+            &mut disk,
+            config(),
+            params,
+            finality_limits,
+        ),
+        Err(WalletSourcesErrorV1::Finality(
+            FinalityQualificationErrorV1::AnchorMismatch
+        ))
+    ));
+    assert_eq!(disk.opens, 48, "native genesis mismatch must precede reads");
     eprintln!(
         "SIGMA_SOURCES_QUALIFIED count=16 signed_inventory=true one_active_original=true wallet_grant=false"
     );

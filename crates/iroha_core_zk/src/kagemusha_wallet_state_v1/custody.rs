@@ -97,6 +97,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             field: "provider handle poisoned",
         })
     }
+    /// Share only native observations with the concrete proof/preparation owner.
+    pub(crate) fn observations(&self) -> NativeObservationsV1<F, P> {
+        NativeObservationsV1 {
+            provider: Arc::clone(&self.provider),
+        }
+    }
+
     /// Create the matching archive capability. Both adapters share one provider and its
     /// exclusive custody lifetime; every archive call uses its protected-storage bracket.
     #[must_use]
@@ -107,6 +114,23 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             scheme_id,
             wallet_id,
         }
+    }
+}
+
+/// Private clock capability sharing the actual exclusive provider lifetime.
+/// It grants no payment-key, storage or Advance access.
+pub(crate) struct NativeObservationsV1<F: KagemushaWalletFsV1, P> {
+    provider: Arc<Mutex<KagemushaWalletProviderV1<F, P>>>,
+}
+
+impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> NativeObservationsV1<F, P> {
+    pub(crate) fn time(&self) -> Result<KagemushaWalletMonotonicReadingV1, ProviderError> {
+        self.provider
+            .lock()
+            .map_err(|_| ProviderError::Invalid {
+                field: "provider handle poisoned",
+            })?
+            .monotonic_reading()
     }
 }
 

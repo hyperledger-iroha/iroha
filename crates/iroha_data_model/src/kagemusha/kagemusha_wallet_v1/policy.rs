@@ -2673,7 +2673,7 @@ impl KagemushaWalletStateV1 {
     pub(super) fn effective_accepted_time(
         &self,
         anchored: Option<&KagemushaWalletAnchoredTimeV1>,
-        now: &KagemushaWalletMonotonicReadingV1,
+        now: Option<&KagemushaWalletMonotonicReadingV1>,
         receiver_accepted_time_ms: u64,
     ) -> WalletResult<KagemushaWalletTimeIntervalV1> {
         let floor = self
@@ -2698,6 +2698,7 @@ impl KagemushaWalletStateV1 {
         if anchor.time_anchor_digest() != self.rest.time_anchor {
             return Err(invalid_v1("state.rest.time_anchor"));
         }
+        let now = now.ok_or_else(|| invalid_v1("time_anchor.observation_missing"))?;
         let interval = anchored.interval_at(now, self.core.time_anchor_max_response_ms)?;
         let lower = floor.max(interval.lower_ms);
         KagemushaWalletTimeIntervalV1::new(lower, interval.upper_ms.max(lower))

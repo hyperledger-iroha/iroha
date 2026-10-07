@@ -271,11 +271,18 @@ unknown source metadata and ordered terminal keys. The k18 scratch trace plans
 fixed-table occupancy only; guarded production replay remains k16. Its 162-byte
 `compiled_policy_transcript` binds the exact constants and planner identity in the
 native profile. `source_circuit` and strict original-PK intake share this recipe;
-cloning a Program retains metadata only. The current capture passes nine native
-units and the genuine rooted Bootstrap chain (445.78 s), reproducing exact
+cloning a Program retains metadata only. The merged native binary passes 83 cases
+with three explicit source-import sweeps excluded from that batch. The separately
+rebuilt genuine rooted Bootstrap regression passes in 289.54 s, reproducing exact
 unknown-source descriptor/VK bytes and original import before verifying the
-3,712-byte proof/4,800-byte transport and both claims. Recorded source and binary
-hashes remain unchanged (`target/qualification/native-omega-source-factory/policy-current`).
+3,712-byte proof/4,800-byte transport and both claims. Its executable SHA is
+`4947f8d9643fa8841d9a38631ec579bf3a4d4527e7775028dc7dbff1fd48f447`;
+recorded build/runtime sources and copied binary remain unchanged
+(`target/qualification/merge-reconcile-root/fixture-capture`). The same capture
+passes seven default Load/recovery/claim cases, with one explicit expensive case
+ignored; the initial all-ignored Bootstrap invocation is retained separately.
+Shared fixture bodies preserve all current builders and keep test registration
+in their own harnesses. All proof test targets compile and pass scoped strict lint.
 This single-terminal check establishes no full-catalog, latency or memory pass.
 
 Within a block session, identical current/authorized context-hash inputs reuse

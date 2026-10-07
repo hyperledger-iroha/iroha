@@ -65,6 +65,79 @@ pub(super) fn monetary_shape(selector: usize) -> Result<SigmaShape, Error> {
     iroha_kagemusha_proof::wallet_monetary_shape(relation).map_err(|_| Error::Profile)
 }
 
+/// One active exact native sigma owner. Every variant holds only its own original PK.
+pub enum ImportedSigmaV1 {
+    /// Initial wallet state source.
+    Bootstrap(Box<BootstrapProver>),
+    /// Finalized-load state source.
+    Load(Box<LoadProver>),
+    /// One exact Send mask or Receive renewal variant.
+    Monetary(Box<SigmaProver<Eq>>),
+    /// Credit archive source.
+    Archive(Box<ArchiveProver>),
+    /// Unload source.
+    Unload(Box<UnloadProver>),
+    /// Policy refresh source.
+    Refresh(Box<RefreshProver>),
+    /// Wallet retirement source.
+    Retiring(Box<RetiringProver>),
+}
+impl ImportedSigmaV1 {
+    pub(super) fn metadata(&self) -> Result<KeyArtifact<Eq>, SigmaQualificationErrorV1> {
+        let (binding, key) = match self {
+            Self::Bootstrap(p) => (p.binding(), p.verifying_key()),
+            Self::Load(p) => (p.binding(), p.verifying_key()),
+            Self::Monetary(p) => (p.proving_key().binding(), p.proving_key().vk()),
+            Self::Archive(p) => (p.binding(), p.verifying_key()),
+            Self::Unload(p) => (p.binding(), p.verifying_key()),
+            Self::Refresh(p) => (p.binding(), p.verifying_key()),
+            Self::Retiring(p) => (p.binding(), p.verifying_key()),
+        };
+        Ok(KeyArtifact::new(binding.clone(), key.clone())?)
+    }
+}
+
+pub(super) fn import_prover(
+    selector: usize,
+    original: &OriginalBytesV1,
+    k12: &PinnedParams<Eq>,
+    k14: &PinnedParams<Eq>,
+    config: ReadConfig,
+) -> Result<ImportedSigmaV1, SigmaQualificationErrorV1> {
+    macro_rules! administrative {
+        ($owner:ty, $variant:ident) => {{
+            ImportedSigmaV1::$variant(Box::new(<$owner>::from_original_artifact(
+                k12.clone(),
+                &original.descriptor,
+                &original.verifying_key,
+                &original.proving_key,
+                config,
+            )?))
+        }};
+    }
+    Ok(match selector {
+        0 => administrative!(BootstrapProver, Bootstrap),
+        1 => administrative!(LoadProver, Load),
+        2..=11 => {
+            let shape = monetary_shape(selector)?;
+            let params = if shape.k == 12 { k12 } else { k14 };
+            ImportedSigmaV1::Monetary(Box::new(SigmaProver::<Eq>::from_original_artifact(
+                shape,
+                params.clone(),
+                &original.descriptor,
+                &original.verifying_key,
+                &original.proving_key,
+                config,
+            )?))
+        }
+        12 => administrative!(ArchiveProver, Archive),
+        13 => administrative!(UnloadProver, Unload),
+        14 => administrative!(RefreshProver, Refresh),
+        15 => administrative!(RetiringProver, Retiring),
+        _ => return Err(Error::Profile.into()),
+    })
+}
+
 pub(super) fn import(
     selector: usize,
     original: &OriginalBytesV1,
@@ -72,41 +145,7 @@ pub(super) fn import(
     k14: &PinnedParams<Eq>,
     config: ReadConfig,
 ) -> Result<KeyArtifact<Eq>, SigmaQualificationErrorV1> {
-    macro_rules! administrative {
-        ($owner:ty) => {{
-            let owner = <$owner>::from_original_artifact(
-                k12.clone(),
-                &original.descriptor,
-                &original.verifying_key,
-                &original.proving_key,
-                config,
-            )?;
-            KeyArtifact::new(owner.binding().clone(), owner.verifying_key().clone())?
-        }};
-    }
-    Ok(match selector {
-        0 => administrative!(BootstrapProver),
-        1 => administrative!(LoadProver),
-        2..=11 => {
-            let shape = monetary_shape(selector)?;
-            let params = if shape.k == 12 { k12 } else { k14 };
-            let owner = SigmaProver::<Eq>::from_original_artifact(
-                shape,
-                params.clone(),
-                &original.descriptor,
-                &original.verifying_key,
-                &original.proving_key,
-                config,
-            )?;
-            let key = owner.proving_key();
-            KeyArtifact::new(key.binding().clone(), key.vk().clone())?
-        }
-        12 => administrative!(ArchiveProver),
-        13 => administrative!(UnloadProver),
-        14 => administrative!(RefreshProver),
-        15 => administrative!(RetiringProver),
-        _ => return Err(Error::Profile.into()),
-    })
+    import_prover(selector, original, k12, k14, config)?.metadata()
 }
 
 impl AuthenticatedProducerInventoryV1 {

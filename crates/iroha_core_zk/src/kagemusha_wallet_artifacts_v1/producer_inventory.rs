@@ -21,8 +21,10 @@ pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};
 
 #[path = "producer_inventory/compiler.rs"]
 mod compiler;
-pub use compiler::{CompilationErrorV1, CompilationPhaseV1, CompiledKeyV1, CompiledOperationV1, CompiledOmegaV1,
-    CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1, q_classes};
+pub use compiler::{
+    CompilationErrorV1, CompilationPhaseV1, CompiledKeyV1, CompiledOmegaV1, CompiledOperationV1,
+    CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1, q_classes,
+};
 
 #[path = "producer_inventory/finality.rs"]
 mod finality;
@@ -34,12 +36,14 @@ pub(super) use sigma::compiled_sigma_policy;
 
 #[path = "producer_inventory/q.rs"]
 mod q;
-pub use q::{QProgramRecipeV1, QQualificationErrorV1, QualifiedQProgramV1, q_source_recipe};
+pub use q::{
+    ImportedQV1, QProgramRecipeV1, QQualificationErrorV1, QualifiedQProgramV1, q_source_recipe,
+};
 
 #[path = "producer_inventory/bootstrap.rs"]
 mod bootstrap;
 pub use bootstrap::{BootstrapQualificationErrorV1, QualifiedBootstrapProgramV1};
-pub use sigma::{QualifiedSigmasV1, SigmaQualificationErrorV1};
+pub use sigma::{ImportedSigmaV1, QualifiedSigmasV1, SigmaQualificationErrorV1};
 
 #[path = "producer_inventory/operation.rs"]
 mod operation;
@@ -50,6 +54,10 @@ pub use operation::{
 #[path = "producer_inventory/omega.rs"]
 mod omega;
 pub use omega::{OmegaQualificationErrorV1, QualifiedOmegaProgramV1};
+
+#[path = "producer_inventory/wallet.rs"]
+mod wallet;
+pub use wallet::{QualifiedWalletSourcesV1, WalletSourcesErrorV1};
 
 /// Canonical inventory metadata cap; original proving tables are stored separately.
 pub const CATALOG_MAX_BYTES_V1: usize = 16 << 20;

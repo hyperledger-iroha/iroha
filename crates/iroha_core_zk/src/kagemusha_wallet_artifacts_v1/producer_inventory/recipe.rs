@@ -58,7 +58,12 @@ impl SourceScopeV1 {
     pub(super) fn bootstrap(self) -> Result<BootstrapPolicy, Error> {
         BootstrapPolicy::new(self.provider, self.root).map_err(|_| Error::Authority)
     }
-    pub(super) const fn root(self) -> Affine {
+    /// Exact authenticated or offline-selected provider limbs in little-endian order.
+    pub const fn provider(self) -> [u128; 2] {
+        self.provider
+    }
+    /// Exact finite P-256 scheme-root point fixed into native source recipes.
+    pub const fn root(self) -> Affine {
         self.root
     }
 }

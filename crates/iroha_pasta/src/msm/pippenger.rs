@@ -29,7 +29,7 @@
 //! queued bucket indices, points and signs, addition kinds and the batch
 //! inversion scratch, including spare capacity) are zeroised when they are
 //! dropped, also during unwinding. Bucket indices, zero-digit skipping,
-//! conflict handling and the equal/opposite-point checks still depend on the
+//! conflict handling, leading-empty-bucket trimming and the equal/opposite-point checks depend on the
 //! scalar digits, which is the posture of the vendored `halo2curves` MSM it
 //! replaces: it is not a constant-time MSM.
 #![allow(
@@ -325,7 +325,16 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
     pub(crate) fn reduce(&self, start: usize, len: usize) -> C {
         let mut running = C::identity();
         let mut acc = C::identity();
-        for j in (start..start + len).rev() {
+        // Before the highest occupied bucket, both running and acc are the
+        // identity. Omit only those identity additions; lower empty buckets
+        // must still contribute running to preserve their positional weight.
+        // Occupancy is digit-dependent, as are the existing bucket accesses
+        // and conflict handling; this stays within the variable-time MSM
+        // posture documented above. Secret window planning is unchanged.
+        let Some(last) = (start..start + len).rfind(|&j| self.has[j] || self.overflow_used[j]) else {
+            return acc;
+        };
+        for j in (start..=last).rev() {
             if self.has[j] {
                 running = running.add_affine_coords(self.x[j], self.y[j]);
             }

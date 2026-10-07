@@ -344,3 +344,56 @@ fn wallet_advance_v1_provider_open_accepts_an_empty_skeleton_without_a_sentinel(
         })
     );
 }
+
+#[test]
+fn wallet_advance_v1_native_clock_preserves_unavailability_and_custody() {
+    let device = device();
+    let provider = device.open();
+    device.platform.with(|state| state.monotonic = Ok(u64::MAX));
+    let reading = provider.monotonic_reading().unwrap();
+    assert_eq!(reading.boot_id, BOOT_A);
+    assert_eq!(reading.monotonic_ms, u64::MAX);
+    for boot in [Ok([0; 32]), Err(KagemushaWalletUnavailableV1::Platform(7))] {
+        device.platform.with(|state| state.boot = boot);
+        assert!(matches!(
+            provider.monotonic_reading(),
+            Err(KagemushaWalletProviderErrorV1::Unavailable(_))
+        ));
+    }
+    device.platform.with(|state| {
+        state.boot = Ok(BOOT_A);
+        state.monotonic = Err(KagemushaWalletUnavailableV1::Platform(8));
+    });
+    assert!(matches!(
+        provider.monotonic_reading(),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(
+            KagemushaWalletUnavailableV1::Platform(8)
+        ))
+    ));
+    device.platform.with(|state| {
+        state.monotonic = Ok(123);
+        state.boot_after_monotonic = Some(Ok([0x42; 32]));
+    });
+    assert!(matches!(
+        provider.monotonic_reading(),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(
+            KagemushaWalletUnavailableV1::Busy
+        ))
+    ));
+    device.platform.with(|state| {
+        state.boot = Ok(BOOT_A);
+        state.storage_lock_after = Some(1);
+    });
+    assert!(matches!(
+        provider.monotonic_reading(),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(
+            KagemushaWalletUnavailableV1::Locked
+        ))
+    ));
+    assert_eq!(
+        device
+            .platform
+            .with(|state| (state.generate_calls, state.sign_calls, state.delete_calls)),
+        (0, 0, 0)
+    );
+}

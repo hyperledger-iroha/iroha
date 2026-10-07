@@ -1,7 +1,7 @@
 //! Shared C/JNI typed intake. Only the installed owner may decode and prepare originals.
 
 use super::*;
-use iroha_data_model::isi::kagemusha_wallet::KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
+use iroha_data_model::isi::kagemusha_wallet::load_finality::KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
 
 /// Exact per-original bounds, applied before either foreign frontend allocates input copies.
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {

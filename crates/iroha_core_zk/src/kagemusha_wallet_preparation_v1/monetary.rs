@@ -25,8 +25,9 @@ mod tests;
 pub struct SendControlsV1<'a> {
     /// Committed same-boot anchor, when held.
     pub anchored: Option<&'a KagemushaWalletAnchoredTimeV1>,
-    /// Actual current Native monotonic observation.
-    pub now: &'a KagemushaWalletMonotonicReadingV1,
+    /// Actual Native monotonic observation, mandatory for a held time anchor.
+    /// The no-anchor floor-only path has no observation.
+    pub now: Option<&'a KagemushaWalletMonotonicReadingV1>,
     /// Held blacklist; its complete digest is checked against the authenticated source state.
     pub blacklist: Option<&'a KagemushaWalletBlacklistV1>,
     /// Held signed quota share including all original windows.

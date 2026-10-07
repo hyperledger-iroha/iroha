@@ -1,7 +1,8 @@
 //! Native admission of an existing account and its actual enrolled custody slot.
 //!
 //! The installation owner supplies an authenticated immutable verifier and the canonical
-//! source-qualified Omega owner, whose complete operation routes were strictly imported.
+//! complete source-qualified wallet graph, including all sigma, receipt, Q, operation
+//! and Omega owners whose originals were strictly imported.
 //! Foreign inputs supply original credential, certificate and AccountId
 //! frames, never slot/scheme/wallet/artifact identifiers or a replacement account vault. Native
 //! enumerates real provider slots, reconciles their markers, checks the positive hardware key,
@@ -26,7 +27,7 @@ use crate::{
         kagemusha_wallet_provider_digest_v1,
     },
     kagemusha_wallet_artifacts_v1::{
-        InstalledVerifierPackV1, producer_inventory::QualifiedOmegaProgramV1,
+        InstalledVerifierPackV1, producer_inventory::QualifiedWalletSourcesV1,
     },
     kagemusha_wallet_preparation_v1::PreparationV1,
 };
@@ -182,7 +183,7 @@ fn open_message(
 pub struct PendingWalletOpenV1<F: KagemushaWalletFsV1, P> {
     provider: KagemushaWalletProviderV1<F, P>,
     installed: Arc<InstalledVerifierPackV1>,
-    omega: Arc<QualifiedOmegaProgramV1>,
+    sources: Arc<QualifiedWalletSourcesV1>,
     slot: KagemushaWalletSlotIdV1,
     marker_file_digest: [u8; 32],
     credential: KagemushaWalletCredentialV1,
@@ -200,7 +201,7 @@ pub struct PendingWalletOpenV1<F: KagemushaWalletFsV1, P> {
 pub struct AdmittedWalletV1<F: KagemushaWalletFsV1, P> {
     provider: KagemushaWalletProviderV1<F, P>,
     installed: Arc<InstalledVerifierPackV1>,
-    omega: Arc<QualifiedOmegaProgramV1>,
+    sources: Arc<QualifiedWalletSourcesV1>,
     slot: KagemushaWalletSlotIdV1,
     credential: KagemushaWalletCredentialV1,
     credential_original: Vec<u8>,
@@ -289,7 +290,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
     pub fn begin(
         mut provider: KagemushaWalletProviderV1<F, P>,
         installed: Arc<InstalledVerifierPackV1>,
-        omega: Arc<QualifiedOmegaProgramV1>,
+        sources: Arc<QualifiedWalletSourcesV1>,
         credential_original: &[u8],
         certificate_original: &[u8],
         account_original: &[u8],
@@ -300,7 +301,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
                 installed.verifier().scheme().scheme_id(),
                 installed.verifier().manifest_digest(),
             ),
-            omega.installation(),
+            sources.installation(),
             *provider.scheme_id(),
         )?;
         let preparation = PreparationV1::new(&installed)
@@ -346,7 +347,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         Ok(Self {
             provider,
             installed,
-            omega,
+            sources,
             slot,
             marker_file_digest,
             credential,
@@ -384,7 +385,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         Ok(AdmittedWalletV1 {
             provider: self.provider,
             installed: self.installed,
-            omega: self.omega,
+            sources: self.sources,
             slot: self.slot,
             credential: self.credential,
             credential_original: self.credential_original,
@@ -435,7 +436,7 @@ impl<F: KagemushaWalletFsV1, P> AdmittedWalletV1<F, P> {
     ) -> (
         KagemushaWalletProviderV1<F, P>,
         Arc<InstalledVerifierPackV1>,
-        Arc<QualifiedOmegaProgramV1>,
+        Arc<QualifiedWalletSourcesV1>,
         KagemushaWalletSlotIdV1,
         KagemushaWalletCredentialV1,
         AccountId,
@@ -448,7 +449,7 @@ impl<F: KagemushaWalletFsV1, P> AdmittedWalletV1<F, P> {
         (
             self.provider,
             self.installed,
-            self.omega,
+            self.sources,
             self.slot,
             self.credential,
             self.account,

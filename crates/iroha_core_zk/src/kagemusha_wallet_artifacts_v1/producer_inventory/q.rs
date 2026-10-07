@@ -270,6 +270,56 @@ pub(super) fn source(
     Ok(result)
 }
 
+/// One active exact Q source with its sole original proving key.
+pub enum ImportedQV1 {
+    /// Q0, carrying the fixed own/incoming sigma source classes.
+    Sigma(Box<QSigmaProver>),
+    /// Q1 or later, carrying its exact hard/soft signature-slot policy.
+    Signature(Box<QSignatureProver>),
+}
+impl ImportedQV1 {
+    pub(super) fn metadata(&self) -> Result<KeyArtifact<Ep>, QQualificationErrorV1> {
+        let (binding, key) = match self {
+            Self::Sigma(p) => (p.binding(), p.verifying_key()),
+            Self::Signature(p) => (p.binding(), p.verifying_key()),
+        };
+        Ok(KeyArtifact::new(binding.clone(), key.clone())?)
+    }
+}
+
+pub(super) fn import(
+    index: usize,
+    source: &QSigmaSource,
+    signatures: &[QSignaturePlan],
+    bytes: &OriginalBytesV1,
+    pallas: &PinnedParams<Ep>,
+    config: ReadConfig,
+) -> Result<ImportedQV1, QQualificationErrorV1> {
+    Ok(if index == 0 {
+        ImportedQV1::Sigma(Box::new(
+            QSigmaProver::from_original_artifact_serialized_foreign(
+                source,
+                pallas.clone(),
+                &bytes.descriptor,
+                &bytes.verifying_key,
+                &bytes.proving_key,
+                config,
+                2,
+            )?,
+        ))
+    } else {
+        let plan = signatures.get(index - 1).ok_or(Error::Inventory)?.clone();
+        ImportedQV1::Signature(Box::new(QSignatureProver::from_original_artifact(
+            plan,
+            pallas.clone(),
+            &bytes.descriptor,
+            &bytes.verifying_key,
+            &bytes.proving_key,
+            config,
+        )?))
+    })
+}
+
 impl AuthenticatedProducerInventoryV1 {
     /// Strictly reconstruct and import one program's Q originals from the same
     /// installed scheme/root and already-qualified sixteen sigma sources.
@@ -300,31 +350,7 @@ impl AuthenticatedProducerInventoryV1 {
         let mut keys = Vec::with_capacity(record.q.len());
         for (index, original) in record.q.iter().copied().enumerate() {
             let bytes = self.read_original(original, originals, config.maximum_bytes)?;
-            let key = if index == 0 {
-                let owner = QSigmaProver::from_original_artifact_serialized_foreign(
-                    &source,
-                    pallas.clone(),
-                    &bytes.descriptor,
-                    &bytes.verifying_key,
-                    &bytes.proving_key,
-                    config,
-                    2,
-                )?;
-                KeyArtifact::new(
-                    owner.proving_key().binding().clone(),
-                    owner.proving_key().vk().clone(),
-                )?
-            } else {
-                let owner = QSignatureProver::from_original_artifact(
-                    signatures[index - 1].clone(),
-                    pallas.clone(),
-                    &bytes.descriptor,
-                    &bytes.verifying_key,
-                    &bytes.proving_key,
-                    config,
-                )?;
-                KeyArtifact::new(owner.binding().clone(), owner.verifying_key().clone())?
-            };
+            let key = import(index, &source, &signatures, &bytes, &pallas, config)?.metadata()?;
             drop(bytes);
             keys.push(key);
         }

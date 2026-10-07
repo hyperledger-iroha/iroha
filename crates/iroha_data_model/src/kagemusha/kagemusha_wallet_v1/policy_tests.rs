@@ -1546,11 +1546,11 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     let mut idle = f.state();
     idle.core.accepted_time_floor_ms = 50;
     assert_eq!(
-        idle.effective_accepted_time(None, &now, 40).expect("idle"),
+        idle.effective_accepted_time(None, None, 40).expect("idle"),
         interval(50, 50)
     );
     assert_eq!(
-        idle.effective_accepted_time(None, &now, 70).expect("idle"),
+        idle.effective_accepted_time(None, None, 70).expect("idle"),
         interval(70, 70)
     );
 
@@ -1560,26 +1560,37 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     let state = f.controlled_state(None, None, Some(&anchor));
     assert!(state.send_requires_time_anchor());
     assert!(is_invalid(
-        state.effective_accepted_time(None, &now, 0),
+        state.effective_accepted_time(None, None, 0),
         "time_anchor.missing"
+    ));
+    assert!(is_invalid(
+        state.effective_accepted_time(Some(&anchored), None, 0),
+        "time_anchor.observation_missing"
+    ));
+    // A held anchor still requires its observation with all controls disabled.
+    let mut idle_with_anchor = state;
+    idle_with_anchor.core.enabled_controls = 0;
+    assert!(is_invalid(
+        idle_with_anchor.effective_accepted_time(Some(&anchored), None, 0),
+        "time_anchor.observation_missing"
     ));
     // Anchor interval at m = 6_000 is [T + 4_700, T + 5_000].
     assert_eq!(
         state
-            .effective_accepted_time(Some(&anchored), &now, 0)
+            .effective_accepted_time(Some(&anchored), Some(&now), 0)
             .expect("anchored"),
         interval(T0_MS + 4_700, T0_MS + 5_000)
     );
     // The receiver's authenticated time raises L, and U never falls below L.
     assert_eq!(
         state
-            .effective_accepted_time(Some(&anchored), &now, T0_MS + 4_900)
+            .effective_accepted_time(Some(&anchored), Some(&now), T0_MS + 4_900)
             .expect("receiver time"),
         interval(T0_MS + 4_900, T0_MS + 5_000)
     );
     assert_eq!(
         state
-            .effective_accepted_time(Some(&anchored), &now, T0_MS + 9_000)
+            .effective_accepted_time(Some(&anchored), Some(&now), T0_MS + 9_000)
             .expect("receiver time"),
         interval(T0_MS + 9_000, T0_MS + 9_000)
     );
@@ -1594,13 +1605,13 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     )
     .expect("anchored");
     assert!(is_invalid(
-        state.effective_accepted_time(Some(&uncommitted), &now, 0),
+        state.effective_accepted_time(Some(&uncommitted), Some(&now), 0),
         "state.rest.time_anchor"
     ));
     let mut foreign = f.state();
     foreign.core.wallet_id = [0x0f; 32];
     assert!(is_invalid(
-        foreign.effective_accepted_time(Some(&anchored), &now, 0),
+        foreign.effective_accepted_time(Some(&anchored), Some(&now), 0),
         "time_anchor.wallet_id"
     ));
 }

@@ -359,6 +359,47 @@ where
         self.require_storage().and(answer)
     }
 
+    /// Read a native sleep-inclusive clock under the same protected custody lifetime.
+    /// No payment key or store is exposed; unknown time never becomes a zero reading.
+    pub(crate) fn monotonic_reading(
+        &self,
+    ) -> Result<
+        iroha_data_model::kagemusha::KagemushaWalletMonotonicReadingV1,
+        KagemushaWalletProviderErrorV1,
+    > {
+        self.require_storage()?;
+        let answer = (|| {
+            let boot_id = self
+                .boot()
+                .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+            if boot_id == [0; 32] {
+                return Err(KagemushaWalletProviderErrorV1::Unavailable(
+                    KagemushaWalletUnavailableV1::Platform(0),
+                ));
+            }
+            let monotonic_ms = self
+                .platform
+                .monotonic_ms()
+                .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+            if self
+                .boot()
+                .map_err(KagemushaWalletProviderErrorV1::Unavailable)?
+                != boot_id
+            {
+                return Err(KagemushaWalletProviderErrorV1::Unavailable(
+                    KagemushaWalletUnavailableV1::Busy,
+                ));
+            }
+            Ok(
+                iroha_data_model::kagemusha::KagemushaWalletMonotonicReadingV1 {
+                    boot_id,
+                    monotonic_ms,
+                },
+            )
+        })();
+        self.require_storage().and(answer)
+    }
+
     /// Current boot identity.
     pub(super) fn boot(&self) -> Result<[u8; 32], KagemushaWalletUnavailableV1> {
         self.platform.boot_id()

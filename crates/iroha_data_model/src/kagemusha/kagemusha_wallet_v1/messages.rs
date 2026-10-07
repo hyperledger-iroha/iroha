@@ -1092,8 +1092,9 @@ pub struct KagemushaWalletSendInputsV1<'a> {
     pub omega: &'a KagemushaWalletLineagePublicV1,
     /// Committed same-boot anchor, if the wallet holds one.
     pub anchored: Option<&'a KagemushaWalletAnchoredTimeV1>,
-    /// Current monotonic reading.
-    pub now: &'a KagemushaWalletMonotonicReadingV1,
+    /// Current native monotonic reading; required whenever a committed anchor is held.
+    /// Absence is permitted only for the floor-only path without an anchor.
+    pub now: Option<&'a KagemushaWalletMonotonicReadingV1>,
     /// Held blacklist, if any.
     pub blacklist: Option<&'a KagemushaWalletBlacklistV1>,
     /// Held quota share, if any.

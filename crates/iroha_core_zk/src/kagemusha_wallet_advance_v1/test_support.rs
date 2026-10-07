@@ -484,6 +484,10 @@ pub(super) struct FakeStateV1 {
     pub(super) anchor_write: AnchorWriteV1,
     /// Boot identity.
     pub(super) boot: Result<[u8; 32], KagemushaWalletUnavailableV1>,
+    /// Test-controlled sleep-inclusive clock result.
+    pub(super) monotonic: Result<u64, KagemushaWalletUnavailableV1>,
+    /// Change the boot result during the next clock read to detect mixed observations.
+    pub(super) boot_after_monotonic: Option<Result<[u8; 32], KagemushaWalletUnavailableV1>>,
     /// Storage state answer.
     pub(super) storage: Result<(), KagemushaWalletUnavailableV1>,
     /// Lock storage after this many further successful storage-state answers.
@@ -553,6 +557,8 @@ impl FakePlatformV1 {
                 policy,
                 anchor_write: AnchorWriteV1::Normal,
                 boot: Ok(BOOT_A),
+                monotonic: Ok(1_000),
+                boot_after_monotonic: None,
                 storage: Ok(()),
                 storage_lock_after: None,
                 probe_unavailable: false,
@@ -880,6 +886,15 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
 
     fn boot_id(&self) -> Result<[u8; 32], KagemushaWalletUnavailableV1> {
         self.with(|state| state.boot)
+    }
+
+    fn monotonic_ms(&self) -> Result<u64, KagemushaWalletUnavailableV1> {
+        self.with(|state| {
+            if let Some(boot) = state.boot_after_monotonic.take() {
+                state.boot = boot;
+            }
+            state.monotonic
+        })
     }
 }
 

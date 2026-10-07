@@ -3416,16 +3416,12 @@ impl MessageFixture {
     ) -> WalletResult<KagemushaWalletSendCheckV1> {
         let omega = self.payer_omega(payer);
         let usage = KagemushaWalletQuotaUsageArrayV1::empty();
-        let now = KagemushaWalletMonotonicReadingV1 {
-            boot_id: [0x7b; 32],
-            monotonic_ms: 1_000,
-        };
         request.check_send(&KagemushaWalletSendInputsV1 {
             payer_credential: &self.payer.credential,
             payer_state: payer,
             omega: &omega,
             anchored: None,
-            now: &now,
+            now: None,
             blacklist: list,
             quota_share: None,
             quota_usage: &usage,
