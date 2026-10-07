@@ -143,20 +143,23 @@ pub(super) fn transport(
     })
 }
 
-pub(super) fn sigma(
-    key: &KeyArtifact<Eq>,
-    statement: Fp,
-    original: &[u8],
+// Correction is only reached after an explicit Undecidable decision. Bind every
+// original challenge/source k and fully decide the distinct replacement before Q work.
+fn corrected_point<C: PastaCurve>(
+    original: &FoldInput<C>,
+    params: &PinnedParams<C>,
     budget: MemoryBudget,
-) -> Result<Option<FoldInput<Eq>>, Error> {
-    let expected = proof(Protocol::new(key.binding().descriptor()))?.proof_length();
-    if original.len() != expected {
-        return Ok(None);
+) -> Result<C::AffineExt, Error> {
+    let correction = proof(original.corrected(params, budget))?;
+    let replacement = correction.replacement();
+    if replacement.g() == original.g()
+        || replacement.source_k() != original.source_k()
+        || replacement.challenges() != original.challenges()
+    {
+        return Err(Error::Proof("incoming correction binding"));
     }
-    let params = proof(PinnedParams::<Eq>::derive(u32::from(
-        key.binding().descriptor().k,
-    )))?;
-    opening(&params, key, &[vec![statement]], original, budget)
+    proof(replacement.decide(params, budget))?;
+    Ok(*replacement.g())
 }
 
 /// Select exactly one correction if all succinct predicates pass but a deferred
@@ -217,7 +220,7 @@ pub(super) fn status_modes(
         match claim.decide(&p, budget) {
             Ok(()) => {}
             Err(iroha_plonk_recursion::Error::Undecidable) => {
-                corrections[index] = *proof(claim.corrected(&p, budget))?.replacement().g();
+                corrections[index] = corrected_point(claim, &p, budget)?;
                 selected.fill(IncomingMode::Trivial);
                 selected[index] = IncomingMode::Corrected;
                 return Ok((selected, corrections, vcorrection));
@@ -228,9 +231,7 @@ pub(super) fn status_modes(
     match transport.vesta.as_input().decide(&v, budget) {
         Ok(()) => {}
         Err(iroha_plonk_recursion::Error::Undecidable) => {
-            vcorrection = *proof(transport.vesta.as_input().corrected(&v, budget))?
-                .replacement()
-                .g();
+            vcorrection = corrected_point(&transport.vesta.as_input(), &v, budget)?;
             selected.fill(IncomingMode::Trivial);
             selected[2] = IncomingMode::Corrected;
         }
@@ -253,7 +254,10 @@ pub(super) fn sigma_mode(
     let params = proof(PinnedParams::<Eq>::derive(16))?;
     match sigma.decide(&params, budget) {
         Ok(()) => Ok(IncomingMode::Accept),
-        Err(iroha_plonk_recursion::Error::Undecidable) => Ok(IncomingMode::Corrected),
+        Err(iroha_plonk_recursion::Error::Undecidable) => {
+            corrected_point(sigma, &params, budget)?;
+            Ok(IncomingMode::Corrected)
+        }
         Err(_) => Err(Error::Proof("incoming decide resources")),
     }
 }
@@ -431,6 +435,81 @@ mod tests {
                 IncomingMode::Corrected
             ]
         );
+    }
+
+    #[test]
+    fn multiple_undecidable_originals_keep_exactly_the_first_checked_correction() {
+        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        let budget = MemoryBudget::DEFAULT;
+        let p = PinnedParams::<Ep>::derive(16).unwrap();
+        let v = PinnedParams::<Eq>::derive(16).unwrap();
+        let good_p = AccumulatorT::trivial(&p, budget).unwrap();
+        let good_v = AccumulatorT::trivial(&v, budget).unwrap();
+        let bad_p =
+            AccumulatorT::new(iroha_pasta::EpAffine::generator(), *good_p.challenges()).unwrap();
+        let bad_v =
+            AccumulatorT::new(iroha_pasta::EqAffine::generator(), *good_v.challenges()).unwrap();
+        let transport = TransportV1 {
+            public: [Fp::ZERO; 18],
+            public_valid: true,
+            pallas: bad_p.clone(),
+            vesta: bad_v.clone(),
+            opening: bad_p.as_input(),
+            valid: true,
+        };
+        let (selected, corrections, _) =
+            modes(true, &transport, Some(&bad_v.as_input()), budget).unwrap();
+        assert_eq!(
+            selected,
+            [
+                IncomingMode::Corrected,
+                IncomingMode::Trivial,
+                IncomingMode::Trivial,
+                IncomingMode::Trivial
+            ]
+        );
+        let replacement = FoldInput::<Ep>::from_normalized(
+            corrections[0],
+            bad_p.as_input().source_k(),
+            *bad_p.challenges(),
+        )
+        .unwrap();
+        assert_ne!(replacement.g(), bad_p.g());
+        assert_eq!(replacement.challenges(), bad_p.challenges());
+        replacement.decide(&p, budget).unwrap();
+        assert_eq!(
+            modes(false, &transport, None, budget).unwrap().0,
+            [IncomingMode::Trivial; 4]
+        );
+    }
+
+    #[test]
+    fn correction_retains_actual_source_prefix_and_resource_failures_abort() {
+        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        let params = PinnedParams::<Eq>::derive(16).unwrap();
+        for k in [12, 14] {
+            let original = FoldInput::<Eq>::from_opening(
+                iroha_pasta::EqAffine::generator(),
+                &vec![Fp::ONE; k],
+            )
+            .unwrap();
+            assert!(matches!(
+                original.decide(&params, MemoryBudget::DEFAULT),
+                Err(iroha_plonk_recursion::Error::Undecidable)
+            ));
+            let point = corrected_point(&original, &params, MemoryBudget::DEFAULT).unwrap();
+            let selected =
+                FoldInput::from_normalized(point, original.source_k(), *original.challenges())
+                    .unwrap();
+            assert_eq!(selected.source_k(), k as u32);
+            assert_eq!(selected.challenges(), original.challenges());
+            assert_ne!(selected.g(), original.g());
+            selected.decide(&params, MemoryBudget::DEFAULT).unwrap();
+            assert!(corrected_point(&original, &params, MemoryBudget::new(0)).is_err());
+            assert!(sigma_mode(true, Some(&original), MemoryBudget::new(0)).is_err());
+        }
+        let deciding = AccumulatorT::<Eq>::trivial(&params, MemoryBudget::DEFAULT).unwrap();
+        assert!(corrected_point(&deciding.as_input(), &params, MemoryBudget::DEFAULT).is_err());
     }
 
     #[test]

@@ -557,16 +557,44 @@ impl NativeFoldWorkerV1 {
                     self.budget,
                 ))?)
             }
-            _ => Fields::Refresh(proof(preparation.refresh_fold_fields(
-                RefreshOwnersV1 {
-                    current: current.as_ref().ok_or(Error::NoHead)?,
-                    successor: &owner,
-                },
-                step,
-                folded.as_ref().ok_or(Error::FoldRequired)?,
-                &public,
-                self.budget,
-            ))?),
+            _ => {
+                let KagemushaWalletEffectV1::RefreshPolicy { update_kind, .. } =
+                    step.frozen.capsule.statement.effect
+                else {
+                    return Err(Error::Proof("Refresh update kind"));
+                };
+                let role = match update_kind {
+                    KagemushaWalletPolicyUpdateKindV1::Credential => {
+                        PreparationOriginalV1::CurrentCredential
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::SchemePolicy => {
+                        PreparationOriginalV1::SchemePolicy
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::Blacklist => {
+                        PreparationOriginalV1::Blacklist
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::QuotaShare => {
+                        PreparationOriginalV1::QuotaShare
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::TimeAnchor => {
+                        PreparationOriginalV1::TimeAnchor
+                    }
+                };
+                let original = custody
+                    .successor_original(role)?
+                    .ok_or(Error::WitnessLost("Refresh successor original"))?;
+                Fields::Refresh(proof(preparation.refresh_fold_fields(
+                    RefreshOwnersV1 {
+                        current: current.as_ref().ok_or(Error::NoHead)?,
+                        successor: &owner,
+                    },
+                    step,
+                    folded.as_ref().ok_or(Error::FoldRequired)?,
+                    &public,
+                    &original,
+                    self.budget,
+                ))?)
+            }
         };
         let root = self.sources.scope().root();
         let own_key = self

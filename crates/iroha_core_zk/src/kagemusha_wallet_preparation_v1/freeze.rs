@@ -156,7 +156,7 @@ impl PreparationV1<'_> {
     ///
     /// # Errors
     /// Foreign installation/owner/fold, invalid proof, altered source, or invalid capsule.
-    pub fn freeze_monetary(
+    pub(crate) fn freeze_monetary(
         &self,
         owner: &AuthenticatedCredentialV1,
         step: &MonetaryStepV1,

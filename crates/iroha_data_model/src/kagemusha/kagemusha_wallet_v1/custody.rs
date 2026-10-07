@@ -11,7 +11,7 @@
 //! typed Norito enum whose wire tag equals the listed value, so an undefined value fails
 //! canonical decoding instead of reaching validation; the `output` transcript carries the
 //! one-byte tag. Their frames therefore carry Norito's four-byte enum tag, which the marker
-//! and capsule digests cover. The retained-input role table (tags 1 to 9) is fixed here; the
+//! and capsule digests cover. The retained-input role table (tags 1 to 10) is fixed here; the
 //! vectors file pins every tag.
 
 use iroha_schema::IntoSchema;
@@ -568,7 +568,10 @@ pub enum KagemushaWalletRetainedInputRoleV1 {
     /// Canonical charge quote consumed by Load or Unload.
     #[codec(index = 5)]
     ChargeQuote,
-    /// Canonical signed update consumed by `RefreshPolicy`.
+    /// Exact update custody consumed by `RefreshPolicy`: Blacklist carries the
+    /// bounded native complete-original archive reference; other fixed kinds
+    /// carry the complete inline signed update. Native restores and authenticates
+    /// the full blacklist before using it; the reference is not an issuer verdict.
     #[codec(index = 6)]
     PolicyUpdate,
     /// Canonical certificate set the operation needed.

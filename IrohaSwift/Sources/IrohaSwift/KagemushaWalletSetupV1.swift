@@ -26,7 +26,7 @@ struct KagemushaWalletSetupInputV1 {
        first: Data = Data(), second: Data = Data(), third: Data = Data()) throws {
     let limits: [Int]
     switch selector {
-    case 0, 1, 4, 6: limits = [0, 0, 0]
+    case 0, 1, 4, 6, 15: limits = [0, 0, 0]
     case 2: limits = [10_000, 1_024, 512]
     case 3, 7...14: limits = [10_000, 0, 0]
     case 5: limits = [512, 512, 0]

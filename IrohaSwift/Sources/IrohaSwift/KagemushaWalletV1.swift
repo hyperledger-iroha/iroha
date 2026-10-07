@@ -19,9 +19,10 @@ public struct KagemushaWalletCallV1: Sendable {
   public let bytes: Data
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
-    guard (0...16).contains(status), bytes.count <= 10_000,
-      (status == 1 || status == 10 || status == 12 || status == 13 || status == 15) ? !bytes.isEmpty : bytes.isEmpty,
+    guard (0...17).contains(status), bytes.count <= (status == 17 ? 16_384 : 10_000),
+      (status == 1 || status == 10 || status == 12 || status == 13 || status == 15 || status == 17) ? !bytes.isEmpty : bytes.isEmpty,
       ![13, 15].contains(status) || (bytes.count == 32 && sequenceLow > 0 && sequenceHigh == 0),
+      status != 17 || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
       status != 16 || (sequenceLow > 0 && sequenceHigh == 0)
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     self.status = status
@@ -77,6 +78,12 @@ public final class KagemushaWalletV1: @unchecked Sendable {
   }
   /// Complete restart-safe native enrollment Bootstrap.
   public func bootstrap() throws -> KagemushaWalletCallV1 { try setup(.init(selector: 0)) }
+  /// Exact retained Activate frame for ledger submission; this is not activation confirmation.
+  public func activation() throws -> Data {
+    let result = try setup(.init(selector: 15))
+    guard result.status == 17 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return result.bytes
+  }
   /// Sign an Offer with a retained native nonce; retries return its exact original bytes.
   public func offer(setupId: Data, amount: KagemushaWalletUInt128V1) throws -> KagemushaWalletCallV1 {
     try setup(.init(selector: 1, identity: setupId, amount: amount))
@@ -325,7 +332,7 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     let status = action(&value)
     defer { if let bytes = value.bytes { free(bytes) } }
     try Self.check(status, reason: value.reason, platform: value.platform_code)
-    guard value.status >= 0, value.length <= 10_000, value.length == 0 || value.bytes != nil
+    guard value.status >= 0, value.length <= (value.status == 17 ? 16_384 : 10_000), value.length == 0 || value.bytes != nil
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return try KagemushaWalletCallV1(
       status: value.status, sequenceLow: value.sequence_low, sequenceHigh: value.sequence_high,

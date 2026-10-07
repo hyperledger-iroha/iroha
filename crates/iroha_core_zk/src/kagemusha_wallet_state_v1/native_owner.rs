@@ -1,6 +1,7 @@
 //! One admitted native wallet owner for preparation, proof imports and folding.
 
 use super::*;
+mod activation;
 mod bootstrap;
 mod runtime;
 pub(super) mod sessions;
@@ -39,6 +40,7 @@ pub struct NativeWalletProofsV1<F: KagemushaWalletFsV1, P, S> {
     budget: MemoryBudget,
     chain: String,
     enrollment: KagemushaWalletCredentialV1,
+    asset: KagemushaWalletAssetScopeV1,
     enrollment_certificates: Vec<u8>,
 }
 
@@ -65,7 +67,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
         Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>,
         (RuntimeCustodyV1<F, P>, S, Error),
     > {
-        let (provider, installed, sources, slot, enrollment, _, _, _, certificates, _, _) =
+        let (provider, installed, sources, slot, enrollment, _, asset, _, certificates, _, _) =
             self.into_parts();
         let verified = (|| {
             let anchor = derive_history_anchor(native_genesis)
@@ -91,6 +93,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             budget,
             chain: native_genesis.chain_id().to_owned(),
             enrollment,
+            asset,
             enrollment_certificates: certificates,
         };
         let mut wallet = Coordinator {

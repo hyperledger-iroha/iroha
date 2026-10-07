@@ -599,30 +599,25 @@ impl Session<'_> {
         self.prepared
             .resume_wrapper(&self.prover.w, checkpoint, budget)
     }
-    /// Restore terminal A2 from its original proof, full Pallas claim and exact
-    /// verified W0 predecessor. Public fields and every forwarded obligation are
-    /// rederived from this session; no stored public frame is trusted.
+    /// Restore terminal A2 from its original proof, retained fold salt and exact
+    /// verified W0 predecessor. The Pallas fold, public fields and every forwarded
+    /// obligation are rederived from this session's original inputs.
     /// # Errors
-    /// Changed source, malformed claim, wrong installed proof or failed decide.
+    /// Changed source/salt, wrong installed proof or failed fold/decide.
     pub fn restore_terminal(
         &self,
         wrapper: &WrapperCheckpoint,
         proof: Vec<u8>,
-        pallas: &[u8],
+        salt: Fp,
         budget: MemoryBudget,
     ) -> Result<Terminal, Error> {
-        let wrapper = self
-            .prepared
-            .resume_wrapper(&self.prover.w, wrapper.clone(), budget)?;
-        let pallas = AccumulatorT::<Ep>::from_bytes(pallas).map_err(|_| Error::Input)?;
-        pallas
-            .decide(&self.prepared.plan.pallas, budget)
-            .map_err(|_| Error::Proof)?;
-        let public = frame(
-            &self.prepared.original.state.lineage,
-            &pallas.as_input(),
-            &wrapper.vesta.as_input(),
-        )?;
+        let fold = FoldConfig {
+            kernel_budget: budget,
+            ..FoldConfig::default()
+        };
+        let (_, public, pallas) =
+            self.prepared
+                .terminal_circuit(wrapper, &self.prover.w, salt, &fold)?;
         let source = &self.prover.terminal;
         verify_full(
             &self.prepared.plan.vesta,
@@ -651,7 +646,7 @@ impl Session<'_> {
             proof,
             instances: public,
             pallas,
-            vesta: wrapper.vesta,
+            vesta: wrapper.vesta.clone(),
             opening,
         })
     }

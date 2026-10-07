@@ -161,6 +161,55 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     response(&mut env, result)
 }
 
+/// Source-bound setup; all input array lengths are checked before any original is copied.
+/// The canonical call reply preserves distinct setup and monetary status projections.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    request_id: JByteArray<'_>,
+    selector: jint,
+    amount_low: jlong,
+    amount_high: jlong,
+    token: jlong,
+    first: JByteArray<'_>,
+    second: JByteArray<'_>,
+    third: JByteArray<'_>,
+) -> jobject {
+    let result = wallet::run(|| {
+        let selector =
+            u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+        let token = u64::try_from(token).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+        let bounds = wallet::setup::bounds(selector)?;
+        for (index, (array, bound)) in [&request_id, &first, &second, &third]
+            .into_iter()
+            .zip([32, bounds[0], bounds[1], bounds[2]])
+            .enumerate()
+        {
+            let length = env
+                .get_array_length(array)
+                .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+            if length < 0 || length as usize > bound || (index == 0 && length != 32) {
+                return Err(wallet::Failure::code(wallet::INVALID));
+            }
+        }
+        let request_id = read(&mut env, &request_id, 32)?;
+        let first = read(&mut env, &first, bounds[0])?;
+        let second = read(&mut env, &second, bounds[1])?;
+        let third = read(&mut env, &third, bounds[2])?;
+        let request = wallet::setup::request(
+            &request_id,
+            selector,
+            u128::from(amount_low as u64) | (u128::from(amount_high as u64) << 64),
+            token,
+            [&first, &second, &third],
+        )?;
+        wallet::setup(handle as u64, request)
+    });
+    response(&mut env, result)
+}
+
 /// Typed lifecycle request; bounds are checked before copying any original object.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_execute(
@@ -249,40 +298,4 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         )
     })();
     result.map_or(std::ptr::null_mut(), |object| object.into_raw())
-}
-
-/// Typed native setup. Native time tokens are opaque identifiers; no foreign time is accepted.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-    setup_id: JByteArray<'_>,
-    selector: jint,
-    amount_low: jlong,
-    amount_high: jlong,
-    token: jlong,
-    first: JByteArray<'_>,
-    second: JByteArray<'_>,
-    third: JByteArray<'_>,
-) -> jobject {
-    let result = wallet::run(|| {
-        let selector =
-            u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-        let token = u64::try_from(token).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-        let limits = wallet::setup::bounds(selector)?;
-        let id = read(&mut env, &setup_id, 32)?;
-        let first = read(&mut env, &first, limits[0])?;
-        let second = read(&mut env, &second, limits[1])?;
-        let third = read(&mut env, &third, limits[2])?;
-        let action = wallet::setup::request(
-            &id,
-            selector,
-            u128::from(amount_low as u64) | (u128::from(amount_high as u64) << 64),
-            token,
-            [&first, &second, &third],
-        )?;
-        wallet::setup(handle as u64, action)
-    });
-    response(&mut env, result)
 }

@@ -324,6 +324,7 @@ fn decode_update(
     successor: &KagemushaWalletCredentialV1,
     source: &KagemushaWalletStateV1,
     capsule: &KagemushaWalletRecoveryCapsuleV1,
+    original_update: &[u8],
 ) -> Result<DecodedRefresh, Error> {
     let KagemushaWalletEffectV1::RefreshPolicy { update_kind, .. } = capsule.statement.effect
     else {
@@ -338,6 +339,13 @@ fn decode_update(
         &capsule.retained_inputs,
         KagemushaWalletRetainedInputRoleV1::PolicyUpdate,
     )?;
+    crate::kagemusha_wallet_state_v1::verify_policy_update_original(
+        update_kind,
+        &scheme.scheme_id(),
+        update,
+        original_update,
+    )
+    .map_err(|_| Error::Authority)?;
     let certificates = retained_original(
         &capsule.retained_inputs,
         KagemushaWalletRetainedInputRoleV1::CertificateSet,
@@ -353,7 +361,7 @@ fn decode_update(
         source,
         RefreshOriginalsV1 {
             kind: update_kind,
-            update,
+            update: original_update,
             certificates,
             openings: &capsule.map_openings,
             quota: quota.map(|original| original.bytes.as_slice()),
@@ -455,6 +463,9 @@ impl RefreshFoldFieldsV1 {
 
 impl PreparationV1<'_> {
     /// Prepare every Refresh kind from its exact retained original custody.
+    /// Native resolves the complete original through its coordinator/archive
+    /// capability before calling this pure proof converter. Storage errors keep
+    /// their original retry/loss classification outside this proof-only boundary.
     /// Credential renewal uses distinct owners; the other kinds require identical
     /// owners. Quota usage is rebuilt only from its retained authenticated predecessor array.
     /// Original Q proofs remain untrusted until the fixed native plan and all mandatory
@@ -469,10 +480,11 @@ impl PreparationV1<'_> {
         step: &ReleasedStep,
         predecessor: &FoldedStateV1,
         public: &KagemushaWalletLineagePublicV1,
+        original_update: &[u8],
         q: [native::QInput; 3],
         budget: MemoryBudget,
     ) -> Result<native::Inputs, Error> {
-        self.refresh_fold_fields(owners, step, predecessor, public, budget)
+        self.refresh_fold_fields(owners, step, predecessor, public, original_update, budget)
             .map(|fields| fields.with_q(q))
     }
 
@@ -484,6 +496,7 @@ impl PreparationV1<'_> {
         step: &ReleasedStep,
         predecessor: &FoldedStateV1,
         public: &KagemushaWalletLineagePublicV1,
+        original_update: &[u8],
         budget: MemoryBudget,
     ) -> Result<RefreshFoldFieldsV1, Error> {
         self.credential_owner(owners.current)?;
@@ -506,6 +519,7 @@ impl PreparationV1<'_> {
             &owners.successor.credential,
             &predecessor.source_state,
             capsule,
+            original_update,
         )?;
         exact_successor(
             &predecessor.source_state,

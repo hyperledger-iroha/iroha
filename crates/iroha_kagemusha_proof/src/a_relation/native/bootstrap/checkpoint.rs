@@ -21,7 +21,7 @@ pub enum CheckpointKind {
     First,
     /// W0's original proof and canonical Vesta accumulator.
     Wrapper,
-    /// Terminal A2 and its carried Pallas claim.
+    /// A2 original proof and exact retained fold salt, rederived against W0.
     Terminal,
 }
 impl CheckpointKind {
@@ -64,7 +64,7 @@ impl CheckpointLayout {
     pub const fn proof_bytes(&self) -> usize {
         self.proof_bytes
     }
-    /// Exact canonical Norito payload length, including native metadata and claim.
+    /// Exact canonical Norito payload length, including native metadata and fold input.
     pub const fn payload_bytes(&self) -> usize {
         self.payload_bytes
     }
@@ -86,6 +86,28 @@ impl CheckpointLayout {
             .try_reserve_exact(proof_bytes)
             .map_err(|_| Error::Artifact)?;
         proof.resize(proof_bytes, 0);
+        if kind == CheckpointKind::Terminal {
+            let specimen = TerminalPayload {
+                version: 1,
+                descriptor_digest,
+                verifying_key_digest,
+                source_context: [0; 32],
+                fold_salt: [0; 32],
+                proof,
+            };
+            let payload_bytes =
+                norito::canonical_frame_len(&specimen).map_err(|_| Error::Artifact)?;
+            if u32::try_from(payload_bytes).is_err() {
+                return Err(Error::Artifact);
+            }
+            return Ok(Self {
+                kind,
+                descriptor_digest,
+                verifying_key_digest,
+                proof_bytes,
+                payload_bytes,
+            });
+        }
         let specimen = Payload {
             version: 1,
             kind: kind.tag(),
@@ -93,7 +115,7 @@ impl CheckpointLayout {
             verifying_key_digest,
             source_context: [0; 32],
             proof,
-            accumulator: (!matches!(kind, CheckpointKind::First)).then_some([0; ACCUMULATOR_BYTES]),
+            vesta: (kind == CheckpointKind::Wrapper).then_some([0; ACCUMULATOR_BYTES]),
         };
         let payload_bytes = norito::canonical_frame_len(&specimen).map_err(|_| Error::Artifact)?;
         if u32::try_from(payload_bytes).is_err() {
@@ -119,17 +141,18 @@ struct Payload {
     verifying_key_digest: [u8; 32],
     source_context: [u8; 32],
     proof: Vec<u8>,
-    accumulator: Option<[u8; ACCUMULATOR_BYTES]>,
+    vesta: Option<[u8; ACCUMULATOR_BYTES]>,
 }
 impl Payload {
     fn check(&self, layout: &CheckpointLayout, source_context: [u8; 32]) -> Result<(), Error> {
-        if self.version != 1
+        if layout.kind == CheckpointKind::Terminal
+            || self.version != 1
             || self.kind != layout.kind.tag()
             || self.descriptor_digest != layout.descriptor_digest
             || self.verifying_key_digest != layout.verifying_key_digest
             || self.source_context != source_context
             || self.proof.len() != layout.proof_bytes
-            || self.accumulator.is_some() != !matches!(layout.kind, CheckpointKind::First)
+            || self.vesta.is_some() != (layout.kind == CheckpointKind::Wrapper)
         {
             return Err(Error::Input);
         }
@@ -159,6 +182,52 @@ impl Payload {
             return Err(Error::Input);
         }
         Ok(bytes)
+    }
+}
+
+#[derive(NoritoSerialize, NoritoDeserialize, NoritoSchema)]
+#[norito_schema(name = "iroha.kagemusha.native.bootstrap.terminal_checkpoint.v1")]
+struct TerminalPayload {
+    version: u16,
+    descriptor_digest: [u8; 32],
+    verifying_key_digest: [u8; 32],
+    source_context: [u8; 32],
+    fold_salt: [u8; 32],
+    proof: Vec<u8>,
+}
+impl TerminalPayload {
+    fn check(&self, layout: &CheckpointLayout, context: [u8; 32]) -> Result<(), Error> {
+        if layout.kind != CheckpointKind::Terminal
+            || self.version != 1
+            || self.descriptor_digest != layout.descriptor_digest
+            || self.verifying_key_digest != layout.verifying_key_digest
+            || self.source_context != context
+            || self.proof.len() != layout.proof_bytes
+            || Option::<super::Fp>::from(super::Fp::from_repr(self.fold_salt)).is_none()
+        {
+            return Err(Error::Input);
+        }
+        Ok(())
+    }
+    fn encode(self, layout: &CheckpointLayout, context: [u8; 32]) -> Result<Vec<u8>, Error> {
+        self.check(layout, context)?;
+        let bytes = norito::encode_canonical(&self).map_err(|_| Error::Input)?;
+        if bytes.len() != layout.payload_bytes {
+            return Err(Error::Input);
+        }
+        Ok(bytes)
+    }
+    fn decode(bytes: &[u8], layout: &CheckpointLayout, context: [u8; 32]) -> Result<Self, Error> {
+        if bytes.len() != layout.payload_bytes {
+            return Err(Error::Input);
+        }
+        let payload: Self = norito::decode_canonical_with_limits(
+            bytes,
+            norito::canonical_decode_limits(layout.payload_bytes),
+        )
+        .map_err(|_| Error::Input)?;
+        payload.check(layout, context)?;
+        Ok(payload)
     }
 }
 
@@ -247,7 +316,7 @@ impl Session<'_> {
             verifying_key_digest: layout.verifying_key_digest,
             source_context,
             proof: checked.proof,
-            accumulator: None,
+            vesta: None,
         }
         .encode(&layout, source_context)
     }
@@ -296,7 +365,7 @@ impl Session<'_> {
             verifying_key_digest: layout.verifying_key_digest,
             source_context,
             proof: checked.proof,
-            accumulator: Some(checked.vesta.to_bytes()),
+            vesta: Some(checked.vesta.to_bytes()),
         }
         .encode(&layout, source_context)
     }
@@ -317,61 +386,60 @@ impl Session<'_> {
             &layout,
             self.prepared.immutable_context_digest()?.to_repr(),
         )?;
-        let vesta = payload.accumulator.ok_or(Error::Input)?;
+        let vesta = payload.vesta.ok_or(Error::Input)?;
         self.restore_wrapper(payload.proof, &vesta, budget)
     }
 
-    /// Retain terminal A2 only after deriving its source frame from W0 and
-    /// completely verifying the installed proof and both carried claims.
+    /// Retain genuine A2 against the original W0, exact source context and canonical fold salt.
     /// # Errors
-    /// Wrong source, substituted frame, malformed claim or proof failure.
+    /// Changed source/key/proof/frame/claim, malformed salt or failed full native verification.
     pub fn encode_terminal_checkpoint(
         &self,
-        prior: &WrapperCheckpoint,
+        wrapper: &WrapperCheckpoint,
         terminal: &Terminal,
+        salt: super::Fp,
         budget: MemoryBudget,
     ) -> Result<Vec<u8>, Error> {
-        let checked = self.restore_terminal(
-            prior,
-            terminal.proof.clone(),
-            &terminal.pallas.to_bytes(),
-            budget,
-        )?;
-        if checked.instances != terminal.instances || checked.vesta != terminal.vesta {
+        let checked = self.restore_terminal(wrapper, terminal.proof.clone(), salt, budget)?;
+        if checked.instances != terminal.instances
+            || checked.pallas.to_bytes() != terminal.pallas.to_bytes()
+            || checked.vesta.to_bytes() != terminal.vesta.to_bytes()
+            || checked.opening.g() != terminal.opening.g()
+            || checked.opening.challenges() != terminal.opening.challenges()
+            || checked.opening.source_k() != terminal.opening.source_k()
+        {
             return Err(Error::Input);
         }
         let layout = self.prover.checkpoint_layout(CheckpointKind::Terminal)?;
-        let source_context = self.prepared.immutable_context_digest()?.to_repr();
-        Payload {
+        let context = self.prepared.immutable_context_digest()?.to_repr();
+        TerminalPayload {
             version: 1,
-            kind: layout.kind.tag(),
             descriptor_digest: layout.descriptor_digest,
             verifying_key_digest: layout.verifying_key_digest,
-            source_context,
+            source_context: context,
+            fold_salt: salt.to_repr(),
             proof: checked.proof,
-            accumulator: Some(checked.pallas.to_bytes()),
         }
-        .encode(&layout, source_context)
+        .encode(&layout, context)
     }
-
-    /// Restore terminal A2 from one bounded canonical payload and exact W0.
-    /// Every public value is rederived from the original session and native claim.
+    /// Restore A2 by replaying its real fold from W0 and fully verifying the original A2.
     /// # Errors
-    /// Wrong source/key/role, altered original, noncanonical claim or proof failure.
+    /// Wrong bounded original/source/key/salt, changed frame or failed proof/decide.
     pub fn restore_terminal_checkpoint(
         &self,
-        prior: &WrapperCheckpoint,
+        wrapper: &WrapperCheckpoint,
         bytes: &[u8],
         budget: MemoryBudget,
     ) -> Result<Terminal, Error> {
         let layout = self.prover.checkpoint_layout(CheckpointKind::Terminal)?;
-        let payload = Payload::decode(
+        let payload = TerminalPayload::decode(
             bytes,
             &layout,
             self.prepared.immutable_context_digest()?.to_repr(),
         )?;
-        let pallas = payload.accumulator.ok_or(Error::Input)?;
-        self.restore_terminal(prior, payload.proof, &pallas, budget)
+        let salt = Option::<super::Fp>::from(super::Fp::from_repr(payload.fold_salt))
+            .ok_or(Error::Input)?;
+        self.restore_terminal(wrapper, payload.proof, salt, budget)
     }
 }
 

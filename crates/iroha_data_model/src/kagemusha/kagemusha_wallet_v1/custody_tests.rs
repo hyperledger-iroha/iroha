@@ -226,6 +226,11 @@ fn kagemusha_wallet_v1_custody_layouts_and_tags() {
     }
     for role in KagemushaWalletRetainedInputRoleV1::ALL {
         assert_eq!(norito_tag(&role), u32::from(role.tag()));
+        let original = norito::encode_canonical(&role).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<KagemushaWalletRetainedInputRoleV1>(&original).unwrap(),
+            role
+        );
     }
     let states = [
         KagemushaWalletMarkerStateV1::Enrollment {

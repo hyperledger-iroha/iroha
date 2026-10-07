@@ -1836,7 +1836,9 @@ typedef struct {
 typedef struct {
     int32_t status; /* 0 unknown,1 complete,2 pending,3 not performed,4 archived,
                       5 delivery loss,6 idle,7 caught up,8 checkpoint,9 folded,
-                      10 CreditStatus; negative failure. */
+                      10 CreditStatus,11 preparing; setup only:12 original,
+                      13 owned time challenge,14 time exchange retained;
+                      open only:15 account challenge,16 admitted handle;17 activation transport; negative failure. */
     int32_t reason; /* failure platform reason, -1 if inapplicable */
     int32_t platform_code;
     uint64_t sequence_low;
@@ -1908,9 +1910,15 @@ typedef struct {
     const uint8_t* third;
     size_t third_length;
 } connect_norito_kagemusha_wallet_operation_request_v1;
-/* Typed setup: Bootstrap0, Offer1, Request2, Credited3, begin-time4, finish-time5.
- * Unused fields are zero/empty. Response12 exact setup bytes;13 nonce32 + sequence_low token;
- *14 retained direct time. No caller clocks, proofs or Archive selectors. */
+// Setup through the same exclusive Native owner. Selectors:
+// Bootstrap0(no originals), Offer1(positive amount), Request2(Offer, optional fee+certificate),
+// Credited3(Credited), BeginTime4(no originals), FinishTime5(TimeAnchor, certificate, owned token),
+// CancelTime6(owned token); envelope wrap7..10 / unwrap11..14 in Offer,Request,Payment,Credited order.
+// Activation15(no inputs) returns kind17, exact durable Activate frame <=16,384 bytes.
+// setup_id is exactly32 bytes: nonzero only for Offer/Request and all zero otherwise.
+// Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
+// signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
+// Transport uses first only and returns canonical bytes; it grants no monetary verdict.
 typedef struct {
     const uint8_t* setup_id;
     uint32_t selector;
@@ -1922,10 +1930,11 @@ typedef struct {
     size_t second_length;
     const uint8_t* third;
     size_t third_length;
-/* Setup: Bootstrap0, Offer1, Request2, Credited3, beginTime4, finishTime5, cancelTime6.
-   Envelope wrap7..10 / unwrap11..14 in Offer,Request,Payment,Credited order.
-   Transport uses first only and returns canonical bytes; it grants no monetary verdict. */
 } connect_norito_kagemusha_wallet_setup_request_v1;
+// Setup results: Bootstrap/Credited preserve completion statuses; CancelTime returns idle6.
+// 12=exact original bytes;13=Native-owned one-use time challenge (token in sequence_low);
+// 14=direct time exchange retained. Token is valid only for the same open Native owner.
+// Neither 12,13,14 nor17 is monetary completion;17 is not ledger activation confirmation. Result bytes use connect_norito_free.
 int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 // Result11=preparing (no Advance selected); result2=pending (irreversible Advance selected).

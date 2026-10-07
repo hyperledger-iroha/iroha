@@ -254,15 +254,21 @@ impl NativeFoldWorkerV1 {
                             cancellation.check()?;
                             let prior =
                                 wrapper.as_ref().ok_or(Error::Proof("Bootstrap W source"))?;
+                            let salt = Fp::random(rand_core_06::OsRng);
                             let source = proof(session.terminal(
                                 prior,
                                 &key,
-                                Fp::random(rand_core_06::OsRng),
+                                salt,
                                 &fold,
                                 ProverRandomness::os(),
                                 config,
                             ))?;
-                            proof(session.encode_terminal_checkpoint(prior, &source, self.budget))?
+                            proof(session.encode_terminal_checkpoint(
+                                prior,
+                                &source,
+                                salt,
+                                self.budget,
+                            ))?
                         }
                         _ => return Err(Error::Proof("Bootstrap stage")),
                     };

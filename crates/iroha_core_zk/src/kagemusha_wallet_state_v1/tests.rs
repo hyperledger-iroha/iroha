@@ -72,7 +72,7 @@ pub(super) fn enrollment_issuer(
     panic!("fixture enrollment issuer")
 }
 
-fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
+pub(super) fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
     for key in vectors()["keys"].as_array().expect("keys") {
         let signing = SigningKey::from_slice(
             &hex::decode(key["scalar_hex"].as_str().expect("scalar")).expect("hex"),
@@ -89,7 +89,7 @@ fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
     panic!("fixture payment key")
 }
 
-fn field(value: u8) -> [u8; 32] {
+pub(super) fn field(value: u8) -> [u8; 32] {
     let mut out = [0; 32];
     out[0] = value;
     out
@@ -150,7 +150,7 @@ fn enrollment() -> KagemushaWalletMarkerV1 {
     fixture("KagemushaWalletMarkerV1")
 }
 
-fn frozen(
+pub(super) fn frozen(
     previous: Option<&FrozenTransition>,
     effect: KagemushaWalletEffectV1,
 ) -> FrozenTransition {
@@ -275,7 +275,7 @@ fn frozen(
     result
 }
 
-fn bootstrap() -> FrozenTransition {
+pub(super) fn bootstrap() -> FrozenTransition {
     frozen(
         None,
         KagemushaWalletEffectV1::Bootstrap {
@@ -426,7 +426,7 @@ pub(super) struct TestCustody {
     tombstones: BTreeMap<[u8; 32], crate::kagemusha_wallet_advance_v1::KagemushaWalletTombstoneV1>,
     pending: Option<AdvanceRequest<KagemushaWalletRecoveryCapsuleV1>>,
     pause: bool,
-    signatures: usize,
+    pub(super) signatures: usize,
     unavailable: bool,
     delivery_lost: bool,
     pub(super) fail_publication: Option<bool>,
@@ -846,10 +846,12 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         folds: IndexRoot::default(),
         claims: IndexRoot::default(),
         preparations: IndexRoot::default(),
+        blacklists: IndexRoot::default(),
         capsule_plans: IndexRoot::default(),
         capsule_sources: IndexRoot::default(),
         issued_requests: IndexRoot::default(),
         sessions: IndexRoot::default(),
+        activation: None,
         direct_anchors: IndexRoot::default(),
         fold_pending: IndexRoot::default(),
         folded: None,
@@ -873,7 +875,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
     )
     .unwrap()
 }
-fn wallet() -> Wallet {
+pub(super) fn wallet() -> Wallet {
     let c = credential();
     Coordinator::new(
         TestCustody::new(),
@@ -2226,4 +2228,46 @@ fn snapshot_source_manifest_cannot_name_a_future_fold_as_an_ancestor() {
         w.snapshot(),
         Err(Error::WitnessLost("archive manifest binding"))
     ));
+}
+
+#[test]
+fn source_reads_preserve_exact_released_head_without_signing() {
+    let mut wallet = wallet();
+    assert!(matches!(
+        wallet.status().unwrap(),
+        SlotStatus::Enrollment(_)
+    ));
+    assert!(wallet.released_steps().unwrap().is_empty());
+    assert!(matches!(wallet.snapshot(), Err(Error::NoHead)));
+    let frozen = bootstrap();
+    wallet.commit(frozen.clone()).unwrap();
+    let signatures = wallet.custody.signatures;
+    let snapshot = wallet.snapshot().unwrap();
+    assert_eq!(snapshot.head, frozen.capsule.statement.successor.value);
+    assert!(snapshot.verified_fold.is_none());
+    let step = wallet.released_steps().unwrap().pop().unwrap();
+    assert_eq!(step.frozen.capsule, frozen.capsule);
+    assert_eq!(
+        wallet.retry(&frozen.capsule.operation_id).unwrap(),
+        Some(Completion::Complete(step.retained.record.output.clone()))
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
+    snapshot_test_fold(&mut wallet);
+    let snapshot = wallet.snapshot().unwrap();
+    let current = wallet.released_steps().unwrap().pop().unwrap();
+    assert_eq!(current.retained.frame, step.retained.frame);
+    assert_eq!(
+        wallet
+            .read_fold(&current)
+            .unwrap()
+            .unwrap()
+            .record
+            .capsule_digest,
+        frozen.capsule.capsule_digest().unwrap()
+    );
+    assert_eq!(
+        snapshot.verified_fold.unwrap().head,
+        frozen.capsule.statement.successor.value
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
 }

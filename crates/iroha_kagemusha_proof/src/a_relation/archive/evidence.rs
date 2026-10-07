@@ -54,7 +54,7 @@ pub enum ArchiveEvidenceSource<'a> {
 fn bind_object(
     region: &mut Region<'_, Fp>,
     plan: &ContextPlan,
-    input: &ContextInputs<'_>,
+    objects: &[ContextObjectCells],
     index: usize,
     spec: ContextObjectSpec,
     actual: &ContextObjectCells,
@@ -62,7 +62,7 @@ fn bind_object(
     if plan.object_specs().get(index) != Some(&spec) {
         return Err(Error::Synthesis);
     }
-    let expected = input.objects.get(index).ok_or(Error::Synthesis)?;
+    let expected = objects.get(index).ok_or(Error::Synthesis)?;
     for (a, b) in actual
         .commitment_words()
         .iter()
@@ -149,6 +149,52 @@ pub(crate) fn derive_evidence(
     source: ArchiveEvidenceSource<'_>,
 ) -> Result<Bit<Fp>, Error> {
     objects.bind_context(region, plan, input)?;
+    evidence_predicate(
+        chip,
+        bytes,
+        region,
+        plan,
+        EvidencePredicateInputs {
+            own_statement: input.own_statement,
+            incoming_statement: input.incoming_statement,
+            incoming_public: input.incoming.map(|v| v.public),
+            objects: input.objects,
+            incoming_selector: input
+                .q_instances
+                .first()
+                .and_then(|q| q.get(2))
+                .and_then(|c| c.get(1)),
+        },
+        policy,
+        objects,
+        source,
+    )
+}
+
+// Exact original-only inputs. No Q0 frame, mode, result or verifier verdict is present.
+#[derive(Clone, Copy)]
+pub(crate) struct EvidencePredicateInputs<'a> {
+    pub(crate) own_statement: &'a crate::operation_relation::statement::StatementCells,
+    pub(crate) incoming_statement:
+        Option<&'a crate::operation_relation::incoming_statement::IncomingStatementCells>,
+    pub(crate) incoming_public: Option<&'a crate::a_relation::IncomingLineageCells>,
+    pub(crate) objects: &'a [ContextObjectCells],
+    pub(crate) incoming_selector: Option<&'a iroha_plonk_recursion::codec::ScalarCells<Ep>>,
+}
+
+// Shared raw evidence predicate. The owning stage retains its task, full context
+// and Q0 selector binding; native evaluation supplies the exact installed selector.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evidence_predicate(
+    chip: &mut VerifierChip<Ep>,
+    bytes: &mut BytesChip<Fp>,
+    region: &mut Region<'_, Fp>,
+    plan: &ContextPlan,
+    input: EvidencePredicateInputs<'_>,
+    policy: OwnPolicy,
+    objects: &ArchiveIncomingObjects,
+    source: ArchiveEvidenceSource<'_>,
+) -> Result<Bit<Fp>, Error> {
     let variant = plan.operation().frame().variant();
     let specs = evidence_specs(variant)?;
     let payment = input
@@ -177,12 +223,7 @@ pub(crate) fn derive_evidence(
             let selector = bounded_word(
                 chip,
                 region,
-                input
-                    .q_instances
-                    .first()
-                    .and_then(|q| q.get(2))
-                    .and_then(|c| c.get(1))
-                    .ok_or(Error::Synthesis)?,
+                input.incoming_selector.ok_or(Error::Synthesis)?,
             )?;
             let lanes = chip.operation_lanes()?;
             let mut uint = UintChip::new(lanes.glue, lanes.range);
@@ -224,7 +265,7 @@ pub(crate) fn derive_evidence(
             if variant != Variant::ArchiveStatus {
                 return Err(Error::Synthesis);
             }
-            let head = input.incoming.ok_or(Error::Synthesis)?.public.checked();
+            let head = input.incoming_public.ok_or(Error::Synthesis)?.checked();
             let status_run = bytes.run(
                 region,
                 status,
@@ -275,7 +316,7 @@ pub(crate) fn derive_evidence(
                 (17, specs[3], opening.digest(), &opening_run),
             ] {
                 let actual = ContextObjectCells::from_exact_run(chip, region, spec, digest, run)?;
-                bind_object(region, plan, input, index, spec, &actual)?;
+                bind_object(region, plan, input.objects, index, spec, &actual)?;
             }
             (
                 credited,
@@ -287,7 +328,7 @@ pub(crate) fn derive_evidence(
         }
     };
     let actual = ContextObjectCells::from_internal_words(chip, region, specs[0], &statement)?;
-    bind_object(region, plan, input, 14, specs[0], &actual)?;
+    bind_object(region, plan, input.objects, 14, specs[0], &actual)?;
     let run = bytes.run(
         region,
         credited_bytes,
@@ -312,6 +353,6 @@ pub(crate) fn derive_evidence(
     let valid = all(uint.glue(), region, &[valid, credited.valid().clone()])?;
     let actual =
         ContextObjectCells::from_exact_run(chip, region, specs[1], credited.digest(), &run)?;
-    bind_object(region, plan, input, 15, specs[1], &actual)?;
+    bind_object(region, plan, input.objects, 15, specs[1], &actual)?;
     Ok(valid)
 }

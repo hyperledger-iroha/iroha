@@ -1,6 +1,7 @@
 //! Explicit full-route source construction from a pinned complete finality metadata snapshot.
-//! This diagnostic emits unsigned originals only. It proves no receipt or payment,
-//! signs no artifact identity, and cannot manufacture a qualified wallet capability.
+//! Unsigned original construction is followed by explicit engineering signing and
+//! the production complete-source acceptance path. It proves no receipt or payment
+//! and grants no deployment authority.
 
 use std::{
     collections::BTreeMap,
@@ -25,6 +26,9 @@ use iroha_plonk_gadgets::p256::native::{Affine, words_from_be};
 use p256::ecdsa::SigningKey;
 
 use super::*;
+
+#[path = "full_catalog/acceptance.rs"]
+mod acceptance;
 
 const RECORDS: usize = 4_096;
 const INVENTORY_BYTES: usize = RECORDS * 2_048 + 4_096;
@@ -292,7 +296,7 @@ impl OriginalSinkV1 for Originals {
 }
 
 #[test]
-#[ignore = "explicit full52 source construction from independently pinned completed finality metadata; unsigned engineering catalog only"]
+#[ignore = "explicit full52 source construction from independently pinned completed finality metadata; engineering source qualification, no deployment authority"]
 fn complete_wallet_catalog_from_pinned_finality_metadata() {
     let snapshot = PathBuf::from(
         std::env::var_os("KAGEMUSHA_FINALITY_METADATA_SNAPSHOT")
@@ -370,9 +374,9 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
         msm_budget: MemoryBudget::DEFAULT,
     };
     eprintln!("WALLET_SOURCE_PHASE all52_compiled_routes signed=false wallet_grant=false");
-    let inventory = OfflineCompilerV1::new(scope, &mut originals, config, OUTPUT_BYTES)
+    let draft = OfflineCompilerV1::new(scope, &mut originals, config, OUTPUT_BYTES)
         .unwrap()
-        .wallet(
+        .wallet_pack(
             ReceiptSourceRecipeV1::new(receipt.source(), &anchor),
             FinalityV1 {
                 network: anchor.network,
@@ -384,8 +388,12 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
             },
         )
         .unwrap();
-    let bytes = inventory.to_canonical_bytes().unwrap();
-    publish(&output.join("producer-inventory.norito"), &bytes).unwrap();
+    let bytes = draft.producer_inventory();
+    let inventory: ProducerInventoryV1 =
+        norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len()))
+            .unwrap();
+    inventory.validate().unwrap();
+    publish(&output.join("producer-inventory.norito"), bytes).unwrap();
     publish(
         &output.join("producer-inventory.sha256"),
         &BlobV1::of(&bytes).sha256,
@@ -400,6 +408,14 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
         inventory.originals.len(),
         originals.bytes,
         metadata.reads
+    );
+    let (_installed, _qualified) = acceptance::accept(
+        &output,
+        draft,
+        &mut originals,
+        &mut metadata,
+        &native,
+        config,
     );
 }
 

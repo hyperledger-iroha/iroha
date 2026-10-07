@@ -124,6 +124,98 @@ mod tests {
             assert_eq!(tree.opening(&mut store, &id).expect("opening").0, credit);
         }
     }
+    #[test]
+    fn draft_records_match_real_tree_for_both_burn_values_without_changing_selected_state() {
+        let mut store = super::super::tests::MemoryArchive::new();
+        let mut tree = CreditTree::default();
+        let mut native = KagemushaWalletIndexedTreeV1::new();
+        for number in [19u8, 7, 25, 2, 31, 11, 3, 9] {
+            let mut id = [0; 32];
+            id[0] = number;
+            let mut payment = [0; 32];
+            payment[0] = number + 42;
+            let original = archive::encode(&tree).unwrap();
+            for burned in [false, true] {
+                let credit = KagemushaWalletCreditDigestLeafV1 {
+                    credit_id: id,
+                    payment_digest: payment,
+                    burned,
+                };
+                let mut expected = native.clone();
+                credit.record(&mut expected).unwrap();
+                let mut draft = tree.clone();
+                let paths = draft.record(&mut store, &credit).unwrap();
+                assert_eq!(
+                    paths.verify(&tree.root(), &credit).unwrap(),
+                    expected.root()
+                );
+                assert_eq!(draft.root(), expected.root());
+                assert_eq!(archive::encode(&tree).unwrap(), original);
+            }
+            let credit = KagemushaWalletCreditDigestLeafV1 {
+                credit_id: id,
+                payment_digest: payment,
+                burned: number % 2 == 0,
+            };
+            tree.record(&mut store, &credit).unwrap();
+            credit.record(&mut native).unwrap();
+            let present = tree.record(&mut store, &credit).unwrap();
+            let (leaf, opening) = native.membership(&id).unwrap();
+            assert_eq!(
+                present,
+                KagemushaWalletCreditDigestRecordV1::Present { leaf, opening }
+            );
+            let changed = KagemushaWalletCreditDigestLeafV1 {
+                burned: !credit.burned,
+                payment_digest: id,
+                ..credit
+            };
+            assert_eq!(
+                present.verify(&tree.root(), &changed).unwrap(),
+                native.root()
+            );
+        }
+        let mut restored: CreditTree = archive::decode(&archive::encode(&tree).unwrap()).unwrap();
+        assert_eq!(restored.root(), tree.root());
+        let mut new_id = [0; 32];
+        new_id[0] = 23;
+        let credit = KagemushaWalletCreditDigestLeafV1 {
+            credit_id: new_id,
+            payment_digest: [1; 32],
+            burned: false,
+        };
+        assert_eq!(
+            restored.record(&mut store, &credit).unwrap(),
+            tree.record(&mut store, &credit).unwrap()
+        );
+        assert_eq!(
+            archive::encode(&restored).unwrap(),
+            archive::encode(&tree).unwrap()
+        );
+    }
+    #[test]
+    fn failed_draft_credit_record_preserves_selected_descriptor_and_can_retry() {
+        let tree = CreditTree::default();
+        let original = archive::encode(&tree).unwrap();
+        let mut draft = tree.clone();
+        let mut store = FaultStore::new();
+        store.fail = Some(0);
+        let credit = sample_credit();
+        assert!(matches!(
+            draft.record(&mut store, &credit),
+            Err(Error::Storage(_))
+        ));
+        assert_eq!(archive::encode(&draft).unwrap(), original);
+        assert_eq!(archive::encode(&tree).unwrap(), original);
+        store.fail = None;
+        let witness = draft.record(&mut store, &credit).unwrap();
+        assert_eq!(witness.verify(&tree.root(), &credit).unwrap(), draft.root());
+        assert_eq!(
+            draft.opening(&mut store, &credit.credit_id).unwrap().0,
+            credit
+        );
+        assert_eq!(archive::encode(&tree).unwrap(), original);
+    }
     struct FaultStore {
         inner: super::super::tests::MemoryArchive,
         writes: usize,

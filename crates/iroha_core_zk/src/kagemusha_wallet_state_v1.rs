@@ -51,6 +51,7 @@ mod map_custody;
 mod map_tree;
 mod native_owner;
 mod native_worker;
+mod policy_custody;
 pub use native_owner::{
     NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeStartupFailureV1,
     NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
@@ -77,6 +78,9 @@ pub use lifecycle::{
 };
 pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub(crate) use native_worker::NativeFoldWorkerV1;
+pub(crate) use policy_custody::{
+    BlacklistOriginalReferenceV1, publish_blacklist_original, verify_policy_update_original,
+};
 pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
 pub use session_custody::DirectTimeExchangeV1;
@@ -240,6 +244,7 @@ pub trait NativeProofs {
     ) -> Result<Vec<CheckpointLayout>, Error>;
     /// Verify the transition, inputs and σ against the actual selected predecessor state.
     /// `folded` is the exact Ω already verified and recorded for that predecessor.
+    /// `custody` holds the exact retained preparation and source-selected originals.
     ///
     /// # Errors
     /// Reject invalid/missing proofs, credentials, historical controls, amounts or map roots.

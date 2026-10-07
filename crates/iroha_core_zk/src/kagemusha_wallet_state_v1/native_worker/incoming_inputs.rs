@@ -134,16 +134,8 @@ pub(super) fn receive(
         &sources.incoming_statement,
         &sources.objects[5],
     )?;
-    let sigma = super::incoming::sigma(
-        worker
-            .sources
-            .sigmas()
-            .key(selector)
-            .ok_or(Error::Proof("Receive sigma source"))?,
-        slot.statement,
-        &sources.objects[5],
-        worker.budget,
-    )?;
+    let q = proof(worker.sources.q(route))?;
+    let sigma = proof(q.sigma().incoming_original(&slot, selector, worker.budget))?;
     let (history_leaf, history_opening) = custody.blacklist_history()?;
     let (pp, pv) = predecessor_claims(predecessor)?;
     let root = worker.sources.scope().root();
@@ -322,16 +314,8 @@ pub(super) fn archive(
                 .incoming
                 .ok_or(Error::Proof("Archive Receive selector"))?;
             let slot = sigma_slot(worker, selector, statement, sigma)?;
-            let claim = super::incoming::sigma(
-                worker
-                    .sources
-                    .sigmas()
-                    .key(selector)
-                    .ok_or(Error::Proof("Archive sigma source"))?,
-                slot.statement,
-                sigma,
-                worker.budget,
-            )?;
+            let q = proof(worker.sources.q(route))?;
+            let claim = proof(q.sigma().incoming_original(&slot, selector, worker.budget))?;
             (receipt, Some(slot), claim)
         }
         archive::Evidence::Status { receipt, .. } => (receipt, None, None),

@@ -4,6 +4,7 @@ use super::*;
 
 pub(crate) enum Setup {
     Bootstrap,
+    Activation,
     Transport {
         kind: u8,
         wrap: bool,
@@ -30,13 +31,13 @@ pub(crate) enum Setup {
     },
     FinishTime {
         token: u64,
-        anchor: Box<KagemushaWalletTimeAnchorV1>,
-        certificate: Box<KagemushaWalletSignerCertificateV1>,
+        anchor: Vec<u8>,
+        certificate: Vec<u8>,
     },
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        0 | 1 | 4 | 6 => [0; 3],
+        0 | 1 | 4 | 6 | 15 => [0; 3],
         2 => [
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1,
@@ -81,6 +82,7 @@ pub(crate) fn request(
     let [first, second, third] = originals;
     Ok(match selector {
         0 => Setup::Bootstrap,
+        15 => Setup::Activation,
         1 => Setup::Offer { id, amount },
         2 if !first.is_empty() && second.is_empty() == third.is_empty() => Setup::Request {
             id,
@@ -101,14 +103,30 @@ pub(crate) fn request(
         },
         5 if !first.is_empty() && !second.is_empty() => Setup::FinishTime {
             token,
-            anchor: Box::new(decode(first)?),
-            certificate: Box::new(decode(second)?),
+            // Decode only after the same owner's one-use exchange has been consumed.
+            anchor: first.to_vec(),
+            certificate: second.to_vec(),
         },
         _ => return Err(Failure::code(INVALID)),
     })
 }
 fn take_time<T>(times: &mut BTreeMap<u64, T>, token: u64) -> Result<T> {
     times.remove(&token).ok_or(Failure::code(INVALID))
+}
+fn take_time_response<T>(
+    times: &mut BTreeMap<u64, T>,
+    token: u64,
+    anchor: &[u8],
+    certificate: &[u8],
+) -> Result<(
+    T,
+    KagemushaWalletTimeAnchorV1,
+    KagemushaWalletSignerCertificateV1,
+)> {
+    // Malformed response bytes must retire the exchange too: the SDK has already
+    // consumed its token, so leaving this entry live would make it unreachable.
+    let exchange = take_time(times, token)?;
+    Ok((exchange, decode(anchor)?, decode(certificate)?))
 }
 impl<P, S> NativeWallet<P, S>
 where
@@ -126,6 +144,13 @@ where
                 transport::convert(kind, wrap, &original, &scheme)?
             }
             Setup::Bootstrap => return Ok(completion(Some(self.wallet.bootstrap()?))),
+            Setup::Activation => {
+                return Ok(Response {
+                    kind: 17,
+                    bytes: self.wallet.activation()?,
+                    ..Response::default()
+                });
+            }
             Setup::Offer { id, amount } => self.wallet.offer(id, amount)?,
             Setup::Request { id, offer, fee } => {
                 self.wallet.request(id, &offer, fee.map(|value| *value))?
@@ -165,9 +190,10 @@ where
                 anchor,
                 certificate,
             } => {
-                let exchange = take_time(&mut self.times, token)?;
+                let (exchange, anchor, certificate) =
+                    take_time_response(&mut self.times, token, &anchor, &certificate)?;
                 self.wallet
-                    .finish_direct_time_exchange(exchange, *anchor, &certificate)?;
+                    .finish_direct_time_exchange(exchange, anchor, &certificate)?;
                 return Ok(Response {
                     kind: 14,
                     ..Response::default()
@@ -187,7 +213,7 @@ mod tests {
     use super::*;
     #[test]
     fn setup_intake_rejects_unused_authority_fields_and_wrong_bounds() {
-        for selector in [0, 1, 3, 4] {
+        for selector in [0, 1, 3, 4, 15] {
             let id = if selector == 1 { [1; 32] } else { [0; 32] };
             let amount = if selector == 1 { u128::MAX } else { 0 };
             let first: &[u8] = if selector == 3 { &[7] } else { &[] };
@@ -209,8 +235,63 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(15).is_err());
+        assert!(bounds(16).is_err());
     }
+    #[test]
+    fn malformed_time_response_retires_only_its_owned_exchange_before_decoding() {
+        let vectors: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../../fixtures/kagemusha/wallet_v1_vectors.json"
+        ))
+        .unwrap();
+        let original = |name| {
+            let row = vectors["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["type"].as_str() == Some(name))
+                .unwrap();
+            hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap()
+        };
+        let anchor = original("KagemushaWalletTimeAnchorV1");
+        let certificate = original("KagemushaWalletSignerCertificateV1");
+        let malformed = vec![7];
+        let mut times = BTreeMap::from([(1, [11; 32]), (2, [22; 32]), (3, [33; 32])]);
+        for (token, first, second) in [(1, &malformed, &certificate), (2, &anchor, &malformed)] {
+            let Setup::FinishTime {
+                token,
+                anchor,
+                certificate,
+            } = request(&[0; 32], 5, 0, token, [first, second, &[]]).unwrap()
+            else {
+                panic!("bounded time originals must reach their native owner");
+            };
+            assert_eq!(
+                take_time_response(&mut times, token, &anchor, &certificate)
+                    .unwrap_err()
+                    .status,
+                INVALID,
+            );
+            assert!(!times.contains_key(&token));
+            assert_eq!(times.get(&3), Some(&[33; 32]));
+        }
+        assert_eq!(times.len(), 1);
+        assert_eq!(
+            take_time_response(&mut times, 1, &anchor, &certificate)
+                .unwrap_err()
+                .status,
+            INVALID,
+        );
+        let (exchange, decoded_anchor, decoded_certificate) =
+            take_time_response(&mut times, 3, &anchor, &certificate).unwrap();
+        assert_eq!(exchange, [33; 32]);
+        assert_eq!(norito::encode_canonical(&decoded_anchor).unwrap(), anchor);
+        assert_eq!(
+            norito::encode_canonical(&decoded_certificate).unwrap(),
+            certificate,
+        );
+        assert!(times.is_empty());
+    }
+
     #[test]
     fn cancelling_time_discards_exact_token_once_without_replacing_other_exchanges() {
         let mut times = BTreeMap::from([(1, [11; 32]), (2, [22; 32])]);

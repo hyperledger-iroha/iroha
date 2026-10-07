@@ -270,17 +270,11 @@ impl PersistentMapV1 {
         }
         Ok(())
     }
-    /// Make both durable paths before returning the new descriptor and witness.
-    /// Failed publication leaves this descriptor unchanged; unreachable objects have no authority.
-    pub(crate) fn insert(
-        &mut self,
+    fn insertion_source(
+        &self,
         store: &mut impl ObjectStore,
         key: [u8; 32],
-        value: [u8; 32],
-    ) -> Result<KagemushaWalletIndexedInsertV1, Error> {
-        if value == [0; 32] || !kagemusha_wallet_is_canonical_field_v1(&value) {
-            return Err(Error::Invalid("map field value"));
-        }
+    ) -> Result<(Self, Entry, u32, KagemushaWalletIndexedInsertV1), Error> {
         let low = self.low(store, &key)?;
         let low_opening = self.require_opening(store, &low)?;
         valid(kagemusha_wallet_indexed_verify_non_membership_v1(
@@ -300,6 +294,25 @@ impl PersistentMapV1 {
         if valid(slot_opening.empty_root())? != next.root {
             return Err(Error::WitnessLost("map insertion slot"));
         }
+        let witness = KagemushaWalletIndexedInsertV1 {
+            low: low.leaf(),
+            low_opening,
+            slot_opening,
+        };
+        Ok((next, low, slot, witness))
+    }
+    /// Make both durable paths before returning the new descriptor and witness.
+    /// Failed publication leaves this descriptor unchanged; unreachable objects have no authority.
+    pub(crate) fn insert(
+        &mut self,
+        store: &mut impl ObjectStore,
+        key: [u8; 32],
+        value: [u8; 32],
+    ) -> Result<KagemushaWalletIndexedInsertV1, Error> {
+        if value == [0; 32] || !kagemusha_wallet_is_canonical_field_v1(&value) {
+            return Err(Error::Invalid("map field value"));
+        }
+        let (mut next, low, slot, witness) = self.insertion_source(store, key)?;
         let entry = Entry {
             slot,
             key,
@@ -308,11 +321,6 @@ impl PersistentMapV1 {
         };
         next.write_slot(store, slot, Some(&entry))?;
         next.next_slot += 1;
-        let witness = KagemushaWalletIndexedInsertV1 {
-            low: low.leaf(),
-            low_opening,
-            slot_opening,
-        };
         if valid(witness.verify(&self.root, &key, &value))? != next.root {
             return Err(Error::WitnessLost("map insertion result"));
         }

@@ -725,6 +725,13 @@ impl PreparationV1<'_> {
                         current: &owner,
                         successor: successor.as_ref().unwrap_or(&owner),
                     };
+                    if *kind == KagemushaWalletPolicyUpdateKindV1::Blacklist {
+                        state::publish_blacklist_original(
+                            custody.maps().store(),
+                            &scheme.scheme_id(),
+                            update,
+                        )?;
+                    }
                     let step = proof(self.prepare_refresh(
                         owners,
                         released,

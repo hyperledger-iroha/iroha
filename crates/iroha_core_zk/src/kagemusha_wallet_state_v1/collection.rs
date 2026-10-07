@@ -67,6 +67,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             if entry.collected {
                 return Ok(CollectionStatus::Collected(sequence));
             }
+            if sequence == 0 {
+                let activation = manifest.activation.ok_or(Error::Invalid(
+                    "Bootstrap activation originals are not retained",
+                ))?;
+                self.require_activation_retention(activation, &entry)?;
+            }
             let step = self.indexed_step(&manifest, sequence)?;
             let latest = self.indexed_step(&manifest, folded)?;
             let fold = self
