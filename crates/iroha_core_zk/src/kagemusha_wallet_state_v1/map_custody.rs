@@ -65,6 +65,15 @@ impl Default for SourceMapsV1 {
     }
 }
 impl SourceMapsV1 {
+    pub(super) fn history(&self) -> &PersistentMapV1 {
+        &self.maps[PreparationMapV1::BlacklistHistory.index()]
+    }
+    pub(super) fn pending(&self) -> &PersistentMapV1 {
+        &self.maps[PreparationMapV1::Pending.index()]
+    }
+    pub(super) fn replace_pending(&mut self, pending: PersistentMapV1) {
+        self.maps[PreparationMapV1::Pending.index()] = pending;
+    }
     pub(super) fn require(&self, state: &KagemushaWalletStateV1) -> Result<(), Error> {
         if self.version != 1 {
             return Err(Error::WitnessLost("source map version"));
@@ -109,6 +118,12 @@ pub struct PreparationMapsV1<'a> {
     refresh: Option<KagemushaWalletPolicyUpdateKindV1>,
 }
 impl<'a> PreparationMapsV1<'a> {
+    pub(super) fn snapshot(&self) -> SourceMapsV1 {
+        self.draft.clone()
+    }
+    pub(super) fn store(&mut self) -> &mut dyn ObjectStore {
+        self.store.0
+    }
     pub(super) fn new(
         store: &'a mut dyn ObjectStore,
         selected: &SourceMapsV1,

@@ -297,9 +297,23 @@ pub(crate) fn inner_product<F: PastaField>(a: &[F], b: &[F]) -> F {
     a.iter().zip(b).fold(F::ZERO, |acc, (x, y)| acc + *x * y)
 }
 
-/// Evaluates a coefficient-form polynomial at `x` (Horner).
+/// Evaluates a coefficient-form polynomial at `x` with Horner leaves.
+///
+/// Large inputs split into a fixed tree on the caller's Rayon pool. Each
+/// node combines `low(x) + x^low.len() high(x)` in that order; scheduling
+/// cannot change the result. The tree needs only bounded stack temporaries,
+/// not a coefficient copy or a parallel reduction buffer.
 #[must_use]
 pub fn evaluate_polynomial<F: Field>(coeffs: &[F], x: F) -> F {
+    if coeffs.len() >= 8192 && rayon::current_num_threads() > 1 {
+        let (low, high) = coeffs.split_at(coeffs.len() / 2);
+        let power = x.pow_vartime([low.len() as u64]);
+        let (low, high) = rayon::join(
+            || evaluate_polynomial(low, x),
+            || evaluate_polynomial(high, x),
+        );
+        return low + power * high;
+    }
     coeffs
         .iter()
         .rev()
@@ -308,9 +322,39 @@ pub fn evaluate_polynomial<F: Field>(coeffs: &[F], x: F) -> F {
 
 #[cfg(test)]
 mod tests {
-    use iroha_pasta::{Ep, Eq, Fq};
+    use iroha_pasta::{Ep, Eq, Fp, Fq};
 
     use super::*;
+
+    fn check_polynomial_evaluation<F: Field + From<u64>>() {
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            for len in [0_usize, 1, 8191, 8192, 8193, 65_537] {
+                let coeffs: Vec<F> = (0..len)
+                    .map(|i| F::from(i as u64 + 3).square() - F::from(7))
+                    .collect();
+                for point in [F::ZERO, F::ONE, -F::ONE, F::from(17)] {
+                    let expected = coeffs
+                        .iter()
+                        .rev()
+                        .fold(F::ZERO, |value, coeff| value * point + coeff);
+                    assert_eq!(
+                        pool.install(|| evaluate_polynomial(&coeffs, point)),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn polynomial_evaluation_tree_matches_horner_on_both_fields() {
+        check_polynomial_evaluation::<Fp>();
+        check_polynomial_evaluation::<Fq>();
+    }
 
     #[test]
     fn fold_scalars_expand_the_product() {

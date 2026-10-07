@@ -30,11 +30,13 @@ use iroha_plonk::{
     prover::{ProverConfig, ProverRandomness, Witness, create_proof_owned},
     verifier::verify_full,
 };
+#[cfg(test)]
 use poseidon_primitives::poseidon::primitives::Spec;
 use std::{collections::BTreeMap, sync::OnceLock};
 pub(super) const POP_MEMBERSHIP_CIRCUIT_ID_V1: &str = "sorafs-pop-membership-pipa-r-v1";
 pub(super) const POP_MEMBERSHIP_CIRCUIT_K_V1: u32 = 14;
 const WIDTH: usize = 3;
+#[cfg(test)]
 const RATE: usize = 2;
 const FULL_ROUNDS: usize = 8;
 const PARTIAL_ROUNDS: usize = 56;
@@ -65,8 +67,10 @@ const PI_REVOCATION_LIST_VERSION: usize = 7;
 const PI_NULLIFIER: usize = 8;
 const PI_PRESENTATION_BINDING: usize = 9;
 const PUBLIC_INPUT_COUNT: usize = 10;
+#[cfg(test)]
 #[derive(Debug)]
 struct PopPoseidonSpec;
+#[cfg(test)]
 impl Spec<Fp, WIDTH, RATE> for PopPoseidonSpec {
     fn full_rounds() -> usize {
         FULL_ROUNDS
@@ -88,7 +92,11 @@ struct PoseidonConstants {
 fn poseidon_constants() -> &'static PoseidonConstants {
     static CONSTANTS: OnceLock<PoseidonConstants> = OnceLock::new();
     CONSTANTS.get_or_init(|| {
-        let (round_constants, mds, _) = <PopPoseidonSpec as Spec<Fp, WIDTH, RATE>>::constants();
+        let (round_constants, mds) = iroha_pasta::poseidon::grain::generate_constants::<Fp, WIDTH>(
+            FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+            0,
+        );
         assert_eq!(round_constants.len(), ROUND_COUNT);
         PoseidonConstants {
             round_constants,
@@ -1446,6 +1454,15 @@ fn _assert_send_sync() {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
+
+    #[test]
+    fn native_rp56_parameters_match_every_upstream_constant() {
+        let actual = poseidon_constants();
+        let (rounds, mds, _) = <PopPoseidonSpec as Spec<Fp, WIDTH, RATE>>::constants();
+        assert_eq!(actual.round_constants, rounds);
+        assert_eq!(actual.mds, mds);
+        assert_eq!(rounds.len(), 64);
+    }
 
     #[test]
     fn pop_rp56_migration_vectors() {

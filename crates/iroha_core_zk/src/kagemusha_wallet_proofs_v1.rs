@@ -35,6 +35,10 @@ pub enum Error {
     /// Missing, duplicate, out-of-order or oversized artifact material.
     #[error("invalid wallet artifact inventory")]
     Inventory,
+    /// Reinstallable artifact storage is absent or temporarily unreadable.
+    /// This is neither proof rejection nor loss of monetary custody.
+    #[error("wallet proof artifacts unavailable")]
+    Unavailable,
     /// Descriptor, key, curve, instance types, parameters or proof layout differ.
     #[error("invalid wallet proof artifact profile")]
     Profile,

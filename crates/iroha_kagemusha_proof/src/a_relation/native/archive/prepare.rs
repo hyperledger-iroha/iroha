@@ -362,6 +362,24 @@ impl Plan {
     /// Wrong original shape, hard joint bound or noncanonical proposed Status opening.
     pub fn original_commitments(&self, input: &Inputs) -> Result<Vec<[Fp; 3]>, Error> {
         self.validate_original_shapes(input)?;
+        self.original_commitments_from_parts(
+            &input.own,
+            &input.retained,
+            &input.evidence,
+            input.results,
+        )
+    }
+
+    // The same original tape commitments are needed before Q exists. This helper
+    // produces no Q or source-verification capability, and every actual A owner
+    // rebinds its named original tape after Q production.
+    pub(super) fn original_commitments_from_parts(
+        &self,
+        own: &[Vec<u8>; 3],
+        retained: &RetainedPayment,
+        evidence: &Evidence,
+        result_bits: [bool; 3],
+    ) -> Result<Vec<[Fp; 3]>, Error> {
         let specs = self.context().object_specs();
         let mut out = Vec::with_capacity(specs.len());
         for (kind, raw) in [
@@ -370,7 +388,7 @@ impl Plan {
             ObjectKind::Receipt,
         ]
         .into_iter()
-        .zip(&input.own)
+        .zip(own)
         .chain(
             [
                 ObjectKind::Request,
@@ -379,7 +397,7 @@ impl Plan {
                 ObjectKind::Credential,
             ]
             .into_iter()
-            .zip(&input.retained.signed),
+            .zip(&retained.signed),
         ) {
             out.push(support::exact_context(
                 specs[out.len()],
@@ -391,24 +409,21 @@ impl Plan {
             |domain: [u8; 8], bytes: &[u8]| p_bytes_native(u64::from_le_bytes(domain), bytes);
         out.push(support::exact_context(
             specs[7],
-            digest(*b"kgwpay_1", &input.retained.payment),
-            &input.retained.payment,
+            digest(*b"kgwpay_1", &retained.payment),
+            &retained.payment,
         )?);
-        out.push(support::internal_context(
-            specs[8],
-            &input.retained.statement,
-        )?);
-        let mut proof_tape = support::frame(&input.retained.omega)?;
-        proof_tape.extend(support::frame(&input.retained.sigma)?);
+        out.push(support::internal_context(specs[8], &retained.statement)?);
+        let mut proof_tape = support::frame(&retained.omega)?;
+        proof_tape.extend(support::frame(&retained.sigma)?);
         let proof_digest = digest(*b"kgwprf_1", &proof_tape);
-        for (slot, raw) in [(9, &input.retained.omega), (10, &input.retained.sigma)] {
+        for (slot, raw) in [(9, &retained.omega), (10, &retained.sigma)] {
             out.push(support::active_context(specs[slot], proof_digest, raw)?);
         }
         out.push(support::internal_context(
             specs[11],
-            &input.retained.statement[17..24],
+            &retained.statement[17..24],
         )?);
-        let (statement, receipt, raw, credited, raw_digest) = match &input.evidence {
+        let (statement, receipt, raw, credited, raw_digest) = match evidence {
             Evidence::Receive {
                 statement,
                 receipt,
@@ -452,7 +467,7 @@ impl Plan {
             status,
             credit_opening,
             ..
-        } = &input.evidence
+        } = evidence
         {
             out.push(support::exact_context(
                 specs[16],
@@ -467,7 +482,7 @@ impl Plan {
         }
         let mut results = vec![
             Fp::ONE,
-            Fp::from(if matches!(input.evidence, Evidence::Receive { .. }) {
+            Fp::from(if matches!(evidence, Evidence::Receive { .. }) {
                 1
             } else {
                 2
@@ -479,8 +494,8 @@ impl Plan {
                 Fp::from(u64::from(self.stage.results().owner(tag))),
             ]);
         }
-        results.extend(input.results.map(|v| Fp::from(u64::from(v))));
-        if let Evidence::Status { witness, .. } = &input.evidence {
+        results.extend(result_bits.map(|v| Fp::from(u64::from(v))));
+        if let Evidence::Status { witness, .. } = evidence {
             support::push_pallas(&mut results, &witness.opening)?;
         }
         out.push(support::internal_context(

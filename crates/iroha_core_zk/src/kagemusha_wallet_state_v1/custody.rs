@@ -234,7 +234,7 @@ impl TransitionOwner {
                 field: "state_owner.request",
             })?
             .bytes;
-        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1 {
+        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
             return Err(ProviderError::Invalid {
                 field: "state_owner.request",
             });

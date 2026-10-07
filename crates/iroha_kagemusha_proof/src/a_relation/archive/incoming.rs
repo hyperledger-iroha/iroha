@@ -19,7 +19,7 @@ use crate::{
     operation_relation::objects::{
         ObjectKind, SignedObjectCells, credential::CredentialCells, request::RequestCells,
     },
-    q_signature::SignatureKey,
+    q_signature::{QSignaturePlan, SignatureKey},
 };
 
 const SLOTS: [usize; 3] = [3, 6, 12];
@@ -207,18 +207,50 @@ impl ArchiveIncomingObjects {
         bundle: &SignatureQCells,
     ) -> Result<Bit<Fp>, Error> {
         self.bind_context(region, plan, input)?;
-        let [slot] = bundle.slots() else {
-            return Err(Error::Synthesis);
-        };
-        if slot.mode() != VerifyMode::Soft || slot.key_policy() != SignatureKey::Variable {
-            return Err(Error::Synthesis);
-        }
         bundle.bind_context(
             region,
             plan.operation(),
             2,
             input.q_instances.get(2).ok_or(Error::Synthesis)?,
         )?;
+        self.bind_signature_slot(region, bundle.slots())
+    }
+
+    // Purpose-limited witness proposal: the exact production slot-binding below
+    // is reused, but this projection cannot enter a proof accumulation ledger.
+    pub(crate) fn derive_signature_projection(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        input: &ContextInputs<'_>,
+        schema: &QSignaturePlan,
+    ) -> Result<Bit<Fp>, Error> {
+        self.bind_context(region, plan, input)?;
+        let instances = input.q_instances.get(2).ok_or(Error::Synthesis)?;
+        let projection = crate::a_relation::signature::project_signature_q(
+            chip,
+            region,
+            plan.operation(),
+            2,
+            schema,
+            instances,
+        )?;
+        projection.bind_context(region, plan.operation(), 2, instances)?;
+        self.bind_signature_slot(region, projection.slots())
+    }
+
+    fn bind_signature_slot(
+        &self,
+        region: &mut Region<'_, Fp>,
+        slots: &[crate::a_relation::signature::SignatureProofCells],
+    ) -> Result<Bit<Fp>, Error> {
+        let [slot] = slots else {
+            return Err(Error::Synthesis);
+        };
+        if slot.mode() != VerifyMode::Soft || slot.key_policy() != SignatureKey::Variable {
+            return Err(Error::Synthesis);
+        }
         self.receipt
             .bind_signature(region, slot, self.receiver.payment_key()?)
     }

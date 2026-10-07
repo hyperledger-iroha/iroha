@@ -617,20 +617,28 @@ impl BodyHistory {
     }
 
     fn revalidate_handles(&self) -> Result<()> {
-        self.root.revalidate()?;
-        if let Some(container) = &self.body_root {
-            container.revalidate()?;
-        }
-        for body in &self.bodies {
-            body.directory.revalidate()?;
-        }
-        if let Some(active) = &self.active {
-            active.history.revalidate_retained_handles()?;
-        }
-        if let Some(closure) = &self.nearest_closure {
-            closure.retained_history().revalidate_retained_handles()?;
-        }
-        Ok(())
+        // Preserve root, container, body, active graph and nearest-closure order. Only
+        // identical complete shared native prefixes use this fresh closed bracket;
+        // independently reopened or unrelated handles keep the full native fallback.
+        self.root.read_tree_scope(|tree| {
+            if let Some(container) = &self.body_root {
+                tree.with_directory(container, |_| Ok::<_, crate::managed::Error>(()))?;
+            }
+            for body in &self.bodies {
+                tree.with_directory(&body.directory, |_| Ok::<_, crate::managed::Error>(()))?;
+            }
+            if let Some(active) = &self.active {
+                active
+                    .history
+                    .revalidate_retained_handles_in_tree(Some(&mut *tree))?;
+            }
+            if let Some(closure) = &self.nearest_closure {
+                closure
+                    .retained_history()
+                    .revalidate_retained_handles_in_tree(Some(&mut *tree))?;
+            }
+            Ok(())
+        })
     }
 
     fn require_retained_prefix(&self, current: &Self) -> Result<()> {
@@ -2068,3 +2076,7 @@ mod read_scope_tests;
 #[cfg(test)]
 #[path = "body_history/tree_snapshot_tests.rs"]
 mod tree_snapshot_tests;
+
+#[cfg(test)]
+#[path = "body_history/handle_tree_tests.rs"]
+mod handle_tree_tests;

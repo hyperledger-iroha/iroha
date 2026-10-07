@@ -7,6 +7,35 @@ use super::*;
 #[path = "sigma_tests.rs"]
 mod sigma_tests;
 
+#[test]
+fn original_io_failure_remains_distinct_from_wrong_length_or_hash() {
+    struct Broken;
+    impl Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        }
+    }
+    impl OriginalSourceV1 for Broken {
+        fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
+            Ok(Box::new(Broken))
+        }
+    }
+    let blob = BlobV1::of(&[1, 2, 3]);
+    assert_eq!(read(&mut Broken, blob, 3), Err(Error::Unavailable));
+    struct Bytes(Vec<u8>);
+    impl OriginalSourceV1 for Bytes {
+        fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
+            Ok(Box::new(Cursor::new(&self.0)))
+        }
+    }
+    assert_eq!(read(&mut Bytes(vec![1, 2]), blob, 3), Err(Error::Inventory));
+    assert_eq!(
+        read(&mut Bytes(vec![1, 2, 4]), blob, 3),
+        Err(Error::Inventory)
+    );
+    assert_eq!(read(&mut Bytes(vec![1, 2, 3]), blob, 3), Ok(vec![1, 2, 3]));
+}
+
 fn finality_record() -> ArtifactRecord {
     use iroha_kagemusha_proof::finality::{
         catalog::{ArtifactSink, DirectoryCatalog},

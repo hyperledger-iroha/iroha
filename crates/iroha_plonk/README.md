@@ -147,6 +147,12 @@ run is manual today (TODO: a CI job); `ORACLE_BUILD` reports the cfg, and
 every shipping root that links this crate asserts `!ORACLE_BUILD` at compile
 time.
 
+Large polynomial evaluations use fixed Horner subtrees, and multiopen reconstruction
+walks the original slot order over disjoint coefficient blocks. Grand-product
+inversions use constant-time field inversion in worker-sized chunks; their scratch
+lengths sum to at most the original column length. These phases use the caller's
+Rayon pool without copying a coefficient column or changing the transcript schedule.
+
 Every output is a pure function of its inputs and the prover's random stream;
 results do not depend on the Rayon pool size, and no behaviour comes from
 environment variables.

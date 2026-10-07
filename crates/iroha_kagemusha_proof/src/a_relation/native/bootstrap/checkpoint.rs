@@ -1,10 +1,10 @@
-//! Canonical A1/W0 payloads bound to the current Bootstrap session and keys.
+//! Canonical A1/W0/A2 payloads bound to the current Bootstrap session and keys.
 //!
 //! These payloads preserve original proof/accumulator bytes. Their source context
 //! is checked against the session and then rederived by its genuine restore path;
 //! transported metadata never authorizes a proof. The custody archive separately
 //! binds the released capsule, predecessor and checkpoint ordinal. This component
-//! supplies neither a complete fold schedule nor A2/Omega or wallet-open authority.
+//! supplies neither a complete fold schedule nor Omega or wallet-open authority.
 
 use ff::PrimeField;
 use iroha_pasta::msm::MemoryBudget;
@@ -12,26 +12,29 @@ use iroha_plonk::Protocol;
 use iroha_plonk_recursion::ACCUMULATOR_BYTES;
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize};
 
-use super::{Error, FirstCheckpoint, Prover, Session, WrapperCheckpoint};
+use super::{Error, FirstCheckpoint, Prover, Session, Terminal, WrapperCheckpoint};
 
-/// The two intermediate Bootstrap payload kinds supported by this component.
+/// The three pre-Omega Bootstrap payload kinds supported by this component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckpointKind {
     /// A1's original proof; its public frame is rederived from retained sources.
     First,
     /// W0's original proof and canonical Vesta accumulator.
     Wrapper,
+    /// Terminal A2 and its carried Pallas claim.
+    Terminal,
 }
 impl CheckpointKind {
     const fn tag(self) -> u8 {
         match self {
             Self::First => 0,
             Self::Wrapper => 1,
+            Self::Terminal => 2,
         }
     }
 }
 
-/// Exact installed A1/W0 identities and canonical payload lengths.
+/// Exact installed A1/W0/A2 identities and canonical payload lengths.
 ///
 /// Construction is private and derives from this Prover's installed keys. The
 /// native installation owner must still authenticate the whole PK/source catalog;
@@ -45,7 +48,7 @@ pub struct CheckpointLayout {
     payload_bytes: usize,
 }
 impl CheckpointLayout {
-    /// The fixed native A1 or W0 payload kind.
+    /// The fixed native A1, W0 or A2 payload kind.
     pub const fn kind(&self) -> CheckpointKind {
         self.kind
     }
@@ -90,7 +93,7 @@ impl CheckpointLayout {
             verifying_key_digest,
             source_context: [0; 32],
             proof,
-            vesta: matches!(kind, CheckpointKind::Wrapper).then_some([0; ACCUMULATOR_BYTES]),
+            accumulator: (!matches!(kind, CheckpointKind::First)).then_some([0; ACCUMULATOR_BYTES]),
         };
         let payload_bytes = norito::canonical_frame_len(&specimen).map_err(|_| Error::Artifact)?;
         if u32::try_from(payload_bytes).is_err() {
@@ -116,7 +119,7 @@ struct Payload {
     verifying_key_digest: [u8; 32],
     source_context: [u8; 32],
     proof: Vec<u8>,
-    vesta: Option<[u8; ACCUMULATOR_BYTES]>,
+    accumulator: Option<[u8; ACCUMULATOR_BYTES]>,
 }
 impl Payload {
     fn check(&self, layout: &CheckpointLayout, source_context: [u8; 32]) -> Result<(), Error> {
@@ -126,7 +129,7 @@ impl Payload {
             || self.verifying_key_digest != layout.verifying_key_digest
             || self.source_context != source_context
             || self.proof.len() != layout.proof_bytes
-            || self.vesta.is_some() != matches!(layout.kind, CheckpointKind::Wrapper)
+            || self.accumulator.is_some() != !matches!(layout.kind, CheckpointKind::First)
         {
             return Err(Error::Input);
         }
@@ -186,18 +189,31 @@ impl Prover {
                     .map_err(|_| Error::Artifact)?
                     .proof_length(),
             ),
+            CheckpointKind::Terminal => CheckpointLayout::new(
+                kind,
+                *self.terminal.binding().digest(),
+                self.terminal
+                    .key()
+                    .kagemusha_digest(self.terminal.binding())
+                    .map_err(|_| Error::Artifact)?
+                    .to_repr(),
+                Protocol::new(self.terminal.binding().descriptor())
+                    .map_err(|_| Error::Artifact)?
+                    .proof_length(),
+            ),
         }
     }
 
-    /// Derive the exact A1/W0 payload identities/lengths from the installed keys.
-    /// A2/final Omega and whole producer-catalog authentication remain separate.
+    /// Derive the exact A1/W0/A2 payload identities/lengths from the installed keys.
+    /// Final Omega and whole producer-catalog authentication remain separate.
     ///
     /// # Errors
     /// An installed descriptor/key cannot define a canonical bounded payload.
-    pub fn checkpoint_layouts(&self) -> Result<[CheckpointLayout; 2], Error> {
+    pub fn checkpoint_layouts(&self) -> Result<[CheckpointLayout; 3], Error> {
         Ok([
             self.checkpoint_layout(CheckpointKind::First)?,
             self.checkpoint_layout(CheckpointKind::Wrapper)?,
+            self.checkpoint_layout(CheckpointKind::Terminal)?,
         ])
     }
 }
@@ -231,7 +247,7 @@ impl Session<'_> {
             verifying_key_digest: layout.verifying_key_digest,
             source_context,
             proof: checked.proof,
-            vesta: None,
+            accumulator: None,
         }
         .encode(&layout, source_context)
     }
@@ -280,7 +296,7 @@ impl Session<'_> {
             verifying_key_digest: layout.verifying_key_digest,
             source_context,
             proof: checked.proof,
-            vesta: Some(checked.vesta.to_bytes()),
+            accumulator: Some(checked.vesta.to_bytes()),
         }
         .encode(&layout, source_context)
     }
@@ -301,8 +317,61 @@ impl Session<'_> {
             &layout,
             self.prepared.immutable_context_digest()?.to_repr(),
         )?;
-        let vesta = payload.vesta.ok_or(Error::Input)?;
+        let vesta = payload.accumulator.ok_or(Error::Input)?;
         self.restore_wrapper(payload.proof, &vesta, budget)
+    }
+
+    /// Retain terminal A2 only after deriving its source frame from W0 and
+    /// completely verifying the installed proof and both carried claims.
+    /// # Errors
+    /// Wrong source, substituted frame, malformed claim or proof failure.
+    pub fn encode_terminal_checkpoint(
+        &self,
+        prior: &WrapperCheckpoint,
+        terminal: &Terminal,
+        budget: MemoryBudget,
+    ) -> Result<Vec<u8>, Error> {
+        let checked = self.restore_terminal(
+            prior,
+            terminal.proof.clone(),
+            &terminal.pallas.to_bytes(),
+            budget,
+        )?;
+        if checked.instances != terminal.instances || checked.vesta != terminal.vesta {
+            return Err(Error::Input);
+        }
+        let layout = self.prover.checkpoint_layout(CheckpointKind::Terminal)?;
+        let source_context = self.prepared.immutable_context_digest()?.to_repr();
+        Payload {
+            version: 1,
+            kind: layout.kind.tag(),
+            descriptor_digest: layout.descriptor_digest,
+            verifying_key_digest: layout.verifying_key_digest,
+            source_context,
+            proof: checked.proof,
+            accumulator: Some(checked.pallas.to_bytes()),
+        }
+        .encode(&layout, source_context)
+    }
+
+    /// Restore terminal A2 from one bounded canonical payload and exact W0.
+    /// Every public value is rederived from the original session and native claim.
+    /// # Errors
+    /// Wrong source/key/role, altered original, noncanonical claim or proof failure.
+    pub fn restore_terminal_checkpoint(
+        &self,
+        prior: &WrapperCheckpoint,
+        bytes: &[u8],
+        budget: MemoryBudget,
+    ) -> Result<Terminal, Error> {
+        let layout = self.prover.checkpoint_layout(CheckpointKind::Terminal)?;
+        let payload = Payload::decode(
+            bytes,
+            &layout,
+            self.prepared.immutable_context_digest()?.to_repr(),
+        )?;
+        let pallas = payload.accumulator.ok_or(Error::Input)?;
+        self.restore_terminal(prior, payload.proof, &pallas, budget)
     }
 }
 

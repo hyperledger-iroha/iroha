@@ -32,15 +32,16 @@ impl CreditTree {
         &mut self,
         store: &mut impl ObjectStore,
         credit: &KagemushaWalletCreditDigestLeafV1,
-    ) -> Result<(), Error> {
+    ) -> Result<KagemushaWalletCreditDigestRecordV1, Error> {
         valid(credit.field_items())?;
         if self.identities.get(store, &credit.credit_id)?.is_some() {
             // The first identity wins, but a missing/corrupt map cannot become a replay.
-            self.opening(store, &credit.credit_id)?;
-            return Ok(());
+            let (_, leaf, opening) = self.opening(store, &credit.credit_id)?;
+            return Ok(KagemushaWalletCreditDigestRecordV1::Present { leaf, opening });
         }
         let mut next = self.clone();
-        next.map
+        let witness = next
+            .map
             .insert(store, credit.credit_id, valid(credit.leaf_value())?)?;
         next.identities = next.identities.set(
             store,
@@ -51,7 +52,7 @@ impl CreditTree {
             })?,
         )?;
         *self = next;
-        Ok(())
+        Ok(KagemushaWalletCreditDigestRecordV1::Inserted { witness })
     }
 
     pub fn opening(

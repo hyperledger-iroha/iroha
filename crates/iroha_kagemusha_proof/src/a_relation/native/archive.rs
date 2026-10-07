@@ -11,7 +11,7 @@
 use core::fmt;
 
 mod circuit;
-pub use circuit::StageCircuit;
+pub use circuit::{PredicateInputs, StageCircuit};
 mod prepare;
 pub use prepare::Prepared;
 mod session;

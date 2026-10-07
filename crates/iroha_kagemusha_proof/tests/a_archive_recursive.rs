@@ -1221,6 +1221,41 @@ fn prove_chain(source: archive_q::ArchiveSource) {
     let identities = preflight_stage_layouts(&stage);
     let input = native_inputs(&stage.source);
     let plan = native_plan(&stage);
+    let slot = &input.q[2].instances[0];
+    assert_eq!(slot.len(), 10);
+    let integer = |low: Fq, high: Fq| {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&low.to_repr()[..16]);
+        bytes[16..].copy_from_slice(&high.to_repr()[..16]);
+        core::array::from_fn(|i| u64::from_le_bytes(bytes[8 * i..8 * i + 8].try_into().unwrap()))
+    };
+    let proposal = native::PredicateInputs {
+        state: input.state,
+        own: input.own.clone(),
+        retained: input.retained.clone(),
+        evidence: input.evidence.clone(),
+        signature: iroha_kagemusha_proof::q_signature::SignatureWitness {
+            digest: Option::<Fp>::from(Fp::from_repr(slot[0].to_repr())).unwrap(),
+            key: [integer(slot[1], slot[2]), integer(slot[3], slot[4])],
+            signature: [integer(slot[5], slot[6]), integer(slot[7], slot[8])],
+        },
+        predecessor_pallas: AccumulatorT::from_bytes(&input.predecessor.pallas).unwrap(),
+        predecessor_vesta: AccumulatorT::from_bytes(&input.predecessor.vesta).unwrap(),
+        incoming_selector: Some(input.q[0].instances[2][1].to_repr()[0]),
+    };
+    let derived = plan.propose_nonproof(proposal.clone()).unwrap();
+    assert_eq!(derived, [input.results[1], input.results[2]]);
+    let mut changed = proposal;
+    if let native::Evidence::Receive { credited, .. } = &mut changed.evidence {
+        credited[35] ^= 1;
+    }
+    assert!(
+        plan.propose_nonproof(changed).is_err(),
+        "Credited cannot change its original Payment binding"
+    );
+    eprintln!(
+        "NATIVE_ARCHIVE_PREDICATES evidence_signature={derived:?} exact_circuit_predicates=true no_synthetic_Q=true"
+    );
     let prepared = Arc::new(plan.prepare(input.clone(), MemoryBudget::DEFAULT).unwrap());
     let (first_circuit, first_public) = prepared
         .first_circuit(Fp::from(191), &FoldConfig::default())

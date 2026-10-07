@@ -3,6 +3,9 @@
 //! Receive and Status evidence share the canonical dispatcher. Every proposal is
 //! committed across stages and derived by its named owner before terminal closure.
 
+mod proposal;
+pub use proposal::PredicateInputs;
+
 use super::{Evidence, INTERNAL_RANGE_BUSES, Prepared, TERMINAL_RANGE_BUSES};
 use crate::{
     a_relation::{

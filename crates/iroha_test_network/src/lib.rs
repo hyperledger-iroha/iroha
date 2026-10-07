@@ -11797,6 +11797,31 @@ mod tests {
     }
 
     #[test]
+    fn generated_peer_base_config_parses_without_retired_load_publisher() -> Result<()> {
+        let dir = tempdir()?;
+        let environment = Environment {
+            dir: dir.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&environment);
+        let original = fs::read(peer.dir.join("config.base.toml"))?;
+        let written: Table = toml::from_str(std::str::from_utf8(&original)?)?;
+        assert!(!written.contains_key("kagemusha_load_authorizer"));
+        let base = peer.base_config_table();
+        assert!(!base.contains_key("kagemusha_load_authorizer"));
+        let actual = resolve_actual_config_result(&peer, &[config::base_iroha_config()])?;
+        assert_eq!(
+            actual.common.key_pair.public_key(),
+            peer.key_pair.public_key()
+        );
+        assert!(peer.client_config.get().is_none());
+        assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
+        let cloned = peer.clone();
+        assert_eq!(cloned.base_config_table(), base);
+        assert_eq!(fs::read(peer.dir.join("config.base.toml"))?, original);
+        Ok(())
+    }
+
+    #[test]
     fn ordinary_load_peer_configuration_rejects_retired_publisher_overrides() -> Result<()> {
         let dir = tempdir()?;
         let environment = Environment {
@@ -11804,25 +11829,34 @@ mod tests {
         };
         let peer = NetworkPeer::builder().build(&environment);
         let base = config::base_iroha_config();
-        resolve_actual_config_result(&peer, &[base.clone()])?;
+        resolve_actual_config_result(&peer, std::slice::from_ref(&base))?;
         assert!(
             peer.base_config_table()
                 .get("kagemusha_load_authorizer")
                 .is_none()
         );
+        let missing = dir.path().join("missing-caller-keyring.nrt");
         for publisher in [
             Value::Boolean(false),
             Value::Table(Table::new()),
             Value::Table(Table::from_iter([
-                ("keyring_file".into(), "retired-keyring.nrt".into()),
-                ("submitter_key_file".into(), "retired-submitter.key".into()),
+                (
+                    "keyring_file".into(),
+                    missing.to_string_lossy().into_owned().into(),
+                ),
+                ("submitter_key_file".into(), "missing-submitter.key".into()),
             ])),
         ] {
             let mut layer = base.clone();
             layer.insert("kagemusha_load_authorizer".into(), publisher);
-            let error = resolve_actual_config_result(&peer, &[layer])
-                .expect_err("retired publisher parameters must not be accepted");
-            assert!(format!("{error:#}").contains("kagemusha_load_authorizer"));
+            let error = resolve_actual_config_result(&peer, &[layer]).expect_err(
+                "retired publisher configuration must not select or synthesize custody",
+            );
+            assert!(
+                format!("{error:#}").contains("kagemusha_load_authorizer"),
+                "unexpected error: {error:?}"
+            );
+            assert!(!missing.exists());
             assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
         }
         resolve_actual_config_result(&peer, &[base])?;

@@ -317,6 +317,7 @@ pub(super) struct MemoryArchive {
     records: Arc<Mutex<BTreeMap<ArchiveKey, Vec<u8>>>>,
     reads: Arc<AtomicUsize>,
     pub(super) fail_remove: bool,
+    capsule_writes: Arc<AtomicUsize>,
 }
 impl MemoryArchive {
     pub(super) fn new() -> Self {
@@ -327,6 +328,7 @@ impl MemoryArchive {
             records: Arc::default(),
             reads: Arc::default(),
             fail_remove: false,
+            capsule_writes: Arc::default(),
         }
     }
 }
@@ -372,6 +374,9 @@ impl ArchiveStore for MemoryArchive {
             return Err(Error::WitnessLost("immutable conflict"));
         }
         records.insert(key, bytes.to_vec());
+        if matches!(key, ArchiveKey::Capsule(_)) {
+            self.capsule_writes.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(())
     }
 }
@@ -618,11 +623,28 @@ pub(super) struct TestProofs {
     preparations: Arc<AtomicUsize>,
     preparation_proofs: Arc<AtomicUsize>,
     fail_preparation_proof: bool,
+    advance_checks: Arc<AtomicUsize>,
+    capsule_writes: Option<Arc<AtomicUsize>>,
+    expire_during_publication: bool,
 }
 
 #[path = "lifecycle/tests.rs"]
 mod lifecycle;
+#[path = "transition_custody/tests.rs"]
+mod transition_custody_tests;
 impl NativeProofs for TestProofs {
+    type AdvanceCheck = usize;
+    fn enrollment_certificates(
+        &self,
+        credential: &KagemushaWalletCredentialV1,
+    ) -> Result<Vec<u8>, Error> {
+        let certificate: KagemushaWalletSignerCertificateV1 =
+            fixture("KagemushaWalletSignerCertificateV1");
+        if certificate.certificate_digest() != credential.body.issuer_certificate {
+            return Err(Error::Invalid("test enrollment issuer"));
+        }
+        archive::encode(&KagemushaWalletCertificateSetV1::new(vec![certificate]).unwrap())
+    }
     fn ledger_scope(&self) -> Result<(KagemushaWalletSchemeV1, String), Error> {
         Ok(self.ledger_scope.clone().unwrap_or_else(|| {
             (
@@ -636,6 +658,7 @@ impl NativeProofs for TestProofs {
         &self,
         _witness: &ReleasedStep,
         _predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        _custody: Option<&mut FoldCustodyV1<'_>>,
     ) -> Result<Vec<CheckpointLayout>, Error> {
         Ok((0..self.checkpoint_stages.max(1))
             .map(|stage| CheckpointLayout {
@@ -652,17 +675,37 @@ impl NativeProofs for TestProofs {
     fn verify_transition(
         &self,
         next: &FrozenTransition,
-        previous: Option<&FrozenTransition>,
+        previous: Option<&ReleasedStep>,
         _folded: Option<&KagemushaWalletFoldRecordV1>,
-    ) -> Result<(), Error> {
+        _custody: &mut TransitionCustodyV1<'_>,
+    ) -> Result<Self::AdvanceCheck, Error> {
         if self.reject {
             return Err(Error::Proof("test rejection"));
         }
         if let Some(previous) = previous {
             assert_eq!(
                 next.capsule.statement.predecessor,
-                previous.capsule.statement.successor
+                previous.frozen.capsule.statement.successor
             );
+        }
+        Ok(self
+            .capsule_writes
+            .as_ref()
+            .map_or(0, |count| count.load(Ordering::SeqCst)))
+    }
+    fn check_advance(&self, before: Self::AdvanceCheck) -> Result<(), Error> {
+        self.advance_checks.fetch_add(1, Ordering::SeqCst);
+        if self.expire_during_publication {
+            let now = self
+                .capsule_writes
+                .as_ref()
+                .expect("test clock")
+                .load(Ordering::SeqCst);
+            assert!(
+                now > before,
+                "freshness must follow the final durable capsule write"
+            );
+            return Err(Error::Invalid("test controls expired during publication"));
         }
         Ok(())
     }
@@ -678,6 +721,7 @@ impl NativeProofs for TestProofs {
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
         checkpoints: &[Vec<u8>],
+        _custody: Option<&mut FoldCustodyV1<'_>>,
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error> {
         cancellation.check()?;
@@ -761,9 +805,15 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         capsule: custody.status.marker().unwrap().head().unwrap().2,
         steps: IndexRoot::default(),
         credits: IndexRoot::default(),
+        outgoing: IndexRoot::default(),
         folds: IndexRoot::default(),
         claims: IndexRoot::default(),
         preparations: IndexRoot::default(),
+        capsule_plans: IndexRoot::default(),
+        capsule_sources: IndexRoot::default(),
+        issued_requests: IndexRoot::default(),
+        direct_anchors: IndexRoot::default(),
+        fold_pending: IndexRoot::default(),
         folded: None,
         checkpoint_count: 0,
         checkpoint_digest: [0; 32],
@@ -1261,12 +1311,12 @@ fn send_requires_recorded_predecessor_and_owner_assembles_canonical_payment() {
     let mut oversized = c.clone();
     oversized.retained_inputs[0]
         .bytes
-        .resize(KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1 + 1, 0);
+        .resize(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 1, 0);
     assert!(
         owner
             .receipt_body(&oversized, &oversized.capsule_digest().expect("digest"))
             .is_err(),
-        "Request session bound must be enforced before signing, not during fee indexing"
+        "Request message bound must be enforced before signing, not during fee indexing"
     );
 }
 
@@ -1669,19 +1719,30 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     let mut w = wallet();
     w.scheduler().set_activity(true, false);
     let template: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
-    let mut boot = bootstrap();
-    boot.capsule.successor_state.core.policy_epoch = template.request.body.policy_epoch;
-    boot.capsule.successor_state.rest.scheme_policy = template.request.body.scheme_policy;
-    rebind(&mut boot);
+    let boot = bootstrap();
     w.commit(boot.clone()).unwrap();
     w.fold_once().unwrap();
     w.fold_once().unwrap();
-    let step = w.released_steps().unwrap().remove(0);
+    // Bootstrap holds no policy. This explicit mock Refresh creates the test's selected
+    // policy head; the test still does not claim a real policy or recursive proof.
+    let mut policy = frozen(Some(&boot), KagemushaWalletEffectV1::RefreshPolicy {
+        update_kind: KagemushaWalletPolicyUpdateKindV1::SchemePolicy,
+        update: template.request.body.scheme_policy,
+        accepted_time_floor_ms: boot.capsule.successor_state.core.accepted_time_floor_ms,
+    });
+    policy.capsule.successor_state.core.policy_epoch = template.request.body.policy_epoch;
+    policy.capsule.successor_state.rest.scheme_policy = template.request.body.scheme_policy;
+    rebind(&mut policy);
+    w.commit(policy.clone()).unwrap();
+    w.fold_once().unwrap();
+    w.fold_once().unwrap();
+    let step = w.released_steps().unwrap().pop().unwrap();
     let fold = w.read_fold(&step).unwrap().unwrap();
     let credit = template.digests().unwrap().credit_id;
     let mut pending = KagemushaWalletIndexedTreeV1::new();
     pending.insert(credit, field(42)).unwrap();
-    let mut send = frozen(Some(&boot), template.send.statement.effect);
+    let mut send = frozen(Some(&policy), template.send.statement.effect);
+    let send_sequence = send.capsule.statement.sequence;
     send.capsule.predecessor_lineage = KagemushaWalletLineageSlotV1::Present {
         lineage: fold.record.lineage.clone(),
     };
@@ -1714,9 +1775,9 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     let empty = KagemushaWalletIndexedTreeV1::new();
     let (low, opening) = empty.non_membership(&credit).unwrap();
     let gap = OutgoingAbsent { low, opening };
-    assert!(w.collect_step(1, None).is_err());
+    assert!(w.collect_step(send_sequence, None).is_err());
     assert!(
-        w.collect_step(1, Some(&gap)).is_err(),
+        w.collect_step(send_sequence, Some(&gap)).is_err(),
         "generic absence under another root is not delivery evidence"
     );
     assert_eq!(
@@ -1741,11 +1802,11 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     w.fold_once().unwrap();
     w.fold_once().unwrap();
     assert_eq!(
-        w.collect_step(1, Some(&gap)).unwrap(),
-        CollectionStatus::Progress(1)
+        w.collect_step(send_sequence, Some(&gap)).unwrap(),
+        CollectionStatus::Progress(send_sequence)
     );
     for _ in 0..10 {
-        if w.resume_collection().unwrap() == Some(CollectionStatus::Collected(1)) {
+        if w.resume_collection().unwrap() == Some(CollectionStatus::Collected(send_sequence)) {
             break;
         }
     }

@@ -16,8 +16,11 @@ use super::*;
 
 #[path = "archive/evidence.rs"]
 mod evidence;
+#[path = "archive/prepare.rs"]
+mod prepare;
 #[path = "archive/retained.rs"]
 mod retained;
+pub(crate) use prepare::ArchiveStepV1;
 
 /// Decoder, opening and correction proposals for the exact retained evidence form.
 /// Every proposal is constrained by the mandatory Archive source owners.
@@ -103,6 +106,33 @@ fn removal(
     ))
 }
 
+/// Verified original field projection; Q proofs remain mandatory independent inputs.
+pub(crate) struct ArchiveFoldFieldsV1 {
+    pub(crate) state: ArchiveWitness,
+    pub(crate) removals: [IndexedRemove<Fp>; 2],
+    pub(crate) own: [Vec<u8>; 3],
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) retained: native::RetainedPayment,
+    pub(crate) evidence: native::Evidence,
+    pub(crate) results: [bool; 3],
+    pub(crate) predecessor: native::PredecessorInput,
+}
+impl ArchiveFoldFieldsV1 {
+    pub(crate) fn with_q(self, q: [native::QInput; 3]) -> native::Inputs {
+        native::Inputs {
+            state: self.state,
+            removals: self.removals,
+            own: self.own,
+            sigma: self.sigma,
+            retained: self.retained,
+            evidence: self.evidence,
+            results: self.results,
+            predecessor: self.predecessor,
+            q,
+        }
+    }
+}
+
 impl PreparationV1<'_> {
     /// Convert exact retained Payment/Credited originals into either native Archive form.
     /// The current owner signs this Archive; its historical payer credential is read
@@ -124,6 +154,21 @@ impl PreparationV1<'_> {
         q: [native::QInput; 3],
         budget: MemoryBudget,
     ) -> Result<native::Inputs, Error> {
+        self.archive_fold_fields(owner, step, predecessor, public, witness, budget)
+            .map(|fields| fields.with_q(q))
+    }
+
+    /// Reconstruct the exact native source before its independent Q proofs exist.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn archive_fold_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ReleasedStep,
+        predecessor: &FoldedStateV1,
+        public: &KagemushaWalletLineagePublicV1,
+        witness: ArchiveFoldWitnessV1,
+        budget: MemoryBudget,
+    ) -> Result<ArchiveFoldFieldsV1, Error> {
         let capsule = &step.frozen.capsule;
         let KagemushaWalletEffectV1::ArchiveSent {
             credit_id,
@@ -168,7 +213,7 @@ impl PreparationV1<'_> {
             &credited,
             witness.incoming,
         )?;
-        Ok(native::Inputs {
+        Ok(ArchiveFoldFieldsV1 {
             state: ArchiveWitness {
                 predecessor: predecessor.witness,
                 successor,
@@ -184,7 +229,6 @@ impl PreparationV1<'_> {
             retained: retained.native,
             evidence,
             results: witness.results,
-            q,
             predecessor: native::PredecessorInput {
                 proof: predecessor.proof.clone(),
                 pallas: predecessor.pallas,

@@ -28,10 +28,12 @@
 //! vendored one.
 
 use ff::Field;
-use iroha_pasta::{PastaCurve, PastaField, field::batch_invert, msm::MemoryBudget};
+use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
 use rand_core_06::RngCore;
 
-use super::{ProverError, quotient::CompiledExpressions, random_values, write_point};
+use super::{
+    ProverError, batch::invert_column, quotient::CompiledExpressions, random_values, write_point,
+};
 use crate::{
     keys::ProvingKey,
     pcs::ipa::{PinnedParams, commit::Secrecy},
@@ -311,7 +313,7 @@ where
             *numerator = (*numerator + beta) * (*denominator + gamma);
             *denominator = (*a + beta) * (*s + gamma);
         }
-        batch_invert(&mut lookup.compressed_table[..u]);
+        invert_column(&mut lookup.compressed_table[..u]);
         let mut product = lookup.compressed_input;
         let mut running = C::ScalarExt::ONE;
         for (value, inverse) in product[..u].iter_mut().zip(&lookup.compressed_table[..u]) {

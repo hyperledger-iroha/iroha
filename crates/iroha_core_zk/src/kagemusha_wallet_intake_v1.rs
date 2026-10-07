@@ -3,7 +3,7 @@
 //! The installation owner supplies an authenticated immutable verifier and the canonical
 //! complete source-qualified wallet graph, including all sigma, receipt, Q, operation
 //! and Omega owners whose originals were strictly imported.
-//! Foreign inputs supply original credential, certificate and AccountId
+//! Foreign inputs supply original credential, Enrollment CertificateSet and AccountId
 //! frames, never slot/scheme/wallet/artifact identifiers or a replacement account vault. Native
 //! enumerates real provider slots, reconciles their markers, checks the positive hardware key,
 //! retained intent/request/current credential and selected capsule, then asks the existing
@@ -155,7 +155,7 @@ fn open_message(
     slot: &KagemushaWalletSlotIdV1,
     marker_file_digest: &[u8; 32],
     credential_original: &[u8],
-    certificate_original: &[u8],
+    certificate_set_original: &[u8],
     account_original: &[u8],
     asset_scope_original: &[u8],
 ) -> Vec<u8> {
@@ -168,7 +168,7 @@ fn open_message(
     transcript.extend_from_slice(marker_file_digest);
     for original in [
         credential_original,
-        certificate_original,
+        certificate_set_original,
         account_original,
         asset_scope_original,
     ] {
@@ -188,7 +188,7 @@ pub struct PendingWalletOpenV1<F: KagemushaWalletFsV1, P> {
     marker_file_digest: [u8; 32],
     credential: KagemushaWalletCredentialV1,
     credential_original: Vec<u8>,
-    certificate_original: Vec<u8>,
+    certificate_set_original: Vec<u8>,
     account: AccountId,
     account_original: Vec<u8>,
     asset_scope: KagemushaWalletAssetScopeV1,
@@ -205,7 +205,7 @@ pub struct AdmittedWalletV1<F: KagemushaWalletFsV1, P> {
     slot: KagemushaWalletSlotIdV1,
     credential: KagemushaWalletCredentialV1,
     credential_original: Vec<u8>,
-    certificate_original: Vec<u8>,
+    certificate_set_original: Vec<u8>,
     account: AccountId,
     account_original: Vec<u8>,
     asset_scope: KagemushaWalletAssetScopeV1,
@@ -292,7 +292,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         installed: Arc<InstalledVerifierPackV1>,
         sources: Arc<QualifiedWalletSourcesV1>,
         credential_original: &[u8],
-        certificate_original: &[u8],
+        certificate_set_original: &[u8],
         account_original: &[u8],
         asset_scope_original: &[u8],
     ) -> Result<Self, Error> {
@@ -307,7 +307,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         let preparation = PreparationV1::new(&installed)
             .map_err(|_| Error::Authority("installed preparation source"))?;
         let authenticated = preparation
-            .authenticate_credential(credential_original, certificate_original)
+            .authenticate_credential_set(credential_original, certificate_set_original)
             .map_err(|_| Error::Authority("issuer-authenticated originals"))?;
         let credential = *authenticated.credential();
         let account = account(account_original, &credential.body.account_digest)?;
@@ -340,7 +340,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
             &slot,
             &marker_file_digest,
             credential_original,
-            certificate_original,
+            certificate_set_original,
             account_original,
             asset_scope_original,
         );
@@ -352,7 +352,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
             marker_file_digest,
             credential,
             credential_original: credential_original.to_vec(),
-            certificate_original: certificate_original.to_vec(),
+            certificate_set_original: certificate_set_original.to_vec(),
             account,
             account_original: account_original.to_vec(),
             asset_scope,
@@ -389,7 +389,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
             slot: self.slot,
             credential: self.credential,
             credential_original: self.credential_original,
-            certificate_original: self.certificate_original,
+            certificate_set_original: self.certificate_set_original,
             account: self.account,
             account_original: self.account_original,
             asset_scope: self.asset_scope,
@@ -411,12 +411,13 @@ impl<F: KagemushaWalletFsV1, P> AdmittedWalletV1<F, P> {
         &self.credential
     }
 
-    /// Original owner frames, retained for the authentic native operation owner.
+    /// Exact credential, Enrollment CertificateSet, account and asset-scope frames,
+    /// retained for the authentic native operation owner.
     #[must_use]
     pub fn originals(&self) -> (&[u8], &[u8], &[u8], &[u8]) {
         (
             &self.credential_original,
-            &self.certificate_original,
+            &self.certificate_set_original,
             &self.account_original,
             &self.asset_scope_original,
         )
@@ -455,7 +456,7 @@ impl<F: KagemushaWalletFsV1, P> AdmittedWalletV1<F, P> {
             self.account,
             self.asset_scope,
             self.credential_original,
-            self.certificate_original,
+            self.certificate_set_original,
             self.account_original,
             self.asset_scope_original,
         )

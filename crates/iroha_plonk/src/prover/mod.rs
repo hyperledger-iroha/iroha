@@ -76,6 +76,7 @@ use crate::{
 };
 
 mod advice;
+mod batch;
 mod lookup;
 mod multiopen;
 mod permutation;

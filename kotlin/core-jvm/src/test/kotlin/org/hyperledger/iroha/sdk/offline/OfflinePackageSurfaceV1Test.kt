@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
 /**
  * Pins the KAGEMUSHA source surface of the three published Kotlin SDK modules.
  *
- * Only the KAGEMUSHA wallet V1 wire, P-256 codec, exclusive native wallet handle, platform
+ * Only the KAGEMUSHA wallet V1 wire, typed ordinary IssueLoad constructor, P-256 codec, exclusive native wallet handle, platform
  * adapter and private typed native callback reply remain. The retired coordinator,
  * ordinary-runtime, device-lifecycle, probe, provider and
  * Torii sources must not return under any source set, and neither Android module may register a
@@ -48,6 +48,8 @@ class OfflinePackageSurfaceV1Test {
         private const val WALLET_PACKAGE = "org/hyperledger/iroha/sdk/offline/wallet"
 
         val KEPT = listOf(
+            "core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/KagemushaWalletIssueLoadInstructionV1.kt",
+            "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/KagemushaWalletIssueLoadInstructionV1Test.kt",
             "$CORE_MAIN/KagemushaP256Codec.kt",
             "$CORE_MAIN/KagemushaWalletWireV1.kt",
             "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaWalletVectorsV1Test.kt",

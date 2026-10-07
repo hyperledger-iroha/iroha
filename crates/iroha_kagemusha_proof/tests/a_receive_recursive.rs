@@ -2245,6 +2245,49 @@ fn native_inputs(
 
 fn assert_native_first_relation(source: &Source, first: &Stage) {
     let (plan, inputs) = native_inputs(source);
+    let signature_inputs = inputs.q[2].instances[0]
+        .chunks_exact(10)
+        .map(|slot| {
+            let integer = |lo: Fq, hi: Fq| {
+                let mut bytes = [0u8; 32];
+                bytes[..16].copy_from_slice(&lo.to_repr()[..16]);
+                bytes[16..].copy_from_slice(&hi.to_repr()[..16]);
+                core::array::from_fn(|i| {
+                    u64::from_le_bytes(bytes[8 * i..8 * i + 8].try_into().unwrap())
+                })
+            };
+            iroha_kagemusha_proof::q_signature::SignatureWitness {
+                digest: Option::<Fp>::from(Fp::from_repr(slot[0].to_repr())).unwrap(),
+                key: [integer(slot[1], slot[2]), integer(slot[3], slot[4])],
+                signature: [integer(slot[5], slot[6]), integer(slot[7], slot[8])],
+            }
+        })
+        .collect();
+    let predicate_inputs = iroha_kagemusha_proof::a_relation::native::receive::PredicateInputs {
+        before: inputs.transition.before,
+        after: inputs.transition.after,
+        statement: inputs.transition.statement,
+        consumed: inputs.transition.consumed,
+        blacklist: inputs.transition.blacklist,
+        incoming_statement: inputs.incoming_statement,
+        objects: inputs.objects.clone(),
+        signatures: signature_inputs,
+        predecessor_pallas: AccumulatorT::from_bytes(&inputs.predecessor.pallas).unwrap(),
+        predecessor_vesta: AccumulatorT::from_bytes(&inputs.predecessor.vesta).unwrap(),
+        own_selector: inputs.q[0].instances[2][0].to_repr()[0],
+        incoming_selector: inputs.q[0].instances[2][1].to_repr()[0],
+    };
+    let proposed = plan.propose_nonproof(predicate_inputs.clone()).unwrap();
+    assert_eq!(proposed, [source.objects_valid, true, true, true]);
+    let mut substituted = predicate_inputs.clone();
+    substituted.objects[3][131] ^= 1;
+    assert!(
+        plan.propose_nonproof(substituted).is_err(),
+        "changed transitive Payment package binding"
+    );
+    eprintln!(
+        "NATIVE_RECEIVE_PREDICATES same_object_signature_map_code=true native_four_results={proposed:?} no_synthetic_Q=true"
+    );
     let prepared = plan.prepare(inputs, MemoryBudget::DEFAULT).unwrap();
     let (native, public) = prepared
         .first_circuit(Fp::from(247), &FoldConfig::default())

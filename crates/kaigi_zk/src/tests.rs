@@ -7,6 +7,16 @@ use authorization_v1::{
 use ff::PrimeField;
 use usage_v1::{KaigiUsageContextV1, KaigiUsageOutputsV1, compute_usage_v1};
 
+#[test]
+fn native_rp56_parameters_match_every_upstream_constant() {
+    let actual = poseidon_constants();
+    let (rounds, mds, _) =
+        <KaigiPoseidonSpec as Spec<Scalar, POSEIDON_WIDTH, POSEIDON_RATE>>::constants();
+    assert_eq!(actual.round_constants, rounds);
+    assert_eq!(actual.mds, mds);
+    assert_eq!(rounds.len(), 64);
+}
+
 fn context() -> KaigiAuthorizationContextV1 {
     KaigiAuthorizationContextV1 {
         network_id: array::from_fn(|index| index as u8 + 1),
