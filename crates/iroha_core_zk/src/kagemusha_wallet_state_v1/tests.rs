@@ -1759,11 +1759,14 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     w.fold_once().unwrap();
     // Bootstrap holds no policy. This explicit mock Refresh creates the test's selected
     // policy head; the test still does not claim a real policy or recursive proof.
-    let mut policy = frozen(Some(&boot), KagemushaWalletEffectV1::RefreshPolicy {
-        update_kind: KagemushaWalletPolicyUpdateKindV1::SchemePolicy,
-        update: template.request.body.scheme_policy,
-        accepted_time_floor_ms: boot.capsule.successor_state.core.accepted_time_floor_ms,
-    });
+    let mut policy = frozen(
+        Some(&boot),
+        KagemushaWalletEffectV1::RefreshPolicy {
+            update_kind: KagemushaWalletPolicyUpdateKindV1::SchemePolicy,
+            update: template.request.body.scheme_policy,
+            accepted_time_floor_ms: boot.capsule.successor_state.core.accepted_time_floor_ms,
+        },
+    );
     policy.capsule.successor_state.core.policy_epoch = template.request.body.policy_epoch;
     policy.capsule.successor_state.rest.scheme_policy = template.request.body.scheme_policy;
     rebind(&mut policy);

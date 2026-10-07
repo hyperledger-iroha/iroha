@@ -89,6 +89,9 @@ the annotation alone establishes no result. Bind the terminal status to exactly
 one unfinished test and still require the
 complete discovered selection, matching result summary and process exit; orphan,
 duplicate or unfinished statuses cannot establish a pass or a mutation kill.
+Nexus happy-day and restart checks require the selected native test's successful
+terminal between one running header and one matching summary, together with the
+unique Rust experiment completion marker. A marker and summary alone cannot pass.
 Each new safety, liveness or custody rule requires its current registered named
 mutation control under spec §13.4. A prepared runner is not execution evidence.
 Regenerate State inventory with its canonical Rust generator on the candidate;

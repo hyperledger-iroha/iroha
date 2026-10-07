@@ -224,8 +224,18 @@ impl AmxTransactionV1 {
     /// The transaction is malformed or does not encode.
     pub fn id(&self) -> Result<[u8; 32], AmxError> {
         self.validate()?;
-        let bytes = norito::encode_canonical(self).map_err(encoding)?;
-        Ok(Hash::new_from_chunks(&[AMX_TRANSACTION_DOMAIN, &bytes]).into())
+        // DM5 restores only the retired canonical-frame scratch in this public API.
+        #[cfg(all(test, sumeragi_model_mutation = "DM5"))]
+        {
+            let bytes = norito::encode_canonical(self).map_err(encoding)?;
+            return Ok(Hash::new_from_chunks(&[AMX_TRANSACTION_DOMAIN, &bytes]).into());
+        }
+        #[cfg(not(all(test, sumeragi_model_mutation = "DM5")))]
+        streamed_transaction_id(self).map_err(|error| {
+            error
+                .decode_resource_error()
+                .map_or_else(|| encoding(&error), AmxError::Resource)
+        })
     }
 
     /// The participant set, ascending.
@@ -314,8 +324,50 @@ impl AmxBeginV1 {
     /// Whether this record is the `Begin` of `transaction` (same id, participants and deadline).
     #[must_use]
     pub fn matches(&self, transaction: &AmxTransactionV1) -> bool {
-        transaction.begin().is_ok_and(|begin| &begin == self)
+        // DM6 reconstructs only the retired Begin owner instead of comparing borrowed fields.
+        #[cfg(all(test, sumeragi_model_mutation = "DM6"))]
+        {
+            return transaction.begin().is_ok_and(|begin| &begin == self);
+        }
+        #[cfg(not(all(test, sumeragi_model_mutation = "DM6")))]
+        {
+            self.deadline == transaction.deadline
+                && self
+                    .participants
+                    .iter()
+                    .copied()
+                    .eq(transaction.legs.iter().map(|leg| leg.dataspace))
+                && transaction.id().is_ok_and(|tx| tx == self.tx)
+        }
     }
+}
+
+// Hash only this closed canonical schema. Validation belongs to the caller; this helper
+// preserves the actual codec or I/O cause without an encoded frame or diagnostic allocation.
+pub(crate) fn streamed_transaction_id(
+    transaction: &AmxTransactionV1,
+) -> Result<[u8; 32], norito::Error> {
+    // Exact existing domain and canonical frame, streamed into the fixed hash owner. Preserve
+    // original codec failures; no Vec, encoded-error String or substituted source identity.
+    // This concrete nongeneric schema has a borrowed static frame name. Its derived struct
+    // serializer calls write_len_prefixed; Vec<AmxLegV1> streams counted elements and each
+    // Vec<u8> payload streams its borrowed slice. Canonical COMPACT_LEN has no offset table.
+    // Both frame passes and the Blake2b writer use fixed stack state; no serializer scratch
+    // layout is omitted from admission. This conclusion is specific to these exact fields.
+    let mut codec = None;
+    let hash = Hash::new_from_writer(|writer| {
+        writer.write_all(AMX_TRANSACTION_DOMAIN)?;
+        norito::core::write_canonical_to_writer(transaction, writer).map_err(|cause| {
+            codec = Some(cause);
+            // The original codec error is retained above. Use the inline ErrorKind bridge,
+            // without allocating an error string or boxed dynamic error while refusing.
+            std::io::Error::from(std::io::ErrorKind::Other)
+        })
+    });
+    if let Some(cause) = codec {
+        return Err(cause);
+    }
+    Ok(hash.map_err(norito::Error::Io)?.into())
 }
 
 /// A participant's vote (§11.3).

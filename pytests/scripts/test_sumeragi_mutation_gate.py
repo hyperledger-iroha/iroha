@@ -2593,7 +2593,11 @@ MODEL_NAMES = {
     "DM2": "isi::amx_owner::tests::original_amx_instruction_admits_complete_actual_layouts_before_copy_and_retries_same_pool",
     "DM3": "isi::amx_owner::tests::original_amx_instruction_last_owner_destroys_fields_and_refunds_exact_ledger",
     "DM4": "sumeragi_amx::allocation::tests::original_begin_record_scan_preserves_canonical_depth_refusal_and_exact_retry",
+    "DM5": "amx_prepare_streaming_allocations::transaction_id_streaming_matches_canonical_frames_without_heap_allocations",
+    "DM6": "amx_prepare_streaming_allocations::begin_matches_borrows_original_graph_without_heap_allocations",
+    "DM7": "amx_prepare_streaming_allocations::native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations",
 }
+MODEL_ALLOCATION_OBSERVER = "amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind"
 
 
 def test_model_mutations_have_owning_source_hooks_named_controls_and_exact_spec_rows():
@@ -2601,13 +2605,19 @@ def test_model_mutations_have_owning_source_hooks_named_controls_and_exact_spec_
     assert set(registered) == set(MODEL_NAMES)
     model = ROOT / "crates/iroha_data_model"
     source = "\n".join(path.read_text() for path in (model / "src").rglob("*.rs"))
+    shared = model / "tests/amx_prepare_streaming_allocations.rs"
+    lib = (model / "src/lib.rs").read_text()
+    assert '#[cfg(test)]\n#[path = "../tests/amx_prepare_streaming_allocations.rs"]\nmod amx_prepare_streaming_allocations;' in lib
+    source += "\n" + shared.read_text()
     functions = set(re.findall(r"\bfn\s+(\w+)\s*\(", source))
     rows = re.findall(r"^\| (DM\d+) \| (.+)$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
     assert len(rows) == len(dict(rows)) == len(MODEL_NAMES)
     assert set(dict(rows)) == set(MODEL_NAMES)
     for identifier, name in MODEL_NAMES.items():
         rule = registered[identifier]
-        assert rule.tests == (name,)
+        expected = (MODEL_ALLOCATION_OBSERVER, name) if identifier in ("DM5", "DM6", "DM7") else (name,)
+        assert rule.tests == expected
+        assert all(test.rsplit("::", 1)[-1] in functions for test in expected)
         assert not rule.scenarios
         assert name.rsplit("::", 1)[-1] in functions
         assert name.rsplit("::", 1)[-1] in dict(rows)[identifier]
@@ -2617,7 +2627,57 @@ def test_model_mutations_have_owning_source_hooks_named_controls_and_exact_spec_
         assert not gate.has_switch(identifier, daemon=True)
     assert "mutation-testing = []" in (model / "Cargo.toml").read_text()
     assert "mod model_mutation_guard;" in (model / "src/lib.rs").read_text()
-    assert 'const IDS: &[&str] = &["DM1", "DM2", "DM3", "DM4"];' in (model / "build.rs").read_text()
+    assert 'const IDS: &[&str] = &["DM1", "DM2", "DM3", "DM4", "DM5", "DM6", "DM7"];' in (model / "build.rs").read_text()
+
+
+def test_model_streaming_mutations_keep_exact_heap_observation_and_fresh_thread_inputs():
+    """The named Model tests observe real allocator routes, not decode or budget counters."""
+
+    model = ROOT / "crates/iroha_data_model"
+    observer = (model / "tests/amx_prepare_streaming_allocations.rs").read_text()
+    assert observer.count("#[global_allocator]") == 1
+    assert "impl GlobalAlloc for TrackingAllocator" in observer
+    for route in ("alloc", "alloc_zeroed", "realloc", "dealloc"):
+        assert f"unsafe fn {route}(" in observer
+        assert f"System.{route}(" in observer
+    for route in range(3):
+        assert f"record_request({route});" in observer
+    assert "fn measured_fresh_thread<T: Send>" in observer
+    assert ".spawn(|| measured(operation))" in observer
+    assert "std::panic::catch_unwind" in observer
+    assert "impl Drop for StopTracking" in observer
+    assert "assert_eq!(count, [1, 1, 1]);" in observer
+    assert "assert_eq!(measured(|| black_box(7)).1, [0; 3]);" in observer
+    assert "AllocationBudget" not in observer and "with_decode_limits" not in observer
+    source = (model / "src/sumeragi_amx.rs").read_text()
+    for identifier, restored in (("DM5", "norito::encode_canonical(self)"),
+                                  ("DM6", "transaction.begin().is_ok_and")):
+        assert source.count(f'all(test, sumeragi_model_mutation = "{identifier}")') == 2
+        assert restored in source
+    guard = (model / "src/model_mutation_guard.rs").read_text()
+    assert '#[cfg(all(feature = "mutation-testing", not(test)))]' in guard
+    assert "compile_error!" in guard
+
+
+def test_native_effects_mutation_keeps_exact_domain_streaming_and_actual_allocator_control():
+    model = ROOT / "crates/iroha_data_model"
+    source = (model / "src/sumeragi_amx/native.rs").read_text()
+    assert source.count('all(test, sumeragi_model_mutation = "DM7")') == 3
+    assert 'norito::encode_canonical(leg).map(|bytes|' in source
+    assert 'writer.write_all(b"iroha:native-amx-transfer:v1")?' in source
+    assert 'writer.write_all(&[0])?' in source
+    assert 'norito::core::write_canonical_to_writer(leg, writer)' in source
+    assert 'return Err(cause);' in source and 'hash.map_err(norito::Error::Io)?' in source
+    observer = (model / "tests/amx_prepare_streaming_allocations.rs").read_text()
+    assert 'fn native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations()' in observer
+    assert '[(0, 0), (1, 64), (64, 1)]' in observer
+    assert 'Quantity::zero(), u128::MAX.into(), wide.clone()' in observer
+    assert re.search(
+        r"let\s*\(actual,\s*requests\)\s*=\s*measured_fresh_thread\s*\(\s*\|\|\s*native_transfer_effects_hash\b",
+        observer,
+    )
+    assert 'assert_eq!(requests, [0; 3]);' in observer
+    assert 'AllocationBudget' not in observer and 'with_decode_limits' not in observer
 
 
 def test_original_begin_depth_mutation_bypasses_only_its_participant_payload_context():
@@ -2639,7 +2699,7 @@ def test_original_begin_depth_mutation_bypasses_only_its_participant_payload_con
     assert source[end:].startswith('                let deadline = fixed_field::<u64, _>')
 
 
-@pytest.mark.parametrize("selected", [None, "DM1", "DM4"])
+@pytest.mark.parametrize("selected", [None, "DM1", "DM4", "DM5", "DM6", "DM7"])
 def test_model_actual_cargo_argv_profile_and_isolated_environment(monkeypatch, tmp_path, selected):
     captured = {}
     class Process:
@@ -2702,7 +2762,7 @@ def test_model_main_keeps_positive_baseline_exact_report_and_default_caps(monkey
     assert gate.main() == expected
     assert len(captured) == 1
     args, directory, ids = captured[0]
-    assert ids == ("DM1", "DM2", "DM3", "DM4")
+    assert ids == ("DM1", "DM2", "DM3", "DM4", "DM5", "DM6", "DM7")
     assert directory == target / "job0"
     assert (args.timeout_build, args.timeout_test, args.timeout_scenario, args.seeds) == (1200, 900, 3600, 200)
     assert not args.fast and not args.skip_baseline
@@ -2710,7 +2770,7 @@ def test_model_main_keeps_positive_baseline_exact_report_and_default_caps(monkey
     assert report["package"] == "iroha_data_model" and report["profile"] == "test"
     assert report["summary"]["baseline"] == baseline
     assert [result["id"] for result in report["mutations"]] == list(ids)
-    assert report["summary"]["mutations"] == 4
+    assert report["summary"]["mutations"] == 7
 
 
 @pytest.mark.parametrize("arguments", [
@@ -2774,6 +2834,9 @@ def model_build_script(tmp_path_factory):
     (False, "DM1", "", True, False), (True, None, "", True, False),
     (True, "DM1", "", True, True), (True, "DM2", "", True, True), (True, "DM3", "", True, True),
     (True, "DM4", "", True, True), (False, "DM4", "", True, False),
+    (True, "DM5", "", True, True), (False, "DM5", "", True, False),
+    (True, "DM6", "", True, True), (False, "DM6", "", True, False),
+    (True, "DM7", "", True, True), (False, "DM7", "", True, False),
     (True, "unknown_rule", "", False, False), (True, "HC1", "", False, False),
     (False, None, '--cfg\x1fsumeragi_model_mutation="DM1"', False, False),
     (True, "DM1", '--cfg\x1fsumeragi_model_mutation="DM2"', False, False),

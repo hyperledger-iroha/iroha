@@ -18,6 +18,10 @@ mod abi_v1_fixture;
 mod model_mutation_guard;
 #[cfg(test)]
 extern crate self as iroha_data_model;
+// One allocator owner per Model unit-test binary; the standalone target reuses this source.
+#[cfg(test)]
+#[path = "../tests/amx_prepare_streaming_allocations.rs"]
+mod amx_prepare_streaming_allocations;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
 // rather than silencing the lint at the crate root.

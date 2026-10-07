@@ -18,6 +18,7 @@ use super::{
 };
 use crate::sumeragi_amx::{
     AllocatedAmxRecordProofV1, AmxLegV1, AmxRecordProofV1, AmxRecordV1, AmxTransactionV1,
+    streamed_transaction_id,
 };
 
 /// Actual local refusal before moving the original proof into its immutable instruction owner.
@@ -38,9 +39,6 @@ pub enum AmxInstructionAdmissionErrorV1 {
     /// The real shared shell allocation refused its exact admitted layout.
     #[error(transparent)]
     Shared(#[from] PrepaidSharedError),
-    /// The streaming canonical hash writer refused without producing an identity.
-    #[error(transparent)]
-    Hash(#[from] std::io::Error),
 }
 use AmxInstructionAdmissionErrorV1 as Error;
 
@@ -265,30 +263,6 @@ impl Action<'_> {
     }
 }
 
-fn streamed_transaction_id(transaction: &AmxTransactionV1) -> Result<[u8; 32], Error> {
-    // Exact existing domain and canonical frame, streamed into the fixed hash owner. Preserve
-    // original codec failures; no Vec, encoded-error String or substituted source identity.
-    // This concrete nongeneric schema has a borrowed static frame name. Its derived struct
-    // serializer calls write_len_prefixed; Vec<AmxLegV1> streams counted elements and each
-    // Vec<u8> payload streams its borrowed slice. Canonical COMPACT_LEN has no offset table.
-    // Both frame passes and the Blake2b writer use fixed stack state; no serializer scratch
-    // layout is omitted from admission. This conclusion is specific to these exact fields.
-    let mut codec = None;
-    let hash = iroha_crypto::Hash::new_from_writer(|writer| {
-        writer.write_all(crate::sumeragi_amx::AMX_TRANSACTION_DOMAIN)?;
-        norito::core::write_canonical_to_writer(transaction, writer).map_err(|cause| {
-            codec = Some(cause);
-            // The original codec error is retained above. Use the inline ErrorKind bridge,
-            // without allocating an error string or boxed dynamic error while refusing.
-            std::io::Error::from(std::io::ErrorKind::Other)
-        })
-    });
-    if let Some(cause) = codec {
-        return Err(Error::Codec(cause));
-    }
-    Ok(hash?.into())
-}
-
 enum PreparedAction {
     Relay,
     Prepare(DataSpaceId, AmxTransactionV1),
@@ -452,7 +426,12 @@ mod tests {
                     nonce: [9; 32],
                 };
                 transaction.validate().unwrap();
-                let original = transaction.id().unwrap();
+                let original_frame = norito::encode_canonical(&transaction).unwrap();
+                let original: [u8; 32] = iroha_crypto::Hash::new_from_chunks(&[
+                    crate::sumeragi_amx::AMX_TRANSACTION_DOMAIN,
+                    &original_frame,
+                ])
+                .into();
                 let limits =
                     norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
                 let streamed = norito::with_decode_limits_scope(limits, || {
@@ -465,6 +444,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn original_amx_prepare_identity_preserves_retained_graph_and_exact_pool_credit() {
+        let (transaction, proof, pool) = crate::sumeragi_amx::allocated_amx_instruction_fixture();
+        let original_proof = original_pointers(proof.canonical());
+        let instruction = proof
+            .into_prepare(transaction.legs[0].dataspace, &transaction)
+            .complete(&pool)
+            .unwrap();
+        let retained = actual_instruction_layout_bytes(&instruction);
+        assert_eq!(pool.reserved_bytes(), retained);
+        pool.set_limit_bytes(retained);
+        let source = instruction.as_any().downcast_ref::<PrepareAmxV1>().unwrap();
+        let original_legs = source.transaction.legs.as_ptr();
+        let original_payloads: [_; 2] =
+            std::array::from_fn(|index| source.transaction.legs[index].payload.as_ptr());
+        let frame = norito::encode_canonical(&source.transaction).unwrap();
+        let expected: [u8; 32] = iroha_crypto::Hash::new_from_chunks(&[
+            crate::sumeragi_amx::AMX_TRANSACTION_DOMAIN,
+            &frame,
+        ])
+        .into();
+        let AmxRecordV1::Begin(begin) = &source.begin.record else {
+            panic!("original fixture Begin");
+        };
+        let original_participants = begin.participants.as_ptr();
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let id = norito::with_decode_limits_scope(limits, || {
+            assert!(begin.matches(&source.transaction));
+            source.transaction.id()
+        })
+        .unwrap();
+        assert_eq!(id, expected);
+        assert_eq!(source.transaction.legs.as_ptr(), original_legs);
+        assert_eq!(begin.participants.as_ptr(), original_participants);
+        assert_eq!(original_pointers(&source.begin), original_proof);
+        for (index, original) in original_payloads.into_iter().enumerate() {
+            assert_eq!(source.transaction.legs[index].payload.as_ptr(), original);
+        }
+        assert!(instruction.amx_proof_admitted_to(&pool));
+        assert_eq!(pool.reserved_bytes(), retained);
+        drop(instruction);
+        assert_eq!(pool.reserved_bytes(), 0);
     }
 
     fn original_pointers(proof: &AmxRecordProofV1) -> [usize; 5] {

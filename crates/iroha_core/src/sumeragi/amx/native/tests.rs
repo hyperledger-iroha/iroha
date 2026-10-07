@@ -387,6 +387,41 @@ fn native(chain: &CertifiedTestChain) -> NativeAmxParticipantStateV1 {
         .clone()
 }
 
+#[inline(never)]
+fn check_paid_effects_at_original_pool_capacity(chain: &CertifiedTestChain) {
+    // The actual signed Prepare left this authenticated escrow in its original State pool.
+    let view = chain.state().view();
+    let owner = view.world().sumeragi_amx_participant();
+    let budget = chain.state().ivm_execution_budget();
+    assert!(owner.is_authenticated());
+    assert!(owner.belongs_to(&budget));
+    let original = owner.canonical().unwrap();
+    assert_eq!(original.escrows.len(), 1);
+    let record = &original.escrows[0];
+    assert_eq!(record.leg.amount, Quantity::from(100_u32));
+    let pointer = std::ptr::from_ref(&record.leg);
+    let frame = norito::encode_canonical(&record.leg).unwrap();
+    let expected: [u8; 32] =
+        iroha_crypto::Hash::new_from_chunks(&[b"iroha:native-amx-transfer:v1", &[0], &frame])
+            .into();
+    let reader = owner.clone();
+    assert!(std::ptr::eq(reader.canonical().unwrap(), original));
+    let retained = budget.reserved_bytes();
+    let limit = budget.limit_bytes();
+    budget.set_limit_bytes(retained);
+    let actual = iroha_data_model::sumeragi_amx::native_transfer_effects_hash(&record.leg);
+    budget.set_limit_bytes(limit);
+    assert_eq!(actual.unwrap(), expected);
+    assert_eq!(expected, record.effects_hash);
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert_eq!(
+        std::ptr::from_ref(&reader.canonical().unwrap().escrows[0].leg),
+        pointer
+    );
+    drop(reader);
+    assert_eq!(budget.reserved_bytes(), retained);
+}
+
 #[test]
 fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
     let mut roots = Roots::new();
@@ -437,6 +472,7 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
             balance(chain, id, fee_asset(), account(&payer())) < 1_000_000_u32.into(),
             "actual positive private fee debit"
         );
+        check_paid_effects_at_original_pool_capacity(chain);
     }
     let custody = native(&roots.participants[0]).custody;
     let bypass = roots.participants[0].sign(
