@@ -20,6 +20,8 @@ mod android;
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 pub use android::AndroidPlatform;
 mod exports;
+pub(crate) mod enrollment;
+pub use enrollment::{NativeEnrollmentRuntime, retain_native_enrollment};
 pub(crate) mod open;
 pub use open::{NativeStartupFailure, retain_native_runtime, start_native_wallet};
 pub(crate) mod requests;

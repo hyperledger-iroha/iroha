@@ -138,6 +138,7 @@ static NoritoBridgeExportReference volatile required_exports[] = {
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_revision_v1,
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_snapshot_v1,
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_setup_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_enrollment_v1,
     (NoritoBridgeExportReference)connect_norito_keypair_from_seed,
     (NoritoBridgeExportReference)connect_norito_parliament_timed_ovn_ballot_from_proof_v1,
     (NoritoBridgeExportReference)connect_norito_parliament_timed_ovn_registration_from_proof_v1,

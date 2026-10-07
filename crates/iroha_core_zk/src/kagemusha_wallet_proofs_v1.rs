@@ -19,9 +19,12 @@ use iroha_plonk::{
     DescriptorBinding, Protocol, VerifyingKey,
     cs::{CurveV1, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV2},
     pcs::ipa::PinnedParams,
-    verify_full,
+    verifier::verify_full_cancellable,
 };
 use iroha_plonk_recursion::{ACCUMULATOR_BYTES, AccumulatorT, K};
+
+mod cancellation;
+pub(crate) use cancellation::NativeProofError;
 
 /// Native artifact/proof admission failure. No failure selects or modifies wallet state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -42,9 +45,36 @@ pub enum Error {
     /// Descriptor, key, curve, instance types, parameters or proof layout differ.
     #[error("invalid wallet proof artifact profile")]
     Profile,
+    /// The caller cancelled proof work; no invalid-proof verdict or monetary effect follows.
+    #[error("wallet proof work cancelled")]
+    Cancelled,
     /// Canonical transport, proof equation or complete accumulator decide failed.
     #[error("wallet proof rejected")]
     Proof,
+}
+
+impl Error {
+    /// Whether a caller cancelled this operation rather than receiving a proof verdict.
+    #[must_use]
+    pub const fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
+
+fn verification_error(error: iroha_plonk::VerifyError) -> Error {
+    if error.is_cancelled() {
+        Error::Cancelled
+    } else {
+        Error::Proof
+    }
+}
+
+fn recursion_error(error: iroha_plonk_recursion::Error) -> Error {
+    if error.is_cancelled() {
+        Error::Cancelled
+    } else {
+        Error::Proof
+    }
 }
 
 /// Independently installed native bindings; never read these from a Payment or foreign open.
@@ -426,12 +456,33 @@ impl ArtifactSet {
         request: Option<&KagemushaWalletRequestBodyV1>,
         budget: MemoryBudget,
     ) -> Result<(), Error> {
+        self.verify_package_proofs_cancellable(package, request, budget, None)
+    }
+
+    /// Perform the same complete verification with a caller-owned cancellation signal.
+    /// # Errors
+    /// Preserves verification failures; interruption returns `Cancelled`, never a verdict.
+    pub fn verify_package_proofs_cancellable(
+        &self,
+        package: &KagemushaWalletPackageV1,
+        request: Option<&KagemushaWalletRequestBodyV1>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         authority(package.statement.validate_for_scheme(&self.scheme))?;
         authority(self.allowlist.check_package(package, request))?;
         let (kind, mask) = authority(package.verifying_key_selector(request))?;
-        self.verify_step_proof(&package.statement, &package.step_proof, kind, mask, budget)?;
+        self.verify_step_proof_cancellable(
+            &package.statement,
+            &package.step_proof,
+            kind,
+            mask,
+            budget,
+            cancellation,
+        )?;
         if let Some(lineage) = package.lineage.lineage() {
-            self.verify_lineage(lineage, budget)?;
+            self.verify_lineage_cancellable(lineage, budget, cancellation)?;
         }
         Ok(())
     }
@@ -458,24 +509,50 @@ impl ArtifactSet {
         credential: &KagemushaWalletCredentialV1,
         budget: MemoryBudget,
     ) -> Result<(), Error> {
+        self.verify_capsule_proofs_cancellable(capsule, credential, budget, None)
+    }
+
+    /// Perform the same complete verification with a caller-owned cancellation signal.
+    /// # Errors
+    /// Preserves verification failures; interruption returns `Cancelled`, never a verdict.
+    pub fn verify_capsule_proofs_cancellable(
+        &self,
+        capsule: &KagemushaWalletRecoveryCapsuleV1,
+        credential: &KagemushaWalletCredentialV1,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let (kind, mask) = capsule_selector(&self.scheme, capsule, credential)?;
-        self.verify_step_proof(&capsule.statement, &capsule.step_proof, kind, mask, budget)?;
+        self.verify_step_proof_cancellable(
+            &capsule.statement,
+            &capsule.step_proof,
+            kind,
+            mask,
+            budget,
+            cancellation,
+        )?;
         if let Some(lineage) = capsule.predecessor_lineage() {
-            self.verify_lineage(lineage, budget)?;
+            self.verify_lineage_cancellable(lineage, budget, cancellation)?;
         }
         Ok(())
     }
 
     // Both receipt-bearing and pre-Advance paths use the same immutable admitted key,
     // canonical statement instance, exact layout and complete native sigma verifier.
-    pub(super) fn verify_step_proof(
+    /// Perform the same complete verification with a caller-owned cancellation signal.
+    /// # Errors
+    /// Preserves verification failures; interruption returns `Cancelled`, never a verdict.
+    pub(super) fn verify_step_proof_cancellable(
         &self,
         statement: &KagemushaWalletStatementV1,
         proof: &KagemushaWalletStepProofV1,
         kind: KagemushaWalletOperationKindV1,
         mask: u32,
         budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         authority(statement.validate_for_scheme(&self.scheme))?;
         authority(self.allowlist.check_step_proof(kind, mask, proof))?;
         let key = self.steps.get(&(kind.tag(), mask)).ok_or(Error::Profile)?;
@@ -484,15 +561,16 @@ impl ArtifactSet {
         if proof.bytes.len() != key.proof_bytes {
             return Err(Error::Proof);
         }
-        verify_full(
+        verify_full_cancellable(
             &key.params,
             &key.binding,
             &key.vk,
             &[vec![instance]],
             &proof.bytes,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)
+        .map_err(verification_error)
     }
 
     /// Fully verify Omega and all transported accumulator obligations.
@@ -509,6 +587,19 @@ impl ArtifactSet {
         lineage: &KagemushaWalletLineageV1,
         budget: MemoryBudget,
     ) -> Result<(), Error> {
+        self.verify_lineage_cancellable(lineage, budget, None)
+    }
+
+    /// Perform the same complete verification with a caller-owned cancellation signal.
+    /// # Errors
+    /// Preserves verification failures; interruption returns `Cancelled`, never a verdict.
+    pub fn verify_lineage_cancellable(
+        &self,
+        lineage: &KagemushaWalletLineageV1,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         authority(self.allowlist.check_lineage(lineage))?;
         if lineage.public.scheme_id != self.scheme.scheme_id()
             || lineage.public.relation_id != self.scheme.relation_id
@@ -532,21 +623,22 @@ impl ArtifactSet {
             vec![x, y],
             challenges,
         ];
-        verify_full(
+        verify_full_cancellable(
             &self.lineage.params,
             &self.lineage.binding,
             &self.lineage.vk,
             &instances,
             proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(verification_error)?;
         pallas
-            .decide(&self.lineage.params, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.lineage.params, budget, cancellation)
+            .map_err(recursion_error)?;
         vesta
-            .decide(&self.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(recursion_error)?;
         Ok(())
     }
 }

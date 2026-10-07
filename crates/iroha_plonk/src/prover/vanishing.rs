@@ -12,7 +12,9 @@
 //! h_{d-2}` with the blinds combined the same way, which the verifier
 //! commits to as `sum_i x^{n i} H_i`.
 
+use crate::secret::SecretPolynomial;
 use ff::Field;
+use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
 use rand_core_06::RngCore;
 
@@ -25,26 +27,46 @@ use crate::{
 };
 
 /// The committed random polynomial `R`.
-pub(super) struct RandomPoly<F> {
+pub(super) struct RandomPoly<F: iroha_pasta::PastaField> {
     /// `n` coefficients.
     pub(super) coeffs: Vec<F>,
     /// Its blind.
     pub(super) blind: F,
 }
+impl<F: iroha_pasta::PastaField> Drop for RandomPoly<F> {
+    fn drop(&mut self) {
+        self.coeffs.iter_mut().for_each(crate::secret::wipe_one);
+        self.blind.zeroize();
+    }
+}
 
 /// The committed quotient pieces.
-pub(super) struct QuotientPieces<F> {
+pub(super) struct QuotientPieces<F: iroha_pasta::PastaField> {
     coefficients: Vec<F>,
     piece_len: usize,
     blinds: Vec<F>,
 }
+impl<F: iroha_pasta::PastaField> Drop for QuotientPieces<F> {
+    fn drop(&mut self) {
+        self.coefficients
+            .iter_mut()
+            .for_each(crate::secret::wipe_one);
+        self.blinds.iter_mut().for_each(crate::secret::wipe_one);
+    }
+}
 
 /// The quotient combined at `x^n` for its opening at `x`.
-pub(super) struct CombinedQuotient<F> {
+pub(super) struct CombinedQuotient<F: iroha_pasta::PastaField> {
     /// `sum_i x^{n i} h_i` (`n` coefficients).
     pub(super) coeffs: Vec<F>,
     /// `sum_i x^{n i} blind_i`.
     pub(super) blind: F,
+}
+impl<F: iroha_pasta::PastaField> Drop for CombinedQuotient<F> {
+    fn drop(&mut self) {
+        self.coeffs.iter_mut().for_each(crate::secret::wipe_one);
+        self.blind.zeroize();
+    }
 }
 
 /// Draws, commits and writes `R` (`BlindingScheduleV1` item 5).
@@ -59,20 +81,31 @@ pub(super) fn commit_random<C, T, R>(
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<RandomPoly<C::ScalarExt>, ProverError>
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
     R: RngCore,
 {
-    let coeffs: Vec<C::ScalarExt> = random_values(rng, shape.n);
+    let coeffs = SecretPolynomial::new(random_values::<C::ScalarExt, _>(rng, shape.n));
     let blind = C::ScalarExt::random(&mut *rng);
     let commitment = pk
         .commitment_tables()
-        .commit(params.params(), &coeffs, &blind, Secrecy::Secret, budget)?
+        .commit_cancellable(
+            params.params(),
+            &coeffs,
+            &blind,
+            Secrecy::Secret,
+            budget,
+            cancellation,
+        )?
         .to_affine();
     write_point(transcript, &commitment)?;
-    Ok(RandomPoly { coeffs, blind })
+    Ok(RandomPoly {
+        coeffs: coeffs.into_vec(),
+        blind,
+    })
 }
 
 /// Splits `h` into `d - 1` pieces, draws their blinds (`BlindingScheduleV1`
@@ -82,6 +115,7 @@ where
 ///
 /// [`ProverError::Key`] when `h` does not have `(d - 1) n` coefficients, or
 /// MSM and transcript errors.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn commit_quotient<C, T, R>(
     params: &PinnedParams<C>,
     pk: &ProvingKey<C>,
@@ -90,12 +124,14 @@ pub(super) fn commit_quotient<C, T, R>(
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<QuotientPieces<C::ScalarExt>, ProverError>
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
     R: RngCore,
 {
+    let h = SecretPolynomial::new(h);
     let expected = shape
         .quotient_pieces
         .checked_mul(shape.n)
@@ -109,30 +145,36 @@ where
             actual: h.len(),
         }));
     }
-    let blinds: Vec<C::ScalarExt> = random_values(rng, shape.quotient_pieces);
+    let blinds =
+        SecretPolynomial::new(random_values::<C::ScalarExt, _>(rng, shape.quotient_pieces));
     let tables = pk.commitment_tables();
-    for (piece, blind) in h.chunks_exact(shape.n).zip(&blinds) {
+    for (piece, blind) in h.chunks_exact(shape.n).zip(blinds.iter()) {
         let commitment = tables
-            .commit(params.params(), piece, blind, Secrecy::Secret, budget)?
+            .commit_cancellable(
+                params.params(),
+                piece,
+                blind,
+                Secrecy::Secret,
+                budget,
+                cancellation,
+            )?
             .to_affine();
         write_point(transcript, &commitment)?;
     }
     Ok(QuotientPieces {
-        coefficients: h,
+        coefficients: h.into_vec(),
         piece_len: shape.n,
-        blinds,
+        blinds: blinds.into_vec(),
     })
 }
 
-impl<F: Field> QuotientPieces<F> {
+impl<F: iroha_pasta::PastaField> QuotientPieces<F> {
     /// `h_0 + xn h_1 + ...` and the matching blind. Reuses the first
     /// coefficient piece and releases the other pieces before the IPA.
-    pub(super) fn combine(self, xn: F) -> CombinedQuotient<F> {
-        let Self {
-            coefficients: mut coeffs,
-            piece_len: n,
-            blinds,
-        } = self;
+    pub(super) fn combine(mut self, xn: F) -> CombinedQuotient<F> {
+        let mut coeffs = SecretPolynomial::new(core::mem::take(&mut self.coefficients));
+        let n = self.piece_len;
+        let blinds = &self.blinds;
         let (first, rest) = coeffs.split_at_mut(n);
         let mut power = xn;
         for piece in rest.chunks_exact(n) {
@@ -147,7 +189,10 @@ impl<F: Field> QuotientPieces<F> {
             .iter()
             .rev()
             .fold(F::ZERO, |acc, blind| acc * xn + blind);
-        CombinedQuotient { coeffs, blind }
+        CombinedQuotient {
+            coeffs: coeffs.into_vec(),
+            blind,
+        }
     }
 }
 

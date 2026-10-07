@@ -1944,6 +1944,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
     "connect_norito_kagemusha_wallet_setup_v1",
+    "connect_norito_kagemusha_wallet_enrollment_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
     "connect_norito_kagemusha_wallet_request_status_v1",
     "connect_norito_kagemusha_wallet_retry_v1",

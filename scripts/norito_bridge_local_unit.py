@@ -443,9 +443,12 @@ def clone(source: Path, destination: Path):
     require((a.st_dev, a.st_ino) != (b.st_dev, b.st_ino) and digest(source) == digest(destination), "COW retention changed bytes/aliased source")
 
 
-def external_root(root: Path, output: Path):
+def artifact_root(root: Path, output: Path):
+    """Keep create-only retained artifacts in the original checkout's qualification lane."""
     require(output.is_absolute() and str(output) == os.path.abspath(output), "output must be an absolute canonical path")
-    require(root != output and root not in output.parents, "unit output cannot be in source checkout")
+    qualification = root / "target" / "qualification"
+    require(output != qualification and output.is_relative_to(qualification),
+            "unit output must be below the original checkout target/qualification")
     require(not os.path.lexists(output), "unit output must be create-only")
     parent = output.parent
     metadata = parent.lstat()
@@ -481,7 +484,7 @@ def produce(root: Path, pins: dict, output: Path, config: dict, acknowledge_reci
     require(acknowledge_recipe, "native packaging requires explicit local-unit recipe acknowledgement")
     host_policy(SCOPE, "macos", "debug", os.environ.get("MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT") == "1")
     require("MOBILE_SDK_APPLE_ARTIFACT_DIR" not in os.environ, "release/external artifact selector must be absent")
-    external_root(root, output)
+    artifact_root(root, output)
     admitted = admit(root, pins)
     require(set(config) == {"python", "clang", "ranlib", "xcodebuild", "developer_dir", "sdk", "deployment_target"}, "native tool configuration is not exact")
     extra_tools = validate_tool_config(config)

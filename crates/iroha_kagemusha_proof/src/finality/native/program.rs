@@ -62,7 +62,10 @@ impl<C: SourceCircuit> Mounted<C> {
         prepare: impl FnOnce(Fp, &FoldConfig) -> Result<C, iroha_plonk::frontend::Error>,
     ) -> Result<SourceNodeEvidence, Error> {
         let entropy = context.entropy(self.id.clone())?;
-        let witness = circuit(prepare(entropy.inner_salt, context.fold))?;
+        iroha_pasta::CancellationToken::checkpoint(context.proof.cancellation)?;
+        let mut fold = context.fold.clone();
+        fold.cancellation = context.proof.cancellation.cloned();
+        let witness = circuit(prepare(entropy.inner_salt, &fold))?;
         self.prove_with(&witness, params, limits, context, entropy)
     }
     pub(super) fn prove_with(
@@ -73,20 +76,27 @@ impl<C: SourceCircuit> Mounted<C> {
         context: &mut ProvingContext<'_, '_>,
         entropy: crate::finality::continuity::tree::NodeRandomness<'_>,
     ) -> Result<SourceNodeEvidence, Error> {
-        let exports = witness.exports(&params.pallas, &params.vesta, context.proof.msm_budget)?;
+        iroha_pasta::CancellationToken::checkpoint(context.proof.cancellation)?;
+        let exports = witness.exports(
+            &params.pallas,
+            &params.vesta,
+            context.proof.msm_budget,
+            context.proof.cancellation,
+        )?;
         if let Some(proof) =
             context.restore_source(&self.source, exports.endpoints, &params.vesta)?
         {
             return Ok(proof);
         }
         let pair = load_pair(context.artifacts, &self.id)?;
-        let prover = Prover::from_original_artifacts(
+        let prover = Prover::from_original_artifacts_cancellable(
             witness,
             borrowed(&pair.source),
             borrowed(&pair.wrapper),
             params.pallas.clone(),
             params.vesta.clone(),
             limits.key,
+            context.proof.cancellation,
         )?;
         if identity(&prover.qualified_source()?)? != identity(&self.source)? {
             return Err(Error::Artifact);

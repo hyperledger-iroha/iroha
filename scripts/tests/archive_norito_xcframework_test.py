@@ -993,7 +993,7 @@ else:
         wallet_exports = re.findall(r'"(connect_norito_kagemusha_[A-Za-z0-9_]+)"', required_inventory)
         self.assertEqual(wallet_exports, [
             "connect_norito_kagemusha_wallet_" + suffix + "_v1"
-            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "setup", "execute", "request_status", "retry", "resume", "fold", "credit_status", "snapshot")
+            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "setup", "enrollment", "execute", "request_status", "retry", "resume", "fold", "credit_status", "snapshot")
         ])
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",

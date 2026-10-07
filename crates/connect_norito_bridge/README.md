@@ -53,3 +53,15 @@ Exact retained Payment bytes and durable completion remain native responsibiliti
 The embedding app must provision signed complete artifacts/configuration; the
 unprovisioned runtime fails unavailable. Full real-wallet and physical-device
 qualification remain open.
+
+
+For initial enrollment, trusted native startup constructs CoreZK `EnrollmentOwnerV1`
+from the approved scheme, exact policy originals and pinned original root DER, then
+registers `NativeEnrollmentRuntime` through `retain_native_enrollment`. The typed
+C/JNI enrollment call accepts original account/challenge/evidence bytes. Android sends
+DER plus an opaque Play Integrity token; the issuer separately acquires Google's
+original response. Native retains the exact account-authorized E5 and issuer-signed E6
+before returning them. Complete-source loader handoff preserves the same opaque handle
+and exclusive provider on failures. `beginEnrolled` still requires a fresh existing-account
+signature through ordinary original admission. No foreign liveness or hardware verdict
+can substitute for issuer checks. The E6 transport bound is separate from Payment10KB.

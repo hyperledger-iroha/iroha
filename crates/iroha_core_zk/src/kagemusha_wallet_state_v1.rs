@@ -267,8 +267,13 @@ pub trait NativeProofs {
     /// Verify Ω in full, including its deferred values and both curve accumulator decides.
     ///
     /// # Errors
-    /// Reject any invalid proof, binding, artifact or decide.
-    fn verify_lineage(&self, lineage: &KagemushaWalletLineageV1) -> Result<(), Error>;
+    /// Reject any invalid proof, binding, artifact or decide. Background callers supply
+    /// their operation signal; cancellation yields no proof verdict.
+    fn verify_lineage(
+        &self,
+        lineage: &KagemushaWalletLineageV1,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<(), Error>;
 
     /// Compute exactly the next sub-proof of one released transition. `checkpoints` holds
     /// every prior original checkpoint in authenticated schedule order, after the coordinator

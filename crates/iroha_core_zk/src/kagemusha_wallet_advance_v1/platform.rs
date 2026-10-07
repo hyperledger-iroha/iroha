@@ -364,6 +364,8 @@ pub enum KagemushaWalletKeyProfileV1 {
     /// Android StrongBox when available, otherwise the TEE; iPhone Secure Enclave. A TEE key
     /// is generated only while the slot's probe is still definitively absent.
     SecureElementOrTee,
+    /// Android TEE only, even when StrongBox exists; unsupported on Apple.
+    AndroidTee,
 }
 
 impl KagemushaWalletKeyProfileV1 {
@@ -373,6 +375,7 @@ impl KagemushaWalletKeyProfileV1 {
         match self {
             Self::SecureElement => 1,
             Self::SecureElementOrTee => 2,
+            Self::AndroidTee => 3,
         }
     }
 
@@ -382,6 +385,7 @@ impl KagemushaWalletKeyProfileV1 {
         match tag {
             1 => Some(Self::SecureElement),
             2 => Some(Self::SecureElementOrTee),
+            3 => Some(Self::AndroidTee),
             _ => None,
         }
     }

@@ -1,5 +1,6 @@
 """Real synthetic AppAttest signatures and durable private-process protocol regressions."""
 import base64
+from dataclasses import replace
 import hashlib
 import io
 import importlib.util
@@ -39,17 +40,18 @@ class WorkerTests(unittest.TestCase):
             self.skipTest("OpenSSL3 unavailable")
         self.openssl = Path(binary).resolve()
 
-    def owner_fixture(self, directory):
+    def owner_fixture(self, directory, challenge_lifetime_ms=120000):
         directory = directory.resolve(strict=True)
         os.chmod(directory, 0o700)
         fixture = SignedEnvelope(directory, self.openssl)
         policy = fixture_policy(synthetic_root(fixture), True)
+        policy = replace(policy, enrollment=replace(policy.enrollment, challenge_lifetime_ms=challenge_lifetime_ms))
         selected = policy_scope(policy, GENERATOR)
         attestation, key_id, root = apple_object(fixture, selected)
         now = int(time.time() * 1000) + 60000
         request = encode({"challenge_transcript_base64": base64.b64encode(selected.challenge_transcript).decode(),
             "payment_key_base64": base64.b64encode(GENERATOR).decode(),
-            "issued_at_ms": now - 1, "expires_at_ms": now - 1 + 120000,
+            "issued_at_ms": now - 1, "expires_at_ms": now - 1 + challenge_lifetime_ms,
             "trusted_time_ms": now, "platform": "apple", "evidence": {
                 "attestation_base64": base64.b64encode(attestation).decode(),
                 "assertion_base64": base64.b64encode(assertion(fixture, selected.enrollment_key_binding(), 1)).decode(),
@@ -62,7 +64,7 @@ class WorkerTests(unittest.TestCase):
                 "scheme_id_hex": policy.enrollment.scheme_id.hex(), "asset_digest_hex": policy.enrollment.asset_digest.hex(),
                 "regulatory_policy": {"permitted_controls": 0, "blacklist_max_age_ms": 0,
                                       "time_anchor_max_response_ms": 0},
-                "challenge_lifetime_ms": 120000, "attestation_lease_lifetime_ms": 0,
+                "challenge_lifetime_ms": challenge_lifetime_ms, "attestation_lease_lifetime_ms": 0,
                 "root_base64": base64.b64encode(root).decode(), "root_sha256": hashlib.sha256(root).hexdigest()}})
         directory_fd = os.open(directory, os.O_RDONLY)
         crypto_fd = os.open(self.openssl, os.O_RDONLY)
@@ -72,6 +74,40 @@ class WorkerTests(unittest.TestCase):
             return VerifierOwner(original, directory_fd=directory_fd, crypto_fd=crypto_fd, **arguments)
         open_owner.config = config
         return open_owner, request, selected, key_id
+
+    def test_selected_lifetime_has_no_unconfigured_ten_minute_ceiling(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, selected, _ = self.owner_fixture(Path(temporary), 600001)
+            owner = open_owner()
+            try:
+                original = owner.perform(request, "verify")
+                self.assertEqual(exact_json(original, MAX_PACKET)["challenge_digest"],
+                                 selected.challenge_digest().hex())
+                self.assertEqual(owner.perform(request, "recover"), original)
+            finally:
+                owner.close()
+
+    def test_selected_lifetime_keeps_strict_u64_and_half_open_time_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary), 1 << 63)
+            owner = open_owner()
+            try:
+                value = exact_json(request, MAX_PACKET)
+                for now in (value["issued_at_ms"], value["expires_at_ms"] - 1):
+                    original = encode(dict(value, trusted_time_ms=now))
+                    self.assertEqual(owner.request(original)[0]["trusted_time_ms"], now)
+                for changed in (
+                    dict(value, trusted_time_ms=value["issued_at_ms"] - 1),
+                    dict(value, trusted_time_ms=value["expires_at_ms"]),
+                    dict(value, issued_at_ms=1 << 63, expires_at_ms=1 << 64,
+                         trusted_time_ms=(1 << 63) + 1),
+                    dict(value, expires_at_ms=value["expires_at_ms"] + 1),
+                    dict(value, trusted_time_ms=True),
+                ):
+                    with self.assertRaises(AttestationRejected):
+                        owner.request(encode(changed))
+            finally:
+                owner.close()
 
     def test_real_apple_result_and_counter_commit_and_recover_after_restart(self):
         with tempfile.TemporaryDirectory() as temporary:

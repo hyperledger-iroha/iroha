@@ -41,3 +41,5 @@ rand_chacha = "0.3.1"
 rayon = { workspace = true }
 # SHA-256 of params bytes against `PINNED_PARAMS_V1` (spec section 3).
 sha2 = "0.10.9"
+# Wipe canonical integer lookup scratch on success and every early return.
+zeroize = { workspace = true }

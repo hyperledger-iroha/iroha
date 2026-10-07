@@ -18,6 +18,9 @@ use super::*;
 /// A logical route failed exact source reconstruction or original-key intake.
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum OperationQualificationErrorV1 {
+    /// The caller cancelled original import; the source was not rejected.
+    #[error("operation source import cancelled")]
+    Cancelled,
     /// Installation, route, inventory or bounded original mismatch.
     #[error(transparent)]
     Original(#[from] Error),
@@ -256,50 +259,95 @@ pub(super) fn plan(
     })
 }
 
+fn import_error(
+    error: impl crate::kagemusha_wallet_proofs_v1::NativeProofError,
+    rejected: OperationQualificationErrorV1,
+) -> OperationQualificationErrorV1 {
+    if error.is_cancelled() {
+        OperationQualificationErrorV1::Cancelled
+    } else {
+        rejected
+    }
+}
+
 impl QualifiedOperationOwnerV1 {
     pub(super) fn import_a(
         &self,
         stage: usize,
         original: &[u8],
         config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<iroha_plonk::ProvingKey<Eq>, OperationQualificationErrorV1> {
-        let result = match self {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| OperationQualificationErrorV1::Cancelled)?;
+        match self {
             Self::Bootstrap(p) => match stage {
-                0 => p.prover().import_first(original, config),
-                1 => p.prover().import_terminal(original, config),
+                0 => p
+                    .prover()
+                    .import_first_cancellable(original, config, cancellation),
+                1 => p
+                    .prover()
+                    .import_terminal_cancellable(original, config, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|_| ()),
-            Self::Load(p) => p.import_a(stage, original, config).map_err(|_| ()),
-            Self::Send(p) => p.import_a(stage, original, config).map_err(|_| ()),
-            Self::Receive(p) => p.import_a(stage, original, config).map_err(|_| ()),
-            Self::Archive(p) => p.import_a(stage, original, config).map_err(|_| ()),
-            Self::Consuming(p) => p.import_a(stage, original, config).map_err(|_| ()),
-            Self::Refresh(p) => p.import_a(stage, original, config).map_err(|_| ()),
-        };
-        result.map_err(|()| OperationQualificationErrorV1::A(stage))
+            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            Self::Load(p) => p
+                .import_a_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            Self::Send(p) => p
+                .import_a_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            Self::Receive(p) => p
+                .import_a_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            Self::Archive(p) => p
+                .import_a_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            Self::Consuming(p) => p
+                .import_a_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            Self::Refresh(p) => p
+                .import_a_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+        }
     }
     pub(super) fn import_w(
         &self,
         stage: usize,
         original: &[u8],
         config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<iroha_plonk::ProvingKey<Ep>, OperationQualificationErrorV1> {
-        let result = match self {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| OperationQualificationErrorV1::Cancelled)?;
+        match self {
             Self::Bootstrap(p) => {
                 if stage != 0 {
                     return Err(OperationQualificationErrorV1::W(stage));
                 }
-                p.prover().import_wrapper(original, config).map_err(|_| ())
+                p.prover()
+                    .import_wrapper_cancellable(original, config, cancellation)
+                    .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage)))
             }
-            Self::Load(p) => p.import_w(stage, original, config).map_err(|_| ()),
-            Self::Send(p) => p.import_w(stage, original, config).map_err(|_| ()),
-            Self::Receive(p) => p.import_w(stage, original, config).map_err(|_| ()),
-            Self::Archive(p) => p.import_w(stage, original, config).map_err(|_| ()),
-            Self::Consuming(p) => p.import_w(stage, original, config).map_err(|_| ()),
-            Self::Refresh(p) => p.import_w(stage, original, config).map_err(|_| ()),
-        };
-        result.map_err(|()| OperationQualificationErrorV1::W(stage))
+            Self::Load(p) => p
+                .import_w_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            Self::Send(p) => p
+                .import_w_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            Self::Receive(p) => p
+                .import_w_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            Self::Archive(p) => p
+                .import_w_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            Self::Consuming(p) => p
+                .import_w_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            Self::Refresh(p) => p
+                .import_w_cancellable(stage, original, config, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+        }
     }
 }
 
@@ -389,11 +437,11 @@ impl AuthenticatedProducerInventoryV1 {
         let owner = plan.install(a, w)?;
         for stage in 0..record.a.len() {
             let original = self.read_original(record.a[stage], originals, config.maximum_bytes)?;
-            drop(owner.import_a(stage, &original.proving_key, config)?);
+            drop(owner.import_a(stage, &original.proving_key, config, None)?);
             drop(original);
             if let Some(index) = record.w.get(stage) {
                 let original = self.read_original(*index, originals, config.maximum_bytes)?;
-                drop(owner.import_w(stage, &original.proving_key, config)?);
+                drop(owner.import_w(stage, &original.proving_key, config, None)?);
                 drop(original);
             }
         }
@@ -460,5 +508,20 @@ mod tests {
                 assert!(require_route(&changed, route).is_err());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    #[test]
+    fn original_import_preserves_cancellation_before_stage_error_mapping() {
+        let cancelled = import_error(Error::Cancelled, OperationQualificationErrorV1::A(2));
+        assert!(matches!(
+            cancelled,
+            OperationQualificationErrorV1::Cancelled
+        ));
+        let rejected = import_error(Error::Proof, OperationQualificationErrorV1::W(3));
+        assert!(matches!(rejected, OperationQualificationErrorV1::W(3)));
     }
 }

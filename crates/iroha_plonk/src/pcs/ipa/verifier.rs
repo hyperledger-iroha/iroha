@@ -145,10 +145,31 @@ impl<C: PastaCurve> PendingOpening<C> {
         params: &PinnedParams<C>,
         budget: MemoryBudget,
     ) -> Result<C::AffineExt, IpaError> {
+        self.folded_generator_cancellable(params, budget, None)
+    }
+
+    /// Runs complete verification arithmetic with an explicit cancellation signal.
+    ///
+    /// # Errors
+    /// As the corresponding verification operation, or [`IpaError::Cancelled`].
+    pub fn folded_generator_cancellable(
+        &self,
+        params: &PinnedParams<C>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<C::AffineExt, IpaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         params.require_k(self.k)?;
         let s = fold_scalars(&self.challenges, C::ScalarExt::ONE);
         let g = &params.params().g()[..s.len()];
-        Ok(msm_complete::<C>(&s, g, budget).to_affine())
+        Ok(super::commit::msm_complete_cancellable::<C>(
+            &s,
+            g,
+            budget,
+            &iroha_pasta::msm::SharedMemoryBudget::process_default(),
+            cancellation,
+        )?
+        .to_affine())
     }
 
     /// The left-hand side with `g` standing for `G'_0`.
@@ -197,11 +218,28 @@ impl<C: PastaCurve> PendingOpening<C> {
         suffix: Option<&C::AffineExt>,
         budget: MemoryBudget,
     ) -> Result<(), IpaError> {
-        let folded = self.folded_generator(params, budget)?;
+        self.verify_full_cancellable(params, suffix, budget, None)
+    }
+
+    /// Runs complete verification arithmetic with an explicit cancellation signal.
+    ///
+    /// # Errors
+    /// As the corresponding verification operation, or [`IpaError::Cancelled`].
+    pub fn verify_full_cancellable(
+        self,
+        params: &PinnedParams<C>,
+        suffix: Option<&C::AffineExt>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), IpaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        let folded = self.folded_generator_cancellable(params, budget, cancellation)?;
         if suffix.is_some_and(|claimed| *claimed != folded) {
             return Err(IpaError::FoldedGeneratorMismatch);
         }
-        if bool::from(self.left_hand_side(params, &folded, budget).is_identity()) {
+        let identity = bool::from(self.left_hand_side(params, &folded, budget).is_identity());
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        if identity {
             Ok(())
         } else {
             Err(IpaError::OpeningFailed)

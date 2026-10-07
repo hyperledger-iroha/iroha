@@ -1823,7 +1823,7 @@ typedef struct {
     void* context;
     void (*retain)(void* context);
     void (*release)(void* context);
-    /* op: 0 key probe, 1 generate (input32/aux profile1/2), 2 sign (input32),
+    /* op: 0 key probe, 1 generate (input32/aux profile1/2/3 (3 Android TEE-only; Apple refuses)), 2 sign (input32),
        3 key delete, 4 anchor read, 5 anchor create, 6 update, 7 storage state,
        8 boot UUID UTF8, 9 prepare non-backup custody root UTF8,
        10 complete ascending unique nonzero32 key slots (at most4096, no truncation).
@@ -1936,6 +1936,32 @@ typedef struct {
 // 14=direct time exchange retained. Token is valid only for the same open Native owner.
 // Neither 12,13,14 nor17 is monetary completion;17 is not ledger activation confirmation. Result bytes use connect_norito_free.
 int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+
+/* Enrollment originals only. Native startup selects approved policy/root and owns custody.
+ * Actions:0 E1/account/asset,1 account signature,2 progress,3 Android(token+DER chain),
+ * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6.
+ * Unused buffers/count must be zero. Android chain2..8, each item1..16384 bytes.
+ * Output:18 local challenge32,19 fixed FFI target161(slot32,key65,challenge32,binding32),
+ * 20 pending,21 abandoned,22 Bootstrap selected,23 E5 challenge32,24 exact E5<=131072,
+ * 25 exact E6<=262144,26 complete-source runtime ready. All carry the same handle in sequence.
+ * E6 is not ledger activation. Payment bounds remain10000. */
+typedef struct connect_norito_kagemusha_wallet_enrollment_item_v1 {
+    const uint8_t* bytes;
+    size_t length;
+} connect_norito_kagemusha_wallet_enrollment_item_v1;
+typedef struct connect_norito_kagemusha_wallet_enrollment_request_v1 {
+    uint32_t selector;
+    const uint8_t* first;
+    size_t first_length;
+    const uint8_t* second;
+    size_t second_length;
+    const uint8_t* third;
+    size_t third_length;
+    const connect_norito_kagemusha_wallet_enrollment_item_v1* certificates;
+    size_t certificate_count;
+} connect_norito_kagemusha_wallet_enrollment_request_v1;
+int32_t connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_enrollment_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+
 int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 // Result11=preparing (no Advance selected); result2=pending (irreversible Advance selected).
 int32_t connect_norito_kagemusha_wallet_request_status_v1(uint64_t handle, const uint8_t* request_id32, connect_norito_kagemusha_wallet_result_v1* out);

@@ -32,6 +32,8 @@ SELF_TESTS=(
   --self-test-bad-wallet-setup-rust-request
   --self-test-bad-wallet-open-header-request
   --self-test-bad-wallet-open-rust-request
+  --self-test-bad-wallet-enrollment-header-request
+  --self-test-bad-wallet-enrollment-rust-request
   --self-test-retired-offline-cash-header-symbol
   --self-test-retired-offline-cash-rust-symbol
   --self-test-retired-pixel6-jni-symbol
@@ -172,6 +174,7 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
     "connect_norito_kagemusha_wallet_setup_v1",
+    "connect_norito_kagemusha_wallet_enrollment_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
     "connect_norito_kagemusha_wallet_request_status_v1",
     "connect_norito_kagemusha_wallet_retry_v1",
@@ -182,7 +185,7 @@ KAGEMUSHA_WALLET_EXPORTS = {
 }
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "execute", "snapshot")
+    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "execute", "snapshot")
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_account_read_permission_multisig_signed_transaction",
@@ -320,6 +323,8 @@ def canonical_rust_type(value: str) -> str:
         "WalletSnapshot": "connect_norito_kagemusha_wallet_snapshot_v1_t",
         "WalletOperationRequest": "connect_norito_kagemusha_wallet_operation_request_v1",
         "WalletSetupRequest": "connect_norito_kagemusha_wallet_setup_request_v1",
+        "WalletEnrollmentRequest": "connect_norito_kagemusha_wallet_enrollment_request_v1",
+        "WalletEnrollmentItem": "connect_norito_kagemusha_wallet_enrollment_item_v1",
         "WalletOpenRequest": "connect_norito_kagemusha_wallet_open_request_v1",
         "ConnectNoritoSorafsReferenceBundlePayload": "ConnectNoritoSorafsReferenceBundlePayload",
         "ConnectNoritoSorafsReferenceInput": "ConnectNoritoSorafsReferenceInput",
@@ -829,6 +834,18 @@ if [[ "${MODE}" == --self-test-* ]]; then
         'request: *const WalletOpenRequest,' \
         'request: *const WalletSetupRequest,'
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_open_begin_v1"
+      ;;
+    --self-test-bad-wallet-enrollment-header-request)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_enrollment_request_v1* request," \
+        "connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_setup_request_v1* request,"
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_enrollment_v1"
+      ;;
+    --self-test-bad-wallet-enrollment-rust-request)
+      replace_once "${tmp}/kagemusha_wallet_ffi/exports.rs" \
+        'request: *const WalletEnrollmentRequest,' \
+        'request: *const WalletSetupRequest,'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_enrollment_v1"
       ;;
     --self-test-retired-kagemusha-jni-symbol)
       printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_RetiredBridge_nativeRetired() -> jint { 0 }\n' >> "${tmp}/platform_jni.rs"

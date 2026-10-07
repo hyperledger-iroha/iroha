@@ -227,21 +227,6 @@ impl ArchiveIncomingObjects {
         self.bind_signature_slot(region, bundle.slots())
     }
 
-    // Purpose-limited witness proposal: the exact production slot-binding below
-    // is reused, but this projection cannot enter a proof accumulation ledger.
-    pub(crate) fn derive_signature_projection(
-        &self,
-        chip: &mut VerifierChip<Ep>,
-        region: &mut Region<'_, Fp>,
-        plan: &ContextPlan,
-        input: &ContextInputs<'_>,
-        schema: &QSignaturePlan,
-    ) -> Result<Bit<Fp>, Error> {
-        self.bind_context(region, plan, input)?;
-        let instances = input.q_instances.get(2).ok_or(Error::Synthesis)?;
-        self.signature_projection(chip, region, plan.operation(), schema, instances)
-    }
-
     // Q-free projection of genuine native signature exports, with no sigma frame.
     // The staged adapter above still binds every original object and Q2 context.
     pub(crate) fn signature_projection(

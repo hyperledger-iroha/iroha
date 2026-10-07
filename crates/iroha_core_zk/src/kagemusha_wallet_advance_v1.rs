@@ -366,3 +366,7 @@ mod tests {
         assert!(decode_envelope_v1::<KagemushaWalletRootSentinelV1>(&corrupt, 1_024).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "kagemusha_wallet_enrollment_v1/tests.rs"]
+mod enrollment_owner_tests;

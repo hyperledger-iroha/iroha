@@ -137,9 +137,11 @@ def host_build(root: Path, output: Path, target: Path, jobs: int | None):
     unit.require(sys.platform == "darwin" and platform.machine() in unit.TARGETS,
                  "guarded host emitter requires a supported macOS host")
     custody.original_directory(root)
-    unit.external_root(root, output)
+    unit.artifact_root(root, output)
     unit.require(target.is_absolute() and target.resolve() == target
                  and target.is_relative_to(root / "target"), "target must be a canonical worktree target directory")
+    unit.require(not output.is_relative_to(target) and not target.is_relative_to(output),
+                 "retained artifacts and the warm Cargo lane must be disjoint")
     with warm_target_custody(target) as assert_custody:
         pins = _host_build_locked(root, output, target, jobs, assert_custody)
     # Context exit must pass before publishing or announcing admissible receipt pins.

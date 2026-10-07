@@ -56,6 +56,10 @@ pub const VESTA_TRIVIAL_GENERATOR: [u8; 32] = [
 /// An invalid encoding, claim, fold input or IPA equation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// The explicit operation signal cancelled the fold or decision.
+    Cancelled,
+    /// A kernel resource or shape failure, never an invalid incoming proof.
+    Kernel(iroha_pasta::msm::MsmError),
     /// A fixed-width wire value has a different length.
     Length {
         /// Required number of bytes or elements.
@@ -94,6 +98,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("operation cancelled"),
+            Self::Kernel(error) => write!(f, "kernel: {error}"),
             Self::Length { expected, actual } => write!(f, "length {actual}, expected {expected}"),
             Self::Encoding(error) => write!(f, "encoding: {error}"),
             Self::SourceK => f.write_str("source k must be in 1..=16"),
@@ -113,6 +119,28 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+impl Error {
+    /// Cancellation is a hard operational failure and never authorizes a burn.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+            || matches!(self, Self::Parameters(error) if error.is_cancelled())
+            || matches!(self, Self::Kernel(iroha_pasta::msm::MsmError::Cancelled))
+    }
+}
+impl From<iroha_pasta::Cancelled> for Error {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+impl From<iroha_pasta::msm::MsmError> for Error {
+    fn from(error: iroha_pasta::msm::MsmError) -> Self {
+        if matches!(error, iroha_pasta::msm::MsmError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Kernel(error)
+        }
+    }
+}
 
 impl From<TranscriptError> for Error {
     fn from(value: TranscriptError) -> Self {

@@ -10,7 +10,7 @@
 use core::{fmt, marker::PhantomData};
 
 use ff::Field;
-use iroha_pasta::{Ep, Eq, Fp, msm::MemoryBudget};
+use iroha_pasta::{CancellationToken, Ep, Eq, Fp, msm::MemoryBudget};
 use iroha_plonk::{
     DescriptorBinding, Protocol, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey, Witness,
     create_proof_owned_with_claim,
@@ -18,7 +18,7 @@ use iroha_plonk::{
     frontend::Circuit,
     keys::pk::artifact::ReadConfig,
     pcs::ipa::PinnedParams,
-    verifier::verify_full,
+    verifier::verify_full_cancellable,
 };
 use iroha_plonk_recursion::{
     AccumulatorT, FOLD_WITNESS_BYTES, FoldConfig, FoldInput, create_fold, verifier::VerifierPlan,
@@ -63,6 +63,19 @@ pub enum Error {
     Proof,
     /// Circuit assignment or proof generation failed.
     Prover,
+    /// The caller cancelled an in-flight operation; this is never proof invalidity.
+    Cancelled,
+}
+impl Error {
+    /// Whether the operation ended without a proof verdict because it was cancelled.
+    pub const fn is_cancelled(self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
+impl From<iroha_pasta::Cancelled> for Error {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -102,6 +115,7 @@ pub(crate) mod sealed {
             pallas: &PinnedParams<Ep>,
             vesta: &PinnedParams<Eq>,
             budget: MemoryBudget,
+            cancellation: Option<&CancellationToken>,
         ) -> Result<Exports, Error>;
     }
 }
@@ -117,9 +131,19 @@ pub(super) fn leaf_exports(
     pallas: &PinnedParams<Ep>,
     vesta: &PinnedParams<Eq>,
     budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Exports, Error> {
-    let pallas = AccumulatorT::trivial(pallas, budget).map_err(|_| Error::Proof)?;
-    let trivial = AccumulatorT::trivial(vesta, budget).map_err(|_| Error::Proof)?;
+    let classify = |error: iroha_plonk_recursion::Error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    };
+    let pallas =
+        AccumulatorT::trivial_cancellable(pallas, budget, cancellation).map_err(classify)?;
+    let trivial =
+        AccumulatorT::trivial_cancellable(vesta, budget, cancellation).map_err(classify)?;
     Ok(Exports {
         endpoints,
         frame: leaf_frame_native(endpoints).map_err(|_| Error::Input)?,
@@ -137,8 +161,9 @@ macro_rules! leaf_source {
                 pallas: &PinnedParams<Ep>,
                 vesta: &PinnedParams<Eq>,
                 budget: MemoryBudget,
+                cancellation: Option<&CancellationToken>,
             ) -> Result<Exports, Error> {
-                leaf_exports(self.endpoints(), pallas, vesta, budget)
+                leaf_exports(self.endpoints(), pallas, vesta, budget, cancellation)
             }
         }
     };
@@ -159,7 +184,9 @@ macro_rules! composed_source {
                 _pallas: &PinnedParams<Ep>,
                 _vesta: &PinnedParams<Eq>,
                 _budget: MemoryBudget,
+                cancellation: Option<&CancellationToken>,
             ) -> Result<Exports, Error> {
+                CancellationToken::checkpoint(cancellation)?;
                 Ok(Exports {
                     endpoints: *self.endpoints(),
                     frame: *self.instances(),
@@ -223,12 +250,14 @@ pub(crate) struct QualifiedSourceKey {
     key: VerifyingKey<Eq>,
 }
 impl<C: SourceCircuit> ImportedSource<C> {
-    pub(crate) fn from_original(
+    pub(crate) fn from_original_cancellable(
         circuit: &C,
         artifact: OriginalArtifact<'_>,
         vesta: &PinnedParams<Eq>,
         config: ReadConfig,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<Self, Error> {
+        CancellationToken::checkpoint(cancellation)?;
         if vesta.k() != 16 {
             return Err(Error::Artifact);
         }
@@ -240,14 +269,21 @@ impl<C: SourceCircuit> ImportedSource<C> {
             config,
         )?;
         VerifyingKey::<Eq>::read(artifact.verifying_key, &binding).map_err(|_| Error::Artifact)?;
-        let key = ProvingKey::from_artifact_v2(
+        let key = ProvingKey::from_artifact_v2_cancellable(
             artifact.proving_key,
             &binding,
             vesta,
             &circuit.without_witnesses(),
             config,
+            cancellation,
         )
-        .map_err(|_| Error::Artifact)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
         if key.vk().to_bytes() != artifact.verifying_key {
             return Err(Error::Artifact);
         }
@@ -291,21 +327,55 @@ impl<C: SourceCircuit> Prover<C> {
         vesta: PinnedParams<Eq>,
         config: ReadConfig,
     ) -> Result<Self, Error> {
-        let source = ImportedSource::from_original(circuit, source, &vesta, config)?;
+        Self::from_original_artifacts_cancellable(
+            circuit, source, wrapper, pallas, vesta, config, None,
+        )
+    }
+
+    /// Import exact original source and wrapper tables with bounded cancellation.
+    /// # Errors
+    /// As [`Self::from_original_artifacts`], or cancellation without an import verdict.
+    pub fn from_original_artifacts_cancellable(
+        circuit: &C,
+        source: OriginalArtifact<'_>,
+        wrapper: OriginalArtifact<'_>,
+        pallas: PinnedParams<Ep>,
+        vesta: PinnedParams<Eq>,
+        config: ReadConfig,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Self, Error> {
+        CancellationToken::checkpoint(cancellation)?;
+        let source = ImportedSource::from_original_cancellable(
+            circuit,
+            source,
+            &vesta,
+            config,
+            cancellation,
+        )?;
         let catalog = [source.catalog_key()];
-        Self::from_qualified_catalog(source, wrapper, &catalog, pallas, vesta, config)
+        Self::from_qualified_catalog_cancellable(
+            source,
+            wrapper,
+            &catalog,
+            pallas,
+            vesta,
+            config,
+            cancellation,
+        )
     }
 
     /// Mount one shared wrapper against only original source-qualified catalog entries.
     /// The finite history owner fixes the exact Genesis/Append pair and ordering.
-    pub(crate) fn from_qualified_catalog(
+    pub(crate) fn from_qualified_catalog_cancellable(
         source: ImportedSource<C>,
         wrapper: OriginalArtifact<'_>,
         catalog: &[QualifiedSourceKey],
         pallas: PinnedParams<Ep>,
         vesta: PinnedParams<Eq>,
         config: ReadConfig,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<Self, Error> {
+        CancellationToken::checkpoint(cancellation)?;
         if pallas.k() != 16
             || vesta.k() != 16
             || catalog.is_empty()
@@ -328,14 +398,21 @@ impl<C: SourceCircuit> Prover<C> {
         VerifyingKey::<Ep>::read(wrapper.verifying_key, &wrapper_binding)
             .map_err(|_| Error::Artifact)?;
         let (plan, blank) = wrapper_source(catalog, vesta.clone())?;
-        let wrapper_key = ProvingKey::from_artifact_v2(
+        let wrapper_key = ProvingKey::from_artifact_v2_cancellable(
             wrapper.proving_key,
             &wrapper_binding,
             &pallas,
             &blank,
             config,
+            cancellation,
         )
-        .map_err(|_| Error::Artifact)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
         if wrapper_key.vk().to_bytes() != wrapper.verifying_key {
             return Err(Error::Artifact);
         }
@@ -384,23 +461,44 @@ impl<C: SourceCircuit> Prover<C> {
         config: ProverConfig,
     ) -> Result<SourceNodeEvidence, Error> {
         let budget = config.msm_budget;
-        let exports = circuit.exports(&self.pallas, &self.vesta, budget)?;
+        let cancellation = config.cancellation;
+        CancellationToken::checkpoint(cancellation)?;
+        let exports = circuit.exports(&self.pallas, &self.vesta, budget, cancellation)?;
         // Check the exact source-bound endpoints and hard frame before proving.
         // The actual circuit independently computes and authenticates them.
         leaf_frame_native(exports.endpoints).map_err(|_| Error::Input)?;
         exports
             .pallas
-            .decide(&self.pallas, budget)
-            .map_err(|_| Error::Proof)?;
-        let trivial = AccumulatorT::trivial(&self.vesta, budget).map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+        let trivial = AccumulatorT::trivial_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let mut expected = vec![
             native_binding(&exports.endpoints, &exports.pallas).map_err(|_| Error::Input)?,
             Fp::from(16),
         ];
         for claim in exports.parts.iter().chain(core::iter::once(&trivial)) {
             claim
-                .decide(&self.vesta, budget)
-                .map_err(|_| Error::Proof)?;
+                .decide_cancellable(&self.vesta, budget, cancellation)
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Proof
+                    }
+                })?;
             expected.extend(native_vesta(claim).map_err(|_| Error::Input)?);
         }
         expected.extend([Fp::ZERO, Fp::ONE, Fp::ZERO]);
@@ -410,7 +508,14 @@ impl<C: SourceCircuit> Prover<C> {
         }
         let public = [exports.frame.to_vec()];
         let witness =
-            Witness::from_circuit(&self.source, circuit, &public).map_err(|_| Error::Prover)?;
+            Witness::from_circuit_cancellable(&self.source, circuit, &public, cancellation)
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Prover
+                    }
+                })?;
         let output = create_proof_owned_with_claim(
             &self.vesta,
             &self.source,
@@ -418,22 +523,47 @@ impl<C: SourceCircuit> Prover<C> {
             source_randomness,
             config,
         )
-        .map_err(|_| Error::Prover)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Prover
+            }
+        })?;
         output
             .opening
-            .decide(&self.vesta, budget)
-            .map_err(|_| Error::Proof)?;
-        verify_full(
+            .decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+        verify_full_cancellable(
             &self.vesta,
             self.source.binding(),
             self.source.vk(),
             &public,
             &output.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let opening = FoldInput::from_opening(*output.opening.g(), output.opening.challenges())
-            .map_err(|_| Error::Proof)?;
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let (fold, vesta) = create_fold(
             &self.vesta,
             &[
@@ -445,10 +575,17 @@ impl<C: SourceCircuit> Prover<C> {
             salt,
             &FoldConfig {
                 kernel_budget: budget,
+                cancellation: cancellation.cloned(),
                 ..FoldConfig::default()
             },
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let wrapper = OmegaCircuit::new(
             self.plan.clone(),
             OmegaWitness {
@@ -467,8 +604,15 @@ impl<C: SourceCircuit> Prover<C> {
             vesta,
         };
         let instances = evidence.instances().map_err(|_| Error::Input)?;
-        let witness = Witness::from_circuit(&self.wrapper, &wrapper, &instances)
-            .map_err(|_| Error::Prover)?;
+        let witness =
+            Witness::from_circuit_cancellable(&self.wrapper, &wrapper, &instances, cancellation)
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Prover
+                    }
+                })?;
         let output = create_proof_owned_with_claim(
             &self.pallas,
             &self.wrapper,
@@ -476,13 +620,26 @@ impl<C: SourceCircuit> Prover<C> {
             wrapper_randomness,
             config,
         )
-        .map_err(|_| Error::Prover)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Prover
+            }
+        })?;
         output
             .opening
-            .decide(&self.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         evidence.proof = output.proof;
-        self.verify_evidence(&evidence, budget)?;
+        self.verify_evidence_cancellable(&evidence, budget, cancellation)?;
+        CancellationToken::checkpoint(cancellation)?;
         Ok(evidence)
     }
 
@@ -495,6 +652,20 @@ impl<C: SourceCircuit> Prover<C> {
         evidence: &SourceNodeEvidence,
         budget: MemoryBudget,
     ) -> Result<(), Error> {
+        self.verify_evidence_cancellable(evidence, budget, None)
+    }
+
+    /// Reverify exact evidence with the caller's operation cancellation signal.
+    /// A cancelled verification produces no valid or invalid proof verdict.
+    /// # Errors
+    /// As [`Self::verify_evidence`], or cancellation.
+    pub fn verify_evidence_cancellable(
+        &self,
+        evidence: &SourceNodeEvidence,
+        budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), Error> {
+        CancellationToken::checkpoint(cancellation)?;
         let length = Protocol::new(self.binding().descriptor())
             .map_err(|_| Error::Artifact)?
             .proof_length();
@@ -503,23 +674,42 @@ impl<C: SourceCircuit> Prover<C> {
         }
         leaf_frame_native(evidence.endpoints).map_err(|_| Error::Input)?;
         let instances = evidence.instances().map_err(|_| Error::Input)?;
-        verify_full(
+        verify_full_cancellable(
             &self.pallas,
             self.binding(),
             self.verifying_key(),
             &instances,
             &evidence.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         evidence
             .pallas
-            .decide(&self.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         evidence
             .vesta
-            .decide(&self.vesta, budget)
-            .map_err(|_| Error::Proof)
+            .decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })
     }
 }
 
@@ -561,4 +751,22 @@ fn wrapper_source(
     .map_err(|_| Error::Artifact)?
     .without_witnesses();
     Ok((plan, blank))
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_has_no_proof_failure_verdict() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let error = CancellationToken::checkpoint(Some(&token))
+            .map_err(Error::from)
+            .unwrap_err();
+        assert!(error.is_cancelled());
+        for error in [Error::Artifact, Error::Input, Error::Proof, Error::Prover] {
+            assert!(!error.is_cancelled());
+        }
+    }
 }

@@ -32,12 +32,14 @@ class KagemushaWalletCallV1 internal constructor(
     bytes: ByteArray,
 ) {
     init {
-        val carriesBytes = status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION
-        if ((status >= 0 && status !in UNKNOWN..ACTIVATION) || bytes.size > (if (status == ACTIVATION) 16_384 else 10_000) ||
+        val carriesBytes = status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status in listOf(18, 19, 23, 24, 25)
+        if ((status >= 0 && status !in UNKNOWN..ENROLLMENT_READY) || bytes.size > when (status) { ACTIVATION -> 16_384; 24 -> 131_072; 25 -> 262_144; else -> 10_000 } ||
             (if (carriesBytes) bytes.isEmpty() else bytes.isNotEmpty()) ||
             ((status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE) && (bytes.size != 32 || sequenceLow <= 0 || sequenceHigh != 0L)) ||
             (status == ACTIVATION && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
-            (status == OPENED && (sequenceLow <= 0 || sequenceHigh != 0L))) {
+            (status == OPENED && (sequenceLow <= 0 || sequenceHigh != 0L)) ||
+            (status in 18..26 && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0)) ||
+            (status in listOf(18, 23) && bytes.size != 32) || (status == 19 && bytes.size != 161)) {
             throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         }
     }
@@ -87,6 +89,7 @@ class KagemushaWalletCallV1 internal constructor(
         const val ACCOUNT_CHALLENGE = 15
         const val OPENED = 16
         const val ACTIVATION = 17
+        const val ENROLLMENT_READY = 26
     }
 }
 
@@ -230,6 +233,7 @@ internal object KagemushaWalletNativeV1 {
     @JvmStatic external fun close(handle: Long): Int
     @JvmStatic external fun activity(handle: Long, foreground: Int, charging: Int): Int
     @JvmStatic external fun call(handle: Long, operation: Int, first: ByteArray, second: ByteArray): KagemushaWalletCallV1?
+    @JvmStatic external fun enrollment(runtime: Long, selector: Int, first: ByteArray, second: ByteArray, third: ByteArray, certificates: Array<ByteArray>): KagemushaWalletCallV1?
     @JvmStatic external fun setup(handle: Long, setupId: ByteArray, selector: Int, amountLow: Long, amountHigh: Long, token: Long, first: ByteArray, second: ByteArray, third: ByteArray): KagemushaWalletCallV1?
     @JvmStatic external fun execute(handle: Long, requestId: ByteArray, selector: Int, amountLow: Long, amountHigh: Long, first: ByteArray, second: ByteArray, third: ByteArray): KagemushaWalletCallV1?
     @JvmStatic external fun snapshot(handle: Long): KagemushaWalletSnapshotReplyV1?

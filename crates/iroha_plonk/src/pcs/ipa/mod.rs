@@ -54,6 +54,8 @@ pub mod verifier;
 /// An IPA operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IpaError {
+    /// The caller cancelled this operation; it has no completed proof result.
+    Cancelled,
     /// Reading or writing the transcript failed.
     Transcript(TranscriptError),
     /// A vector has the wrong length.
@@ -83,9 +85,21 @@ pub enum IpaError {
     Msm(MsmError),
 }
 
+impl IpaError {
+    /// Whether this failure is cooperative cancellation, never an invalid proof.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled => true,
+            Self::Msm(error) => matches!(error, MsmError::Cancelled),
+            _ => false,
+        }
+    }
+}
+
 impl fmt::Display for IpaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("operation cancelled"),
             Self::Transcript(error) => write!(f, "transcript: {error}"),
             Self::LengthMismatch { expected, actual } => {
                 write!(f, "vector has {actual} entries, expected {expected}")
@@ -105,6 +119,12 @@ impl fmt::Display for IpaError {
 
 impl std::error::Error for IpaError {}
 
+impl From<iroha_pasta::Cancelled> for IpaError {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+
 impl From<TranscriptError> for IpaError {
     fn from(error: TranscriptError) -> Self {
         Self::Transcript(error)
@@ -113,7 +133,11 @@ impl From<TranscriptError> for IpaError {
 
 impl From<MsmError> for IpaError {
     fn from(error: MsmError) -> Self {
-        Self::Msm(error)
+        if matches!(error, MsmError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Msm(error)
+        }
     }
 }
 

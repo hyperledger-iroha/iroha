@@ -67,17 +67,31 @@ impl QualifiedOmegaProgramV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<native::Prover, OmegaQualificationErrorV1> {
+        self.import_prover_cancellable(originals, config, None)
+    }
+
+    /// Import the same exact source with a caller-owned cancellation signal.
+    /// # Errors
+    /// The ordinary source errors, or cancellation without an imported key.
+    pub fn import_prover_cancellable(
+        &self,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<native::Prover, OmegaQualificationErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let bytes = read(
             originals,
             self.original,
             config.maximum_bytes.min(PROVING_KEY_MAX_BYTES_V1),
         )?;
-        let owner = native::Prover::from_original_artifact(
+        let owner = native::Prover::from_original_artifact_cancellable(
             self.program.clone(),
             self.key.binding().encoded(),
             self.key.key().to_bytes(),
             &bytes,
             config,
+            cancellation,
         )?;
         drop(bytes);
         Ok(owner)

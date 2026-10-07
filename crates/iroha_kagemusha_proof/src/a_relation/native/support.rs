@@ -12,9 +12,7 @@ use ff::{Field, PrimeField};
 use iroha_pasta::{
     Ep, EpAffine, Eq, EqAffine, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain,
 };
-use iroha_plonk::{
-    DescriptorBinding, VerifyingKey, pcs::ipa::PinnedParams, verifier::accumulate_generator,
-};
+use iroha_plonk::{DescriptorBinding, VerifyingKey, pcs::ipa::PinnedParams};
 use iroha_plonk_gadgets::{
     bytes::{le_value, p_bytes_native},
     statement::foreign_limbs,
@@ -24,6 +22,8 @@ use iroha_plonk_recursion::{AccumulatorT, FoldInput};
 /// Shared native source/claim failure; no error grants operation acceptance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Error {
+    /// Explicit cancellation, never an invalid proof verdict.
+    Cancelled,
     /// Invalid source shape, canonical field/point or selected correction.
     Input,
     /// Original proof or selected full accumulator failed verification.
@@ -40,6 +40,7 @@ pub(super) fn mode_words(mode: IncomingMode) -> [Fp; 3] {
 }
 
 /// Select and fully decide a Pallas obligation without dropping its original challenges.
+#[cfg(test)]
 pub(super) fn select_pallas(
     params: &PinnedParams<Ep>,
     original: &FoldInput<Ep>,
@@ -47,10 +48,30 @@ pub(super) fn select_pallas(
     correction: EpAffine,
     budget: MemoryBudget,
 ) -> Result<FoldInput<Ep>, Error> {
+    select_pallas_cancellable(params, original, mode, correction, budget, None)
+}
+/// Execute the same native check with an explicit operation signal.
+/// # Errors
+/// As the ordinary entry point, or cancellation without a partial verdict.
+pub(super) fn select_pallas_cancellable(
+    params: &PinnedParams<Ep>,
+    original: &FoldInput<Ep>,
+    mode: IncomingMode,
+    correction: EpAffine,
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<FoldInput<Ep>, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
     let selected = match mode {
         IncomingMode::Accept => original.clone(),
-        IncomingMode::Trivial => AccumulatorT::trivial(params, budget)
-            .map_err(|_| Error::Proof)?
+        IncomingMode::Trivial => AccumulatorT::trivial_cancellable(params, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?
             .as_input(),
         IncomingMode::Corrected => {
             if correction == *original.g() {
@@ -60,10 +81,19 @@ pub(super) fn select_pallas(
                 .map_err(|_| Error::Input)?
         }
     };
-    selected.decide(params, budget).map_err(|_| Error::Proof)?;
+    selected
+        .decide_cancellable(params, budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
     Ok(selected)
 }
 
+#[cfg(test)]
 /// Select and fully decide a Vesta obligation without dropping its original challenges.
 pub(super) fn select_vesta(
     params: &PinnedParams<Eq>,
@@ -72,10 +102,30 @@ pub(super) fn select_vesta(
     correction: EqAffine,
     budget: MemoryBudget,
 ) -> Result<FoldInput<Eq>, Error> {
+    select_vesta_cancellable(params, original, mode, correction, budget, None)
+}
+/// Execute the same native check with an explicit operation signal.
+/// # Errors
+/// As the ordinary entry point, or cancellation without a partial verdict.
+pub(super) fn select_vesta_cancellable(
+    params: &PinnedParams<Eq>,
+    original: &FoldInput<Eq>,
+    mode: IncomingMode,
+    correction: EqAffine,
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<FoldInput<Eq>, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
     let selected = match mode {
         IncomingMode::Accept => original.clone(),
-        IncomingMode::Trivial => AccumulatorT::trivial(params, budget)
-            .map_err(|_| Error::Proof)?
+        IncomingMode::Trivial => AccumulatorT::trivial_cancellable(params, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?
             .as_input(),
         IncomingMode::Corrected => {
             if correction == *original.g() {
@@ -85,7 +135,15 @@ pub(super) fn select_vesta(
                 .map_err(|_| Error::Input)?
         }
     };
-    selected.decide(params, budget).map_err(|_| Error::Proof)?;
+    selected
+        .decide_cancellable(params, budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
     Ok(selected)
 }
 
@@ -190,6 +248,7 @@ pub(super) fn omega_instances(digest: Fp, vesta: &AccumulatorT<Eq>) -> Result<Ve
     ])
 }
 
+#[cfg(test)]
 /// Verify the original Pallas proof and fully decide its generator opening.
 pub(super) fn opening_pallas(
     params: &PinnedParams<Ep>,
@@ -199,14 +258,52 @@ pub(super) fn opening_pallas(
     proof: &[u8],
     budget: MemoryBudget,
 ) -> Result<FoldInput<Ep>, Error> {
-    let claim = accumulate_generator(params, binding, key, instances, proof, budget)
-        .map_err(|_| Error::Proof)?;
+    opening_pallas_cancellable(params, binding, key, instances, proof, budget, None)
+}
+/// Execute the same native check with an explicit operation signal.
+/// # Errors
+/// As the ordinary entry point, or cancellation without a partial verdict.
+pub(super) fn opening_pallas_cancellable(
+    params: &PinnedParams<Ep>,
+    binding: &DescriptorBinding,
+    key: &VerifyingKey<Ep>,
+    instances: &[Vec<Fq>],
+    proof: &[u8],
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<FoldInput<Ep>, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+    let claim = iroha_plonk::verifier::accumulate_generator_cancellable(
+        params,
+        binding,
+        key,
+        instances,
+        proof,
+        budget,
+        cancellation,
+    )
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    })?;
     let input =
         FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
-    input.decide(params, budget).map_err(|_| Error::Proof)?;
+    input
+        .decide_cancellable(params, budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
     Ok(input)
 }
 
+#[cfg(test)]
 /// Verify the original Vesta proof and fully decide its generator opening.
 pub(super) fn opening_vesta(
     params: &PinnedParams<Eq>,
@@ -216,11 +313,48 @@ pub(super) fn opening_vesta(
     proof: &[u8],
     budget: MemoryBudget,
 ) -> Result<FoldInput<Eq>, Error> {
-    let claim = accumulate_generator(params, binding, key, instances, proof, budget)
-        .map_err(|_| Error::Proof)?;
+    opening_vesta_cancellable(params, binding, key, instances, proof, budget, None)
+}
+/// Execute the same native check with an explicit operation signal.
+/// # Errors
+/// As the ordinary entry point, or cancellation without a partial verdict.
+pub(super) fn opening_vesta_cancellable(
+    params: &PinnedParams<Eq>,
+    binding: &DescriptorBinding,
+    key: &VerifyingKey<Eq>,
+    instances: &[Vec<Fp>],
+    proof: &[u8],
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<FoldInput<Eq>, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+    let claim = iroha_plonk::verifier::accumulate_generator_cancellable(
+        params,
+        binding,
+        key,
+        instances,
+        proof,
+        budget,
+        cancellation,
+    )
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    })?;
     let input =
         FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
-    input.decide(params, budget).map_err(|_| Error::Proof)?;
+    input
+        .decide_cancellable(params, budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
     Ok(input)
 }
 

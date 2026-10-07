@@ -470,6 +470,18 @@ must have shared vectors. No server receives wallet private state or acts as
 its monetary prover; proving runs in the native wallet core. Enrollment
 evidence verification is an issuer task.
 
+The wallet artifact bundle carries every exact descriptor, verifying key and
+proving key used by its sigma, Q, A, W and Ω source owners. Its ordinary-finality
+portion carries the complete descriptor/verifying-key graph required to
+reconstruct and authenticate the receipt verifier. Ordinary-finality server
+proving keys remain server artifacts: their exact lengths and content hashes
+stay committed in the signed producer inventory, but wallet transport and
+installation neither require nor read their bytes. Missing or changed wallet
+proving keys or required finality verifier originals prevent export or complete
+source qualification; reinstallable artifact unavailability is not custody loss.
+Directory contents cannot substitute for the compiler's closed original list;
+signed genesis and the complete source qualification remain separate checks.
+
 Every transition enforces the following. The tag says where and when each
 check runs.
 

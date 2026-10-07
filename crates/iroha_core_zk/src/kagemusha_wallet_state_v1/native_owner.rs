@@ -47,6 +47,7 @@ pub struct NativeWalletProofsV1<F: KagemushaWalletFsV1, P, S> {
 fn proof<T>(value: Result<T, ProofError>) -> Result<T, Error> {
     value.map_err(|error| match error {
         ProofError::Unavailable => Error::ArtifactsUnavailable("native operation artifact"),
+        ProofError::Cancelled => Error::Cancelled,
         _ => Error::Proof("native operation source or proof"),
     })
 }
@@ -284,12 +285,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     fn check_advance(&self, check: Self::AdvanceCheck) -> Result<(), Error> {
         check.check(&self.observations)
     }
-    fn verify_lineage(&self, lineage: &KagemushaWalletLineageV1) -> Result<(), Error> {
-        proof(
-            self.installed
-                .verifier()
-                .verify_lineage(lineage, self.budget),
-        )
+    fn verify_lineage(
+        &self,
+        lineage: &KagemushaWalletLineageV1,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<(), Error> {
+        proof(self.installed.verifier().verify_lineage_cancellable(
+            lineage,
+            self.budget,
+            cancellation.map(Cancellation::prover_token),
+        ))
     }
     fn fold_schedule(
         &self,

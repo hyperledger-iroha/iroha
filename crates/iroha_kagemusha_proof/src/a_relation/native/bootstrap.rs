@@ -34,7 +34,6 @@ use iroha_plonk::{
     keys::pk::artifact::ReadConfig,
     pcs::ipa::PinnedParams,
     transcript::decode_point,
-    verifier::{accumulate_generator, verify_full},
 };
 use iroha_plonk_gadgets::{
     GlueChip, Word,
@@ -80,6 +79,8 @@ const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 /// Production preparation or proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    /// Explicit cancellation; no proof failure or burn verdict is produced.
+    Cancelled,
     /// The installed stage/Q key, schema or pinned parameters differ.
     Artifact,
     /// A supplied original, frame, obligation or typed input is malformed.
@@ -95,6 +96,12 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl Error {
+    /// Whether the operation was cancelled instead of proving an invalid input.
+    pub fn is_cancelled(self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
 
 /// One original Q proof and the exact public columns that proof authenticates.
 /// Public instance values are witnesses, never a native acceptance verdict.
@@ -228,6 +235,18 @@ impl Plan {
     /// # Errors
     /// Invalid originals, substituted public columns or failed proof/decide.
     pub fn prepare(&self, input: Inputs, budget: MemoryBudget) -> Result<Prepared, Error> {
+        self.prepare_cancellable(input, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn prepare_cancellable(
+        &self,
+        input: Inputs,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Prepared, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         for (kind, original) in object_kinds().into_iter().zip(&input.objects) {
             if original.len() != kind.body_len() + 64 {
                 return Err(Error::Input);
@@ -245,29 +264,49 @@ impl Plan {
         let mut openings = Vec::with_capacity(2);
         for (index, original) in input.q.iter().enumerate() {
             let fixed = self.context.operation().q(index).ok_or(Error::Artifact)?;
-            verify_full(
+            iroha_plonk::verifier::verify_full_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &original.instances,
                 &original.proof,
                 budget,
+                cancellation,
             )
-            .map_err(|_| Error::Proof)?;
-            let claim = accumulate_generator(
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+            let claim = iroha_plonk::verifier::accumulate_generator_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &original.instances,
                 &original.proof,
                 budget,
+                cancellation,
             )
-            .map_err(|_| Error::Proof)?;
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
             let opening = FoldInput::from_opening(*claim.g(), claim.challenges())
                 .map_err(|_| Error::Proof)?;
             opening
-                .decide(&self.pallas, budget)
-                .map_err(|_| Error::Proof)?;
+                .decide_cancellable(&self.pallas, budget, cancellation)
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Proof
+                    }
+                })?;
             openings.push(opening);
         }
         check_sigma_tape(&input)?;
@@ -275,7 +314,14 @@ impl Plan {
             &input.q[0],
             self.context.operation().frame().part_source_k(),
         )?;
-        part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
+        part.decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let original = Arc::new(input);
         Ok(Prepared {
             plan: Arc::new(self.clone()),
@@ -415,16 +461,35 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
     ) -> Result<ProvingKey<Eq>, Error> {
+        self.import_first_cancellable(original, config, None)
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn import_first_cancellable(
+        &self,
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Eq>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         original_bounds(original, self.first.binding().n(), config)?;
         let source = self.plan.source_circuit(0, None)?;
-        let key = ProvingKey::from_artifact_v2(
+        let key = ProvingKey::from_artifact_v2_cancellable(
             original,
             self.first.binding(),
             &self.plan.vesta,
             &source,
             config,
+            cancellation,
         )
-        .map_err(|_| Error::Artifact)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
         self.first
             .require_prover(&key)
             .map_err(|_| Error::Artifact)?;
@@ -440,18 +505,37 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
     ) -> Result<ProvingKey<Ep>, Error> {
+        self.import_wrapper_cancellable(original, config, None)
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn import_wrapper_cancellable(
+        &self,
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Ep>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         original_bounds(original, self.wrapper.binding().n(), config)?;
         let source = self
             .plan
             .wrapper_source(0, self.first.binding(), self.first.key())?;
-        let key = ProvingKey::from_artifact_v2(
+        let key = ProvingKey::from_artifact_v2_cancellable(
             original,
             self.wrapper.binding(),
             &self.plan.pallas,
             &source,
             config,
+            cancellation,
         )
-        .map_err(|_| Error::Artifact)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
         self.wrapper
             .require_prover(&key)
             .map_err(|_| Error::Artifact)?;
@@ -467,16 +551,35 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
     ) -> Result<ProvingKey<Eq>, Error> {
+        self.import_terminal_cancellable(original, config, None)
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn import_terminal_cancellable(
+        &self,
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Eq>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         original_bounds(original, self.terminal.binding().n(), config)?;
         let source = self.plan.source_circuit(1, Some(self.w.clone()))?;
-        let key = ProvingKey::from_artifact_v2(
+        let key = ProvingKey::from_artifact_v2_cancellable(
             original,
             self.terminal.binding(),
             &self.plan.vesta,
             &source,
             config,
+            cancellation,
         )
-        .map_err(|_| Error::Artifact)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
         self.terminal
             .require_prover(&key)
             .map_err(|_| Error::Artifact)?;
@@ -488,9 +591,23 @@ impl Prover {
     /// # Errors
     /// Any source proof, complete decide or original-tape mismatch.
     pub fn prepare(&self, inputs: Inputs, budget: MemoryBudget) -> Result<Session<'_>, Error> {
+        self.prepare_cancellable(inputs, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn prepare_cancellable(
+        &self,
+        inputs: Inputs,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Session<'_>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         Ok(Session {
             prover: self,
-            prepared: self.plan.prepare(inputs, budget)?,
+            prepared: self
+                .plan
+                .prepare_cancellable(inputs, budget, cancellation)?,
         })
     }
 
@@ -535,6 +652,18 @@ impl Session<'_> {
         proof: Vec<u8>,
         budget: MemoryBudget,
     ) -> Result<FirstCheckpoint, Error> {
+        self.restore_first_cancellable(proof, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_first_cancellable(
+        &self,
+        proof: Vec<u8>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<FirstCheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let mut public = frame(
             &self.prepared.original.state.lineage,
             &self.prepared.openings[0],
@@ -546,11 +675,12 @@ impl Session<'_> {
             proof,
             carried: self.prepared.openings[0].clone(),
         };
-        self.prepared.resume_first(
+        self.prepared.resume_first_cancellable(
             self.prover.first.key(),
             self.prover.first.binding(),
             checkpoint,
             budget,
+            cancellation,
         )
     }
     /// Compute W0 from the exact first checkpoint using the installed wrapper key.
@@ -565,6 +695,15 @@ impl Session<'_> {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<WrapperCheckpoint, Error> {
+        let cancellation = config.cancellation.or(fold.cancellation.as_ref());
+        let config = ProverConfig {
+            cancellation,
+            ..config
+        };
+        let mut normalized_fold = fold.clone();
+        normalized_fold.cancellation = cancellation.cloned();
+        let fold = &normalized_fold;
+
         self.prover
             .wrapper
             .require_prover(key)
@@ -590,6 +729,19 @@ impl Session<'_> {
         vesta: &[u8],
         budget: MemoryBudget,
     ) -> Result<WrapperCheckpoint, Error> {
+        self.restore_wrapper_cancellable(proof, vesta, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_wrapper_cancellable(
+        &self,
+        proof: Vec<u8>,
+        vesta: &[u8],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<WrapperCheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let vesta = AccumulatorT::from_bytes(vesta).map_err(|_| Error::Input)?;
         let checkpoint = WrapperCheckpoint {
             proof,
@@ -597,7 +749,7 @@ impl Session<'_> {
             context: self.prepared.first_stage_digest()?,
         };
         self.prepared
-            .resume_wrapper(&self.prover.w, checkpoint, budget)
+            .resume_wrapper_cancellable(&self.prover.w, checkpoint, budget, cancellation)
     }
     /// Restore terminal A2 from its original proof, retained fold salt and exact
     /// verified W0 predecessor. The Pallas fold, public fields and every forwarded
@@ -611,6 +763,20 @@ impl Session<'_> {
         salt: Fp,
         budget: MemoryBudget,
     ) -> Result<Terminal, Error> {
+        self.restore_terminal_cancellable(wrapper, proof, salt, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_terminal_cancellable(
+        &self,
+        wrapper: &WrapperCheckpoint,
+        proof: Vec<u8>,
+        salt: Fp,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Terminal, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let fold = FoldConfig {
             kernel_budget: budget,
             ..FoldConfig::default()
@@ -619,29 +785,49 @@ impl Session<'_> {
             self.prepared
                 .terminal_circuit(wrapper, &self.prover.w, salt, &fold)?;
         let source = &self.prover.terminal;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.prepared.plan.vesta,
             source.binding(),
             source.key(),
             std::slice::from_ref(&public),
             &proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
-        let claim = accumulate_generator(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+        let claim = iroha_plonk::verifier::accumulate_generator_cancellable(
             &self.prepared.plan.vesta,
             source.binding(),
             source.key(),
             std::slice::from_ref(&public),
             &proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let opening =
             FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
         opening
-            .decide(&self.prepared.plan.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.prepared.plan.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(Terminal {
             proof,
             instances: public,
@@ -663,6 +849,15 @@ impl Session<'_> {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<Terminal, Error> {
+        let cancellation = config.cancellation.or(fold.cancellation.as_ref());
+        let config = ProverConfig {
+            cancellation,
+            ..config
+        };
+        let mut normalized_fold = fold.clone();
+        normalized_fold.cancellation = cancellation.cloned();
+        let fold = &normalized_fold;
+
         self.prover
             .terminal
             .require_prover(key)
@@ -764,20 +959,41 @@ impl Prepared {
         checkpoint: FirstCheckpoint,
         budget: MemoryBudget,
     ) -> Result<FirstCheckpoint, Error> {
+        self.resume_first_cancellable(key, binding, checkpoint, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn resume_first_cancellable(
+        &self,
+        key: &VerifyingKey<Eq>,
+        binding: &iroha_plonk::DescriptorBinding,
+        checkpoint: FirstCheckpoint,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<FirstCheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let mut expected = frame(&self.original.state.lineage, &self.openings[0], &self.part)?;
         expected[0] = self.first_stage_digest()?;
         if checkpoint.public != expected || checkpoint.carried != self.openings[0] {
             return Err(Error::Input);
         }
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.plan.vesta,
             binding,
             key,
             &[expected],
             &checkpoint.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         Ok(checkpoint)
     }
 
@@ -793,20 +1009,43 @@ impl Prepared {
         salt: Fq,
         config: &FoldConfig,
     ) -> Result<WrapperPreparation, Error> {
-        self.resume_first(a1.key(), a1.binding(), first.clone(), config.kernel_budget)?;
-        let opening = accumulate_generator(
+        self.resume_first_cancellable(
+            a1.key(),
+            a1.binding(),
+            first.clone(),
+            config.kernel_budget,
+            config.cancellation.as_ref(),
+        )?;
+        let opening = iroha_plonk::verifier::accumulate_generator_cancellable(
             &self.plan.vesta,
             a1.binding(),
             a1.key(),
             std::slice::from_ref(&first.public),
             &first.proof,
             config.kernel_budget,
+            config.cancellation.as_ref(),
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let opening = FoldInput::from_opening(*opening.g(), opening.challenges())
             .map_err(|_| Error::Proof)?;
-        let trivial = AccumulatorT::trivial(&self.plan.vesta, config.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+        let trivial = AccumulatorT::trivial_cancellable(
+            &self.plan.vesta,
+            config.kernel_budget,
+            config.cancellation.as_ref(),
+        )
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let (fold, vesta) = create_fold(
             &self.plan.vesta,
             &[
@@ -818,10 +1057,26 @@ impl Prepared {
             salt.to_repr(),
             config,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         vesta
-            .decide(&self.plan.vesta, config.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(
+                &self.plan.vesta,
+                config.kernel_budget,
+                config.cancellation.as_ref(),
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let allowed = a1
             .key()
             .kagemusha_digest(a1.binding())
@@ -859,24 +1114,54 @@ impl Prepared {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<WrapperCheckpoint, Error> {
+        let cancellation = config.cancellation.or(fold.cancellation.as_ref());
+        let config = ProverConfig {
+            cancellation,
+            ..config
+        };
+        let mut normalized_fold = fold.clone();
+        normalized_fold.cancellation = cancellation.cloned();
+        let fold = &normalized_fold;
+
         let WrapperKeys {
             first: a1,
             wrapper: w,
         } = keys;
         let (circuit, instances, vesta) = self.wrapper_circuit(first, a1, salt, fold)?;
-        let witness = Witness::from_circuit(w, &circuit, &instances).map_err(|_| Error::Prover)?;
+        let witness =
+            Witness::from_circuit_cancellable(w, &circuit, &instances, config.cancellation)
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Prover
+                    }
+                })?;
         let output =
             create_proof_owned_with_claim(&self.plan.pallas, w, witness, randomness, config)
-                .map_err(|_| Error::Prover)?;
-        verify_full(
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Prover
+                    }
+                })?;
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.plan.pallas,
             w.binding(),
             w.vk(),
             &instances,
             &output.proof,
             fold.kernel_budget,
+            config.cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         Ok(WrapperCheckpoint {
             proof: output.proof,
             vesta,
@@ -896,23 +1181,49 @@ impl Prepared {
         checkpoint: WrapperCheckpoint,
         budget: MemoryBudget,
     ) -> Result<WrapperCheckpoint, Error> {
+        self.resume_wrapper_cancellable(w, checkpoint, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn resume_wrapper_cancellable(
+        &self,
+        w: &WKey,
+        checkpoint: WrapperCheckpoint,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<WrapperCheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         if checkpoint.context != self.first_stage_digest()? {
             return Err(Error::Input);
         }
         let public = omega_instances(checkpoint.context, &checkpoint.vesta)?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.plan.pallas,
             w.verifier().binding(),
             w.verifying_key(),
             &public,
             &checkpoint.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         checkpoint
             .vesta
-            .decide(&self.plan.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.plan.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(checkpoint)
     }
 
@@ -928,17 +1239,29 @@ impl Prepared {
         salt: Fp,
         config: &FoldConfig,
     ) -> Result<(StageCircuit, Vec<Fp>, AccumulatorT<Ep>), Error> {
-        self.resume_wrapper(w, wrapper.clone(), config.kernel_budget)?;
+        self.resume_wrapper_cancellable(
+            w,
+            wrapper.clone(),
+            config.kernel_budget,
+            config.cancellation.as_ref(),
+        )?;
         let public = omega_instances(wrapper.context, &wrapper.vesta)?;
-        let opening = accumulate_generator(
+        let opening = iroha_plonk::verifier::accumulate_generator_cancellable(
             &self.plan.pallas,
             w.verifier().binding(),
             w.verifying_key(),
             &public,
             &wrapper.proof,
             config.kernel_budget,
+            config.cancellation.as_ref(),
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let opening = FoldInput::from_opening(*opening.g(), opening.challenges())
             .map_err(|_| Error::Proof)?;
         let (fold, pallas) = create_fold(
@@ -947,10 +1270,26 @@ impl Prepared {
             salt.to_repr(),
             config,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         pallas
-            .decide(&self.plan.pallas, config.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(
+                &self.plan.pallas,
+                config.kernel_budget,
+                config.cancellation.as_ref(),
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let split = SplitPlan::new(self.plan.context.clone(), 1, w.clone(), &self.plan.pallas)
             .map_err(|_| Error::Artifact)?;
         let circuit = StageCircuit {
@@ -987,26 +1326,48 @@ impl Prepared {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<Terminal, Error> {
+        let cancellation = config.cancellation.or(fold.cancellation.as_ref());
+        let config = ProverConfig {
+            cancellation,
+            ..config
+        };
+        let mut normalized_fold = fold.clone();
+        normalized_fold.cancellation = cancellation.cloned();
+        let fold = &normalized_fold;
+
         let TerminalKeys {
             wrapper: w,
             terminal: a2,
         } = keys;
         let (circuit, public, pallas) = self.terminal_circuit(wrapper, w, salt, fold)?;
         let proof = prove_vesta(&self.plan, a2, &circuit, &public, randomness, config)?;
-        let opening = accumulate_generator(
+        let opening = iroha_plonk::verifier::accumulate_generator_cancellable(
             &self.plan.vesta,
             a2.binding(),
             a2.vk(),
             std::slice::from_ref(&public),
             &proof,
             fold.kernel_budget,
+            config.cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let opening = FoldInput::from_opening(*opening.g(), opening.challenges())
             .map_err(|_| Error::Proof)?;
         opening
-            .decide(&self.plan.vesta, fold.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.plan.vesta, fold.kernel_budget, config.cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(Terminal {
             proof,
             instances: public,
@@ -1136,18 +1497,38 @@ fn prove_vesta(
         return Err(Error::Artifact);
     }
     let public = [public.to_vec()];
-    let witness = Witness::from_circuit(key, circuit, &public).map_err(|_| Error::Prover)?;
+    let witness = Witness::from_circuit_cancellable(key, circuit, &public, config.cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Prover
+            }
+        })?;
     let output = create_proof_owned_with_claim(&plan.vesta, key, witness, randomness, config)
-        .map_err(|_| Error::Prover)?;
-    verify_full(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Prover
+            }
+        })?;
+    iroha_plonk::verifier::verify_full_cancellable(
         &plan.vesta,
         key.binding(),
         key.vk(),
         &public,
         &output.proof,
         MemoryBudget::DEFAULT,
+        config.cancellation,
     )
-    .map_err(|_| Error::Proof)?;
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    })?;
     Ok(output.proof)
 }
 

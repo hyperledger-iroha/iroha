@@ -137,3 +137,10 @@ and unsigned sums use these batches, explicitly reducing inputs to Proper first.
 Negation and semantic-boundary canonicalization retain their original checks.
 Final source artifacts, full key catalog, actual compact outer proofs and
 composed row/performance qualification remain open.
+
+`FoldConfig::cancellation` owns an optional clone of the operation token.
+Fold creation, complete verification, accumulator decisions, and corrected-claim
+construction propagate cancellation as a typed hard error. A cancelled check
+establishes neither validity nor invalidity and cannot authorize a burn. All
+kernel workers join before the operation returns and releases its scratch.
+Callers must start a fresh operation after cancellation.

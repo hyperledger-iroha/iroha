@@ -341,8 +341,10 @@ class VerifierOwner:
                 and scope.challenge_transcript[130:162] == self.enrollment_policy,
                 "E1 differs from selected private policy")
         issued, expires, now = (value[k] for k in ("issued_at_ms", "expires_at_ms", "trusted_time_ms"))
+        # The approved policy supplies the whole lifetime; no private process ceiling
+        # may narrow it. Preserve checked u64 endpoints and the half-open live interval.
         require(all(type(t) is int for t in (issued, expires, now))
-                and 0 < issued <= now < expires < 1 << 64 and expires - issued <= 600000,
+                and 0 < issued <= now < expires < 1 << 64,
                 "private E1 time outside original window")
         require(type(value["evidence"]) is dict, "invalid private platform evidence")
         require(expires == issued + self.policy.enrollment.challenge_lifetime_ms,

@@ -61,6 +61,7 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_close_v1
   connect_norito_kagemusha_wallet_activity_v1
   connect_norito_kagemusha_wallet_setup_v1
+  connect_norito_kagemusha_wallet_enrollment_v1
   connect_norito_kagemusha_wallet_execute_v1
   connect_norito_kagemusha_wallet_request_status_v1
   connect_norito_kagemusha_wallet_retry_v1
@@ -70,7 +71,7 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_snapshot_v1
 )
 wallet_jni_symbols=()
-for method in revision openBegin openFinish openCancel close activity call setup execute snapshot; do
+for method in revision openBegin openFinish openCancel close activity call setup enrollment execute snapshot; do
   wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
 done
 auth_jni_symbols=(

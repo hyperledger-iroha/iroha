@@ -14,7 +14,10 @@ use sha2::{Digest as _, Sha256};
 
 use super::{BlobV1, Error, OriginalSinkV1, OriginalSourceV1, PROVING_KEY_MAX_BYTES_V1};
 
-/// A retained existing private directory of immutable descriptor/VK/PK originals.
+/// A retained existing private directory of immutable content-addressed originals.
+/// Wallet source directories contain descriptor/VK/PK bytes; wallet finality
+/// directories contain only the exact descriptor/VK graph. Signed server PK
+/// hashes remain in the catalog and do not require server tables on a wallet.
 /// Every read retains actual no-follow native ancestry and a sealed original file.
 /// Opening never creates, hardens, cleans or replaces an existing directory/file.
 pub struct DirectoryOriginalsV1 {

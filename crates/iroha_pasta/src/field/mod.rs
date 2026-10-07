@@ -122,23 +122,42 @@ pub trait PastaField:
 /// selections per element plus one Fermat inversion). Returns the number of
 /// elements processed.
 pub fn batch_invert<F: PastaField>(values: &mut [F]) -> usize {
-    let mut scratch = Vec::with_capacity(values.len());
-    let mut acc = F::ONE;
-    for v in values.iter() {
-        scratch.push(acc);
-        let next = acc * v;
-        acc = F::conditional_select(&next, &acc, v.is_zero());
+    batch_invert_cancellable(values, None).expect("no cancellation signal")
+}
+
+/// Inverts a column with the same constant-time field arithmetic and an explicit
+/// cancellation signal. A cancelled in-place column must be discarded.
+/// # Errors
+/// Explicit cancellation after zeroizing the scratch and joining caller tasks.
+pub fn batch_invert_cancellable<F: PastaField>(
+    values: &mut [F],
+    cancellation: Option<&crate::CancellationToken>,
+) -> Result<usize, crate::Cancelled> {
+    crate::CancellationToken::checkpoint(cancellation)?;
+    let mut scratch = zeroize::Zeroizing::new(Vec::with_capacity(values.len()));
+    let mut acc = zeroize::Zeroizing::new(F::ONE);
+    for (index, v) in values.iter().enumerate() {
+        if index % 1024 == 0 {
+            crate::CancellationToken::checkpoint(cancellation)?;
+        }
+        scratch.push(*acc);
+        let next = *acc * v;
+        *acc = F::conditional_select(&next, &acc, v.is_zero());
     }
     // `acc` is a product of nonzero elements, so it is invertible.
-    let mut inv = acc.invert().unwrap_or(F::ZERO);
-    for (v, prefix) in values.iter_mut().zip(scratch.iter()).rev() {
+    let mut inv = zeroize::Zeroizing::new(acc.invert().unwrap_or(F::ZERO));
+    for (index, (v, prefix)) in values.iter_mut().zip(scratch.iter()).rev().enumerate() {
+        if index % 1024 == 0 {
+            crate::CancellationToken::checkpoint(cancellation)?;
+        }
         let is_zero = v.is_zero();
-        let new_v = inv * prefix;
-        let next_inv = inv * *v;
-        inv = F::conditional_select(&next_inv, &inv, is_zero);
+        let new_v = *inv * prefix;
+        let next_inv = *inv * *v;
+        *inv = F::conditional_select(&next_inv, &inv, is_zero);
         *v = F::conditional_select(&new_v, v, is_zero);
     }
-    values.len()
+    crate::CancellationToken::checkpoint(cancellation)?;
+    Ok(values.len())
 }
 
 /// Inverts every element of `values` in place with one variable-time

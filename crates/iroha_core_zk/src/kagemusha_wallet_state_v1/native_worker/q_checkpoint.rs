@@ -2,7 +2,7 @@
 
 use iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact;
 use iroha_pasta::Ep;
-use iroha_plonk::{Protocol, pcs::ipa::PinnedParams, verifier::verify_full};
+use iroha_plonk::{Protocol, pcs::ipa::PinnedParams, verifier::verify_full_cancellable};
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize};
 
 use super::*;
@@ -102,7 +102,9 @@ pub(super) fn encode(
     source: [u8; 32],
     original: &Original,
     budget: MemoryBudget,
+    cancellation: &Cancellation,
 ) -> Result<Vec<u8>, Error> {
+    cancellation.check()?;
     let layout = Layout::new(stage, key)?;
     let payload = Payload {
         version: 1,
@@ -121,13 +123,14 @@ pub(super) fn encode(
     let params = proof(PinnedParams::derive(u32::from(
         key.binding().descriptor().k,
     )))?;
-    proof(verify_full(
+    proof(verify_full_cancellable(
         &params,
         key.binding(),
         key.key(),
         &original.instances,
         &original.proof,
         budget,
+        Some(cancellation.prover_token()),
     ))?;
     let bytes = proof(norito::encode_canonical(&payload))?;
     if bytes.len() != layout.custody.payload_bytes as usize {
@@ -143,7 +146,9 @@ pub(super) fn restore(
     bytes: &[u8],
     expected: &[Vec<Fq>],
     budget: MemoryBudget,
+    cancellation: &Cancellation,
 ) -> Result<Original, Error> {
+    cancellation.check()?;
     let payload = Layout::new(stage, key)?.decode(bytes, source)?;
     let instances = payload
         .instances
@@ -164,13 +169,14 @@ pub(super) fn restore(
     let params = proof(PinnedParams::derive(u32::from(
         key.binding().descriptor().k,
     )))?;
-    proof(verify_full(
+    proof(verify_full_cancellable(
         &params,
         key.binding(),
         key.key(),
         &instances,
         &payload.proof,
         budget,
+        Some(cancellation.prover_token()),
     ))?;
     Ok(Original {
         proof: payload.proof,

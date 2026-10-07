@@ -755,3 +755,49 @@ fn receipt_free_send_context_refuses_missing_or_ambiguous_request_originals() {
         "identical duplicate originals cannot select Send's Request context"
     );
 }
+
+#[test]
+#[ignore = "genuine signed k12/k16 verifier inventory; run optimized"]
+fn cancelled_verification_never_reports_acceptance_or_invalidity() {
+    use crate::kagemusha_wallet_artifacts_v1::{InstalledVerifierPackV1, engineering_fixture};
+    let (pack, installation) = engineering_fixture::signed_inventory();
+    let installed =
+        InstalledVerifierPackV1::load(&pack.to_canonical_bytes().unwrap(), installation).unwrap();
+    let verifier = installed.verifier();
+    // These are unadmitted DATA originals from another scheme. This test proves only
+    // cancellation precedence; none of their placeholder proof bytes is accepted.
+    let (_, capsule, credential) = receive_capsule_data();
+    let payment: KagemushaWalletPaymentV1 = capsule_data_fixture("KagemushaWalletPaymentV1");
+    let lineage = payment.send.lineage.lineage().unwrap();
+    let token = iroha_pasta::CancellationToken::new();
+    token.cancel();
+    let budget = MemoryBudget::DEFAULT;
+    assert_eq!(
+        verifier.verify_package_proofs_cancellable(&payment.send, None, budget, Some(&token)),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(
+        verifier.verify_capsule_proofs_cancellable(&capsule, &credential, budget, Some(&token)),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(
+        verifier.verify_step_proof_cancellable(
+            &capsule.statement,
+            &capsule.step_proof,
+            KagemushaWalletOperationKindV1::Receive,
+            0,
+            budget,
+            Some(&token)
+        ),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(
+        verifier.verify_lineage_cancellable(lineage, budget, Some(&token)),
+        Err(Error::Cancelled)
+    );
+    // A fresh operation has no inherited signal and performs actual authority checks.
+    assert_eq!(
+        verifier.verify_package_proofs(&payment.send, None, budget),
+        Err(Error::Authority)
+    );
+}

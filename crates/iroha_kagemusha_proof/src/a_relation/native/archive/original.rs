@@ -22,6 +22,19 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
     ) -> Result<ProvingKey<Eq>, Error> {
+        self.import_a_cancellable(stage, original, config, None)
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn import_a_cancellable(
+        &self,
+        stage: usize,
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Eq>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
         let source = self.plan.source_circuit(
@@ -30,14 +43,21 @@ impl Prover {
                 .checked_sub(1)
                 .map(|previous| self.wrappers[previous].clone()),
         )?;
-        let key = ProvingKey::from_artifact_v2(
+        let key = ProvingKey::from_artifact_v2_cancellable(
             original,
             artifact.binding(),
             &self.plan.vesta,
             &source,
             config,
+            cancellation,
         )
-        .map_err(|_| Error::Artifact)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
         Ok(key)
     }
@@ -52,18 +72,38 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
     ) -> Result<ProvingKey<Ep>, Error> {
+        self.import_w_cancellable(stage, original, config, None)
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn import_w_cancellable(
+        &self,
+        stage: usize,
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Ep>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
         let a = &self.a[stage];
         let circuit = self.plan.wrapper_source(stage, a.binding(), a.key())?;
-        let key = ProvingKey::from_artifact_v2(
+        let key = ProvingKey::from_artifact_v2_cancellable(
             original,
             artifact.binding(),
             &self.plan.pallas,
             &circuit,
             config,
+            cancellation,
         )
-        .map_err(|_| Error::Artifact)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
         Ok(key)
     }

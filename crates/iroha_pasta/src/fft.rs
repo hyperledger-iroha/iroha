@@ -27,6 +27,7 @@
 use rayon::prelude::*;
 
 use crate::field::PastaField;
+use crate::{CancellationToken, Cancelled};
 
 /// Below this many elements per pass the transforms run on the calling
 /// thread; above it they split work across the caller's Rayon pool.
@@ -35,6 +36,8 @@ const PARALLEL_MIN: usize = 1 << 12;
 /// FFT domain construction failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FftError {
+    /// The caller cancelled this transform; its in-place buffer is incomplete.
+    Cancelled,
     /// `k` exceeds the 2-adicity of the field (32) or the platform limit.
     UnsupportedSize {
         /// The requested `log2(n)`.
@@ -55,6 +58,7 @@ pub enum FftError {
 impl core::fmt::Display for FftError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("FFT: operation cancelled"),
             Self::UnsupportedSize { k } => write!(f, "unsupported FFT size 2^{k}"),
             Self::WrongLength { expected, actual } => {
                 write!(f, "FFT input has {actual} elements, expected {expected}")
@@ -65,6 +69,11 @@ impl core::fmt::Display for FftError {
 }
 
 impl std::error::Error for FftError {}
+impl From<Cancelled> for FftError {
+    fn from(_: Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
 
 /// A multiplicative subgroup of order `2^k` with cached twiddle factors.
 #[derive(Clone, Debug)]
@@ -94,19 +103,35 @@ impl<F: PastaField> CosetFftPlan<'_, '_, F> {
     ///
     /// Rejects any wrong column length before mutating any input.
     pub fn fft_many(&self, columns: &mut [&mut [F]]) -> Result<(), FftError> {
+        self.fft_many_cancellable(columns, None)
+    }
+
+    /// Runs [`Self::fft_many`] with an explicit per-operation cancellation signal.
+    /// All Rayon tasks join before returning. After cancellation the buffer is
+    /// incomplete and must be discarded or reinitialized by its owner.
+    ///
+    /// # Errors
+    /// As [`Self::fft_many`], or [`FftError::Cancelled`].
+    pub fn fft_many_cancellable(
+        &self,
+        columns: &mut [&mut [F]],
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
         for column in columns.iter() {
             self.domain.check(column)?;
         }
         let shift = Some(CosetShift::Prepared(self.powers));
         if let [column] = columns {
-            dif::<_, true>(column, &self.domain.forward, shift);
-            bit_reverse_scale::<_, true>(column, self.domain.k, None);
+            dif::<_, true>(column, &self.domain.forward, shift, cancellation);
+            bit_reverse_scale::<_, true>(column, self.domain.k, None, cancellation);
         } else {
             columns.par_iter_mut().for_each(|column| {
-                dif::<_, false>(column, &self.domain.forward, shift);
-                bit_reverse_scale::<_, false>(column, self.domain.k, None);
+                dif::<_, false>(column, &self.domain.forward, shift, cancellation);
+                bit_reverse_scale::<_, false>(column, self.domain.k, None, cancellation);
             });
         }
+        CancellationToken::checkpoint(cancellation)?;
         Ok(())
     }
 }
@@ -204,9 +229,25 @@ impl<F: PastaField> FftDomain<F> {
     ///
     /// [`FftError::WrongLength`] unless `a.len() == n`.
     pub fn fft(&self, a: &mut [F]) -> Result<(), FftError> {
+        self.fft_cancellable(a, None)
+    }
+
+    /// Runs [`Self::fft`] with an explicit per-operation cancellation signal.
+    /// All Rayon tasks join before returning. After cancellation the buffer is
+    /// incomplete and must be discarded or reinitialized by its owner.
+    ///
+    /// # Errors
+    /// As [`Self::fft`], or [`FftError::Cancelled`].
+    pub fn fft_cancellable(
+        &self,
+        a: &mut [F],
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
         self.check(a)?;
-        dif::<_, true>(a, &self.forward, None);
-        bit_reverse_scale::<_, true>(a, self.k, None);
+        dif::<_, true>(a, &self.forward, None, cancellation);
+        bit_reverse_scale::<_, true>(a, self.k, None, cancellation);
+        CancellationToken::checkpoint(cancellation)?;
         Ok(())
     }
 
@@ -216,9 +257,25 @@ impl<F: PastaField> FftDomain<F> {
     ///
     /// [`FftError::WrongLength`] unless `a.len() == n`.
     pub fn ifft(&self, a: &mut [F]) -> Result<(), FftError> {
+        self.ifft_cancellable(a, None)
+    }
+
+    /// Runs [`Self::ifft`] with an explicit per-operation cancellation signal.
+    /// All Rayon tasks join before returning. After cancellation the buffer is
+    /// incomplete and must be discarded or reinitialized by its owner.
+    ///
+    /// # Errors
+    /// As [`Self::ifft`], or [`FftError::Cancelled`].
+    pub fn ifft_cancellable(
+        &self,
+        a: &mut [F],
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
         self.check(a)?;
-        dif::<_, true>(a, &self.inverse, None);
-        bit_reverse_scale::<_, true>(a, self.k, Some((self.n_inv, F::ONE)));
+        dif::<_, true>(a, &self.inverse, None, cancellation);
+        bit_reverse_scale::<_, true>(a, self.k, Some((self.n_inv, F::ONE)), cancellation);
+        CancellationToken::checkpoint(cancellation)?;
         Ok(())
     }
 
@@ -232,10 +289,32 @@ impl<F: PastaField> FftDomain<F> {
     /// [`FftError::ZeroShift`] for `shift = 0`, which is not a coset (checked
     /// before `a` is touched).
     pub fn coset_fft(&self, a: &mut [F], shift: F) -> Result<(), FftError> {
+        self.coset_fft_cancellable(a, shift, None)
+    }
+
+    /// Runs [`Self::coset_fft`] with an explicit per-operation cancellation signal.
+    /// All Rayon tasks join before returning. After cancellation the buffer is
+    /// incomplete and must be discarded or reinitialized by its owner.
+    ///
+    /// # Errors
+    /// As [`Self::coset_fft`], or [`FftError::Cancelled`].
+    pub fn coset_fft_cancellable(
+        &self,
+        a: &mut [F],
+        shift: F,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
         self.check(a)?;
         check_shift(&shift)?;
-        dif::<_, true>(a, &self.forward, Some(CosetShift::Geometric(shift)));
-        bit_reverse_scale::<_, true>(a, self.k, None);
+        dif::<_, true>(
+            a,
+            &self.forward,
+            Some(CosetShift::Geometric(shift)),
+            cancellation,
+        );
+        bit_reverse_scale::<_, true>(a, self.k, None, cancellation);
+        CancellationToken::checkpoint(cancellation)?;
         Ok(())
     }
 
@@ -254,17 +333,39 @@ impl<F: PastaField> FftDomain<F> {
     /// [`FftError::ZeroShift`] for `shift = 0`. All columns and the shift are
     /// checked before any input is touched, including for an empty batch.
     pub fn coset_fft_many(&self, columns: &mut [&mut [F]], shift: F) -> Result<(), FftError> {
+        self.coset_fft_many_cancellable(columns, shift, None)
+    }
+
+    /// Runs [`Self::coset_fft_many`] with an explicit per-operation cancellation signal.
+    /// All Rayon tasks join before returning. After cancellation the buffer is
+    /// incomplete and must be discarded or reinitialized by its owner.
+    ///
+    /// # Errors
+    /// As [`Self::coset_fft_many`], or [`FftError::Cancelled`].
+    pub fn coset_fft_many_cancellable(
+        &self,
+        columns: &mut [&mut [F]],
+        shift: F,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
         for column in columns.iter() {
             self.check(column)?;
         }
         check_shift(&shift)?;
         if let [column] = columns {
-            return self.coset_fft(column, shift);
+            return self.coset_fft_cancellable(column, shift, cancellation);
         }
         columns.par_iter_mut().for_each(|column| {
-            dif::<_, false>(column, &self.forward, Some(CosetShift::Geometric(shift)));
-            bit_reverse_scale::<_, false>(column, self.k, None);
+            dif::<_, false>(
+                column,
+                &self.forward,
+                Some(CosetShift::Geometric(shift)),
+                cancellation,
+            );
+            bit_reverse_scale::<_, false>(column, self.k, None, cancellation);
         });
+        CancellationToken::checkpoint(cancellation)?;
         Ok(())
     }
 
@@ -282,9 +383,27 @@ impl<F: PastaField> FftDomain<F> {
         scratch: &'scratch mut [F],
         shift: F,
     ) -> Result<CosetFftPlan<'domain, 'scratch, F>, FftError> {
+        self.coset_plan_cancellable(scratch, shift, None)
+    }
+
+    /// Prepares coset powers with an explicit cancellation signal.
+    ///
+    /// # Errors
+    /// As [`Self::coset_plan`], or [`FftError::Cancelled`]; scratch then holds
+    /// incomplete powers and remains exclusively owned by the caller.
+    pub fn coset_plan_cancellable<'domain, 'scratch>(
+        &'domain self,
+        scratch: &'scratch mut [F],
+        shift: F,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<CosetFftPlan<'domain, 'scratch, F>, FftError> {
+        CancellationToken::checkpoint(cancellation)?;
         self.check(scratch)?;
         check_shift(&shift)?;
         let fill = |(index, chunk): (usize, &mut [F])| {
+            if CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
             let mut power = shift.pow_vartime([(index * PARALLEL_MIN) as u64]);
             for value in chunk {
                 *value = power;
@@ -299,6 +418,7 @@ impl<F: PastaField> FftDomain<F> {
         } else {
             fill((0, scratch));
         }
+        CancellationToken::checkpoint(cancellation)?;
         Ok(CosetFftPlan {
             domain: self,
             powers: scratch,
@@ -314,12 +434,29 @@ impl<F: PastaField> FftDomain<F> {
     /// [`FftError::ZeroShift`] for `shift = 0` (checked before `a` is
     /// touched).
     pub fn coset_ifft(&self, a: &mut [F], shift: F) -> Result<(), FftError> {
+        self.coset_ifft_cancellable(a, shift, None)
+    }
+
+    /// Runs [`Self::coset_ifft`] with an explicit per-operation cancellation signal.
+    /// All Rayon tasks join before returning. After cancellation the buffer is
+    /// incomplete and must be discarded or reinitialized by its owner.
+    ///
+    /// # Errors
+    /// As [`Self::coset_ifft`], or [`FftError::Cancelled`].
+    pub fn coset_ifft_cancellable(
+        &self,
+        a: &mut [F],
+        shift: F,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
         self.check(a)?;
         check_shift(&shift)?;
         // `shift` is nonzero, so the inverse exists.
         let shift_inv = shift.invert().unwrap_or(F::ZERO);
-        dif::<_, true>(a, &self.inverse, None);
-        bit_reverse_scale::<_, true>(a, self.k, Some((self.n_inv, shift_inv)));
+        dif::<_, true>(a, &self.inverse, None, cancellation);
+        bit_reverse_scale::<_, true>(a, self.k, Some((self.n_inv, shift_inv)), cancellation);
+        CancellationToken::checkpoint(cancellation)?;
         Ok(())
     }
 }
@@ -359,6 +496,7 @@ fn dif<F: PastaField, const PARALLEL: bool>(
     a: &mut [F],
     tw: &[Vec<F>],
     shift: Option<CosetShift<'_, F>>,
+    cancellation: Option<&CancellationToken>,
 ) {
     let n = a.len();
     if n <= 1 {
@@ -369,12 +507,15 @@ fn dif<F: PastaField, const PARALLEL: bool>(
     let mut s = k; // stages are applied for half sizes 2^(s-1) down to 1
     let mut first = true;
     while s >= 2 {
+        if CancellationToken::checkpoint(cancellation).is_err() {
+            return;
+        }
         // Fused stages with half sizes 2m (outer) and m (inner).
         let m = 1usize << (s - 2);
         let outer = &tw[s - 1]; // w_{4m}^j, j < 2m
         let inner = &tw[s - 2]; // w_{2m}^j, j < m
         let pass_shift = if first { shift } else { None };
-        dif_pass4::<_, PARALLEL>(a, m, outer, inner, pass_shift);
+        dif_pass4::<_, PARALLEL>(a, m, outer, inner, pass_shift, cancellation);
         first = false;
         s -= 2;
     }
@@ -388,6 +529,9 @@ fn dif<F: PastaField, const PARALLEL: bool>(
             };
         }
         let body = |chunk: &mut [F]| {
+            if CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
             for pair in chunk.chunks_exact_mut(2) {
                 let (x, y) = (pair[0], pair[1]);
                 pair[0] = x + y;
@@ -409,6 +553,7 @@ fn dif_pass4<F: PastaField, const PARALLEL: bool>(
     outer: &[F],
     inner: &[F],
     shift: Option<CosetShift<'_, F>>,
+    cancellation: Option<&CancellationToken>,
 ) {
     let n = a.len();
     let block = 4 * m;
@@ -435,6 +580,9 @@ fn dif_pass4<F: PastaField, const PARALLEL: bool>(
             .zip(q3.iter_mut())
             .enumerate()
         {
+            if off % 1024 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
             let j = j0 + off;
             let (mut a0, mut a1, mut a2, mut a3) = (*x0, *x1, *x2, *x3);
             if let (Some(s), Some((sh, c))) = (sj.as_mut(), quarter_shift.as_ref()) {
@@ -510,11 +658,15 @@ fn bit_reverse_scale<F: PastaField, const PARALLEL: bool>(
     a: &mut [F],
     k: u32,
     scale: Option<(F, F)>,
+    cancellation: Option<&CancellationToken>,
 ) {
     let n = a.len();
     if k > 0 {
         let shift = usize::BITS - k;
         for i in 0..n {
+            if i % 4096 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
             let r = i.reverse_bits() >> shift;
             if i < r {
                 a.swap(i, r);
@@ -524,6 +676,9 @@ fn bit_reverse_scale<F: PastaField, const PARALLEL: bool>(
     if let Some((c, s)) = scale {
         let unit_shift = s == F::ONE;
         let body = |(ci, chunk): (usize, &mut [F])| {
+            if CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
             if unit_shift {
                 // Plain inverse transform: one multiplication per element.
                 for x in chunk {
@@ -735,14 +890,14 @@ mod tests {
     #[test]
     fn bit_reverse_scale_permutes() {
         let mut a: Vec<Fp> = (0..8u64).map(Fp::from).collect();
-        bit_reverse_scale::<_, true>(&mut a, 3, None);
+        bit_reverse_scale::<_, true>(&mut a, 3, None, None);
         let expected: Vec<Fp> = [0u64, 4, 2, 6, 1, 5, 3, 7]
             .into_iter()
             .map(Fp::from)
             .collect();
         assert_eq!(a, expected);
         let mut b = vec![Fp::ONE; 4];
-        bit_reverse_scale::<_, true>(&mut b, 2, Some((Fp::from(3u64), Fp::from(2u64))));
+        bit_reverse_scale::<_, true>(&mut b, 2, Some((Fp::from(3u64), Fp::from(2u64))), None);
         assert_eq!(
             b,
             vec![
@@ -766,7 +921,7 @@ mod tests {
             x *= d.omega();
         }
         let mut b = vec![Fp::ONE; 8];
-        dif::<_, true>(&mut b, &stage_twiddles(d.omega(), 3), None);
+        dif::<_, true>(&mut b, &stage_twiddles(d.omega(), 3), None, None);
         assert_eq!(b[0], Fp::from(8u64));
     }
 }

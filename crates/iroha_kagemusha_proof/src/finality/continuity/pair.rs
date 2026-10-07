@@ -128,17 +128,32 @@ impl SourcePairWitness {
         if vesta_params.k() != 16 {
             return Err(Error::Synthesis);
         }
+        let cancellation = fold_config.cancellation.as_ref();
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let budget = fold_config.kernel_budget;
         let mut claims = Vec::with_capacity(4);
         for (source, child) in plan.children.iter().zip(&children) {
-            let opening = source.verify_native(child, vesta_params, budget)?;
+            let opening =
+                source.verify_native_cancellable(child, vesta_params, budget, cancellation)?;
             claims.extend([child.pallas.as_input(), opening]);
         }
         let (fold, pallas) = create_fold(&plan.params, &claims, salt.to_repr(), fold_config)
-            .map_err(|_| Error::Synthesis)?;
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Synthesis
+                }
+            })?;
         pallas
-            .decide(&plan.params, budget)
-            .map_err(|_| Error::Synthesis)?;
+            .decide_cancellable(&plan.params, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Synthesis
+                }
+            })?;
         Ok(Self {
             plan,
             children,

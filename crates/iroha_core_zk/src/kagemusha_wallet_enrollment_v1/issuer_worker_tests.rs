@@ -1,0 +1,475 @@
+//! Private boundary mutation tests with unadmitted DATA; no device-attestation claims.
+use super::*;
+use crate::kagemusha_wallet_enrollment_v1::RequestBodyV1;
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+use iroha_data_model::{
+    account::AccountId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1,
+};
+
+fn fixture(apple: bool) -> VerifierRequestV1 {
+    let key = KeyPair::from_seed(vec![43; 32], Algorithm::Ed25519);
+    let account = AccountId::new(key.public_key().clone());
+    let asset = KagemushaWalletAssetScopeV1::new(
+        AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .unwrap(),
+        &AxtAssetIncarnationV1::try_from_bytes(*Hash::new(b"issuer boundary DATA").as_ref())
+            .unwrap(),
+        2,
+    )
+    .unwrap();
+    let app = KagemushaWalletAppPolicyV1 {
+        version: 1,
+        scheme_id: [1; 32],
+        identity: if apple {
+            KagemushaWalletAppIdentityV1::Apple {
+                app_id: "TEAM.org.example.wallet".into(),
+            }
+        } else {
+            KagemushaWalletAppIdentityV1::Android {
+                package_name: "org.example.wallet".into(),
+                package_version: 7,
+                app_signing_certificate_sha256: [3; 32],
+            }
+        },
+    };
+    let policy = KagemushaWalletEnrollmentPolicyV1 {
+        version: 1,
+        scheme_id: app.scheme_id,
+        asset_digest: asset.asset_digest(),
+        app_policy: app.policy_digest().unwrap(),
+        platform: if apple {
+            KagemushaWalletEnrollmentPlatformV1::Apple {
+                attestation_root_sha256: [4; 32],
+            }
+        } else {
+            KagemushaWalletEnrollmentPlatformV1::Android {
+                attestation_root_sha256: [4; 32],
+                hardware: KagemushaWalletAndroidHardwareV1::Tee,
+                patch_floor_yyyymm: 202608,
+                play_integrity_maximum_age_ms: 120_000,
+                require_play_recognized: true,
+                require_licensed: true,
+                minimum_device_integrity: KagemushaWalletPlayIntegrityLevelV1::Device,
+            }
+        },
+        regulatory_policy: KagemushaWalletRegulatoryPolicyV1::default(),
+        challenge_lifetime_ms: 600_001,
+        attestation_lease_lifetime_ms: 0,
+    };
+    let challenge = KagemushaWalletEnrollmentChallengeV1 {
+        version: 1,
+        scheme_id: app.scheme_id,
+        asset_digest: asset.asset_digest(),
+        account_digest: kagemusha_wallet_account_digest_v1(&account).unwrap(),
+        app_policy: policy.app_policy,
+        enrollment_policy: policy.policy_digest().unwrap(),
+        issuer_nonce: [5; 32],
+    };
+    let payment = p256::ecdsa::SigningKey::from_slice(&[17; 32]).unwrap();
+    let payment = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+        payment.verifying_key().to_encoded_point(false).as_bytes(),
+    )
+    .unwrap();
+    let evidence = if apple {
+        PlatformEvidenceV1::Apple {
+            key_id: [6; 32],
+            attestation: b"DATA attestation".to_vec(),
+            key_binding_assertion: b"DATA assertion".to_vec(),
+        }
+    } else {
+        PlatformEvidenceV1::Android {
+            certificates: vec![b"DATA leaf".to_vec(), b"DATA root".to_vec()],
+            play_integrity_token: b"opaque token".to_vec(),
+        }
+    };
+    let body = RequestBodyV1 {
+        version: 1,
+        challenge,
+        marker: KagemushaWalletMarkerV1::enrollment(&challenge, payment).unwrap(),
+        app: app.clone(),
+        policy,
+        account,
+        asset,
+        evidence: norito::encode_canonical(&evidence).unwrap(),
+    };
+    let account_signature =
+        Signature::try_new(key.private_key(), &body.account_challenge().unwrap())
+            .unwrap()
+            .payload()
+            .try_into()
+            .unwrap();
+    VerifierRequestV1::from_retained(
+        RequestV1 {
+            body,
+            account_signature,
+        },
+        &app,
+        &policy,
+        1_000,
+        601_000,
+        [7; 32],
+    )
+    .unwrap()
+}
+fn projection(request: &VerifierRequestV1) -> Value {
+    let body = &request.request.body;
+    let (kind, originals, items, key, counter) =
+        match PlatformEvidenceV1::decode(&body.evidence, &body.policy).unwrap() {
+            PlatformEvidenceV1::Android { certificates, .. } => {
+                let mut items = certificates.clone();
+                items.push(b"DATA original Google response".to_vec());
+                (
+                    KagemushaWalletEvidenceKindV1::AndroidKeyMintTee,
+                    IssuerEvidenceV1::Android {
+                        certificates,
+                        google_response: items.last().unwrap().clone(),
+                    },
+                    items,
+                    Value::Null,
+                    Value::Null,
+                )
+            }
+            PlatformEvidenceV1::Apple {
+                key_id,
+                attestation,
+                key_binding_assertion,
+            } => (
+                KagemushaWalletEvidenceKindV1::AppleAppAttest,
+                IssuerEvidenceV1::Apple {
+                    attestation: attestation.clone(),
+                    key_binding_assertion: key_binding_assertion.clone(),
+                },
+                vec![attestation, key_binding_assertion],
+                Value::from(hex::encode(key_id)),
+                Value::from(1_u32),
+            ),
+        };
+    let facts = kind.required_enrollment_facts()
+        | if kind.is_android() {
+            KAGEMUSHA_WALLET_FACT_PLAY_INTEGRITY_SIGNAL_V1
+                | KAGEMUSHA_WALLET_FACT_REVOCATION_LIST_CLEAR_V1
+        } else {
+            KAGEMUSHA_WALLET_FACT_APP_ATTEST_PRODUCTION_V1
+        };
+    norito::json!({
+        "config_sha256": (hex::encode(request.configuration)),
+        "challenge_digest": (hex::encode(body.challenge.challenge_digest())),
+        "key_binding": (hex::encode(kagemusha_wallet_enrollment_key_binding_v1(&body.challenge.challenge_digest(), &body.marker.payment_key))),
+        "payment_key_base64": (STANDARD.encode(body.marker.payment_key.as_sec1_bytes())),
+        "kind_tag": (kind.tag()), "time_ms": (request.verification_time_ms),
+        "facts": (facts), "os_patch_level": (0_u32), "vendor_patch_level": (0_u32), "boot_patch_level": (0_u32),
+        "evidence_digest": (hex::encode(originals.digest(body, kind).unwrap())),
+        "original_items_base64": (items.iter().map(|v| STANDARD.encode(v)).collect::<Vec<_>>()),
+        "app_attest_key_id": (key), "app_attest_counter": (counter),
+    })
+}
+fn framed(value: &Value) -> Vec<u8> {
+    let bytes = json::to_vec(value).unwrap();
+    let mut frame = (bytes.len() as u32).to_le_bytes().to_vec();
+    frame.extend(bytes);
+    frame
+}
+fn response(request: &VerifierRequestV1, outcome: &str, evidence: Value) -> Value {
+    norito::json!({
+        "schema": (SCHEMA), "version": (1_u16), "exchange_id": (hex::encode([9; 32])),
+        "original_sha256": (hex::encode(Sha256::digest(request.original()))),
+        "outcome": (outcome), "evidence_base64": (evidence),
+    })
+}
+fn change(value: &mut Value, key: &str, next: Value) {
+    *value.get_mut(key).unwrap() = next;
+}
+
+#[test]
+fn retained_request_has_exact_python_fields_and_no_extra_lifetime_ceiling() {
+    for apple in [false, true] {
+        let request = fixture(apple);
+        let decoded = decode(request.original(), MAX_REQUEST).unwrap();
+        fields(
+            &decoded,
+            &[
+                "challenge_transcript_base64",
+                "payment_key_base64",
+                "issued_at_ms",
+                "expires_at_ms",
+                "trusted_time_ms",
+                "platform",
+                "evidence",
+            ],
+        )
+        .unwrap();
+        assert_eq!(integer(&decoded, "issued_at_ms").unwrap(), 1_000);
+        assert_eq!(integer(&decoded, "expires_at_ms").unwrap(), 601_001);
+        assert_eq!(
+            binary(text(&decoded, "challenge_transcript_base64").unwrap(), 194).unwrap(),
+            request.request.body.challenge.transcript()
+        );
+        for action in [ActionV1::Verify, ActionV1::Recover] {
+            let packet = request.packet(action, [8; 32]).unwrap();
+            assert_eq!(
+                u32::from_le_bytes(packet[..4].try_into().unwrap()) as usize,
+                packet.len() - 4
+            );
+            let value = decode(&packet[4..], MAX_PACKET).unwrap();
+            assert_eq!(
+                binary(text(&value, "original_base64").unwrap(), MAX_REQUEST).unwrap(),
+                request.original()
+            );
+        }
+        assert!(request.packet(ActionV1::Verify, [0; 32]).is_err());
+        let body = &request.request.body;
+        for (created, now) in [
+            (0, 1_000),
+            (1_000, 999),
+            (1_000, 601_001),
+            (u64::MAX, u64::MAX),
+        ] {
+            assert!(
+                VerifierRequestV1::from_retained(
+                    request.request.clone(),
+                    &body.app,
+                    &body.policy,
+                    created,
+                    now,
+                    [7; 32]
+                )
+                .is_err()
+            );
+        }
+        let mut other = body.policy;
+        other.challenge_lifetime_ms += 1;
+        assert!(
+            VerifierRequestV1::from_retained(
+                request.request.clone(),
+                &body.app,
+                &other,
+                1_000,
+                1_001,
+                [7; 32]
+            )
+            .is_err()
+        );
+        let mut forged = request.request.clone();
+        forged.account_signature[0] ^= 1;
+        assert!(
+            VerifierRequestV1::from_retained(
+                forged,
+                &body.app,
+                &body.policy,
+                1_000,
+                1_001,
+                [7; 32]
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn worker_originals_rederive_digest_and_keep_exact_private_result() {
+    for apple in [false, true] {
+        let request = fixture(apple);
+        let original = encode(&projection(&request), MAX_RESULT).unwrap();
+        let value = response(
+            &request,
+            "evidence",
+            Value::from(STANDARD.encode(&original)),
+        );
+        let OutcomeV1::Evidence(result) = request.response([9; 32], &framed(&value)).unwrap()
+        else {
+            panic!("evidence projection")
+        };
+        assert_eq!(result.original_result, original);
+        assert_eq!(
+            result.evidence.digest,
+            result
+                .originals
+                .digest(&request.request.body, result.kind)
+                .unwrap()
+        );
+        assert_eq!(result.evidence.time_ms, request.verification_time_ms);
+        assert_eq!(
+            result.apple_counter,
+            if apple { Some(([6; 32], 1)) } else { None }
+        );
+    }
+}
+
+#[test]
+fn projection_rejects_foreign_identity_time_kind_facts_and_originals() {
+    for apple in [false, true] {
+        let request = fixture(apple);
+        let baseline = projection(&request);
+        let mutations = [
+            ("config_sha256", Value::from(hex::encode([8; 32]))),
+            ("challenge_digest", Value::from(hex::encode([8; 32]))),
+            ("key_binding", Value::from(hex::encode([8; 32]))),
+            ("evidence_digest", Value::from(hex::encode([8; 32]))),
+            ("time_ms", Value::from(request.verification_time_ms + 1)),
+            ("kind_tag", Value::from(if apple { 1_u32 } else { 2_u32 })),
+            ("facts", Value::from(0_u32)),
+            ("app_attest_counter", Value::from(0_u32)),
+            (
+                "original_items_base64",
+                Value::Array(vec![
+                    Value::from(STANDARD.encode(b"forged")),
+                    Value::from(STANDARD.encode(b"original")),
+                ]),
+            ),
+        ];
+        for (key, next) in mutations {
+            let mut value = baseline.clone();
+            change(&mut value, key, next);
+            assert!(
+                request
+                    .projection(encode(&value, MAX_RESULT).unwrap())
+                    .is_err(),
+                "{key}"
+            );
+        }
+        let mut value = baseline.clone();
+        change(
+            &mut value,
+            "facts",
+            Value::from(
+                integer(&baseline, "facts").unwrap()
+                    | u64::from(KAGEMUSHA_WALLET_FACT_LOCAL_COMPROMISE_CHECKS_CLEAR_V1),
+            ),
+        );
+        assert!(
+            request
+                .projection(encode(&value, MAX_RESULT).unwrap())
+                .is_err()
+        );
+        let mut value = baseline;
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("approved".into(), Value::Bool(true));
+        assert!(
+            request
+                .projection(encode(&value, MAX_RESULT).unwrap())
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn uncertain_and_unavailable_outcomes_never_become_evidence() {
+    let request = fixture(false);
+    for outcome in ["outcome_unknown", "unavailable", "rejected"] {
+        let value = response(&request, outcome, Value::Null);
+        let result = request.response([9; 32], &framed(&value)).unwrap();
+        assert!(matches!(
+            (outcome, result),
+            ("outcome_unknown", OutcomeV1::OutcomeUnknown)
+                | ("unavailable", OutcomeV1::Unavailable)
+                | ("rejected", OutcomeV1::Rejected)
+        ));
+        assert!(request.response([8; 32], &framed(&value)).is_err());
+        let mut wrong = value.clone();
+        change(
+            &mut wrong,
+            "original_sha256",
+            Value::from(hex::encode([8; 32])),
+        );
+        assert!(request.response([9; 32], &framed(&wrong)).is_err());
+        change(
+            &mut wrong,
+            "evidence_base64",
+            Value::from(STANDARD.encode(b"injected")),
+        );
+        assert!(request.response([9; 32], &framed(&wrong)).is_err());
+    }
+    for outcome in ["accepted", "", "success", "evidence"] {
+        assert!(
+            request
+                .response([9; 32], &framed(&response(&request, outcome, Value::Null)))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn private_decode_rejects_duplicate_fields_bad_numbers_and_noncanonical_binary() {
+    assert!(decode(br#"{"a":1,"a":2}"#, MAX_PACKET).is_err());
+    assert!(decode(b"", MAX_PACKET).is_err());
+    assert!(decode(&[b' '; 9], 8).is_err());
+    assert!(encode(&Value::from("too long"), 1).is_err());
+    for value in [Value::Bool(true), Value::from(-1_i64), norito::json!(1.0)] {
+        assert!(integer(&norito::json!({"version": (value)}), "version").is_err());
+    }
+    for value in ["", "Zg", "Zh==", "Zg==\n"] {
+        assert!(binary(value, 10).is_err());
+    }
+    assert_eq!(binary("Zg==", 1).unwrap(), b"f");
+    assert!(binary("Zm9v", 1).is_err());
+    assert!(digest(&norito::json!({"x": ("AA".repeat(32))}), "x").is_err());
+    let request = fixture(false);
+    let frame = framed(&response(&request, "unavailable", Value::Null));
+    assert!(request.response([0; 32], &frame).is_err());
+    assert!(
+        request
+            .response([9; 32], &frame[..frame.len() - 1])
+            .is_err()
+    );
+    let mut appended = frame;
+    appended.push(0);
+    assert!(request.response([9; 32], &appended).is_err());
+}
+
+#[test]
+fn google_original_uses_actual_worker_bound_without_expanding_certificate_bounds() {
+    let request = fixture(false);
+    let PlatformEvidenceV1::Android { certificates, .. } =
+        PlatformEvidenceV1::decode(&request.request.body.evidence, &request.request.body.policy)
+            .unwrap()
+    else {
+        panic!("Android DATA")
+    };
+    for size in [65_537, 131_072, 131_073] {
+        let google = vec![b'x'; size];
+        let mut items = certificates.clone();
+        items.push(google);
+        let digest = kagemusha_wallet_evidence_digest_v1(
+            KagemushaWalletEvidenceKindV1::AndroidKeyMintTee,
+            &items.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let mut value = projection(&request);
+        change(
+            &mut value,
+            "original_items_base64",
+            Value::Array(
+                items
+                    .iter()
+                    .map(|v| Value::from(STANDARD.encode(v)))
+                    .collect(),
+            ),
+        );
+        change(
+            &mut value,
+            "evidence_digest",
+            Value::from(hex::encode(digest)),
+        );
+        let result = request.projection(encode(&value, MAX_RESULT).unwrap());
+        if size <= 131_072 {
+            assert_eq!(result.unwrap().evidence.digest, digest);
+        } else {
+            assert!(matches!(result, Err(Error("binary bound"))));
+        }
+    }
+    let mut value = projection(&request);
+    value
+        .get_mut("original_items_base64")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()[0] = Value::from(STANDARD.encode(vec![b'd'; 16_385]));
+    assert!(matches!(
+        request.projection(encode(&value, MAX_RESULT).unwrap()),
+        Err(Error("binary bound"))
+    ));
+}

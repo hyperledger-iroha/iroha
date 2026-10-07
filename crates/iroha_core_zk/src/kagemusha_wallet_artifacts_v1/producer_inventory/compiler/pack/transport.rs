@@ -14,7 +14,7 @@ const PACK_MAX_BYTES: usize = 16 * 1024 * 1024 + 64 * 1024;
 const CATALOG_MAX_BYTES: usize = 16 * 1024 * 1024;
 const ORIGINAL_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 const WALLET_MAX_ROWS: usize = 3 * 4096;
-const FINALITY_MAX_ROWS: usize = 3 * 65536;
+const FINALITY_MAX_ROWS: usize = 2 * 65536;
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -144,7 +144,8 @@ impl WalletArtifactOriginalsV1 {
 
     /// Export the three whole metadata originals into an existing private bundle root.
     /// The genuine compiler sink must be its `wallet-originals` child; the separately
-    /// supplied finality graph must be its `finality-originals` child. Every referenced
+    /// supplied finality descriptor/VK graph must be its `finality-originals` child.
+    /// Server finality proving tables are not required or read. Every referenced
     /// original is reauthenticated by a 64 KiB stream before metadata publication.
     /// Files are sealed 0400 before atomic no-replace publication. Exact retries retain
     /// original inodes; conflicts and partial publication evidence are preserved.
@@ -224,18 +225,35 @@ mod tests {
         let mut finality =
             DirectoryOriginalsV1::open_existing(root.join("finality-originals"), 1024).unwrap();
         let one = BlobV1::of(b"actual wallet original");
-        let two = BlobV1::of(b"independent finality original");
+        let two = BlobV1::of(b"independent finality descriptor original");
+        let vk = BlobV1::of(b"independent finality verifier original");
+        let pk = BlobV1::of(b"server finality proving original");
+        let finality_record = iroha_kagemusha_proof::finality::catalog::ArtifactRecord {
+            name: vec![1],
+            lengths: [two.bytes, vk.bytes, pk.bytes],
+            sha256: [two.sha256, vk.sha256, pk.sha256],
+        };
         wallet
             .store_original(one, b"actual wallet original")
             .unwrap();
         finality
-            .store_original(two, b"independent finality original")
+            .store_original(two, b"independent finality descriptor original")
             .unwrap();
+        finality
+            .store_original(vk, b"independent finality verifier original")
+            .unwrap();
+        // The server PK remains deliberately absent from this wallet transport fixture.
+        assert!(
+            !root
+                .join("finality-originals")
+                .join(hex::encode(pk.sha256))
+                .exists()
+        );
         let originals = WalletArtifactOriginalsV1 {
             verifier_pack: b"transport fixture whole pack".to_vec(),
             producer_inventory: b"transport fixture whole inventory".to_vec(),
             wallet_originals: vec![one],
-            finality_originals: vec![two],
+            finality_originals: super::super::finality_verifier_blobs(&[finality_record]).unwrap(),
         };
         (temp, root, wallet, finality, originals)
     }
@@ -282,6 +300,60 @@ mod tests {
         );
         assert!(!root.join("wallet-verifier-pack.norito").exists());
         assert!(!root.join("wallet-artifact-transport.json").exists());
+    }
+
+    #[test]
+    fn missing_server_pk_is_allowed_but_each_required_original_remains_mandatory() {
+        let (_temp, root, wallet, finality, originals) = fixture();
+        assert_eq!(originals.wallet_originals.len(), 1);
+        assert_eq!(originals.finality_originals.len(), 2);
+        originals
+            .write_bundle_metadata(&root, &wallet, &finality)
+            .unwrap();
+        for role in [0_usize, 1, 2] {
+            let (_temp, root, wallet, finality, originals) = fixture();
+            let (directory, blob) = match role {
+                0 => ("wallet-originals", originals.wallet_originals[0]),
+                1 => (
+                    "finality-originals",
+                    BlobV1::of(b"independent finality descriptor original"),
+                ),
+                _ => (
+                    "finality-originals",
+                    BlobV1::of(b"independent finality verifier original"),
+                ),
+            };
+            std::fs::remove_file(root.join(directory).join(hex::encode(blob.sha256))).unwrap();
+            assert!(
+                originals
+                    .write_bundle_metadata(&root, &wallet, &finality)
+                    .is_err()
+            );
+            assert!(!root.join("wallet-verifier-pack.norito").exists());
+        }
+    }
+
+    #[test]
+    fn changed_required_verifier_original_refuses_before_metadata_publication() {
+        let (_temp, root, wallet, finality, originals) = fixture();
+        let blob = BlobV1::of(b"independent finality verifier original");
+        let path = root
+            .join("finality-originals")
+            .join(hex::encode(blob.sha256));
+        std::fs::remove_file(&path).unwrap();
+        // Equal extent and private permissions cannot authorize a changed preimage.
+        let directory = PrivateDirectory::open_exact(root.join("finality-originals")).unwrap();
+        let mut writer = directory
+            .create_retained_private(hex::encode(blob.sha256), blob.bytes as usize)
+            .unwrap();
+        writer.write_all(&vec![0; blob.bytes as usize]).unwrap();
+        writer.seal_read_only().unwrap();
+        assert!(
+            originals
+                .write_bundle_metadata(&root, &wallet, &finality)
+                .is_err()
+        );
+        assert!(!root.join("wallet-verifier-pack.norito").exists());
     }
 
     #[test]

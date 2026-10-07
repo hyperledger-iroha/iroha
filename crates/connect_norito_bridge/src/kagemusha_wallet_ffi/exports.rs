@@ -9,7 +9,9 @@ pub struct WalletResult {
     /// 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss,
     /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing;
     /// setup only: 12 original, 13 owned time challenge, 14 time exchange retained.
-    /// Open only: 15 account challenge, 16 admitted wallet handle. Negative is failure.
+    /// Open: 15 account challenge,16 admitted handle;17 retained Activation.
+    /// Enrollment18..26 are typed challenge/evidence/retained-original/runtime statuses.
+    /// Negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
     pub reason: i32,
@@ -870,4 +872,96 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_snapshot_v1(
     // SAFETY: admitted complete output storage; all fields are initialized, no heap ownership.
     unsafe { out.write(value) };
     status
+}
+
+/// One original certificate in an enrollment request; no decoded platform facts.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletEnrollmentItem {
+    /// Exactly `length` readable original bytes.
+    pub bytes: *const u8,
+    /// Bounded by 16,384.
+    pub length: usize,
+}
+/// Typed native enrollment actions. Unused fields must be empty.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletEnrollmentRequest {
+    /// 0 begin(E1/account/asset),1 authorize(signature),2 status,3 Android(token+chain),
+    /// 4 Apple(keyid/attestation/assertion),5 retain E5(signature),6 E6(result),7 load runtime,8 original open from retained E5/E6.
+    pub selector: u32,
+    /// First exact original according to selector.
+    pub first: *const u8,
+    /// Exact first length.
+    pub first_length: usize,
+    /// Second exact original according to selector.
+    pub second: *const u8,
+    /// Exact second length.
+    pub second_length: usize,
+    /// Third exact original according to selector.
+    pub third: *const u8,
+    /// Exact third length.
+    pub third_length: usize,
+    /// Android certificate items only, leaf first; null when count is zero.
+    pub certificates: *const WalletEnrollmentItem,
+    /// 2..8 for Android selector3; zero otherwise.
+    pub certificate_count: usize,
+}
+/// Drive original enrollment under a native-provisioned exclusive owner.
+/// Results18 local challenge32,19 target161(slot32,key65,challenge32,binding32),20 pending,
+/// 21 abandoned,22 Bootstrap selected,23 E5 challenge32,24 exact E5,25 exact E6,26 runtime ready.
+/// The same opaque runtime handle is returned in sequence. E6 does not imply ledger activation.
+/// # Safety
+/// Request and each bounded item/input must be readable; output writable and unallocated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_enrollment_v1(
+    runtime: u64,
+    request: *const WalletEnrollmentRequest,
+    out: *mut WalletResult,
+) -> i32 {
+    unsafe {
+        output(out, || {
+            let request = request.as_ref().ok_or(Failure::code(INVALID))?;
+            let bounds = enrollment::bounds(request.selector)?;
+            if request.certificate_count > 8
+                || (request.certificate_count != 0 && request.certificates.is_null())
+                || (request.selector != 3 && request.certificate_count != 0)
+                || [
+                    request.first_length,
+                    request.second_length,
+                    request.third_length,
+                ]
+                .into_iter()
+                .zip(bounds)
+                .any(|(length, bound)| length > bound)
+            {
+                return Err(Failure::code(INVALID));
+            }
+            let certificates = if request.certificate_count == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(request.certificates, request.certificate_count)
+            };
+            if certificates
+                .iter()
+                .any(|item| item.length == 0 || item.length > 16_384)
+            {
+                return Err(Failure::code(INVALID));
+            }
+            let chain = certificates
+                .iter()
+                .map(|item| input(item.bytes, item.length, 16_384))
+                .collect::<Result<Vec<_>>>()?;
+            let action = enrollment::request(
+                request.selector,
+                [
+                    input(request.first, request.first_length, bounds[0])?,
+                    input(request.second, request.second_length, bounds[1])?,
+                    input(request.third, request.third_length, bounds[2])?,
+                ],
+                &chain,
+            )?;
+            enrollment::call(runtime, action)
+        })
+    }
 }

@@ -51,9 +51,10 @@ impl WalletArtifactOriginalsV1 {
         &self.wallet_originals
     }
 
-    /// Closed references to the separately supplied complete original finality graph.
-    /// The compiler does not copy that graph into its wallet-original sink. Delivery must
-    /// preserve every exact original and independently authenticate signed genesis at intake.
+    /// Closed descriptor/VK references to the complete original finality graph.
+    /// Wallet qualification reconstructs every verifier source but never loads server
+    /// proving tables. Their identities remain committed in the producer inventory;
+    /// their bytes are not wallet artifacts. Signed genesis is independently admitted.
     pub fn finality_originals(&self) -> &[BlobV1] {
         &self.finality_originals
     }
@@ -73,6 +74,19 @@ fn closed_blobs(
         }
     }
     Ok(closed.into_values().collect())
+}
+
+fn finality_verifier_blobs(
+    records: &[iroha_kagemusha_proof::finality::catalog::ArtifactRecord],
+) -> Result<Vec<BlobV1>, Error> {
+    closed_blobs(records.iter().flat_map(|record| {
+        record
+            .lengths
+            .into_iter()
+            .zip(record.sha256)
+            .zip([DESCRIPTOR_MAX_BYTES_V1, VERIFYING_KEY_MAX_BYTES_V1])
+            .map(|((bytes, sha256), bound)| (BlobV1 { bytes, sha256 }, bound))
+    }))
 }
 
 fn source_root(scope: SourceScopeV1) -> Result<KagemushaDevicePublicKeyV1, CompilationErrorV1> {
@@ -139,19 +153,7 @@ impl OfflineCompilerV1<'_> {
                 (original.proving_key, PROVING_KEY_MAX_BYTES_V1),
             ]
         }))?;
-        let finality_originals =
-            closed_blobs(inventory.finality.originals.iter().flat_map(|record| {
-                record
-                    .lengths
-                    .into_iter()
-                    .zip(record.sha256)
-                    .zip([
-                        DESCRIPTOR_MAX_BYTES_V1,
-                        VERIFYING_KEY_MAX_BYTES_V1,
-                        PROVING_KEY_MAX_BYTES_V1,
-                    ])
-                    .map(|((bytes, sha256), bound)| (BlobV1 { bytes, sha256 }, bound))
-            }))?;
+        let finality_originals = finality_verifier_blobs(&inventory.finality.originals)?;
         let mut artifact = |index: u32| -> Result<ArtifactOriginalV1, CompilationErrorV1> {
             let original = *inventory.member(index)?;
             Ok(ArtifactOriginalV1 {
@@ -434,6 +436,26 @@ mod tests {
         let wrong = SourceScopeV1::new([1, 2], scope.root()).unwrap();
         assert!(raw_scheme(wrong, draft.scheme.network_id, [1; 32]).is_err());
         assert!(raw_scheme(scope, [0; 32], [1; 32]).is_err());
+    }
+
+    #[test]
+    fn wallet_finality_transport_retains_verifiers_without_server_proving_tables() {
+        use iroha_kagemusha_proof::finality::catalog::ArtifactRecord;
+        let descriptor = BlobV1::of(b"descriptor original");
+        let vk = BlobV1::of(b"verifying original");
+        let pk = BlobV1::of(b"server proving original");
+        // This tests only transport projection, not canonical names or qualification.
+        let record = ArtifactRecord {
+            name: vec![1],
+            lengths: [descriptor.bytes, vk.bytes, pk.bytes],
+            sha256: [descriptor.sha256, vk.sha256, pk.sha256],
+        };
+        let original = norito::to_bytes(&record).unwrap();
+        let transport = finality_verifier_blobs(std::slice::from_ref(&record)).unwrap();
+        assert_eq!(transport.len(), 2);
+        assert!(transport.contains(&descriptor) && transport.contains(&vk));
+        assert!(!transport.contains(&pk));
+        assert_eq!(norito::to_bytes(&record).unwrap(), original);
     }
 
     #[test]

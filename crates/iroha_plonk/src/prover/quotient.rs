@@ -44,6 +44,8 @@
 //! Rows are independent, so the rows of a coset are split across the
 //! caller's Rayon pool; every row's arithmetic is the same at any pool size.
 
+use crate::secret::{SecretColumns, SecretPolynomial};
+use iroha_pasta::CancellationToken;
 use std::{borrow::Cow, collections::BTreeMap};
 
 use ff::Field;
@@ -388,6 +390,7 @@ impl<F: PastaField> CompiledExpressions<F> {
         n: usize,
         width: usize,
         emit: impl Fn(&[F], &mut [F]) + Sync,
+        cancellation: Option<&CancellationToken>,
     ) -> Vec<Vec<F>> {
         let mut outputs = vec![vec![F::ZERO; n]; width];
         let mut tasks: Vec<Vec<&mut [F]>> = (0..n.div_ceil(ROWS_PER_TASK))
@@ -402,14 +405,17 @@ impl<F: PastaField> CompiledExpressions<F> {
             .into_par_iter()
             .enumerate()
             .for_each(|(task, mut chunks)| {
+                if CancellationToken::checkpoint(cancellation).is_err() {
+                    return;
+                }
                 let start = task * ROWS_PER_TASK;
                 let rows = chunks.first().map_or(0, |chunk| chunk.len());
-                let mut scratch = vec![F::ZERO; self.nodes.len()];
-                let mut row_out = vec![F::ZERO; width];
+                let mut scratch = SecretPolynomial::new(vec![F::ZERO; self.nodes.len()]);
+                let mut row_out = SecretPolynomial::new(vec![F::ZERO; width]);
                 for offset in 0..rows {
                     self.evaluate_row(columns, start + offset, &mut scratch);
                     emit(&scratch, &mut row_out);
-                    for (chunk, value) in chunks.iter_mut().zip(&row_out) {
+                    for (chunk, value) in chunks.iter_mut().zip(row_out.iter()) {
                         chunk[offset] = *value;
                     }
                 }
@@ -431,15 +437,46 @@ impl<F: PastaField> CompiledExpressions<F> {
         theta: F,
         n: usize,
     ) -> Result<Vec<CompressedLookup<F>>, ProverError> {
+        self.compress_lookups_cancellable(fixed, advice, instance, theta, n, None)
+    }
+
+    /// Compresses lookup inputs with cooperative cancellation.
+    ///
+    /// # Errors
+    /// As [`Self::compress_lookups`], or [`ProverError::Cancelled`].
+    pub fn compress_lookups_cancellable(
+        &self,
+        fixed: &[Vec<F>],
+        advice: &[Vec<F>],
+        instance: &[Vec<F>],
+        theta: F,
+        n: usize,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Vec<CompressedLookup<F>>, ProverError> {
+        CancellationToken::checkpoint(cancellation)?;
         let (fixed, advice, instance) = (slices(fixed), slices(advice), slices(instance));
         let columns = self.bind(&fixed, &advice, &instance, n)?;
         let width = self.lookups.len() * 2;
-        let outputs = self.evaluate_columns(&columns, n, width, |scratch, row_out| {
-            for (lookup, pair) in self.lookups.iter().zip(row_out.chunks_mut(2)) {
-                pair[0] = Self::compress(&lookup.inputs, scratch, theta);
-                pair[1] = Self::compress(&lookup.tables, scratch, theta);
-            }
-        });
+        let outputs = self.evaluate_columns(
+            &columns,
+            n,
+            width,
+            |scratch, row_out| {
+                for (lookup, pair) in self.lookups.iter().zip(row_out.chunks_mut(2)) {
+                    pair[0] = Self::compress(&lookup.inputs, scratch, theta);
+                    pair[1] = Self::compress(&lookup.tables, scratch, theta);
+                }
+            },
+            cancellation,
+        );
+        if let Err(error) = CancellationToken::checkpoint(cancellation) {
+            let mut outputs = outputs;
+            outputs
+                .iter_mut()
+                .flatten()
+                .for_each(crate::secret::wipe_one);
+            return Err(error.into());
+        }
         let mut outputs = outputs.into_iter();
         let mut compressed = Vec::with_capacity(self.lookups.len());
         while let (Some(input), Some(table)) = (outputs.next(), outputs.next()) {
@@ -465,13 +502,17 @@ impl<F: PastaField> CompiledExpressions<F> {
     ) -> Result<Vec<Vec<F>>, ProverError> {
         let (fixed, advice, instance) = (slices(fixed), slices(advice), slices(instance));
         let columns = self.bind(&fixed, &advice, &instance, n)?;
-        Ok(
-            self.evaluate_columns(&columns, n, self.gates.len(), |scratch, row_out| {
+        Ok(self.evaluate_columns(
+            &columns,
+            n,
+            self.gates.len(),
+            |scratch, row_out| {
                 for (root, value) in self.gates.iter().zip(row_out.iter_mut()) {
                     *value = scratch[*root as usize];
                 }
-            }),
-        )
+            },
+            None,
+        ))
     }
 }
 
@@ -598,7 +639,9 @@ fn evaluate_many<F: PastaField>(
     plan: Option<&CosetFftPlan<'_, '_, F>>,
     coefficients: &[impl AsRef<[F]>],
     values: &mut [&mut [F]],
+    cancellation: Option<&CancellationToken>,
 ) -> Result<(), KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
     if coefficients.len() != values.len() {
         return Err(KeyError::Shape {
             what: "coset columns",
@@ -623,7 +666,7 @@ fn evaluate_many<F: PastaField>(
     for (values, coefficients) in values.iter_mut().zip(coefficients) {
         values.copy_from_slice(coefficients.as_ref());
     }
-    plan.fft_many(values)?;
+    plan.fft_many_cancellable(values, cancellation)?;
     Ok(())
 }
 
@@ -636,7 +679,9 @@ fn refresh_key_cosets<'a, C: PastaCurve>(
     polynomial: impl Fn(usize) -> CosetPolynomial,
     coset: usize,
     plan: Option<&CosetFftPlan<'_, '_, C::ScalarExt>>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<(), KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
     if coset >= pk.quotient_domain().pieces() {
         return Err(KeyError::CosetIndex);
     }
@@ -656,7 +701,7 @@ fn refresh_key_cosets<'a, C: PastaCurve>(
             }
         }
     }
-    evaluate_many(plan, &owned_coefficients, &mut owned)?;
+    evaluate_many(plan, &owned_coefficients, &mut owned, cancellation)?;
     Ok(())
 }
 
@@ -669,6 +714,7 @@ fn refresh_key_cosets<'a, C: PastaCurve>(
 ///
 /// [`ProverError::Key`] for a missing polynomial or coset,
 /// [`ProverError::Fft`] on a transform failure.
+#[cfg(test)]
 pub(super) fn evaluate<C: PastaCurve>(
     pk: &ProvingKey<C>,
     protocol: &Protocol,
@@ -677,11 +723,24 @@ pub(super) fn evaluate<C: PastaCurve>(
     challenges: Challenges<C::ScalarExt>,
     filter: &(impl ConstraintFilter + Sync),
 ) -> Result<Vec<C::ScalarExt>, ProverError> {
+    evaluate_cancellable(pk, protocol, compiled, inputs, challenges, filter, None)
+}
+
+pub(super) fn evaluate_cancellable<C: PastaCurve>(
+    pk: &ProvingKey<C>,
+    protocol: &Protocol,
+    compiled: &CompiledExpressions<C::ScalarExt>,
+    inputs: &QuotientInputs<'_, C::ScalarExt>,
+    challenges: Challenges<C::ScalarExt>,
+    filter: &(impl ConstraintFilter + Sync),
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<C::ScalarExt>, ProverError> {
+    CancellationToken::checkpoint(cancellation)?;
     let bytes = workspace_elements(pk, protocol)?
         .checked_mul(size_of::<C::ScalarExt>())
         .ok_or(ProtocolError::Overflow)?;
     let mut workspace = QuotientWorkspace::new(bytes);
-    evaluate_with_workspace(
+    evaluate_with_workspace_cancellable(
         pk,
         protocol,
         compiled,
@@ -689,10 +748,12 @@ pub(super) fn evaluate<C: PastaCurve>(
         challenges,
         filter,
         &mut workspace,
+        cancellation,
     )
 }
 
 /// The same quotient evaluator using an exclusively borrowed reusable buffer.
+#[cfg(test)]
 pub(super) fn evaluate_with_workspace<C: PastaCurve>(
     pk: &ProvingKey<C>,
     protocol: &Protocol,
@@ -702,6 +763,23 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
     filter: &(impl ConstraintFilter + Sync),
     workspace: &mut QuotientWorkspace<C::ScalarExt>,
 ) -> Result<Vec<C::ScalarExt>, ProverError> {
+    evaluate_with_workspace_cancellable(
+        pk, protocol, compiled, inputs, challenges, filter, workspace, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn evaluate_with_workspace_cancellable<C: PastaCurve>(
+    pk: &ProvingKey<C>,
+    protocol: &Protocol,
+    compiled: &CompiledExpressions<C::ScalarExt>,
+    inputs: &QuotientInputs<'_, C::ScalarExt>,
+    challenges: Challenges<C::ScalarExt>,
+    filter: &(impl ConstraintFilter + Sync),
+    workspace: &mut QuotientWorkspace<C::ScalarExt>,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<C::ScalarExt>, ProverError> {
+    CancellationToken::checkpoint(cancellation)?;
     let shape = protocol.shape();
     let n = shape.n;
     let domain = pk.domain();
@@ -717,7 +795,7 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
     } = challenges;
     let one = C::ScalarExt::ONE;
     let delta = <C::ScalarExt as ff::PrimeField>::DELTA;
-    let mut cosets = Vec::with_capacity(shape.quotient_pieces);
+    let mut cosets = SecretColumns::new(Vec::with_capacity(shape.quotient_pieces));
     let elements = workspace_elements(pk, protocol)?;
     let count = elements / n;
     let lease = workspace.lease(n, count).map_err(ProverError::Workspace)?;
@@ -764,10 +842,11 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
         .into());
     }
     for coset in 0..shape.quotient_pieces {
+        CancellationToken::checkpoint(cancellation)?;
         let shift = quotient.shift(coset).ok_or(KeyError::CosetIndex)?;
         let plan = powers
             .as_deref_mut()
-            .map(|powers| domain.coset_plan(powers, shift))
+            .map(|powers| domain.coset_plan_cancellable(powers, shift, cancellation))
             .transpose()?;
         {
             // Refresh coset zero too: allocation above performs no owned FFT.
@@ -778,6 +857,7 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
                 CosetPolynomial::Fixed,
                 coset,
                 plan.as_ref(),
+                cancellation,
             )?;
             refresh_key_cosets(
                 pk,
@@ -786,6 +866,7 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
                 CosetPolynomial::Permutation,
                 coset,
                 plan.as_ref(),
+                cancellation,
             )?;
         }
         let masks = pk.coset_masks(coset)?;
@@ -794,9 +875,14 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
             masks.l_last.as_slice(),
             masks.l_active.as_slice(),
         );
-        evaluate_many(plan.as_ref(), inputs.advice, &mut advice)?;
-        evaluate_many(plan.as_ref(), inputs.instance, &mut instance)?;
-        evaluate_many(plan.as_ref(), &inputs.permutation_products, &mut products)?;
+        evaluate_many(plan.as_ref(), inputs.advice, &mut advice, cancellation)?;
+        evaluate_many(plan.as_ref(), inputs.instance, &mut instance, cancellation)?;
+        evaluate_many(
+            plan.as_ref(),
+            &inputs.permutation_products,
+            &mut products,
+            cancellation,
+        )?;
         let fixed_refs: Vec<&[C::ScalarExt]> = fixed.iter().map(AsRef::as_ref).collect();
         let advice_refs: Vec<&[C::ScalarExt]> = advice.iter().map(|values| &**values).collect();
         let instance_refs: Vec<&[C::ScalarExt]> = instance.iter().map(|values| &**values).collect();
@@ -826,7 +912,7 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
         {
             return Err(KeyError::CosetIndex.into());
         }
-        let mut values = vec![C::ScalarExt::ZERO; n];
+        let mut values = SecretPolynomial::new(vec![C::ScalarExt::ZERO; n]);
         // Evaluate the shared expression DAG once per row. Retain only
         // (A + beta)(S + gamma) for each lookup; its three committed cosets
         // are streamed below after the gates and permutation have folded.
@@ -846,8 +932,12 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
             .zip(numerator_tasks.into_par_iter())
             .enumerate()
             .for_each(|(task, (out, mut numerators))| {
+                if CancellationToken::checkpoint(cancellation).is_err() {
+                    return;
+                }
                 let start = task * ROWS_PER_TASK;
-                let mut scratch = vec![C::ScalarExt::ZERO; compiled.nodes.len()];
+                let mut scratch =
+                    SecretPolynomial::new(vec![C::ScalarExt::ZERO; compiled.nodes.len()]);
                 let mut x_row = shift * omega.pow_vartime([start as u64]);
                 for (offset, out) in out.iter_mut().enumerate() {
                     let row = start + offset;
@@ -916,6 +1006,7 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
                     x_row *= omega;
                 }
             });
+        CancellationToken::checkpoint(cancellation)?;
         if let Some([product, input, table]) = &mut lookup_cosets {
             for (index, (lookup, numerator)) in
                 inputs.lookups.iter().zip(&lookup_numerators).enumerate()
@@ -924,11 +1015,15 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
                     plan.as_ref(),
                     &[lookup.product, lookup.input, lookup.table],
                     &mut [&mut **product, &mut **input, &mut **table],
+                    cancellation,
                 )?;
                 values
                     .par_chunks_mut(ROWS_PER_TASK)
                     .enumerate()
                     .for_each(|(task, out)| {
+                        if CancellationToken::checkpoint(cancellation).is_err() {
+                            return;
+                        }
                         let start = task * ROWS_PER_TASK;
                         for (offset, value) in out.iter_mut().enumerate() {
                             let row = start + offset;
@@ -967,11 +1062,12 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
                     });
             }
         }
+        CancellationToken::checkpoint(cancellation)?;
         let inverse = quotient
             .vanishing_inverse(coset)
             .ok_or(KeyError::CosetIndex)?;
         values.par_iter_mut().for_each(|value| *value *= inverse);
-        cosets.push(values);
+        cosets.push(values.into_vec());
     }
     // Recombination needs only the accumulated numerator cosets.
     drop((
@@ -984,7 +1080,8 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
         lookup_cosets,
     ));
     drop(lease);
-    Ok(quotient.recombine(domain, cosets)?)
+    CancellationToken::checkpoint(cancellation)?;
+    Ok(quotient.recombine_cancellable(domain, cosets.into_vec(), cancellation)?)
 }
 
 #[cfg(test)]

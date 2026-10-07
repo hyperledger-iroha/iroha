@@ -9,7 +9,7 @@ use crate::finality::continuity::{
     SourceCheckpoint, SourceEndpoints, SourceMergeCircuit, SourceNodeEvidence, SourcePairConfig,
     SourceVerifier,
     pair::{assign_evidence, frame_native},
-    single::{verify_key_cells, verify_key_native},
+    single::{verify_key_cells, verify_key_native_cancellable},
 };
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Eq, Fp};
@@ -146,6 +146,8 @@ impl HistoryAppendCircuit {
         salt: Fp,
         config: &FoldConfig,
     ) -> Result<Self, Error> {
+        let cancellation = config.cancellation.as_ref();
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let key_digest = previous_key
             .kagemusha_digest(plan.previous.binding())
             .map_err(|_| Error::Synthesis)?;
@@ -165,16 +167,20 @@ impl HistoryAppendCircuit {
         {
             return Err(Error::Synthesis);
         }
-        let first = verify_key_native(
+        let first = verify_key_native_cancellable(
             &plan.previous,
             &previous_key,
             &children[0],
             vesta,
             config.kernel_budget,
+            cancellation,
         )?;
-        let second = plan
-            .body
-            .verify_native(&children[1], vesta, config.kernel_budget)?;
+        let second = plan.body.verify_native_cancellable(
+            &children[1],
+            vesta,
+            config.kernel_budget,
+            cancellation,
+        )?;
         let (fold, pallas) = create_fold(
             plan.previous.params(),
             &[
@@ -186,10 +192,22 @@ impl HistoryAppendCircuit {
             salt.to_repr(),
             config,
         )
-        .map_err(|_| Error::Synthesis)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Synthesis
+            }
+        })?;
         pallas
-            .decide(plan.previous.params(), config.kernel_budget)
-            .map_err(|_| Error::Synthesis)?;
+            .decide_cancellable(plan.previous.params(), config.kernel_budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Synthesis
+                }
+            })?;
         let endpoints = [
             Fp::from(PREFIX_PROGRAM_ID),
             context,

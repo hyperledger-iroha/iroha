@@ -82,10 +82,8 @@ impl Circuit<Fp> for Proposal {
         layouter.assign_region(
             || "native Archive predicate proposal",
             |mut region| {
-                let (old, pred_public) =
-                    cells.state(&mut chip, &mut region, &source.state.predecessor)?;
-                let (new, next_public) =
-                    cells.state(&mut chip, &mut region, &source.state.successor)?;
+                cells.state(&mut chip, &mut region, &source.state.predecessor)?;
+                cells.state(&mut chip, &mut region, &source.state.successor)?;
                 let fields = cells.words(&mut chip, &mut region, &source.state.statement)?;
                 let statement = StatementCells::constrain_with_verifier(
                     &mut chip,

@@ -43,6 +43,15 @@ public final class KagemushaWalletRuntimeV1: @unchecked Sendable {
     guard result.status == 15 && result.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return KagemushaWalletPendingOpenV1(runtime: self, challenge: result.bytes)
   }
+  /// Begin strict account admission with exact Native-retained E5/E6 originals after enrollment handoff.
+  public func beginEnrolled() throws -> KagemushaWalletPendingOpenV1 {
+    lock.lock(); defer { lock.unlock() }
+    guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
+    let input = try KagemushaWalletEnrollmentInputV1(8)
+    let result = try driver.result { out in input.withRequest { driver.enrollment(owner,$0,out) } }
+    guard result.status == 15 && result.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return KagemushaWalletPendingOpenV1(runtime:self,challenge:result.bytes)
+  }
   fileprivate func finish(_ signature: Data) throws -> KagemushaWalletV1 {
     lock.lock(); defer { lock.unlock() }
     guard owner != 0 else { throw KagemushaWalletErrorV1.closed }

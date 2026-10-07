@@ -19,17 +19,20 @@ impl From<state::NativeOpenErrorV1> for Failure {
         }
     }
 }
-trait Admission: Send {
+pub(super) trait Admission: Send {
+    fn enrollment(&mut self, _action: super::enrollment::Action<'_>) -> Result<Response> {
+        Err(Failure::code(INVALID))
+    }
     fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>>;
     fn finish(&mut self, signature: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)>;
     fn cancel(&mut self) -> Result<()>;
 }
-enum Phase<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
+pub(super) enum Phase<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     Ready(state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>),
     Pending(state::PendingNativeWalletOpenV1<advance::KagemushaWalletStdFsV1, P, S>),
 }
-struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>(
-    Option<Phase<P, S>>,
+pub(super) struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>(
+    pub(super) Option<Phase<P, S>>,
 );
 impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send + 'static>
     Admission for Runtime<P, S>
@@ -96,8 +99,8 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
     }
 }
 pub(super) struct RuntimeOwner {
-    admission: Mutex<Option<Box<dyn Admission>>>,
-    finished: Mutex<Option<(Box<dyn Wallet>, state::Scheduler)>>,
+    pub(super) admission: Mutex<Option<Box<dyn Admission>>>,
+    pub(super) finished: Mutex<Option<(Box<dyn Wallet>, state::Scheduler)>>,
 }
 fn validate(originals: [&[u8]; 4]) -> Result<()> {
     if originals
@@ -109,7 +112,7 @@ fn validate(originals: [&[u8]; 4]) -> Result<()> {
     }
     Ok(())
 }
-fn runtime(id: u64) -> Result<Arc<RuntimeOwner>> {
+pub(super) fn runtime(id: u64) -> Result<Arc<RuntimeOwner>> {
     registry()
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?
@@ -276,7 +279,7 @@ where
     S: OriginalSourceV1 + Send + 'static,
 {
     let runtime = state::NativeWalletRuntimeV1::load(
-        config,
+        &config,
         provider,
         verifier_pack,
         producer_inventory,

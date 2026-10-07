@@ -76,7 +76,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             let step = self.indexed_step(&manifest, sequence)?;
             let latest = self.indexed_step(&manifest, folded)?;
             let fold = self
-                .read_fold(&latest)?
+                .read_fold_cancellable(&latest, Some(&guard.token))?
                 .ok_or(Error::WitnessLost("collection covering Ω"))?;
             if let KagemushaWalletEffectV1::Send { credit_id, fee, .. } =
                 step.frozen.capsule.statement.effect

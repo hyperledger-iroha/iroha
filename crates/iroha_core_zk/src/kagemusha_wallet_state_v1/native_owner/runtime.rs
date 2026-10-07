@@ -302,7 +302,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Invalid signatures, mismatched native configuration, incomplete source graphs or I/O.
     /// The exclusive provider and original source are returned on every failure.
     pub fn load(
-        config: NativeInstallationConfigV1,
+        config: &NativeInstallationConfigV1,
         provider: crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>,
         verifier_pack: &[u8],
         producer_inventory: &[u8],
@@ -324,7 +324,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                     &config.genesis,
                     &mut originals,
                     config.read,
-                    config.finality_parameters,
+                    config.finality_parameters.clone(),
                     config.finality_limits,
                 )
                 .map_err(|error| {
@@ -341,7 +341,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 provider,
                 installed,
                 sources,
-                config.genesis,
+                Arc::clone(&config.genesis),
                 originals,
                 config.read,
                 config.budget,

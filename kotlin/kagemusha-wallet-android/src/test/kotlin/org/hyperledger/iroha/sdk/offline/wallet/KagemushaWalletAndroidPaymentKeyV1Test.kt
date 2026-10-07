@@ -292,6 +292,18 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(listOf(true, true, true, false, true, true), keyStore.generated.map { it.strongBox })
     }
 
+    @Test fun `exact TEE policy never selects StrongBox even when available`() {
+        apiLevel(28)
+        val generated = assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(
+            fresh(slot(), KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE))
+        assertEquals(KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT, generated.securityLevel)
+        apiLevel(31)
+        assertEquals(KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT,
+            assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(paymentKey.generate(slot(), challenge,
+                KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE)).securityLevel)
+        assertEquals(listOf(false, false), keyStore.generated.map { it.strongBox })
+    }
+
     @Test fun `fresh TEE hint is spent by the next matching attempt even when its probe fails`() {
         apiLevel(28)
         keyStore.strongBoxAvailable = false
@@ -638,6 +650,12 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY, kagemushaWalletAndroidHardwarePlanV1(profiles.second, 31, false))
         assertEquals(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT, KagemushaWalletAndroidKeyProfileV1.fromTag(1))
         assertEquals(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE, KagemushaWalletAndroidKeyProfileV1.fromTag(2))
+        assertEquals(KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE, KagemushaWalletAndroidKeyProfileV1.fromTag(3))
+        for (hasStrongBox in listOf(false, true)) {
+            assertEquals(KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY,
+                kagemushaWalletAndroidHardwarePlanV1(KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE, 31, hasStrongBox))
+        }
+        assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(4))
         assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(0))
     }
 

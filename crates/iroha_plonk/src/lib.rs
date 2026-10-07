@@ -175,3 +175,8 @@ pub use verifier::{
 
 #[cfg(test)]
 mod pipa_r_tests;
+
+mod secret;
+
+#[cfg(test)]
+mod cancellation_integration_tests;

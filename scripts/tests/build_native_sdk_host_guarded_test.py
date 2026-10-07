@@ -142,7 +142,9 @@ def test_lock_replacement_during_admission_prevents_pins_publication(monkeypatch
     root.mkdir()
     (root / "target").mkdir()
     lane = root / "target" / "stable-lane"
-    output = tmp_path / "evidence"
+    parent = root / "target" / "qualification" / "native-sdk"
+    parent.mkdir(parents=True, mode=0o700)
+    output = parent / "evidence"
     monkeypatch.setattr(emitter.sys, "platform", "darwin")
     monkeypatch.setattr(emitter.platform, "machine", lambda: "arm64")
     calls = []
@@ -161,3 +163,17 @@ def test_lock_replacement_during_admission_prevents_pins_publication(monkeypatch
         emitter.host_build(root, output, lane, None)
     assert calls == ["admit"]
     assert not (output / "pins.json").exists()
+
+
+@pytest.mark.parametrize("inside_output", [False, True])
+def test_artifact_and_warm_cargo_lanes_cannot_overlap(monkeypatch, tmp_path, inside_output):
+    root = tmp_path.resolve() / "source"
+    parent = root / "target" / "qualification" / "native-sdk"
+    parent.mkdir(parents=True, mode=0o700)
+    output = parent / "output"
+    lane = output / "cargo" if inside_output else parent
+    monkeypatch.setattr(emitter.sys, "platform", "darwin")
+    monkeypatch.setattr(emitter.platform, "machine", lambda: "arm64")
+    with pytest.raises(emitter.unit.Refused, match="disjoint"):
+        emitter.host_build(root, output, lane, None)
+    assert not output.exists()

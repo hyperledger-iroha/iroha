@@ -82,8 +82,21 @@ macro_rules! prove_admin {
                 &prover.verifying_key().to_bytes(),
             )?;
             let proof = prover
-                .prove(witness, randomness, ProverConfig { msm_budget: budget })
-                .map_err(|_| Error::Proof)?;
+                .prove(
+                    witness,
+                    randomness,
+                    ProverConfig {
+                        msm_budget: budget,
+                        cancellation: self.cancellation,
+                    },
+                )
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Proof
+                    }
+                })?;
             self.admin_result(statement, proof, kind, budget)
         }
     };
@@ -114,9 +127,14 @@ impl PreparationV1<'_> {
         budget: MemoryBudget,
     ) -> Result<KagemushaWalletStepProofV1, Error> {
         let proof = bind_result(statement, proof)?;
-        self.installed
-            .verifier()
-            .verify_step_proof(statement, &proof, kind, 0, budget)?;
+        self.installed.verifier().verify_step_proof_cancellable(
+            statement,
+            &proof,
+            kind,
+            0,
+            budget,
+            self.cancellation,
+        )?;
         Ok(proof)
     }
 
@@ -184,9 +202,18 @@ impl PreparationV1<'_> {
             .prove(
                 step.witness(),
                 randomness,
-                ProverConfig { msm_budget: budget },
+                ProverConfig {
+                    msm_budget: budget,
+                    cancellation: self.cancellation,
+                },
             )
-            .map_err(|_| Error::Proof)?;
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         self.admin_result(step.statement(), proof, kind, budget)
     }
 }

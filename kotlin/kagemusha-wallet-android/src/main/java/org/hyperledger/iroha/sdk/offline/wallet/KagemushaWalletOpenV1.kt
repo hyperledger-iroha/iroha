@@ -37,6 +37,13 @@ class KagemushaWalletRuntimeV1(nativeRuntimeHandle: Long) : Closeable {
         if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         return KagemushaWalletPendingOpenV1(this, result.bytes())
     }
+    /** Begin strict account admission using exact native-retained E5/E6 originals after enrollment handoff. */
+    @Synchronized fun beginEnrolled(): KagemushaWalletPendingOpenV1 {
+        val id = handle()
+        val result = reply(KagemushaWalletNativeV1.enrollment(id,8,byteArrayOf(),byteArrayOf(),byteArrayOf(),emptyArray()))
+        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id) throw KagemushaWalletExceptionV1(-100)
+        return KagemushaWalletPendingOpenV1(this,result.bytes())
+    }
     @Synchronized internal fun finish(signature: ByteArray): KagemushaWalletV1 {
         val id = handle()
         val result = reply(KagemushaWalletNativeV1.openFinish(id, signature.copyOf()))

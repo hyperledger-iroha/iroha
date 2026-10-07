@@ -19,7 +19,6 @@ use iroha_plonk::{
         multiopen::MultiopenError,
     },
     transcript::TranscriptError,
-    verifier::{accumulate_generator, verify_full},
 };
 use iroha_plonk_gadgets::bytes::tape::{ByteOrder, segment_value};
 use iroha_plonk_recursion::{
@@ -66,6 +65,20 @@ impl fmt::Display for QSigmaError {
     }
 }
 impl std::error::Error for QSigmaError {}
+impl QSigmaError {
+    /// Whether this is cancellation, never an invalid incoming proof or burn witness.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Layout(error) => matches!(error, iroha_plonk::frontend::Error::Cancelled),
+            Self::Artifact(error) => error.is_cancelled(),
+            Self::Key(error) => error.is_cancelled(),
+            Self::Prover(error) => error.is_cancelled(),
+            Self::Verify(error) => error.is_cancelled(),
+            Self::Fold(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
 
 /// The caller-selected global mode of the incoming sigma obligation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,14 +169,16 @@ impl SigmaClass {
         &self,
         witness: &SigmaSlotWitness,
         budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<FoldInput<Eq>, QSigmaError> {
-        let opening = accumulate_generator(
+        let opening = iroha_plonk::verifier::accumulate_generator_cancellable(
             self.verifier.params(),
             self.verifier.binding(),
             &witness.key,
             &[vec![witness.statement]],
             &witness.proof,
             budget,
+            cancellation,
         )
         .map_err(QSigmaError::Verify)?;
         FoldInput::from_opening(*opening.g(), opening.challenges()).map_err(QSigmaError::Fold)
@@ -231,6 +246,20 @@ impl QSigmaPlan {
         global_index: u8,
         budget: MemoryBudget,
     ) -> Result<Option<FoldInput<Eq>>, QSigmaError> {
+        self.incoming_original_cancellable(witness, global_index, budget, None)
+    }
+    /// Derive an original opening with cancellation kept outside the soft-invalid branch.
+    /// # Errors
+    /// As [`Self::incoming_original`], or explicit cancellation without any verdict.
+    pub fn incoming_original_cancellable(
+        &self,
+        witness: &SigmaSlotWitness,
+        global_index: u8,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Option<FoldInput<Eq>>, QSigmaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| QSigmaError::Fold(iroha_plonk_recursion::Error::Cancelled))?;
         let class = self.incoming.as_ref().ok_or(QSigmaError::UnauthorizedKey)?;
         if class.index(witness)? != global_index {
             return Err(QSigmaError::UnauthorizedKey);
@@ -241,7 +270,7 @@ impl QSigmaPlan {
         if usize::try_from(witness.length).ok() != Some(witness.proof.len()) {
             return Ok(None);
         }
-        match class.opening(witness, budget) {
+        match class.opening(witness, budget, cancellation) {
             Ok(original) => Ok(Some(original)),
             Err(QSigmaError::Verify(error)) if incoming_proof_failure(&error) => Ok(None),
             Err(error) => Err(error),
@@ -280,9 +309,11 @@ impl QSigmaPlan {
             return Err(QSigmaError::OwnLength);
         }
         let own_index = self.own.index(&own)?;
-        let own_claim = self.own.opening(&own, config.kernel_budget)?;
+        let own_claim =
+            self.own
+                .opening(&own, config.kernel_budget, config.cancellation.as_ref())?;
         own_claim
-            .decide(params, config.kernel_budget)
+            .decide_cancellable(params, config.kernel_budget, config.cancellation.as_ref())
             .map_err(QSigmaError::Fold)?;
         let mut statements = vec![scalar(own.statement)];
         let mut exported = chunks(&own);
@@ -291,15 +322,28 @@ impl QSigmaPlan {
         let (incoming, part) = if let Some(input) = incoming {
             let class = self.incoming.as_ref().ok_or(QSigmaError::IncomingMode)?;
             let index = class.index(&input.sigma)?;
-            let original = self.incoming_original(&input.sigma, index, config.kernel_budget)?;
+            let original = self.incoming_original_cancellable(
+                &input.sigma,
+                index,
+                config.kernel_budget,
+                config.cancellation.as_ref(),
+            )?;
             let valid = original.is_some();
-            let trivial =
-                AccumulatorT::trivial(params, config.kernel_budget).map_err(QSigmaError::Fold)?;
+            let trivial = AccumulatorT::trivial_cancellable(
+                params,
+                config.kernel_budget,
+                config.cancellation.as_ref(),
+            )
+            .map_err(QSigmaError::Fold)?;
             let (selected, corrected) = match input.mode {
                 IncomingMode::Accept => {
                     let original = original.ok_or(QSigmaError::IncomingMode)?;
                     original
-                        .decide(params, config.kernel_budget)
+                        .decide_cancellable(
+                            params,
+                            config.kernel_budget,
+                            config.cancellation.as_ref(),
+                        )
                         .map_err(QSigmaError::Fold)?;
                     (original, Eq::from(*trivial.g()))
                 }
@@ -307,7 +351,11 @@ impl QSigmaPlan {
                 IncomingMode::Corrected => {
                     let original = original.ok_or(QSigmaError::IncomingMode)?;
                     let correction = original
-                        .corrected(params, config.kernel_budget)
+                        .corrected_cancellable(
+                            params,
+                            config.kernel_budget,
+                            config.cancellation.as_ref(),
+                        )
                         .map_err(QSigmaError::Fold)?;
                     (
                         correction.replacement().clone(),
@@ -322,7 +370,7 @@ impl QSigmaPlan {
                 config,
             )
             .map_err(QSigmaError::Fold)?;
-            part.decide(params, config.kernel_budget)
+            part.decide_cancellable(params, config.kernel_budget, config.cancellation.as_ref())
                 .map_err(QSigmaError::Fold)?;
             statements.push(scalar(input.sigma.statement));
             exported.extend(chunks(&input.sigma));
@@ -576,7 +624,7 @@ impl QSigmaProver {
         original: &[u8],
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
     ) -> Result<Self, QSigmaError> {
-        Self::from_original_profile(
+        Self::from_original_artifact_cancellable(
             source,
             params,
             descriptor,
@@ -584,6 +632,31 @@ impl QSigmaProver {
             original,
             config,
             None,
+        )
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn from_original_artifact_cancellable(
+        source: &QSigmaSource,
+        params: PinnedParams<Ep>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: iroha_plonk::keys::pk::artifact::ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, QSigmaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| QSigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
+        Self::from_original_profile_cancellable(
+            source,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            None,
+            cancellation,
         )
     }
 
@@ -604,10 +677,38 @@ impl QSigmaProver {
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
         range_buses: usize,
     ) -> Result<Self, QSigmaError> {
+        Self::from_original_artifact_serialized_foreign_cancellable(
+            source,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            range_buses,
+            None,
+        )
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    // Retain distinct authenticated originals and explicit per-operation policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_original_artifact_serialized_foreign_cancellable(
+        source: &QSigmaSource,
+        params: PinnedParams<Ep>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: iroha_plonk::keys::pk::artifact::ReadConfig,
+        range_buses: usize,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, QSigmaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| QSigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
         if !(1..=8).contains(&range_buses) {
             return Err(QSigmaError::Layout(LayoutError::Synthesis));
         }
-        Self::from_original_profile(
+        Self::from_original_profile_cancellable(
             source,
             params,
             descriptor,
@@ -615,10 +716,16 @@ impl QSigmaProver {
             original,
             config,
             Some(range_buses),
+            cancellation,
         )
     }
 
-    fn from_original_profile(
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    // Retain distinct authenticated originals and explicit per-operation policy.
+    #[allow(clippy::too_many_arguments)]
+    fn from_original_profile_cancellable(
         source: &QSigmaSource,
         params: PinnedParams<Ep>,
         descriptor: &[u8],
@@ -626,9 +733,12 @@ impl QSigmaProver {
         original: &[u8],
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
         serialized_buses: Option<usize>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, QSigmaError> {
         use iroha_plonk::cs::{CurveV1, InstanceModeV1, ProofSuffixV1, TranscriptV2};
         use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| QSigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
         if params.k() != 16 {
             return Err(QSigmaError::Parameters);
         }
@@ -659,10 +769,24 @@ impl QSigmaProver {
         })?;
         let key = if let Some(buses) = serialized_buses {
             let circuit = source.serialized_circuit(buses)?;
-            ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
+            ProvingKey::from_artifact_v2_cancellable(
+                original,
+                &binding,
+                &params,
+                &circuit,
+                config,
+                cancellation,
+            )
         } else {
             let circuit = source.circuit()?;
-            ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
+            ProvingKey::from_artifact_v2_cancellable(
+                original,
+                &binding,
+                &params,
+                &circuit,
+                config,
+                cancellation,
+            )
         }
         .map_err(QSigmaError::Artifact)?;
         if key.vk().to_bytes() != installed_vk {
@@ -710,20 +834,31 @@ impl QSigmaProver {
                 .clone()
                 .with_serialized_foreign(buses)
                 .map_err(QSigmaError::Layout)?;
-            Witness::from_circuit(&self.key, &circuit, &prepared.instances)
+            Witness::from_circuit_cancellable(
+                &self.key,
+                &circuit,
+                &prepared.instances,
+                config.cancellation,
+            )
         } else {
-            Witness::from_circuit(&self.key, &prepared.circuit, &prepared.instances)
+            Witness::from_circuit_cancellable(
+                &self.key,
+                &prepared.circuit,
+                &prepared.instances,
+                config.cancellation,
+            )
         }
         .map_err(QSigmaError::Prover)?;
         let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
             .map_err(QSigmaError::Prover)?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.params,
             self.key.binding(),
             self.key.vk(),
             &prepared.instances,
             &bytes,
             config.msm_budget,
+            config.cancellation,
         )
         .map_err(QSigmaError::Verify)?;
         Ok(QSigmaProof {
@@ -898,6 +1033,24 @@ mod tests {
         ] {
             assert!(!incoming_proof_failure(&error));
         }
+    }
+
+    #[test]
+    fn cancellation_never_authorizes_incoming_burn_or_correction() {
+        for error in [
+            VerifyError::Cancelled,
+            VerifyError::Ipa(IpaError::Cancelled),
+            VerifyError::Multiopen(iroha_plonk::pcs::multiopen::MultiopenError::Cancelled),
+            VerifyError::Multiopen(iroha_plonk::pcs::multiopen::MultiopenError::Ipa(
+                IpaError::Cancelled,
+            )),
+        ] {
+            assert!(error.is_cancelled());
+            assert!(!incoming_proof_failure(&error));
+            assert!(QSigmaError::Verify(error).is_cancelled());
+        }
+        assert!(QSigmaError::Fold(iroha_plonk_recursion::Error::Cancelled).is_cancelled());
+        assert!(!QSigmaError::IncomingMode.is_cancelled());
     }
 
     #[test]

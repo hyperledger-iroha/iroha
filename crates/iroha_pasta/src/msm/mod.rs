@@ -31,9 +31,10 @@ pub use budget::{
 };
 pub use fixed_base::FixedBaseTable;
 
+use crate::{CancellationToken, Cancelled};
 use group::prime::PrimeCurveAffine;
 use rayon::prelude::*;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::curve::PastaCurve;
 use crate::field::PastaField;
@@ -41,6 +42,8 @@ use crate::field::PastaField;
 /// MSM failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MsmError {
+    /// The caller cancelled this MSM; no partial group result is returned.
+    Cancelled,
     /// `scalars` and `bases` differ in length.
     LengthMismatch(crate::LengthMismatch),
     /// No window plan fits the memory budget.
@@ -55,6 +58,7 @@ pub enum MsmError {
 impl core::fmt::Display for MsmError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("msm: operation cancelled"),
             Self::LengthMismatch(e) => write!(f, "msm: {e}"),
             Self::Budget(e) => write!(f, "msm: {e}"),
             Self::TooLarge { n } => write!(f, "msm: {n} points exceed the engine limit"),
@@ -63,6 +67,12 @@ impl core::fmt::Display for MsmError {
 }
 
 impl std::error::Error for MsmError {}
+
+impl From<Cancelled> for MsmError {
+    fn from(_: Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
 
 impl From<BudgetExceeded> for MsmError {
     fn from(e: BudgetExceeded) -> Self {
@@ -127,7 +137,7 @@ pub fn msm_public_with_shared_budget<C: PastaCurve>(
     budget: MemoryBudget,
     shared: &SharedMemoryBudget,
 ) -> Result<C, MsmError> {
-    msm_impl::<C, false>(scalars, bases, budget, shared)
+    msm_impl::<C, false>(scalars, bases, budget, shared, None)
 }
 
 /// Secret MSM with an explicitly shared caller scratch ceiling.
@@ -140,7 +150,36 @@ pub fn msm_secret_with_shared_budget<C: PastaCurve>(
     budget: MemoryBudget,
     shared: &SharedMemoryBudget,
 ) -> Result<C, MsmError> {
-    msm_impl::<C, true>(scalars, bases, budget, shared)
+    msm_impl::<C, true>(scalars, bases, budget, shared, None)
+}
+
+/// Public MSM with an explicit cancellation signal and scratch ceiling.
+///
+/// # Errors
+/// As [`msm_public`], or [`MsmError::Cancelled`] after all kernel tasks join.
+pub fn msm_public_cancellable<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
+    msm_impl::<C, false>(scalars, bases, budget, shared, cancellation)
+}
+
+/// Secret MSM with an explicit cancellation signal and scratch ceiling.
+///
+/// # Errors
+/// As [`msm_secret`], or [`MsmError::Cancelled`]; all secret scratch is wiped
+/// and every Rayon task has joined before the error is returned.
+pub fn msm_secret_cancellable<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
+    msm_impl::<C, true>(scalars, bases, budget, shared, cancellation)
 }
 
 fn msm_impl<C: PastaCurve, const SECRET: bool>(
@@ -148,7 +187,9 @@ fn msm_impl<C: PastaCurve, const SECRET: bool>(
     bases: &[C::AffineExt],
     budget: MemoryBudget,
     shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<C, MsmError> {
+    CancellationToken::checkpoint(cancellation)?;
     if scalars.len() != bases.len() {
         return Err(MsmError::LengthMismatch(crate::LengthMismatch {
             left: scalars.len(),
@@ -163,7 +204,7 @@ fn msm_impl<C: PastaCurve, const SECRET: bool>(
         return Ok(C::identity());
     }
     if n <= SMALL_MSM {
-        return Ok(small_msm::<C, SECRET>(scalars, bases));
+        return small_msm::<C, SECRET>(scalars, bases, cancellation);
     }
     let bits = if SECRET {
         255
@@ -194,33 +235,37 @@ fn msm_impl<C: PastaCurve, const SECRET: bool>(
             threads,
             budget.bytes().min(shared.available_bytes()),
         ) else {
-            return Ok(small_msm::<C, SECRET>(scalars, bases));
+            return small_msm::<C, SECRET>(scalars, bases, cancellation);
         };
         plan = smaller;
     }
     let Some(_scratch) = shared.try_reserve(plan.bytes) else {
-        return Ok(small_msm::<C, SECRET>(scalars, bases));
+        return small_msm::<C, SECRET>(scalars, bases, cancellation);
     };
     // Identity bases contribute nothing and would break the affine formulas.
     let skip: Vec<bool> = bases.iter().map(|b| bool::from(b.is_identity())).collect();
-    let digits = pippenger::Digits::new(scalars, plan.c, plan.nw);
+    let digits = pippenger::Digits::new_cancellable(scalars, plan.c, plan.nw, cancellation)?;
     let tasks = plan.groups * plan.chunks;
     // Waves of at most `plan.concurrency` tasks bound the live bucket memory.
-    let mut windows = vec![C::identity(); plan.nw];
+    let mut windows = Zeroizing::new(vec![C::identity(); plan.nw]);
     for start in (0..tasks).step_by(plan.concurrency) {
-        let mut results: Vec<(usize, Vec<C>)> = (start..(start + plan.concurrency).min(tasks))
+        CancellationToken::checkpoint(cancellation)?;
+        let mut results: Vec<(usize, Zeroizing<Vec<C>>)> = (start
+            ..(start + plan.concurrency).min(tasks))
             .into_par_iter()
             .map(|task| {
-                pippenger::run_task::<C, SECRET>(
+                pippenger::run_task_cancellable::<C, SECRET>(
                     bases,
                     &skip,
                     &digits,
                     &plan,
                     task / plan.chunks,
                     task % plan.chunks,
+                    cancellation,
                 )
             })
             .collect();
+        CancellationToken::checkpoint(cancellation)?;
         for (w0, sums) in &mut results {
             for (k, s) in sums.iter().enumerate() {
                 windows[*w0 + k] += s;
@@ -234,6 +279,7 @@ fn msm_impl<C: PastaCurve, const SECRET: bool>(
     if SECRET {
         windows.zeroize();
     }
+    CancellationToken::checkpoint(cancellation)?;
     Ok(result)
 }
 
@@ -241,16 +287,19 @@ fn msm_impl<C: PastaCurve, const SECRET: bool>(
 fn small_msm<C: PastaCurve, const SECRET: bool>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
-) -> C {
-    let mut acc = C::identity();
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
+    let mut acc = Zeroizing::new(C::identity());
     for (s, b) in scalars.iter().zip(bases.iter()) {
+        CancellationToken::checkpoint(cancellation)?;
         let p = b.to_curve();
         // The public GLV multiplier allocates wNAF digit vectors. Use the
         // stack-only complete multiplier for both modes: this path also runs
         // when the shared scratch ceiling has no free bytes.
-        acc += p * *s;
+        *acc += p * *s;
     }
-    acc
+    CancellationToken::checkpoint(cancellation)?;
+    Ok(*acc)
 }
 
 /// Reference MSM by independent scalar multiplications (tests and
@@ -395,7 +444,7 @@ mod tests {
             })
         );
         assert_eq!(
-            small_msm::<Ep, false>(&scalars[..2], &bases[..2]),
+            small_msm::<Ep, false>(&scalars[..2], &bases[..2], None).unwrap(),
             msm_naive::<Ep>(&scalars[..2], &bases[..2])
         );
     }
