@@ -72,6 +72,44 @@ fn exact_requests_keep_their_original_gap_and_survive_reopening() {
         .unwrap();
     let record: IssuedRequestCustodyV1 = archive::decode(&value).unwrap();
     assert!(record.gap.is_none());
+    let (restored, original) = record
+        .read(
+            &mut store,
+            &request.body.scheme_id,
+            &request.body.receiver_wallet_id,
+            &request.request_digest(),
+        )
+        .unwrap();
+    assert_eq!(original, archive::encode(&request).unwrap());
+    assert_eq!(restored, request);
+    assert!(record.gap(&mut store, &restored).unwrap().is_none());
+    assert!(matches!(
+        record.read(
+            &mut store,
+            &[42; 32],
+            &request.body.receiver_wallet_id,
+            &request.request_digest()
+        ),
+        Err(Error::WitnessLost(_))
+    ));
+    assert!(matches!(
+        record.read(
+            &mut store,
+            &request.body.scheme_id,
+            &[42; 32],
+            &request.request_digest()
+        ),
+        Err(Error::WitnessLost(_))
+    ));
+    assert!(matches!(
+        record.read(
+            &mut store,
+            &request.body.scheme_id,
+            &request.body.receiver_wallet_id,
+            &[42; 32]
+        ),
+        Err(Error::WitnessLost(_))
+    ));
     let mut reopened = store.clone();
     assert_eq!(
         reopened
@@ -94,6 +132,7 @@ fn exact_requests_keep_their_original_gap_and_survive_reopening() {
         .unwrap()
         .unwrap();
     let record: IssuedRequestCustodyV1 = archive::decode(&value).unwrap();
+    assert_eq!(record.gap(&mut store, &request).unwrap(), Some(gap));
     assert_eq!(
         store
             .read_object(

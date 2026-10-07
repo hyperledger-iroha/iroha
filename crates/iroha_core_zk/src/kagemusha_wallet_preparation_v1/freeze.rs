@@ -164,15 +164,7 @@ impl PreparationV1<'_> {
         proof: KagemushaWalletStepProofV1,
         budget: MemoryBudget,
     ) -> Result<FrozenTransition, Error> {
-        let payment = match step.originals().1 {
-            None => [0; 32],
-            Some(bytes) => authority(KagemushaWalletPaymentV1::decode_canonical(
-                bytes,
-                &self.installed.verifier().scheme().scheme_id(),
-            ))?
-            .payment_digest()
-            .map_err(|_| Error::Authority)?,
-        };
+        let payment = step.retained_payment_digest()?;
         self.freeze(
             owner,
             CapsuleFields {

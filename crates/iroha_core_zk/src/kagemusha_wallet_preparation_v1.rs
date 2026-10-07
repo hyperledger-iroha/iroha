@@ -25,6 +25,9 @@ use crate::{
     kagemusha_wallet_state_v1::ReleasedStep,
 };
 
+#[path = "kagemusha_wallet_preparation_v1/incoming_statement.rs"]
+mod incoming_statement;
+
 #[path = "kagemusha_wallet_preparation_v1/monetary.rs"]
 mod monetary;
 pub use monetary::{MonetaryStepV1, ReceiveFoldMapsV1, ReceiveMapsV1, SendControlsV1, SendMapsV1};

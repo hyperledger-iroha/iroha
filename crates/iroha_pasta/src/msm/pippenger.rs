@@ -29,7 +29,7 @@
 //! queued bucket indices, points and signs, addition kinds and the batch
 //! inversion scratch, including spare capacity) are zeroised when they are
 //! dropped, also during unwinding. Bucket indices, zero-digit skipping,
-//! conflict handling, leading-empty-bucket trimming and equal/opposite-point
+//! conflict handling, empty-gap weighting and equal/opposite-point
 //! checks depend on the scalar digits, which is the posture of the vendored
 //! `halo2curves` MSM it replaces: it is not a constant-time MSM.
 #![allow(
@@ -47,6 +47,10 @@ use crate::field::PastaField;
 #[cfg(test)]
 #[path = "reduction_tests.rs"]
 mod reduction_tests;
+
+#[cfg(test)]
+#[path = "gap_tests.rs"]
+mod gap_tests;
 
 /// Largest supported window: digits must fit `i16` with magnitude `2^(c-1)`.
 pub(crate) const MAX_WINDOW: usize = 15;
@@ -329,24 +333,47 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
     pub(crate) fn reduce(&self, start: usize, len: usize) -> C {
         let mut running = C::identity();
         let mut acc = C::identity();
-        // Before the highest occupied bucket, both running and acc are the
-        // identity. Omit only those identity additions; lower empty buckets
-        // must still contribute running to preserve their positional weight.
-        // Occupancy is digit-dependent, as are the existing bucket accesses
-        // and conflict handling; this stays within the variable-time MSM
-        // posture documented above. Secret window planning is unchanged.
-        let Some(last) = (start..start + len).rfind(|&j| self.has[j] || self.overflow_used[j])
-        else {
+        // Occupancy is digit-dependent under the existing variable-time
+        // MSM contract. An empty gap repeats the same running sum; multiply
+        // it by that exact positive gap length with complete curve formulas.
+        // Dense windows keep their one-addition path. No scratch is added.
+        let occupied = |j: usize| self.has[j] || self.overflow_used[j];
+        let Some(last) = (start..start + len).rfind(|&j| occupied(j)) else {
             return acc;
         };
-        for j in (start..=last).rev() {
+        // Retain the original reduction for dense windows. Counting stops
+        // once one occupied bucket per 32 positions is established; this
+        // avoids imposing gap-multiply overhead on coefficient-form MSMs.
+        let cutoff = (last - start + 1).div_ceil(32);
+        if (start..=last).filter(|&j| occupied(j)).take(cutoff).count() == cutoff {
+            for j in (start..=last).rev() {
+                if self.has[j] {
+                    running = running.add_affine_coords(self.x[j], self.y[j]);
+                }
+                if self.overflow_used[j] {
+                    running += self.overflow[j];
+                }
+                acc += running;
+            }
+            return acc;
+        }
+        let mut occupied = (start..=last)
+            .rev()
+            .filter(|&j| self.has[j] || self.overflow_used[j])
+            .peekable();
+        while let Some(j) = occupied.next() {
             if self.has[j] {
                 running = running.add_affine_coords(self.x[j], self.y[j]);
             }
             if self.overflow_used[j] {
                 running += self.overflow[j];
             }
-            acc += running;
+            let gap = occupied.peek().map_or(j - start + 1, |&next| j - next);
+            if gap == 1 {
+                acc += running;
+            } else {
+                acc += multiply_gap_vartime(running, gap);
+            }
         }
         acc
     }
@@ -379,6 +406,24 @@ impl<C: PastaCurve, const SECRET: bool> Drop for Buckets<'_, C, SECRET> {
     fn drop(&mut self) {
         self.wipe();
     }
+}
+
+/// The exact repeated sum of a running bucket total across an empty gap.
+/// The gap depends on digit occupancy; this is part of the variable-time
+/// prover MSM, never a replacement for a constant-time scalar multiplier.
+fn multiply_gap_vartime<C: PastaCurve>(point: C, gap: usize) -> C {
+    if gap == 0 {
+        return C::identity();
+    }
+    let mut result = point;
+    let top = usize::BITS - 1 - gap.leading_zeros();
+    for bit in (0..top).rev() {
+        result = result.double();
+        if (gap >> bit) & 1 == 1 {
+            result += point;
+        }
+    }
+    result
 }
 
 /// Mixed addition helpers on projective points used by the engine.

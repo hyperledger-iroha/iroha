@@ -14,6 +14,8 @@ use iroha_pasta::Eq;
 use iroha_plonk::ProverRandomness;
 
 use super::*;
+#[path = "monetary/incoming_original.rs"]
+mod incoming_original;
 
 #[cfg(test)]
 #[path = "monetary/tests.rs"]
@@ -78,8 +80,24 @@ pub struct MonetaryStepV1 {
     payment_original: Option<Vec<u8>>,
     maps: Vec<IndexedInsert<Fp>>,
     send_check: Option<KagemushaWalletSendCheckV1>,
-    payer: Option<AuthenticatedCredentialV1>,
+    payer: Option<PayerOriginalV1>,
     payer_certificate_set_original: Option<Vec<u8>>,
+}
+
+// Exact incoming signed bytes, deliberately not an authenticated credential capability.
+struct PayerOriginalV1 {
+    credential: KagemushaWalletCredentialV1,
+    credential_original: Vec<u8>,
+    credential_tape: Vec<u8>,
+}
+impl From<AuthenticatedCredentialV1> for PayerOriginalV1 {
+    fn from(owner: AuthenticatedCredentialV1) -> Self {
+        Self {
+            credential: owner.credential,
+            credential_original: owner.credential_original,
+            credential_tape: owner.credential_tape,
+        }
+    }
 }
 
 impl MonetaryStepV1 {
@@ -125,6 +143,13 @@ impl MonetaryStepV1 {
             return Err(Error::Authority);
         }
         Ok(inputs)
+    }
+
+    pub(super) fn retained_payment_digest(&self) -> Result<[u8; 32], Error> {
+        match self.payment_original.as_deref() {
+            None => Ok([0; 32]),
+            Some(bytes) => Ok(incoming_original::payment(bytes)?.payment_digest),
+        }
     }
 
     /// Exact witness of the installed selector; not a separate monetary relation.
@@ -718,12 +743,108 @@ impl PreparationV1<'_> {
         self.installed
             .verifier()
             .verify_package_proofs(&payment.send, None, budget)?;
+        self.derive_receive(
+            owner,
+            source,
+            request,
+            request_original,
+            payment_original,
+            payer_owner.into(),
+            payer_certificate_set_original,
+            recorded_blacklist,
+            maps,
+            successor_nonce,
+            check.effect,
+        )
+    }
+
+    /// Restore only a selected Receive's own sigma witness. Incoming acceptance belongs
+    /// to the total fold predicates; this private path never authorizes Advance or signing.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_receive(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        source: &ReleasedStep,
+        request_original: &[u8],
+        payment_original: &[u8],
+        payer_original: &[u8],
+        payer_certificates: &[u8],
+        recorded_blacklist: Option<&KagemushaWalletRecordedBlacklistProofV1>,
+        maps: ReceiveMapsV1,
+        nonce: [u8; 32],
+        budget: MemoryBudget,
+    ) -> Result<MonetaryStepV1, Error> {
+        self.receipt_tape(owner, source, budget)?;
+        let request = request(request_original, self.installed.verifier().scheme())?;
+        if request.body.receiver_wallet_id != owner.credential.body.wallet_id
+            || request.receiver_credential.body.payment_key != owner.credential.body.payment_key
+            || request.body.receiver_account_digest != owner.credential.body.account_digest
+        {
+            return Err(Error::Authority);
+        }
+        if payer_original.is_empty()
+            || payer_original.len() > KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1
+        {
+            return Err(Error::Authority);
+        }
+        let credential: KagemushaWalletCredentialV1 = norito::decode_canonical_with_limits(
+            payer_original,
+            norito::canonical_decode_limits(payer_original.len()),
+        )
+        .map_err(|_| Error::Authority)?;
+        incoming_original::payment(payment_original)?;
+        let payer = PayerOriginalV1 {
+            credential,
+            credential_original: payer_original.to_vec(),
+            credential_tape: signed_tape(credential.body.transcript(), &credential.signature),
+        };
+        let effect = KagemushaWalletEffectV1::Receive {
+            credit_id: request.credit_id(),
+            payer_wallet_id: request.body.payer_wallet_id,
+            amount: request.body.amount,
+        };
+        self.derive_receive(
+            owner,
+            source,
+            request,
+            request_original,
+            payment_original,
+            payer,
+            payer_certificates,
+            recorded_blacklist,
+            maps,
+            nonce,
+            effect,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn derive_receive(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        source: &ReleasedStep,
+        request: KagemushaWalletRequestV1,
+        request_original: &[u8],
+        payment_original: &[u8],
+        payer: PayerOriginalV1,
+        payer_certificate_set_original: &[u8],
+        recorded_blacklist: Option<&KagemushaWalletRecordedBlacklistProofV1>,
+        maps: ReceiveMapsV1,
+        successor_nonce: [u8; 32],
+        effect: KagemushaWalletEffectV1,
+    ) -> Result<MonetaryStepV1, Error> {
+        let scheme = self.installed.verifier().scheme();
+        let source_state = &source.frozen.capsule.successor_state;
         let sequence = source_state
             .core
             .sequence
             .checked_add(1)
             .ok_or(Error::Authority)?;
-        let consumed = authority(payment.consumed_credit_leaf(sequence))?;
+        let consumed = KagemushaWalletConsumedCreditLeafV1 {
+            credit_id: request.credit_id(),
+            amount: request.body.amount,
+            receive_sequence: sequence,
+        };
         let consumed_root = authority(maps.consumed.verify(
             &source_state.core.consumed_credit_root,
             &consumed.key(),
@@ -757,7 +878,7 @@ impl PreparationV1<'_> {
         if witness.request_body() != body {
             return Err(Error::Authority);
         }
-        let (state, statement) = derive(source_state, relation, &witness, check.effect)?;
+        let (state, statement) = derive(source_state, relation, &witness, effect)?;
         authority(statement.validate_for_scheme(scheme))?;
         authority(statement.validate_for_credential(&owner.credential))?;
         authority(statement.validate_successor_of(&source.frozen.capsule.statement))?;
@@ -773,7 +894,7 @@ impl PreparationV1<'_> {
             payment_original: Some(payment_original.to_vec()),
             maps: vec![insertion(&maps.consumed)?],
             send_check: None,
-            payer: Some(payer_owner),
+            payer: Some(payer),
             payer_certificate_set_original: Some(payer_certificate_set_original.to_vec()),
         })
     }
@@ -1004,44 +1125,25 @@ impl PreparationV1<'_> {
         {
             return Err(Error::Authority);
         }
-        let scheme = self.installed.verifier().scheme();
-        let payment = authority(KagemushaWalletPaymentV1::decode_canonical(
-            original,
-            &scheme.scheme_id(),
-        ))?;
         let payer = prepared.payer.as_ref().ok_or(Error::Authority)?;
-        self.credential_owner(payer)?;
+        let incoming = incoming_original::payment(original)?;
+        if incoming.payment_digest != capsule.payment_digest {
+            return Err(Error::Authority);
+        }
         let (after, statement, receipt) =
             self.retained_monetary(owner, step, predecessor, prepared, public, budget)?;
-        let incoming = &payment.send;
-        let incoming_lineage = incoming.lineage.lineage().ok_or(Error::Authority)?;
-        let receipt_signer = authority(KagemushaWalletReceiptSignerV1::from_credential(
-            &payer.credential,
-        ))?;
-        let incoming_receipt = authority(incoming.receipt.body(
-            &receipt_signer,
-            &incoming.statement,
-            &authority(incoming.proof_digest())?,
-        ))?;
         let quoted = &prepared.request.receiver_credential;
         let quoted_certificate = authority(prepared.request.certificates.certificate(
             &quoted.body.issuer_certificate,
             KagemushaWalletSignerRoleV1::Enrollment,
         ))?;
-        let digests = authority(payment.digests())?;
-        let compact = kagemusha_wallet_payment_transcript_v1(
-            &digests.request,
-            &payment.payer_payment_key,
-            &payment.payer_credential_digest,
-            &digests.package.package,
-        );
         let consumed = *prepared.maps.first().ok_or(Error::Authority)?;
         Ok(ReceiveSourceFieldsV1 {
             before: predecessor.witness,
             after,
             statement,
             consumed,
-            incoming_statement: fields(authority(incoming.statement.field_items())?)?,
+            incoming_statement: incoming.incoming_statement,
             sigma: capsule.step_proof.bytes.clone(),
             objects: [
                 signed_tape(
@@ -1049,10 +1151,10 @@ impl PreparationV1<'_> {
                     &prepared.request.signature,
                 ),
                 payer.credential_tape.clone(),
-                signed_tape(incoming_receipt.transcript(), &incoming.receipt.signature),
-                compact,
-                incoming_lineage.bytes(),
-                incoming.step_proof.bytes.clone(),
+                incoming.receipt,
+                incoming.compact,
+                incoming.omega,
+                incoming.payment.send.step_proof.bytes.clone(),
                 owner.credential_tape.clone(),
                 owner.certificate_tape.clone(),
                 receipt,

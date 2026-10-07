@@ -485,6 +485,75 @@ fn invalid_status_membership_and_receipt_identity_are_not_silently_repaired() {
 }
 
 #[test]
+fn incoming_evidence_versions_and_statement_predicates_are_preserved_for_both_routes() {
+    let (scheme, payer, inputs) = originals();
+    let source = retained::originals(&scheme, &payer, &inputs).unwrap();
+    for message in messages() {
+        let KagemushaWalletMessageV1::Credited { mut credited } = message else {
+            continue;
+        };
+        let before = evidence::credited_digest(
+            &norito::to_bytes(&credited).unwrap(),
+            &source.request,
+            &source.payment_digest,
+        )
+        .unwrap();
+        credited.version = 7;
+        let proposal = match &mut credited.evidence {
+            KagemushaWalletCreditedEvidenceV1::Receive { package } => {
+                package.statement.version = 9;
+                package.statement.enabled_controls = 99;
+                package.receipt.version = 23;
+                assert!(package.statement.field_items().is_err());
+                ArchiveIncomingWitnessV1::Receive(Box::new(IncomingMode::Trivial))
+            }
+            KagemushaWalletCreditedEvidenceV1::Status { status } => {
+                status.statement.version = 9;
+                status.statement.enabled_controls = 99;
+                status.receipt.version = 23;
+                status.version = 29;
+                assert!(status.statement.field_items().is_err());
+                status_proposal()
+            }
+        };
+        let bytes = norito::to_bytes(&credited).unwrap();
+        let after =
+            evidence::credited_digest(&bytes, &source.request, &source.payment_digest).unwrap();
+        assert_ne!(before, after);
+        let native = evidence::original(
+            &bytes,
+            &source.request,
+            &source.payment_digest,
+            &after,
+            proposal,
+        )
+        .unwrap();
+        let (statement, receipt, credited) = match native {
+            native::Evidence::Receive {
+                statement,
+                receipt,
+                credited,
+                ..
+            } => (statement, receipt, credited),
+            native::Evidence::Status {
+                statement,
+                receipt,
+                credited,
+                status,
+                ..
+            } => {
+                assert_eq!(&status[..2], &29_u16.to_le_bytes());
+                (statement, receipt, credited)
+            }
+        };
+        assert_eq!(statement[0], Fp::from(9));
+        assert_eq!(statement[11], Fp::from(99));
+        assert_eq!(&receipt[..2], &23_u16.to_le_bytes());
+        assert_eq!(&credited[..2], &7_u16.to_le_bytes());
+    }
+}
+
+#[test]
 fn private_archive_derivation_removes_only_bound_pending_and_preserves_value() {
     let (scheme, payer, inputs) = originals();
     let held = retained::originals(&scheme, &payer, &inputs).unwrap();

@@ -20,8 +20,8 @@
 //! Collection records a source-selected intent before deleting historical witness objects.
 //! A newer verified Ω supplies coverage; Send additionally needs pending-map nonmembership.
 //! Earned-fee Payments have separate custody until their exact finalized payout is verified.
-// TODO(G3/G4): connect the qualified native operation/Λ/Ω artifact loader; qualify the complete
-// custody/proof lifetime on stock phones. Multi-step run relations remain artifact-dependent.
+// TODO(G3/G4): qualify the installed full-catalog native owner through wallet/SDK delivery and
+// the complete custody/proof lifetime on stock phones. Run relations remain artifact-dependent.
 // Persistent replay metadata and unreachable immutable index nodes remain retained; a future
 // compactor must preserve source-selected reachable roots without full-history hot-path scans.
 
@@ -75,7 +75,7 @@ pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub(crate) use native_worker::NativeFoldWorkerV1;
 pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
-pub(crate) use session_custody::DirectTimeExchangeV1;
+pub use session_custody::DirectTimeExchangeV1;
 pub use snapshot::{Snapshot, SnapshotFold};
 pub use transition_custody::TransitionCustodyV1;
 

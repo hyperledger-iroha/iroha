@@ -425,6 +425,7 @@ fn installed_public_refresh_proves_all_five_updates_and_rejects_resigned_bad_sig
     preparation
         .receipt_tape(&owner, &released, MemoryBudget::DEFAULT)
         .unwrap();
+    preparation.assert_incoming_restoration_boundary(&owner, &released, &payment);
     for source in [
         Source::credential(),
         Source::policy(),

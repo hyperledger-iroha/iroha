@@ -44,6 +44,12 @@ fn required_original(custody: &mut PreparationCustodyV1<'_>, role: Original) -> 
         .ok_or(state::Error::WitnessLost("required native original"))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Derivation {
+    BeforeAdvance,
+    ReleasedFold,
+}
+
 pub(super) enum Step {
     Archive(Box<ArchiveStepV1>),
     Load(Box<LoadStepV1>),
@@ -386,8 +392,61 @@ impl PreparationV1<'_> {
         now: Option<&KagemushaWalletMonotonicReadingV1>,
         budget: MemoryBudget,
     ) -> Result<PreparedOperationV1> {
+        self.derive_operation(
+            request,
+            source,
+            custody,
+            sources,
+            nonce,
+            now,
+            budget,
+            Derivation::BeforeAdvance,
+            None,
+        )
+    }
+
+    // Only the selected fold worker calls this. Own source, receipt, sigma and exact plan/draft
+    // remain mandatory; incoming acceptance belongs to the total recursive predicates.
+    pub(crate) fn restore_operation(
+        &self,
+        request: &NativeIntentV1,
+        frozen: &state::FrozenTransition,
+        source: &PreparationSourceV1<'_>,
+        custody: &mut PreparationCustodyV1<'_>,
+        sources: &QualifiedWalletSourcesV1,
+        nonce: [u8; 32],
+        now: Option<&KagemushaWalletMonotonicReadingV1>,
+        budget: MemoryBudget,
+    ) -> Result<PreparedOperationV1> {
+        self.derive_operation(
+            request,
+            source,
+            custody,
+            sources,
+            nonce,
+            now,
+            budget,
+            Derivation::ReleasedFold,
+            Some(frozen),
+        )
+    }
+
+    fn derive_operation(
+        &self,
+        request: &NativeIntentV1,
+        source: &PreparationSourceV1<'_>,
+        custody: &mut PreparationCustodyV1<'_>,
+        sources: &QualifiedWalletSourcesV1,
+        nonce: [u8; 32],
+        now: Option<&KagemushaWalletMonotonicReadingV1>,
+        budget: MemoryBudget,
+        derivation: Derivation,
+        frozen: Option<&state::FrozenTransition>,
+    ) -> Result<PreparedOperationV1> {
         let scheme = self.installed.verifier().scheme();
-        request.validate(scheme)?;
+        if derivation == Derivation::BeforeAdvance {
+            request.validate(scheme)?;
+        }
         if sources.installation()
             != (
                 scheme.scheme_id(),
@@ -419,9 +478,14 @@ impl PreparationV1<'_> {
             ))?;
             let pending = model(payment.pending_outgoing_leaf())?;
             let removal = custody.maps().remove(Map::Pending, &pending.credit_id)?;
-            Step::Archive(Box::new(proof(
-                self.prepare_archive(&owner, released, intent, &removal, nonce, budget),
-            )?))
+            Step::Archive(Box::new(proof(match derivation {
+                Derivation::BeforeAdvance => {
+                    self.prepare_archive(&owner, released, intent, &removal, nonce, budget)
+                }
+                Derivation::ReleasedFold => {
+                    self.restore_archive(&owner, released, intent, &removal, nonce, budget)
+                }
+            })?))
         } else {
             match &request
                 .user_request()
@@ -537,12 +601,44 @@ impl PreparationV1<'_> {
                     payer_credential,
                     certificates,
                 } => {
-                    let decoded = model(KagemushaWalletPaymentV1::decode_canonical(
-                        payment,
-                        &scheme.scheme_id(),
-                    ))?;
-                    let digest = decoded.request.request_digest();
+                    let decoded: KagemushaWalletPaymentV1 = match derivation {
+                        Derivation::BeforeAdvance => {
+                            model(KagemushaWalletPaymentV1::decode_canonical(
+                                payment,
+                                &scheme.scheme_id(),
+                            ))?
+                        }
+                        Derivation::ReleasedFold => {
+                            decode(payment, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?
+                        }
+                    };
+                    let frozen_request = frozen
+                        .map(|frozen| {
+                            let mut originals =
+                                frozen.capsule.retained_inputs.iter().filter(|input| {
+                                    input.role == KagemushaWalletRetainedInputRoleV1::Request
+                                });
+                            let original = originals
+                                .next()
+                                .ok_or(state::Error::WitnessLost("released Request original"))?;
+                            if originals.next().is_some() {
+                                return Err(state::Error::WitnessLost(
+                                    "duplicate released Request",
+                                ));
+                            }
+                            let request: KagemushaWalletRequestV1 =
+                                decode(&original.bytes, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?;
+                            Ok((request.request_digest(), original.bytes.as_slice()))
+                        })
+                        .transpose()?;
+                    let digest = frozen_request
+                        .map_or_else(|| decoded.request.request_digest(), |(digest, _)| digest);
                     let request_original = custody.issued_request(&digest)?;
+                    if frozen_request.is_some_and(|(_, bytes)| bytes != request_original) {
+                        return Err(state::Error::WitnessLost(
+                            "issued/released Request mismatch",
+                        ));
+                    }
                     let request: KagemushaWalletRequestV1 =
                         decode(&request_original, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?;
                     if request.request_digest() != digest {
@@ -564,32 +660,47 @@ impl PreparationV1<'_> {
                                 .ok_or(state::Error::WitnessLost("issued Request payer gap"))?,
                         })
                     };
-                    let leaf = model(
-                        decoded.consumed_credit_leaf(
-                            before
-                                .core
-                                .sequence
-                                .checked_add(1)
-                                .ok_or(state::Error::Invalid("Receive sequence"))?,
-                        ),
-                    )?;
+                    let leaf = KagemushaWalletConsumedCreditLeafV1 {
+                        credit_id: request.credit_id(),
+                        amount: request.body.amount,
+                        receive_sequence: before
+                            .core
+                            .sequence
+                            .checked_add(1)
+                            .ok_or(state::Error::Invalid("Receive sequence"))?,
+                    };
                     let consumed = custody.maps().insert(
                         Map::Consumed,
                         leaf.key(),
                         model(leaf.leaf_value())?,
                     )?;
-                    Step::Monetary(Box::new(proof(self.prepare_receive(
-                        &owner,
-                        released,
-                        &request_original,
-                        payment,
-                        payer_credential,
-                        certificates,
-                        recorded.as_ref(),
-                        ReceiveMapsV1 { consumed },
-                        nonce,
-                        budget,
-                    ))?))
+                    let step = match derivation {
+                        Derivation::BeforeAdvance => self.prepare_receive(
+                            &owner,
+                            released,
+                            &request_original,
+                            payment,
+                            payer_credential,
+                            certificates,
+                            recorded.as_ref(),
+                            ReceiveMapsV1 { consumed },
+                            nonce,
+                            budget,
+                        ),
+                        Derivation::ReleasedFold => self.restore_receive(
+                            &owner,
+                            released,
+                            &request_original,
+                            payment,
+                            payer_credential,
+                            certificates,
+                            recorded.as_ref(),
+                            ReceiveMapsV1 { consumed },
+                            nonce,
+                            budget,
+                        ),
+                    };
+                    Step::Monetary(Box::new(proof(step)?))
                 }
                 Action::Refresh {
                     kind,

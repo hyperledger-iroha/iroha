@@ -1,6 +1,6 @@
 //! Fixed map witness access tests; synthetic completions here grant no proof authority.
 
-use super::super::tests::{MemoryArchive, fixture};
+use super::super::tests::{MemoryArchive, enrollment_issuer, fixture};
 use super::*;
 
 fn field(value: u128) -> [u8; 32] {
@@ -9,8 +9,7 @@ fn field(value: u128) -> [u8; 32] {
 
 fn setup(effect: KagemushaWalletEffectV1) -> (MemoryArchive, ReleasedStep, SourceCustodyV1) {
     let credential: KagemushaWalletCredentialV1 = fixture("KagemushaWalletCredentialV1");
-    let certificate: KagemushaWalletSignerCertificateV1 =
-        fixture("KagemushaWalletSignerCertificateV1");
+    let certificate = enrollment_issuer(&credential);
     let certificates = KagemushaWalletCertificateSetV1::new(vec![certificate]).unwrap();
     let state = KagemushaWalletStateV1::bootstrap(&credential, field(7)).unwrap();
     let mut capsule: KagemushaWalletRecoveryCapsuleV1 = fixture("KagemushaWalletRecoveryCapsuleV1");

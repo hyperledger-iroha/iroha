@@ -117,6 +117,7 @@ mod reconcile;
 mod retained;
 mod store;
 mod terminal;
+mod setup;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use self::store::{

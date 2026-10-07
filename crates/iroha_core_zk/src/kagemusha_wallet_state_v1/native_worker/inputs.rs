@@ -147,10 +147,8 @@ fn selector(step: &ReleasedStep) -> Result<OperationRoute, Error> {
         K::Receive => {
             let request: KagemushaWalletRequestV1 =
                 custody_codec::decode(original(step, R::Request)?)?;
-            let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
-                original(step, R::Payment)?,
-                &capsule.scheme_id,
-            ))?;
+            let payment: KagemushaWalletPaymentV1 =
+                custody_codec::decode(original(step, R::Payment)?)?;
             let variant = if request.receiver_credential.credential_digest()
                 == step.frozen.credential.credential_digest()
             {
@@ -386,8 +384,9 @@ impl NativeFoldWorkerV1 {
             intent,
             &source,
         )?;
-        let prepared = preparation.prepare_operation(
+        let prepared = preparation.restore_operation(
             intent,
+            &step.frozen,
             &source,
             &mut selected,
             &self.sources,

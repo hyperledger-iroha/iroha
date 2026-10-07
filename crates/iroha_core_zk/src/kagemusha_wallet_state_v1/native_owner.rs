@@ -2,6 +2,7 @@
 
 use super::*;
 mod bootstrap;
+mod sessions;
 use crate::{
     kagemusha_wallet_advance_v1::{KagemushaWalletFsV1, KagemushaWalletPlatformV1},
     kagemusha_wallet_artifacts_v1::{

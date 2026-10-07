@@ -18,6 +18,14 @@ impl Drop for TestWallet {
     }
 }
 impl Wallet for TestWallet {
+    fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Response {
+            kind: 12,
+            bytes: vec![0, 255, 7],
+            ..Response::default()
+        })
+    }
     fn snapshot(&mut self) -> Result<state::Snapshot> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(state::Snapshot {

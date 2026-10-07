@@ -45,6 +45,33 @@ fn credential() -> KagemushaWalletCredentialV1 {
     fixture("KagemushaWalletCredentialV1")
 }
 
+pub(super) fn enrollment_issuer(
+    credential: &KagemushaWalletCredentialV1,
+) -> KagemushaWalletSignerCertificateV1 {
+    // The standalone certificate vector exercises a different signer role. Recover the
+    // actual enrollment original from the authenticated session that carries this wallet.
+    for row in vectors()["envelopes"].as_array().expect("envelopes") {
+        let envelope: KagemushaWalletEnvelopeV1 = archive::decode(
+            &hex::decode(row["canonical_hex"].as_str().expect("hex")).expect("hex"),
+        )
+        .expect("envelope");
+        let certificates = match envelope.message {
+            KagemushaWalletMessageV1::Offer { offer } => offer.certificates,
+            KagemushaWalletMessageV1::Request { request } => request.certificates,
+            _ => continue,
+        };
+        if let Some(certificate) = certificates.certificates.iter().find(|certificate| {
+            certificate.certificate_digest() == credential.body.issuer_certificate
+        }) {
+            credential
+                .verify(&fixture("KagemushaWalletSchemeV1"), certificate)
+                .expect("actual enrollment issuer");
+            return *certificate;
+        }
+    }
+    panic!("fixture enrollment issuer")
+}
+
 fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
     for key in vectors()["keys"].as_array().expect("keys") {
         let signing = SigningKey::from_slice(
@@ -181,6 +208,13 @@ fn frozen(
     } else {
         [0; 32]
     };
+    // The vector is a Receive with an already populated consumed map. It supplies signed
+    // object fixtures, never the initial local map descriptor. Mock steps carry their actual
+    // selected predecessor fields; Bootstrap starts with the protocol's empty local stores.
+    c.successor_state = previous.map_or_else(
+        || KagemushaWalletStateV1::bootstrap(&credential, field(92)).expect("empty state"),
+        |previous| previous.capsule.successor_state,
+    );
     let state = &mut c.successor_state;
     state.core.scheme_id = c.scheme_id;
     state.core.wallet_id = c.wallet_id;
@@ -638,8 +672,7 @@ impl NativeProofs for TestProofs {
         &self,
         credential: &KagemushaWalletCredentialV1,
     ) -> Result<Vec<u8>, Error> {
-        let certificate: KagemushaWalletSignerCertificateV1 =
-            fixture("KagemushaWalletSignerCertificateV1");
+        let certificate = enrollment_issuer(credential);
         if certificate.certificate_digest() != credential.body.issuer_certificate {
             return Err(Error::Invalid("test enrollment issuer"));
         }
@@ -812,6 +845,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         capsule_plans: IndexRoot::default(),
         capsule_sources: IndexRoot::default(),
         issued_requests: IndexRoot::default(),
+        sessions: IndexRoot::default(),
         direct_anchors: IndexRoot::default(),
         fold_pending: IndexRoot::default(),
         folded: None,

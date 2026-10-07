@@ -1,6 +1,6 @@
 //! Retained source custody tests use authentic G1 fixtures, not proof qualification.
 
-use super::super::tests::{MemoryArchive, fixture};
+use super::super::tests::{MemoryArchive, enrollment_issuer, fixture};
 use super::*;
 use KagemushaWalletOperationKindV1 as K;
 use KagemushaWalletPolicyUpdateKindV1 as U;
@@ -8,8 +8,7 @@ use PreparationOriginalV1 as R;
 
 fn setup() -> (MemoryArchive, KagemushaWalletStateV1, SourceCustodyV1) {
     let credential: KagemushaWalletCredentialV1 = fixture("KagemushaWalletCredentialV1");
-    let certificate: KagemushaWalletSignerCertificateV1 =
-        fixture("KagemushaWalletSignerCertificateV1");
+    let certificate = enrollment_issuer(&credential);
     let certificates = KagemushaWalletCertificateSetV1::new(vec![certificate]).unwrap();
     let state =
         KagemushaWalletStateV1::bootstrap(&credential, kagemusha_wallet_field_from_u128_v1(8))

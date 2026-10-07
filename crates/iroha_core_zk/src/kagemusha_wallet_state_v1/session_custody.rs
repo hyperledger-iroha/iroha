@@ -14,7 +14,11 @@ use crate::kagemusha_wallet_advance_v1::{
 const ANCHOR_CUSTODY_MAX_BYTES: usize = KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1 + 1024;
 
 /// Native single-use request observation. There is no decoder or foreign constructor.
-pub(crate) struct DirectTimeExchangeV1 {
+#[allow(
+    missing_copy_implementations,
+    reason = "direct time observation custody is consumed exactly once"
+)]
+pub struct DirectTimeExchangeV1 {
     scheme: [u8; 32],
     wallet: [u8; 32],
     nonce: [u8; 32],
@@ -24,7 +28,8 @@ pub(crate) struct DirectTimeExchangeV1 {
 
 impl DirectTimeExchangeV1 {
     /// The only value sent to the issuer; local clock custody never crosses the boundary.
-    pub(crate) const fn nonce(&self) -> [u8; 32] {
+    #[must_use]
+    pub const fn nonce(&self) -> [u8; 32] {
         self.nonce
     }
 
@@ -57,7 +62,7 @@ impl DirectTimeExchangeV1 {
     }
 }
 
-fn retain_request<A: ObjectStore>(
+pub(super) fn retain_request<A: ObjectStore>(
     store: &mut A,
     index: IndexRoot,
     request: &KagemushaWalletRequestV1,
@@ -126,6 +131,24 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         request: &KagemushaWalletRequestV1,
     ) -> Result<Vec<u8>, Error> {
         let (root, mut manifest) = self.sync_manifest()?;
+        if let Some(value) = manifest
+            .issued_requests
+            .get(&mut self.archive, &request.request_digest())?
+        {
+            let record: IssuedRequestCustodyV1 = archive::decode(&value)?;
+            let (original, bytes) = record.read(
+                &mut self.archive,
+                &self.scheme_id,
+                &self.wallet_id,
+                &request.request_digest(),
+            )?;
+            record.gap(&mut self.archive, &original)?;
+            if bytes != archive::encode(request)? {
+                return Err(Error::OperationConflict);
+            }
+            // Historical exact replay precedes current credential/policy selection.
+            return Ok(bytes);
+        }
         if manifest.capsule != source_capsule {
             return Err(Error::Invalid("Request source changed before publication"));
         }
@@ -173,7 +196,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, N: NativeProofs>
     Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, N>
 {
     /// Capture a fresh nonce and request reading from the exclusive native provider.
-    pub(crate) fn begin_direct_time_exchange(&mut self) -> Result<DirectTimeExchangeV1, Error> {
+    ///
+    /// # Errors
+    /// Missing selected head or originals, unavailable entropy, native clock or storage.
+    pub fn begin_direct_time_exchange(&mut self) -> Result<DirectTimeExchangeV1, Error> {
         let (_, manifest) = self.sync_manifest()?;
         let step = self.indexed_step(&manifest, manifest.indexed.ok_or(Error::NoHead)?)?;
         self.source_custody(&manifest, &step)?;
@@ -212,7 +238,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, N: NativeProofs>
 
     /// Authenticate and durably retain a direct response before ordinary TimeAnchor Refresh.
     /// Refresh alone cannot create this native observation. A lost token requires reanchoring.
-    pub(crate) fn finish_direct_time_exchange(
+    ///
+    /// # Errors
+    /// Invalid issuer, nonce, wallet, boot or response interval; lost selected witnesses;
+    /// or unavailable native clock or durable storage. The token is consumed on every call.
+    pub fn finish_direct_time_exchange(
         &mut self,
         exchange: DirectTimeExchangeV1,
         anchor: KagemushaWalletTimeAnchorV1,

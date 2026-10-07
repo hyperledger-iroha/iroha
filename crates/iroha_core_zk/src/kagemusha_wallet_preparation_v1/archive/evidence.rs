@@ -24,7 +24,7 @@ fn receipt(
         operation_id: original.operation_id,
         predecessor: statement.predecessor,
         successor: statement.successor,
-        statement_digest: authority(statement.statement_digest())?,
+        statement_digest: incoming_statement::digest(statement)?,
         proof_digest: proof,
         capsule_digest: original.capsule_digest,
         payment_digest: original.payment_digest,
@@ -37,8 +37,15 @@ fn receipt(
     Ok((signed_tape(body.transcript(), &original.signature), object))
 }
 
-fn credited_tape(tag: u8, credit: [u8; 32], payment: [u8; 32], evidence: [u8; 32]) -> Vec<u8> {
-    let mut tape = vec![1, 0, tag];
+fn credited_tape(
+    version: u16,
+    tag: u8,
+    credit: [u8; 32],
+    payment: [u8; 32],
+    evidence: [u8; 32],
+) -> Vec<u8> {
+    let mut tape = version.to_le_bytes().to_vec();
+    tape.push(tag);
     for word in [credit, payment, evidence] {
         tape.extend_from_slice(&word);
     }
@@ -89,7 +96,7 @@ fn decode_original(
     payment_digest: &[u8; 32],
 ) -> Result<Original, Error> {
     let credited: KagemushaWalletCreditedV1 = decode(bytes)?;
-    if credited.version != 1 || credited.scheme_id != credited.evidence.statement().scheme_id {
+    if credited.scheme_id != credited.evidence.statement().scheme_id {
         return Err(Error::Authority);
     }
     Ok(match credited.evidence {
@@ -112,15 +119,16 @@ fn decode_original(
             let (receipt, receipt_digest) =
                 receipt(&signer, &package.statement, proof, &package.receipt)?;
             let package_digest = authority(kagemusha_wallet_package_digest_v1(
-                &authority(package.statement.statement_digest())?,
+                &incoming_statement::digest(&package.statement)?,
                 &proof,
                 &receipt_digest,
             ))?;
             Original::Receive {
-                statement: fields(authority(package.statement.field_items())?)?,
+                statement: incoming_statement::fields(&package.statement)?,
                 receipt,
                 sigma: package.step_proof.bytes,
                 credited: credited_tape(
+                    credited.version,
                     1,
                     request.body.credit_id(),
                     *payment_digest,
@@ -144,7 +152,7 @@ fn decode_original(
             let opening = opening_tape(&status.opening)?;
             let mut tape = status.version.to_le_bytes().to_vec();
             for word in [
-                authority(status.statement.statement_digest())?,
+                incoming_statement::digest(&status.statement)?,
                 status.proof_digest,
                 receipt_digest,
                 status.lineage.lineage_digest(),
@@ -153,10 +161,11 @@ fn decode_original(
                 tape.extend_from_slice(&word);
             }
             Original::Status {
-                statement: fields(authority(status.statement.field_items())?)?,
+                statement: incoming_statement::fields(&status.statement)?,
                 receipt,
                 omega: status.lineage.bytes(),
                 credited: credited_tape(
+                    credited.version,
                     2,
                     request.body.credit_id(),
                     *payment_digest,

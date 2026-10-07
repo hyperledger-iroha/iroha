@@ -116,12 +116,17 @@ impl NativeIntentV1 {
         }
     }
 
-    pub(in crate::kagemusha_wallet_state_v1) fn decode(bytes: &[u8], scheme: &KagemushaWalletSchemeV1) -> Result<Self, Error> {
+    pub(in crate::kagemusha_wallet_state_v1) fn decode(
+        bytes: &[u8],
+        _scheme: &KagemushaWalletSchemeV1,
+    ) -> Result<Self, Error> {
         if bytes.is_empty() || bytes.len() > REQUEST_MAX_BYTES {
             return Err(Error::WitnessLost("native intent size"));
         }
         let intent: Self = archive::decode(bytes)?;
-        intent.validate(scheme)?;
+        if intent.request_id() == [0; 32] {
+            return Err(Error::WitnessLost("native intent identity"));
+        }
         Ok(intent)
     }
 

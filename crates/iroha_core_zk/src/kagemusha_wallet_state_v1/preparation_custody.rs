@@ -196,7 +196,9 @@ impl SourceCustodyV1 {
         {
             return Err(Error::WitnessLost("current credential issuer original"));
         }
-        valid(state.validate_for_credential(&credential))?;
+        state
+            .validate_for_credential(&credential)
+            .map_err(|_| Error::WitnessLost("retained credential state"))?;
         Ok(())
     }
 }
@@ -206,6 +208,56 @@ impl SourceCustodyV1 {
 pub(super) struct IssuedRequestCustodyV1 {
     pub(super) request: [u8; 32],
     pub(super) gap: Option<[u8; 32]>,
+}
+
+impl IssuedRequestCustodyV1 {
+    pub(super) fn read(
+        &self,
+        store: &mut dyn ObjectStore,
+        scheme: &[u8; 32],
+        wallet: &[u8; 32],
+        digest: &[u8; 32],
+    ) -> Result<(KagemushaWalletRequestV1, Vec<u8>), Error> {
+        let bytes = store.read_object(&self.request, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?;
+        let request: KagemushaWalletRequestV1 = archive::decode(&bytes)?;
+        request
+            .validate()
+            .map_err(|_| Error::WitnessLost("issued Request encoding or signature"))?;
+        if request.request_digest() != *digest
+            || request.body.scheme_id != *scheme
+            || request.receiver_credential.body.wallet_id != *wallet
+        {
+            return Err(Error::WitnessLost("issued Request binding"));
+        }
+        if (request.body.receiver_blacklist_version != 0) != self.gap.is_some() {
+            return Err(Error::WitnessLost("issued Request gap presence"));
+        }
+        Ok((request, bytes))
+    }
+
+    pub(super) fn gap(
+        &self,
+        store: &mut dyn ObjectStore,
+        request: &KagemushaWalletRequestV1,
+    ) -> Result<Option<KagemushaWalletBlacklistGapOpeningV1>, Error> {
+        self.gap
+            .map(|address| {
+                let bytes = store.read_object(
+                    &address,
+                    KAGEMUSHA_WALLET_BLACKLIST_GAP_OPENING_TRANSCRIPT_BYTES_V1,
+                )?;
+                let opening = KagemushaWalletBlacklistGapOpeningV1::from_transcript(&bytes)
+                    .map_err(|_| Error::WitnessLost("issued Request gap encoding"))?;
+                opening
+                    .verify(
+                        &request.body.receiver_blacklist_root,
+                        &request.body.payer_account_digest,
+                    )
+                    .map_err(|_| Error::WitnessLost("issued Request gap binding"))?;
+                Ok(opening)
+            })
+            .transpose()
+    }
 }
 
 // The object-store adapter avoids exposing a second archive or changing IndexRoot's
@@ -322,21 +374,12 @@ impl<'a> PreparationCustodyV1<'a> {
             .get(&mut Store(self.maps.store()), digest)?
             .ok_or(Error::WitnessLost("issued Request custody"))?;
         let record: IssuedRequestCustodyV1 = archive::decode(&value)?;
-        let bytes = self
-            .maps
-            .store()
-            .read_object(&record.request, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?;
-        let request: KagemushaWalletRequestV1 = archive::decode(&bytes)?;
-        valid(request.validate())?;
-        if request.request_digest() != *digest
-            || request.body.scheme_id != self.state.core.scheme_id
-            || request.receiver_credential.body.wallet_id != self.state.core.wallet_id
-        {
-            return Err(Error::WitnessLost("issued Request binding"));
-        }
-        if (request.body.receiver_blacklist_version != 0) != record.gap.is_some() {
-            return Err(Error::WitnessLost("issued Request gap presence"));
-        }
+        let (request, bytes) = record.read(
+            self.maps.store(),
+            &self.state.core.scheme_id,
+            &self.state.core.wallet_id,
+            digest,
+        )?;
         Ok((request, bytes, record))
     }
 
@@ -357,23 +400,7 @@ impl<'a> PreparationCustodyV1<'a> {
         digest: &[u8; 32],
     ) -> Result<Option<KagemushaWalletBlacklistGapOpeningV1>, Error> {
         let (request, _, record) = self.request_record(digest)?;
-        record
-            .gap
-            .map(|address| {
-                let bytes = self.maps.store().read_object(
-                    &address,
-                    KAGEMUSHA_WALLET_BLACKLIST_GAP_OPENING_TRANSCRIPT_BYTES_V1,
-                )?;
-                let opening = valid(KagemushaWalletBlacklistGapOpeningV1::from_transcript(
-                    &bytes,
-                ))?;
-                valid(opening.verify(
-                    &request.body.receiver_blacklist_root,
-                    &request.body.payer_account_digest,
-                ))?;
-                Ok(opening)
-            })
-            .transpose()
+        record.gap(self.maps.store(), &request)
     }
 
     /// Recover native direct-exchange observations for the exact committed anchor.
@@ -397,7 +424,9 @@ impl<'a> PreparationCustodyV1<'a> {
             .store()
             .read_object(&address, KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1 + 1024)?;
         let anchored: KagemushaWalletAnchoredTimeV1 = archive::decode(&bytes)?;
-        valid(anchored.validate(self.state.core.time_anchor_max_response_ms))?;
+        anchored
+            .validate(self.state.core.time_anchor_max_response_ms)
+            .map_err(|_| Error::WitnessLost("direct anchor observation"))?;
         if anchored.anchor.time_anchor_digest() != self.state.rest.time_anchor
             || anchored.anchor.body.scheme_id != self.state.core.scheme_id
         {

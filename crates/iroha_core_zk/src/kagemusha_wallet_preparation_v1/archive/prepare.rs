@@ -87,6 +87,37 @@ impl PreparationV1<'_> {
         nonce: [u8; 32],
         budget: MemoryBudget,
     ) -> Result<ArchiveStepV1, Error> {
+        let scheme = self.installed.verifier().scheme();
+        let request: KagemushaWalletRequestV1 = decode(&intent.request)?;
+        let payment = authority(KagemushaWalletPaymentV1::decode_canonical(
+            &intent.payment,
+            &scheme.scheme_id(),
+        ))?;
+        let credited: KagemushaWalletCreditedV1 = decode(&intent.credited)?;
+        authority(credited.verify_for(scheme, &request, &payment))?;
+        match &credited.evidence {
+            KagemushaWalletCreditedEvidenceV1::Receive { package } => self
+                .installed
+                .verifier()
+                .verify_package_proofs(package, Some(&request.body), budget)?,
+            KagemushaWalletCreditedEvidenceV1::Status { status } => self
+                .installed
+                .verifier()
+                .verify_lineage(&status.lineage, budget)?,
+        }
+        self.restore_archive(owner, source, intent, removal, nonce, budget)
+    }
+
+    // Reconstruct selected own state; incoming no-op predicates are evaluated by Archive A.
+    pub(crate) fn restore_archive(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        source: &ReleasedStep,
+        intent: &crate::kagemusha_wallet_state_v1::ArchiveIntentV1,
+        removal: &KagemushaWalletIndexedRemoveV1,
+        nonce: [u8; 32],
+        budget: MemoryBudget,
+    ) -> Result<ArchiveStepV1, Error> {
         use KagemushaWalletRetainedInputRoleV1 as R;
         self.credential_owner(owner)?;
         self.receipt_tape(owner, source, budget)?;
