@@ -501,11 +501,11 @@ class BoundAndVerdictTests(unittest.TestCase):
         }
         run = timeline(end=40_000)
         limits = thresholds(live_bound_ms=30_000.0)  # the 40 s run can show a stall
-        verdict = soak.build_verdict(soak.Analysis.from_logs(logs), run, limits, None, {"seed": 1})
+        verdict = soak.build_verdict(soak.Analysis.from_logs(logs), run, limits, None, {"seed": 1, "faults": []})
         json.dumps(verdict)
         self.assertTrue(verdict["ok"], json.dumps(verdict, indent=1))
         self.assertEqual(verdict["schema"], soak.VERDICT_SCHEMA)
-        self.assertEqual(verdict["run"], {"seed": 1})
+        self.assertEqual(verdict["run"], {"seed": 1, "faults": []})
         self.assertEqual(verdict["nodes"]["peer0"]["max_height"], 39)
         blind = {"peer0": node_log("peer0", [chain]), "peer1": node_log("peer1", [chain])}
         verdict = soak.build_verdict(soak.Analysis.from_logs(blind), run, limits, None)
@@ -534,6 +534,42 @@ class BoundAndVerdictTests(unittest.TestCase):
         # Four fault-free intervals of 20 s each: 0-20, 25-45, 50-70 and 80-100 s.
         self.assertEqual(judged["oracles"]["O-LIVE"]["checked"]["judged_intervals"], 4)
         self.assertNotIn("no-interval-judged-by-o-live", [entry["kind"] for entry in judged["harness"]])
+
+    def test_requested_fault_coverage_is_not_inferred_from_healthy_consensus(self) -> None:
+        chain = [applied_json(T0 + 1_000 * i, i, i) for i in range(1, 100)]
+        record = [durable_json(T0 + 1_000 * i, i + 1, f"prepare:0:{h(i)}:{h(i + 1)}") for i in range(1, 100)]
+        analysis = soak.Analysis.from_logs({"peer0": node_log("peer0", [chain + record])})
+        run = timeline([(10_000, 20_000, "kill", ("peer0",)), (30_000, 40_000, "disk", ("peer0",))], nodes=("peer0",))
+        limits = thresholds(live_bound_ms=20_000.0)
+        requested = {"faults": ["kill", "disk", "net"]}
+        verdict = soak.build_verdict(analysis, run, limits, None, requested)
+        self.assertTrue(all(entry["ok"] for entry in verdict["oracles"].values()))
+        self.assertFalse(verdict["ok"])
+        self.assertEqual(verdict["harness"], [{"oracle": "HARNESS", "kind": "missing-requested-fault-kinds",
+            "requested": ["disk", "kill", "net"], "observed": ["disk", "kill"], "missing": ["net"]}])
+        # A nonempty in-run observed window is required, not a declared plan or a zero-size marker.
+        for start, stop in ((50_000, 50_000), (-1, 1), (90_000, 110_000)):
+            with self.subTest(start=start, stop=stop):
+                partial = timeline([(10_000, 20_000, "kill", ("peer0",)), (30_000, 40_000, "disk", ("peer0",)), (start, stop, "net", ())], nodes=("peer0",))
+                missing = soak.build_verdict(analysis, partial, limits, None, requested)
+                self.assertFalse(missing["ok"])
+                self.assertTrue(any(entry["kind"] == "missing-requested-fault-kinds" for entry in missing["harness"]))
+        complete = timeline([(10_000, 20_000, "kill", ("peer0",)), (30_000, 40_000, "disk", ("peer0",)), (50_000, 60_000, "net", ())], nodes=("peer0",))
+        self.assertTrue(soak.build_verdict(analysis, complete, limits, None, requested)["ok"])
+        self.assertTrue(soak.build_verdict(analysis, timeline(nodes=("peer0",)), limits, None, {"faults": []})["ok"])
+
+    def test_malformed_or_missing_report_fault_contract_cannot_pass(self) -> None:
+        chain = [applied_json(T0 + 1_000 * i, i, i) for i in range(1, 40)]
+        record = [durable_json(T0 + 1_000 * i, i + 1, "-") for i in range(1, 40)]
+        analysis = soak.Analysis.from_logs({"peer0": node_log("peer0", [chain + record])})
+        run = timeline(nodes=("peer0",), end=40_000)
+        limits = thresholds(live_bound_ms=30_000.0)
+        for contract in ({}, {"faults": None}, {"faults": "net"}, {"faults": ["net", "net"]}, {"faults": ["unknown"]}, {"faults": [1]}, {"faults": [["net"]]}):
+            with self.subTest(contract=contract):
+                verdict = soak.build_verdict(analysis, run, limits, None, contract)
+                self.assertTrue(all(entry["ok"] for entry in verdict["oracles"].values()))
+                self.assertFalse(verdict["ok"])
+                self.assertEqual([entry["kind"] for entry in verdict["harness"]], ["invalid-requested-fault-kinds"])
 
     def test_timeline_round_trips(self) -> None:
         run = timeline([(1, 2, "kill", ("peer0",))], [soak.Boot("peer0", 0, T0, None, "running")])

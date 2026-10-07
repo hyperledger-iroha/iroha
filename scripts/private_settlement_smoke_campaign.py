@@ -285,6 +285,26 @@ def terminal_success(output: str, *, kind: str = "smoke") -> None:
     require(f"APS {other} completed:" not in output, "another experiment completion was mixed into the stream")
 
 
+def validate_process_closure(output: str) -> None:
+    """Require all restart and final-shutdown exits from the standalone smoke run.
+
+    PeerExit prints the pinned Rust ExitStatus Debug value: Unix wait status or
+    the nested Windows ExitStatus. Every one of the 16 original and 16 replacement
+    validator processes must report successful termination; unrelated log lines
+    do not replace missing records. Native/source/PID custody remains separately
+    authenticated by the campaign and its Rust producer.
+    """
+    prefix = "TEST_NETWORK peer exited"
+    records = [line for line in output.splitlines() if prefix in line]
+    require(len(records) == 2 * PEER_COUNT, "smoke requires exactly 32 validator process exit records")
+    successful = {
+        "TEST_NETWORK peer exited with status ExitStatus(unix_wait_status(0))",
+        "TEST_NETWORK peer exited with status ExitStatus(ExitStatus(0))",
+    }
+    require(records[0] in successful and all(record == records[0] for record in records),
+            "smoke requires successful validator process exits with one exact platform grammar")
+
+
 def validate_inventory(before: Any, after: Any, restarts: Any, validator_sha: str,
                        *, kind: str = "smoke") -> list[Any]:
     """Check identity/configuration and the process lifecycle selected by the experiment."""
@@ -1041,7 +1061,9 @@ def run_campaign(repo: Path, output: Path, target: Path, commit: str) -> dict[st
             write_json(directory / "after.json", {"source": post_source, "artifacts": post_binaries})
             require(post_source == seal and post_binaries == binaries, "source or executable drift during smoke")
             require(receipt["exit_code"] == 0, f"smoke run {index} failed; all output retained in {directory}")
-            terminal_success(read_bytes(directory / "stdout.log", limit=256 * 1024 * 1024).decode("utf-8"))
+            output_text = read_bytes(directory / "stdout.log", limit=256 * 1024 * 1024).decode("utf-8")
+            terminal_success(output_text)
+            validate_process_closure(output_text)
             summary = validate_run(directory, request, binaries["validator"]["sha256"])
             for name in ("network_id", "bundle_id"):
                 identity = canonical(summary[name])
@@ -1161,7 +1183,9 @@ def validate_campaign(path: Path | str, *, expected_commit: str | None = None) -
         require(record["started_ns"] >= previous_end and row["command_sha256"] == sha(canonical(record)),
                 "smoke runs overlap or command receipt changed")
         previous_end = record["finished_ns"]
-        terminal_success(read_bytes(directory / "stdout.log", limit=256 * 1024 * 1024).decode())
+        output_text = read_bytes(directory / "stdout.log", limit=256 * 1024 * 1024).decode()
+        terminal_success(output_text)
+        validate_process_closure(output_text)
         summary = validate_run(directory, request, binaries["validator"]["sha256"])
         require(row["summary"] == summary and row["result_sha256"] == summary["result_sha256"], "run summary changed")
         for name in ("network_id", "bundle_id"):
