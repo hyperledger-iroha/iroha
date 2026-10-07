@@ -128,16 +128,16 @@ impl CatalogReader {
             PROVING_KEY_MAX_BYTES_V1,
         )
         .map_err(storage)?;
-        // Reauthenticate every whole offered original. The current wallet source graph
-        // mounts the complete finality producer as well as its verifier, so its original
-        // PK tables are required. Bounded streams keep this pass independent of PK size.
+        // Reauthenticate every wallet proving original and the complete finality D/VK
+        // graph. Server finality PK identities remain signed inventory metadata;
+        // their bytes are neither required nor read by the wallet.
         for record in &inventory.originals {
             for blob in [record.descriptor, record.verifying_key, record.proving_key] {
                 wallet.verify_original(blob).map_err(storage)?;
             }
         }
         for record in &inventory.finality.originals {
-            for index in 0..3 {
+            for index in 0..2 {
                 finality
                     .verify_original(BlobV1 {
                         bytes: record.lengths[index],
@@ -153,9 +153,8 @@ impl CatalogReader {
             }
         }
         for record in &inventory.finality.originals {
-            // QualifiedFinalityProducerV1 mounts each exact descriptor/VK/PK triple.
-            // Select all three addresses without retaining their table bytes in this owner.
-            for i in 0..3 {
+            // Only the complete receipt verifier graph is a wallet transport role.
+            for i in 0..2 {
                 insert(
                     &mut roles,
                     BlobV1 {
@@ -245,12 +244,11 @@ fn closed(blobs: impl IntoIterator<Item = BlobV1>) -> Result<Vec<BlobV1>> {
 }
 fn require_transport(inventory: &ProducerInventoryV1, bytes: &[u8]) -> Result<()> {
     // Exact catalog maxima are 4096 wallet records and 65536 finality records;
-    // each contributes three original rows with two fixed scalar fields. Account
+    // wallet records contribute three rows, finality records two. Account
     // for that whole legitimate closed transport graph before allocating JSON.
     const ROWS: usize =
-        (iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::ARTIFACT_MAX_COUNT_V1
-            + 65_536)
-            * 3;
+        iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::ARTIFACT_MAX_COUNT_V1 * 3
+            + 65_536 * 2;
     let limits = norito::json::JsonPreflightLimits::new(
         32 * 1024 * 1024,
         ROWS * 3 + 4,
@@ -276,7 +274,7 @@ fn require_transport(inventory: &ProducerInventoryV1, bytes: &[u8]) -> Result<()
             .flat_map(|r| [r.descriptor, r.verifying_key, r.proving_key]),
     )?;
     let finality = closed(inventory.finality.originals.iter().flat_map(|r| {
-        (0..3).map(|i| BlobV1 {
+        (0..2).map(|i| BlobV1 {
             bytes: r.lengths[i],
             sha256: r.sha256[i],
         })

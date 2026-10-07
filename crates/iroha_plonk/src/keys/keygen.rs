@@ -595,6 +595,59 @@ pub fn keygen_pk_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     )
 }
 
+/// Fingerprint exact witnessless V2 source tables without generating a key.
+///
+/// Uses the same synthesis/finalization, selector compression, copy mapping and
+/// permutation evaluations as key generation. Resource-only cache/table/MSM
+/// choices do not affect the result. This performs no commitments, polynomial
+/// transforms, proof verification or source qualification. Equality merely
+/// locates an untrusted original; strict original import remains mandatory.
+///
+/// # Errors
+/// Circuit/descriptor/table errors from key preparation, or explicit cancellation.
+pub fn source_fingerprint_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    config: &KeygenConfigV2,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<super::SourceFingerprintV2, KeyError> {
+    use iroha_pasta::CancellationToken;
+    CancellationToken::checkpoint(cancellation)?;
+    let synthesized = crate::frontend::synthesize_cancellable(
+        &circuit.without_witnesses(),
+        params.k(),
+        None,
+        cancellation,
+    )?;
+    let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
+    let prepared = prepare(
+        params,
+        synthesized.cs,
+        fixed,
+        selectors,
+        &permutation,
+        &config.layout_options(),
+        Some(config),
+    )?;
+    drop(permutation);
+    let mut hash = super::source_fingerprint::SourceHasher::new(
+        &prepared.binding,
+        &prepared.copy_digest,
+        &prepared.vk_selectors,
+        cancellation,
+    )?;
+    for column in prepared.fixed.iter().chain(&prepared.sigma) {
+        for (index, value) in column.iter().enumerate() {
+            if index % 1024 == 0 {
+                CancellationToken::checkpoint(cancellation)?;
+            }
+            hash.scalar(value.to_repr().as_ref());
+        }
+    }
+    CancellationToken::checkpoint(cancellation)?;
+    Ok(hash.finish(prepared.binding))
+}
+
 /// Generates a V2 verifying key without retaining a proving key.
 ///
 /// # Errors

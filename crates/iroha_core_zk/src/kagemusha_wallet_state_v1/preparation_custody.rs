@@ -134,6 +134,53 @@ impl SourceCustodyV1 {
         Ok(value)
     }
 
+    // A completed Unload retains its request plan even after historical capsule collection.
+    // Read only the two fixed original roles selected by that plan. The retained package
+    // binds the credential digest; no caller-selected state or map snapshot is introduced.
+    pub(super) fn unload_identity(
+        &self,
+        store: &mut dyn ObjectStore,
+        package: &KagemushaWalletPackageV1,
+        scheme: &[u8; 32],
+        wallet: &[u8; 32],
+    ) -> Result<(KagemushaWalletCredentialV1, KagemushaWalletCertificateSetV1), Error> {
+        if self.version != 1
+            || package.statement.effect.kind() != KagemushaWalletOperationKindV1::Unload
+        {
+            return Err(Error::WitnessLost("Unload selected identity role"));
+        }
+        let mut read = |role: PreparationOriginalV1| {
+            let address = self.originals[role.index()]
+                .ok_or(Error::WitnessLost("Unload identity original"))?;
+            store.read_object(&address, role.maximum())
+        };
+        let credential = KagemushaWalletCredentialV1::decode_canonical(
+            &read(PreparationOriginalV1::CurrentCredential)?,
+            scheme,
+        )
+        .map_err(|_| Error::WitnessLost("Unload credential original"))?;
+        if credential.body.wallet_id != *wallet
+            || credential.credential_digest() != package.statement.credential_digest
+        {
+            return Err(Error::WitnessLost("Unload credential binding"));
+        }
+        let certificates: KagemushaWalletCertificateSetV1 =
+            archive::decode(&read(PreparationOriginalV1::EnrollmentCertificates)?)?;
+        certificates
+            .validate()
+            .map_err(|_| Error::WitnessLost("Unload certificate originals"))?;
+        certificates
+            .certificate(
+                &credential.body.issuer_certificate,
+                KagemushaWalletSignerRoleV1::Enrollment,
+            )
+            .map_err(|_| Error::WitnessLost("Unload issuer original"))?;
+        package
+            .verify(&credential)
+            .map_err(|_| Error::WitnessLost("Unload selected package"))?;
+        Ok((credential, certificates))
+    }
+
     pub(super) fn original(
         &self,
         store: &mut dyn ObjectStore,

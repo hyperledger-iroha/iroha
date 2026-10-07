@@ -1,7 +1,7 @@
 """Build the sole current private verifier archive from explicit source originals.
 
-This produces unsigned bytes only. Native release/runtime admission must authenticate the
-result and the complete Python/OpenSSL/TLS dependency inventory before serving enrollment.
+This produces unsigned bytes only. Native runtime admission selects and rechecks the exact
+configured archive/executable originals; these hashes do not attest the host dependency closure.
 """
 import argparse
 import hashlib

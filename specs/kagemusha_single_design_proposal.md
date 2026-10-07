@@ -147,6 +147,24 @@ to the canonical domainless `AccountId`, network, scheme, asset incarnation,
 wallet key, app identity and enrollment policy. A new incarnation always begins
 at zero; reenrollment never imports an old balance or resets its replay state.
 
+Every token on the universal dataspace is eligible for KAGEMUSHA offline payments. There
+is no Parliament approval, named-token allowlist or regulated/non-regulated asset-class gate.
+The canonical universal balance scope is `AssetBalanceScope::Global`, routed to
+`DataSpaceId::UNIVERSAL`. Its ordinary asset authorization, exact incarnation and scale,
+reserve backing, enrollment and proof requirements still apply. These setup requirements
+must be available to every universal asset through the shared registration and SDK paths;
+no special governance authority is required merely because a token is non-regulated.
+Current enrollment eligibility and freeze status use the
+[eligibility SDK contract](kagemusha_enrollment_eligibility_v1.md). Bank-required enrollment
+uses the user's bank middleware for KYC approval and freeze status. Other schemes select
+their own authorized provider, including an issuer, community operator or SORA Parliament
+for assets it governs. Parliament approval is not a protocol prerequisite. A scheme may
+explicitly admit public enrollment; missing bank data never selects that policy implicitly.
+The issuer rechecks authenticated authority, account routing and fresh eligibility at the
+online enrollment boundaries. These observations do not replace platform evidence or confer
+monetary authority, and add no per-payment call. Regulatory classification is an issuer policy
+concern, not a cryptographic limitation or a legal classification made by the codec.
+
 The issuer verifies platform evidence and issues a compact signed credential:
 
 `(scheme, asset_incarnation, wallet_id, account_id, payment_key,
@@ -1299,11 +1317,11 @@ checks are in [the evidence appendix](kagemusha_single_design_evidence.md).
 
 | Owner | Current responsibility and remaining work |
 |---|---|
-| `crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/`; future monetary state owner | The current provider owns custody bytes and head selection. Build the monetary state machine with native verification and step proof, then Advance, then background lineage folding. Add fold scheduling, witness custody, lineage-adjusted values, the credit-digest root and burn/no-op branches. |
-| `crates/iroha_kagemusha_proof/` | One artifact set on PIPA-v1: native step relations, the lineage relation and the transport wrap. Complete the P-256 and recursion gadgets in the native proof owners; vendored halo2 remains the test oracle. |
+| `crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/` and `kagemusha_wallet_state_v1/` | The shared state machine retains native operation originals, permanent replay indexes, source-selected fold witnesses and checkpoints around the existing Advance provider. Its background worker performs ordered native folding with cooperative payment preemption. Qualify the complete installed proof catalog, funded exchange and custody/recovery lifetime on stock phones; component fixtures do not establish these outcomes. |
+| `crates/iroha_kagemusha_proof/` | Native step, lineage and transport relations use PIPA-v1 with the P-256 and recursion gadget owners. Complete and qualify the authenticated artifact set, original-receipt finality chain and real operation compositions; vendored halo2 remains only the temporary independent test oracle pending the recorded retirement gate. |
 | `crates/iroha_plonk`, `crates/iroha_plonk_gadgets`, `crates/iroha_pasta` | The PIPA-v1 proof system: arithmetization, transcripts, prover, verifier, accumulation and `decide`, gadget chips, Pasta fields, curves, MSM and Poseidon ([PIPA-v1](plonk_ipa_v1.md)). |
 | `iroha_crypto`; canonical wallet custody types | Use the current encryption and recovery primitives with canonical caller contracts and domain bindings. The retired KAGEMUSHA crypto module is deleted. |
-| `crates/connect_norito_bridge/` (integration pending) | Build one adapter for opaque current state/proof handles, Advance platform dispatch and durable retry coordination. The superseded coordinator and per-payment service phases are deleted. |
+| `crates/connect_norito_bridge/` | C/JNI adapters expose opaque native state/proof handles, Advance platform dispatch and retained retry originals to thin SDKs. Qualify the current rebuilt native artifacts and complete installed wallet flow; the superseded coordinator and per-payment service phases are deleted. |
 | Swift; Kotlin `core-jvm`, `client-android`, `kagemusha-wallet-android` | Thin shared-core clients; platform evidence/key/storage adapters and carriers remain in their appropriate modules. Kotlin owns JVM behavior; preserve Java consumer assertions. |
 | `iroha_data_model`, `iroha_core`, `iroha_torii`, `iroha_config` | One model and service family for enrollment, load, unload and policy; reserve/finality/replay enforcement; configuration through user → actual → defaults. |
 | Formal models, fixtures and package tools | Update the selected trust boundary, messages and crash transitions; preserve useful assertions and regenerate one canonical set of vectors. |

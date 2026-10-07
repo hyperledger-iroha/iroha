@@ -33,6 +33,8 @@ pub mod content_mime;
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
 pub mod governance_proposal_api;
+/// Canonical requests and responses for the authenticated KAGEMUSHA enrollment service.
+pub mod kagemusha_enrollment;
 /// The list-query language (filter, sort, projection, pagination) shared by Torii, SDKs and CLI.
 pub mod list_query;
 /// Shared MCP wire constants for Torii and repository clients.

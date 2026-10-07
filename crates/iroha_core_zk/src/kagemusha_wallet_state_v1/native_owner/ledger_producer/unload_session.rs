@@ -81,14 +81,9 @@ impl UnloadInclusion<'_> {
         genesis: &SumeragiFinalityVerifier,
         checkpoint: &SumeragiFinalityCheckpoint,
     ) -> Result<bool, Error> {
-        if let Some(bytes) = confirmations.get(archive, self.transaction)? {
-            let confirmed: UnloadConfirmation = archive::decode(&bytes)?;
-            if confirmed.original_digest != *self.digest
-                || confirmed.height < 2
-                || confirmed.block_hash == [0; 32]
-            {
-                return Err(Error::WitnessLost("retained Unload confirmation"));
-            }
+        if retained_unload_confirmation(archive, confirmations, self.transaction, self.digest)?
+            .is_some()
+        {
             return Ok(false);
         }
         let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
@@ -198,18 +193,31 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
         Ok(())
     }
-    /// Read this exact transaction and claim's independently retained ordinary finality cursor.
+    /// Read this exact transaction and claim's selected confirmation or ordinary finality cursor.
+    /// Only an absent confirmation yields progress; malformed or mismatched retained DATA fails.
     /// # Errors
     /// Foreign/changed claim, missing checkpoint custody or invalid selected genesis.
     pub fn unload_finality_progress(
         &mut self,
         transaction: [u8; 32],
         original: &[u8],
-    ) -> Result<Option<LedgerProgressV1>, Error> {
+    ) -> Result<UnloadFinalityProgressV1, Error> {
         let digest = self.unload_original_digest(&transaction, original)?;
         let (_, manifest) = self.sync_manifest()?;
+        if let Some(confirmed) = retained_unload_confirmation(
+            &mut self.archive,
+            &manifest.ledger_unload_confirmations,
+            &transaction,
+            &digest,
+        )? {
+            return Ok(UnloadFinalityProgressV1::Confirmed(confirmed));
+        }
         let (_, checkpoint) = self.selected_unload_cursor(&manifest, &transaction, &digest)?;
-        Ok(checkpoint.as_ref().map(ledger::progress))
+        Ok(checkpoint
+            .as_ref()
+            .map_or(UnloadFinalityProgressV1::NotStarted, |checkpoint| {
+                UnloadFinalityProgressV1::Verifying(ledger::progress(checkpoint))
+            }))
     }
     /// Verify and persist one exact next ordinary block for this Unload's own cursor.
     /// No caller height, HTTP status or proposed transaction supplies inclusion authority.
@@ -288,6 +296,74 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
 mod tests {
     use super::*;
     use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+
+    #[test]
+    fn unload_settlement_read_distinguishes_absence_from_corrupt_or_foreign_confirmation() {
+        use crate::kagemusha_wallet_state_v1::tests::MemoryArchive;
+
+        let mut archive = MemoryArchive::new();
+        let mut confirmations = index::IndexRoot::default();
+        let transaction = [41; 32];
+        let digest = [42; 32];
+        assert_eq!(
+            retained_unload_confirmation(&mut archive, &confirmations, &transaction, &digest)
+                .unwrap(),
+            None
+        );
+        let original = archive::encode(&UnloadConfirmation {
+            original_digest: digest,
+            height: 2,
+            block_hash: [43; 32],
+        })
+        .unwrap();
+        confirmations = confirmations
+            .set(&mut archive, transaction, &original)
+            .unwrap();
+        let selected = archive::encode(&confirmations).unwrap();
+        let restored = archive::decode(&selected).unwrap();
+        let expected = Some(LedgerProgressV1 {
+            height: 2,
+            block_hash: [43; 32],
+        });
+        assert_eq!(
+            retained_unload_confirmation(&mut archive, &restored, &transaction, &digest).unwrap(),
+            expected
+        );
+        assert!(
+            retained_unload_confirmation(&mut archive, &restored, &transaction, &[44; 32]).is_err()
+        );
+        assert_eq!(
+            retained_unload_confirmation(&mut archive, &restored, &[45; 32], &digest).unwrap(),
+            None
+        );
+        for invalid in [
+            vec![0xff],
+            archive::encode(&UnloadConfirmation {
+                original_digest: digest,
+                height: 1,
+                block_hash: [43; 32],
+            })
+            .unwrap(),
+            archive::encode(&UnloadConfirmation {
+                original_digest: digest,
+                height: 2,
+                block_hash: [0; 32],
+            })
+            .unwrap(),
+        ] {
+            let corrupt = confirmations
+                .set(&mut archive, transaction, &invalid)
+                .unwrap();
+            assert!(
+                retained_unload_confirmation(&mut archive, &corrupt, &transaction, &digest)
+                    .is_err()
+            );
+            assert_eq!(
+                confirmations.get(&mut archive, &transaction).unwrap(),
+                Some(original.clone())
+            );
+        }
+    }
 
     #[test]
     fn unload_confirmation_survives_overshooting_locator_with_genuine_certificates() {
@@ -436,6 +512,11 @@ mod tests {
         let confirmation: UnloadConfirmation = archive::decode(&exact).unwrap();
         assert_eq!(confirmation.height, 2);
         assert_eq!(confirmation.block_hash, ledger::progress(&two).block_hash);
+        assert_eq!(
+            retained_unload_confirmation(&mut archive, &confirmations, &transaction, &digest)
+                .unwrap(),
+            Some(ledger::progress(&two))
+        );
         let changed = UnloadInclusion {
             digest: &[94; 32],
             ..inclusion

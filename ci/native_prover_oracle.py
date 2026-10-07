@@ -19,6 +19,8 @@ import sys
 
 TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin")
 TIMING_TEST = "timing::timing_sigma_k11_native_vs_vendored"
+MAINTENANCE_TEST = "reference_fixture::capture_reference_verifier_inputs"
+EXCLUDED_TESTS = (TIMING_TEST, MAINTENANCE_TEST)
 HARNESSES = (
     "iroha_plonk_oracle", "vendored_goldens", "native_prover_kats",
     "pasta_parity", "plonk_cs_parity",
@@ -33,6 +35,7 @@ REQUIRED_TESTS = {
         "succinct_parity::sigma_ep_succinct_matches_snark_verifier",
         "succinct_parity::wide_eq_succinct_matches_snark_verifier",
         "succinct_parity::wide_ep_succinct_matches_snark_verifier",
+        "reference_fixture::reference_verifier_inputs_match_genuine_sources",
     },
     "native_prover_kats": {"native_prover_release_params_match_fixture"},
     "pasta_parity": {"params::params_bytes_match_vendored_k15", "params::params_bytes_match_vendored_k16"},
@@ -63,8 +66,9 @@ def compiler_harnesses(text: str, target: Path) -> dict[str, Path]:
 
 
 def test_command(binary: Path) -> list[str]:
-    """Run ordinary and ignored correctness tests, excluding only timing cases."""
-    return [str(binary), "--include-ignored", "--skip", TIMING_TEST, "--test-threads=2"]
+    """Run all correctness cases; omit timing and the fixture-printing maintenance command."""
+    return [str(binary), "--include-ignored",
+            *[arg for name in EXCLUDED_TESTS for arg in ("--skip", name)], "--test-threads=2"]
 
 
 def test_inventory(name: str, listing: str) -> set[str]:
@@ -72,7 +76,7 @@ def test_inventory(name: str, listing: str) -> set[str]:
     names = {line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")}
     if not REQUIRED_TESTS[name].issubset(names):
         raise ValueError(f"missing required oracle-mode/release cases in {name}")
-    return {test for test in names if TIMING_TEST not in test}
+    return names - set(EXCLUDED_TESTS)
 
 
 def complete_result(text: str, expected_count: int) -> bool:
@@ -111,8 +115,8 @@ def shipping_rejection(text: str, exit_code: int) -> bool:
 
 
 def source_hashes(root: Path) -> dict[str, str]:
-    """Pin tracked checkout bytes; verify them again after every harness ends."""
-    paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).split(b"\0")
+    """Pin checkout source bytes, including new files, before and after execution."""
+    paths = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=root).split(b"\0")
     return {os.fsdecode(path): hashlib.sha256((root / os.fsdecode(path)).read_bytes()).hexdigest()
             for path in paths if path and (root / os.fsdecode(path)).is_file()}
 
@@ -186,11 +190,24 @@ def main() -> int:
                                "expected_tests": len(expected),
                                "complete": complete_result((evidence / f"{name}.log").read_text(), len(expected))})
         (evidence / "result.json").write_text(json.dumps(record, indent=2))
+    reference_command = [sys.executable, "-I", "-B", "-S",
+                         str(root / "fixtures/native_prover/verify_reference_v1.py")]
+    with (evidence / "independent-reference.log").open("w") as log:
+        reference = subprocess.run(reference_command, cwd=root, env=environment,
+                                   stdout=log, stderr=subprocess.STDOUT)
+    reference_text = (evidence / "independent-reference.log").read_text().strip()
+    record["independent_reference"] = {
+        "command": reference_command, "natural_exit": reference.returncode,
+        "complete": reference_text == (
+            f"{root / 'fixtures/native_prover/reference_v1.json'}: "
+            "verified full_proofs=46, pinned_parameter_sets=10, curves=2, profiles=3"),
+    }
     after = source_hashes(root)
     (evidence / "source-after.json").write_text(json.dumps(after, sort_keys=True, indent=2))
     record["source_drift"] = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
     (evidence / "result.json").write_text(json.dumps(record, indent=2))
-    return int(bool(record["source_drift"]) or any(run["natural_exit"] != 0 or not run["complete"] for run in record["runs"]))
+    return int(bool(record["source_drift"]) or reference.returncode != 0
+               or not record["independent_reference"]["complete"] or any(run["natural_exit"] != 0 or not run["complete"] for run in record["runs"]))
 
 
 if __name__ == "__main__":

@@ -1945,37 +1945,57 @@ typedef struct {
 // returns kind36 canonical FeeClaim <=16,384 after exact schedule/beneficiary binding; DATA only, not payout confirmation.
 // LedgerLoad27(nonzero setup_id, positive amount, no originals) returns kind40 canonical instruction <=65536.
 // Native freezes its selected next ordinal and returns the same original on exact request retries.
-// ProveLoadFinality28(first unsigned receipt <=512, second counted event proof <=8192) returns kind41 <=16384
-// only after complete recursive proof production from the installed originals and selected native history.
+// Retired selectors28/31/32 and result kinds41/43 are not reused. Wallets verify received Load
+// terminal proofs; server finality PKs are neither required nor read by wallet installation.
 // LedgerInstruction29(token=1 Activate/2 Unload/3 CloseLoads, first original <=65536) returns kind40;
-// conversion does not confirm execution. Kinds40/41 have zero sequence/detail and nonempty bytes.
-// LedgerFinality23 also proves and atomically retains the complete recursive history under the same manifest.
+// conversion does not confirm execution. Kind40 has zero sequence/detail and nonempty bytes.
+// LedgerFinality23 atomically retains the genuinely verified native checkpoint under the same manifest.
 // ConfirmUnload30(nonzero transaction entrypoint hash in setup_id, first exact Unload original <=65536)
 // verifies successful input/output inclusion and saves its confirmation before returning kind42 (same geometry as kind33).
-// LoadProofProgress31(first receipt <=512) and IngestLoadProof32(first receipt <=512, second ordinary proof <=36MiB)
-// use a separate durable receipt-bound recursive cursor. Kind43: sequence_low=receipt proposed height>1,
-// sequence_high/detail=0, bytes8BE=verified height (0..receipt height). Completed proofs are retained before return.
-// UnloadProofProgress33(nonzero tx hash setup_id, first exact Unload <=65536) returns kind33 or34.
+// UnloadProofProgress33(nonzero tx hash setup_id, first exact Unload <=65536) returns kind42 for
+// retained authentic successful inclusion, kind33 for verified history, or kind34 when not started.
+// Missing inclusion is distinct from malformed/mismatched custody, which remains an error.
 // IngestUnloadProof34 adds second ordinary proof <=36MiB and returns kind33. Both use a separate
 // transaction+claim-bound cursor; ConfirmUnload30 consumes its selected block, independent of later global tips.
 // ConfirmActivation35(first exact signed Activate transaction <=65536) returns kind44 only after
 // Native verifies successful exact input/output inclusion and durably selects the confirmation.
 // IngestActivationProof36(first exact signed transaction <=65536, second complete finality <=36MiB)
-// proves one next block in a separate Activate-bound cursor, independent of the ordinary ledger tip.
+// verifies one next block in a separate Activate-bound cursor, independent of the ordinary ledger tip.
 // Matching successful execution is confirmed atomically before the cursor can pass its block.
 // ActivationProofProgress37(first exact signed transaction <=65536) reads that cursor after restart.
 // Results44 confirmed /45 verifying: sequence_low=verified height, sequence_high/detail=0, bytes=32-byte block hash.
 // Result46 not started: zero sequence/detail, empty bytes. Confirmed result44 requires height>=2.
 // Setup35..37 use zero setup_id/amount/token and no unused originals. No HTTP receipt is authority.
+// RequestFeeSelection38(no inputs) returns kind12 bytes64 = asset digest32 || selected fee digest32.
+// Zero fee digest means Native-selected zero fee; this projection is DATA, never Request authority.
+// RequestWithFeePolicy39(nonzero setup_id, first Offer <=10000, optional paired second FeeSchedule
+// PolicyData envelope and third Certificates PolicyData envelope <=10000 each) invokes ordinary
+// Native Request with authenticated exact originals. No pair is accepted only by the zero-fee rule.
+// ValidateRequestFeePolicy40(first FeeSchedule envelope, second Certificates envelope, each <=10000)
+// verifies signatures, scheme, asset, signer role and selected fee digest; returns the same bytes64.
+// Intake/cache validation does not refresh policy. Exact Request retries retain the original pair.
+// AcceptCreditedForSend41 and CreditedForSendStatus42 use nonzero selected Send request identity
+// and first exact Credited original <=10000; other inputs are zero. Both return ordinary Archive
+// outcomes. Native binds delivery evidence to that Send before issuing or recovering its intent.
+// UnloadClaim45(nonzero completed Unload request id in setup_id; optional first canonical charge beneficiary <=16,384;
+// no other inputs) returns kind48 canonical UnloadClaim <=16,384 from exact selected originals and native-admitted account.
+// Pending remains an error requiring the existing retry flow; this projection never signs, debits or acknowledges settlement.
 // CloseLoads19(nonzero setup_id retry identity, no originals) returns kind30, exact durable signed closure frame <=16,384 bytes;
 // Reuse an id for exact retries; a fresh id selects current native source after a preissued Load.
 // It does not confirm ledger closure or authorize key retirement.
 // Activation15(no inputs) returns kind17, exact durable Activate frame <=16,384 bytes.
 // CreditedReceive16(first=Receive package), CreditedStatus17(first=CreditStatus) return
 // kind12 canonical Credited data after native shape/scheme/full-envelope bounds; no proof verdict.
-// setup_id is exactly32 bytes: nonzero only for selectors1/2/19/20/25/27/30/33/34; all zero otherwise.
+// CreditProjection43 takes only the nonzero Receive request id; DeliveryProjection44 takes
+// nonzero Send request id, first exact completed-Archive Credited anchor <=10000 and optional
+// second newer Credited <=10000. Third/amount/token are zero. Both return kind47, <=10092:
+// LE16 version1; evidence byte1=unfolded/2=credited/3=burned; archive byte0=receiver,
+// 1=awaiting fold/2=removed/3=retained; core-pending byte; three zeros; credit32;
+// Payment digest32; LE128amount; LE32original length; exact receiver Credited <=10000.
+// Payer original length is zero. Projection is display evidence, never permission to mutate.
+// setup_id is exactly32 bytes: nonzero only for selectors1/2/19/20/25/27/30/33/34/39/41/42/43/44/45; all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
-// signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
+// signer certificate frames are <=512 bytes. No caller clock, nonce, proof verdict or arbitrary signing body.
 // Transport uses first only and returns canonical bytes; it grants no monetary verdict.
 typedef struct {
     const uint8_t* setup_id;
@@ -2041,8 +2061,12 @@ int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const 
  * Send: amount0, first signed Request1..10000, second canonical AccountId1..4096.
  * Native authenticates the complete Request, then canonical-decodes the singleEd25519
  * account original and binds its Role::Account digest to that signed destination.
- * Unload: nonzero amount, first optional quote1..1024 and second certificate1..10000;
- * both Unload originals must be present or both absent. */
+ * Unload: nonzero amount, first optional quote1..1024; second is the exact closed DATA
+ * carrier KWUCV1\0\0 || LE32 certificates_length || certificates1..10000 ||
+ * LE32 beneficiary_length || canonical beneficiary AccountId1..4096 (maximum14112).
+ * Both carriers are absent for uncharged Unload. Native verifies the quote/certificates,
+ * binds the beneficiary before review, and retains/rechecks it before execution.
+ * Raw certificate-only charged review is rejected; monetary intent/wire is unchanged. */
 typedef struct connect_norito_kagemusha_wallet_review_request_v1 {
   uint32_t selector;
   connect_norito_kagemusha_wallet_u128_v1 amount;

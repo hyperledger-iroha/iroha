@@ -114,6 +114,90 @@ fn v2_key<B: CurveBridge>(source: &Setup<B>, config: &KeygenConfigV2) -> Proving
     .expect("V2 key")
 }
 
+fn oracle_cases<B: CurveBridge>(source: &Setup<B>, cases: &mut Vec<Value>) {
+    let k = source.k;
+    let proof = source.prove_vendored([42; 32]);
+    source
+        .verify_vendored(&source.vendored_instances(), &proof)
+        .expect("original full verifier");
+    cases.push(record(
+        &format!("oracle/blake/{k}"),
+        source,
+        &source.pk,
+        &proof,
+        true,
+    ));
+    let keys = kagemusha_keys(source);
+    let proof = source.prove_vendored_kagemusha([42; 32]);
+    source
+        .verify_vendored_kagemusha(&source.vendored_instances(), &proof)
+        .expect("original augmented verifier");
+    cases.push(record(
+        &format!("oracle/poseidon/{k}"),
+        source,
+        &keys.pk,
+        &proof,
+        true,
+    ));
+}
+
+fn v1_cases<B: CurveBridge>(source: &Setup<B>, cases: &mut Vec<Value>) {
+    for (name, transcript) in [
+        ("blake", TranscriptV1::Blake2bChallenge255),
+        ("poseidon", TranscriptV1::KagemushaPoseidonRp57),
+    ] {
+        for mode in [InstanceModeV1::Committed, InstanceModeV1::Direct] {
+            for compress in [false, true] {
+                let mut config = KeygenConfig::new(transcript);
+                config.instance_mode = mode;
+                config.compress_selectors = compress;
+                config.proof_suffix = if compress {
+                    ProofSuffixV1::FoldedGenerator
+                } else {
+                    ProofSuffixV1::None
+                };
+                let pk = source
+                    .exported
+                    .keygen(&source.params, &config)
+                    .expect("V1 key");
+                cases.push(production(
+                    &format!("v1/{name}/{mode:?}/{compress}"),
+                    source,
+                    &pk,
+                ));
+            }
+        }
+    }
+}
+
+fn v2_cases<B: CurveBridge>(source: &Setup<B>, cases: &mut Vec<Value>) {
+    for (name, transcript) in [
+        ("blake", TranscriptV2::Blake2bChallenge255),
+        ("poseidon", TranscriptV2::KagemushaPoseidonRp57),
+        ("base", TranscriptV2::KagemushaPoseidonRp57Base),
+    ] {
+        for mode in [InstanceModeV1::Committed, InstanceModeV1::Direct] {
+            if transcript == TranscriptV2::KagemushaPoseidonRp57Base
+                && mode == InstanceModeV1::Committed
+            {
+                continue;
+            }
+            let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Field]);
+            config.transcript = transcript;
+            config.instance_mode = mode;
+            let pk = v2_key(source, &config);
+            cases.push(production(
+                &format!("v2/{name}/{mode:?}/field"),
+                source,
+                &pk,
+            ));
+        }
+    }
+    let config = KeygenConfigV2::pipa_r(vec![InstanceType::Bits(4)]);
+    let pk = v2_key(source, &config);
+    cases.push(production("v2/base/k6/bits4", source, &pk));
+}
+
 fn curve_cases<B: CurveBridge>(parameters: &mut Map, cases: &mut Vec<Value>) {
     for (family, k) in [
         (Family::Sigma, 6),
@@ -135,82 +219,11 @@ fn curve_cases<B: CurveBridge>(parameters: &mut Map, cases: &mut Vec<Value>) {
         );
         parameters.insert(format!("{}/{k}", B::NAME), Value::String(hex(&original)));
         if k == 6 || k == 8 {
-            let proof = source.prove_vendored([42; 32]);
-            source
-                .verify_vendored(&source.vendored_instances(), &proof)
-                .expect("original full verifier");
-            cases.push(record(
-                &format!("oracle/blake/{k}"),
-                &source,
-                &source.pk,
-                &proof,
-                true,
-            ));
-            let keys = kagemusha_keys(&source);
-            let proof = source.prove_vendored_kagemusha([42; 32]);
-            source
-                .verify_vendored_kagemusha(&source.vendored_instances(), &proof)
-                .expect("original augmented verifier");
-            cases.push(record(
-                &format!("oracle/poseidon/{k}"),
-                &source,
-                &keys.pk,
-                &proof,
-                true,
-            ));
+            oracle_cases(&source, cases);
         }
         if k == 6 {
-            for (name, transcript) in [
-                ("blake", TranscriptV1::Blake2bChallenge255),
-                ("poseidon", TranscriptV1::KagemushaPoseidonRp57),
-            ] {
-                for mode in [InstanceModeV1::Committed, InstanceModeV1::Direct] {
-                    for compress in [false, true] {
-                        let mut config = KeygenConfig::new(transcript);
-                        config.instance_mode = mode;
-                        config.compress_selectors = compress;
-                        config.proof_suffix = if compress {
-                            ProofSuffixV1::FoldedGenerator
-                        } else {
-                            ProofSuffixV1::None
-                        };
-                        let pk = source
-                            .exported
-                            .keygen(&source.params, &config)
-                            .expect("V1 key");
-                        cases.push(production(
-                            &format!("v1/{name}/{mode:?}/{compress}"),
-                            &source,
-                            &pk,
-                        ));
-                    }
-                }
-            }
-            for (name, transcript) in [
-                ("blake", TranscriptV2::Blake2bChallenge255),
-                ("poseidon", TranscriptV2::KagemushaPoseidonRp57),
-                ("base", TranscriptV2::KagemushaPoseidonRp57Base),
-            ] {
-                for mode in [InstanceModeV1::Committed, InstanceModeV1::Direct] {
-                    if transcript == TranscriptV2::KagemushaPoseidonRp57Base
-                        && mode == InstanceModeV1::Committed
-                    {
-                        continue;
-                    }
-                    let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Field]);
-                    config.transcript = transcript;
-                    config.instance_mode = mode;
-                    let pk = v2_key(&source, &config);
-                    cases.push(production(
-                        &format!("v2/{name}/{mode:?}/field"),
-                        &source,
-                        &pk,
-                    ));
-                }
-            }
-            let config = KeygenConfigV2::pipa_r(vec![InstanceType::Bits(4)]);
-            let pk = v2_key(&source, &config);
-            cases.push(production("v2/base/k6/bits4", &source, &pk));
+            v1_cases(&source, cases);
+            v2_cases(&source, cases);
         }
         let mut config = KeygenConfigV2::pipa_r(vec![if k == 6 {
             InstanceType::Bounded

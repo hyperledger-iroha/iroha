@@ -1530,6 +1530,372 @@ async fn signed_owner_prepare_and_claim_retain_exact_native_opening() {
     );
 }
 #[cfg(feature = "app_api")]
+fn identifier_beneficiary_fixture(
+    beneficiary_uaid: bool,
+    phone: bool,
+) -> (
+    SharedAppState,
+    AccountId,
+    KeyPair,
+    AccountId,
+    IdentifierPolicy,
+) {
+    let owner_key = checked_torii_test_ed25519_keypair(0x51, "identifier beneficiary policy owner");
+    let owner = AccountId::new(owner_key.public_key().clone());
+    let beneficiary = checked_torii_test_account_id(0x52, "identifier receipt beneficiary");
+    let other_owner = checked_torii_test_account_id(0x53, "independent identifier policy owner");
+    let signer = checked_torii_test_ed25519_keypair(0x54, "identifier beneficiary resolver");
+    let owner_account = Account::new(owner.clone())
+        .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
+            b"policy-owner-uaid",
+        ))))
+        .build(&owner);
+    let beneficiary_account = Account::new(beneficiary.clone())
+        .with_uaid(
+            beneficiary_uaid.then(|| UniversalAccountId::from_hash(Hash::new(b"beneficiary-uaid"))),
+        )
+        .build(&beneficiary);
+    let other_account = Account::new(other_owner.clone()).build(&other_owner);
+    let domain = Domain::new(DomainId::try_new("directory", "universal").unwrap()).build(&owner);
+    let world = World::with(
+        [domain],
+        [owner_account, beneficiary_account, other_account],
+        [],
+    );
+    let mut app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(world);
+    let policy_id = if phone {
+        "phone#retail"
+    } else {
+        "string#retail"
+    };
+    let (mut policy, program) =
+        sample_identifier_policy(&owner, &signer, &policy_id.parse().unwrap());
+    if phone {
+        policy.normalization = IdentifierNormalization::PhoneE164;
+        policy = policy.with_phone_retail_attestor_public_key(
+            checked_torii_test_ed25519_keypair(0x56, "independent phone beneficiary attestor")
+                .public_key()
+                .clone(),
+        );
+    }
+    let (other_policy, other_program) =
+        sample_identifier_policy(&other_owner, &signer, &"string#other".parse().unwrap());
+    let resolver = identifier_resolution::IdentifierResolutionService::new();
+    resolver.register_program_runtime(
+        program.program_id.clone(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec()).unwrap(),
+        iroha_crypto::default_bfv_programmed_hidden_program(),
+        signer,
+        Some(30_000),
+    );
+    Arc::get_mut(&mut app).unwrap().identifier_resolver = Some(Arc::new(resolver));
+    let mut block = app
+        .state
+        .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let mut tx = block.transaction();
+    register_and_activate_identifier_policy_bundle(&owner, &mut tx, &policy, &program);
+    register_and_activate_identifier_policy_bundle(
+        &other_owner,
+        &mut tx,
+        &other_policy,
+        &other_program,
+    );
+    tx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    (app, owner, owner_key, beneficiary, policy)
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_beneficiary_prepare(
+    policy: &IdentifierPolicy,
+) -> routing::IdentifierResolveRequestDto {
+    routing::IdentifierResolveRequestDto {
+        phase: "prepare".to_owned(),
+        policy_id: policy.id.to_string(),
+        normalized_input: if policy.id.is_phone_retail() {
+            "+6771234567".to_owned()
+        } else {
+            "alice".to_owned()
+        },
+        input_nonce: "a".repeat(64),
+        output_opening: None,
+        phone_retail_canonicality: None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn identifier_beneficiary_request(
+    app: SharedAppState,
+    caller: &AccountId,
+    key: &KeyPair,
+    beneficiary: &AccountId,
+    request: &routing::IdentifierResolveRequestDto,
+) -> Result<AxResponse, Error> {
+    let uri: axum::http::Uri = format!("/v1/accounts/{beneficiary}/identifiers/claim-receipt")
+        .parse()
+        .unwrap();
+    let body = norito::json::to_vec(request).unwrap();
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        caller,
+        key,
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    );
+    handler_identifier_claim_receipt(
+        State(app),
+        axum::http::Method::POST,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        AxPath(beneficiary.to_string()),
+        body.into(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_identifier_owner_prepares_and_claims_for_distinct_registered_beneficiary() {
+    for phone in [false, true] {
+        let (app, owner, owner_key, beneficiary, policy) =
+            identifier_beneficiary_fixture(true, phone);
+        assert_ne!(owner, beneficiary);
+        let prepare = identifier_beneficiary_prepare(&policy);
+        let response =
+            identifier_beneficiary_request(app.clone(), &owner, &owner_key, &beneficiary, &prepare)
+                .await
+                .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let prepared: routing::IdentifierPrfPrepareResponseDto =
+            norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(prepared.account_id, beneficiary.to_string());
+        assert_eq!(
+            prepared.uaid,
+            UniversalAccountId::from_hash(Hash::new(b"beneficiary-uaid")).to_string()
+        );
+        assert_ne!(
+            prepared.uaid,
+            UniversalAccountId::from_hash(Hash::new(b"policy-owner-uaid")).to_string()
+        );
+        assert_eq!(prepared.policy_id, policy.id.to_string());
+        assert_eq!(
+            prepared.network_id,
+            hex::encode(app.state.network_id_ref().as_bytes())
+        );
+        prepared
+            .output_opening
+            .verify_signature(
+                checked_torii_test_ed25519_keypair(0x54, "identifier beneficiary resolver")
+                    .public_key(),
+            )
+            .unwrap();
+        let canonicality = prepared
+            .phone_retail_canonicality_payload
+            .clone()
+            .map(|payload| {
+                assert_eq!(payload.account_id, beneficiary);
+                assert_eq!(payload.uaid.to_string(), prepared.uaid);
+                let key = checked_torii_test_ed25519_keypair(
+                    0x56,
+                    "independent phone beneficiary attestor",
+                );
+                let signature = SignatureOf::try_new(key.private_key(), &payload)
+                    .unwrap()
+                    .into();
+                iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1 {
+                    payload,
+                    signature,
+                }
+            });
+        assert_eq!(canonicality.is_some(), phone);
+        let claim = routing::IdentifierResolveRequestDto {
+            phase: "claim".to_owned(),
+            policy_id: prepare.policy_id.clone(),
+            normalized_input: prepare.normalized_input.clone(),
+            input_nonce: prepare.input_nonce.clone(),
+            output_opening: Some(prepared.output_opening.clone()),
+            phone_retail_canonicality: canonicality.clone(),
+        };
+        let response =
+            identifier_beneficiary_request(app, &owner, &owner_key, &beneficiary, &claim)
+                .await
+                .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let receipt: routing::IdentifierResolveResponseDto =
+            norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(receipt.payload.account_id, beneficiary.to_string());
+        assert_eq!(receipt.payload.uaid, prepared.uaid);
+        assert_eq!(receipt.payload.network_id, prepared.network_id);
+        assert_eq!(receipt.payload.policy_id, prepared.policy_id);
+        assert_eq!(receipt.payload.opening, prepared.output_opening);
+        assert_eq!(
+            receipt.payload.execution.executed_at_ms,
+            prepared.output_opening.payload.opened_at_ms
+        );
+        assert_eq!(
+            receipt.payload.execution.expires_at_ms,
+            prepared.output_opening.payload.expires_at_ms
+        );
+        assert_eq!(receipt.attestation.kind, "signed");
+        assert!(receipt.attestation.signature.is_some());
+        assert_eq!(receipt.phone_retail_canonicality, canonicality);
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn identifier_beneficiary_signature_cannot_replace_policy_owner_authority() {
+    let (app, _, _, beneficiary, policy) = identifier_beneficiary_fixture(true, false);
+    let key = checked_torii_test_ed25519_keypair(0x52, "identifier receipt beneficiary");
+    let error = identifier_beneficiary_request(
+        app,
+        &beneficiary,
+        &key,
+        &beneficiary,
+        &identifier_beneficiary_prepare(&policy),
+    )
+    .await
+    .expect_err("valid beneficiary signature is not the policy owner");
+    assert!(matches!(error, Error::AppUnauthorized { .. }));
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_identifier_owner_cannot_issue_under_another_owners_policy() {
+    let (app, owner, key, beneficiary, policy) = identifier_beneficiary_fixture(true, false);
+    let mut request = identifier_beneficiary_prepare(&policy);
+    request.policy_id = "string#other".to_owned();
+    let error = identifier_beneficiary_request(app, &owner, &key, &beneficiary, &request)
+        .await
+        .expect_err("another active program and identifier policy retain their owner");
+    assert!(matches!(error, Error::AppUnauthorized { .. }));
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_identifier_owner_requires_registered_beneficiary_with_uaid() {
+    for registered in [false, true] {
+        let (app, owner, key, beneficiary, policy) = identifier_beneficiary_fixture(false, false);
+        let beneficiary = if registered {
+            beneficiary
+        } else {
+            checked_torii_test_account_id(0x55, "unregistered identifier beneficiary")
+        };
+        let response = identifier_beneficiary_request(
+            app,
+            &owner,
+            &key,
+            &beneficiary,
+            &identifier_beneficiary_prepare(&policy),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.status(),
+            if registered {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        );
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_identifier_owner_cannot_retarget_beneficiary_uri_after_signing() {
+    let (app, owner, key, beneficiary, policy) = identifier_beneficiary_fixture(true, false);
+    let signed_uri: axum::http::Uri = format!("/v1/accounts/{owner}/identifiers/claim-receipt")
+        .parse()
+        .unwrap();
+    let actual_uri: axum::http::Uri =
+        format!("/v1/accounts/{beneficiary}/identifiers/claim-receipt")
+            .parse()
+            .unwrap();
+    let body = norito::json::to_vec(&identifier_beneficiary_prepare(&policy)).unwrap();
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &owner,
+        &key,
+        &axum::http::Method::POST,
+        &signed_uri,
+        &body,
+    );
+    let error = handler_identifier_claim_receipt(
+        State(app),
+        axum::http::Method::POST,
+        actual_uri,
+        headers,
+        crate::loopback_connect_info(),
+        AxPath(beneficiary.to_string()),
+        body.into(),
+    )
+    .await
+    .expect_err("canonical owner signature binds the exact beneficiary path");
+    assert!(matches!(error, Error::AppUnauthorized { .. }));
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_identifier_owner_cannot_replace_phone_attestation_beneficiary() {
+    for include_wrong_beneficiary in [false, true] {
+        let (app, owner, key, beneficiary, policy) = identifier_beneficiary_fixture(true, true);
+        let prepare = identifier_beneficiary_prepare(&policy);
+        let response =
+            identifier_beneficiary_request(app.clone(), &owner, &key, &beneficiary, &prepare)
+                .await
+                .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let prepared: routing::IdentifierPrfPrepareResponseDto =
+            norito::json::from_slice(&bytes).unwrap();
+        let canonicality = if include_wrong_beneficiary {
+            let mut payload = prepared.phone_retail_canonicality_payload.clone().unwrap();
+            payload.account_id = owner.clone();
+            let attestor =
+                checked_torii_test_ed25519_keypair(0x56, "independent phone beneficiary attestor");
+            let signature = SignatureOf::try_new(attestor.private_key(), &payload)
+                .unwrap()
+                .into();
+            Some(
+                iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1 {
+                    payload,
+                    signature,
+                },
+            )
+        } else {
+            None
+        };
+        let claim = routing::IdentifierResolveRequestDto {
+            phase: "claim".to_owned(),
+            policy_id: prepare.policy_id.clone(),
+            normalized_input: prepare.normalized_input.clone(),
+            input_nonce: prepare.input_nonce.clone(),
+            output_opening: Some(prepared.output_opening),
+            phone_retail_canonicality: canonicality,
+        };
+        let result = identifier_beneficiary_request(app, &owner, &key, &beneficiary, &claim).await;
+        assert!(
+            result.is_err(),
+            "owner authorization cannot replace exact independent phone evidence"
+        );
+    }
+}
+
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_receipt_lookup_returns_not_found_without_an_admitted_claim() {
     let (app, owner, _, policy, _) = registered_hkdf_identifier_app(0x1e);

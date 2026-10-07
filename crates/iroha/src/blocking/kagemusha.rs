@@ -1,10 +1,10 @@
-//! Wallet load reads on the account facade's reusable asynchronous runtime.
+//! Wallet enrollment and load reads on the account facade's reusable asynchronous runtime.
 
 use super::{AccountClient, RuntimeOwner};
 use crate::Result;
 use iroha_data_model::isi::kagemusha_wallet::load_finality::KagemushaWalletLoadReceiptV1;
 
-/// Blocking access to the canonical account-authenticated wallet read capability.
+/// Blocking access to canonical account-authenticated wallet services.
 #[derive(Clone, Copy, Debug)]
 pub struct Kagemusha<'a> {
     inner: crate::client::kagemusha::Kagemusha<'a>,
@@ -12,7 +12,7 @@ pub struct Kagemusha<'a> {
 }
 
 impl AccountClient {
-    /// Retrieve load originals through this account's immutable authority and owned runtime.
+    /// Access wallet services through this account's immutable authority and owned runtime.
     #[must_use]
     pub fn kagemusha(&self) -> Kagemusha<'_> {
         Kagemusha {
@@ -23,6 +23,18 @@ impl AccountClient {
 }
 
 impl Kagemusha<'_> {
+    /// Send one exact enrollment operation, preserving native originals for durable recovery.
+    ///
+    /// Returned originals require the native wallet owner's verification and durable admission.
+    /// # Errors
+    /// Returns the asynchronous enrollment failure or a typed blocking-runtime rejection.
+    pub fn enrollment(
+        &self,
+        request: &crate::client::kagemusha::EnrollmentServiceRequestV1,
+    ) -> Result<crate::client::kagemusha::EnrollmentServiceResponseV1> {
+        self.runtime.block_on(self.inner.enrollment(request))?
+    }
+
     /// Retrieve one original load transaction receipt without granting balance authority.
     ///
     /// # Errors

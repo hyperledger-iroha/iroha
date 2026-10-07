@@ -27,7 +27,7 @@ impl Count {
     fn start() -> Self {
         Self(CONSTRUCTIONS.with(|value| value.replace(Some(0))))
     }
-    fn value(&self) -> usize {
+    fn value() -> usize {
         CONSTRUCTIONS.with(|value| value.get().expect("active test count"))
     }
 }
@@ -93,13 +93,13 @@ async fn construction_and_cloning_do_not_initialize_native_pools() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<DefaultHttpTransport>();
     assert_send_sync::<ReqwestHttpTransport>();
-    let count = Count::start();
+    let _count = Count::start();
     let transport = DefaultHttpTransport::new();
     let clone = transport.clone();
     let bounded = clone.with_deadline(Instant::now() + Duration::from_secs(5));
     let _public = crate::http::PublicHttpClient::new();
     assert!(transport.shares_pools_with(&bounded));
-    assert_eq!(count.value(), 0);
+    assert_eq!(Count::value(), 0);
     let raw = ReqwestHttpTransport::default();
     assert!(raw.asynchronous.get().is_none());
     assert!(raw.asynchronous_direct_loopback.get().is_none());
@@ -109,7 +109,7 @@ async fn construction_and_cloning_do_not_initialize_native_pools() {
 
 #[tokio::test]
 async fn first_send_initializes_only_selected_pool_and_clones_reuse_it() {
-    let count = Count::start();
+    let _count = Count::start();
     let pools = Arc::new(ReqwestHttpTransport::default());
     let transport = DefaultHttpTransport::from_shared(pools.clone());
     let clone = transport.clone();
@@ -122,7 +122,7 @@ async fn first_send_initializes_only_selected_pool_and_clones_reuse_it() {
             .unwrap();
         assert_eq!(response.body(), b"ok");
     }
-    assert_eq!(count.value(), 1);
+    assert_eq!(Count::value(), 1);
     assert!(pools.asynchronous.get().is_none());
     assert!(pools.asynchronous_direct_loopback.get().is_some());
     assert!(pools.blocking.get().is_none());
@@ -132,7 +132,7 @@ async fn first_send_initializes_only_selected_pool_and_clones_reuse_it() {
         .await
         .unwrap();
     assert_eq!(response.body(), b"ok");
-    assert_eq!(count.value(), 2);
+    assert_eq!(Count::value(), 2);
     assert!(pools.asynchronous.get().is_some());
     assert!(untouched.asynchronous.get().is_none());
     assert!(untouched.asynchronous_direct_loopback.get().is_none());

@@ -7,6 +7,8 @@ pub(crate) const PROJECTION_FIXED_BYTES: usize = FINANCIAL_BYTES + 4;
 const ACCOUNT_MAX: usize = iroha_core_zk::kagemusha_wallet_intake_v1::ACCOUNT_ORIGINAL_MAX_BYTES_V1;
 const MAX_REVIEWS: usize = 8;
 const MAGIC: &[u8; 8] = b"KWORV1\0\0";
+const CHARGE_MAGIC: &[u8; 8] = b"KWUCV1\0\0";
+const CHARGE_CARRIER_MAX: usize = 16 + KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + ACCOUNT_MAX;
 
 /// One fixed request for Native to authenticate; no foreign state or financial verdict.
 #[repr(C)]
@@ -20,7 +22,7 @@ pub struct WalletReviewRequest {
     pub first: *const u8,
     /// Exact first-original length.
     pub first_length: usize,
-    /// Canonical destination AccountId for Send; certificate set for nonempty Unload charge.
+    /// Canonical destination AccountId for Send; closed certificate/beneficiary DATA for Unload.
     pub second: *const u8,
     /// Exact second-original length.
     pub second_length: usize,
@@ -33,17 +35,44 @@ pub(crate) enum Input {
     Unload {
         amount: u128,
         charge: Option<state::ChargeOriginalsV1>,
+        beneficiary: Option<Vec<u8>>,
     },
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 2]> {
     Ok(match selector {
         1 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, ACCOUNT_MAX],
-        8 => {
-            let limits = requests::bounds(selector)?;
-            [limits[0], limits[1]]
-        }
+        8 => [
+            KAGEMUSHA_WALLET_CHARGE_QUOTE_MAX_BYTES_V1,
+            CHARGE_CARRIER_MAX,
+        ],
         _ => return Err(Failure::code(INVALID)),
     })
+}
+fn unload_charge_carrier(second: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    let invalid = || Failure::code(INVALID);
+    if second.len() < 18 || second.len() > CHARGE_CARRIER_MAX || &second[..8] != CHARGE_MAGIC {
+        return Err(invalid());
+    }
+    let certificates =
+        u32::from_le_bytes(second[8..12].try_into().map_err(|_| invalid())?) as usize;
+    if certificates == 0 || certificates > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
+        return Err(invalid());
+    }
+    let beneficiary_offset = 12 + certificates;
+    let length = second
+        .get(beneficiary_offset..beneficiary_offset + 4)
+        .ok_or_else(invalid)?;
+    let beneficiary = u32::from_le_bytes(length.try_into().map_err(|_| invalid())?) as usize;
+    if beneficiary == 0
+        || beneficiary > ACCOUNT_MAX
+        || second.len() != beneficiary_offset + 4 + beneficiary
+    {
+        return Err(invalid());
+    }
+    Ok((
+        second[12..beneficiary_offset].to_vec(),
+        second[beneficiary_offset + 4..].to_vec(),
+    ))
 }
 pub(crate) fn request(selector: u32, amount: u128, first: &[u8], second: &[u8]) -> Result<Input> {
     let b = bounds(selector)?;
@@ -55,13 +84,22 @@ pub(crate) fn request(selector: u32, amount: u128, first: &[u8], second: &[u8]) 
             request: first.to_vec(),
             destination_account: second.to_vec(),
         },
-        8 if amount != 0 && first.is_empty() == second.is_empty() => Input::Unload {
+        8 if amount != 0 && first.is_empty() && second.is_empty() => Input::Unload {
             amount,
-            charge: (!first.is_empty()).then(|| state::ChargeOriginalsV1 {
-                quote: first.to_vec(),
-                certificates: second.to_vec(),
-            }),
+            charge: None,
+            beneficiary: None,
         },
+        8 if amount != 0 && !first.is_empty() => {
+            let (certificates, beneficiary) = unload_charge_carrier(second)?;
+            Input::Unload {
+                amount,
+                charge: Some(state::ChargeOriginalsV1 {
+                    quote: first.to_vec(),
+                    certificates,
+                }),
+                beneficiary: Some(beneficiary),
+            }
+        }
         _ => return Err(Failure::code(INVALID)),
     })
 }
@@ -152,7 +190,13 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
                 request,
                 destination_account,
             } => self.wallet.review_send(&request, &destination_account)?,
-            Input::Unload { amount, charge } => self.wallet.review_unload(amount, charge)?,
+            Input::Unload {
+                amount,
+                charge,
+                beneficiary,
+            } => self
+                .wallet
+                .review_unload(amount, charge, beneficiary.as_deref())?,
         };
         let bytes = projection(review.projection())?;
         let token = self.reviews.put(review)?;
@@ -257,6 +301,48 @@ pub extern "C" fn connect_norito_kagemusha_wallet_discard_review_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn charge_carrier(certificates: &[u8], beneficiary: &[u8]) -> Vec<u8> {
+        let mut bytes = CHARGE_MAGIC.to_vec();
+        bytes.extend_from_slice(&(certificates.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(certificates);
+        bytes.extend_from_slice(&(beneficiary.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(beneficiary);
+        bytes
+    }
+    #[test]
+    fn charged_review_carrier_is_closed_bounded_and_keeps_exact_originals() {
+        let certificates = vec![7; 10_000];
+        let beneficiary = vec![8; ACCOUNT_MAX];
+        let bytes = charge_carrier(&certificates, &beneficiary);
+        assert_eq!(bytes.len(), CHARGE_CARRIER_MAX);
+        assert_eq!(bounds(8).unwrap(), [1_024, 14_112]);
+        let Input::Unload {
+            charge,
+            beneficiary: actual,
+            ..
+        } = request(8, 1, &[9], &bytes).unwrap()
+        else {
+            panic!("Unload input");
+        };
+        assert_eq!(charge.unwrap().certificates, certificates);
+        assert_eq!(actual, Some(beneficiary));
+        for invalid in [
+            vec![7; 10_000],
+            charge_carrier(&[], &[8]),
+            charge_carrier(&[7], &[]),
+            charge_carrier(&vec![7; 10_001], &[8]),
+            charge_carrier(&[7], &vec![8; ACCOUNT_MAX + 1]),
+            bytes[..bytes.len() - 1].to_vec(),
+            [bytes.as_slice(), &[0]].concat(),
+        ] {
+            assert!(request(8, 1, &[9], &invalid).is_err());
+        }
+        for offset in [0, 8, 12 + certificates.len()] {
+            let mut invalid = bytes.clone();
+            invalid[offset] ^= 0xff;
+            assert!(request(8, 1, &[9], &invalid).is_err());
+        }
+    }
     #[test]
     fn intake_refuses_other_operations_and_unused_authority() {
         assert!(request(1, 0, &[7], &[8]).is_ok());
@@ -266,7 +352,8 @@ mod tests {
         assert_eq!(bounds(1).unwrap(), [10_000, ACCOUNT_MAX]);
         assert!(request(1, 0, &[7], &vec![8; ACCOUNT_MAX + 1]).is_err());
         assert!(request(8, u128::MAX, &[], &[]).is_ok());
-        assert!(request(8, 1, &[7], &[8]).is_ok());
+        assert!(request(8, 1, &[7], &charge_carrier(&[8], &[9])).is_ok());
+        assert!(request(8, 1, &[7], &[8]).is_err());
         assert!(request(8, 1, &[7], &[]).is_err());
         assert!(request(8, 1, &[], &[8]).is_err());
         assert!(request(8, 0, &[], &[]).is_err());

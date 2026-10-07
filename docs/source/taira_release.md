@@ -194,9 +194,9 @@ capture, package closure, pinned tools, six jobs, release profile and immutable
 artifact custody remain required. Existing failed or diagnostic records are never
 relabeled as a successful check. Transfer and the same-revision owner-signed
 dispatcher transition preserve the actual typed check evidence without requiring
-regression success. Native deployment preflight, signed canary, finality,
-readiness and restart proof still run; the build result keeps `release_qualified`
-and `deployed` false.
+regression success. Native deployment preflight, authenticated bootstrap,
+finality and readiness still run; diagnostic canaries and restart proofs are
+optional. The build result keeps `release_qualified` and `deployed` false.
 
 Use independently reviewed tool digests and the full signing-key fingerprint
 (GPG uppercase hexadecimal, or SSH SHA256 form). A valid signature from another
@@ -591,6 +591,18 @@ These preparation operations do not authorize replacement of shared network
 state. The reviewed inventory, explicit reset authorization, and independently
 provisioned trusted host dispatcher and reset guard remain prerequisites for
 `public-reset apply`. The candidate cannot provision its own host authority.
+
+For an explicitly authorized fresh reset after deployment proof whose seal
+bookkeeping remains unfinished, select
+`public-reset prepare-dispatcher-transition --deployment-proven-predecessor`.
+This admits the genuine immutable `deployment-proven` receipt together with the
+exact unresolved operational journal, sealed guest progress with no pending
+action, the expired predecessor lease, the stopped current runtime and the
+independently signed native edge capture. The journal must agree with the proof
+except for its bounded seal-failure diagnostic. Both original files remain
+unchanged; this does not claim that the old deployment completed. The new
+source, artifacts and reset authorization retain their normal custody and
+signature checks. This selection conflicts with `--terminal-rolled-back`.
 
 For first-time native custody, use the same-source Kagami key owner with two
 separate fresh directories, one for native capture and one for the independently

@@ -70,6 +70,27 @@ fn send_destination_original(
     Ok(original.to_vec())
 }
 
+// Call only after review_unload_terms authenticates this exact quote and its certificate set.
+fn unload_beneficiary_original(
+    scheme: &[u8; 32],
+    charge: Option<&ChargeOriginalsV1>,
+    original: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>, Error> {
+    match (charge, original) {
+        (None, None) => Ok(None),
+        (Some(charge), Some(original)) => {
+            let quote = valid(KagemushaWalletChargeQuoteV1::decode_canonical(
+                &charge.quote,
+                scheme,
+            ))?;
+            intake::account(original, &quote.body.beneficiary_account_digest)
+                .map_err(|_| Error::Invalid("review Unload beneficiary original"))?;
+            Ok(Some(original.to_vec()))
+        }
+        _ => Err(Error::Invalid("review Unload beneficiary presence")),
+    }
+}
+
 /// Opaque one-use review owned by the single admitted Native coordinator.
 /// No public constructor, clone or codec can reconstruct it from projection DATA.
 /// Mobile boundaries must retain this actual value under an owner-local one-use token.
@@ -87,6 +108,7 @@ pub struct ReviewedOperationV1 {
     projection: NativeOperationReviewV1,
     source: ReviewSourceV1,
     action: OperationActionV1,
+    unload_beneficiary: Option<Vec<u8>>,
 }
 impl ReviewedOperationV1 {
     /// Borrow the immutable financial DATA for hardware UI approval.
@@ -118,6 +140,7 @@ impl ReviewedOperationV1 {
         if self.action != fresh.action
             || self.projection != fresh.projection
             || self.source != fresh.source
+            || self.unload_beneficiary != fresh.unload_beneficiary
         {
             return Err(Error::OperationConflict);
         }
@@ -199,10 +222,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         &mut self,
         action: OperationActionV1,
         destination_original: Option<&[u8]>,
+        unload_beneficiary: Option<&[u8]>,
     ) -> Result<ReviewedOperationV1, Error> {
         let kind = match &action {
             OperationActionV1::Send { request }
-                if !request.is_empty()
+                if unload_beneficiary.is_none()
+                    && !request.is_empty()
                     && request.len() <= KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
                     && destination_original.is_some_and(|original| {
                         !original.is_empty() && original.len() <= ACCOUNT_ORIGINAL_MAX_BYTES_V1
@@ -210,7 +235,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             {
                 KagemushaWalletOperationKindV1::Send
             }
-            OperationActionV1::Unload { .. } if destination_original.is_none() => {
+            OperationActionV1::Unload { charge, .. }
+                if destination_original.is_none()
+                    && charge.is_some() == unload_beneficiary.is_some()
+                    && unload_beneficiary.is_none_or(|original| {
+                        !original.is_empty() && original.len() <= ACCOUNT_ORIGINAL_MAX_BYTES_V1
+                    }) =>
+            {
                 KagemushaWalletOperationKindV1::Unload
             }
             _ => return Err(Error::Invalid("review operation")),
@@ -245,6 +276,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             proof(preparation.folded_state(&owner, &released, &fold, self.proofs.budget))?;
         let before = predecessor.source_state();
         let mut destination_account_original = None;
+        let mut verified_unload_beneficiary = None;
         let (
             amount,
             fee,
@@ -329,6 +361,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                         certificate_set: &c.certificates,
                     }),
                 ))?;
+                verified_unload_beneficiary = unload_beneficiary_original(
+                    &self.scheme_id,
+                    charge.as_ref(),
+                    unload_beneficiary,
+                )?;
                 (
                     *amount,
                     fee,
@@ -375,6 +412,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             projection,
             source: binding,
             action,
+            unload_beneficiary: verified_unload_beneficiary,
         })
     }
 
@@ -400,6 +438,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 request: request_original.to_vec(),
             },
             Some(destination_account_original),
+            None,
         )
     }
 
@@ -407,14 +446,20 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// The fee is withheld from the ledger payout; the offline debit remains the face amount.
     /// No nonce, map insertion, proof, signature or Advance is produced.
     /// # Errors
-    /// Unavailable or changed source, missing fold, invalid amount or foreign/malformed quote/certificates.
+    /// Unavailable or changed source, missing fold, invalid amount or foreign/malformed
+    /// quote/certificates/beneficiary. Charged reviews require the exact canonical beneficiary.
     pub fn review_unload(
         &mut self,
         amount: u128,
         charge: Option<ChargeOriginalsV1>,
+        beneficiary_original: Option<&[u8]>,
     ) -> Result<ReviewedOperationV1, Error> {
         let _payment = self.scheduler.payment();
-        self.review_action(OperationActionV1::Unload { amount, charge }, None)
+        self.review_action(
+            OperationActionV1::Unload { amount, charge },
+            None,
+            beneficiary_original,
+        )
     }
 
     /// Consume one actual review after fresh hardware UI approval and recheck its exact source.
@@ -437,6 +482,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let fresh = self.review_action(
             review.action.clone(),
             review.projection.destination_account_original.as_deref(),
+            review.unload_beneficiary.as_deref(),
         )?;
         review.require_recheck(&fresh)?;
         self.execute(review.into_request(request_id)?)

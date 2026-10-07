@@ -20,6 +20,7 @@ on:
       - "crates/norito*/**"
       - "vendor/**"
       - "fixtures/native_prover/**"
+      - "pytests/scripts/native_prover_reference_test.py"
       - "specs/plonk_ipa_v1.md"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -39,6 +40,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  independent-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Verify every full proof with the standard library alone
+        run: python3 -I -B -S fixtures/native_prover/verify_reference_v1.py
+      - name: Install the test runner only
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Exercise independent proof, parser and decision mutations
+        run: python3 -B -m pytest -q pytests/scripts/native_prover_reference_test.py
   oracle:
     strategy:
       fail-fast: false

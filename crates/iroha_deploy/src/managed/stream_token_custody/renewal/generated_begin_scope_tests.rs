@@ -260,3 +260,179 @@ fn begin_epoch_workspace_preserves_late_finite_outer_charge_refusal_and_retry() 
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
 }
+
+// This one-shot hook exists only in libtest, at the real lease-root selection boundary.
+// It cannot change shipping authorization, resource limits or source validation.
+std::thread_local! {
+    static LEASE_ROOT_SELECTION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// Execute and remove the test-owned one-shot hook at the genuine lease selection seam.
+pub(super) fn before_lease_root_selection() {
+    let hook = LEASE_ROOT_SELECTION_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+fn with_lease_root_selection_hook<T>(hook: impl FnOnce() + 'static, run: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            LEASE_ROOT_SELECTION_HOOK.with(|slot| slot.borrow_mut().take());
+        }
+    }
+    LEASE_ROOT_SELECTION_HOOK.with(|slot| {
+        assert!(slot.borrow().is_none(), "lease-root hook must not overlap");
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+    let _reset = Reset;
+    run()
+}
+
+#[test]
+fn renewal_lease_keeps_original_root_material_and_same_source_retry() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = fixture_with_renewal_body();
+    let deadline = fixture.options.deadline;
+    let floor = *fixture
+        .owner
+        .retained_initial_enrollment(&fixture.policy, fixture.initial, deadline)
+        .unwrap()
+        .finalized();
+    let history = BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
+        .unwrap()
+        .unwrap();
+    let identity = history.root().identity().unwrap();
+    let bytes = history.outer_bytes().unwrap();
+    let before = history.root().read("original.nrt", bytes.len()).unwrap();
+    assert_eq!(before.as_slice(), bytes);
+    let mut turn = begin(&fixture, floor, true, deadline).unwrap();
+    let called = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = std::rc::Rc::clone(&called);
+    #[cfg(windows)]
+    let root_path = history.root().path().to_path_buf();
+    #[cfg(windows)]
+    let displaced = root_path.with_file_name("held-renewal-original");
+    with_lease_root_selection_hook(
+        move || {
+            observed.set(true);
+            #[cfg(windows)]
+            assert!(std::fs::rename(&root_path, &displaced).is_err());
+        },
+        || {
+            let authorization = turn
+                .authorize_retained(&fixture.owner, &history, deadline)
+                .unwrap();
+            assert_eq!(authorization.lease.directory.identity().unwrap(), identity);
+            assert_eq!(authorization.lease.directory.path(), history.root().path());
+            assert_eq!(
+                authorization
+                    .lease
+                    .directory
+                    .read("original.nrt", bytes.len())
+                    .unwrap(),
+                before,
+            );
+            authorization.lease.check(deadline).unwrap();
+            history
+                .root()
+                .write_atomic("original.nrt", &[0xff], PublishMode::Replace)
+                .unwrap();
+            assert!(authorization.lease.check(deadline).is_err());
+            history
+                .root()
+                .write_atomic("original.nrt", &bytes, PublishMode::Replace)
+                .unwrap();
+            assert_eq!(history.root().identity().unwrap(), identity);
+            assert_eq!(
+                history.root().read("original.nrt", bytes.len()).unwrap(),
+                before
+            );
+            authorization.lease.check(deadline).unwrap();
+        },
+    );
+    assert!(called.get());
+    assert!(LEASE_ROOT_SELECTION_HOOK.with(|slot| slot.borrow().is_none()));
+    assert_eq!(fixture.native.chain.height(), 4);
+}
+
+#[cfg(unix)]
+#[test]
+fn renewal_lease_refuses_same_byte_root_replacement_and_retries_original() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = fixture_with_renewal_body();
+    let deadline = fixture.options.deadline;
+    let floor = *fixture
+        .owner
+        .retained_initial_enrollment(&fixture.policy, fixture.initial, deadline)
+        .unwrap()
+        .finalized();
+    let history = BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
+        .unwrap()
+        .unwrap();
+    let identity = history.root().identity().unwrap();
+    let bytes = history.outer_bytes().unwrap();
+    let root_path = history.root().path().to_path_buf();
+    let displaced = root_path.with_file_name("held-renewal-original");
+    let hook_path = root_path.clone();
+    let hook_displaced = displaced.clone();
+    let hook_bytes = bytes.clone();
+    let mut turn = begin(&fixture, floor, true, deadline).unwrap();
+    let refusal = with_lease_root_selection_hook(
+        move || {
+            std::fs::rename(&hook_path, &hook_displaced).unwrap();
+            let replacement = PrivateDirectory::open_or_create(&hook_path).unwrap();
+            replacement
+                .write_atomic("original.nrt", &hook_bytes, PublishMode::CreateNew)
+                .unwrap();
+        },
+        || {
+            turn.authorize_retained(&fixture.owner, &history, deadline)
+                .map(|_| ())
+        },
+    );
+    assert!(
+        matches!(&refusal, Err(crate::managed::Error::Io(_))),
+        "{refusal:?}"
+    );
+    assert!(turn.authorization.is_none());
+    assert!(turn.issuance_consumed);
+    assert!(LEASE_ROOT_SELECTION_HOOK.with(|slot| slot.borrow().is_none()));
+    let replacement = PrivateDirectory::open_exact(&root_path).unwrap();
+    assert_ne!(replacement.identity().unwrap(), identity);
+    assert_eq!(
+        replacement
+            .read("original.nrt", bytes.len())
+            .unwrap()
+            .as_slice(),
+        bytes
+    );
+    assert_eq!(
+        replacement.entries(1).unwrap(),
+        vec![std::ffi::OsString::from("original.nrt")]
+    );
+    assert!(!root_path.join("epochs").exists());
+    drop(replacement);
+    std::fs::remove_dir_all(&root_path).unwrap();
+    std::fs::rename(&displaced, &root_path).unwrap();
+    assert_eq!(history.root().identity().unwrap(), identity);
+    assert_eq!(
+        history
+            .root()
+            .read("original.nrt", bytes.len())
+            .unwrap()
+            .as_slice(),
+        bytes
+    );
+    // Failed issuance consumes its original turn; source restoration uses a fresh genuine Begin.
+    let mut retry = begin(&fixture, floor, true, deadline).unwrap();
+    let authorization = retry
+        .authorize_retained(&fixture.owner, &history, deadline)
+        .unwrap();
+    assert_eq!(authorization.lease.directory.identity().unwrap(), identity);
+    authorization.lease.check(deadline).unwrap();
+    assert_eq!(fixture.native.chain.height(), 4);
+}

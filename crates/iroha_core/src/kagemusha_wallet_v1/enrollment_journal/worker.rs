@@ -11,8 +11,8 @@ use iroha_data_model::kagemusha::KagemushaWalletCredentialBodyV1;
 impl EnrollmentJournalV1 {
     /// Reconstruct the exact private request from retained account-signed E5 and issuer time.
     /// The independently admitted process must match the original configuration pin. This
-    /// returns codec state only: a reread `Verifying` attempt permits `Recover`, never another
-    /// fresh E5 selection. Later terminal phases already have their original outcome in this journal.
+    /// returns codec state only: a reread `Verifying` attempt permits live `Recover` under
+    /// fresh eligibility or passive `Inspect`, never another fresh E5 selection. Later terminal phases already have their original outcome in this journal.
     /// # Errors
     /// Refuses an unselected or stale attempt, configuration substitution, invalid E5, changed
     /// issuer bindings or any mismatch with the exact previously published worker request.
@@ -48,9 +48,11 @@ impl EnrollmentJournalV1 {
         Ok(worker)
     }
 
-    /// Bind one Complete/Recover exchange to the durable preparation and exact account-signed
-    /// E5. A reread attempt must use Recover; the worker atomically claims an unclaimed prepared
+    /// Bind one Complete/Recover/Inspect exchange to the durable preparation and exact account-signed
+    /// E5. A reread attempt uses Recover or passive Inspect; only live Complete/Recover can
+    /// atomically claim an unclaimed prepared
     /// row and never repeats verification after a claim, even when its result remains unknown.
+    /// Inspect never claims or performs verification, including after E1 expiry.
     /// The caller supplies a fresh exchange nonce and trusted current dispatch time.
     /// # Errors
     /// Unprepared/mismatched originals, malformed time/nonce or unavailable custody.

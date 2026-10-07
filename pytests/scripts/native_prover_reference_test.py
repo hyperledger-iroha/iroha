@@ -290,3 +290,65 @@ def test_complete_reference_cli_uses_only_standard_library_from_other_directory(
     assert result.stdout.strip() == (
         f"{ROOT / 'fixtures/native_prover/reference_v1.json'}: "
         'verified full_proofs=46, pinned_parameter_sets=10, curves=2, profiles=3')
+
+
+SOFT_CASES = [case for case in PRODUCTION if case['name'].split('/', 1)[1] in
+              ('v2/blake/Direct/field', 'v2/poseidon/Committed/field', 'v2/base/Direct/field')]
+
+
+@pytest.mark.parametrize('case', SOFT_CASES, ids=lambda c: c['name'])
+def test_false_generator_preserves_soft_equation_but_full_decision_rejects(case):
+    """A valid soft equation is deliberately insufficient for full acceptance."""
+    from reference_verifier.verify import verify
+    args = production_inputs(case)
+    genuine = verify(**args)
+    d = Descriptor.decode(args['descriptor'], args['version'])
+    curve, m = d.curve, d.curve.scalar
+    params = Parameters.decode(args['parameter_bytes'], curve, d['k'])
+    proof = args['proof']
+    assert d['proof_suffix'] == 1 and len(genuine.challenges) == d['k'] + 11
+    c, f = scalar(proof[-96:-64].hex()), scalar(proof[-64:-32].hex())
+    changed_c = (c + 1) % m
+    assert changed_c != 0
+    b, power = 1, genuine.challenges[7]  # x3 from the specified multiopen transcript.
+    for u in reversed(genuine.rounds):
+        b = b * (1 + u * power) % m
+        power = power * power % m
+    bz = b * genuine.challenges[10] % m  # zeta; final scalars have no later squeeze.
+    forged = curve.multiply(curve.sum([(c, genuine.generator),
+                                      (-(changed_c - c) * bz, params.u)]), pow(changed_c, -1, m))
+    assert not curve.equal(forged, genuine.generator)
+    before = curve.sum([(c, genuine.generator), (c * bz, params.u), (f, params.w)])
+    after = curve.sum([(changed_c, forged), (changed_c * bz, params.u), (f, params.w)])
+    assert curve.equal(before, after), 'the exact soft IPA equation is unchanged'
+    args['proof'] = proof[:-96] + changed_c.to_bytes(32, 'little') + proof[-64:-32] + curve.encode(forged)
+    assert args['proof'][:-96] == proof[:-96]
+    with pytest.raises(InvalidProof, match='generator decision'):
+        verify(**args)
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'duplicate', 'version_alias', 'curve_label',
+                                      'profile_label', 'proof_with_new_digest'])
+def test_reference_evidence_matrix_cannot_substitute_missing_or_false_cases(mutation):
+    """The fixture labels and hash are not substitutes for cryptographic verification."""
+    from copy import deepcopy
+    import hashlib
+    import verify_reference_v1
+    document = deepcopy(REFERENCE)
+    case = document['cases'][0]
+    if mutation == 'missing':
+        document['cases'].pop()
+    elif mutation == 'duplicate':
+        document['cases'][-1] = deepcopy(case)
+    elif mutation == 'version_alias':
+        case['descriptor_version'] = True
+    elif mutation == 'curve_label':
+        case['curve'] = 'eq' if case['curve'] == 'ep' else 'ep'
+    elif mutation == 'profile_label':
+        # Preserve the complete name set while assigning a genuine proof to the wrong profile.
+        case['name'], document['cases'][1]['name'] = document['cases'][1]['name'], case['name']
+    else:
+        proof = bytes.fromhex(case['proof']) + b'\0'
+        case['proof'], case['proof_sha256'] = proof.hex(), hashlib.sha256(proof).hexdigest()
+    with pytest.raises(InvalidProof):
+        verify_reference_v1.check(document)

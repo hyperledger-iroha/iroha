@@ -12,8 +12,11 @@ public struct KagemushaWalletCallV1: Sendable {
   /// idle6, caught up7, checkpoint8, folded9, CreditStatus10, preparing11, setup12,
   /// timeChallenge13, timeRetained14, accountChallenge15, opened16, activation17;
   /// background29, closure30, retainedFee31, noFee32, ledgerTip33, noTip34, payoutRecorded35,
-  /// feeClaimTransport36, authenticatedEnrollmentSelection37, appleOriginals38, appleCustodyAcknowledged39, ledgerInstruction40, recursiveLoadFinality41, confirmedUnload42, receiptProofProgress43; enrollment18...28 is projected by the separate enrollment owner.
-  static let statusRange: ClosedRange<Int32> = 0...43
+  /// feeClaimTransport36, authenticatedEnrollmentSelection37, appleOriginals38, appleCustodyAcknowledged39,
+  /// ledgerInstruction40, confirmedUnload42, confirmedActivation44, activationProgress45,
+  /// activationNotStarted46, creditProjection47, unloadClaimTransport48; retired kinds41/43 are rejected.
+  /// Enrollment18...28 is projected by the separate enrollment owner.
+  static let statusRange: ClosedRange<Int32> = 0...48
   public let status: Int32
   public let sequenceLow: UInt64
   public let sequenceHigh: UInt64
@@ -24,16 +27,16 @@ public struct KagemushaWalletCallV1: Sendable {
   public let bytes: Data
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
-    guard Self.statusRange.contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
-      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 41, 42, 43].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
-      ![12, 14, 17, 30, 31, 32, 34, 35, 36, 40, 41].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
+    guard Self.statusRange.contains(status), ![41, 43].contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
+      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 42, 44, 45, 47, 48].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
+      ![12, 14, 17, 30, 31, 32, 34, 35, 36, 40, 46, 47, 48].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
       !([13, 15, 16].contains(status) || (18...28).contains(status) || (37...39).contains(status))
         || (sequenceLow > 0 && sequenceLow <= UInt64(Int64.max) && sequenceHigh == 0 && detail == 0),
       ![13, 15, 18, 23].contains(status) || bytes.count == 32,
       status != 13 || bytes.contains(where: { $0 != 0 }),
       status != 19 || bytes.count == 161,
-      status != 43 || (sequenceLow > 1 && sequenceHigh == 0 && detail == 0 && bytes.count == 8 && bytes.reduce(UInt64(0), { ($0 << 8) | UInt64($1) }) <= sequenceLow),
-      ![33, 42].contains(status) || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
+      ![42, 44].contains(status) || sequenceLow > 1,
+      ![33, 42, 44, 45].contains(status) || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     self.status = status
     self.sequenceLow = sequenceLow
@@ -90,6 +93,15 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
     let result = try setup(.init(selector: 19, identity: requestId))
     guard result.status == 30 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return result.bytes
+  }
+  /// Canonical claim for a completed Unload, never settlement confirmation. Native selects
+  /// the admitted account and exact retained package/quote. Charged Unload requires the
+  /// quote's canonical beneficiary; uncharged Unload requires absence.
+  public func unloadClaimTransport(requestId: Data, chargeBeneficiary: Data? = nil) throws -> Data {
+    guard chargeBeneficiary == nil || !(chargeBeneficiary?.isEmpty ?? true) else {
+      throw KagemushaWalletErrorV1.invalidInput
+    }
+    return try setup(.init(selector: 45, identity: requestId, first: chargeBeneficiary ?? Data())).unloadClaimOriginal()
   }
   /// Read both exact fee-claim originals atomically from one native-retained frame.
   /// Nil means no pending claim; missing selected bytes are an error, never a paid verdict.
@@ -203,11 +215,18 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
     try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: kind.rawValue, first: update, second: certificates))
   }
   /// Authenticate exact Unload gross debit and optional signed charge before fresh confirmation.
-  public func reviewUnload(amount: KagemushaWalletUInt128V1, quote: Data? = nil, certificates: Data? = nil) throws -> KagemushaWalletReviewV1 {
+  public func reviewUnload(amount: KagemushaWalletUInt128V1, quote: Data? = nil, certificates: Data? = nil,
+    chargeBeneficiary: Data? = nil) throws -> KagemushaWalletReviewV1 {
     guard amount.low != 0 || amount.high != 0, (quote == nil) == (certificates == nil),
+      (quote == nil) == (chargeBeneficiary == nil),
       quote.map({ !$0.isEmpty && $0.count <= 1_024 }) ?? true,
-      certificates.map({ !$0.isEmpty && $0.count <= 10_000 }) ?? true else { throw KagemushaWalletErrorV1.invalidInput }
-    return try review(selector: 8, amount: amount, first: quote ?? Data(), second: certificates ?? Data(), expected: .unload)
+      certificates.map({ !$0.isEmpty && $0.count <= 10_000 }) ?? true,
+      chargeBeneficiary.map({ !$0.isEmpty && $0.count <= 4_096 }) ?? true else { throw KagemushaWalletErrorV1.invalidInput }
+    let companion: Data
+    if let certificates, let chargeBeneficiary {
+      companion = try KagemushaWalletUnloadChargeReviewV1.encode(certificates: certificates, beneficiary: chargeBeneficiary)
+    } else { companion = Data() }
+    return try review(selector: 8, amount: amount, first: quote ?? Data(), second: companion, expected: .unload)
   }
   private func review(selector: UInt32, amount: KagemushaWalletUInt128V1, first: Data, second: Data,
     expected: KagemushaWalletReviewProjectionV1.Kind) throws -> KagemushaWalletReviewV1 {
@@ -629,5 +648,17 @@ func kagemushaWalletCallbacksV1(_ platform: KagemushaWalletApplePlatformV1)
 }
 
 func kagemushaWalletOutputBoundV1(_ status: Int32) -> Int {
-  switch status { case 17, 27, 30, 36, 41: return 16_384; case 40: return 65_536; case 24: return KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; case 25: return 262_144; case 28: return 1024; case 37: return 1028; case 38: return 73_740; case 31: return 21_024; case 33, 42: return 32; case 43: return 8; default: return 10_000 }
+  switch status {
+  case 17, 27, 30, 36, 48: return 16_384
+  case 40: return 65_536
+  case 24: return KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES
+  case 25: return 262_144
+  case 28: return 1024
+  case 37: return 1028
+  case 38: return 73_740
+  case 31: return 21_024
+  case 33, 42, 44, 45: return 32
+  case 47: return 10_092
+  default: return 10_000
+  }
 }

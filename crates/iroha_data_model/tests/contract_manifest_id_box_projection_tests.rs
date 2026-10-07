@@ -309,7 +309,7 @@ fn rejected_event_manifest_signer_and_verification_share_one_finite_original_own
     let frame = grant
         .try_partition_bytes(exact)
         .expect("original signing frame");
-    let signed = manifest
+    let authenticated = manifest
         .try_signed(&context, exact, &key)
         .expect("bounded provenance");
     assert_eq!(
@@ -320,10 +320,11 @@ fn rejected_event_manifest_signer_and_verification_share_one_finite_original_own
     let verify_frame = grant
         .try_partition_bytes(exact)
         .expect("same original verification frame");
-    let (payload, allocations) = measured(|| signed.signature_payload_bytes(&context, exact));
+    let (payload, allocations) =
+        measured(|| authenticated.signature_payload_bytes(&context, exact));
     let payload = payload.expect("same cumulative owner verification output");
     assert_eq!(allocations, 1);
-    let provenance = signed.provenance.as_ref().expect("signed manifest");
+    let provenance = authenticated.provenance.as_ref().expect("signed manifest");
     assert_eq!(provenance.signer, *key.public_key());
     provenance
         .signature
@@ -332,7 +333,7 @@ fn rejected_event_manifest_signer_and_verification_share_one_finite_original_own
     assert_eq!(context.consumed_allocated_bytes(), cumulative as u64);
     drop(payload);
     drop(verify_frame);
-    drop(signed);
+    drop(authenticated);
     drop(signer_credit);
     drop(context);
     drop(grant);

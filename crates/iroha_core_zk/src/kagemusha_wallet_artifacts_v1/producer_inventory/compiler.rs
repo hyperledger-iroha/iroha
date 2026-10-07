@@ -21,7 +21,7 @@ use iroha_kagemusha_proof::{
 use iroha_plonk::{
     ProvingKey,
     frontend::Circuit,
-    keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2, pk::artifact::ReadConfig},
+    keys::{CosetCachePolicy, KeyError, KeygenConfigV2, keygen_pk_v2, pk::artifact::ReadConfig},
     pcs::ipa::PinnedParams,
 };
 
@@ -39,8 +39,6 @@ pub trait OriginalSinkV1: OriginalSourceV1 {
 /// Exact compiled owner where an offline construction failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompilationPhaseV1 {
-    /// Key generation.
-    KeyGeneration,
     /// Key identity.
     KeyIdentity,
     /// Original encoding.
@@ -86,7 +84,7 @@ pub enum CompilationPhaseV1 {
 }
 
 /// Offline source, original, storage or complete-catalog failure.
-#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum CompilationErrorV1 {
     /// A bounded original or immutable storage identity failed.
     #[error(transparent)]
@@ -94,6 +92,24 @@ pub enum CompilationErrorV1 {
     /// The fixed source or its complete original import failed at this owner.
     #[error("offline source compilation failed: {0:?}")]
     Source(CompilationPhaseV1),
+    /// Typed source-key construction failure; it contains no witness values.
+    #[error("offline key generation failed: {0}")]
+    KeyGeneration(#[from] KeyError),
+    /// Public fixed operation and stage where source-key construction failed.
+    #[error("offline {route:?} stage {stage} wrapper={wrapper} key generation failed: {source}")]
+    OperationKeyGeneration {
+        /// Compiled logical operation and sigma selectors.
+        route: OperationRoute,
+        /// Zero-based A/W stage.
+        stage: usize,
+        /// Whether the failed source was its W continuation.
+        wrapper: bool,
+        /// Exact typed key error, including a synthesis or resource refusal.
+        source: KeyError,
+    },
+    /// A canonical original failed source lookup or complete strict import.
+    #[error(transparent)]
+    ProvingKey(#[from] iroha_plonk::keys::pk::artifact::Error),
     /// The supplied partial graph cannot close into this exact complete catalog.
     #[error("offline catalog is incomplete or has a different dependency")]
     Closure,
@@ -194,10 +210,27 @@ pub struct OfflineCompilerV1<'a> {
     maximum_total_bytes: u64,
     bytes: u64,
     blobs: BTreeMap<[u8; 32], u64>,
+    candidates: BTreeMap<[u8; 32], OriginalV1>,
 }
 
 fn source<T, E>(result: Result<T, E>, phase: CompilationPhaseV1) -> Result<T, CompilationErrorV1> {
     result.map_err(|_| CompilationErrorV1::Source(phase))
+}
+fn stage_error(
+    error: CompilationErrorV1,
+    route: OperationRoute,
+    stage: usize,
+    wrapper: bool,
+) -> CompilationErrorV1 {
+    match error {
+        CompilationErrorV1::KeyGeneration(source) => CompilationErrorV1::OperationKeyGeneration {
+            route,
+            stage,
+            wrapper,
+            source,
+        },
+        other => other,
+    }
 }
 fn equal<C: PastaCurve>(a: &KeyArtifact<C>, b: &KeyArtifact<C>) -> bool {
     a.binding() == b.binding() && a.key().to_bytes() == b.key().to_bytes()
@@ -235,6 +268,7 @@ impl<'a> OfflineCompilerV1<'a> {
             maximum_total_bytes,
             bytes: 0,
             blobs: BTreeMap::new(),
+            candidates: BTreeMap::new(),
         })
     }
 
@@ -263,10 +297,11 @@ impl<'a> OfflineCompilerV1<'a> {
         params: &PinnedParams<C>,
         cfg: &KeygenConfigV2,
     ) -> Result<CompiledKeyV1<C>, CompilationErrorV1> {
-        let key = source(
-            keygen_pk_v2(params, circuit, cfg),
-            CompilationPhaseV1::KeyGeneration,
-        )?;
+        let fingerprint = iroha_plonk::keys::source_fingerprint_v2(params, circuit, cfg, None)?;
+        if let Some(&original) = self.candidates.get(fingerprint.digest()) {
+            return self.import_candidate(original, &fingerprint, circuit, params);
+        }
+        let key = keygen_pk_v2(params, circuit, cfg)?;
         let d = key.binding().descriptor();
         let expected = (d.num_fixed_columns as usize)
             .checked_add(d.permutation.len())
@@ -316,6 +351,7 @@ impl<'a> OfflineCompilerV1<'a> {
         )?;
         drop(imported);
         drop(original);
+        self.remember_candidate(*fingerprint.digest(), record)?;
         Ok(CompiledKeyV1 {
             original: record,
             metadata,
@@ -561,7 +597,8 @@ impl<'a> OfflineCompilerV1<'a> {
                     let key = if let Some(old) = originals {
                         self.import(&old.a[stage], &circuit, &eq)?
                     } else {
-                        self.key(&circuit, &eq, &acfg)?
+                        self.key(&circuit, &eq, &acfg)
+                            .map_err(|error| stage_error(error, route, stage, false))?
                     };
                     if stage + 1 < plan.context().stage_count() {
                         let circuit = source(
@@ -571,7 +608,8 @@ impl<'a> OfflineCompilerV1<'a> {
                         let wrapper = if let Some(old) = originals {
                             self.import(&old.w[stage], &circuit, &ep)?
                         } else {
-                            self.key(&circuit, &ep, &wcfg)?
+                            self.key(&circuit, &ep, &wcfg)
+                                .map_err(|error| stage_error(error, route, stage, true))?
                         };
                         previous = Some(source(
                             WKey::from_artifact(
@@ -708,3 +746,6 @@ mod tests;
 mod full_catalog;
 #[cfg(test)]
 pub(crate) use full_catalog::open_pinned_engineering_wallet_sources;
+
+#[path = "compiler/reuse.rs"]
+mod reuse;

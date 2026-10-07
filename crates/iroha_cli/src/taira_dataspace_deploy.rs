@@ -47,6 +47,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[path = "taira_dataspace_deploy_authority.rs"]
+mod authority;
 #[path = "taira_dataspace_deploy_finality.rs"]
 mod finality;
 #[path = "taira_dataspace_deploy_manifest.rs"]
@@ -55,6 +57,10 @@ mod lane_manifest;
 mod profile;
 #[path = "taira_dataspace_runtime_update.rs"]
 mod runtime_update;
+pub use authority::{
+    DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
+    dataspace_authority_original_inventory, verify_dataspace_authority_originals,
+};
 
 pub(crate) use finality::authenticated_height::{
     AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
@@ -82,6 +88,8 @@ const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 pub(crate) enum Command {
     /// Export independently selected network trust once for all its dataspaces.
     ExportProfile(profile::ExportProfile),
+    /// Replay completed allocation originals without loading credentials or contacting peers.
+    VerifyAuthority(authority::VerifyAuthority),
     /// Validate the definition and save its immutable plan without submitting transactions.
     Plan(DefinitionArgs),
     /// Plan if needed, then advance the retained transactions without resubmission.
@@ -96,7 +104,9 @@ impl Command {
         let (args, status) = match self {
             Self::Plan(args) | Self::Apply(args) => (args, false),
             Self::Status(args) => (args, true),
-            Self::ExportProfile(_) => eyre::bail!("profile export has no verification routes"),
+            Self::ExportProfile(_) | Self::VerifyAuthority(_) => {
+                eyre::bail!("local authority tooling has no verification routes")
+            }
         };
         require(
             status || args.verification_peer_urls.is_empty(),
@@ -106,6 +116,22 @@ impl Command {
             status || args.verification_runtime_update.is_none(),
             "--verification-runtime-update is only available for read-only dataspace status",
         )?;
+        require(
+            status || args.export_authority.is_none(),
+            "--export-authority is only available for read-only dataspace status",
+        )?;
+        require(
+            args.verification_source_commit.is_some() == args.verification_source_version.is_some()
+                && (args.verification_source_commit.is_none()
+                    || (status && args.verification_runtime_update.is_some())),
+            "explicit target source requires a complete source pair and read-only runtime-update status",
+        )?;
+        if let (Some(commit), Some(version)) = (
+            &args.verification_source_commit,
+            &args.verification_source_version,
+        ) {
+            runtime_update::selected_source_fingerprint(commit, version)?;
+        }
         finality::verification_origins(trust, &args.verification_peer_urls)
     }
 }
@@ -124,9 +150,18 @@ pub(crate) struct DefinitionArgs {
     /// Signed peer identities and retained deployment intent are never changed.
     #[arg(long = "verification-peer-url", value_name = "URL")]
     pub(crate) verification_peer_urls: Vec<String>,
-    /// Actual completed preserved-state update on this Linux guest; verify its compiled build identity.
+    /// Actual completed preserved-state update on this Linux guest; verify its target build identity.
     #[arg(long, value_name = "DIRECTORY")]
     pub(crate) verification_runtime_update: Option<PathBuf>,
+    /// Independently authenticated target commit for read-only status with a separate verifier.
+    #[arg(long, value_name = "COMMIT", requires_all = ["verification_source_version", "verification_runtime_update"])]
+    pub(crate) verification_source_commit: Option<String>,
+    /// Package version from that same independently authenticated target source.
+    #[arg(long, value_name = "VERSION", requires_all = ["verification_source_commit", "verification_runtime_update"])]
+    pub(crate) verification_source_version: Option<String>,
+    /// New private directory for verified public allocation originals, after successful status.
+    #[arg(long, value_name = "DIRECTORY")]
+    pub(crate) export_authority: Option<PathBuf>,
     /// Total time budget for planning, dispatch and fresh verification.
     #[arg(long, default_value_t = DEFAULT_OPERATION_TIMEOUT_MS,
           value_parser = clap::value_parser!(u64).range(1..))]

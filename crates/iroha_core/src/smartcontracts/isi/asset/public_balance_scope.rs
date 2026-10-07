@@ -197,16 +197,12 @@ mod direct_dataspace_home_tests {
             id.clone(),
             "Kina",
             AssetBalancePolicy::DataspaceRestricted,
-            Some(domain.clone()),
+            None,
         )
         .build(&ALICE_ID);
-        let mut world = World::with(
-            [Domain::new(domain).build(&ALICE_ID)],
-            [],
-            [definition.clone()],
-        );
+        let mut world = World::default();
         world
-            .set_asset_definition_dataspace_for_testing(id.clone(), home)
+            .insert_direct_asset_definition_with_assets_for_testing(definition.clone(), home, [])
             .expect("direct home fixture");
         let state = State::new(
             world,

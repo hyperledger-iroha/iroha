@@ -21,6 +21,9 @@ use mv::storage::StorageReadOnly as _;
 #[path = "load_event_evidence_tests.rs"]
 mod load_event_evidence_tests;
 
+#[path = "universal_asset_registration_tests.rs"]
+mod universal_asset_registration_tests;
+
 fn load_event_digests(events: &[iroha_data_model::events::EventBox]) -> Vec<[u8; 32]> {
     use iroha_data_model::events::{EventBox, data::DataEvent};
     events

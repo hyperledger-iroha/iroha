@@ -67,14 +67,24 @@ enum ToriiIdentifierOwnerContract {
         return exact
     }
     static func signature(_ value: String, field: String) throws -> String {
-        let hex = try lowerHex(value, field: field)
+        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw ToriiClientError.invalidPayload("\(field) must be exact hex without surrounding whitespace.")
+        }
+        let hex: String
+        do {
+            hex = try lowerHex(value, field: field)
+        } catch {
+            throw ToriiClientError.invalidPayload("\(field) must be valid hex with exact lowercase raw bytes.")
+        }
         guard hex.utf8.count <= 2 * 3309 else {
             throw ToriiClientError.invalidPayload("\(field) exceeds the canonical signature bound.")
         }
         return hex
     }
     static func modelSignature(_ value: String, field: String) throws -> String {
-        _ = try exact(value, field)
+        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw ToriiClientError.invalidPayload("\(field) must be exact Model signature hex without surrounding whitespace.")
+        }
         guard value == value.uppercased(), !value.hasPrefix("0X") else {
             throw ToriiClientError.invalidPayload("\(field) requires exact uppercase Model signature hex.")
         }
@@ -110,11 +120,22 @@ enum ToriiIdentifierOwnerContract {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(value)
     }
-    static func fields(_ decoder: Decoder, required: Set<String>, optional: Set<String> = []) throws {
+    /// Reports schema violations at the JSON object that owns the fields.
+    static func fields(_ decoder: Decoder, required: Set<String>, optional: Set<String> = [], debugDescription: String = "Identifier JSON requires its exact current fields.") throws {
         let values = try decoder.container(keyedBy: IdentifierOwnerJSONKey.self)
         let keys = Set(values.allKeys.map(\.stringValue))
         guard required.isSubset(of: keys), keys.isSubset(of: required.union(optional)) else {
-            throw ToriiClientError.invalidPayload("Identifier JSON requires its exact current fields.")
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: debugDescription))
+        }
+    }
+
+    /// Keeps owner validation errors attached to their original JSON field.
+    static func string<K: CodingKey>(from container: KeyedDecodingContainer<K>, forKey key: K, validate: (String) throws -> String) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        do {
+            return try validate(value)
+        } catch {
+            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath + [key], debugDescription: String(describing: error), underlyingError: error))
         }
     }
 }

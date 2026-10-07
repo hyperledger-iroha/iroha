@@ -6,11 +6,11 @@ pub use activation::ActivationFinalityProgressV1;
 mod close_loads;
 mod ledger;
 mod ledger_producer;
+mod unload;
 pub use ledger::{LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, PAYOUT_RECORD_MAX_BYTES_V1};
-pub use ledger_producer::{
-    LEDGER_INSTRUCTION_MAX_BYTES_V1, LOAD_EVENT_PROOF_MAX_BYTES_V1, LoadProofProgressV1,
-};
+pub use ledger_producer::{LEDGER_INSTRUCTION_MAX_BYTES_V1, UnloadFinalityProgressV1};
 mod bootstrap;
+mod request_fee;
 mod review;
 mod runtime;
 pub(super) mod sessions;
@@ -52,6 +52,7 @@ pub struct NativeWalletProofsV1<F: KagemushaWalletFsV1, P, S> {
     genesis: Arc<SumeragiFinalityVerifier>,
     enrollment: KagemushaWalletCredentialV1,
     asset: KagemushaWalletAssetScopeV1,
+    account: iroha_data_model::account::AccountId,
     enrollment_certificates: Vec<u8>,
 }
 
@@ -79,7 +80,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
         Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>,
         (RuntimeCustodyV1<F, P>, S, Error),
     > {
-        let (provider, installed, sources, slot, enrollment, _, asset, _, certificates, _, _) =
+        let (provider, installed, sources, slot, enrollment, account, asset, _, certificates, _, _) =
             self.into_parts();
         let verified = (|| {
             let anchor = derive_history_anchor(native_genesis)
@@ -107,6 +108,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             genesis: Arc::clone(native_genesis),
             enrollment,
             asset,
+            account,
             enrollment_certificates: certificates,
         };
         let mut wallet = Coordinator {
@@ -307,6 +309,27 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             self.budget,
             cancellation.map(Cancellation::prover_token),
         ))
+    }
+    fn verify_credited(
+        &self,
+        credited: &KagemushaWalletCreditedV1,
+        request: &KagemushaWalletRequestV1,
+        payment: &KagemushaWalletPaymentV1,
+    ) -> Result<(), Error> {
+        valid(credited.verify_for(self.installed.verifier().scheme(), request, payment))?;
+        match &credited.evidence {
+            KagemushaWalletCreditedEvidenceV1::Receive { package } => {
+                proof(self.installed.verifier().verify_package_proofs_cancellable(
+                    package,
+                    Some(&request.body),
+                    self.budget,
+                    None,
+                ))
+            }
+            KagemushaWalletCreditedEvidenceV1::Status { status } => {
+                self.verify_lineage(&status.lineage, None)
+            }
+        }
     }
     fn fold_schedule(
         &self,

@@ -59,7 +59,7 @@ final class KagemushaWalletCurrentReviewIntegrationV1Tests: XCTestCase {
   func testFixedInputBoundsAndForeignFieldRefusal() throws {
     _ = try KagemushaWalletReviewInputV1(selector: 1, first: Data(repeating: 1, count: 10_000), second: Data(repeating: 2, count: 4_096))
     _ = try KagemushaWalletReviewInputV1(selector: 8, amount: .init(low: UInt64.max, high: UInt64.max))
-    _ = try KagemushaWalletReviewInputV1(selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_024), second: Data(repeating: 1, count: 10_000))
+    _ = try KagemushaWalletReviewInputV1(selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_024), second: KagemushaWalletUnloadChargeReviewV1.encode(certificates: Data(repeating: 1, count: 10_000), beneficiary: Data(repeating: 2, count: 4_096)))
     let makers: [() throws -> KagemushaWalletReviewInputV1] = [
       { try .init(selector: 2, first: Data([1])) },
       { try .init(selector: 1) },

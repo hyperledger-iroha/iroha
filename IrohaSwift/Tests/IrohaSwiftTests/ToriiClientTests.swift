@@ -723,7 +723,7 @@ final class ToriiClientTests: XCTestCase {
         outputCiphertextHash: String = String(repeating: "bb", count: 32),
         parameterDigest: String = String(repeating: "cd", count: 32),
         evaluationKeyDigest: String = String(repeating: "dd", count: 32),
-        openedOutputHash: String = String(repeating: "ee", count: 32),
+        openedOutputHash: String = String(repeating: "ee", count: 31) + "ef",
         openedAtMs: UInt64 = 42,
         expiresAtMs: UInt64? = 142,
         signatureHex: String = String(repeating: "ff", count: 64)
@@ -2623,10 +2623,21 @@ final class ToriiClientTests: XCTestCase {
             payload: payload,
             signatureHex: shortSignature.hexUppercased()
         )
-        let overlongReceipt = try identifierReceipt(
-            payload: payload,
-            signatureHex: overlongSignature.hexUppercased()
-        )
+        for signature in [
+            overlongSignature,
+            Data(repeating: 0x33, count: MlDsaSuite.mlDsa87.parameters().signatureLength),
+        ] {
+            XCTAssertThrowsError(try identifierReceipt(
+                payload: payload,
+                signatureHex: signature.hexUppercased()
+            )) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    return XCTFail("Expected signature-bound decode refusal, got \(error)")
+                }
+                XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
+                XCTAssertTrue(context.debugDescription.contains("canonical signature bound"))
+            }
+        }
 
         for prefix in ["ml-dsa", "mldsa", "mldsa65", "ML-DSA-65", "ML_DSA_65", "ML_DSA-65"] {
             let policy = identifierPolicy(
@@ -2634,12 +2645,11 @@ final class ToriiClientTests: XCTestCase {
                 resolverPublicKey: "\(prefix):\(publicKeyMultihash)"
             )
             XCTAssertEqual(try shortReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false, prefix)
-            XCTAssertEqual(try overlongReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false, prefix)
 
             for suite in [MlDsaSuite.mlDsa44, .mlDsa87] {
                 let signature = Data(
                     repeating: 0x33,
-                    count: suite.parameters().signatureLength
+                    count: min(suite.parameters().signatureLength, params.signatureLength)
                 )
                 let receipt = try identifierReceipt(
                     payload: payload,
@@ -2648,7 +2658,7 @@ final class ToriiClientTests: XCTestCase {
                 XCTAssertEqual(
                     try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical),
                     false,
-                    "protocol ML-DSA verification must reject the \(suite) signature width for \(prefix)"
+                    "protocol ML-DSA verification must reject the in-bound \(suite) signature for \(prefix)"
                 )
             }
         }
@@ -2678,9 +2688,24 @@ final class ToriiClientTests: XCTestCase {
                 algorithm: .mlDsa,
                 payload: keypair.publicKey
             )
+            if signature.count > MlDsaSuite.mlDsa65.parameters().signatureLength {
+                XCTAssertThrowsError(try identifierReceipt(
+                    payload: payload,
+                    signatureHex: signature.hexUppercased()
+                )) { error in
+                    guard case let DecodingError.dataCorrupted(context) = error else {
+                        return XCTFail("Expected signature-bound decode refusal, got \(error)")
+                    }
+                    XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
+                    XCTAssertTrue(context.debugDescription.contains("canonical signature bound"))
+                }
+            }
+            // Keep wrong-suite key rejection reachable within the DTO's wire bound.
+            // The actual ML-DSA-65 signature remains unchanged and must verify.
+            let boundedSignature = Data(signature.prefix(MlDsaSuite.mlDsa65.parameters().signatureLength))
             let receipt = try identifierReceipt(
                 payload: payload,
-                signatureHex: signature.hexUppercased()
+                signatureHex: boundedSignature.hexUppercased()
             )
 
             for resolverPublicKey in ["ml-dsa:\(multihash)", multihash] {
@@ -3964,9 +3989,12 @@ final class ToriiClientTests: XCTestCase {
 
     func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixtureAndRejectsLegacySignature() throws {
         let accountId = "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463"
+        // Retain the historical signature as a negative control over today's
+        // network-bound payload; only the current receipt layout is decoded.
         let receiptJSON = """
         {
           "payload":{
+            "network_id":"\(ToriiIdentifierOwnerContract.rawNetwork(TestNetworkIds.canonical))",
             "policy_id":"email#retail",
             "execution":{
               "program_id":"email_retail",
@@ -3993,7 +4021,7 @@ final class ToriiClientTests: XCTestCase {
                 "opened_at_ms":1776812470694,
                 "expires_at_ms":1776812500694
               },
-              "signature":"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+              "signature":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
             },
             "opaque_id":"opaque:fd14cb369e853352d4b9c578745627d154471ce5fd3462c4db542c104766e983",
             "receipt_hash":"51bbe55b70e09d4c2bb75d9c31b2cde46a7bdd5414134f6786255c679a68ac53",

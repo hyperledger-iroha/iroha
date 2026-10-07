@@ -7,6 +7,9 @@ network policy, process signalling or persistent PID authority.
 - `PrivateDirectory` requires current-user private custody. `OwnerDirectory`
   admits reader-shared project directories while refusing foreign mutation.
   Both retain ancestor authority and create private files/directories.
+  `OwnerDirectory::open_private_child` and its optional form share the original
+  ancestor handles while enforcing private child custody. Optional admission
+  accepts absence only at the first native child open.
 - `read_private` and `read_regular` perform bounded, stable descriptor reads into
   zeroizing allocations. `RetainedFile` supports streaming with explicit custody
   revalidation; `seal` freezes a completed writer's observation without reopening.

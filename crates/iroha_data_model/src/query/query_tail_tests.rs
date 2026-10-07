@@ -52,6 +52,27 @@ mod canonical_output_inclusion_tests {
             >,
             merge_carrier: Option<()>,
         }
+        // The retired monetary top-up slots are not an accepted alternative layout either.
+        #[derive(norito::codec::Encode)]
+        struct RetiredTopUpExecution {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+            top_up_root: Option<Hash>,
+            top_up_count: u32,
+            parent_world_state_root: Hash,
+            world_state_root: Hash,
+            event_commitment: Option<iroha_crypto::MerkleTreeCommitment<crate::events::EventBox>>,
+            executed_block_wire_len: u64,
+            executed_block_wire_hash: Hash,
+            transaction_input_commitment:
+                Option<iroha_crypto::MerkleTreeCommitment<TransactionEntrypoint>>,
+            transaction_output_commitment: Option<
+                iroha_crypto::MerkleTreeCommitment<
+                    crate::block::execution_output::ExecutionOutputV1,
+                >,
+            >,
+        }
         let (block, _) = execution_fixture();
         let current = commitment(&block);
         let old = RetiredExecution {
@@ -78,27 +99,6 @@ mod canonical_output_inclusion_tests {
             crate::sumeragi_finality::ExecutionCommitment::decode_all(&mut old.encode().as_slice())
                 .is_err()
         );
-        // The retired monetary top-up slots are not an accepted alternative layout either.
-        #[derive(norito::codec::Encode)]
-        struct RetiredTopUpExecution {
-            parent_state_root: Hash,
-            post_state_root: Hash,
-            ordinary_writes_root: Hash,
-            top_up_root: Option<Hash>,
-            top_up_count: u32,
-            parent_world_state_root: Hash,
-            world_state_root: Hash,
-            event_commitment: Option<iroha_crypto::MerkleTreeCommitment<crate::events::EventBox>>,
-            executed_block_wire_len: u64,
-            executed_block_wire_hash: Hash,
-            transaction_input_commitment:
-                Option<iroha_crypto::MerkleTreeCommitment<TransactionEntrypoint>>,
-            transaction_output_commitment: Option<
-                iroha_crypto::MerkleTreeCommitment<
-                    crate::block::execution_output::ExecutionOutputV1,
-                >,
-            >,
-        }
         let top_ups = RetiredTopUpExecution {
             parent_state_root: current.parent_state_root,
             post_state_root: current.post_state_root,

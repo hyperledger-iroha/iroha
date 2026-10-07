@@ -9621,7 +9621,19 @@
      "literals": ["hkdf-sha3-512-prf-v1"],
      "test_only": true
     },
-    {"path": "crates/iroha_core/src/state/identifier_claim_restore_tests.rs", "kind": "test", "literals": ["HkdfSha3_512PrfV1"], "test_only": true}
+    {"path": "crates/iroha_core/src/state/identifier_claim_restore_tests.rs", "kind": "test", "literals": ["HkdfSha3_512PrfV1"], "test_only": true},
+    {
+     "path": "crates/iroha_torii/src/tests/lib_tests/identifier_owner_routes.rs",
+     "kind": "test",
+     "literals": ["registered_hkdf_identifier_app"],
+     "test_only": true
+    },
+    {
+     "path": "crates/iroha_torii/src/tests/lib_tests/owner_prf_routes.rs",
+     "kind": "test",
+     "literals": ["registered_hkdf_identifier_app"],
+     "test_only": true
+    }
    ],
    "consumer_evidence": [
     {
@@ -12314,6 +12326,18 @@
     {"path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_1.rs", "patterns": ["bfv", "ram_lfe"], "cfg": ["test"], "test_only": true},
     {"path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_6.rs", "patterns": ["fhe"], "cfg": ["test"], "test_only": true},
     {"path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_7.rs", "patterns": ["fhe"], "cfg": ["test"], "test_only": true},
+    {
+     "path": "crates/iroha_torii/src/tests/lib_tests/identifier_owner_routes.rs",
+     "patterns": ["hkdf", "ram_lfe"],
+     "cfg": ["all(test, feature = \"app_api\")"],
+     "test_only": true
+    },
+    {
+     "path": "crates/iroha_torii/src/tests/lib_tests/owner_prf_routes.rs",
+     "patterns": ["hkdf", "ram_lfe"],
+     "cfg": ["all(test, feature = \"app_api\")"],
+     "test_only": true
+    },
     {
      "path": "crates/iroha_torii/src/tests/lib_tests/part_1.rs",
      "patterns": ["bfv", "hkdf", "hkdf_ram_lfe", "ram_lfe"],

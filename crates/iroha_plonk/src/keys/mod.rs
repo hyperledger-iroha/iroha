@@ -29,6 +29,7 @@ use crate::{
 
 pub mod keygen;
 pub mod pk;
+mod source_fingerprint;
 #[cfg(test)]
 mod tests;
 pub mod vk;
@@ -36,10 +37,12 @@ pub mod vk;
 pub use keygen::{
     KeygenConfig, KeygenConfigV2, keygen_from_tables, keygen_from_tables_v2, keygen_pk,
     keygen_pk_v2, keygen_vk, keygen_vk_v2, keygen_vk_with_binding_v2, permutation_values,
+    source_fingerprint_v2,
 };
 pub use pk::{
     CosetCachePolicy, CosetMasks, CosetPolynomial, KeyConstraintSystem, ProvingKey, QuotientDomain,
 };
+pub use source_fingerprint::SourceFingerprintV2;
 pub use vk::{VK_VERSION, VerifyingKey, VkError};
 
 /// A validated descriptor, its canonical Norito frame `D` and

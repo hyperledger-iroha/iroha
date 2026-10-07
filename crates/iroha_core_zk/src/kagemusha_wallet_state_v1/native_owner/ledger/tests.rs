@@ -52,6 +52,7 @@ fn ledger_original_bounds_refuse_empty_trailing_oversized_and_checkpoint_frames(
     assert!(proof_original(&native.checkpoint().encode_canonical().unwrap()).is_err());
     assert!(proof_original(&vec![0; LEDGER_PROOF_MAX_BYTES_V1 + 1]).is_err());
 }
+
 #[test]
 fn ledger_continuity_exact_retry_foreign_root_and_selected_original_loss() {
     let mut native = NativeFinalityFixture::start("wallet-ledger-continuity");

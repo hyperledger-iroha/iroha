@@ -15,6 +15,14 @@ impl AsRef<[u8]> for IssuanceBody {
 }
 const ROUTE: &str = "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}";
 const EVENT_ROUTE: &str = "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/event-proof";
+const FINALITY_ROUTE: &str =
+    "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality-proof";
+#[derive(Clone, Copy)]
+enum Original {
+    Receipt,
+    Event,
+    Finality,
+}
 fn selector(value: &str) -> Result<[u8; 32], Error> {
     let mut bytes = [0; 32];
     if value.len() != 64
@@ -36,6 +44,12 @@ fn unavailable() -> Error {
         message: "The payer's finalized issuance record is unavailable.".into(),
     }
 }
+fn finality_unavailable() -> Error {
+    Error::AppServiceUnavailable {
+        code: "kagemusha_load_finality_unavailable",
+        message: "The payer's terminal Load finality proof is unavailable.".into(),
+    }
+}
 pub(crate) async fn handler(
     State(app): State<SharedAppState>,
     axum::extract::Path((scheme, wallet, request)): axum::extract::Path<(String, String, String)>,
@@ -45,7 +59,15 @@ pub(crate) async fn handler(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     read(
-        app, scheme, wallet, request, headers, method, uri, remote, false,
+        app,
+        scheme,
+        wallet,
+        request,
+        headers,
+        method,
+        uri,
+        remote,
+        Original::Receipt,
     )
     .await
 }
@@ -58,7 +80,36 @@ pub(crate) async fn event_handler(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     read(
-        app, scheme, wallet, request, headers, method, uri, remote, true,
+        app,
+        scheme,
+        wallet,
+        request,
+        headers,
+        method,
+        uri,
+        remote,
+        Original::Event,
+    )
+    .await
+}
+pub(crate) async fn finality_handler(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((scheme, wallet, request)): axum::extract::Path<(String, String, String)>,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    read(
+        app,
+        scheme,
+        wallet,
+        request,
+        headers,
+        method,
+        uri,
+        remote,
+        Original::Finality,
     )
     .await
 }
@@ -71,9 +122,17 @@ async fn read(
     method: axum::http::Method,
     uri: axum::http::Uri,
     remote: std::net::SocketAddr,
-    event: bool,
+    original: Original,
 ) -> Result<AxResponse, Error> {
-    let route = if event { EVENT_ROUTE } else { ROUTE };
+    let route = match original {
+        Original::Receipt => ROUTE,
+        Original::Event => EVENT_ROUTE,
+        Original::Finality => FINALITY_ROUTE,
+    };
+    let unavailable: fn() -> Error = match original {
+        Original::Finality => finality_unavailable,
+        _ => unavailable,
+    };
     let scheme = selector(&scheme)?;
     let wallet = selector(&wallet)?;
     let request = selector(&request)?;
@@ -119,6 +178,7 @@ async fn read(
     let memory = QueryFanoutMemoryReservation::new(memory);
     let maximum = app.torii_proxy_max_response_bytes.min(bytes / 16);
     let state = app.state.clone();
+    let finality = app.kagemusha_load_finality.clone();
     let response =
         routing::run_admitted_blocking(admission, "KAGEMUSHA issuance worker failed", move || {
             let budget = AllocationBudget::new(bytes);
@@ -129,7 +189,25 @@ async fn read(
             let view = state.view();
             let source =
                 CommittedLoadReceipts::new(&view, maximum, limits).map_err(|_| unavailable())?;
-            let bytes = if event {
+            let bytes = if matches!(original, Original::Finality) {
+                let service = finality.ok_or_else(unavailable)?;
+                let receipt = source
+                    .receipt_for(&payer, &scheme, &wallet, &request)
+                    .map_err(|_| unavailable())?;
+                let original = service
+                    .read_or_schedule(payer, receipt)
+                    .map_err(|_| unavailable())?
+                    .ok_or_else(unavailable)?;
+                if original.is_empty() || original.len() > maximum.min(16_384) {
+                    return Err(unavailable());
+                }
+                let mut bytes = iroha_allocation::ChargedBuffer::new(original.len(), &budget)
+                    .map_err(|_| crate::native_projection_response::capacity())?;
+                for byte in original {
+                    bytes.push_reserved(byte);
+                }
+                bytes
+            } else if matches!(original, Original::Event) {
                 let path = source
                     .event_path_for(&payer, &scheme, &wallet, &request)
                     .map_err(|_| unavailable())?;
@@ -159,6 +237,10 @@ async fn read(
             response.headers_mut().insert(
                 axum::http::header::CONTENT_TYPE,
                 HeaderValue::from_static("application/x-norito"),
+            );
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-store"),
             );
             Ok(response)
         })

@@ -336,7 +336,7 @@ fn retained_request_has_exact_python_fields_and_no_extra_lifetime_ceiling() {
             binary(text(&decoded, "challenge_transcript_base64").unwrap(), 194).unwrap(),
             request.request.body.challenge.transcript()
         );
-        for action in [ActionV1::Complete, ActionV1::Recover] {
+        for action in [ActionV1::Complete, ActionV1::Recover, ActionV1::Inspect] {
             let packet = request
                 .packet(action, [10; 32], [8; 32], request.verification_time_ms)
                 .unwrap();

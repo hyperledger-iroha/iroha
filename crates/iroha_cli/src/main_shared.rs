@@ -40,6 +40,10 @@ mod subscriptions;
 mod sumeragi;
 mod taira;
 mod taira_dataspace_deploy;
+pub use taira_dataspace_deploy::{
+    DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
+    dataspace_authority_original_inventory, verify_dataspace_authority_originals,
+};
 mod taira_public_reset;
 mod transaction_journal;
 mod transaction_load;
@@ -1721,14 +1725,21 @@ fn run_local_dataspace_profile(
     args: &Args,
     output: impl std::io::Write,
 ) -> Option<ReportResult<(), MainError>> {
-    let Command::Dataspace(taira_dataspace_deploy::Command::ExportProfile(command)) = &args.command
-    else {
-        return None;
-    };
-    Some((|| {
-        reject_irrelevant_local_tool_globals(args, "dataspace export-profile")?;
-        map_command_result(command.run_without_client_config(output))
-    })())
+    match &args.command {
+        Command::Dataspace(taira_dataspace_deploy::Command::ExportProfile(command)) => {
+            Some((|| {
+                reject_irrelevant_local_tool_globals(args, "dataspace export-profile")?;
+                map_command_result(command.run_without_client_config(output))
+            })())
+        }
+        Command::Dataspace(taira_dataspace_deploy::Command::VerifyAuthority(command)) => {
+            Some((|| {
+                reject_irrelevant_local_tool_globals(args, "dataspace verify-authority")?;
+                map_command_result(command.run_without_client_config(output))
+            })())
+        }
+        _ => None,
+    }
 }
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.map_err(|error| command_error_report(&error))
@@ -3086,7 +3097,12 @@ mod asset {
         #[derive(clap::Args, Debug)]
         pub struct Register {
             /// Immutable owning domain, independent from any alias.
-            #[arg(long, value_parser = parse_domain_id_literal, required_unless_present_any = ["dataspace", "global_home"], conflicts_with_all = ["dataspace", "global_home"])]
+            #[arg(
+                long,
+                value_parser = parse_domain_id_literal,
+                required_unless_present_any = ["dataspace", "global_home"],
+                conflicts_with_all = ["dataspace", "global_home"]
+            )]
             pub domain: Option<DomainId>,
             /// Exact nonzero dataspace ID for direct namespace ownership.
             #[arg(long, required_unless_present_any = ["domain", "global_home"], conflicts_with_all = ["domain", "global_home"])]
@@ -3417,16 +3433,29 @@ mod asset {
                 let global = Parser::try_parse_from(base.into_iter().chain(["--global-home"]))
                     .expect("explicit genesis global home");
                 assert!(global.registration.global_home);
-                let domain =
-                    Parser::try_parse_from(base.into_iter().chain(["--domain", "issuer.public"]))
+                let domain = DomainId::try_new("issuer", "public").expect("canonical domain");
+                let literal = domain.to_string();
+                let parsed =
+                    Parser::try_parse_from(base.into_iter().chain(["--domain", literal.as_str()]))
                         .expect("canonical fully-qualified domain home");
-                assert_eq!(
-                    domain.registration.domain,
-                    Some(DomainId::try_new("issuer", "public").expect("domain"))
-                );
-                let error = Parser::try_parse_from(base.into_iter().chain(["--domain", "issuer"]))
-                    .expect_err("an unqualified domain must fail during argument parsing");
-                assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+                assert_eq!(parsed.registration.domain, Some(domain));
+                assert!(parsed.registration.dataspace.is_none());
+                assert!(!parsed.registration.global_home);
+                for literal in [
+                    "issuer",
+                    ".public",
+                    "issuer.",
+                    "issuer.public.extra",
+                    " issuer.public",
+                    "issuer.public ",
+                ] {
+                    let error =
+                        Parser::try_parse_from(base.into_iter().chain(["--domain", literal]))
+                            .expect_err(
+                                "bare or invalid domain home must fail during argument parsing",
+                            );
+                    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+                }
             }
         }
     }

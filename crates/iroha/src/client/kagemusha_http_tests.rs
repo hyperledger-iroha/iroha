@@ -27,7 +27,7 @@ const OP: &str = "kagemusha.wallet.load_issuance.read";
 const REQUEST: [u8; 32] = [3; 32];
 type Requests = Arc<Mutex<Vec<TransportRequest>>>;
 
-fn original(payer: iroha_data_model::account::AccountId) -> KagemushaWalletLoadReceiptV1 {
+fn original(payer: &iroha_data_model::account::AccountId) -> KagemushaWalletLoadReceiptV1 {
     // Transport DATA only; this fixture cannot establish consensus or authorize wallet value.
     KagemushaWalletLoadReceiptV1 {
         version: 1,
@@ -42,7 +42,7 @@ fn original(payer: iroha_data_model::account::AccountId) -> KagemushaWalletLoadR
         transaction_hash: [5; 32],
         block_height: 2,
         payer_account_digest: iroha_data_model::kagemusha::kagemusha_wallet_account_digest_v1(
-            &payer,
+            payer,
         )
         .unwrap(),
     }
@@ -57,7 +57,7 @@ fn response(value: &KagemushaWalletLoadReceiptV1) -> Response<Vec<u8>> {
 }
 
 fn attach(
-    initial: Client,
+    initial: &Client,
     responder: impl Fn(&TransportRequest) -> eyre::Result<Response<Vec<u8>>> + Send + Sync + 'static,
     delay: Duration,
     timeout: Duration,
@@ -100,10 +100,10 @@ fn header<'a>(request: &'a TransportRequest, name: &str) -> &'a str {
 #[tokio::test]
 async fn load_read_signs_exact_route_network_and_payer_and_preserves_receipt() {
     let initial = client_with_base_url(base_url());
-    let expected = original(initial.account.clone());
+    let expected = original(&initial.account);
     let reply = response(&expected);
     let (client, requests, _) = attach(
-        initial.clone(),
+        &initial,
         move |_| Ok(reply.clone()),
         Duration::ZERO,
         Duration::ZERO,
@@ -214,12 +214,12 @@ async fn load_read_signs_exact_route_network_and_payer_and_preserves_receipt() {
 #[tokio::test]
 async fn load_read_refuses_zero_ids_or_witness_authority_before_dispatch() {
     let (client, requests, _) = attach(
-        client_with_base_url(base_url()),
+        &client_with_base_url(base_url()),
         |_| unreachable!("invalid input must not dispatch"),
         Duration::ZERO,
         Duration::ZERO,
     );
-    let value = original(client.account.clone());
+    let value = original(&client.account);
     for (scheme, wallet, request) in [
         ([0; 32], value.wallet_id, REQUEST),
         (value.scheme_id, [0; 32], REQUEST),
@@ -255,7 +255,7 @@ async fn load_read_refuses_zero_ids_or_witness_authority_before_dispatch() {
 #[tokio::test]
 async fn load_read_rejects_foreign_payer_request_wallet_and_invalid_receipt_fields() {
     let initial = client_with_base_url(base_url());
-    let expected = original(initial.account.clone());
+    let expected = original(&initial.account);
     for mutation in 0..10 {
         let mut changed = expected;
         match mutation {
@@ -273,7 +273,7 @@ async fn load_read_rejects_foreign_payer_request_wallet_and_invalid_receipt_fiel
         }
         let reply = response(&changed);
         let (client, requests, _) = attach(
-            initial.clone(),
+            &initial,
             move |_| Ok(reply.clone()),
             Duration::ZERO,
             Duration::ZERO,
@@ -297,7 +297,7 @@ async fn load_read_rejects_foreign_payer_request_wallet_and_invalid_receipt_fiel
 #[tokio::test]
 async fn load_read_requires_one_canonical_binary_frame_and_media_type() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone());
+    let value = original(&initial.account);
     let mut replies = Vec::new();
     for types in [
         vec![],
@@ -325,7 +325,7 @@ async fn load_read_requires_one_canonical_binary_frame_and_media_type() {
     }
     for reply in replies {
         let (client, requests, _) = attach(
-            initial.clone(),
+            &initial,
             move |_| Ok(reply.clone()),
             Duration::ZERO,
             Duration::ZERO,
@@ -346,10 +346,10 @@ async fn load_read_requires_one_canonical_binary_frame_and_media_type() {
 #[tokio::test]
 async fn load_read_preserves_http_transport_and_capacity_failures_without_replaying() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone());
+    let value = original(&initial.account);
     for status in [401, 403, 404, 429, 503] {
         let (client, requests, _) = attach(
-            initial.clone(),
+            &initial,
             move |_| {
                 Ok(Response::builder()
                     .status(status)
@@ -373,7 +373,7 @@ async fn load_read_preserves_http_transport_and_capacity_failures_without_replay
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
     let (client, requests, _) = attach(
-        initial.clone(),
+        &initial,
         |_| Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into()),
         Duration::ZERO,
         Duration::ZERO,
@@ -394,7 +394,7 @@ async fn load_read_preserves_http_transport_and_capacity_failures_without_replay
     assert_eq!(requests.lock().unwrap().len(), 1);
     for status in [200, 503] {
         let (client, requests, _) = attach(
-            initial.clone(),
+            &initial,
             move |_| {
                 Ok(Response::builder()
                     .status(status)
@@ -423,10 +423,10 @@ async fn load_read_preserves_http_transport_and_capacity_failures_without_replay
 #[tokio::test]
 async fn load_read_obeys_absolute_deadline_and_cancels_pending_async_dispatch() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone());
+    let value = original(&initial.account);
     let reply = response(&value);
     let (client, requests, completed) = attach(
-        initial.clone(),
+        &initial,
         move |_| Ok(reply.clone()),
         Duration::from_secs(60),
         Duration::from_millis(10),
@@ -442,7 +442,8 @@ async fn load_read_obeys_absolute_deadline_and_cancels_pending_async_dispatch() 
     ));
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert_eq!(completed.load(Ordering::SeqCst), 0);
-    let client = client.with_request_deadline(Instant::now() - Duration::from_secs(1));
+    let client =
+        client.with_request_deadline(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
     assert!(matches!(
         client
             .account_client()
@@ -458,10 +459,10 @@ async fn load_read_obeys_absolute_deadline_and_cancels_pending_async_dispatch() 
 #[test]
 fn blocking_load_read_reuses_owned_runtime_and_rejects_nested_async_entry() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone());
+    let value = original(&initial.account);
     let reply = response(&value);
     let (client, requests, _) = attach(
-        initial.clone(),
+        &initial,
         move |_| Ok(reply.clone()),
         Duration::ZERO,
         Duration::ZERO,

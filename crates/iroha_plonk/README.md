@@ -159,9 +159,25 @@ Oracle mode (the injected vendored `transcript_repr`, `fe_to_fe` Poseidon
 point absorption and caller-seeded prover randomness) is compiled only with
 `--cfg iroha_plonk_oracle` (and in this crate's unit tests); it is never a
 Cargo feature. `build.rs` only declares the cfg for `check-cfg`. The oracle
-run is manual today (TODO: a CI job); `ORACLE_BUILD` reports the cfg, and
+run is enforced by `.github/workflows/native_prover_parity.yml`; `ORACLE_BUILD` reports the cfg, and
 every shipping root that links this crate asserts `!ORACLE_BUILD` at compile
 time.
+
+Offline compiler recovery can use `keys::source_fingerprint_v2` to identify
+exact witnessless public source tables before generating commitments. It runs the
+ordinary key preparation and hashes the complete descriptor, copy mapping digest,
+finalized fixed/permutation evaluations and selector bitmaps. Its matching
+`keys::pk::artifact::source_fingerprint_v2` checks bounded canonical originals
+and streams their scalar bytes without retaining a second set of tables or
+loading parameter arrays. Both return lookup DATA only. Cache/table/MSM resource
+choices do not change the identity, and no global cache is introduced.
+
+A fingerprint match does not authenticate a VK or authorize its use. In
+particular, a different valid commitment can retain the same lookup fingerprint.
+The compiler must still call `ProvingKey::from_artifact_v2_cancellable` against
+the exact installed source and reject every source, copy, profile or commitment
+mismatch before publishing a reused key. These helpers do not change proof
+bytes, original-key encoding or source-qualified capability construction.
 
 Large polynomial evaluations use fixed Horner subtrees, and multiopen reconstruction
 walks the original slot order over disjoint coefficient blocks. Grand-product

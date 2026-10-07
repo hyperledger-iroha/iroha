@@ -51,9 +51,15 @@ impl Wallet for TestWallet {
     }
     fn review(&mut self, input: review::Input) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let review::Input::Unload { amount, charge } = input else {
+        let review::Input::Unload {
+            amount,
+            charge,
+            beneficiary,
+        } = input
+        else {
             panic!("expected Unload review fixture")
         };
+        assert_eq!(beneficiary, Some(vec![3, 255, 0, 1]));
         assert_eq!(
             state::OperationActionV1::Unload { amount, charge },
             self.expected_request
@@ -749,13 +755,18 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let mut companion = b"KWUCV1\0\0".to_vec();
+    companion.extend_from_slice(&(certificates.len() as u32).to_le_bytes());
+    companion.extend_from_slice(&certificates);
+    companion.extend_from_slice(&4_u32.to_le_bytes());
+    companion.extend_from_slice(&[3, 255, 0, 1]);
     let review = WalletReviewRequest {
         selector: request.selector,
         amount: request.amount,
         first: request.first,
         first_length: request.first_length,
-        second: request.second,
-        second_length: request.second_length,
+        second: companion.as_ptr(),
+        second_length: companion.len(),
     };
     // The stand-in review owner asserts the exact unsigned amount and charge originals.
     assert_eq!(
@@ -844,6 +855,53 @@ fn setup_c_layout_and_bounds_preserve_exact_identity_amount_and_unused_slots() {
     assert!(result.bytes.is_null());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     close(handle).unwrap();
+}
+
+#[test]
+fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
+    let id = [9; 32];
+    let zero = [0; 32];
+    let mut request = WalletSetupRequest {
+        setup_id: id.as_ptr(),
+        selector: 45,
+        amount: WalletU128 { low: 0, high: 0 },
+        token: 0,
+        first: std::ptr::null(),
+        first_length: 0,
+        second: std::ptr::null(),
+        second_length: 0,
+        third: std::ptr::null(),
+        third_length: 0,
+    };
+    let mut result = WalletResult::default();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        CLOSED
+    );
+    assert_eq!(result.status, CLOSED);
+    assert!(result.bytes.is_null());
+    assert_eq!(result.length, 0);
+    request.setup_id = zero.as_ptr();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        INVALID
+    );
+    request.setup_id = id.as_ptr();
+    request.token = 1;
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        INVALID
+    );
+    request.token = 0;
+    let overlong = vec![1; 16_385];
+    request.first = overlong.as_ptr();
+    request.first_length = overlong.len();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        INVALID
+    );
+    assert!(result.bytes.is_null());
+    assert_eq!(result.length, 0);
 }
 
 #[test]

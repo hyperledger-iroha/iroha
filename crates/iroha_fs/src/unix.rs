@@ -1358,3 +1358,67 @@ mod snapshot_tests {
         assert!(directory.snapshot_directory().is_err());
     }
 }
+
+#[cfg(test)]
+mod private_child_parent_sharing_tests {
+    use super::*;
+
+    #[test]
+    fn private_child_adds_one_handle_and_shares_the_complete_original_parent_chain() {
+        let temporary = tempfile::tempdir().unwrap();
+        let nested = temporary.path().join("one/two/three");
+        std::fs::create_dir_all(&nested).unwrap();
+        let parent = crate::OwnerDirectory::open(&nested).unwrap();
+        let original = parent.create_private_child("journal").unwrap();
+        let identity = original.identity().unwrap();
+        drop(original);
+        let depth = parent.inner.links.len();
+        for optional in [false, true] {
+            let child = if optional {
+                parent
+                    .open_private_child_optional("journal")
+                    .unwrap()
+                    .unwrap()
+            } else {
+                parent.open_private_child("journal").unwrap()
+            };
+            assert_eq!(child.identity().unwrap(), identity);
+            assert_eq!(child.inner.links.len(), depth + 1);
+            assert!(
+                parent
+                    .inner
+                    .links
+                    .iter()
+                    .zip(&child.inner.links)
+                    .all(|(parent, child)| Arc::ptr_eq(parent, child))
+            );
+            let shared = parent
+                .inner
+                .links
+                .iter()
+                .chain(&child.inner.links)
+                .map(|link| Arc::as_ptr(link) as usize)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(shared.len(), depth + 1);
+            // The old absolute selection holds a separate File for every prefix component.
+            let reopened = crate::PrivateDirectory::open(child.path()).unwrap();
+            assert_eq!(reopened.identity().unwrap(), identity);
+            assert!(
+                parent
+                    .inner
+                    .links
+                    .iter()
+                    .zip(&reopened.inner.links)
+                    .all(|(parent, child)| !Arc::ptr_eq(parent, child))
+            );
+            let duplicated = parent
+                .inner
+                .links
+                .iter()
+                .chain(&reopened.inner.links)
+                .map(|link| Arc::as_ptr(link) as usize)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(duplicated.len(), 2 * depth + 1);
+        }
+    }
+}

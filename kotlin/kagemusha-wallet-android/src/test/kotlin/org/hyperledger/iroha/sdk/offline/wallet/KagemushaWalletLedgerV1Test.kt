@@ -8,6 +8,36 @@ import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.Test
 
 class KagemushaWalletLedgerV1Test {
+    @Test fun `Unload settlement absence and prefix never imply confirmation`() {
+        val absent = KagemushaWalletUnloadFinalityV1(KagemushaWalletCallV1(34, -1, 0, 0, 0, 0, byteArrayOf()))
+        assertEquals(null, absent.confirmation); assertEquals(null, absent.verifiedHeightBits)
+        assertEquals(null, absent.blockHash())
+        val progress = KagemushaWalletUnloadFinalityV1(KagemushaWalletCallV1(33, -1, 0, 1, 0, 0, ByteArray(32) { 8 }))
+        assertEquals(null, progress.confirmation); assertEquals(1L, progress.verifiedHeightBits)
+        assertContentEquals(ByteArray(32) { 8 }, progress.blockHash())
+        for (status in listOf(0, 1, 2, 44, 45, 46)) {
+            val bytes = if (status in listOf(1, 44, 45)) ByteArray(32) { 8 } else byteArrayOf()
+            val height = if (status in listOf(44, 45)) 2L else 0L
+            assertFailsWith<KagemushaWalletExceptionV1> {
+                KagemushaWalletUnloadFinalityV1(KagemushaWalletCallV1(status, -1, 0, height, 0, 0, bytes))
+            }
+        }
+    }
+
+    @Test fun `Unload settlement confirmation retains exact immutable Native evidence`() {
+        val hash = ByteArray(32) { 7 }
+        val result = KagemushaWalletCallV1(42, -1, 0, -1L, 0, 0, hash)
+        hash.fill(0)
+        val state = KagemushaWalletUnloadFinalityV1(result)
+        assertEquals(-1L, state.verifiedHeightBits)
+        assertEquals(-1L, state.confirmation!!.heightBits)
+        state.blockHash()!!.fill(0); state.confirmation.blockHash().fill(0)
+        assertContentEquals(ByteArray(32) { 7 }, state.blockHash())
+        assertContentEquals(ByteArray(32) { 7 }, state.confirmation.blockHash())
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(42, -1, 0, 1, 0, 0, ByteArray(32) { 7 }) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(34, -1, 0, 0, 0, 0, byteArrayOf(1)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
+    }
     @Test fun `Activate history accepts only exact bounded wire with no caller authority`() {
         val wire = ByteArray(65_536) { 9 }; val proof = byteArrayOf(7)
         val read = KagemushaWalletSetupInputV1(37, first = wire)
@@ -80,21 +110,18 @@ class KagemushaWalletLedgerV1Test {
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(34, identity = read.identity(), first = claim, second = ByteArray(36 * 1024 * 1024 + 1)) }
     }
 
-    @Test fun `Load history progress is receipt bound and cannot advance beyond its height`() {
-        val receipt = byteArrayOf(1)
-        KagemushaWalletSetupInputV1(31, first = receipt)
-        KagemushaWalletSetupInputV1(32, first = receipt, second = byteArrayOf(2))
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(31) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(31, first = ByteArray(513)) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(32, first = receipt) }
-        val bytes = ByteArray(8).also { it[7] = 2 }
-        val result = KagemushaWalletCallV1(43, -1, 0, 3, 0, 0, bytes)
-        val progress = KagemushaWalletLoadProofProgressV1(result)
-        assertEquals(3L, progress.receiptHeightBits); assertEquals(2L, progress.verifiedHeightBits)
-        assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
-        bytes[7] = 4
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletLoadProofProgressV1(KagemushaWalletCallV1(43, -1, 0, 3, 0, 0, bytes)) }
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(43, -1, 0, 1, 0, 0, ByteArray(8)) }
+    @Test fun `retired wallet server proving selectors and results are refused`() {
+        for (selector in listOf(28, 31, 32)) {
+            for ((first, second) in listOf(byteArrayOf() to byteArrayOf(), byteArrayOf(1) to byteArrayOf(), byteArrayOf(1) to byteArrayOf(2))) {
+                assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, first = first, second = second) }
+            }
+        }
+        for (status in listOf(41, 43)) {
+            for (bytes in listOf(byteArrayOf(), byteArrayOf(1), ByteArray(8) { 2 })) {
+                assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 0, 0, bytes) }
+                assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 3, 0, 0, bytes) }
+            }
+        }
     }
 
     @Test fun `Unload confirmation binds exact transaction hash and positive native inclusion`() {
@@ -126,20 +153,6 @@ class KagemushaWalletLedgerV1Test {
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(27, identity = input.identity(), amount = input.amount, token = 1) }
     }
 
-    @Test fun `Load finality intake retains both exact bounded originals without authority fields`() {
-        val receipt = ByteArray(512) { 2 }; val proof = ByteArray(8192) { 3 }
-        val input = KagemushaWalletSetupInputV1(28, first = receipt, second = proof)
-        receipt.fill(0); proof.fill(0)
-        assertContentEquals(ByteArray(512) { 2 }, input.first())
-        assertContentEquals(ByteArray(8192) { 3 }, input.second())
-        for ((a, b) in listOf(byteArrayOf() to proof, receipt to byteArrayOf(), ByteArray(513) to proof, receipt to ByteArray(8193))) {
-            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(28, first = a, second = b) }
-        }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(28, identity = ByteArray(32) { 1 }, first = receipt, second = proof) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(28, token = 1, first = receipt, second = proof) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(28, amount = KagemushaWalletUInt128V1(1, 0), first = receipt, second = proof) }
-    }
-
     @Test fun `ledger transport selects a closed purpose and cannot carry proof or time authority`() {
         for (kind in KagemushaWalletLedgerTransportV1.values()) {
             val original = ByteArray(65_536) { 4 }
@@ -156,8 +169,8 @@ class KagemushaWalletLedgerV1Test {
         }
     }
 
-    @Test fun `instruction and recursive proof are bounded originals never monetary completion`() {
-        for ((status, bound) in listOf(40 to 65_536, 41 to 16_384)) {
+    @Test fun `ledger instruction is a bounded original never monetary completion`() {
+        for ((status, bound) in listOf(40 to 65_536)) {
             val original = ByteArray(bound) { 8 }
             val result = KagemushaWalletCallV1(status, -1, 0, 0, 0, 0, original)
             original.fill(0)
@@ -169,6 +182,6 @@ class KagemushaWalletLedgerV1Test {
             assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 1, 0, byteArrayOf(1)) }
             assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 0, 1, byteArrayOf(1)) }
         }
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(44, -1, 0, 0, 0, 0, byteArrayOf()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(49, -1, 0, 0, 0, 0, byteArrayOf()) }
     }
 }

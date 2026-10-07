@@ -198,7 +198,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Bounded canonical decoding, certificate/continuity, custody and publication failures.
     pub fn ingest_ledger_finality(&mut self, original: &[u8]) -> Result<LedgerProgressV1, Error> {
         let _payment = self.scheduler.payment();
-        self.ingest_recursive_ledger(original)
+        let genesis = Arc::clone(&self.proofs.genesis);
+        self.ingest_ledger_original(&genesis, original)
     }
     /// Read only the authoritative selected native prefix, not an uncommitted in-memory tip.
     /// # Errors

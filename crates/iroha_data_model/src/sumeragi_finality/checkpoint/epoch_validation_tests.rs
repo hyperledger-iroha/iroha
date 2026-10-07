@@ -476,13 +476,12 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
         .map(|instruction| {
             if let Some(RegisterBox::Peer(register)) =
                 instruction.as_any().downcast_ref::<RegisterBox>()
+                && replacements == 0
             {
-                if replacements == 0 {
-                    replacements += 1;
-                    let mut register: RegisterPeerWithPop = register.clone();
-                    register.pop[0] ^= 1;
-                    return register.into();
-                }
+                replacements += 1;
+                let mut register: RegisterPeerWithPop = register.clone();
+                register.pop[0] ^= 1;
+                return register.into();
             }
             instruction.clone()
         })

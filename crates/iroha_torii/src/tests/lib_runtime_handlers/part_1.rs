@@ -2464,6 +2464,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
             iroha_core::musubi_search::MusubiSearchIndexV1::default(),
         )),
         bootle_lantern_issuance_runtime: None,
+        #[cfg(feature = "app_api")]
+        kagemusha_enrollment: None,
+        #[cfg(feature = "app_api")]
+        kagemusha_load_finality: None,
         kiso,
         query_service: query_handle,
         query_inflight: Arc::new(tokio::sync::Semaphore::new(

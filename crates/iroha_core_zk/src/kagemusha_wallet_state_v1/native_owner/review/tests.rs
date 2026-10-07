@@ -57,6 +57,7 @@ fn unadmitted_review_fixture() -> ReviewedOperationV1 {
         value: kagemusha_wallet_field_from_u128_v1(1),
     };
     ReviewedOperationV1 {
+        unload_beneficiary: None,
         projection: NativeOperationReviewV1 {
             kind: KagemushaWalletOperationKindV1::Send,
             amount: request.body.amount,
@@ -216,6 +217,86 @@ fn recipient_original_is_bound_to_the_genuine_signed_request_destination() {
     retargeted.body.receiver_account_digest[0] ^= 1;
     assert!(retargeted.verify(&scheme()).is_err());
     assert!(send_destination_original(&original, &retargeted).is_err());
+}
+
+#[test]
+fn unload_beneficiary_is_bound_to_the_genuine_signed_quote_before_review() {
+    use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+
+    let (beneficiary, original) = account_original(0x58, Algorithm::Ed25519);
+    let certificate: KagemushaWalletSignerCertificateV1 =
+        super::super::super::tests::fixture("KagemushaWalletSignerCertificateV1");
+    let mut quote: KagemushaWalletChargeQuoteV1 =
+        super::super::super::tests::fixture("KagemushaWalletChargeQuoteV1");
+    quote.body.kind = KagemushaWalletChargeKindV1::Unload;
+    quote.body.net_amount = 10;
+    quote.body.online_charge = 1;
+    quote.body.beneficiary_account_digest =
+        kagemusha_wallet_account_digest_v1(&beneficiary).unwrap();
+    // Public vector signer used solely for a real signature/binding component test.
+    let all = vectors();
+    let row = all["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"].as_str() == Some("regulator"))
+        .unwrap();
+    let signer =
+        SigningKey::from_slice(&hex::decode(row["scalar_hex"].as_str().unwrap()).unwrap()).unwrap();
+    let signature: Signature = signer.sign(&quote.body.signing_message());
+    let quote = KagemushaWalletChargeQuoteV1::sign(
+        quote.body,
+        &certificate,
+        KagemushaWalletSignerOutputV1::Raw(signature.to_bytes().into()),
+    )
+    .unwrap();
+    quote.verify(&scheme(), &certificate).unwrap();
+    let charge = ChargeOriginalsV1 {
+        quote: quote.to_canonical_bytes().unwrap(),
+        certificates: archive::encode(
+            &KagemushaWalletCertificateSetV1::new(vec![certificate]).unwrap(),
+        )
+        .unwrap(),
+    };
+    assert_eq!(
+        unload_beneficiary_original(&scheme().scheme_id(), Some(&charge), Some(&original)).unwrap(),
+        Some(original.clone())
+    );
+    assert_eq!(
+        unload_beneficiary_original(&scheme().scheme_id(), None, None).unwrap(),
+        None
+    );
+    assert!(unload_beneficiary_original(&scheme().scheme_id(), Some(&charge), None).is_err());
+    assert!(unload_beneficiary_original(&scheme().scheme_id(), None, Some(&original)).is_err());
+    let mut trailing = original.clone();
+    trailing.push(0);
+    for invalid in [
+        vec![],
+        vec![0; ACCOUNT_ORIGINAL_MAX_BYTES_V1 + 1],
+        trailing,
+        account_original(0x59, Algorithm::Ed25519).1,
+        account_original(0x5a, Algorithm::Secp256k1).1,
+    ] {
+        assert!(
+            unload_beneficiary_original(&scheme().scheme_id(), Some(&charge), Some(&invalid))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn recheck_preserves_the_private_unload_beneficiary_companion() {
+    // Isolated private-capability comparison fixture; never an admitted wallet operation.
+    let mut retained = unadmitted_review_fixture();
+    retained.unload_beneficiary = Some(account_original(0x58, Algorithm::Ed25519).1);
+    for substitute in [None, Some(account_original(0x59, Algorithm::Ed25519).1)] {
+        let mut fresh = unadmitted_review_fixture();
+        fresh.unload_beneficiary = substitute;
+        assert!(matches!(
+            retained.require_recheck(&fresh),
+            Err(Error::OperationConflict)
+        ));
+    }
 }
 
 #[test]

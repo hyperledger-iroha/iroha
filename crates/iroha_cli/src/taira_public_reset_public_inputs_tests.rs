@@ -417,7 +417,7 @@ fn execute_fixture_genesis(
                 .map(|(index, reason)| format!("output[{index}]: {reason:?}"))
                 .collect::<Vec<_>>();
             panic!(
-                "native fixture genesis execution failed: {error}; {}",
+                "native fixture genesis execution failed: {error:?}; {}",
                 output_errors.join("; ")
             )
         }
@@ -481,7 +481,7 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
             Register::asset_definition(AssetDefinition::new(
                 stake_asset.clone(),
                 "Fixture stake",
-                NumericSpec::default(),
+                NumericSpec::fractional(9),
                 AssetBalancePolicy::Global,
                 None,
             ))

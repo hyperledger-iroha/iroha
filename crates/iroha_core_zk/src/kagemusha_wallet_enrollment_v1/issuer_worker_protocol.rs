@@ -2,7 +2,7 @@
 
 use super::*;
 
-const PREPARATION_SCHEMA: &str = "bpng.wallet-e1-worker-preparation.v1";
+const PREPARATION_SCHEMA: &str = "iroha.kagemusha.wallet-e1-worker-preparation.v1";
 const MAX_PREPARATION: usize = 16 * 1024;
 
 /// Selected immutable pre-key originals retained before any payment key or E5 exists.
@@ -161,6 +161,7 @@ enum Kind {
     Prepare,
     Complete,
     Recover,
+    Inspect,
 }
 
 #[derive(Default)]
@@ -206,6 +207,7 @@ impl VerifierExchangeV1 {
             Kind::Prepare => "prepare",
             Kind::Complete => "complete",
             Kind::Recover => "recover",
+            Kind::Inspect => "inspect",
         };
         let bytes = encode(
             &norito::json!({
@@ -324,7 +326,7 @@ impl VerifierExchangeV1 {
         request: &VerifierRequestV1,
         frame: &[u8],
     ) -> Result<(Value, u64), Error> {
-        if !matches!(self.kind, Kind::Complete | Kind::Recover)
+        if !matches!(self.kind, Kind::Complete | Kind::Recover | Kind::Inspect)
             || self.configuration != request.configuration
             || self.request_binding != Some(request_binding(request))
         {
@@ -367,6 +369,7 @@ pub(super) fn request_exchange(
         match action {
             ActionV1::Complete => Kind::Complete,
             ActionV1::Recover => Kind::Recover,
+            ActionV1::Inspect => Kind::Inspect,
         },
         Contents {
             preparation: Some(&request.preparation.original),
