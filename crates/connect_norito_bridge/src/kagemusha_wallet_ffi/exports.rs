@@ -93,44 +93,90 @@ unsafe fn input<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&
 pub extern "C" fn connect_norito_kagemusha_wallet_revision_v1() -> u32 {
     1
 }
-/// Open an Apple wallet with an authenticated artifact identity.
-///
-/// Currently returns `ARTIFACTS_UNAVAILABLE`, initializes handle to zero, and performs no
-/// callback or custody operation. This explicit unfinished dependency prevents a proof bypass.
+/// Original owner frames. Native selects slot, scheme, wallet and complete proof owners.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletOpenRequest {
+    /// Original issuer-authenticated credential.
+    pub credential: *const u8,
+    /// Exact credential frame length.
+    pub credential_length: usize,
+    /// Original Enrollment CertificateSet.
+    pub certificates: *const u8,
+    /// Exact certificate-set frame length.
+    pub certificates_length: usize,
+    /// Existing canonical AccountId frame.
+    pub account: *const u8,
+    /// Exact account frame length.
+    pub account_length: usize,
+    /// Original issuer-bound asset scope and scale.
+    pub asset: *const u8,
+    /// Exact asset-scope frame length.
+    pub asset_length: usize,
+}
+/// Reconcile a native-provisioned runtime and return one fresh account challenge (kind15).
 /// # Safety
-/// Inputs must be initialized for their stated lengths and output must be writable. The
-/// callback context satisfies `PlatformCallbacks` if a later authenticated loader retains it.
+/// Request/input memory must be readable for its declared lengths and output writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_wallet_open_v1(
-    callbacks: *const PlatformCallbacks,
-    slot: *const u8,
-    scheme: *const u8,
-    wallet: *const u8,
-    artifact: *const u8,
-    handle: *mut u64,
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_open_begin_v1(
+    runtime: u64,
+    request: *const WalletOpenRequest,
+    result: *mut WalletResult,
 ) -> i32 {
-    if handle.is_null() {
-        return INVALID;
+    // SAFETY: caller supplies writable output; individual original bounds precede slices.
+    unsafe {
+        output(result, || {
+            let request = request.as_ref().ok_or(Failure::code(INVALID))?;
+            open::begin(
+                runtime,
+                [
+                    input(
+                        request.credential,
+                        request.credential_length,
+                        open::BOUNDS[0],
+                    )?,
+                    input(
+                        request.certificates,
+                        request.certificates_length,
+                        open::BOUNDS[1],
+                    )?,
+                    input(request.account, request.account_length, open::BOUNDS[2])?,
+                    input(request.asset, request.asset_length, open::BOUNDS[3])?,
+                ],
+            )
+        })
     }
-    // SAFETY: caller supplies writable handle.
-    unsafe { handle.write(0) };
-    run(|| {
-        if callbacks.is_null() {
-            return Err(Failure::code(INVALID));
-        }
-        // SAFETY: caller supplies initialized complete table and four exact 32-byte identities.
-        unsafe {
-            CallbackPlatform::validate(&*callbacks)?;
-            for value in [slot, scheme, wallet, artifact] {
-                if input(value, 32, 32)? == [0; 32] {
-                    return Err(Failure::code(INVALID));
-                }
-            }
-        }
-        Err::<(), _>(Failure::code(ARTIFACTS_UNAVAILABLE))
-    })
-    .err()
-    .map_or(0, |error| error.status)
+}
+/// Consume one account challenge and return the admitted wallet handle (kind16).
+/// Wrong signatures consume the challenge and retain unadmitted custody for a fresh begin.
+/// # Safety
+/// Signature must be readable for length and output writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_open_finish_v1(
+    runtime: u64,
+    signature: *const u8,
+    length: usize,
+    result: *mut WalletResult,
+) -> i32 {
+    // SAFETY: caller supplies writable result and readable signature. An invalid byte length
+    // reaches the native finish as an empty signature so its one-use challenge is consumed.
+    unsafe {
+        output(result, || {
+            let signature = if length != 64 || signature.is_null() {
+                &[]
+            } else {
+                input(signature, length, 64)?
+            };
+            open::finish(runtime, signature)
+        })
+    }
+}
+/// Abandon an account challenge without discarding native custody or accepting authority.
+#[unsafe(no_mangle)]
+pub extern "C" fn connect_norito_kagemusha_wallet_open_cancel_v1(runtime: u64) -> i32 {
+    run(|| open::cancel(runtime))
+        .err()
+        .map_or(0, |error| error.status)
 }
 /// Close an owner, cooperatively join a running fold, and release exclusive custody.
 #[unsafe(no_mangle)]
@@ -425,4 +471,64 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_snapshot_v1(
     // SAFETY: admitted complete output storage; all fields are initialized, no heap ownership.
     unsafe { out.write(value) };
     status
+}
+
+/// Typed native setup: Bootstrap0, Offer1, Request2, Credited3, begin-time4, finish-time5,
+/// cancel-time6; wrap7..10/unwrap11..14 in Offer, Request, Payment, Credited order.
+/// Unused identities, amount, token and original slots are exactly zero/empty.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletSetupRequest {
+    /// Exactly32 readable bytes: nonzero retry identity only for Offer/Request.
+    pub setup_id: *const u8,
+    /// Fixed setup action, never an Archive relation or proof-key selector.
+    pub selector: u32,
+    /// Positive Offer amount only.
+    pub amount: WalletU128,
+    /// Native single-use time token only for finish-time; cannot contain a clock reading.
+    pub token: u64,
+    /// Offer, Credited or TimeAnchor original, according to action.
+    pub first: *const u8,
+    /// Exact first original length.
+    pub first_length: usize,
+    /// Optional Request fee schedule or required finish-time signer certificate.
+    pub second: *const u8,
+    /// Exact second original length.
+    pub second_length: usize,
+    /// Optional Request fee-schedule signer certificate only.
+    pub third: *const u8,
+    /// Exact third original length.
+    pub third_length: usize,
+}
+/// Complete bootstrap or a typed native session action. Status12 carries exact setup bytes;
+/// status13 carries nonce32 and sequence_low native token; status14 confirms retained time.
+/// # Safety
+/// Request and pointed-to inputs are initialized for their lengths; out is writable and empty.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_setup_v1(
+    handle: u64,
+    request: *const WalletSetupRequest,
+    out: *mut WalletResult,
+) -> i32 {
+    unsafe {
+        output(out, || {
+            if request.is_null() {
+                return Err(Failure::code(INVALID));
+            }
+            let request = &*request;
+            let limits = setup::bounds(request.selector)?;
+            let action = setup::request(
+                input(request.setup_id, 32, 32)?,
+                request.selector,
+                u128::from(request.amount.low) | (u128::from(request.amount.high) << 64),
+                request.token,
+                [
+                    input(request.first, request.first_length, limits[0])?,
+                    input(request.second, request.second_length, limits[1])?,
+                    input(request.third, request.third_length, limits[2])?,
+                ],
+            )?;
+            setup(handle, action)
+        })
+    }
 }

@@ -341,11 +341,16 @@ impl PreparationV1<'_> {
         let request_bytes = norito::to_bytes(&request).unwrap();
         let payer_bytes = payer.to_canonical_bytes().unwrap();
         let cert_bytes = norito::to_bytes(&certificates).unwrap();
-        for objects_invalid in [false, true] {
+        for variant in 0..3 {
+            let objects_invalid = variant == 1;
             let mut original = incoming.clone();
             if objects_invalid {
                 original.version = 19;
                 original.send.receipt.version = 23;
+            }
+            if variant == 2 {
+                original.request.body.nonce[0] ^= 1;
+                assert_ne!(original.request, request.signed());
             }
             let bytes = norito::to_bytes(&original).unwrap();
             assert!(
@@ -544,4 +549,75 @@ fn projected_invalid_receipt_retains_false_and_original_digest_in_native_decoder
     assert_receipt_decode(&project(&original), true);
     original.send.receipt.version = 9;
     assert_receipt_decode(&project(&original), false);
+}
+
+#[test]
+fn malformed_key_and_signature_encodings_are_custody_errors_before_soft_predicates() {
+    // Keep the outer frame/CRC valid, so failure is the typed payload boundary.
+    fn replace(original: &[u8], old: &[u8], new: &[u8]) -> Vec<u8> {
+        assert_eq!(old.len(), new.len());
+        let header = norito::core::Header::read(original).unwrap();
+        let payload_at = original.len() - usize::try_from(header.length).unwrap();
+        let mut changed = original.to_vec();
+        let index = changed[payload_at..]
+            .windows(old.len())
+            .position(|window| window == old)
+            .unwrap()
+            + payload_at;
+        changed[index..index + old.len()].copy_from_slice(new);
+        let checksum = norito::core::hardware_crc64(&changed[payload_at..]);
+        let checksum_at = norito::core::Header::SIZE - 9;
+        changed[checksum_at..checksum_at + 8].copy_from_slice(&checksum.to_le_bytes());
+        norito::core::from_bytes_view(&changed).unwrap();
+        changed
+    }
+    let original: KagemushaWalletPaymentV1 = object("KagemushaWalletPaymentV1");
+    let frame = norito::to_bytes(&original).unwrap();
+    let key = original.payer_payment_key.as_sec1_bytes();
+    let mut off_curve = [0; 65];
+    off_curve[0] = 4;
+    let mut bad_prefix = *key;
+    bad_prefix[0] = 2;
+    for invalid in [off_curve, bad_prefix] {
+        let changed = replace(&frame, key, &invalid);
+        assert!(matches!(payment(&changed), Err(Error::Authority)));
+    }
+    let signature = original.send.receipt.signature.as_raw_bytes();
+    let low = Signature::from_slice(signature).unwrap();
+    let high = Signature::from_scalars(low.r().to_bytes(), (-*low.s()).to_bytes()).unwrap();
+    assert!(high.normalize_s().is_some());
+    let mut zero_r = *signature;
+    zero_r[..32].fill(0);
+    let mut zero_s = *signature;
+    zero_s[32..].fill(0);
+    for invalid in [zero_r, zero_s, high.to_bytes().into()] {
+        let changed = replace(&frame, signature, &invalid);
+        assert!(matches!(payment(&changed), Err(Error::Authority)));
+    }
+}
+
+#[test]
+fn unsupported_outer_carriers_are_custody_errors_without_normalization() {
+    let original: KagemushaWalletPaymentV1 = object("KagemushaWalletPaymentV1");
+    let mut changed = original.clone();
+    changed.send.version = 7;
+    assert!(matches!(
+        payment(&norito::to_bytes(&changed).unwrap()),
+        Err(Error::Authority)
+    ));
+    changed = original.clone();
+    changed.send.lineage = KagemushaWalletLineageSlotV1::None;
+    assert!(matches!(
+        payment(&norito::to_bytes(&changed).unwrap()),
+        Err(Error::Authority)
+    ));
+    changed = original;
+    changed.send.statement.effect = KagemushaWalletEffectV1::Bootstrap {
+        enrollment_id: [0; 32],
+        enrollment_marker: [0; 32],
+    };
+    assert!(matches!(
+        payment(&norito::to_bytes(&changed).unwrap()),
+        Err(Error::Authority)
+    ));
 }

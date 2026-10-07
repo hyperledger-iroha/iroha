@@ -802,17 +802,34 @@ impl Directory {
 
     pub(super) fn open_readonly(&self, name: &OsStr) -> io::Result<File> {
         self.revalidate()?;
-        let file = open_file(
+        let file = self
+            .open_readonly_native(name, false)?
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        self.revalidate()?;
+        Ok(file)
+    }
+
+    // Sole original readonly-open admission, with no ancestry observation. Only the initial
+    // native opener may yield optional absence; named admission and final-name errors remain errors.
+    pub(super) fn open_readonly_native(
+        &self,
+        name: &OsStr,
+        optional: bool,
+    ) -> io::Result<Option<File>> {
+        let file = match open_file(
             &self.path().join(name),
             GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             OPEN_EXISTING,
             false,
             false,
-        )?;
+        ) {
+            Ok(file) => file,
+            Err(error) if optional && error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
         snapshot(&file, true, false)?;
-        self.revalidate()?;
-        Ok(file)
+        Ok(Some(file))
     }
 
     pub(super) fn open_retained(

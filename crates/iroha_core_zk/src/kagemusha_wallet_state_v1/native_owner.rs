@@ -2,7 +2,8 @@
 
 use super::*;
 mod bootstrap;
-mod sessions;
+mod runtime;
+pub(super) mod sessions;
 use crate::{
     kagemusha_wallet_advance_v1::{KagemushaWalletFsV1, KagemushaWalletPlatformV1},
     kagemusha_wallet_artifacts_v1::{
@@ -19,6 +20,11 @@ use crate::{
 use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::keys::pk::artifact::ReadConfig;
+use runtime::RuntimeCustodyV1;
+pub use runtime::{
+    NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeStartupFailureV1,
+    NativeWalletCoordinatorV1, NativeWalletRuntimeV1, PendingNativeWalletOpenV1,
+};
 use std::sync::{Arc, Mutex};
 
 /// Concrete native owner constructed only by consuming actual original admission.
@@ -49,7 +55,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
     ///
     /// # Errors
     /// Changed installation/genesis, unavailable custody or inconsistent native state.
-    pub fn into_coordinator<S: OriginalSourceV1 + Send>(
+    fn into_coordinator<S: OriginalSourceV1 + Send>(
         self,
         native_genesis: &SumeragiFinalityVerifier,
         originals: S,
@@ -57,17 +63,22 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
         budget: MemoryBudget,
     ) -> Result<
         Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>,
-        Error,
+        (RuntimeCustodyV1<F, P>, S, Error),
     > {
         let (provider, installed, sources, slot, enrollment, _, _, _, certificates, _, _) =
             self.into_parts();
-        let anchor = derive_history_anchor(native_genesis)
-            .map_err(|_| Error::Proof("native Global root"))?;
-        if &anchor != sources.finality().anchor() {
-            return Err(Error::Proof("native finality source binding"));
-        }
-        let worker =
-            NativeFoldWorkerV1::new(Arc::clone(&installed), Arc::clone(&sources), read, budget)?;
+        let verified = (|| {
+            let anchor = derive_history_anchor(native_genesis)
+                .map_err(|_| Error::Proof("native Global root"))?;
+            if &anchor != sources.finality().anchor() {
+                return Err(Error::Proof("native finality source binding"));
+            }
+            NativeFoldWorkerV1::new(Arc::clone(&installed), Arc::clone(&sources), read, budget)
+        })();
+        let worker = match verified {
+            Ok(worker) => worker,
+            Err(error) => return Err((RuntimeCustodyV1::Exclusive(provider), originals, error)),
+        };
         let handle = AdvanceHandle::new(provider, slot);
         let archive = handle.archive(enrollment.body.scheme_id, enrollment.body.wallet_id);
         let owner = NativeWalletProofsV1 {
@@ -82,13 +93,39 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             enrollment,
             enrollment_certificates: certificates,
         };
-        Coordinator::new(
-            handle,
+        let mut wallet = Coordinator {
+            custody: handle,
             archive,
-            owner,
-            enrollment.body.scheme_id,
-            enrollment.body.wallet_id,
-        )
+            proofs: owner,
+            scheme_id: enrollment.body.scheme_id,
+            wallet_id: enrollment.body.wallet_id,
+            scheduler: Scheduler::new(),
+            verified_folds: BTreeMap::new(),
+        };
+        if let Err(error) = wallet.initialize() {
+            let Coordinator {
+                custody,
+                archive,
+                proofs,
+                ..
+            } = wallet;
+            let NativeWalletProofsV1 {
+                originals,
+                observations,
+                ..
+            } = proofs;
+            drop(archive);
+            drop(observations);
+            let originals = originals
+                .into_inner()
+                .unwrap_or_else(|error| error.into_inner());
+            let custody = match custody.try_into_provider() {
+                Ok(provider) => RuntimeCustodyV1::Exclusive(provider),
+                Err(handle) => RuntimeCustodyV1::Shared(handle),
+            };
+            return Err((custody, originals, error));
+        }
+        Ok(wallet)
     }
 }
 

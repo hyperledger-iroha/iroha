@@ -125,27 +125,6 @@ impl PreparedOperationV1 {
     pub(crate) fn owner(&self) -> &AuthenticatedCredentialV1 {
         &self.owner
     }
-    pub(crate) fn predecessor(&self) -> Option<&FoldedStateV1> {
-        self.predecessor.as_ref()
-    }
-    pub(crate) fn state(&self) -> &KagemushaWalletStateV1 {
-        match &self.step {
-            Step::Load(s) => s.state(),
-            Step::Archive(s) => s.state(),
-            Step::Monetary(s) => s.state(),
-            Step::Refresh(s) => s.state(),
-            Step::Consuming(s) => s.state(),
-        }
-    }
-    pub(crate) fn statement(&self) -> &KagemushaWalletStatementV1 {
-        match &self.step {
-            Step::Load(s) => s.statement(),
-            Step::Archive(s) => s.statement(),
-            Step::Monetary(s) => s.statement(),
-            Step::Refresh(s) => s.statement(),
-            Step::Consuming(s) => s.statement(),
-        }
-    }
     fn selector(&self) -> Result<u8> {
         use KagemushaWalletOperationKindV1 as K;
         Ok(match &self.step {

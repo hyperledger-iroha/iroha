@@ -67,15 +67,35 @@ class KagemushaWalletV1Test {
             assertEquals(2, unavailable.tag); assertEquals(4, uncertain.tag)
         }
     }
-    @Test fun `factory rejects invalid incarnation before loading native code`() {
-        val platform = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), TestKeyStoreV1())
-        val id = ByteArray(32) { 1 }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletV1.open(platform, ByteArray(31), id, id, id) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletV1.open(platform, id, id, id, ByteArray(32)) }
+    @Test fun `original open inputs reject empty or oversized roles before native loading`() {
+        val one = byteArrayOf(1)
+        KagemushaWalletOpenOriginalsV1(one, one, one, one)
+        for (role in 0..3) {
+            val values = MutableList(4) { one }
+            values[role] = ByteArray(listOf(1024, 10000, 4096, 1024)[role] + 1)
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletOpenOriginalsV1(values[0], values[1], values[2], values[3]) }
+            values[role] = byteArrayOf()
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletOpenOriginalsV1(values[0], values[1], values[2], values[3]) }
+        }
+        val value = KagemushaWalletOpenOriginalsV1(one, one, one, one)
+        one[0] = 2
+        assertEquals(1, value.frames()[0][0].toInt())
+        value.frames()[0][0] = 3
+        assertEquals(1, value.frames()[0][0].toInt())
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletRuntimeV1(0) }
+    }
+    @Test fun `account challenge and opened handle keep fixed reply shapes`() {
+        KagemushaWalletCallV1(15, -1, 0, 1, 0, 0, ByteArray(32))
+        KagemushaWalletCallV1(16, -1, 0, 1, 0, 0, byteArrayOf())
+        for (count in listOf(0, 31, 33)) assertFailsWith<KagemushaWalletExceptionV1> {
+            KagemushaWalletCallV1(15, -1, 0, 1, 0, 0, ByteArray(count))
+        }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(16, -1, 0, 0, 0, 0, byteArrayOf()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(16, -1, 0, 1, 1, 0, byteArrayOf()) }
     }
     @Test fun `native API contains only opaque state machine calls`() {
         val type = JvmApiInventory.read(KagemushaWalletNativeV1::class.java)
-        assertEquals(setOf("revision", "open", "close", "activity", "call", "snapshot", "execute"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
         assertEquals(-4, KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE)
     }
     @Test fun `typed lifecycle inputs bound originals and preserve unsigned scalar bits`() {

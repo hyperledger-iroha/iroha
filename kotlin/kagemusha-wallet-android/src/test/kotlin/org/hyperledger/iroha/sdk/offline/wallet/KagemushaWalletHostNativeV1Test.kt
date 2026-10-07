@@ -35,7 +35,7 @@ class KagemushaWalletHostNativeV1Test {
         val id = ByteArray(32) { 1 }
         repeat(2) {
             val error = assertFailsWith<KagemushaWalletExceptionV1> {
-                KagemushaWalletV1.open(platform, id, id, id, id)
+                KagemushaWalletRuntimeV1(Long.MAX_VALUE).begin(KagemushaWalletOpenOriginalsV1(id, id, id, id))
             }
             assertEquals(KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE, error.status)
         }
@@ -75,8 +75,10 @@ class KagemushaWalletHostNativeV1Test {
     fun malformedNativeCallsRejectBeforeUnknownHandleLookup() {
         val id = ByteArray(32) { 1 }
         val platform = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), TestKeyStoreV1())
-        assertEquals(-1L, KagemushaWalletNativeV1.open(platform, ByteArray(31), id, id, id))
-        assertEquals(-1L, KagemushaWalletNativeV1.open(platform, id, id, id, ByteArray(32)))
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.openBegin(0, byteArrayOf(), id, id, id)).status)
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.openBegin(0, id, id, ByteArray(4097), id)).status)
+        assertEquals(-4, assertNotNull(KagemushaWalletNativeV1.openFinish(0, ByteArray(64))).status)
+        assertEquals(-4, KagemushaWalletNativeV1.openCancel(0))
         val cases = listOf(
             Triple(0, byteArrayOf(), byteArrayOf()),
             Triple(1, ByteArray(31), byteArrayOf()),

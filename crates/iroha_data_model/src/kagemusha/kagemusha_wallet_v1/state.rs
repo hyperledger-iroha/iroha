@@ -149,7 +149,7 @@ pub enum KagemushaWalletLifecycleV1 {
     /// Normal operation.
     #[codec(index = 1)]
     Active,
-    /// New setup and funding closed; existing claims are preserved.
+    /// New receiving quotes and funding closed; remaining value and existing claims persist.
     #[codec(index = 2)]
     Retiring,
 }

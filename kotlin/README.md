@@ -349,6 +349,26 @@ exact failure results and refusal to open without authenticated proof artifacts.
 They do not establish a working monetary provider, successful wallet operation,
 Android native artifact or physical-device qualification.
 
+Trusted embedding-app native startup calls the Rust bridge's `start_native_wallet`
+with independently provisioned installation pins, authenticated genesis, the signed
+complete producer graph and exclusive provider/original store. Kotlin receives an
+opaque `KagemushaWalletRuntimeV1` handle. `begin` carries only original credential,
+Enrollment CertificateSet, AccountId and asset-scope frames; the existing Ed25519
+account signs its fresh native challenge. `finish` admits the shared wallet owner.
+Failed finish consumes the challenge while retaining runtime custody for a fresh
+begin; closing the pending challenge cancels it. `cancelPendingOpen` handles an
+interrupted begin response, and `retryOpenCompletion` recovers the same live
+admitted handle after interrupted finish delivery without reauthorization. Foreign callers provide no trust
+pins, proof verdicts or payment-key replacement.
+
+Typed setup and lifecycle APIs retain exact native bytes and expose durable status
+separately from fold backlog. Offer/Request setup bytes are canonical object
+frames; peer transports use Envelope frames. Native `envelope`/`original` conversion
+checks the expected kind, native scheme and full-frame bound without monetary
+admission. `cancelTimeExchange` discards only the
+pending native token and does not update an anchor. Native deployment material and
+full real-wallet qualification remain prerequisites for monetary use.
+
 ### Java transaction metadata
 
 `JsonValue` is one immutable Kotlin-owned type for both JVM languages. Its

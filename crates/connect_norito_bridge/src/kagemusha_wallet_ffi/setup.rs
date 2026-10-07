@@ -4,6 +4,11 @@ use super::*;
 
 pub(crate) enum Setup {
     Bootstrap,
+    Transport {
+        kind: u8,
+        wrap: bool,
+        original: Vec<u8>,
+    },
     Offer {
         id: [u8; 32],
         amount: u128,
@@ -20,6 +25,9 @@ pub(crate) enum Setup {
     },
     Credited(Vec<u8>),
     BeginTime,
+    CancelTime {
+        token: u64,
+    },
     FinishTime {
         token: u64,
         anchor: Box<KagemushaWalletTimeAnchorV1>,
@@ -28,22 +36,26 @@ pub(crate) enum Setup {
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        0 | 1 | 4 => [0; 3],
+        0 | 1 | 4 | 6 => [0; 3],
         2 => [
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1,
-            KAGEMUSHA_WALLET_SIGNER_CERTIFICATE_MAX_BYTES_V1,
+            KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
         ],
-        3 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
+        3 | 7..=14 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
         5 => [
             KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
-            KAGEMUSHA_WALLET_SIGNER_CERTIFICATE_MAX_BYTES_V1,
+            KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
             0,
         ],
         _ => return Err(Failure::code(INVALID)),
     })
 }
-fn decode<T: norito::Decode>(bytes: &[u8]) -> Result<T> {
+fn decode<T>(bytes: &[u8]) -> Result<T>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
     norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len()))
         .map_err(|_| Failure::code(INVALID))
 }
@@ -58,7 +70,7 @@ pub(crate) fn request(
     let bounds = bounds(selector)?;
     if ((1..=2).contains(&selector) != (id != [0; 32]))
         || ((selector == 1) != (amount != 0))
-        || ((selector == 5) != (token != 0))
+        || (matches!(selector, 5 | 6) != (token != 0))
         || originals
             .iter()
             .zip(bounds)
@@ -81,6 +93,12 @@ pub(crate) fn request(
         },
         3 if !first.is_empty() => Setup::Credited(first.to_vec()),
         4 => Setup::BeginTime,
+        6 => Setup::CancelTime { token },
+        7..=14 if !first.is_empty() => Setup::Transport {
+            kind: ((selector - 7) % 4 + 1) as u8,
+            wrap: selector < 11,
+            original: first.to_vec(),
+        },
         5 if !first.is_empty() && !second.is_empty() => Setup::FinishTime {
             token,
             anchor: Box::new(decode(first)?),
@@ -89,6 +107,9 @@ pub(crate) fn request(
         _ => return Err(Failure::code(INVALID)),
     })
 }
+fn take_time<T>(times: &mut BTreeMap<u64, T>, token: u64) -> Result<T> {
+    times.remove(&token).ok_or(Failure::code(INVALID))
+}
 impl<P, S> NativeWallet<P, S>
 where
     P: advance::KagemushaWalletPlatformV1,
@@ -96,6 +117,14 @@ where
 {
     pub(super) fn setup_inner(&mut self, input: Setup) -> Result<Response> {
         let bytes = match input {
+            Setup::Transport {
+                kind,
+                wrap,
+                original,
+            } => {
+                let scheme = self.wallet.snapshot()?.scheme_id;
+                transport::convert(kind, wrap, &original, &scheme)?
+            }
             Setup::Bootstrap => return Ok(completion(Some(self.wallet.bootstrap()?))),
             Setup::Offer { id, amount } => self.wallet.offer(id, amount)?,
             Setup::Request { id, offer, fee } => {
@@ -124,12 +153,19 @@ where
                     ..Response::default()
                 });
             }
+            Setup::CancelTime { token } => {
+                take_time(&mut self.times, token)?;
+                return Ok(Response {
+                    kind: 6,
+                    ..Response::default()
+                });
+            }
             Setup::FinishTime {
                 token,
                 anchor,
                 certificate,
             } => {
-                let exchange = self.times.remove(&token).ok_or(Failure::code(INVALID))?;
+                let exchange = take_time(&mut self.times, token)?;
                 self.wallet
                     .finish_direct_time_exchange(exchange, *anchor, &certificate)?;
                 return Ok(Response {
@@ -164,6 +200,24 @@ mod tests {
         assert!(request(&[0; 32], 2, 0, 0, [&[7], &[], &[]]).is_err());
         assert!(request(&[1; 31], 1, 1, 0, [&[]; 3]).is_err());
         assert!(request(&[0; 32], 5, 0, 1, [&[]; 3]).is_err());
-        assert!(bounds(6).is_err());
+        assert!(request(&[0; 32], 6, 0, 1, [&[]; 3]).is_ok());
+        assert!(request(&[0; 32], 6, 0, 0, [&[]; 3]).is_err());
+        assert!(request(&[1; 32], 6, 0, 1, [&[]; 3]).is_err());
+        assert!(request(&[0; 32], 6, 1, 1, [&[]; 3]).is_err());
+        assert!(request(&[0; 32], 6, 0, 1, [&[7], &[], &[]]).is_err());
+        for selector in 7..=14 {
+            assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
+            assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
+        }
+        assert!(bounds(15).is_err());
+    }
+    #[test]
+    fn cancelling_time_discards_exact_token_once_without_replacing_other_exchanges() {
+        let mut times = BTreeMap::from([(1, [11; 32]), (2, [22; 32])]);
+        assert_eq!(take_time(&mut times, 1).unwrap(), [11; 32]);
+        assert_eq!(take_time(&mut times, 1).unwrap_err().status, INVALID);
+        assert_eq!(times.len(), 1);
+        assert_eq!(take_time(&mut times, 2).unwrap(), [22; 32]);
+        assert!(times.is_empty());
     }
 }

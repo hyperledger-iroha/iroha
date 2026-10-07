@@ -92,6 +92,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             slot,
         }
     }
+    pub(super) fn try_into_provider(self) -> Result<KagemushaWalletProviderV1<F, P>, Self> {
+        let Self { provider, slot } = self;
+        match Arc::try_unwrap(provider) {
+            Ok(provider) => Ok(provider
+                .into_inner()
+                .unwrap_or_else(|error| error.into_inner())),
+            Err(provider) => Err(Self { provider, slot }),
+        }
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, KagemushaWalletProviderV1<F, P>>, ProviderError> {
         self.provider.lock().map_err(|_| ProviderError::Invalid {
             field: "provider handle poisoned",

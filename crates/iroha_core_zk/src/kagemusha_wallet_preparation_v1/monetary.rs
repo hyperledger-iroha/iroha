@@ -86,14 +86,12 @@ pub struct MonetaryStepV1 {
 
 // Exact incoming signed bytes, deliberately not an authenticated credential capability.
 struct PayerOriginalV1 {
-    credential: KagemushaWalletCredentialV1,
     credential_original: Vec<u8>,
     credential_tape: Vec<u8>,
 }
 impl From<AuthenticatedCredentialV1> for PayerOriginalV1 {
     fn from(owner: AuthenticatedCredentialV1) -> Self {
         Self {
-            credential: owner.credential,
             credential_original: owner.credential_original,
             credential_tape: owner.credential_tape,
         }
@@ -794,7 +792,6 @@ impl PreparationV1<'_> {
         .map_err(|_| Error::Authority)?;
         incoming_original::payment(payment_original)?;
         let payer = PayerOriginalV1 {
-            credential,
             credential_original: payer_original.to_vec(),
             credential_tape: signed_tape(credential.body.transcript(), &credential.signature),
         };
@@ -1147,8 +1144,8 @@ impl PreparationV1<'_> {
             sigma: capsule.step_proof.bytes.clone(),
             objects: [
                 signed_tape(
-                    prepared.request.body.transcript(),
-                    &prepared.request.signature,
+                    incoming.payment.request.body.transcript(),
+                    &incoming.payment.request.signature,
                 ),
                 payer.credential_tape.clone(),
                 incoming.receipt,

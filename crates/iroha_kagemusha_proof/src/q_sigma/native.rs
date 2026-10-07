@@ -169,22 +169,32 @@ impl SigmaClass {
         FoldInput::from_opening(*opening.g(), opening.challenges()).map_err(QSigmaError::Fold)
     }
 }
-fn proof_failure(error: &VerifyError) -> bool {
+/// Whether total incoming verification maps this witness failure to false.
+///
+/// This classification never accepts a proof or authorizes a burn. Descriptor,
+/// key, parameter, profile and resource failures remain hard errors. Native
+/// operation coordinators and Q preparation use the same classification as the
+/// total circuit's proof reader, including failures nested inside IPA/multiopen.
+#[must_use]
+pub fn incoming_proof_failure(error: &VerifyError) -> bool {
     match error {
         VerifyError::Transcript(error) => !matches!(error, TranscriptError::ProfileMismatch),
         VerifyError::DegenerateChallenge
+        | VerifyError::IdentityInstanceCommitment { .. }
         | VerifyError::ProofLength { .. }
         | VerifyError::Multiopen(
             MultiopenError::PointCollision
             | MultiopenError::ConflictingEvaluations { .. }
             | MultiopenError::DegenerateChallenge,
         ) => true,
-        VerifyError::Ipa(error) | VerifyError::Multiopen(MultiopenError::Ipa(error)) => matches!(
-            error,
+        VerifyError::Ipa(error) | VerifyError::Multiopen(MultiopenError::Ipa(error)) => match error
+        {
+            IpaError::Transcript(error) => !matches!(error, TranscriptError::ProfileMismatch),
             IpaError::ZeroChallenge { .. }
-                | IpaError::OpeningFailed
-                | IpaError::FoldedGeneratorMismatch
-        ),
+            | IpaError::OpeningFailed
+            | IpaError::FoldedGeneratorMismatch => true,
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -252,7 +262,7 @@ impl QSigmaPlan {
                 if usize::try_from(input.sigma.length).ok() == Some(input.sigma.proof.len()) {
                     match class.opening(&input.sigma, config.kernel_budget) {
                         Ok(claim) => Some(claim),
-                        Err(QSigmaError::Verify(error)) if proof_failure(&error) => None,
+                        Err(QSigmaError::Verify(error)) if incoming_proof_failure(&error) => None,
                         Err(error) => return Err(error),
                     }
                 } else {
@@ -900,18 +910,46 @@ mod tests {
 
     #[test]
     fn soft_failure_classification_retains_configuration_and_resource_errors() {
-        assert!(proof_failure(&VerifyError::Transcript(
+        assert!(incoming_proof_failure(&VerifyError::Transcript(
             TranscriptError::InvalidPoint
         )));
-        assert!(proof_failure(&VerifyError::Ipa(IpaError::OpeningFailed)));
-        assert!(proof_failure(&VerifyError::Multiopen(MultiopenError::Ipa(
-            IpaError::ZeroChallenge { round: 0 }
-        ))));
-        assert!(!proof_failure(&VerifyError::Transcript(
+        assert!(incoming_proof_failure(&VerifyError::Ipa(
+            IpaError::OpeningFailed
+        )));
+        assert!(incoming_proof_failure(&VerifyError::Multiopen(
+            MultiopenError::Ipa(IpaError::ZeroChallenge { round: 0 })
+        )));
+        assert!(!incoming_proof_failure(&VerifyError::Transcript(
             TranscriptError::ProfileMismatch
         )));
-        assert!(!proof_failure(&VerifyError::KeyMismatch));
-        assert!(!proof_failure(&VerifyError::Ipa(
+        for error in [
+            TranscriptError::ProofTruncated,
+            TranscriptError::TrailingBytes { remaining: 1 },
+            TranscriptError::NonCanonicalScalar,
+            TranscriptError::InvalidPoint,
+            TranscriptError::IdentityPoint,
+        ] {
+            assert!(incoming_proof_failure(&VerifyError::Transcript(
+                error.clone()
+            )));
+            assert!(incoming_proof_failure(&VerifyError::Ipa(
+                IpaError::Transcript(error.clone())
+            )));
+            assert!(incoming_proof_failure(&VerifyError::Multiopen(
+                MultiopenError::Ipa(IpaError::Transcript(error))
+            )));
+        }
+        assert!(incoming_proof_failure(
+            &VerifyError::IdentityInstanceCommitment { column: 0 }
+        ));
+        assert!(!incoming_proof_failure(&VerifyError::Ipa(
+            IpaError::Transcript(TranscriptError::ProfileMismatch)
+        )));
+        assert!(!incoming_proof_failure(&VerifyError::Multiopen(
+            MultiopenError::Ipa(IpaError::Transcript(TranscriptError::ProfileMismatch))
+        )));
+        assert!(!incoming_proof_failure(&VerifyError::KeyMismatch));
+        assert!(!incoming_proof_failure(&VerifyError::Ipa(
             IpaError::ParamsTooSmall {
                 needed: 16,
                 available: 12

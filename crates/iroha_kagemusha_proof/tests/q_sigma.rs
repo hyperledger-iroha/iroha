@@ -368,6 +368,22 @@ fn actual_two_sigma_q_proof_verifies() {
         let burned = plan.prepare(own.clone(),Some(invalid),&inner_params,Fq::from(73),&FoldConfig::default()).unwrap();
         assert_eq!(burned.instances()[3],[Fq::ONE,Fq::ZERO,Fq::ZERO,Fq::ONE,Fq::ZERO]);
         assert_result(burned.circuit(),burned.instances(),true);
+        // Native total verification must match the circuit for a changed direct
+        // instance and a malformed final IPA/suffix message, including nested
+        // transcript failures rather than only the first proof commitment.
+        for mutation in 0..2 {
+            let mut malformed = input.clone();
+            malformed.mode = IncomingMode::Trivial;
+            if mutation == 0 {
+                malformed.sigma.statement = Fp::ZERO;
+            } else {
+                let end = malformed.sigma.proof.len();
+                malformed.sigma.proof[end - 32..].fill(0xff);
+            }
+            let retained = plan.prepare(own.clone(), Some(malformed), &inner_params, Fq::from(79), &FoldConfig::default()).unwrap();
+            assert_eq!(retained.instances()[3], [Fq::ONE,Fq::ZERO,Fq::ZERO,Fq::ONE,Fq::ZERO]);
+            assert_result(retained.circuit(), retained.instances(), true);
+        }
         let mut not_correctable = input; not_correctable.mode = IncomingMode::Corrected;
         assert!(plan.prepare(own,Some(not_correctable),&inner_params,Fq::from(73),&FoldConfig::default()).is_err());
         let params = iroha_plonk::pcs::ipa::PinnedParams::<iroha_pasta::Ep>::derive(16).unwrap();
