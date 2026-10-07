@@ -166,7 +166,7 @@ def configured_policy(value: dict, platform: str) -> ConfiguredWalletEnrollmentP
     require(type(regulator) is dict and set(regulator) == {
         "permitted_controls", "blacklist_max_age_ms", "time_anchor_max_response_ms"}, "invalid regulator projection")
     selected_regulator = RegulatoryPolicyV1(**regulator)
-    require(type(value["challenge_lifetime_ms"]) is int and 0 < value["challenge_lifetime_ms"] <= 600000,
+    require(type(value["challenge_lifetime_ms"]) is int and 0 < value["challenge_lifetime_ms"] < (1 << 64),
             "invalid private challenge lifetime")
     if platform == "apple":
         identity = AppleAppIdentityV1(value["app_id"])

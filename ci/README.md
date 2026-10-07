@@ -145,7 +145,7 @@ deliberately described as a reproducible source graph: use the compile-unit
 guard or an actual Cargo profile when compiler-unit or fully resolved
 registry-package evidence is needed.
 
-After an intentional dependency reduction, refresh the exact limits with:
+After reviewing an intentional dependency change, refresh the exact limits with:
 
 ```sh
 python3 scripts/check_dependency_budget.py \
@@ -160,19 +160,23 @@ stacks listed in `denied_required_packages` cannot be blessed by a refresh.
 Any manifest-fingerprint drift fails closed until that dependency change and
 the refreshed exact limits are reviewed together.
 
-The foundational model extraction adds one local compilation unit and direct
-consumer ownership edges. Its reviewed graph adds no external package and keeps
-shared `derive_more` and `sha2` declarations in both owners where they are used.
-The base scope has 13 required local packages, 30 external packages and 72
-required declaration edges. Four separately resolved base feature selections
-reject aggregate, privacy/service, HTTP, storage and node execution paths;
-normal and build dependencies are both checked.
+The foundational model's default and transparent API selections reject
+aggregate, privacy/service, HTTP, storage, proof primitive and node execution
+paths. Native Pasta/PLONK primitives are shared by the aggregate model and SoraFS
+proof-of-possession verifier; wallet relation and recursive proof execution stay
+owned by `iroha_kagemusha_proof` and `iroha_plonk_recursion`. Model, SDK, wire and
+service selections reject those wallet execution owners. The daemon retains its
+mandatory Core ZK verification dependencies. Normal and build dependencies are
+both checked; only the explicit aggregate-model test selection includes its root
+development dependencies.
 
 `python3 scripts/check_dependency_budget.py --check-boundaries` additionally
 enforces the `architecture` layer ownership and shipping configurations in
 the same policy file. Each configuration resolves its own Cargo package and
-feature selection with `--locked`, includes normal and build dependencies,
-and excludes development dependencies. The `all` target selection covers
+feature selection with `--locked` and includes normal and build dependencies.
+Shipping selections exclude development dependencies; the explicit model test
+selection includes only its root's development dependencies. The `all` target
+selection covers
 platform-specific dependencies. The check reports a concrete transitive path
 for every forbidden layer or proof-execution feature; a resolution error is
 a failure. Use `--offline` after dependencies have been fetched and

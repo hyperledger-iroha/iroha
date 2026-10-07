@@ -58,11 +58,11 @@ pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
 pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
-pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub use lifecycle::{
     ChargeOriginalsV1, NativePreparation, OperationActionV1, OperationRequestV1,
     PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES, RequestStatusV1,
 };
+pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
 pub use snapshot::{Snapshot, SnapshotFold};
 

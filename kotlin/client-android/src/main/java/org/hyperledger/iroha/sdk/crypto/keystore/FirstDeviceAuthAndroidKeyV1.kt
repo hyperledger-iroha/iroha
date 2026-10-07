@@ -13,6 +13,7 @@ import java.security.Signature
 import java.security.cert.Certificate
 import java.security.cert.X509Certificate
 import org.hyperledger.iroha.sdk.auth.FirstDeviceAuthProtocolV1 as Protocol
+import org.hyperledger.iroha.sdk.auth.FirstDeviceAuthRegistrationBridgeV1 as RegistrationBridge
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AndroidKeyAttestationOriginalV1 as Original
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationResult
 
@@ -92,6 +93,26 @@ object FirstDeviceAuthAndroidKeyV1 {
             verifyFirstDeviceAuthPossessionDerV1(original.leaf, message, der)
             recheck()
             return der.copyOf().also { recheck() }
+        }
+
+        /** The separate closed registration purpose; never an arbitrary message signing API.
+         * The app rechecks the existing Ed registration/runtime and its durable exact frame record.
+         * Core independently verifies this whole-frame signature before its existing owner CAS.
+         */
+        fun signRegistrationBridgeOriginal(frame: RegistrationBridge.FrameOriginal,
+            requireOriginalRegistration: () -> Unit): ByteArray {
+            fun guard() { requireOriginalRegistration(); recheck(); requireOriginalRegistration() }
+            guard()
+            frame.requireKeyBinding(challenge, original.publicKey, original.der)
+            val message = frame.originalBytes()
+            guard()
+            val signature = try { access.sign(original.privateKey, message.copyOf()) }
+            catch (failure: Exception) { requireOriginalOwner(); requireOriginalRegistration(); throw failure }
+            guard()
+            val der = Protocol.canonicalPossessionDerBytes(signature)
+            verifyFirstDeviceAuthPossessionDerV1(original.leaf, message, der)
+            guard()
+            return der.copyOf().also { guard() }
         }
 
         /** Positive lookup and all retained originals are rechecked for every use; no cached readiness. */

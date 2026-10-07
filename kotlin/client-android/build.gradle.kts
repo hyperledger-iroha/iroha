@@ -1857,6 +1857,7 @@ android {
         getByName("main").jniLibs.directories.clear()
         // Reuse the exact Java assertions against the Android consumer classpath.
         getByName("test").java.srcDir(project(":core-jvm").file("src/sorafsJavaTest/java"))
+        getByName("test").kotlin.srcDir(rootProject.file("test-support/src"))
     }
 
     packaging {
@@ -1920,6 +1921,7 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))
     testImplementation(libs.bcprov)
+    testImplementation(libs.bcpkix)
     testImplementation(libs.junit.params)
     testRuntimeOnly(libs.junit.jupiter.engine)
     testRuntimeOnly(libs.junit.platform.launcher)

@@ -331,7 +331,8 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
         // Occupancy is digit-dependent, as are the existing bucket accesses
         // and conflict handling; this stays within the variable-time MSM
         // posture documented above. Secret window planning is unchanged.
-        let Some(last) = (start..start + len).rfind(|&j| self.has[j] || self.overflow_used[j]) else {
+        let Some(last) = (start..start + len).rfind(|&j| self.has[j] || self.overflow_used[j])
+        else {
             return acc;
         };
         for j in (start..=last).rev() {
