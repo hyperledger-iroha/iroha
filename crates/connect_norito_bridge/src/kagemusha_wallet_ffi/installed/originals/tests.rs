@@ -149,3 +149,42 @@ fn retired_project_transport_schema_is_rejected_even_with_exact_rows() {
     );
     assert!(require_transport(&fixture(), old.as_bytes()).is_err());
 }
+
+#[test]
+fn metadata_inventory_requires_the_four_current_originals_and_two_cas_children() {
+    // This owner-private namespace observation conveys no verifier or source authority.
+    let temp = tempfile::tempdir().unwrap();
+    let root = PrivateDirectory::open_or_create(temp.path().join("bundle")).unwrap();
+    for name in ["wallet-originals", "finality-originals"] {
+        root.ensure_child(name).unwrap();
+    }
+    for name in [
+        "verifier-pack.norito",
+        "producer-inventory.norito",
+        "transport.json",
+    ] {
+        root.write_atomic(name, b"DATA", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+    }
+    assert_eq!(
+        require_metadata_inventory(&root).unwrap_err().status,
+        INVALID
+    );
+    root.write_atomic(
+        "financial-originals.json",
+        b"DATA",
+        iroha_fs::PublishMode::CreateNew,
+    )
+    .unwrap();
+    require_metadata_inventory(&root).unwrap();
+    root.write_atomic(
+        "wallet-verifier-pack.norito",
+        b"AMBIGUOUS_DATA",
+        iroha_fs::PublishMode::CreateNew,
+    )
+    .unwrap();
+    assert_eq!(
+        require_metadata_inventory(&root).unwrap_err().status,
+        INVALID
+    );
+}

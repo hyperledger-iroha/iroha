@@ -394,17 +394,60 @@ where
 {
     retain_runtime(runtime, None)
 }
-/// Retain the genuine native installation with its independently authenticated app scope.
-/// This function is private to the installed-original intake; foreign IDs cannot create it.
-pub(super) fn retain_native_runtime_bound<P, S>(
+/// Retain the actual loaded runtime and binding before foreign registration can fail.
+/// This creates no registry entry, ID, reservation, enrollment or monetary permission.
+pub(super) fn bound_runtime_owner<P, S>(
     runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
     binding: super::installed::BoundOriginals,
-) -> std::result::Result<u64, NativeStartupFailure<P, S>>
+) -> Arc<RuntimeOwner>
 where
     P: advance::KagemushaWalletPlatformV1 + 'static,
     S: OriginalSourceV1 + Send + 'static,
 {
-    retain_runtime(runtime, Some(binding))
+    Arc::new(runtime_owner(runtime, Some(binding)))
+}
+fn runtime_owner<P, S>(
+    runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+    binding: Option<super::installed::BoundOriginals>,
+) -> RuntimeOwner
+where
+    P: advance::KagemushaWalletPlatformV1 + 'static,
+    S: OriginalSourceV1 + Send + 'static,
+{
+    RuntimeOwner {
+        closing: Arc::new(closing::CloseState::default()),
+        admission: Mutex::new(Some(Box::new(Runtime {
+            phase: Some(Phase::Ready(runtime)),
+            binding,
+        }))),
+        finished: Mutex::new(None),
+    }
+}
+fn registration_id(registry: &Registry) -> Result<u64> {
+    if registry.owners.len() + registry.runtimes.len() >= MAX_OWNERS {
+        return Err(Failure::code(RESOURCE));
+    }
+    registry
+        .next
+        .checked_add(1)
+        .filter(|id| *id <= i64::MAX as u64)
+        .ok_or(Failure::code(RESOURCE))
+}
+/// Register the same opaque attempt under the existing capacity and ID policy.
+/// The borrowed Arc retains all custody/binding on every ordinary refusal.
+pub(super) fn register_owned_runtime(
+    selected_registry: &Mutex<Registry>,
+    owner: &Arc<RuntimeOwner>,
+) -> Result<u64> {
+    owner.closing.require_open()?;
+    let mut selected = selected_registry
+        .lock()
+        .map_err(|_| Failure::code(INTERNAL))?;
+    owner.closing.require_open()?;
+    let id = registration_id(&selected)?;
+    selected.runtimes.insert(id, Arc::clone(owner));
+    selected.next = id;
+    Ok(id)
 }
 fn retain_runtime<P, S>(
     runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
@@ -415,13 +458,8 @@ where
     S: OriginalSourceV1 + Send + 'static,
 {
     let originals = RegistrationOriginals { runtime, binding };
-    retain_registration(registry(), originals, |originals| RuntimeOwner {
-        closing: Arc::new(closing::CloseState::default()),
-        admission: Mutex::new(Some(Box::new(Runtime {
-            phase: Some(Phase::Ready(originals.runtime)),
-            binding: originals.binding,
-        }))),
-        finished: Mutex::new(None),
+    retain_registration(registry(), originals, |originals| {
+        runtime_owner(originals.runtime, originals.binding)
     })
     .map_err(|(originals, failure)| NativeStartupFailure::Registration {
         owner: NativeRegistrationRetry { originals },
@@ -440,20 +478,76 @@ fn retain_registration<T>(
         Ok(registry) => registry,
         Err(_) => return Err((originals, Failure::code(INTERNAL))),
     };
-    if registry.owners.len() + registry.runtimes.len() >= MAX_OWNERS {
-        return Err((originals, Failure::code(RESOURCE)));
-    }
-    let Some(id) = registry
-        .next
-        .checked_add(1)
-        .filter(|id| *id <= i64::MAX as u64)
-    else {
-        return Err((originals, Failure::code(RESOURCE)));
+    let id = match registration_id(&registry) {
+        Ok(id) => id,
+        Err(failure) => return Err((originals, failure)),
     };
     let owner = admit(originals);
     registry.next = id;
     registry.runtimes.insert(id, Arc::new(owner));
     Ok(id)
+}
+
+// SOFTWARE DATA ownership controls only. No fixture here can construct a Native
+// installation, authenticated BoundOriginals, platform key or monetary permission.
+#[cfg(test)]
+pub(super) mod installation_data {
+    use super::*;
+    struct Token {
+        tag: u8,
+        drops: Arc<Mutex<Vec<u8>>>,
+    }
+    impl Drop for Token {
+        fn drop(&mut self) {
+            self.drops.lock().unwrap().push(self.tag);
+        }
+    }
+    struct DataAdmission {
+        _runtime: Token,
+        _binding: Token,
+    }
+    impl Admission for DataAdmission {
+        fn begin(&mut self, _: [&[u8]; 4]) -> Result<Vec<u8>> {
+            Err(Failure::code(INVALID))
+        }
+        fn finish(&mut self, _: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)> {
+            Err(Failure::code(INVALID))
+        }
+        fn cancel(&mut self) -> Result<()> {
+            Err(Failure::code(INVALID))
+        }
+    }
+    pub(in crate::kagemusha_wallet_ffi) fn owner(drops: &Arc<Mutex<Vec<u8>>>) -> Arc<RuntimeOwner> {
+        Arc::new(RuntimeOwner {
+            closing: Arc::new(closing::CloseState::default()),
+            admission: Mutex::new(Some(Box::new(DataAdmission {
+                _runtime: Token {
+                    tag: 1,
+                    drops: Arc::clone(drops),
+                },
+                _binding: Token {
+                    tag: 2,
+                    drops: Arc::clone(drops),
+                },
+            }))),
+            finished: Mutex::new(None),
+        })
+    }
+    pub(in crate::kagemusha_wallet_ffi) fn poison(owner: &Arc<RuntimeOwner>, finished: bool) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if finished {
+                let _held = owner.finished.lock().unwrap();
+                panic!("DATA finished lock poison");
+            } else {
+                let _held = owner.admission.lock().unwrap();
+                panic!("DATA admission lock poison");
+            }
+        }));
+    }
+    pub(in crate::kagemusha_wallet_ffi) fn repair(owner: &Arc<RuntimeOwner>) {
+        owner.admission.clear_poison();
+        owner.finished.clear_poison();
+    }
 }
 
 #[cfg(test)]

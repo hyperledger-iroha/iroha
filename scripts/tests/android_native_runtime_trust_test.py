@@ -8,7 +8,9 @@ spec.loader.exec_module(runner)
 class RuntimeTrustTests(unittest.TestCase):
     def environment(self,profile):
         env=dict.fromkeys(runner.PROFILES[profile],"SYNTHETIC public DATA")
-        if profile in runner.AUTHENTICATED_CARGO_PROFILES: env[runner.WALLET_RUNTIME_TRUST_INPUT]="3"*64
+        if profile in runner.AUTHENTICATED_CARGO_PROFILES:
+            env[runner.WALLET_RUNTIME_TRUST_INPUT]="3"*64
+            env[runner.WALLET_RUNTIME_AUTHORITY_INPUT]="bpng-taira-v6"
         return env
     def test_every_authenticated_mobile_profile_requires_the_public_root(self):
         for profile in runner.AUTHENTICATED_CARGO_PROFILES:
@@ -25,6 +27,21 @@ class RuntimeTrustTests(unittest.TestCase):
                 with self.subTest(profile=profile,value=value):
                     env=self.environment(profile);env[runner.WALLET_RUNTIME_TRUST_INPUT]=value
                     with self.assertRaises(RuntimeError):runner.validate_profile_environment(profile,env)
+    def test_only_exact_explicit_authorities_are_accepted(self):
+        for profile in runner.AUTHENTICATED_CARGO_PROFILES:
+            for authority in ["bpng-taira-v6", "cbsi-release-v1"]:
+                env=self.environment(profile);env[runner.WALLET_RUNTIME_AUTHORITY_INPUT]=authority
+                runner.validate_profile_environment(profile,env)
+                self.assertEqual(runner.wallet_runtime_authority(authority),authority)
+            for authority in ["", "bpng", "cbsi", "BPNG-TAIRA-V6", "bpng-taira-v6\n", " cbsi-release-v1"]:
+                env=self.environment(profile);env[runner.WALLET_RUNTIME_AUTHORITY_INPUT]=authority
+                with self.assertRaises(RuntimeError):runner.validate_profile_environment(profile,env)
+    def test_partial_pair_and_absent_pair_refuse_authenticated_corridors(self):
+        for profile in runner.AUTHENTICATED_CARGO_PROFILES:
+            for absent in [(runner.WALLET_RUNTIME_AUTHORITY_INPUT,), (runner.WALLET_RUNTIME_TRUST_INPUT,), (runner.WALLET_RUNTIME_AUTHORITY_INPUT,runner.WALLET_RUNTIME_TRUST_INPUT)]:
+                env=self.environment(profile)
+                for name in absent:del env[name]
+                with self.assertRaises(RuntimeError):runner.validate_profile_environment(profile,env)
     def test_non_native_build_profiles_do_not_accept_the_root(self):
         for profile in set(runner.PROFILES)-runner.AUTHENTICATED_CARGO_PROFILES:
             env=self.environment(profile);runner.validate_profile_environment(profile,env)

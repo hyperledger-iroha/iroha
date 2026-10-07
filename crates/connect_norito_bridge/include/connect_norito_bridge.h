@@ -1993,8 +1993,9 @@ int32_t connect_norito_kagemusha_wallet_discard_review_v1(uint64_t handle, uint6
 // Mandatory original base authenticated under public build-selected Ed25519 trust.
 // Whole app manifest <=8MiB; envelope <=2048; wallet runtime <=128KiB;
 // signed genesis <=64MiB; root UTF-8 <=4096. Verifier pack/catalog retain Native caps.
-// All seven installation originals are required; absent input returns -1/no handle.
-// Any nonempty financial offer must supply the complete genuine original graph.
+// Four signed base originals are mandatory. BPNG signed financialOriginals:null
+// with an absent financial trio returns -4/no attempt after authenticating that base.
+// Partial offers or signed full selections without all originals return -1.
 typedef struct {
     const uint8_t* app_manifest; size_t app_manifest_length;
     const uint8_t* envelope; size_t envelope_length;
@@ -2004,12 +2005,24 @@ typedef struct {
     const uint8_t* signed_genesis; size_t signed_genesis_length;
     const uint8_t* originals_root; size_t originals_root_length;
 } connect_norito_kagemusha_wallet_runtime_originals_v1;
-// Uses existing platform custody_root callback; retains actual provider in the existing
-// Native runtime registry. Begin/finish/cancel/close remain the sole existing open APIs.
-int32_t connect_norito_kagemusha_wallet_install_runtime_v1(
+// Uses the existing platform custody_root callback and retains the actual provider and
+// authenticated originals together before registry admission. No reservation or permission.
+/* Move-only opaque actual Runtime+authenticated BoundOriginals; no registry ID or reservation.
+ * Native alone constructs it after all seven originals and full financial graph qualification.
+ * Caller owns exact pointer once; serialize registration/close, never copy/dereference/forge.
+ * Zero begin creates the owner; failure clears output. Ordinary register refusal preserves it.
+ * Register zero transfers once to existing runtime ID and clears pointer. Close zero alone
+ * acknowledges custody join and clears pointer; failure retains exact closing owner.
+ * New first-release symbols; install_runtime_v1 is retired with no alias. */
+typedef struct connect_norito_kagemusha_wallet_installation_attempt_v1 connect_norito_kagemusha_wallet_installation_attempt_v1;
+int32_t connect_norito_kagemusha_wallet_installation_begin_v1(
     const connect_norito_kagemusha_wallet_runtime_originals_v1* originals,
     const connect_norito_kagemusha_platform_v1* platform,
-    uint64_t* out_runtime);
+    connect_norito_kagemusha_wallet_installation_attempt_v1** out_attempt);
+int32_t connect_norito_kagemusha_wallet_installation_register_v1(
+    connect_norito_kagemusha_wallet_installation_attempt_v1** attempt, uint64_t* out_runtime);
+int32_t connect_norito_kagemusha_wallet_installation_close_v1(
+    connect_norito_kagemusha_wallet_installation_attempt_v1** attempt);
 
 // Enrollment DATA in the existing installed runtime; no slot/profile/freshness selector.
 // Canonical E1/policy/account originals and original dates are retained before generation.

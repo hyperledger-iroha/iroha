@@ -30,8 +30,26 @@ fn asset_definition_home_dataspace(
     state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinition,
 ) -> Result<Option<DataSpaceId>, InstructionExecutionError> {
+    if let Some(dataspace_id) = state_transaction
+        .world
+        .asset_definition_dataspace(definition.id())
+        .map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid authoritative asset definition home: {error}").into(),
+            )
+        })?
+    {
+        if definition.owning_domain().is_some() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset definition has conflicting domain and dataspace homes".into(),
+            ));
+        }
+        return Ok(Some(dataspace_id));
+    }
     match definition.owning_domain() {
-        Some(domain) => dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref()),
+        Some(domain) => {
+            dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref())
+        }
         None => Ok(Some(DataSpaceId::UNIVERSAL)),
     }
 }

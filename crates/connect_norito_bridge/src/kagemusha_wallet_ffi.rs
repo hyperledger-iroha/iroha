@@ -36,8 +36,12 @@ mod installed;
 pub use enrollment::{
     WalletEnrollmentRequest, WalletEnrollmentResult, connect_norito_kagemusha_wallet_enrollment_v1,
 };
-pub use installed::WalletRuntimeOriginals;
-pub use installed::connect_norito_kagemusha_wallet_install_runtime_v1;
+pub use installed::{WalletInstallationAttempt, WalletRuntimeOriginals};
+pub use installed::{
+    connect_norito_kagemusha_wallet_installation_begin_v1,
+    connect_norito_kagemusha_wallet_installation_close_v1,
+    connect_norito_kagemusha_wallet_installation_register_v1,
+};
 pub(crate) mod open;
 pub use open::{
     NativeRegistrationRetry, NativeStartupFailure, retain_native_runtime, start_native_wallet,

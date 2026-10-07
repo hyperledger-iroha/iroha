@@ -647,6 +647,7 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
   const fields = [
     "id",
     "owning_domain",
+    "owning_dataspace",
     "mintable",
     "logo",
     "metadata",
@@ -673,6 +674,20 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
     );
     if (owningDomain !== value.owning_domain) {
       rejectType(`${context}.owning_domain${TEXT_MUST_BE_AN}exact string or null`);
+    }
+  }
+  if (value.owning_dataspace !== null) {
+    if (
+      typeof value.owning_dataspace !== "string" ||
+      value.owning_dataspace.length > 20 ||
+      !/^[1-9][0-9]*$/.test(value.owning_dataspace) ||
+      BigInt(value.owning_dataspace).toString() !== value.owning_dataspace ||
+      BigInt(value.owning_dataspace) > 0xffff_ffff_ffff_ffffn
+    ) {
+      rejectType(`${context}.owning_dataspace must be a canonical nonzero u64 decimal string or null`);
+    }
+    if (value.owning_domain !== null) {
+      rejectType(`${context} cannot carry both domain and dataspace homes`);
     }
   }
   for (const field of ["logo", WIRE_FIELD_LOCKED_QUANTITY, WIRE_FIELD_CIRCULATING_QUANTITY]) {

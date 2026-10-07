@@ -71,7 +71,8 @@ impl CatalogOriginals {
             return Err(Failure::code(INVALID));
         }
         let metadata = PrivateDirectory::open_exact(root).map_err(storage)?;
-        // All five financial offering paths have fixed current Native roles.
+        require_metadata_inventory(&metadata)?;
+        // All six financial offering paths have fixed current Native roles.
         // A signed transport row cannot substitute a different path.
         for (name, bytes, cap) in [
             ("verifier-pack.norito", pack, VERIFIER_PACK_MAX_BYTES_V1),
@@ -85,7 +86,12 @@ impl CatalogOriginals {
         let transport = metadata
             .read("transport.json", 32 * 1024 * 1024)
             .map_err(storage)?;
-        if BlobV1::of(&transport) != selected.transport_identity {
+        selected.require_transport_selection(&transport)?;
+        let financial = selected.financial.as_ref().ok_or(Failure::code(INVALID))?;
+        let financial_original = metadata
+            .read("financial-originals.json", ENVELOPE_MAX)
+            .map_err(storage)?;
+        if financial_original.as_slice() != financial.original()?.as_slice() {
             return Err(Failure::code(INVALID));
         }
         require_transport(inventory, &transport)?;
@@ -164,6 +170,26 @@ impl OriginalSourceV1 for CatalogOriginals {
             Store::Finality => self.finality.open_original(sha256),
         }
     }
+}
+fn require_metadata_inventory(metadata: &PrivateDirectory) -> Result<()> {
+    const NAMES: [&str; 6] = [
+        "finality-originals",
+        "financial-originals.json",
+        "producer-inventory.norito",
+        "transport.json",
+        "verifier-pack.norito",
+        "wallet-originals",
+    ];
+    let entries = metadata.entries(NAMES.len() + 1).map_err(storage)?;
+    if entries.len() != NAMES.len()
+        || entries
+            .iter()
+            .zip(NAMES)
+            .any(|(actual, expected)| actual.as_os_str() != std::ffi::OsStr::new(expected))
+    {
+        return Err(Failure::code(INVALID));
+    }
+    Ok(())
 }
 fn storage(error: std::io::Error) -> Failure {
     if matches!(

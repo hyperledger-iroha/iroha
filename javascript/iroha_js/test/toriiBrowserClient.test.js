@@ -665,6 +665,7 @@ test("ToriiBrowserClient uses explicit asset-definition ownership fields", async
   const item = {
     id: "11111111-1111-4111-8111-111111111111",
     owning_domain: null,
+    owning_dataspace: null,
     mintable: "Infinitely",
     logo: null,
     metadata: {},
@@ -691,6 +692,7 @@ test("ToriiBrowserClient uses explicit asset-definition ownership fields", async
     filter: 'owning_domain = "treasury.universal"',
   });
   assert.equal(page.items[0].owning_domain, null);
+  assert.equal(page.items[0].owning_dataspace, null);
 
   const missingOwnership = { ...item };
   delete missingOwnership.owning_domain;
@@ -707,6 +709,52 @@ test("ToriiBrowserClient uses explicit asset-definition ownership fields", async
   );
 });
 
+
+test("ToriiBrowserClient preserves exact direct asset homes and rejects malformed ownership", async () => {
+  const item = {
+    id: "11111111-1111-4111-8111-111111111111",
+    owning_domain: null,
+    owning_dataspace: null,
+    mintable: "Infinitely",
+    logo: null,
+    metadata: {},
+    owned_by: FIXTURE_ALICE_ID,
+    assets: 0,
+    total_quantity: "0",
+    locked_quantity: null,
+    circulating_quantity: null,
+  };
+  const read = (row) => new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => jsonResponse({ next_cursor: null, items: [row] }),
+  }).explorerAssetDefinitions.list({ limit: 1 });
+
+  for (const home of ["1", "9007199254740993", "8648377547929788715", "18446744073709551615"]) {
+    const page = await read({ ...item, owning_dataspace: home });
+    assert.equal(page.items[0].owning_dataspace, home);
+    assert.equal(typeof page.items[0].owning_dataspace, "string");
+    assert.equal(page.items[0].owning_domain, null);
+  }
+  for (const owningDomain of [null, "treasury.bpng"]) {
+    const page = await read({ ...item, owning_domain: owningDomain });
+    assert.equal(page.items[0].owning_domain, owningDomain);
+    assert.equal(page.items[0].owning_dataspace, null);
+  }
+  for (const home of [
+    "0", "00", "01", "18446744073709551616", "184467440737095516150",
+    "", "+1", "-1", "1.0", "1e0", " 1", "1 ", "1\n", "1\r\n", "１", 0, 7, 9007199254740992, true, {}, [],
+  ]) {
+    await assert.rejects(read({ ...item, owning_dataspace: home }), /owning_dataspace/u);
+  }
+  await assert.rejects(
+    read({ ...item, owning_domain: "treasury.bpng", owning_dataspace: "7" }),
+    /cannot carry both domain and dataspace homes/u,
+  );
+  for (const field of ["owning_domain", "owning_dataspace"]) {
+    const missing = { ...item };
+    delete missing[field];
+    await assert.rejects(read(missing), /missing or unsupported fields/u);
+  }
+});
 
 test("ToriiBrowserClient exposes exact JSON ledger windows, roots, and state proofs", async () => {
   const calls = [];

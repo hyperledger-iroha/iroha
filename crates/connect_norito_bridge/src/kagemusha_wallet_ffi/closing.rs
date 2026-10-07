@@ -11,7 +11,7 @@ pub(super) struct CloseState {
     joined: Mutex<bool>,
 }
 impl CloseState {
-    fn begin(&self) {
+    pub(super) fn begin(&self) {
         self.started.store(true, Ordering::Release);
     }
     pub(super) fn require_open(&self) -> Result<()> {

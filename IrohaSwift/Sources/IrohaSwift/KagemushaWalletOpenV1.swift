@@ -24,9 +24,15 @@ public struct KagemushaWalletOpenOriginalsV1: Sendable {
   }
 }
 
+/// Sole release acknowledgement from the same Native owner, retained before wrapper destruction.
+protocol KagemushaWalletCleanupLeaseV1: AnyObject {
+  var isReleased: Bool { get }
+  func close() throws
+}
+
 /// A cleanup view of the one actual Native owner, never a second admission registry.
 protocol KagemushaWalletCleanupResourceV1: AnyObject {
-  var cleanupLease: KagemushaWalletNativeLeaseV1? { get }
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { get }
 }
 
 /// Only close is injectable for cleanup fault tests; this interface cannot admit or spend.
@@ -41,7 +47,7 @@ extension KagemushaWalletNativeDriverV1: KagemushaWalletNativeCloseDriverV1 {
 /// Strongly owns the actual Native ID, its driver and its callback platform until close joins.
 /// Wrappers already own this lease before their deinit starts. A failed close quarantines
 /// the lease itself; it never publishes a wrapper whose destruction has begun.
-final class KagemushaWalletNativeLeaseV1: KagemushaWalletCleanupResourceV1, @unchecked Sendable {
+final class KagemushaWalletNativeLeaseV1: KagemushaWalletCleanupResourceV1, KagemushaWalletCleanupLeaseV1, @unchecked Sendable {
   private let condition = NSCondition()
   private var owner: UInt64
   private let driver: any KagemushaWalletNativeCloseDriverV1
@@ -52,7 +58,7 @@ final class KagemushaWalletNativeLeaseV1: KagemushaWalletCleanupResourceV1, @unc
     precondition(owner > 0 && owner <= UInt64(Int64.max))
     self.owner = owner; self.driver = driver; self.platformOwner = platformOwner
   }
-  var cleanupLease: KagemushaWalletNativeLeaseV1? { self }
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { self }
   /// True only after this exact Native ID returned close status zero.
   var isReleased: Bool {
     condition.lock(); defer { condition.unlock() }; return owner == 0
@@ -105,7 +111,7 @@ public final class KagemushaWalletRuntimeV1: KagemushaWalletCleanupResourceV1, @
     lease = .init(owner: nativeRuntimeHandle, driver: cleanupDriver ?? driver, platformOwner: platformOwner)
     self.driver = driver
   }
-  var cleanupLease: KagemushaWalletNativeLeaseV1? {
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? {
     lock.lock(); defer { lock.unlock() }; return lease
   }
   /// Begin with original issuer/account frames. Native reconciles before sampling its challenge.

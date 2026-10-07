@@ -40,7 +40,7 @@ spec!(DOMAINS, "explorer_domains", 41, ["id"], true, [
     "assets" => Number, "nfts" => Number,
 ]);
 spec!(DEFINITIONS, "explorer_asset_definitions", 42, ["id"], true, [
-    "id" => Text, "owning_domain" => Text, "mintable" => Text, "logo" => Text,
+    "id" => Text, "owning_domain" => Text, "owning_dataspace" => Text, "mintable" => Text, "logo" => Text,
     "owned_by" => Text, "assets" => Number, "total_quantity" => Number,
     "locked_quantity" => Number, "circulating_quantity" => Number,
 ]);
@@ -649,6 +649,29 @@ mod tests {
         visibility: [u8; 32],
     ) -> Result<ScanQuery, Error> {
         ScanQuery::new(spec, query, visibility, limits())
+    }
+
+    #[test]
+    fn direct_home_filter_preserves_large_exact_dataspace_identity() {
+        let query = standalone_scan(
+            &DEFINITIONS,
+            ListQuery::new().filter(field("owning_dataspace").eq("8648377547929788715")),
+            [1; 32],
+        )
+        .expect("direct home query");
+        let page = query.page(norito::json!({
+            "items": [
+                {"id":"direct", "owning_domain":null, "owning_dataspace":"8648377547929788715"},
+                {"id":"adjacent", "owning_domain":null, "owning_dataspace":"8648377547929788716"},
+                {"id":"domain", "owning_domain":"treasury.bpng", "owning_dataspace":null}
+            ],
+            "pagination":{"next_cursor":null}
+        })).expect("filtered definitions");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(
+            page.items[0].get("id").and_then(Value::as_str),
+            Some("direct")
+        );
     }
 
     #[test]

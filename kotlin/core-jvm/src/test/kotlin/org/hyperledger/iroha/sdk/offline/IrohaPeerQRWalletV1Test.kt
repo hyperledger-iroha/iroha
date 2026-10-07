@@ -33,6 +33,7 @@ class IrohaPeerQRWalletV1Test {
             val message = IrohaPeerKagemushaWalletAdapterV1.wrap(
                 frame,
                 IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED,
+                destinationAccountOriginal = if (kind == IrohaPeerPayloadKind.REQUEST) IrohaPeerRequestFixtureV1.account() else null,
             )
             assertEquals(kind, message.canonicalPayload.kind)
             val session = IrohaPeerQRScanSessionV1(

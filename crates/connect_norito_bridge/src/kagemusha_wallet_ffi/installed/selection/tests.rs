@@ -318,6 +318,9 @@ struct BaseFixture {
 }
 impl BaseFixture {
     fn new() -> Self {
+        Self::with_asset("7ZepsJTHCVLKsrFFNZGSRGZgvBhv")
+    }
+    fn with_asset(asset_id: &str) -> Self {
         let native = NativeFinalityFixture::start("fc56984b-2be7-431d-840e-21514d1883f0");
         let genesis = native.genesis().encode_wire().unwrap();
         let epoch = genesis_epoch(native.genesis()).unwrap();
@@ -372,7 +375,7 @@ impl BaseFixture {
         )
         .unwrap();
         let asset = KagemushaWalletAssetScopeV1::new(
-            AssetDefinitionId::from_str("7ZepsJTHCVLKsrFFNZGSRGZgvBhv").unwrap(),
+            AssetDefinitionId::from_str(asset_id).unwrap(),
             &AxtAssetIncarnationV1::try_from_bytes(
                 *iroha_crypto::Hash::new(b"native-installation-test-incarnation").as_ref(),
             )
@@ -702,7 +705,7 @@ fn genuine_signed_base_cannot_omit_financial_originals_or_register_an_owner() {
 }
 
 #[test]
-fn every_native_offered_original_role_is_mandatory_and_bounded() {
+fn cbsi_financial_original_roles_remain_mandatory_and_bounded() {
     let fixture = BaseFixture::new();
     let (app, envelope, runtime) = fixture.originals();
     for offered in 0..8 {
@@ -715,11 +718,19 @@ fn every_native_offered_original_role_is_mandatory_and_bounded() {
             producer_inventory: if offered & 2 == 0 { b"" } else { TEST_CATALOG },
             originals_root: if offered & 4 == 0 { b"" } else { TEST_ROOT },
         };
-        if offered == 7 {
+        if offered == 0 || offered == 7 {
             assert!(input.validate_bounds().is_ok());
         } else {
             assert_eq!(input.validate_bounds().unwrap_err().status, INVALID);
         }
+        assert_eq!(
+            Selection::load(
+                &RuntimeTrust::test(fixture.key.public_key().clone()),
+                &input
+            )
+            .is_ok(),
+            offered == 7
+        );
     }
     for missing in 0..7 {
         let mut input = RuntimeOriginals {
@@ -748,8 +759,16 @@ fn every_native_offered_original_role_is_mandatory_and_bounded() {
 fn cbsi_signed_release_requires_exact_mobile_selection_and_all_seven_inventory_roles() {
     let fixture = BaseFixture::new();
     let selected = fixture.load().unwrap();
-    assert_eq!(selected._service_release_scope, [0x10; 32]);
-    assert_eq!(selected.producer_catalog_digest, [0x13; 32]);
+    let ApplicationBinding::CbsiReleaseV1 {
+        _service_release_scope,
+        producer_catalog_digest,
+        ..
+    } = selected.application
+    else {
+        panic!("CBSI authority")
+    };
+    assert_eq!(_service_release_scope, [0x10; 32]);
+    assert_eq!(producer_catalog_digest, [0x13; 32]);
     for field_name in [
         "service_release_scope",
         "scheme_id",
@@ -830,14 +849,14 @@ fn cbsi_signed_release_requires_exact_mobile_selection_and_all_seven_inventory_r
 }
 
 #[test]
-fn retired_bpng_signature_domain_and_runtime_grammar_are_not_aliases() {
+fn cbsi_authority_rejects_bpng_signature_domain_and_runtime_grammar() {
     let fixture = BaseFixture::new();
     let (app, envelope, _) = fixture.originals();
     let mut envelope = json(&envelope, ENVELOPE_MAX, true).unwrap();
     mutate(
         &mut envelope,
         "schema",
-        Value::String("bpng.taira-app-runtime-manifest-signature.v6".into()),
+        Value::String("bpng.taira-app-runtime-manifest-signature.v7".into()),
     );
     assert!(
         signed_app(
@@ -1037,3 +1056,5 @@ fn renewed_issuer_original_is_left_to_genuine_intake_and_never_replaced_by_curre
     // This is scope admission only. Native original intake still requires its exact
     // actual issuer certificate, retained credential and positive enrolled key.
 }
+
+mod bpng_tests;

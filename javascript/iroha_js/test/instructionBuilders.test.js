@@ -11,6 +11,7 @@ import {
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,
+  buildRegisterDataspaceAssetDefinitionInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildGrantAccountPermissionInstruction,
@@ -79,6 +80,7 @@ import {
 import {
   _createNoritoInstructionApi,
   exactPublicPlainBallotJson,
+  exactRegisterDataspaceAssetDefinitionJson,
   noritoDecodeInstruction,
   noritoDecodeInstructionBoxArchive,
   noritoEncodeInstruction,
@@ -86,6 +88,8 @@ import {
   validateNoritoFrame,
 } from "../src/norito.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
+import { _createTransactionApi } from "../src/transaction.js";
+import { NetworkId } from "../src/networkId.js";
 import {
   hasNoritoBinding,
   makeNativeTest,
@@ -4947,5 +4951,285 @@ baseTest("native ProofAttachment adapter rejects invalid ids and extra tails", (
       () => decodeWithNative(Buffer.of(1), 753, options),
       /must contain 1\.\.=255 siblings/,
     );
+  }
+});
+
+baseTest("direct dataspace registration retains exact namespace independently of balance policy", () => {
+  for (const balanceScopePolicy of ["Global", "DataspaceRestricted"]) {
+    const result = buildRegisterDataspaceAssetDefinitionInstruction({
+      assetDefinitionId: "fixture-definition", name: "Unit", balanceScopePolicy,
+      dataspaceId: "18446744073709551615",
+    });
+    assert.equal(result.RegisterDataspaceAssetDefinition.dataspace_id, 18446744073709551615n);
+    assert.equal(result.RegisterDataspaceAssetDefinition.object.owning_domain, null);
+    assert.equal(result.RegisterDataspaceAssetDefinition.object.balance_scope_policy, balanceScopePolicy);
+  }
+});
+
+baseTest("direct dataspace registration rejects inferred, contradictory or lossy homes", () => {
+  const base = { assetDefinitionId: "fixture-definition", name: "Unit", balanceScopePolicy: "DataspaceRestricted" };
+  for (const dataspaceId of [undefined, null, 0, "0", "01", "1\n", "1\r\n", "1.0", "1e0", "+1", -1, Number.MAX_SAFE_INTEGER + 1, "18446744073709551616"]) {
+    assert.throws(() => buildRegisterDataspaceAssetDefinitionInstruction({ ...base, dataspaceId }));
+  }
+  assert.throws(() => buildRegisterDataspaceAssetDefinitionInstruction({ ...base, dataspaceId: 7, owningDomain: "issuer.paynet" }));
+  assert.throws(() => buildRegisterDataspaceAssetDefinitionInstruction({ ...base, dataspaceId: 7, dataspace_id: 8 }));
+  assert.throws(() => buildRegisterDataspaceAssetDefinitionInstruction({ ...base, dataspaceId: 1, dataspace_id: "1\n" }));
+});
+
+
+function directDataspaceRegistrationFixture(options = {}) {
+  return buildRegisterDataspaceAssetDefinitionInstruction({
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    name: "Direct unit",
+    dataspaceId: 0xffff_ffff_ffff_ffffn,
+    balanceScopePolicy: "DataspaceRestricted",
+    metadata: { fraction: 1.25, zero: -0 },
+    ...options,
+  });
+}
+
+baseTest("direct dataspace codec preserves full u64 tokens and ordinary metadata", () => {
+  assert.equal(exactRegisterDataspaceAssetDefinitionJson({ Log: {} }), null);
+  for (const dataspaceId of [1n, 9007199254740993n, 0xffff_ffff_ffff_ffffn]) {
+    const instruction = directDataspaceRegistrationFixture({ dataspaceId });
+    const exact = exactRegisterDataspaceAssetDefinitionJson(instruction);
+    assert.ok(exact.includes(`"dataspace_id":${dataspaceId},`));
+    assert.ok(exact.includes('"fraction":1.25'));
+    assert.ok(exact.includes('"zero":0'));
+    const calls = [];
+    const codec = _createNoritoInstructionApi(createNativeRuntime({
+      noritoEncodeInstruction(json) { calls.push(json); return Buffer.of(1); },
+      noritoDecodeInstruction() { return exact; },
+      noritoEncodeInstructionBoxArchive(json) { calls.push(json); return Buffer.of(2); },
+      noritoDecodeInstructionBoxArchive() { return exact; },
+    }));
+    assert.deepEqual(codec.noritoEncodeInstruction(instruction, 753), Buffer.of(1));
+    assert.deepEqual(codec.noritoEncodeInstructionBoxArchive(instruction, 753), Buffer.of(2));
+    assert.deepEqual(calls, [exact, exact, exact]);
+    for (const decoded of [
+      codec.noritoDecodeInstruction(Buffer.of(1), 753),
+      codec.noritoDecodeInstructionBoxArchive(Buffer.of(2), 753),
+    ]) {
+      assert.equal(BigInt(decoded.RegisterDataspaceAssetDefinition.dataspace_id), dataspaceId);
+      assert.equal(decoded.RegisterDataspaceAssetDefinition.object.metadata.fraction, 1.25);
+    }
+    assert.equal(codec.noritoDecodeInstruction(Buffer.of(1), 753, { parseJson: false }), exact);
+    assert.ok(codec._instructionWireSchemaBindings().some(({ outerWireId, innerTypeName }) =>
+      outerWireId === "iroha.asset_definition.dataspace.register.v1" &&
+      innerTypeName === "iroha_data_model::isi::register_dataspace_asset_definition::RegisterDataspaceAssetDefinition"));
+  }
+});
+
+baseTest("direct dataspace codec rejects lossy object numbers and malformed decoded homes", () => {
+  const instruction = directDataspaceRegistrationFixture();
+  const payload = instruction.RegisterDataspaceAssetDefinition;
+  for (const dataspace_id of [0, -1, 2n ** 64n, Number.MAX_SAFE_INTEGER + 1, "1", null]) {
+    assert.throws(() => exactRegisterDataspaceAssetDefinitionJson({
+      RegisterDataspaceAssetDefinition: { ...payload, dataspace_id },
+    }));
+  }
+  for (const metadata of [{ value: Number.MAX_SAFE_INTEGER + 1 }, { value: 1n }, { value: Infinity }]) {
+    assert.throws(() => exactRegisterDataspaceAssetDefinitionJson({
+      RegisterDataspaceAssetDefinition: { ...payload, object: { ...payload.object, metadata } },
+    }));
+  }
+  assert.throws(() => exactRegisterDataspaceAssetDefinitionJson({
+    RegisterDataspaceAssetDefinition: { ...payload, unexpected: true },
+  }));
+  assert.throws(() => exactRegisterDataspaceAssetDefinitionJson({
+    ...instruction, Register: {},
+  }));
+  const exact = exactRegisterDataspaceAssetDefinitionJson(instruction);
+  let nativeJson;
+  const codec = _createNoritoInstructionApi(createNativeRuntime({
+    noritoDecodeInstruction() { return nativeJson; },
+    noritoDecodeInstructionBoxArchive() { return nativeJson; },
+  }));
+  const invalid = [
+    ...["0", "-1", "18446744073709551616", '"1"', "null", "1e0", "01", "1.0"].map(
+      (value) => exact.replace('"dataspace_id":18446744073709551615', `"dataspace_id":${value}`)),
+    exact.replace('"dataspace_id":18446744073709551615', '"dataspace_id":1,"dataspace_id":2'),
+    exact.replace('"scale":null', '"scale":1.5'),
+    exact.replace('"fraction":1.25', '"fraction":9007199254740993'),
+  ];
+  for (const malformed of invalid) {
+    nativeJson = malformed;
+    assert.throws(() => codec.noritoDecodeInstruction(Buffer.of(1), 753));
+    assert.throws(() => codec.noritoDecodeInstructionBoxArchive(Buffer.of(2), 753));
+  }
+});
+
+test("direct dataspace frame and archive use the distinct Native schema", () => {
+  for (const dataspaceId of [9007199254740993n, 0xffff_ffff_ffff_ffffn]) {
+    for (const balanceScopePolicy of ["Global", "DataspaceRestricted"]) {
+      const instruction = directDataspaceRegistrationFixture({ dataspaceId, balanceScopePolicy });
+      const exact = exactRegisterDataspaceAssetDefinitionJson(instruction);
+      const frame = noritoEncodeInstruction(instruction, 753);
+      assert.deepEqual(frame, Buffer.from(nativeBinding.noritoEncodeInstruction(exact, 753)));
+      assert.equal(readInstructionEnvelopeWireId(frame, "direct dataspace"),
+        "iroha.asset_definition.dataspace.register.v1");
+      const archive = noritoEncodeInstructionBoxArchive(instruction, 753);
+      for (const decoded of [noritoDecodeInstruction(frame, 753), noritoDecodeInstructionBoxArchive(archive, 753)]) {
+        const payload = decoded.RegisterDataspaceAssetDefinition;
+        assert.equal(payload.dataspace_id, dataspaceId);
+        assert.equal(payload.object.owning_domain, null);
+        assert.equal(payload.object.balance_scope_policy, balanceScopePolicy);
+        assert.equal(payload.object.metadata.fraction, 1.25);
+        assert.deepEqual(noritoEncodeInstruction(decoded, 753), frame);
+      }
+      for (const invalid of [
+        exact.replace(`"dataspace_id":${dataspaceId}`, '"dataspace_id":0'),
+        exact.replace(`"dataspace_id":${dataspaceId}`, '"dataspace_id":18446744073709551616'),
+        exact.replace(`"dataspace_id":${dataspaceId}`, '"dataspace_id":"1"'),
+        exact.replace(`"dataspace_id":${dataspaceId}`, '"dataspace_id":1,"dataspace_id":2'),
+        exact.replace('"owning_domain":null', '"owning_domain":"issuer.paynet"'),
+      ]) {
+        assert.throws(() => noritoEncodeInstruction(invalid, 753));
+      }
+    }
+  }
+});
+
+baseTest("direct dataspace aggregate transactions scope account-only mints and preserve bilateral buckets", () => {
+  const captures = [];
+  const transaction = _createTransactionApi(createNativeRuntime({
+    buildTransaction(_network, _authority, instructions) {
+      captures.push(instructions);
+      return { signed_transaction: Buffer.of(1), hash: Buffer.alloc(32, 1) };
+    },
+  }));
+  const common = {
+    networkId: NetworkId.fromBytes(Buffer.alloc(32, 1)),
+    authority: ACCOUNT_ID,
+    feePayment: { payer: "authority", chargeLimits: [] },
+    privateKey: Buffer.alloc(32, 1),
+  };
+  for (const build of [transaction.buildRegisterAssetDefinitionAndMintTransaction,
+    transaction.buildRegisterAssetDefinitionMintAndTransferTransaction]) {
+    build({ ...common, assetDefinition: {
+      assetDefinitionId: ASSET_DEFINITION_ID, name: "Global unit",
+      owningDomain: null, balanceScopePolicy: "Global",
+    }, mint: { accountId: ACCOUNT_ID, quantity: "1" } });
+    const global = captures.at(-1);
+    assert.equal(JSON.parse(global[0]).Register.AssetDefinition.owning_domain, null);
+    assert.equal(JSON.parse(global[1]).Mint.Asset.destination, ASSET_ID_CANONICAL);
+    for (const policy of ["Global", "DataspaceRestricted"]) {
+      const home = "18446744073709551615";
+      const assetDefinition = {
+        assetDefinitionId: ASSET_DEFINITION_ID, name: "Direct unit",
+        owningDataspace: home, balanceScopePolicy: policy,
+      };
+      const transfer = { destinationAccountId: ACCOUNT_ID, quantity: "1" };
+      const expected = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID_CANONICAL}` +
+        (policy === "DataspaceRestricted" ? `#dataspace:${home}` : "");
+      build({ ...common, assetDefinition, mint: { accountId: ACCOUNT_ID, quantity: "2" }, transfer });
+      const single = captures.at(-1);
+      assert.ok(single[0].includes(`"dataspace_id":${home},`));
+      assert.equal(JSON.parse(single[1]).Mint.Asset.destination, expected);
+      if (single.length === 3) assert.equal(JSON.parse(single[2]).Transfer.Asset.source, expected);
+      if (policy === "DataspaceRestricted") {
+        const explicit = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID_CANONICAL}#dataspace:9007199254740993`;
+        build({ ...common, assetDefinition, mints: [
+          { accountId: ACCOUNT_ID, assetHoldingId: explicit, quantity: "2" },
+          { accountId: ACCOUNT_ID, quantity: "3" },
+        ], transfer });
+        const batch = captures.at(-1);
+        assert.equal(JSON.parse(batch[1]).Mint.Asset.destination, explicit);
+        assert.equal(JSON.parse(batch[2]).Mint.Asset.destination, expected);
+        if (batch.length === 4) assert.equal(JSON.parse(batch[3]).Transfer.Asset.source, explicit);
+      }
+    }
+  }
+});
+
+baseTest("mixed executable batches carry the exact direct dataspace numeral", () => {
+  const captures = [];
+  const transaction = _createTransactionApi(createNativeRuntime({
+    buildExecutableBatchTransaction(_network, _authority, entries) {
+      captures.push(entries);
+      return { signed_transaction: Buffer.of(1), hash: Buffer.alloc(32, 1) };
+    },
+  }));
+  const instruction = directDataspaceRegistrationFixture();
+  const exact = exactRegisterDataspaceAssetDefinitionJson(instruction);
+  transaction.buildExecutableBatchTransaction({
+    networkId: NetworkId.fromBytes(Buffer.alloc(32, 1)),
+    authority: ACCOUNT_ID,
+    feePayment: { payer: "authority", chargeLimits: [], gasLimit: 100 },
+    privateKey: Buffer.alloc(32, 1),
+    entries: [
+      { kind: "instruction", instruction },
+      { kind: "instruction", instruction: exact },
+      { kind: "contractCall", contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
+        expectedCodeHash: Buffer.alloc(32, 1), entrypoint: "apply", arguments: null },
+    ],
+  });
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0][0], `{"kind":"instruction","instruction":${exact}}`);
+  assert.equal(JSON.parse(captures[0][1]).instruction, exact);
+  assert.equal(JSON.parse(captures[0][2]).kind, "contractCall");
+});
+
+
+baseTest("direct homes stay exact through Native draft views, signed inspection, and quote signing", () => {
+  const instruction = directDataspaceRegistrationFixture();
+  const exact = exactRegisterDataspaceAssetDefinitionJson(instruction);
+  const common = {
+    networkId: NetworkId.fromBytes(Buffer.alloc(32, 1)), authority: ACCOUNT_ID,
+    feePayment: { payer: "authority", chargeLimits: [] },
+  };
+  for (const batch of [false, true]) {
+    const executable = batch ? `{"Batch":[{"Instruction":${exact}}]}` : `{"Instructions":[${exact}]}`;
+    const payloadJson = `{"instructions":${executable},"metadata":{"fraction":2.5,` +
+      '"RegisterDataspaceAssetDefinition":{"dataspace_id":"ordinary metadata"}}}';
+    const signedJson = `{"payload":${payloadJson},"signature":"fixture"}`;
+    const captured = [];
+    const nativeDraft = { payload_json: payloadJson, payload_bytes: Buffer.of(3),
+      payload_hash: Buffer.alloc(32, 1) };
+    const transaction = _createTransactionApi(createNativeRuntime({
+      buildTransactionPayload(_network, _authority, instructions) {
+        assert.equal(instructions[0], exact);
+        return nativeDraft;
+      },
+      buildExecutableBatchTransactionPayload(_network, _authority, entries) {
+        assert.equal(entries[0], `{"kind":"instruction","instruction":${exact}}`);
+        return nativeDraft;
+      },
+      decodeSignedTransactionJson() { return signedJson; },
+      signQuotedTransactionPayload(_network, json) {
+        captured.push(json);
+        return { signed_transaction: Buffer.of(1), hash: Buffer.alloc(32, 1) };
+      },
+    }));
+    const draft = batch
+      ? transaction.buildExecutableBatchTransactionPayload({ ...common,
+          entries: [{ kind: "instruction", instruction }] })
+      : transaction.buildTransactionPayload({ ...common, instructions: [instruction] });
+    const selectInstruction = (payload) => batch
+      ? payload.instructions.Batch[0].Instruction : payload.instructions.Instructions[0];
+    assert.equal(draft.payloadJson, payloadJson);
+    assert.equal(selectInstruction(draft.payload).RegisterDataspaceAssetDefinition.dataspace_id,
+      0xffff_ffff_ffff_ffffn);
+    assert.equal(draft.payload.metadata.fraction, 2.5);
+    assert.equal(draft.payload.metadata.RegisterDataspaceAssetDefinition.dataspace_id,
+      "ordinary metadata");
+    const signed = transaction.decodeSignedTransaction(Buffer.of(1), 753);
+    assert.equal(selectInstruction(signed.payload).RegisterDataspaceAssetDefinition.dataspace_id,
+      0xffff_ffff_ffff_ffffn);
+    for (const payload of [draft.payload, draft]) {
+      transaction.signQuotedTransactionPayload({ networkId: common.networkId, payload,
+        quotedFeePayment: common.feePayment, privateKey: Buffer.alloc(32, 1) });
+    }
+    assert.deepEqual(captured, [payloadJson, payloadJson]);
+    const lossy = structuredClone(draft.payload);
+    selectInstruction(lossy).RegisterDataspaceAssetDefinition.dataspace_id = Number.MAX_SAFE_INTEGER + 1;
+    assert.throws(() => transaction.signQuotedTransactionPayload({ networkId: common.networkId,
+      payload: lossy, quotedFeePayment: common.feePayment, privateKey: Buffer.alloc(32, 1) }));
+    const collision = structuredClone(draft.payload);
+    collision.metadata.marker = "__iroha-direct-dataspace-instruction-0__";
+    assert.throws(() => transaction.signQuotedTransactionPayload({ networkId: common.networkId,
+      payload: collision, quotedFeePayment: common.feePayment, privateKey: Buffer.alloc(32, 1) }),
+    /marker collision/u);
+    assert.equal(captured.length, 2);
   }
 });

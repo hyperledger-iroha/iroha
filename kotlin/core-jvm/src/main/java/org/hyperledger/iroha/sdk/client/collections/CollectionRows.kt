@@ -142,6 +142,13 @@ class AssetDefinitionRow internal constructor(json: JsonObject) : CollectionRow(
     @JvmField val alias: String? = row.stringOrNull("alias")
     @JvmField val ownedBy: String? = row.stringOrNull("owned_by")
     @JvmField val owningDomain: String? = row.stringOrNull("owning_domain")
+    /** Immutable direct definition home, independent of concrete balance buckets. */
+    @JvmField val owningDataspace: String? = row.stringOrNull("owning_dataspace")?.also { home ->
+        require(owningDomain == null && home.length <= 20 && home.matches(Regex("[1-9][0-9]*")) &&
+            java.math.BigInteger(home) <= java.math.BigInteger("18446744073709551615")) {
+            "owning_dataspace must be canonical nonzero u64 text without owning_domain"
+        }
+    }
     @JvmField val mintable: String? = row.stringOrNull("mintable")
     @JvmField val description: String? = row.stringOrNull("description")
     @JvmField val logo: String? = row.stringOrNull("logo")

@@ -5,6 +5,7 @@ import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import {
   parseStrictLosslessIntegerJson,
+  parseStrictLosslessJson,
   stringifyStrictLosslessIntegerJson,
 } from "./strictLosslessJson.js";
 
@@ -419,6 +420,9 @@ const SUBMIT_BALLOT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::SubmitBallot");
 const FINALIZE_ELECTION_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::" + TEXT_FINALIZE_ELECTION);
 const REGISTER_VERIFYING_KEY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "verifying_keys::" + TEXT_REGISTER_VERIFYING_KEY);
 const UPDATE_VERIFYING_KEY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "verifying_keys::" + TEXT_UPDATE_VERIFYING_KEY);
+const REGISTER_DATASPACE_ASSET_DEFINITION_WIRE_ID = "iroha.asset_definition.dataspace.register.v1";
+const REGISTER_DATASPACE_ASSET_DEFINITION_JSON_PREFIX = '{"RegisterDataspaceAssetDefinition":';
+
 const RETAIL_INSTRUCTION_NAMES_V1 = Object.freeze([
   "ActivateRetailDailyLimitV1",
   "BindRetailIdentityV1",
@@ -446,6 +450,8 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.mint": `${TEXT_IROHA_DATA_MODEL_ISI}mint_burn::MintBox`,
   "iroha.burn": `${TEXT_IROHA_DATA_MODEL_ISI}mint_burn::BurnBox`,
   "iroha.register": `${TEXT_IROHA_DATA_MODEL_ISI}register::RegisterBox`,
+  [REGISTER_DATASPACE_ASSET_DEFINITION_WIRE_ID]:
+    `${TEXT_IROHA_DATA_MODEL_ISI}register_dataspace_asset_definition::RegisterDataspaceAssetDefinition`,
   "iroha.transfer": `${TEXT_IROHA_DATA_MODEL_ISI}transfer::TransferBox`,
   "iroha.custom": `${TEXT_IROHA_DATA_MODEL_ISI}transparent::CustomInstruction`,
   "iroha.execute_trigger": `${TEXT_IROHA_DATA_MODEL_ISI}transparent::ExecuteTrigger`,
@@ -610,6 +616,10 @@ class BufferReader {
 }
 
 function cloneJson(value) {
+  const directDataspace = exactRegisterDataspaceAssetDefinitionJson(value);
+  if (directDataspace !== null) {
+    return parseRegisterDataspaceAssetDefinitionJson(directDataspace, "direct-dataspace instruction");
+  }
   if (isPublicPlainBallotInstruction(value)) {
     return parseStrictGovernanceInstructionJson(
       stringifyStrictLosslessIntegerJson(value, "standalone public ballot"),
@@ -715,7 +725,8 @@ function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
   const exactJson = exactFinalizeElectionTallyJson(normalized)
-    ?? exactPublicPlainBallotJson(normalized);
+    ?? exactPublicPlainBallotJson(normalized)
+    ?? exactRegisterDataspaceAssetDefinitionJson(normalized);
   if (exactJson !== null) {
     const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
     return toBuffer(native.noritoEncodeInstruction(exactJson, networkPrefix));
@@ -727,6 +738,44 @@ function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
     ? stringifyStrictLosslessIntegerJson(normalized, "retail instruction")
     : JSON.stringify(normalized);
   return toBuffer(native.noritoEncodeInstruction(json, networkPrefix));
+}
+
+/** Serialize the direct-dataspace namespace as an exact native u64 JSON token. */
+export function exactRegisterDataspaceAssetDefinitionJson(instruction) {
+  if (!isPlainObject(instruction) || !Object.prototype.hasOwnProperty.call(
+    instruction, "RegisterDataspaceAssetDefinition",
+  )) {
+    return null;
+  }
+  const payload = instruction.RegisterDataspaceAssetDefinition;
+  if (Object.keys(instruction).length !== 1 || !isPlainObject(payload) ||
+      Object.keys(payload).length !== 2 ||
+      !Object.prototype.hasOwnProperty.call(payload, "dataspace_id") ||
+      !Object.prototype.hasOwnProperty.call(payload, "object") ||
+      !isPlainObject(payload.object)) {
+    rejectType("RegisterDataspaceAssetDefinition must contain exactly dataspace_id and object");
+  }
+  const value = payload.dataspace_id;
+  if (typeof value !== "bigint" &&
+      (typeof value !== "number" || !Number.isSafeInteger(value))) {
+    rejectType("RegisterDataspaceAssetDefinition.dataspace_id must be an exact unsigned integer");
+  }
+  const dataspaceId = BigInt(value);
+  if (dataspaceId <= 0n || dataspaceId > 0xffff_ffff_ffff_ffffn) {
+    rejectRange("RegisterDataspaceAssetDefinition.dataspace_id must be a nonzero u64");
+  }
+  // Only the namespace needs a raw integer token. The unchanged definition
+  // keeps ordinary JSON metadata, including finite fractions and signed zero.
+  // Native still validates the complete definition and instruction schema.
+  validateInstructionObjectNumbers(payload.object);
+  const objectJson = JSON.stringify(payload.object);
+  return `{"RegisterDataspaceAssetDefinition":{"dataspace_id":${dataspaceId},"object":${objectJson}}}`;
+}
+
+function parseRegisterDataspaceAssetDefinitionJson(json, context) {
+  return parseStrictLosslessJson(json, context, {
+    floatingPointPaths: [["RegisterDataspaceAssetDefinition", "object", "metadata"]],
+  });
 }
 
 /** Serialize one canonical direct public ballot without rounding its u64 duration. */
@@ -1682,10 +1731,15 @@ function decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime) {
   const native = resolveNative("noritoDecodeInstructionBoxArchive", nativeRuntime);
   const json = native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix);
   const retail = RETAIL_INSTRUCTION_JSON_PREFIXES_V1.some((prefix) => json.startsWith(prefix));
-  const decoded = retail
-    ? parseStrictLosslessIntegerJson(json, "retail instruction archive")
-    : parsePublicPlainBallotInstructionJson(json, "standalone public ballot InstructionBox");
-  if (!retail && !isPublicPlainBallotInstruction(decoded)) {
+  const directDataspace = json.startsWith(REGISTER_DATASPACE_ASSET_DEFINITION_JSON_PREFIX);
+  const decoded = directDataspace
+    ? parseRegisterDataspaceAssetDefinitionJson(json, "direct-dataspace instruction archive")
+    : retail
+      ? parseStrictLosslessIntegerJson(json, "retail instruction archive")
+      : parsePublicPlainBallotInstructionJson(json, "standalone public ballot InstructionBox");
+  if (directDataspace) {
+    exactRegisterDataspaceAssetDefinitionJson(decoded);
+  } else if (!retail && !isPublicPlainBallotInstruction(decoded)) {
     validateInstructionObjectNumbers(decoded);
   }
   validateDecodedInstructionProofAttachments(decoded);
@@ -1709,14 +1763,21 @@ function decodeInstruction(bytes, networkPrefix, options, nativeRuntime) {
   const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
   const json = native.noritoDecodeInstruction(buffer, networkPrefix);
   const retail = RETAIL_INSTRUCTION_JSON_PREFIXES_V1.some((prefix) => json.startsWith(prefix));
-  const decoded = retail
-    ? parseStrictLosslessIntegerJson(json, "retail instruction frame")
-    : parsePublicPlainBallotInstructionJson(json, "standalone public ballot instruction");
+  const directDataspace = json.startsWith(REGISTER_DATASPACE_ASSET_DEFINITION_JSON_PREFIX);
+  const decoded = directDataspace
+    ? parseRegisterDataspaceAssetDefinitionJson(json, "direct-dataspace instruction frame")
+    : retail
+      ? parseStrictLosslessIntegerJson(json, "retail instruction frame")
+      : parsePublicPlainBallotInstructionJson(json, "standalone public ballot instruction");
   validateDecodedInstructionProofAttachments(decoded);
   // Raw mode preserves the owner's exact numeric tokens. Parsed mode must
   // never return a rounded integer or non-finite value to signing callers.
-  if (options.parseJson !== false && !retail && !isPublicPlainBallotInstruction(decoded)) {
-    validateInstructionObjectNumbers(decoded);
+  if (options.parseJson !== false) {
+    if (directDataspace) {
+      exactRegisterDataspaceAssetDefinitionJson(decoded);
+    } else if (!retail && !isPublicPlainBallotInstruction(decoded)) {
+      validateInstructionObjectNumbers(decoded);
+    }
   }
   return options.parseJson === false ? json : decoded;
 }

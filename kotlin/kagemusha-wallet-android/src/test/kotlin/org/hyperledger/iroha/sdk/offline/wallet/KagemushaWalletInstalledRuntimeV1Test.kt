@@ -34,7 +34,7 @@ class KagemushaWalletInstalledRuntimeV1Test {
         assertTrue(retained.toString().contains("[REDACTED]"))
     }
 
-    @Test fun `all seven originals are mandatory including the complete financial trio`() {
+    @Test fun `four signed base originals are mandatory and financial trio is all present or all absent`() {
         for (role in 0..6) {
             val values = MutableList(7) { byteArrayOf(1) }
             values[role] = byteArrayOf()
@@ -45,7 +45,7 @@ class KagemushaWalletInstalledRuntimeV1Test {
             listOf(3, 4, 6).forEachIndexed { bit, role ->
                 if (presence and (1 shl bit) == 0) values[role] = byteArrayOf()
             }
-            if (presence == 7) {
+            if (presence == 0 || presence == 7) {
                 // Retaining these bytes conveys no authentication or readiness.
                 val retained = originals(values).frames()
                 values.forEachIndexed { role, bytes -> assertContentEquals(bytes, retained[role]) }
@@ -131,15 +131,17 @@ class KagemushaWalletInstalledRuntimeV1Test {
         assertEquals(Long.MAX_VALUE, installationRuntimeHandle(Long.MAX_VALUE))
     }
 
-    @Test fun `compiled JNI declaration accepts only platform and seven original arrays`() {
+    @Test fun `compiled JNI declarations require the exact move-only installation corridor`() {
         val methods = JvmApiInventory.read(KagemushaWalletInstalledRuntimeNativeV1::class.java)
             .methods.filter { it.isNative }
-        assertEquals(1, methods.size)
-        val entry = methods.single()
-        assertEquals("installRuntime", entry.name)
-        assertTrue(entry.isStatic)
-        assertEquals("(Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidPlatformV1;[B[B[B[B[B[B[B)J",
-            entry.descriptor)
+        val expected = mapOf(
+            "beginInstallation" to "(Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidPlatformV1;[B[B[B[B[B[B[B)J",
+            "registerInstallation" to "(J)J",
+            "closeInstallation" to "(J)I",
+        )
+        assertEquals(expected.size, methods.size)
+        assertEquals(expected, methods.associate { it.name to it.descriptor })
+        assertTrue(methods.all { it.isStatic })
     }
 
     @Test fun `bare exceptional cancellation really activates a cancellation observer`() {

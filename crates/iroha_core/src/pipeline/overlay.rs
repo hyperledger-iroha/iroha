@@ -1966,6 +1966,13 @@ impl TxOverlay {
                             | SettlementInstructionBox::RefundFxCorridorEscrow(_) => {}
                         }
                     }
+                    if let Some(reg) =
+                        crate::executor::extract_register_dataspace_asset_definition(instr)
+                    {
+                        crate::smartcontracts::isi::domain::isi::ensure_dataspace_asset_definition_registration_allowed(
+                            state_tx, effect_authority, &reg,
+                        ).map_err(ValidationFail::InstructionFailed)?;
+                    }
                     if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
                         ensure_asset_definition_registration_allowed(
                             state_tx,

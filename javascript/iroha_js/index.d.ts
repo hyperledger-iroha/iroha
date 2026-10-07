@@ -6639,6 +6639,8 @@ interface RegisterAssetDefinitionAndMintInputBase {
     name: string;
     /** Immutable ownership intent; null means intentionally unowned global. */
     owningDomain: string | null;
+    /** Explicit direct namespace; owningDomain must be null when present. */
+    owningDataspace?: number | string | bigint;
     metadata?: object;
     mintable?: string;
     logo?: string | null;
@@ -9654,6 +9656,8 @@ export interface ToriiAssetDefinitionRow extends ToriiCollectionRowExtras {
   readonly alias?: string | null;
   readonly owned_by?: string | null;
   readonly owning_domain?: string | null;
+  /** Exact immutable direct namespace as canonical nonzero u64 decimal text. */
+  readonly owning_dataspace?: string | null;
   readonly mintable?: string | null;
   readonly description?: string | null;
   readonly logo?: string | null;
@@ -12541,6 +12545,26 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   balance_scope_policy?: string;
   /** Immutable ownership intent; null means intentionally unowned global. */
   owningDomain: string | null;
+}): object;
+
+/** Register under explicit Native dataspace ownership without changing existing definition bytes. */
+export function buildRegisterDataspaceAssetDefinitionInstruction(options: {
+  assetDefinitionId?: string;
+  asset_definition_id?: string;
+  id?: string;
+  name: string;
+  description?: string | null;
+  alias?: string | null;
+  logo?: string | null;
+  scale?: NumericLike | null;
+  mintable?: string;
+  mintOnce?: boolean;
+  metadata?: object | null;
+  balanceScopePolicy: string;
+  balance_scope_policy?: string;
+  /** Explicit nonzero physical dataspace, independent of balance policy and aliases. */
+  dataspaceId: number | string | bigint;
+  owningDomain?: null;
 }): object;
 
 /** Exact JSON text preserves 64-bit dataspace IDs across the native signing boundary. */

@@ -13,10 +13,11 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::Storage;
 
 fn check(world: &World, work: u64) -> Result<(), GroupedOwnershipError> {
+    let budget = iroha_allocation::AllocationBudget::new(16_777_216);
     let mut result = None;
     assert_eq!(
         allocations_during(
-            || result = Some(CheckedAssetDefinitions::capture(world, work).map(|_| ()))
+            || result = Some(CheckedAssetDefinitions::capture(world, &budget, work).map(|_| ()))
         ),
         0
     );

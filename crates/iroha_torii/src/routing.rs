@@ -370,11 +370,20 @@ impl DataspaceReadVisibility {
         world: &impl WorldReadOnly,
         definition_id: &AssetDefinitionId,
     ) -> bool {
-        self.can_read_all
-            || world
-                .asset_definition_domains()
-                .get(definition_id)
-                .is_some_and(|domain| self.allows_domain(world, domain))
+        if self.can_read_all {
+            return true;
+        }
+        // The immutable home determines definition visibility. A holder's bucket or
+        // a mutable alias must never grant access to another namespace's definition.
+        match world.asset_definition_dataspace(definition_id) {
+            Ok(Some(dataspace)) => return self.allows_dataspace(dataspace),
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+        world
+            .asset_definition_domains()
+            .get(definition_id)
+            .is_some_and(|domain| self.allows_domain(world, domain))
     }
 
     /// Return whether an asset bucket and its holder belong only to visible routes.
@@ -36531,6 +36540,59 @@ mod explorer_lookup_tests {
         (state, public_dataspace, definition_id)
     }
 
+    routing_test! { sync direct_dataspace_definition_visibility_uses_immutable_home
+        let (owner, _) = checked_explorer_lookup_account(0x33, "direct definition visibility owner");
+        let home = DataSpaceId::new(8_648_377_547_929_788_715);
+        let other = DataSpaceId::new(8);
+        let definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "public").expect("id seed"),
+            "kina".parse().expect("name"),
+        );
+        let mut definition = dm::AssetDefinition::numeric(
+            definition_id.clone(), "Kina", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
+        ).build(&owner);
+        definition.alias = Some("kina#public".parse().expect("non-authoritative alias"));
+        let mut world = World::with([], [], [definition]);
+        world.set_asset_definition_dataspace_for_testing(definition_id.clone(), home).expect("direct home fixture");
+        let view = world.view();
+        assert!(DataspaceReadVisibility::new(BTreeSet::from([home]), false).allows_asset_definition(&view, &definition_id));
+        assert!(!DataspaceReadVisibility::new(BTreeSet::from([other, DataSpaceId::UNIVERSAL]), false).allows_asset_definition(&view, &definition_id));
+    }
+
+    routing_test! { sync direct_definition_asset_visibility_requires_home_holder_and_bucket
+        let (owner, _) = checked_explorer_lookup_account(0x34, "direct balance visibility owner");
+        let home = DataSpaceId::new(7);
+        let bucket = DataSpaceId::new(8);
+        let definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "universal").expect("id seed"), "kina".parse().expect("name"),
+        );
+        let definition = dm::AssetDefinition::numeric(
+            definition_id.clone(), "Kina", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
+        ).build(&owner);
+        let account = dm::Account::new(owner.clone()).build(&owner);
+        let asset_id = dm::AssetId::with_scope(definition_id.clone(), owner.clone(), dm::asset::AssetBalanceScope::Dataspace(bucket));
+        let asset = dm::Asset::new(asset_id.clone(), iroha_primitives::numeric::Quantity::from(1_u32));
+        let mut world = World::with_assets([], [account], [definition], [asset], []);
+        world.set_asset_definition_dataspace_for_testing(definition_id, home).expect("direct home fixture");
+        crate::test_utils::bind_fixture_root(&mut world, dm::block::consensus::SumeragiRootScope::Global);
+        let catalog = DataSpaceCatalog::new(vec![
+            dm::nexus::DataSpaceMetadata::default(),
+            dm::nexus::DataSpaceMetadata { id: home, alias: "home".to_owned(), description: None, fault_tolerance: 1 },
+            dm::nexus::DataSpaceMetadata { id: bucket, alias: "bucket".to_owned(), description: None, fault_tolerance: 1 },
+        ]).expect("catalog");
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus { dataspace_catalog: catalog, ..Default::default() },
+            LiveQueryStore::start_test(),
+        ));
+        bind_account_alias_for_test(&state, &owner, "holder@universal");
+        let world = state.world_view();
+        for partial in [BTreeSet::from([home, bucket]), BTreeSet::from([home, DataSpaceId::UNIVERSAL]), BTreeSet::from([bucket, DataSpaceId::UNIVERSAL])] {
+            assert!(!DataspaceReadVisibility::new(partial, false).allows_asset(&world, &asset_id));
+        }
+        assert!(DataspaceReadVisibility::new(BTreeSet::from([home, bucket, DataSpaceId::UNIVERSAL]), false).allows_asset(&world, &asset_id));
+    }
+
     routing_test! { sync account_metadata_requires_every_bound_dataspace
         let (state, account_id, public_dataspace, restricted_dataspace) =
             mixed_binding_account_visibility_fixture();
@@ -55287,6 +55349,7 @@ pub async fn handle_v1_explorer_asset_definition_detail(
             &definition_id,
             &visibility,
         ),
+        asset_definition_dataspace_for_read(&world, &definition_id)?,
     );
     let zero_locked_quantity = Quantity::zero();
     if definition_id == governance.voting_asset_id {
@@ -56868,15 +56931,35 @@ fn handle_v1_explorer_block_detail_sync(
     );
     response
 }
+/// Read the immutable direct home without treating corrupt authoritative state as no home.
+pub(crate) fn asset_definition_dataspace_for_read(
+    world: &impl WorldReadOnly,
+    definition_id: &AssetDefinitionId,
+) -> Result<Option<DataSpaceId>, Error> {
+    world.asset_definition_dataspace(definition_id).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            format!("invalid asset-definition home: {error}"),
+        ))
+    })
+}
 fn asset_definition_to_json_value(
     def: &iroha_data_model::asset::definition::AssetDefinition,
     alias_binding: Option<&AssetAliasBindingDto>,
+    owning_dataspace: Option<DataSpaceId>,
 ) -> Result<norito::json::Value> {
     let mut value = norito::json::to_value(def).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             error.to_string(),
         ))
     })?;
+    if let norito::json::Value::Object(map) = &mut value {
+        map.insert(
+            "owning_dataspace".into(),
+            owning_dataspace.map_or(norito::json::Value::Null, |dataspace| {
+                norito::json::Value::from(dataspace.as_u64().to_string())
+            }),
+        );
+    }
     if let (Some(binding), norito::json::Value::Object(map)) = (alias_binding, &mut value) {
         map.insert(
             "alias".into(),

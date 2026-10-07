@@ -223,6 +223,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
             plistlib.dump(info, handle, sort_keys=True)
         build_environment = {
             "schema": "iroha.mobile-native-build-environment.v1",
+                "wallet_runtime_authority": "cbsi-release-v1",
                 "wallet_runtime_trust_ed25519_hex": "3" * 64,
             "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
             "hermetic_runner_sha256": digest(
@@ -994,7 +995,7 @@ else:
         wallet_exports = re.findall(r'"(connect_norito_kagemusha_[A-Za-z0-9_]+)"', required_inventory)
         self.assertEqual(wallet_exports, [
             "connect_norito_kagemusha_wallet_" + suffix + "_v1"
-            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "setup", "execute", "load_original_validate", "request_status", "retry", "resume", "fold", "credit_status", "snapshot", "review", "execute_reviewed", "discard_review", "install_runtime", "enrollment")
+            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "setup", "execute", "load_original_validate", "request_status", "retry", "resume", "fold", "credit_status", "snapshot", "review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "enrollment")
         ])
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",

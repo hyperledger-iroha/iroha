@@ -1133,6 +1133,37 @@ final class ToriiCollectionClientTests: XCTestCase {
         XCTAssertEqual(transaction.metadata["k"], .number(1))
     }
 
+    func testDirectAssetDefinitionHomesPreserveExactUnsignedIdentity() throws {
+        let decoder = JSONDecoder()
+        for home in ["1", "9007199254740993", "8648377547929788715", "18446744073709551615"] {
+            let definition = try decoder.decode(ToriiAssetDefinition.self, from: Data(#"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","owning_domain":null,"owning_dataspace":"\#(home)"}"#.utf8))
+            XCTAssertEqual(definition.owningDataspace, home)
+            XCTAssertNil(definition.owningDomain)
+        }
+        for row in [
+            #"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM"}"#,
+            #"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","owning_domain":null,"owning_dataspace":null}"#,
+            #"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","owning_domain":"treasury.bpng","owning_dataspace":null}"#,
+        ] {
+            let definition = try decoder.decode(ToriiAssetDefinition.self, from: Data(row.utf8))
+            XCTAssertNil(definition.owningDataspace)
+        }
+        let selected = try decoder.decode(ToriiAssetDefinition.self, from: Data(#"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","owning_dataspace":"7"}"#.utf8))
+        XCTAssertEqual(selected.owningDataspace, "7", "selected rows need not repeat an absent domain field")
+        XCTAssertNil(selected.owningDomain)
+    }
+
+    func testDirectAssetDefinitionHomesRejectNoncanonicalAndConflictingValues() throws {
+        let decoder = JSONDecoder()
+        for home in ["0", "00", "01", "18446744073709551616", "184467440737095516150", "", "+1", "-1", "1.0", "1e0", " 1", "1 ", "１"] {
+            XCTAssertThrowsError(try decoder.decode(ToriiAssetDefinition.self, from: Data(#"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","owning_dataspace":"\#(home)"}"#.utf8)), home)
+        }
+        for home in ["0", "7", "9007199254740992", "true", "{}", "[]"] {
+            XCTAssertThrowsError(try decoder.decode(ToriiAssetDefinition.self, from: Data(#"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","owning_dataspace":\#(home)}"#.utf8)), home)
+        }
+        XCTAssertThrowsError(try decoder.decode(ToriiAssetDefinition.self, from: Data(#"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","owning_domain":"treasury.bpng","owning_dataspace":"7"}"#.utf8)))
+    }
+
     func testOnlyIdentityFieldsAreRequired() throws {
         let decoder = JSONDecoder()
         let domain = try decoder.decode(ToriiDomain.self, from: Data(#"{"id":"wonderland","owned_by":null}"#.utf8))
@@ -1141,6 +1172,8 @@ final class ToriiCollectionClientTests: XCTestCase {
         let definition = try decoder.decode(ToriiAssetDefinition.self, from: Data(#"{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","alias_binding":{"alias":null}}"#.utf8))
         XCTAssertNil(definition.name)
         XCTAssertNil(definition.mintable)
+        XCTAssertNil(definition.owningDomain)
+        XCTAssertNil(definition.owningDataspace)
         XCTAssertNil(definition.aliasBinding?.boundAtMs)
         let rwa = try decoder.decode(ToriiRwa.self, from: Data(#"{"id":"lot-1","quantity":null}"#.utf8))
         XCTAssertNil(rwa.quantity)

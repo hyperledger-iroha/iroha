@@ -467,6 +467,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::RegisterRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::RegisterDataspaceAssetDefinition>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,

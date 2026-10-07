@@ -48,7 +48,7 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
   init(lease: KagemushaWalletNativeLeaseV1, driver: KagemushaWalletNativeDriverV1) {
     self.lease = lease; self.driver = driver
   }
-  var cleanupLease: KagemushaWalletNativeLeaseV1? { lease }
+  var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { lease }
   private func handle() throws -> UInt64 { try lease.handle() }
   /// Join cooperative work and release custody, without deleting keys, markers or Payments.
   /// Once close starts, operations stay blocked; another close can retry the same Native ID.

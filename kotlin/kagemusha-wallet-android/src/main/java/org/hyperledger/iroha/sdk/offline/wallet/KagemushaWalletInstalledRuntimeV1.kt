@@ -7,7 +7,6 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.Executors
-import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 
 /**
  * Exact public installation originals, retained as bounded DATA until Native authenticates them.
@@ -18,8 +17,9 @@ import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
  * finality-originals/. Native opens the original files without following links and verifies the
  * complete authenticated catalog. This constructor neither reads nor creates that directory.
  *
- * All seven originals are mandatory, matching Native installation input validation. Missing
- * authenticated financial originals cannot produce an installed owner.
+ * The four signed base originals are mandatory. The financial trio is all present or all absent.
+ * Complete absence still enters Native base authentication, then ArtifactsUnavailable (-4)
+ * with no installed owner. Partial financial offers are invalid.
  */
 class KagemushaWalletInstallationOriginalsV1(
     appManifest: ByteArray,
@@ -40,7 +40,13 @@ class KagemushaWalletInstallationOriginalsV1(
         require(values.indices.all { values[it].size <= bounds[it] }) {
             "installation original exceeds its native input bound"
         }
-        require(values.all { it.isNotEmpty() }) { "all seven installation originals are required" }
+        require(listOf(appManifest, signatureEnvelope, walletRuntime, signedGenesis).all { it.isNotEmpty() }) {
+            "four signed base originals are required"
+        }
+        val financial = listOf(verifierPack, producerInventory, originalsRoot)
+        require(financial.all { it.isEmpty() } || financial.all { it.isNotEmpty() }) {
+            "financial originals must be all present or all absent"
+        }
         originals = values.map { it.copyOf() }
     }
 
@@ -194,18 +200,16 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
             try { release() } catch (failure: Throwable) { if(primary !== failure)primary.addSuppressed(failure); retainFailure(resource,failure) }; return primary
         }
         private fun unwrap(error: Throwable): Throwable = if(error is CompletionException && error.cause != null) error.cause!! else error
-        /** Require all seven originals and authenticate the complete installation before enrollment. */
-        @JvmStatic fun install(platform: KagemushaWalletAndroidPlatformV1, originals: KagemushaWalletInstallationOriginalsV1): KagemushaWalletInstalledRuntimeV1 {
+        /** Authenticate the signed base, then return retained financial custody before registry registration.
+         * The caller retains this attempt and explicitly invokes register(); ordinary refusal retries it.
+         */
+        @JvmStatic fun install(platform: KagemushaWalletAndroidPlatformV1, originals: KagemushaWalletInstallationOriginalsV1): KagemushaWalletInstallationAttemptV1 {
             requireNoUnreleasedAdmissions()
-            if (!PrivacyNativeBridge.isNativeAvailable()) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
-            val handle = try {
-                if(KagemushaWalletNativeV1.revision()!=1) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
-                val b=originals.frames()
-                KagemushaWalletInstalledRuntimeNativeV1.installRuntime(platform,b[0],b[1],b[2],b[3],b[4],b[5],b[6])
-            } catch (_: LinkageError) { throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
-            val admitted=installationRuntimeHandle(handle)
-            return KagemushaWalletInstalledRuntimeV1(KagemushaWalletRuntimeV1(admitted),platform)
+            return KagemushaWalletInstallationAttemptV1.begin(platform,originals)
         }
+        internal fun adoptRegistered(handle:Long,platform:KagemushaWalletAndroidPlatformV1):KagemushaWalletInstalledRuntimeV1 =
+            KagemushaWalletInstalledRuntimeV1(KagemushaWalletRuntimeV1(handle),platform)
+
     }
 }
 
@@ -247,8 +251,10 @@ internal fun installationRuntimeHandle(result: Long): Long {
 }
 
 internal object KagemushaWalletInstalledRuntimeNativeV1 {
-    @JvmStatic external fun installRuntime(platform: KagemushaWalletAndroidPlatformV1,appManifest: ByteArray,envelope: ByteArray,
+    @JvmStatic external fun beginInstallation(platform: KagemushaWalletAndroidPlatformV1,appManifest: ByteArray,envelope: ByteArray,
         walletRuntime: ByteArray,verifierPack: ByteArray,producerInventory: ByteArray,signedGenesis: ByteArray,originalsRoot: ByteArray): Long
+    @JvmStatic external fun registerInstallation(attempt: Long): Long
+    @JvmStatic external fun closeInstallation(attempt: Long): Int
 }
 
 /** Cleanup quarantine only; no owner lookup, raw ID, admission or monetary capability. */

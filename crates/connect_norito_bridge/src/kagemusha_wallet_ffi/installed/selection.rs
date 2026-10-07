@@ -1,7 +1,10 @@
 //! Exact signed application/runtime originals selected by immutable Native build trust.
 
 use super::*;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -17,6 +20,7 @@ include!(concat!(
     "/kagemusha_wallet_runtime_trust.rs"
 ));
 
+#[cfg(test)]
 const DOMAIN: &[u8] = b"cbsi.iroha-application-release.v1\0";
 const APP_FIELDS: &[&str] = &[
     "artifacts",
@@ -26,20 +30,59 @@ const APP_FIELDS: &[&str] = &[
     "toolchain_closure",
 ];
 
+mod bpng;
 mod cbsi;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeAuthority {
+    BpngTairaV7,
+    CbsiReleaseV1,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FinancialSelection {
+    pub pack_identity: BlobV1,
+    pub catalog_identity: BlobV1,
+    pub producer_catalog_digest: [u8; 32],
+    pub transport_identity: BlobV1,
+}
+
+impl FinancialSelection {
+    pub(super) fn original(&self) -> Result<Vec<u8>> {
+        // Compare an original to the genuine producer's exact canonical DATA frame.
+        // This expected frame is never published, used as proof or given ownership.
+        let blob = |value: BlobV1| norito::json!({"bytes":(value.bytes), "sha256":(hex::encode(value.sha256))});
+        let value = norito::json!({"schema":("iroha.kagemusha.wallet-financial-originals.v1"),
+            "verifierPack":(blob(self.pack_identity)), "producerInventory":(blob(self.catalog_identity)),
+            "transport":(blob(self.transport_identity)), "producerCatalogDigest":(hex::encode(self.producer_catalog_digest))});
+        let mut bytes = norito::json::to_json_bounded(&value, ENVELOPE_MAX - 1)
+            .map_err(|_| invalid())?
+            .into_bytes();
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+}
+
 /// Construction is private to installed Native policy; offered originals cannot choose a key.
-struct RuntimeTrust(PublicKey);
+struct RuntimeTrust {
+    authority: RuntimeAuthority,
+    key: PublicKey,
+}
 impl RuntimeTrust {
     fn installed() -> Result<Self> {
-        let key = INSTALLED_RUNTIME_TRUST.ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
-        Ok(Self(
-            PublicKey::from_bytes(Algorithm::Ed25519, &key).map_err(|_| invalid())?,
-        ))
+        let (authority, key) =
+            INSTALLED_RUNTIME_TRUST.ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
+        Ok(Self {
+            authority,
+            key: PublicKey::from_bytes(Algorithm::Ed25519, &key).map_err(|_| invalid())?,
+        })
     }
     #[cfg(test)]
     fn test(key: PublicKey) -> Self {
-        Self(key)
+        Self {
+            authority: RuntimeAuthority::CbsiReleaseV1,
+            key,
+        }
     }
 }
 
@@ -50,11 +93,25 @@ struct RetainedBaseOriginals {
     _signed_genesis: Box<[u8]>,
 }
 
+/// Each variant retains only authority actually present in its independently signed release.
+/// The BPNG runtime does not invent a CBSI service scope or a foreign catalog pin.
+enum ApplicationBinding {
+    CbsiReleaseV1 {
+        _service_release_scope: [u8; 32],
+        scheme_id: [u8; 32],
+        manifest_digest: [u8; 32],
+        producer_catalog_digest: [u8; 32],
+        transport: BlobV1,
+    },
+    BpngTairaV7 {
+        _wallet_runtime_sha256: [u8; 32],
+    },
+}
+
 pub(super) struct Selection {
     _originals: RetainedBaseOriginals,
-    _service_release_scope: [u8; 32],
-    pub producer_catalog_digest: [u8; 32],
-    pub transport_identity: BlobV1,
+    application: ApplicationBinding,
+    pub financial: Option<FinancialSelection>,
     pub scheme: KagemushaWalletSchemeV1,
     pub artifact_certificate: Vec<u8>,
     pub artifact_manifest: Vec<u8>,
@@ -187,6 +244,20 @@ fn raw(map: &Map, key: &str, maximum: usize) -> Result<Vec<u8>> {
 }
 fn signed_app(trust: &RuntimeTrust, manifest: &[u8], envelope: &[u8]) -> Result<Value> {
     bounded(manifest, APP_MANIFEST_MAX)?;
+    let (schema, domain, signature_field, encoding) = match trust.authority {
+        RuntimeAuthority::CbsiReleaseV1 => (
+            "cbsi.iroha-application-release-signature.v1",
+            "cbsi.iroha-application-release.v1",
+            "signatureBase64",
+            &STANDARD,
+        ),
+        RuntimeAuthority::BpngTairaV7 => (
+            "bpng.taira-app-runtime-manifest-signature.v7",
+            "bpng:taira-app-runtime-manifest:v7",
+            "signatureBase64Url",
+            &URL_SAFE_NO_PAD,
+        ),
+    };
     let signature = json(envelope, ENVELOPE_MAX, true)?;
     let signature = exact(
         &signature,
@@ -196,39 +267,50 @@ fn signed_app(trust: &RuntimeTrust, manifest: &[u8], envelope: &[u8]) -> Result<
             "domain",
             "keyId",
             "manifestSha256",
-            "signatureBase64",
+            signature_field,
         ],
     )?;
-    let (_, public) = trust.0.to_bytes();
-    if text(signature, "schema")? != "cbsi.iroha-application-release-signature.v1"
+    let (_, public) = trust.key.to_bytes();
+    if text(signature, "schema")? != schema
         || text(signature, "algorithm")? != "ed25519"
-        || text(signature, "domain")? != "cbsi.iroha-application-release.v1"
+        || text(signature, "domain")? != domain
         || text(signature, "keyId")? != format!("sha256:{}", hex::encode(BlobV1::of(public).sha256))
         || sha(text(signature, "manifestSha256")?)? != BlobV1::of(manifest).sha256
     {
         return Err(invalid());
     }
-    let encoded = text(signature, "signatureBase64")?;
-    if encoded.len() != 88 {
+    let encoded = text(signature, signature_field)?;
+    if encoded.len() != encoding.encode([0_u8; 64]).len() {
         return Err(invalid());
     }
-    let bytes = STANDARD.decode(encoded).map_err(|_| invalid())?;
-    if bytes.len() != 64 || STANDARD.encode(&bytes) != encoded {
+    let bytes = encoding.decode(encoded).map_err(|_| invalid())?;
+    if bytes.len() != 64 || encoding.encode(&bytes) != encoded {
         return Err(invalid());
     }
-    let mut message = Vec::with_capacity(DOMAIN.len() + manifest.len());
-    message.extend_from_slice(DOMAIN);
+    let mut message = Vec::with_capacity(domain.len() + 1 + manifest.len());
+    message.extend_from_slice(domain.as_bytes());
+    message.push(0);
     message.extend_from_slice(manifest);
     Signature::from_bytes(&bytes)
-        .verify(&trust.0, &message)
+        .verify(&trust.key, &message)
         .map_err(|_| invalid())?;
-    let manifest = cbsi::signed_document(manifest)?;
-    cbsi::application(&manifest)?;
+    let manifest = match trust.authority {
+        RuntimeAuthority::CbsiReleaseV1 => {
+            let document = cbsi::signed_document(manifest)?;
+            cbsi::application(&document)?;
+            document
+        }
+        RuntimeAuthority::BpngTairaV7 => {
+            let document = json(manifest, APP_MANIFEST_MAX, true)?;
+            bpng::application(&document)?;
+            document
+        }
+    };
     Ok(manifest)
 }
 
 // This public selection is signed DATA; admission still authenticates the complete originals.
-fn first_device_authentication(app: &Map) -> Result<()> {
+fn first_device_authentication(app: &Map, expected_schema: &str) -> Result<()> {
     let selection = exact(
         field(app, "firstDeviceAuthentication")?,
         &[
@@ -242,7 +324,7 @@ fn first_device_authentication(app: &Map) -> Result<()> {
         ],
     )?;
     let client = text(selection, "googleOAuthClientId")?;
-    if text(selection, "schema")? != "cbsi.first-device-auth-runtime-selection.v1"
+    if text(selection, "schema")? != expected_schema
         || !(1..=1024).contains(&client.len())
         || !client.bytes().all(|byte| (b'!'..=b'~').contains(&byte))
         || !matches!(
@@ -266,37 +348,112 @@ fn first_device_authentication(app: &Map) -> Result<()> {
 }
 
 impl Selection {
+    pub(super) fn require_producer_selection(
+        &self,
+        installed: &InstalledVerifierPackV1,
+    ) -> Result<()> {
+        let financial = self.financial.as_ref().ok_or_else(invalid)?;
+        if let ApplicationBinding::CbsiReleaseV1 {
+            producer_catalog_digest,
+            ..
+        } = &self.application
+        {
+            if financial.producer_catalog_digest != *producer_catalog_digest {
+                return Err(invalid());
+            }
+        }
+        if installed.originals().producer_catalog_digest != financial.producer_catalog_digest {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    pub(super) fn require_transport_selection(&self, bytes: &[u8]) -> Result<()> {
+        let financial = self.financial.as_ref().ok_or_else(invalid)?;
+        if let ApplicationBinding::CbsiReleaseV1 { transport, .. } = &self.application {
+            if financial.transport_identity != *transport {
+                return Err(invalid());
+            }
+        }
+        if BlobV1::of(bytes) != financial.transport_identity {
+            return Err(invalid());
+        }
+        // The exact complete authenticated catalog closure remains mandatory below.
+        Ok(())
+    }
     pub(super) fn installed(input: &RuntimeOriginals<'_>) -> Result<Self> {
         Self::load(&RuntimeTrust::installed()?, input)
     }
     fn load(trust: &RuntimeTrust, input: &RuntimeOriginals<'_>) -> Result<Self> {
         input.validate_bounds()?;
         let document = signed_app(trust, input.app_manifest, input.envelope)?;
-        let selected = cbsi::current(&document, input)?;
-        let app = selected.app;
+        let (app, application, financial) = match trust.authority {
+            RuntimeAuthority::CbsiReleaseV1 => {
+                let selected = cbsi::current(&document, input)?;
+                (
+                    selected.app,
+                    ApplicationBinding::CbsiReleaseV1 {
+                        _service_release_scope: selected.service_release_scope,
+                        scheme_id: selected.scheme_id,
+                        manifest_digest: selected.artifact_manifest_digest,
+                        producer_catalog_digest: selected.producer_catalog_digest,
+                        transport: selected.transport,
+                    },
+                    Some(FinancialSelection {
+                        pack_identity: selected.pack,
+                        catalog_identity: selected.catalog,
+                        producer_catalog_digest: selected.producer_catalog_digest,
+                        transport_identity: selected.transport,
+                    }),
+                )
+            }
+            RuntimeAuthority::BpngTairaV7 => {
+                let app = bpng::application(&document)?;
+                let (digest, financial) = bpng::require_runtime(app, input)?;
+                (
+                    app,
+                    ApplicationBinding::BpngTairaV7 {
+                        _wallet_runtime_sha256: digest,
+                    },
+                    financial,
+                )
+            }
+        };
         // The exact signed inventory row binds the whole public runtime original.
         let runtime = json(input.wallet_runtime, WALLET_RUNTIME_MAX, false)?;
-        let runtime = exact(
-            &runtime,
-            &[
-                "schema",
-                "version",
-                "scheme_id",
-                "scheme_original_base64",
-                "asset_original_base64",
-                "enrollment_certificate_original_base64",
-                "artifact_signer_certificate_original_base64",
-                "artifact_manifest_original_base64",
-                "regulatory_policy_original_base64",
-                "challenge_lifetime_ms",
-                "android",
-                "apple",
-            ],
-        )?;
-        if text(runtime, "schema")? != "cbsi.kagemusha.wallet-runtime.v1"
+        let mut runtime_fields = vec![
+            "schema",
+            "version",
+            "scheme_id",
+            "scheme_original_base64",
+            "asset_original_base64",
+            "enrollment_certificate_original_base64",
+            "artifact_signer_certificate_original_base64",
+            "artifact_manifest_original_base64",
+            "regulatory_policy_original_base64",
+            "challenge_lifetime_ms",
+            "android",
+            "apple",
+        ];
+        let runtime_schema = match trust.authority {
+            RuntimeAuthority::CbsiReleaseV1 => "cbsi.kagemusha.wallet-runtime.v1",
+            RuntimeAuthority::BpngTairaV7 => {
+                runtime_fields.extend([
+                    "python_path",
+                    "python_sha256",
+                    "openssl_path",
+                    "openssl_sha256",
+                ]);
+                "bpng.current-wallet-core-runtime.v1"
+            }
+        };
+        let runtime = exact(&runtime, &runtime_fields)?;
+        if text(runtime, "schema")? != runtime_schema
             || field(runtime, "version")?.as_u64() != Some(1)
         {
             return Err(invalid());
+        }
+        if trust.authority == RuntimeAuthority::BpngTairaV7 {
+            bpng::runtime_tools(runtime)?;
         }
         if !field(runtime, "challenge_lifetime_ms")?
             .as_u64()
@@ -313,8 +470,10 @@ impl Selection {
             &sha(text(runtime, "scheme_id")?)?,
         )
         .map_err(|_| invalid())?;
-        if scheme.scheme_id() != selected.scheme_id {
-            return Err(invalid());
+        if let ApplicationBinding::CbsiReleaseV1 { scheme_id, .. } = &application {
+            if scheme.scheme_id() != *scheme_id {
+                return Err(invalid());
+            }
         }
         let artifact_certificate = raw(
             runtime,
@@ -336,8 +495,13 @@ impl Selection {
             KagemushaWalletArtifactManifestV1::decode_canonical(&artifact_manifest, &scheme)
                 .map_err(|_| invalid())?;
         manifest.verify(&scheme, &signer).map_err(|_| invalid())?;
-        if manifest.manifest_digest() != selected.artifact_manifest_digest {
-            return Err(invalid());
+        if let ApplicationBinding::CbsiReleaseV1 {
+            manifest_digest, ..
+        } = &application
+        {
+            if manifest.manifest_digest() != *manifest_digest {
+                return Err(invalid());
+            }
         }
         let asset_original = raw(
             runtime,
@@ -371,15 +535,22 @@ impl Selection {
             .map_err(|_| invalid())?;
         regulatory_policy.validate().map_err(|_| invalid())?;
         let platform_policy = |name| -> Result<([u8; 32], [u8; 32], Vec<u8>)> {
-            let platform = exact(
-                field(runtime, name)?,
-                &[
-                    "app_policy_hex",
-                    "enrollment_policy_hex",
-                    "app_policy_original_base64",
-                    "enrollment_policy_original_base64",
-                ],
-            )?;
+            let mut fields = vec![
+                "app_policy_hex",
+                "enrollment_policy_hex",
+                "app_policy_original_base64",
+                "enrollment_policy_original_base64",
+            ];
+            if trust.authority == RuntimeAuthority::BpngTairaV7 {
+                fields.push("verifier_configuration_path");
+            }
+            let platform = exact(field(runtime, name)?, &fields)?;
+            if trust.authority == RuntimeAuthority::BpngTairaV7
+                && text(platform, "verifier_configuration_path")?
+                    != format!("srv/etc/kagemusha/wallet-e1-{name}.json")
+            {
+                return Err(invalid());
+            }
             let app_digest = sha(text(platform, "app_policy_hex")?)?;
             let enrollment_digest = sha(text(platform, "enrollment_policy_hex")?)?;
             let app = KagemushaWalletAppPolicyV1::decode_canonical(
@@ -442,13 +613,17 @@ impl Selection {
         sha(text(consensus, "signedGenesisSha256")?)?;
         sha(text(consensus, "genesisBlockHash")?)?;
         sha(text(consensus, "finalityVerifierSha256")?)?;
-        sha(text(consensus, "checkpointSha256")?)?;
-        sha(text(consensus, "checkpointContextId")?)?;
-        if field(consensus, "checkpointHeight")?
-            .as_u64()
-            .is_none_or(|value| value > 9_007_199_254_740_991)
-        {
-            return Err(invalid());
+        if trust.authority == RuntimeAuthority::BpngTairaV7 {
+            bpng::checkpoint(consensus)?;
+        } else {
+            sha(text(consensus, "checkpointSha256")?)?;
+            sha(text(consensus, "checkpointContextId")?)?;
+            if field(consensus, "checkpointHeight")?
+                .as_u64()
+                .is_none_or(|value| value > 9_007_199_254_740_991)
+            {
+                return Err(invalid());
+            }
         }
         let original = bounded(input.signed_genesis, GENESIS_MAX)?;
         if BlobV1::of(original).sha256 != sha(text(consensus, "signedGenesisSha256")?)?
@@ -529,10 +704,13 @@ impl Selection {
         }
         let native = SumeragiFinalityVerifier::new(&genesis, text(ledger, "chainId")?, roster)
             .map_err(|_| invalid())?;
-        let selected_asset = exact(
-            field(app, "asset")?,
-            &["assetAlias", "assetDefinitionId", "scale"],
-        )?;
+        let selected_asset = match trust.authority {
+            RuntimeAuthority::CbsiReleaseV1 => exact(
+                field(app, "asset")?,
+                &["assetAlias", "assetDefinitionId", "scale"],
+            )?,
+            RuntimeAuthority::BpngTairaV7 => bpng::asset(app)?,
+        };
         if AssetDefinitionId::from_str(text(selected_asset, "assetDefinitionId")?)
             .map_err(|_| invalid())?
             != asset.asset
@@ -541,9 +719,8 @@ impl Selection {
             return Err(invalid());
         }
         Ok(Self {
-            _service_release_scope: selected.service_release_scope,
-            producer_catalog_digest: selected.producer_catalog_digest,
-            transport_identity: selected.transport,
+            application,
+            financial,
             _originals: RetainedBaseOriginals {
                 _app_manifest: input.app_manifest.into(),
                 _envelope: input.envelope.into(),

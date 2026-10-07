@@ -73,6 +73,9 @@ tasks.test {
     val issueLoadParityOutput = layout.buildDirectory.file("kagemusha-issue-load-parity.properties")
     outputs.file(issueLoadParityOutput)
     systemProperty("kagemusha.issueLoad.parityOutput", issueLoadParityOutput.get().asFile.absolutePath)
+    val activateParityOutput = layout.buildDirectory.file("kagemusha-activate-parity.properties")
+    outputs.file(activateParityOutput)
+    systemProperty("kagemusha.activate.parityOutput", activateParityOutput.get().asFile.absolutePath)
     enableAssertions = true
     useJUnitPlatform {
         excludeTags("cuda-hardware")

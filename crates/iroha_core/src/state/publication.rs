@@ -221,6 +221,13 @@ impl<'state> StateBlock<'state> {
                 );
                 return Err(TransactionsBlockError::ExecutionOutputCapacity);
             }
+            if let Err(error) = this.validate_owned_asset_definition_registry_overlay() {
+                error!(
+                    ?error,
+                    "direct asset home registry differs from its retained native transition"
+                );
+                return Err(TransactionsBlockError::ExecutionOutputCapacity);
+            }
             if let Err(error) = this.validate_owned_runtime_catalog_overlay() {
                 error!(
                     ?error,

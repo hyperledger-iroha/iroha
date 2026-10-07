@@ -1,4 +1,4 @@
-//! Mandatory original bounds; DATA fixtures cannot install a financial runtime.
+//! Mandatory base and closed financial original bounds; DATA cannot install a runtime.
 use super::*;
 fn base() -> RuntimeOriginals<'static> {
     RuntimeOriginals {
@@ -12,7 +12,7 @@ fn base() -> RuntimeOriginals<'static> {
     }
 }
 #[test]
-fn every_installation_original_is_mandatory_before_decode_or_platform_acquisition() {
+fn missing_base_or_partial_financial_original_refuses_before_platform_acquisition() {
     base().validate_bounds().unwrap();
     for field in 0..7 {
         let mut input = base();
@@ -30,7 +30,7 @@ fn every_installation_original_is_mandatory_before_decode_or_platform_acquisitio
     }
 }
 #[test]
-fn complete_financial_absence_and_every_partial_offer_refuse() {
+fn complete_financial_absence_is_bounded_data_and_partial_offers_refuse() {
     for mask in 0..8 {
         let mut input = base();
         if mask & 1 == 0 {
@@ -44,7 +44,7 @@ fn complete_financial_absence_and_every_partial_offer_refuse() {
         }
         assert_eq!(
             input.validate_bounds(),
-            if mask == 7 {
+            if mask == 0 || mask == 7 {
                 Ok(())
             } else {
                 Err(Failure::code(INVALID))
@@ -72,4 +72,21 @@ fn original_extents_are_refused_before_decode_or_platform_acquisition() {
     }
     assert_eq!(read_config().maximum_bytes, PROVING_KEY_MAX_BYTES_V1);
     assert_eq!(read_config().maximum_rows, 1 << 16);
+}
+
+#[test]
+fn financial_offer_classification_never_grants_an_owner() {
+    let mut absent = base();
+    absent.verifier_pack = b"";
+    absent.producer_inventory = b"";
+    absent.originals_root = b"";
+    absent.validate_bounds().unwrap();
+    assert_eq!(
+        financial_offer(&absent),
+        Err(Failure::code(ARTIFACTS_UNAVAILABLE))
+    );
+    absent.verifier_pack = b"pack";
+    assert_eq!(absent.validate_bounds(), Err(Failure::code(INVALID)));
+    assert_eq!(financial_offer(&absent), Err(Failure::code(INVALID)));
+    assert_eq!(financial_offer(&base()), Ok(()));
 }

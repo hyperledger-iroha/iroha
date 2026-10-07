@@ -111,6 +111,42 @@ class ToriiCollectionTest {
     }
 
     @Test
+    fun directAssetDefinitionHomesPreserveExactUnsignedIdentityAndPartialRows() {
+        for (home in listOf("1", "9007199254740993", "8648377547929788715", "18446744073709551615")) {
+            val row = AssetDefinitionRow(Json.parse("""{"id":"asset","owning_domain":null,"owning_dataspace":"$home"}""") as JsonObject)
+            assertEquals(home, row.owningDataspace)
+            assertNull(row.owningDomain)
+        }
+        for (body in listOf(
+            """{"id":"asset"}""",
+            """{"id":"asset","owning_domain":null,"owning_dataspace":null}""",
+            """{"id":"asset","owning_domain":"treasury.bpng","owning_dataspace":null}""",
+        )) {
+            assertNull(AssetDefinitionRow(Json.parse(body) as JsonObject).owningDataspace)
+        }
+        val selected = AssetDefinitionRow(Json.parse("""{"id":"asset","owning_dataspace":"7"}""") as JsonObject)
+        assertEquals("7", selected.owningDataspace)
+        assertNull(selected.owningDomain, "selected rows retain optional field semantics")
+    }
+
+    @Test
+    fun directAssetDefinitionHomesRejectNoncanonicalAndConflictingValues() {
+        for (home in listOf("0", "00", "01", "18446744073709551616", "184467440737095516150", "", "+1", "-1", "1.0", "1e0", " 1", "1 ", "１")) {
+            assertFailsWith<IllegalArgumentException>(home) {
+                AssetDefinitionRow(Json.parse("""{"id":"asset","owning_dataspace":"$home"}""") as JsonObject)
+            }
+        }
+        for (home in listOf("0", "7", "9007199254740992", "true", "{}", "[]")) {
+            assertFailsWith<IllegalArgumentException>(home) {
+                AssetDefinitionRow(Json.parse("""{"id":"asset","owning_dataspace":$home}""") as JsonObject)
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AssetDefinitionRow(Json.parse("""{"id":"asset","owning_domain":"treasury.bpng","owning_dataspace":"7"}""") as JsonObject)
+        }
+    }
+
+    @Test
     fun pagePostsTheCanonicalBodyAndDecodesTypedRows() {
         val executor = ScriptedExecutor()
         executor.reply(
@@ -154,6 +190,8 @@ class ToriiCollectionTest {
         assertEquals("xor#universal", xor.alias)
         assertEquals("Infinitely", xor.mintable)
         assertNull(xor.description)
+        assertEquals("universal", xor.owningDomain)
+        assertNull(xor.owningDataspace)
         assertEquals(Json.parse("""{"scale":9}"""), xor.spec)
         assertEquals("active", xor.aliasBinding!!.status)
         assertEquals(1_700_000_000_000L, xor.aliasBinding!!.leaseExpiryMs)

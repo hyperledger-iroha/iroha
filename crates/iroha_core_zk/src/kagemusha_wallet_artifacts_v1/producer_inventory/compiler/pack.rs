@@ -28,6 +28,7 @@ pub struct WalletArtifactDraftV1 {
 /// Native installation still needs independently admitted identities, signed genesis
 /// and the complete original source qualification; this supplies none of those grants.
 pub struct WalletArtifactOriginalsV1 {
+    producer_catalog_digest: [u8; 32],
     verifier_pack: Vec<u8>,
     producer_inventory: Vec<u8>,
     wallet_originals: Vec<BlobV1>,
@@ -308,6 +309,7 @@ impl WalletArtifactDraftV1 {
         self.pack.signer_certificate = certificate_original.to_vec();
         self.pack.manifest = manifest_original.to_vec();
         Ok(WalletArtifactOriginalsV1 {
+            producer_catalog_digest: self.pack.producer_catalog_digest,
             verifier_pack: self.pack.to_canonical_bytes()?,
             producer_inventory: self.catalog,
             wallet_originals: self.wallet_originals,

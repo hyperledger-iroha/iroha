@@ -16,6 +16,7 @@ use iroha_plonk::{
     pcs::ipa::PinnedParams,
 };
 
+mod attempt;
 mod exports;
 #[cfg(any(
     target_os = "android",
@@ -26,6 +27,7 @@ mod exports;
 mod jni;
 mod originals;
 mod selection;
+pub use attempt::WalletInstallationAttempt;
 pub use exports::*;
 use originals::CatalogOriginals;
 use selection::Selection;
@@ -68,12 +70,47 @@ impl RuntimeOriginals<'_> {
         .into_iter()
         .zip(RUNTIME_BOUNDS)
         {
-            if original.is_empty() || original.len() > maximum {
+            if original.len() > maximum {
                 return Err(Failure::code(INVALID));
             }
         }
+        for original in [
+            self.app_manifest,
+            self.envelope,
+            self.wallet_runtime,
+            self.signed_genesis,
+        ] {
+            if original.is_empty() {
+                return Err(Failure::code(INVALID));
+            }
+        }
+        let financial = [
+            self.verifier_pack,
+            self.producer_inventory,
+            self.originals_root,
+        ];
+        if financial.iter().any(|original| original.is_empty())
+            && financial.iter().any(|original| !original.is_empty())
+        {
+            return Err(Failure::code(INVALID));
+        }
         Ok(())
     }
+}
+/// Called only after Selection authenticates the whole signed base and native genesis.
+fn financial_offer(input: &RuntimeOriginals<'_>) -> Result<()> {
+    let absent = [
+        input.verifier_pack.is_empty(),
+        input.producer_inventory.is_empty(),
+        input.originals_root.is_empty(),
+    ];
+    if absent.iter().all(|value| *value) {
+        return Err(Failure::code(ARTIFACTS_UNAVAILABLE));
+    }
+    if absent.iter().any(|value| *value) {
+        return Err(Failure::code(INVALID));
+    }
+    Ok(())
 }
 fn read_config() -> ReadConfig {
     ReadConfig {
@@ -222,9 +259,17 @@ impl PreparedInstallation {
         Self::from_selected(input, selected)
     }
     fn from_selected(input: RuntimeOriginals<'_>, selected: Arc<Selection>) -> Result<Self> {
-        // Every installation includes the complete signed base and financial originals.
-        // A caller cannot select an installation without the monetary proof sources.
+        // Both closed application adapters have authenticated their whole base here.
+        // Complete financial absence never acquires a platform, custody root or owner.
         input.validate_bounds()?;
+        match (selected.financial.as_ref(), input.verifier_pack.is_empty()) {
+            (None, true) => return Err(Failure::code(ARTIFACTS_UNAVAILABLE)),
+            (Some(financial), false)
+                if financial.pack_identity == BlobV1::of(input.verifier_pack)
+                    && financial.catalog_identity == BlobV1::of(input.producer_inventory) => {}
+            _ => return Err(Failure::code(INVALID)),
+        }
+        financial_offer(&input)?;
         let installed = InstalledVerifierPackV1::load(input.verifier_pack, selected.installation)
             .map_err(|_| Failure::code(INVALID))?;
         if installed.originals().scheme.to_vec()
@@ -234,10 +279,10 @@ impl PreparedInstallation {
                 .map_err(|_| Failure::code(INVALID))?
             || installed.originals().signer_certificate != selected.artifact_certificate
             || installed.originals().manifest != selected.artifact_manifest
-            || installed.originals().producer_catalog_digest != selected.producer_catalog_digest
         {
             return Err(Failure::code(INVALID));
         }
+        selected.require_producer_selection(&installed)?;
         let inventory = installed
             .authenticate_producer_inventory(input.producer_inventory)
             .map_err(|_| Failure::code(INVALID))?;
@@ -279,12 +324,12 @@ impl PreparedInstallation {
             originals,
         })
     }
-    fn register<P: advance::KagemushaWalletPlatformV1 + 'static>(
+    fn runtime<P: advance::KagemushaWalletPlatformV1 + 'static>(
         self,
         platform: P,
         custody_root: std::path::PathBuf,
         android: bool,
-    ) -> Result<u64> {
+    ) -> Result<Arc<open::RuntimeOwner>> {
         let fs = advance::KagemushaWalletStdFsV1::open(custody_root)
             .map_err(|error| Failure::unavailable(UNAVAILABLE, error))?;
         let provider = advance::KagemushaWalletProviderV1::open(
@@ -306,10 +351,7 @@ impl PreparedInstallation {
             selected: self.selected,
             android,
         };
-        open::retain_native_runtime_bound(runtime, binding).map_err(|failure| match failure {
-            open::NativeStartupFailure::Registration { failure, .. } => failure,
-            open::NativeStartupFailure::Load(_) => Failure::code(INTERNAL),
-        })
+        Ok(open::bound_runtime_owner(runtime, binding))
     }
 }
 

@@ -14105,6 +14105,14 @@ fn resolve_signed_query_routing_for_app(
         SignedQueryScope::UniversalAssetDefinition(_) => {
             resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL)
         }
+        SignedQueryScope::DataspaceAssetDefinition(dataspace_id) => {
+            resolve_torii_route_for_dataspace_id(app, dataspace_id)
+        }
+        SignedQueryScope::UnavailableAssetDefinitionHome => {
+            Err(queue::RoutingResolveError::OrdinaryRouteUnavailable {
+                reason: "invalid authoritative asset-definition home".to_owned(),
+            })
+        }
         SignedQueryScope::PublicControlPlane
         | SignedQueryScope::LocalReplicated
         | SignedQueryScope::AuthorityRouted
@@ -16312,6 +16320,8 @@ enum SignedQueryScope {
     TargetAlias(iroha_data_model::account::AccountAlias),
     TargetDomain(iroha_model_base::domain::DomainId),
     UniversalAssetDefinition(iroha_data_model::asset::AssetDefinitionId),
+    DataspaceAssetDefinition(DataSpaceId),
+    UnavailableAssetDefinitionHome,
 }
 fn torii_signed_query_permission_denied_response(
     authority: &AccountId,
@@ -16352,6 +16362,11 @@ fn torii_authorize_signed_query_routes(
 ) -> Result<Vec<RoutingDecision>, Response> {
     let authority = &request.request_with_authority().authority;
     match scope {
+        SignedQueryScope::UnavailableAssetDefinitionHome => Err(torii_proxy_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_asset_definition_home",
+            "authoritative asset-definition home is invalid",
+        )),
         SignedQueryScope::PublicControlPlane => Ok(Vec::new()),
         SignedQueryScope::LocalReplicated => Ok(routes),
         SignedQueryScope::CrossDataspaceFanout => {
@@ -16425,7 +16440,9 @@ fn torii_authorize_signed_query_routes(
                 ))
             }
         }
-        SignedQueryScope::TargetDomain(_) | SignedQueryScope::UniversalAssetDefinition(_) => {
+        SignedQueryScope::TargetDomain(_)
+        | SignedQueryScope::UniversalAssetDefinition(_)
+        | SignedQueryScope::DataspaceAssetDefinition(_) => {
             let (allowed, denied) = torii_intersect_signed_query_routes(
                 routes,
                 torii_global_signed_query_read_routes(app, authority),
@@ -16614,6 +16631,17 @@ fn resolve_asset_definition_scope(
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
 ) -> Option<SignedQueryScope> {
     let world = app.state.world_view();
+    resolve_asset_definition_scope_in_world(&world, asset_definition_id)
+}
+fn resolve_asset_definition_scope_in_world(
+    world: &impl WorldReadOnly,
+    asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+) -> Option<SignedQueryScope> {
+    match world.asset_definition_dataspace(asset_definition_id) {
+        Ok(Some(dataspace)) => return Some(SignedQueryScope::DataspaceAssetDefinition(dataspace)),
+        Ok(None) => {}
+        Err(_) => return Some(SignedQueryScope::UnavailableAssetDefinitionHome),
+    }
     if let Some(domain) = world.asset_definition_domains().get(asset_definition_id) {
         return Some(SignedQueryScope::TargetDomain(domain.clone()));
     }
@@ -16627,6 +16655,41 @@ fn resolve_asset_definition_scope(
             (definition.balance_scope_policy == iroha_data_model::asset::AssetBalancePolicy::Global)
                 .then(|| SignedQueryScope::UniversalAssetDefinition(asset_definition_id.clone()))
         })
+}
+#[cfg(test)]
+mod direct_dataspace_definition_query_scope_tests {
+    use super::*;
+
+    use iroha_data_model::Registrable as _;
+
+    #[test]
+    fn direct_definition_query_uses_exact_home_and_unknown_id_stays_unclassified() {
+        let mut world = iroha_core::state::World::default();
+        let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            "cash.universal".parse().expect("id seed"),
+            "kina".parse().expect("name"),
+        );
+        let home = DataSpaceId::new(8_648_377_547_929_788_715);
+        assert_eq!(
+            resolve_asset_definition_scope_in_world(&world.view(), &id),
+            None
+        );
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(
+            id.clone(),
+            "Kina",
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            None,
+        )
+        .build(&iroha_test_samples::ALICE_ID);
+        world = iroha_core::state::World::with([], [], [definition]);
+        world
+            .set_asset_definition_dataspace_for_testing(id.clone(), home)
+            .expect("direct home fixture");
+        assert_eq!(
+            resolve_asset_definition_scope_in_world(&world.view(), &id),
+            Some(SignedQueryScope::DataspaceAssetDefinition(home))
+        );
+    }
 }
 fn target_account_iterable_query(
     query: &iroha_data_model::query::QueryWithParams,
@@ -17001,6 +17064,13 @@ fn torii_authorized_signed_query_routes(
         ]);
     }
     let routes = match scope {
+        SignedQueryScope::UnavailableAssetDefinitionHome => {
+            return Err(torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_asset_definition_home",
+                "authoritative asset-definition home is invalid",
+            ));
+        }
         SignedQueryScope::PublicControlPlane => Vec::new(),
         SignedQueryScope::LocalReplicated => Vec::new(),
         SignedQueryScope::AuthorityRouted => unreachable!("handled above"),
@@ -17020,6 +17090,15 @@ fn torii_authorized_signed_query_routes(
         SignedQueryScope::TargetAlias(alias) => torii_target_alias_routes(app, alias)?,
         SignedQueryScope::TargetDomain(domain_id) => torii_target_domain_routes(app, domain_id)?,
         SignedQueryScope::UniversalAssetDefinition(_) => vec![torii_nexus_route(app)?],
+        SignedQueryScope::DataspaceAssetDefinition(dataspace) => vec![
+            resolve_torii_route_for_dataspace_id(app, *dataspace).map_err(|_| {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "failed to resolve asset-definition home route",
+                )
+            })?,
+        ],
     };
     torii_authorize_signed_query_routes(app, request, scope, routes)
 }
@@ -18360,9 +18439,13 @@ fn torii_signed_query_fanout_routes(
         SignedQueryScope::PublicControlPlane
         | SignedQueryScope::LocalReplicated
         | SignedQueryScope::AuthorityRouted
-        | SignedQueryScope::UniversalAssetDefinition(_) => Err(unsupported_routed_query_response(
-            "Nexus fanout coordinator received a single-route query",
-        )),
+        | SignedQueryScope::UniversalAssetDefinition(_)
+        | SignedQueryScope::DataspaceAssetDefinition(_)
+        | SignedQueryScope::UnavailableAssetDefinitionHome => {
+            Err(unsupported_routed_query_response(
+                "Nexus fanout coordinator received a single-route query",
+            ))
+        }
         SignedQueryScope::CrossDataspaceFanout
         | SignedQueryScope::TargetAccount(_)
         | SignedQueryScope::TargetAlias(_)
@@ -18679,6 +18762,10 @@ fn asset_definition_home_dataspace_id(
     let (dataspace_alias, is_global) = {
         let state_view = app.state.view();
         let world = state_view.world();
+        if let Some(dataspace) = routing::asset_definition_dataspace_for_read(world, definition_id)?
+        {
+            return Ok(Some(dataspace));
+        }
         if let Some(domain) = world.asset_definition_domains().get(definition_id) {
             (Some(domain.dataspace().as_ref().to_owned()), false)
         } else {

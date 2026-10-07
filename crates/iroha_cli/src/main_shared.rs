@@ -535,7 +535,7 @@ struct Args {
     ///
     /// Example usage:
     ///
-    /// `iroha --emit-instructions ledger asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha --fee-payer authority tx stdin`
+    /// `iroha --emit-instructions ledger asset definition register --domain issuer.universal --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha --fee-payer authority tx stdin`
     #[arg(long = "emit-instructions")]
     emit_instructions: bool,
     /// Output format for command responses.
@@ -3038,33 +3038,9 @@ mod asset {
                             .wrap_err("Failed to get asset definition")?;
                         context.print_data(&entry)
                     }
-                    Register(args) => {
-                        let alias = register_alias_from_args(&args)?;
-                        let spec = numeric_spec_from_scale(args.scale)?;
-                        let mut entry = AssetDefinition::new(
-                            args.id,
-                            args.name,
-                            spec,
-                            iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
-                        );
-                        if let Some(description) = args.description {
-                            entry = entry.with_description(Some(description));
-                        }
-                        if let Some(alias) = alias {
-                            entry = entry.with_alias(Some(alias));
-                        }
-                        if let Some(logo) = args.logo {
-                            entry = entry.with_logo(Some(logo));
-                        }
-                        if args.mint_once {
-                            entry = entry.mintable_once();
-                        }
-                        let instruction = iroha::data_model::isi::Register::asset_definition(entry);
-                        context
-                            .finish([instruction])
-                            .wrap_err("Failed to register asset")
-                    }
+                    Register(args) => context
+                        .finish([registration_instruction_from_args(args)?])
+                        .wrap_err("Failed to register asset"),
                     Unregister(args) => {
                         let id = args
                             .resolve_id(context)
@@ -3092,8 +3068,28 @@ mod asset {
                 }
             }
         }
+        /// Transparent balance partitioning requested at asset registration.
+        #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum BalancePolicy {
+            /// Use a single transparent balance bucket across dataspaces.
+            Global,
+            /// Keep transparent balances in explicit dataspace buckets.
+            DataspaceRestricted,
+        }
         #[derive(clap::Args, Debug)]
         pub struct Register {
+            /// Immutable owning domain, independent from any alias.
+            #[arg(long, required_unless_present_any = ["dataspace", "global_home"], conflicts_with_all = ["dataspace", "global_home"])]
+            pub domain: Option<DomainId>,
+            /// Exact nonzero dataspace ID for direct namespace ownership.
+            #[arg(long, required_unless_present_any = ["domain", "global_home"], conflicts_with_all = ["domain", "global_home"])]
+            pub dataspace: Option<NonZeroU64>,
+            /// Construct an unowned global definition for genesis registration.
+            #[arg(long, required_unless_present_any = ["domain", "dataspace"], conflicts_with_all = ["domain", "dataspace"])]
+            pub global_home: bool,
+            /// Transparent balance partition policy, independent from the immutable home.
+            #[arg(long, value_enum, default_value = "global")]
+            pub balance_policy: BalancePolicy,
             /// Asset definition identifier (unprefixed Base58 address)
             #[arg(short, long, value_parser = parse_asset_definition_literal)]
             pub id: AssetDefinitionId,
@@ -3148,6 +3144,47 @@ mod asset {
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
         }
+        fn registration_instruction_from_args(args: Register) -> Result<InstructionBox> {
+            let selected_homes = u8::from(args.domain.is_some())
+                + u8::from(args.dataspace.is_some())
+                + u8::from(args.global_home);
+            if selected_homes != 1 {
+                eyre::bail!("select exactly one of --domain, --dataspace, or --global-home");
+            }
+            if args.global_home && args.balance_policy != BalancePolicy::Global {
+                eyre::bail!("--global-home requires --balance-policy global");
+            }
+            let alias = register_alias_from_args(&args)?;
+            let spec = numeric_spec_from_scale(args.scale)?;
+            let policy = match args.balance_policy {
+                BalancePolicy::Global => iroha_data_model::asset::AssetBalancePolicy::Global,
+                BalancePolicy::DataspaceRestricted => {
+                    iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
+                }
+            };
+            let mut entry = AssetDefinition::new(args.id, args.name, spec, policy, args.domain);
+            if let Some(description) = args.description {
+                entry = entry.with_description(Some(description));
+            }
+            if let Some(alias) = alias {
+                entry = entry.with_alias(Some(alias));
+            }
+            if let Some(logo) = args.logo {
+                entry = entry.with_logo(Some(logo));
+            }
+            if args.mint_once {
+                entry = entry.mintable_once();
+            }
+            match args.dataspace {
+                Some(dataspace) => iroha::data_model::isi::RegisterDataspaceAssetDefinition::new(
+                    iroha_model_base::topology::DataSpaceId::new(dataspace.get()),
+                    entry,
+                )
+                .map(InstructionBox::from)
+                .map_err(|error| eyre!("invalid direct-dataspace registration: {error}")),
+                None => Ok(iroha::data_model::isi::Register::asset_definition(entry).into()),
+            }
+        }
         fn register_alias_from_args(args: &Register) -> Result<Option<AssetDefinitionAlias>> {
             match (&args.alias, &args.alias_domain, &args.alias_dataspace) {
                 (Some(alias), None, None) => Ok(Some(alias.clone())),
@@ -3198,6 +3235,10 @@ mod asset {
             use super::*;
             fn base_register_args() -> Register {
                 Register {
+                    domain: None,
+                    dataspace: None,
+                    global_home: true,
+                    balance_policy: BalancePolicy::Global,
                     id: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").expect("domain"),
                         "rose".parse().expect("asset name"),
@@ -3259,6 +3300,116 @@ mod asset {
                     .expect("alias should derive")
                     .expect("alias should be present");
                 assert_eq!(alias.as_ref(), "Rose#main");
+            }
+            #[test]
+            fn direct_registration_preserves_exact_dataspace_and_requested_balance_policy() {
+                for policy in [BalancePolicy::Global, BalancePolicy::DataspaceRestricted] {
+                    let mut args = base_register_args();
+                    args.global_home = false;
+                    args.dataspace = NonZeroU64::new(u64::MAX);
+                    args.balance_policy = policy;
+                    args.alias = Some("Rose#labels".parse().expect("alias label"));
+                    let instruction =
+                        registration_instruction_from_args(args).expect("direct registration");
+                    let direct = instruction
+                        .as_any()
+                        .downcast_ref::<iroha::data_model::isi::RegisterDataspaceAssetDefinition>()
+                        .expect("standalone direct registration");
+                    assert_eq!(direct.dataspace_id.as_u64(), u64::MAX);
+                    assert_eq!(direct.object.owning_domain, None);
+                    assert_eq!(
+                        direct.object.alias.as_ref().map(AsRef::as_ref),
+                        Some("Rose#labels")
+                    );
+                    assert_eq!(
+                        direct.object.balance_scope_policy,
+                        match policy {
+                            BalancePolicy::Global =>
+                                iroha_data_model::asset::AssetBalancePolicy::Global,
+                            BalancePolicy::DataspaceRestricted =>
+                                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                        }
+                    );
+                }
+            }
+
+            #[test]
+            fn explicit_domain_and_genesis_global_homes_keep_original_register_variant() {
+                let domain = DomainId::try_new("issuer", "public").expect("domain");
+                for home in [None, Some(domain)] {
+                    let mut args = base_register_args();
+                    args.global_home = home.is_none();
+                    args.domain = home.clone();
+                    let instruction =
+                        registration_instruction_from_args(args).expect("ordinary registration");
+                    let register = instruction
+                        .as_any()
+                        .downcast_ref::<iroha::data_model::isi::RegisterBox>()
+                        .expect("original register box");
+                    let iroha::data_model::isi::RegisterBox::AssetDefinition(register) = register
+                    else {
+                        panic!("asset definition registration")
+                    };
+                    assert_eq!(register.object.owning_domain, home);
+                    assert_eq!(
+                        register.object.balance_scope_policy,
+                        iroha_data_model::asset::AssetBalancePolicy::Global
+                    );
+                }
+            }
+
+            #[test]
+            fn alias_labels_do_not_supply_missing_home_and_conflicting_homes_fail() {
+                let mut missing = base_register_args();
+                missing.global_home = false;
+                missing.alias_dataspace = Some("labels".parse().expect("alias label"));
+                assert!(registration_instruction_from_args(missing).is_err());
+                let mut conflicting = base_register_args();
+                conflicting.dataspace = NonZeroU64::new(42);
+                assert!(registration_instruction_from_args(conflicting).is_err());
+                let mut invalid_global = base_register_args();
+                invalid_global.balance_policy = BalancePolicy::DataspaceRestricted;
+                assert!(registration_instruction_from_args(invalid_global).is_err());
+            }
+
+            #[test]
+            fn parser_requires_exclusive_home_and_exact_nonzero_u64_dataspace() {
+                use clap::Parser as _;
+                #[derive(clap::Parser, Debug)]
+                struct Parser {
+                    #[command(flatten)]
+                    registration: Register,
+                }
+                let id = base_register_args().id.to_string();
+                let base = ["register", "--id", id.as_str(), "--name", "Rose"];
+                for extra in [
+                    vec![],
+                    vec!["--dataspace", "0"],
+                    vec!["--dataspace", "18446744073709551616"],
+                    vec!["--dataspace", "42", "--domain", "issuer.public"],
+                    vec!["--dataspace", "42", "--global-home"],
+                    vec!["--alias-dataspace", "labels"],
+                ] {
+                    assert!(Parser::try_parse_from(base.into_iter().chain(extra)).is_err());
+                }
+                let parsed = Parser::try_parse_from(base.into_iter().chain([
+                    "--dataspace",
+                    "18446744073709551615",
+                    "--balance-policy",
+                    "dataspace-restricted",
+                ]))
+                .expect("full-width exact dataspace");
+                assert_eq!(
+                    parsed.registration.dataspace.map(NonZeroU64::get),
+                    Some(u64::MAX)
+                );
+                assert_eq!(
+                    parsed.registration.balance_policy,
+                    BalancePolicy::DataspaceRestricted
+                );
+                let global = Parser::try_parse_from(base.into_iter().chain(["--global-home"]))
+                    .expect("explicit genesis global home");
+                assert!(global.registration.global_home);
             }
         }
     }

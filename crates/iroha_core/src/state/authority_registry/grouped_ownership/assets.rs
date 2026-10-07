@@ -15,10 +15,14 @@ use iroha_data_model::{
     },
     domain::Domain,
 };
+use iroha_data_model::{nexus::AxtAssetIncarnationV1, parameter::Parameters};
+use mv::cell::CommittedCellView;
 
 /// Retained balance, definition, domain and derived readers from one native cut.
 pub(in super::super) struct CheckedAssets<'world> {
     world: &'world World,
+    parameters: CommittedCellView<'world, Parameters>,
+    incarnations: CommittedStorageView<'world, AssetDefinitionId, AxtAssetIncarnationV1>,
     rows: CommittedStorageView<'world, AssetId, AssetValue>,
     definitions: CommittedStorageView<'world, AssetDefinitionId, AssetDefinition>,
     domains: CommittedStorageView<'world, DomainId, Domain>,
@@ -30,13 +34,21 @@ pub(in super::super) struct CheckedAssets<'world> {
 }
 
 impl<'world> CheckedAssets<'world> {
-    /// Check both original images without allocating or repairing derived rows.
+    /// Check both original images with bounded registry decoding and no row repair.
     pub(in super::super) fn capture(
         world: &'world World,
+        budget: &iroha_allocation::AllocationBudget,
         max_work: u64,
     ) -> Result<Self, GroupedOwnershipError> {
         let checked = Self {
             world,
+            parameters: world
+                .parameters
+                .try_committed_view()
+                .map_err(GroupedOwnershipError::Cell)?,
+            incarnations: world
+                .axt_asset_incarnations
+                .try_committed_view_nonblocking()?,
             rows: world.assets.try_committed_view_nonblocking()?,
             definitions: world.asset_definitions.try_committed_view_nonblocking()?,
             domains: world.domains.try_committed_view_nonblocking()?,
@@ -61,6 +73,16 @@ impl<'world> CheckedAssets<'world> {
             &checked.by_domain,
             &checked.holders,
             &checked.nonzero,
+            [
+                checked.parameters.current(),
+                checked
+                    .parameters
+                    .undo()
+                    .as_ref()
+                    .unwrap_or(checked.parameters.current()),
+            ],
+            &checked.incarnations,
+            budget,
             max_work,
         );
         checked.finish_validation(result)
@@ -103,6 +125,17 @@ impl<'world> CheckedAssets<'world> {
         let nonzero = self
             .nonzero
             .try_matches_current(&self.world.asset_definition_nonzero_holders);
+        let parameters = self
+            .world
+            .parameters
+            .try_committed_view()
+            .map_err(GroupedOwnershipError::Cell)
+            .map(|current| self.parameters.same_publication(&current));
+        let incarnations = self
+            .incarnations
+            .try_matches_current(&self.world.axt_asset_incarnations);
+        let parameters = parameters?;
+        let incarnations = incarnations?;
         let rows = rows?;
         let definitions = definitions?;
         let domains = domains?;
@@ -111,7 +144,9 @@ impl<'world> CheckedAssets<'world> {
         let by_domain = by_domain?;
         let holders = holders?;
         let nonzero = nonzero?;
-        Ok(rows
+        Ok(parameters
+            && incarnations
+            && rows
             && definitions
             && domains
             && by_definition
@@ -371,6 +406,9 @@ pub(in crate::state) fn validate_original_assets(
     by_domain: &impl RawStorageImages<DomainId, BTreeSet<AssetId>>,
     holders: &impl RawStorageImages<AssetDefinitionId, BTreeSet<AccountId>>,
     nonzero: &impl RawStorageImages<AssetDefinitionId, BTreeSet<AccountId>>,
+    parameters: [&Parameters; 2],
+    incarnations: &impl RawStorageImages<AssetDefinitionId, AxtAssetIncarnationV1>,
+    budget: &iroha_allocation::AllocationBudget,
     max_work: u64,
 ) -> Result<(), GroupedOwnershipError> {
     let mut work = AssetBalanceWork::bounded(max_work);
@@ -388,7 +426,24 @@ pub(in crate::state) fn validate_original_assets(
         AssetId::account,
         &mut work,
     )?;
+    let homes = AdmittedAssetHomeImages::capture(parameters, budget, |amount| work.prepay(amount))?;
+    homes.validate_transition()?;
     for image in [GroupImage::Current, GroupImage::Predecessor] {
+        for binding in homes.bindings(image) {
+            let id = &binding.asset_definition_id;
+            let definition = lookup(definitions, image, id, &mut work)?;
+            let incarnation = lookup(incarnations, image, id, &mut work)?;
+            crate::state::asset_definition_dataspace_from_binding(
+                Some(binding),
+                definition,
+                incarnation,
+            )
+            .map_err(|_| GroupedOwnershipError::Source {
+                table: "world.parameters",
+                image,
+                reason: "direct home does not match its exact definition incarnation",
+            })?;
+        }
         visit_original(rows, image, &mut work, |id, value, work| {
             let definition = lookup(definitions, image, id.definition(), work)?.ok_or(
                 GroupedOwnershipError::Source {
@@ -400,7 +455,11 @@ pub(in crate::state) fn validate_original_assets(
             work.prepay(1)?;
             if definition.balance_scope_policy() == AssetBalancePolicy::DataspaceRestricted {
                 work.prepay(1)?;
-                if definition.owning_domain().is_none() {
+                if definition.owning_domain().is_none()
+                    && !homes
+                        .get(image, id.definition())
+                        .is_some_and(|binding| binding.active)
+                {
                     return Err(GroupedOwnershipError::Source {
                         table: "world.asset_definitions",
                         image,
@@ -487,3 +546,31 @@ pub(in crate::state) mod test_support;
 mod tests;
 #[cfg(test)]
 mod work_tests;
+
+#[cfg(test)]
+mod direct_home_balance_tests {
+    use super::*;
+    use iroha_model_base::topology::DataSpaceId;
+
+    #[test]
+    fn direct_home_balances_retain_and_check_their_authority_owners() {
+        let mut world = test_support::fixture(false);
+        let budget = iroha_allocation::AllocationBudget::new(16_777_216);
+        let id = test_support::definition("coin");
+        world
+            .set_asset_definition_dataspace_for_testing(id.clone(), DataSpaceId::new(7))
+            .unwrap();
+        assert!(CheckedAssets::capture(&world, &budget, 16_777_216).is_ok());
+        world.axt_asset_incarnations.insert(
+            id,
+            AxtAssetIncarnationV1::try_from_bytes(iroha_crypto::Hash::new([99]).into()).unwrap(),
+        );
+        assert!(matches!(
+            CheckedAssets::capture(&world, &budget, 16_777_216),
+            Err(GroupedOwnershipError::Source {
+                table: "world.parameters",
+                ..
+            })
+        ));
+    }
+}

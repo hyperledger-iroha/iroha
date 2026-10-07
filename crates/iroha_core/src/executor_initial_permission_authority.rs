@@ -1347,6 +1347,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     }
     // Asset controls and CBDC policy records have Core owner/scope checks.
     if is_any!(
+        iroha_data_model::isi::RegisterDataspaceAssetDefinition,
         iroha_data_model::isi::SetAssetKeyValue,
         iroha_data_model::isi::RemoveAssetKeyValue,
         iroha_data_model::isi::SetAssetTransferAvailability,

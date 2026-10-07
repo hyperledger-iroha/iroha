@@ -30,7 +30,9 @@ WALLET_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
     for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "execute", "snapshot")
 ] + [
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_closeInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletEnrollmentNativeV1_enroll",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_review",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_executeReviewed",
@@ -141,6 +143,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
+                "wallet_runtime_authority": "cbsi-release-v1",
                 "wallet_runtime_trust_ed25519_hex": "3" * 64,
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
                 "hermetic_runner_sha256": hashlib.sha256(
@@ -571,7 +574,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                     self.validate()
 
     def test_every_current_review_installation_enrollment_export_is_mandatory(self) -> None:
-        for suffix in ("review", "execute_reviewed", "discard_review", "install_runtime", "enrollment"):
+        for suffix in ("review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "enrollment"):
             symbol = "connect_norito_kagemusha_wallet_" + suffix + "_v1"
             for replacement in (None, symbol + "_optional"):
                 with self.subTest(symbol=symbol, replacement=replacement):
@@ -740,6 +743,19 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         symbolic.symlink_to("Info.plist")
         with self.assertRaisesRegex(validator.ValidationError, "contains a symlink"):
             self.validate()
+
+    def test_application_authority_is_exact_closed_build_data(self):
+        environment = self.payload["build_environment"]
+        for authority in ["bpng-taira-v6", "cbsi-release-v1"]:
+            environment["wallet_runtime_authority"] = authority
+            validator._validate_build_environment(ROOT, environment)
+        for authority in [None, "", "bpng", "BPNG-TAIRA-V6", "bpng-taira-v6\n", 1, True, {}, []]:
+            environment["wallet_runtime_authority"] = authority
+            with self.assertRaises(validator.ValidationError):
+                validator._validate_build_environment(ROOT, environment)
+        del environment["wallet_runtime_authority"]
+        with self.assertRaises(validator.ValidationError):
+            validator._validate_build_environment(ROOT, environment)
 
     def test_rejects_fabricated_environment_policy_and_source_identity(self) -> None:
         environment = self.payload["build_environment"]

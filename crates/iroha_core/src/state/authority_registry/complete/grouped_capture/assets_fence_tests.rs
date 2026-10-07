@@ -25,7 +25,9 @@ fn asset_encoding_refusal_keeps_all_native_and_state_fences() {
     for changed in 0..11 {
         let state = state();
         let generation = state.state_view_generation();
-        let checked = CheckedAssets::capture(&state.world, 16_777_216).unwrap();
+        let checked =
+            CheckedAssets::capture(&state.world, &state.ivm_execution_budget(), 16_777_216)
+                .unwrap();
         let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
             "world.assets",
             LeafLimits {

@@ -3680,6 +3680,12 @@ fn instruction_transaction_dataspace_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(register) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::RegisterDataspaceAssetDefinition>(
+    ) {
+        return Ok(Some(register.dataspace_id));
+    }
     if let Some(operation) = instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
@@ -4102,6 +4108,12 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(register) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::RegisterDataspaceAssetDefinition>(
+    ) {
+        return Ok(Some(register.dataspace_id));
+    }
     if let Some(operation) = instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
@@ -6801,6 +6813,16 @@ fn asset_definition_target_from_parts_with_state(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(view) = state_view
+        && let Some(dataspace) = view
+            .world
+            .asset_definition_dataspace(asset_definition_id)
+            .map_err(|error| RoutingResolveError::OrdinaryRouteUnavailable {
+                reason: format!("invalid asset-definition home: {error}"),
+            })?
+    {
+        return Ok(Some(dataspace));
+    }
     let dataspace_alias = asset_definition_alias
         .map(|alias| alias.dataspace_segment().to_owned())
         .or_else(|| {
@@ -6828,6 +6850,14 @@ fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(dataspace) = world
+        .asset_definition_dataspace(asset_definition_id)
+        .map_err(|error| RoutingResolveError::OrdinaryRouteUnavailable {
+            reason: format!("invalid asset-definition home: {error}"),
+        })?
+    {
+        return Ok(Some(dataspace));
+    }
     let dataspace_alias = asset_definition_alias
         .map(|alias| alias.dataspace_segment().to_owned())
         .or_else(|| {
@@ -9004,20 +9034,25 @@ fn asset_definition_scope_matches(
     asset_definition_id: &AssetDefinitionId,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
-    state_view
-        .and_then(|view| {
-            view.world
-                .asset_definition_domains()
-                .get(asset_definition_id)
-                .cloned()
-        })
-        .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
+    state_view.is_some_and(|view| {
+        asset_definition_scope_matches_with_world(scope, asset_definition_id, &view.world)
+    })
 }
 fn asset_definition_scope_matches_with_world<W: WorldReadOnly>(
     scope: &str,
     asset_definition_id: &AssetDefinitionId,
     world: &W,
 ) -> bool {
+    match world.asset_definition_dataspace(asset_definition_id) {
+        Ok(Some(dataspace)) => {
+            return world
+                .dataspace_catalog()
+                .by_id(dataspace)
+                .is_some_and(|entry| scope.eq_ignore_ascii_case(&entry.alias));
+        }
+        Ok(None) => {}
+        Err(_) => return false,
+    }
     world
         .asset_definition_domains()
         .get(asset_definition_id)
@@ -9026,6 +9061,9 @@ fn asset_definition_scope_matches_with_world<W: WorldReadOnly>(
 }
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
+    if any.is::<iroha_data_model::isi::RegisterDataspaceAssetDefinition>() {
+        return matches_box_variant(matcher, "register", "register::asset_definition");
+    }
     if any.is::<TransferAssetBatch>() {
         return matches_box_variant(matcher, "transfer", "transfer::asset");
     }
@@ -14250,6 +14288,111 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
+    #[test]
+    fn direct_dataspace_registration_uses_explicit_home_without_alias_resolution() {
+        let dataspace = DataSpaceId::new(8_648_377_547_929_788_715);
+        let id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("unrelated", "universal").expect("id seed"),
+            "kina".parse().expect("name"),
+        );
+        let register = iroha_data_model::isi::RegisterDataspaceAssetDefinition::new(
+            dataspace,
+            AssetDefinition::numeric(id, "Kina", AssetBalancePolicy::DataspaceRestricted, None),
+        )
+        .expect("valid direct registration");
+        let world = crate::state::World::default();
+        let state = state_from_world(world);
+        assert_eq!(
+            instruction_transaction_dataspace_target(&register, None, None).unwrap(),
+            Some(dataspace)
+        );
+        assert_eq!(
+            instruction_transaction_dataspace_target_with_world(
+                &register,
+                None,
+                state.view().world(),
+                None,
+            )
+            .unwrap(),
+            Some(dataspace)
+        );
+        assert!(instruction_label_matches(
+            "register::asset_definition",
+            &register
+        ));
+    }
+
+    #[test]
+    fn direct_dataspace_home_survives_alias_changes_and_preserves_global_balance_routing() {
+        let (owner, _) = gen_account_in("wonderland");
+        let dataspace = DataSpaceId::new(10);
+        let id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("unrelated", "universal").expect("id seed"),
+            "kina".parse().expect("name"),
+        );
+        let catalog = dataspace_catalog(&[(dataspace, "bpng"), (DataSpaceId::new(12), "other")]);
+        let lanes = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), dataspace),
+        ]);
+        for policy in [
+            AssetBalancePolicy::Global,
+            AssetBalancePolicy::DataspaceRestricted,
+        ] {
+            let mut definition =
+                AssetDefinition::numeric(id.clone(), "Kina", policy, None).build(&owner);
+            definition.alias = Some("kina#other".parse().expect("mutable alias"));
+            let mut state =
+                state_with_asset_definitions(vec![definition], catalog.clone(), lanes.clone());
+            state
+                .world
+                .set_asset_definition_dataspace_for_testing(id.clone(), dataspace)
+                .expect("direct home fixture");
+            let view = state.view();
+            assert_eq!(
+                asset_definition_dataspace_target(&id, None, None, Some(&catalog), Some(&view))
+                    .unwrap(),
+                Some(dataspace)
+            );
+            assert_eq!(
+                asset_definition_dataspace_target_with_world(
+                    &id,
+                    None,
+                    None,
+                    Some(&catalog),
+                    view.world(),
+                    None
+                )
+                .unwrap(),
+                Some(dataspace)
+            );
+            let expected_balance = if policy == AssetBalancePolicy::Global {
+                DataSpaceId::UNIVERSAL
+            } else {
+                dataspace
+            };
+            assert_eq!(
+                asset_balance_definition_route_target(&id, Some(&catalog), Some(&view))
+                    .unwrap()
+                    .dataspace_id,
+                Some(expected_balance)
+            );
+            assert_eq!(
+                asset_balance_definition_route_target_with_world(
+                    &id,
+                    Some(&catalog),
+                    view.world(),
+                    None
+                )
+                .unwrap()
+                .dataspace_id,
+                Some(expected_balance)
+            );
+            assert!(asset_definition_scope_matches("bpng", &id, Some(&view)));
+            assert!(!asset_definition_scope_matches("other", &id, Some(&view)));
+        }
+    }
+
     #[test]
     fn asset_definition_registration_routes_by_declared_alias_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
