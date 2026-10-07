@@ -47,7 +47,7 @@ def originals():
                'source_changes': [], 'source_before': source, 'source_after': source,
                'finished_unix': 12, 'native_companion_sha256': 'c' * 64}
     component = {'emitter_path': '/owned/emitter.json', 'emitter_sha256': 'd' * 64,
-                 'qualified': True, 'observed_abi_version': 25,
+                 'qualified': True, 'observed_abi_version': 26,
                  'artifact_path': '/owned/retained/lib.dylib', 'artifact_sha256': 'c' * 64,
                  'source_before': source, 'source_after': source,
                  'toolchain_before': tools, 'toolchain_after': tools,
@@ -101,9 +101,9 @@ def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refu
 
 def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     policy = unit.native_policy(ROOT)
-    assert len(policy['c_jni']) == 56
-    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 10
-    assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 6
+    assert len(policy['c_jni']) == 60
+    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 11
+    assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 7
     assert len(policy['privacy']) == 6
     assert 'connect_norito_kagemusha_wallet_snapshot_v1' in policy['required']
     assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot' in policy['required']
@@ -243,7 +243,7 @@ def test_make_dependency_words_are_not_shell_evaluated():
 
 def manifest_fixture():
     return {'schema': unit.SCHEMA, 'artifact_scope': 'local-unit', 'purpose': unit.PURPOSE,
-            'version': '0.1.0', 'native_bridge_abi_version': 25,
+            'version': '0.1.0', 'native_bridge_abi_version': 26,
             'target_triple': 'aarch64-apple-darwin', 'hashes': {'macos-arm64': 'a' * 64},
             'producer_record': '/owned/producer-record.json', 'producer_record_sha256': 'b' * 64,
             'source_inputs': {'inert-source': 'c' * 64}, 'tool_inputs': {'inert-tool': 'd' * 64},

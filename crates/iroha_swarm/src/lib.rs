@@ -4,10 +4,6 @@ mod path;
 mod peer;
 mod schema;
 pub use crate::peer::PeerOverride;
-/// Fixed private keyring path named by every projected publisher configuration.
-pub const KAGEMUSHA_LOAD_KEYRING_TARGET: &str = "/run/secrets/iroha_kagemusha_load_keyring";
-/// Fixed ordinary submitter key path named by every projected publisher configuration.
-pub const KAGEMUSHA_LOAD_SUBMITTER_TARGET: &str = "/run/secrets/iroha_kagemusha_load_submitter";
 const CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const BASE_PORT_P2P: u16 = 1337;
 const BASE_PORT_API: u16 = 8080;
@@ -183,20 +179,6 @@ pub struct PreparedValidator {
     pub runtime_files: Vec<PreparedRuntimeFile>,
     /// File-backed private runtime inputs that must not appear in Compose YAML.
     pub secret_files: Vec<PreparedSecretFile>,
-    /// Required byte-exact private publisher inputs from this node's admitted original config.
-    /// Their host ownership must also match the container daemon UID; no Compose ownership
-    /// override or world-readable projection substitutes for that custody requirement.
-    pub publisher_custody: PreparedPublisherCustody,
-}
-/// Existing private publisher files captured before projected configuration validation.
-/// This descriptor carries paths only; canonical role/network admission remains mandatory
-/// in the daemon and cannot be established by constructing a descriptor.
-#[derive(Debug)]
-pub struct PreparedPublisherCustody {
-    /// Owner-0600 exact original keyring capture, never generated from development seeds.
-    pub keyring_source_path: std::path::PathBuf,
-    /// Owner-0600 exact original ordinary submitter-key capture.
-    pub submitter_source_path: std::path::PathBuf,
 }
 /// One byte-exact runtime file materialized through a Compose config.
 #[derive(Debug)]
@@ -267,7 +249,6 @@ struct PreparedRuntimeConfig {
     blake3: [u8; 32],
     files: Vec<PreparedRuntimeSource>,
     secrets: Vec<PreparedSecretSource>,
-    publisher: PreparedPublisherSource,
     requires_sora_profile: bool,
 }
 #[derive(Debug)]
@@ -279,11 +260,6 @@ struct PreparedRuntimeSource {
 struct PreparedSecretSource {
     target: String,
     source: path::RelativePath,
-}
-#[derive(Debug)]
-struct PreparedPublisherSource {
-    keyring: path::RelativePath,
-    submitter: path::RelativePath,
 }
 impl PeerSettings {
     fn is_valid_runtime_target(target: &str) -> bool {
@@ -310,8 +286,6 @@ impl PeerSettings {
         !name.is_empty()
             && name != "."
             && name != ".."
-            && target != KAGEMUSHA_LOAD_KEYRING_TARGET
-            && target != KAGEMUSHA_LOAD_SUBMITTER_TARGET
             && !name.starts_with("iroha_runtime_")
             && !matches!(
                 name,
@@ -566,16 +540,6 @@ impl PeerSettings {
                 blake3: validator.runtime_config_blake3,
                 files: runtime_files,
                 secrets: secret_files,
-                publisher: PreparedPublisherSource {
-                    keyring: path::AbsolutePath::new(
-                        &validator.publisher_custody.keyring_source_path,
-                    )?
-                    .relative_to(target_dir)?,
-                    submitter: path::AbsolutePath::new(
-                        &validator.publisher_custody.submitter_source_path,
-                    )?
-                    .relative_to(target_dir)?,
-                },
                 requires_sora_profile: validator.requires_sora_profile,
             };
             let (public_key, private_key) = validator.key_pair.into_parts();
@@ -640,12 +604,9 @@ impl<'a> Swarm<'a> {
     /// identities use separate derivation domains, so no key serves two roles.
     ///
     /// The generated manifest requires the signed genesis body, verifier key, and exact hash
-    /// through explicit host-file environment variables, as well as a per-node existing TOML
-    /// and both existing owner-only publisher files. These variables select mount sources,
-    /// never runtime publisher settings or secret bytes. The mounted TOML must name
-    /// [`KAGEMUSHA_LOAD_KEYRING_TARGET`] and [`KAGEMUSHA_LOAD_SUBMITTER_TARGET`]. Its explicit
-    /// publisher limits are retained; the daemon always admits and supervises that publisher.
-    /// Host private-file ownership must match the container daemon UID. Production callers use
+    /// through explicit host-file environment variables, as well as a per-node existing
+    /// owner-only TOML. These variables select mount sources, never runtime settings or secret
+    /// bytes. Host private-file ownership must match the container daemon UID. Production callers use
     /// [`Self::from_prepared`] so the validator roster and signed artifacts come from one
     /// authoritative prepared bundle.
     #[allow(clippy::missing_errors_doc)]
@@ -738,8 +699,8 @@ impl From<path::Error> for Error {
 mod tests {
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
     use crate::{
-        PreparedGenesisArtifacts, PreparedPublisherCustody, PreparedRuntimeFile,
-        PreparedSecretFile, PreparedValidator, Swarm, base64_standard,
+        PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile, PreparedValidator,
+        Swarm, base64_standard,
         peer::{self, PeerOverride},
     };
     const IMAGE: &str = "hyperledger/iroha:dev";
@@ -884,16 +845,16 @@ mod tests {
                 .lines()
                 .filter(|line| line.trim() == "type: bind")
                 .count(),
-            4 * peer_count,
-            "every validator must bind signed genesis, its real TOML and both publisher originals"
+            2 * peer_count,
+            "every validator must bind signed genesis and its real TOML"
         );
         assert_eq!(
             output
                 .lines()
                 .filter(|line| line.trim() == "read_only: true")
                 .count(),
-            4 * peer_count,
-            "genesis, per-node config and both publisher inputs must all be read-only"
+            2 * peer_count,
+            "genesis and per-node config must both be read-only"
         );
         assert!(
             output.contains("export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE"),
@@ -930,20 +891,23 @@ mod tests {
         }
     }
     #[test]
-    fn development_manifest_requires_existing_per_node_publisher_custody() {
+    fn development_manifest_requires_existing_per_node_config() {
         let output = build_as_string(nonzero_ext::nonzero!(4u16), false, None, false, None);
         for index in 0..4 {
-            for suffix in [
-                "CONFIG",
-                "KAGEMUSHA_LOAD_KEYRING",
-                "KAGEMUSHA_LOAD_SUBMITTER",
-            ] {
-                assert!(output.contains(&format!("${{IROHA_PEER{index}_{suffix}_FILE:?")));
+            assert!(output.contains(&format!("${{IROHA_PEER{index}_CONFIG_FILE:?")));
+            for suffix in ["KAGEMUSHA_LOAD_KEYRING", "KAGEMUSHA_LOAD_SUBMITTER"] {
+                assert!(!output.contains(&format!("IROHA_PEER{index}_{suffix}_FILE")));
             }
         }
         assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
-        assert_eq!(output.matches("create_host_path: false").count(), 12);
-        assert_eq!(output.matches("require_publisher_file").count(), 16);
+        assert_eq!(output.matches("create_host_path: false").count(), 4);
+        assert_eq!(output.matches("require_private_file").count(), 8);
+        assert_eq!(
+            output
+                .matches("require_private_file /config/peer.toml 8388608")
+                .count(),
+            4
+        );
         assert!(output.contains("stat -c '%u:%a:%h'"));
         assert!(!output.contains("KAGEMUSHA_LOAD_AUTHORIZER_KEYRING"));
         assert!(
@@ -978,12 +942,6 @@ mod tests {
             runtime_config_blake3: [u8::try_from(index).expect("test index fits u8"); 32],
             runtime_files: Vec::new(),
             secret_files: Vec::new(),
-            // Manifest-shape TEST references only: this helper does not construct an admitted
-            // publisher keyring or a successful daemon Service.
-            publisher_custody: PreparedPublisherCustody {
-                keyring_source_path: format!("peer{index}.UNADMITTED-keyring.nrt").into(),
-                submitter_source_path: format!("peer{index}.TEST-submitter.key").into(),
-            },
         }
     }
     #[test]
@@ -1543,8 +1501,6 @@ mod tests {
             "/run/secrets/iroha_runtime_deadbeef.b64",
             "/run/secrets/iroha_genesis_public_key",
             "/run/secrets/iroha_genesis_expected_hash",
-            crate::KAGEMUSHA_LOAD_KEYRING_TARGET,
-            crate::KAGEMUSHA_LOAD_SUBMITTER_TARGET,
         ] {
             let temp = TempDir::new("prepared_secret_target");
             let bundle = temp.path().join("bundle");
@@ -1861,25 +1817,14 @@ mod tests {
             assert!(output.contains(artifact), "missing {artifact}: {output}");
         }
         assert!(!output.contains("${IROHA_GENESIS_"));
-        assert_eq!(output.matches("read_only: true").count(), 12);
+        assert_eq!(output.matches("read_only: true").count(), 4);
         assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
         assert_eq!(output.matches("exec env -i").count(), 4);
         assert_eq!(output.matches("--config-blake3 ").count(), 4);
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
-        assert_eq!(
-            output
-                .matches("target: /run/secrets/iroha_kagemusha_load_keyring")
-                .count(),
-            4
-        );
-        assert_eq!(
-            output
-                .matches("target: /run/secrets/iroha_kagemusha_load_submitter")
-                .count(),
-            4
-        );
-        assert_eq!(output.matches("create_host_path: false").count(), 8);
-        assert_eq!(output.matches("require_publisher_file").count(), 16);
+        assert!(!output.contains("iroha_kagemusha_load"));
+        assert_eq!(output.matches("create_host_path: false").count(), 0);
+        assert_eq!(output.matches("require_private_file").count(), 8);
         assert_eq!(output.matches("target: /run/secrets/iroha_peer").count(), 4);
         assert!(output.contains("../bundle/peer0.faucet.key"));
         assert!(!output.contains("private-0"));

@@ -165,7 +165,8 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_open_v1",
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
-    "connect_norito_kagemusha_wallet_commit_v1",
+    "connect_norito_kagemusha_wallet_execute_v1",
+    "connect_norito_kagemusha_wallet_request_status_v1",
     "connect_norito_kagemusha_wallet_retry_v1",
     "connect_norito_kagemusha_wallet_resume_v1",
     "connect_norito_kagemusha_wallet_fold_v1",
@@ -174,7 +175,7 @@ KAGEMUSHA_WALLET_EXPORTS = {
 }
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "open", "close", "activity", "call", "snapshot")
+    for method in ("revision", "open", "close", "activity", "call", "execute", "snapshot")
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_account_read_permission_multisig_signed_transaction",
@@ -309,6 +310,8 @@ def canonical_rust_type(value: str) -> str:
         "usize": "size_t",
         "PlatformCallbacks": "connect_norito_kagemusha_platform_v1",
         "WalletResult": "connect_norito_kagemusha_wallet_result_v1",
+        "WalletSnapshot": "connect_norito_kagemusha_wallet_snapshot_v1_t",
+        "WalletOperationRequest": "connect_norito_kagemusha_wallet_operation_request_v1",
         "ConnectNoritoSorafsReferenceBundlePayload": "ConnectNoritoSorafsReferenceBundlePayload",
         "ConnectNoritoSorafsReferenceInput": "ConnectNoritoSorafsReferenceInput",
         "u8": "uint8_t",
@@ -517,8 +520,8 @@ require_signature_parity(
     | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1"}
 )
 
-require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+25\b", header, "C bridge ABI version")
-require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*25\s*;", privacy, "Rust bridge ABI version")
+require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+26\b", header, "C bridge ABI version")
+require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*26\s*;", privacy, "Rust bridge ABI version")
 require(
     r"const\s+CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*PRIVACY_BRIDGE_ABI_VERSION_V1\s*;",
     rust,
@@ -601,7 +604,7 @@ if umbrella_contract(umbrella) != [
     raise SystemExit("[connect-norito-header] umbrella header drift")
 
 print(
-    "[connect-norito-header] ABI 25 synchronized: "
+    "[connect-norito-header] ABI 26 synchronized: "
     f"{len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
     f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(RETAIL_EXPORTS)} retail-fee, "
@@ -784,15 +787,15 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-wallet-header-width)
       replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_wallet_commit_v1(uint64_t handle," \
-        "connect_norito_kagemusha_wallet_commit_v1(uint32_t handle,"
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_commit_v1"
+        "connect_norito_kagemusha_wallet_execute_v1(uint64_t handle," \
+        "connect_norito_kagemusha_wallet_execute_v1(uint32_t handle,"
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_execute_v1"
       ;;
     --self-test-bad-wallet-rust-width)
       replace_once "${tmp}/kagemusha_wallet_ffi/exports.rs" \
-        $'connect_norito_kagemusha_wallet_commit_v1(\n    handle: u64,' \
-        $'connect_norito_kagemusha_wallet_commit_v1(\n    handle: u32,'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_commit_v1"
+        $'connect_norito_kagemusha_wallet_execute_v1(\n    handle: u64,' \
+        $'connect_norito_kagemusha_wallet_execute_v1(\n    handle: u32,'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_execute_v1"
       ;;
     --self-test-retired-kagemusha-jni-symbol)
       printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_RetiredBridge_nativeRetired() -> jint { 0 }\n' >> "${tmp}/platform_jni.rs"
@@ -854,7 +857,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-abi)
       replace_once "${tmp_header}" \
-        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 25" \
+        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 26" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
       ;;
     --self-test-missing-privacy-header-symbol)

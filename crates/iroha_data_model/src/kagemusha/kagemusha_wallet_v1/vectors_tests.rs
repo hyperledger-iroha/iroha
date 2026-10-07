@@ -56,6 +56,10 @@ use super::{
     *,
 };
 
+use crate::isi::kagemusha_wallet::load_finality::{
+    KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1, KagemushaWalletLoadReceiptV1,
+};
+
 type Role = KagemushaWalletDigestRoleV1;
 type Domain = KagemushaWalletSigningDomainV1;
 type ObjectDomain = KagemushaWalletObjectDigestDomainV1;
@@ -80,7 +84,6 @@ const ROOT_SEED: u8 = 0x11;
 const RECEIVER_ISSUER_SEED: u8 = 0x22;
 const PAYER_ISSUER_SEED: u8 = 0x26;
 const REGULATOR_SEED: u8 = 0x33;
-const LOAD_SEED: u8 = 0x34;
 const TIME_SEED: u8 = 0x35;
 const ARTIFACT_SEED: u8 = 0x36;
 const RENEWAL_KEY_SEED: u8 = 0x37;
@@ -121,10 +124,6 @@ const BOUNDARY_BODY: &[u8] = b"kagemusha wallet v1 low-S boundary";
 pub(super) struct VectorWorld {
     /// Payer, receiver and regulator of one scheme.
     pub(super) f: MessageFixture,
-    /// `LoadAuthorization`-role signer.
-    load_signer: SigningKey,
-    /// `LoadAuthorization`-role certificate.
-    load_certificate: KagemushaWalletSignerCertificateV1,
     /// `TimeAnchor`-role signer.
     time_signer: SigningKey,
     /// `TimeAnchor`-role certificate.
@@ -145,8 +144,8 @@ pub(super) struct VectorWorld {
     time_anchor: KagemushaWalletTimeAnchorV1,
     /// Load charge quote of the payer.
     charge_quote: KagemushaWalletChargeQuoteV1,
-    /// Quoted load voucher of the payer.
-    voucher: KagemushaWalletLoadVoucherV1,
+    /// Ordinary quoted Load receipt of the payer.
+    load_receipt: KagemushaWalletLoadReceiptV1,
     /// Artifact manifest of the scheme.
     manifest: KagemushaWalletArtifactManifestV1,
     /// Android renewal request of the payer.
@@ -331,14 +330,6 @@ fn build_world() -> VectorWorld {
     );
 
     let root = &f.payer.root;
-    let load_signer = signing_key(LOAD_SEED);
-    let load_certificate = test_certificate(
-        &scheme,
-        root,
-        KagemushaWalletSignerRoleV1::LoadAuthorization,
-        &load_signer,
-        3,
-    );
     let time_signer = signing_key(TIME_SEED);
     let time_certificate = test_certificate(
         &scheme,
@@ -445,28 +436,24 @@ fn build_world() -> VectorWorld {
         raw_output(&f.regulator, &quote_body.signing_message()),
     )
     .expect("charge quote");
-    let voucher_body = KagemushaWalletLoadVoucherBodyV1 {
+    let load_receipt = KagemushaWalletLoadReceiptV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
         scheme_id,
         asset_digest,
         wallet_id: payer.body.wallet_id,
+        request_id: [0x9b; 32],
         ordinal: 0,
         amount: 5_000,
         online_charge: 25,
         charge_quote: charge_quote.charge_quote_digest(),
         transaction_hash: [0x9a; 32],
         block_height: 42,
-        authorizer_certificate: load_certificate.certificate_digest(),
+        payer_account_digest: kagemusha_wallet_account_digest_v1(&test_account(BENEFICIARY_SEED))
+            .unwrap(),
     };
-    let voucher = KagemushaWalletLoadVoucherV1::sign(
-        voucher_body,
-        &load_certificate,
-        raw_output(&load_signer, &voucher_body.signing_message()),
-    )
-    .expect("voucher");
-    voucher
+    load_receipt
         .require_charge_quote(Some(&charge_quote))
-        .expect("quoted voucher");
+        .expect("quoted ordinary receipt");
 
     let manifest_body = KagemushaWalletArtifactManifestBodyV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
@@ -784,8 +771,6 @@ fn build_world() -> VectorWorld {
 
     VectorWorld {
         f,
-        load_signer,
-        load_certificate,
         time_signer,
         time_certificate,
         artifact_signer,
@@ -796,7 +781,7 @@ fn build_world() -> VectorWorld {
         quota_share,
         time_anchor,
         charge_quote,
-        voucher,
+        load_receipt,
         manifest,
         renewal,
         offer,
@@ -967,6 +952,8 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
     let receiver_challenge = f.receiver.challenge.challenge_digest();
     let payer_challenge = f.payer.challenge.challenge_digest();
     let receive_digests = w.receive.verify(receiver).expect("receive package");
+    let (new_app, new_enrollment) =
+        enrollment_policy::enrollment_policy_tests::policy_fixture(false);
 
     vec![
         digest_vector(
@@ -1016,6 +1003,20 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             f.payer.challenge.transcript(),
             false,
             Some(payer_challenge),
+        ),
+        digest_vector(
+            Role::AppPolicy,
+            "NEW unadmitted DATA app policy; public pins are placeholders, no approval",
+            new_app.transcript().expect("policy transcript"),
+            false,
+            Some(new_app.policy_digest().expect("policy digest")),
+        ),
+        digest_vector(
+            Role::EnrollmentPolicy,
+            "NEW unadmitted DATA enrollment policy; public pins are placeholders, no approval",
+            new_enrollment.transcript().expect("policy transcript"),
+            false,
+            Some(new_enrollment.policy_digest().expect("policy digest")),
         ),
         digest_vector(
             Role::EnrollmentId,
@@ -1272,13 +1273,6 @@ fn object_digest_vectors(w: &VectorWorld) -> Vec<ObjectDigestVector> {
             w.request.signature,
             digests.request,
         ),
-        object_digest_vector(
-            ObjectDomain::Voucher,
-            "load voucher",
-            w.voucher.body.signing_message(),
-            w.voucher.signature,
-            w.voucher.voucher_digest(),
-        ),
     ]
 }
 
@@ -1324,7 +1318,6 @@ fn object_domain_use(domain: ObjectDomain) -> &'static str {
         ObjectDomain::TimeAnchor => "object_time_anchor",
         ObjectDomain::ChargeQuote => "object_charge_quote",
         ObjectDomain::Request => "object_request",
-        ObjectDomain::Voucher => "object_voucher",
     }
 }
 
@@ -1466,13 +1459,6 @@ fn signature_vectors(w: &VectorWorld) -> Vec<SignatureVector> {
             key: w.time_certificate.body.key,
             transcript: w.time_anchor.body.transcript(),
             signature: w.time_anchor.signature,
-        },
-        SignatureVector {
-            object: "load voucher",
-            domain: Domain::Voucher,
-            key: w.load_certificate.body.key,
-            transcript: w.voucher.body.transcript(),
-            signature: w.voucher.signature,
         },
         SignatureVector {
             object: "Activate ledger control",
@@ -1930,7 +1916,12 @@ struct FramePin {
 
 fn frame_pin<T: norito::NoritoSchema>(short_name: &'static str, max_bytes: usize) -> FramePin {
     let frame_name = <T as norito::NoritoSchema>::frame_name();
-    assert_eq!(frame_name, format!("{FRAME_NAME_PREFIX}{short_name}"));
+    let expected = if short_name == "KagemushaWalletLoadReceiptV1" {
+        format!("iroha_data_model::isi::kagemusha_wallet::{short_name}")
+    } else {
+        format!("{FRAME_NAME_PREFIX}{short_name}")
+    };
+    assert_eq!(frame_name, expected);
     let frame_hash = norito::schema::identity::frame_hash::<T>();
     assert_eq!(frame_hash, norito::core::schema_hash_for_name(&frame_name));
     FramePin {
@@ -1988,6 +1979,10 @@ fn frame_pins() -> Vec<FramePin> {
             "KagemushaWalletQuotaShareV1",
             KAGEMUSHA_WALLET_QUOTA_SHARE_MAX_BYTES_V1,
         ),
+        frame_pin::<KagemushaWalletQuotaRefreshWitnessV1>(
+            "KagemushaWalletQuotaRefreshWitnessV1",
+            KAGEMUSHA_WALLET_QUOTA_REFRESH_WITNESS_MAX_BYTES_V1,
+        ),
         frame_pin::<KagemushaWalletTimeAnchorV1>(
             "KagemushaWalletTimeAnchorV1",
             KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
@@ -2020,9 +2015,13 @@ fn frame_pins() -> Vec<FramePin> {
             "KagemushaWalletFoldRecordV1",
             KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1,
         ),
-        frame_pin::<KagemushaWalletLoadVoucherV1>(
-            "KagemushaWalletLoadVoucherV1",
-            KAGEMUSHA_WALLET_LOAD_VOUCHER_MAX_BYTES_V1,
+        frame_pin::<KagemushaWalletLoadReceiptV1>(
+            "KagemushaWalletLoadReceiptV1",
+            KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1,
+        ),
+        frame_pin::<KagemushaWalletLoadFinalityV1>(
+            "KagemushaWalletLoadFinalityV1",
+            KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
         ),
         frame_pin::<KagemushaWalletUnloadClaimV1>(
             "KagemushaWalletUnloadClaimV1",
@@ -2107,7 +2106,12 @@ where
         "{short_name} {variant} canonical frame"
     );
     let frame_name = <T as norito::NoritoSchema>::frame_name();
-    assert_eq!(frame_name, format!("{FRAME_NAME_PREFIX}{short_name}"));
+    let expected = if short_name == "KagemushaWalletLoadReceiptV1" {
+        format!("iroha_data_model::isi::kagemusha_wallet::{short_name}")
+    } else {
+        format!("{FRAME_NAME_PREFIX}{short_name}")
+    };
+    assert_eq!(frame_name, expected);
     let header = norito::core::Header::read(frame.as_slice()).expect("header");
     assert_eq!(
         header.schema,
@@ -2376,6 +2380,135 @@ macro_rules! framed_pin {
     }};
 }
 
+/// Full 64-slot typed custody sample and a structurally valid quota-refresh capsule.
+/// The predecessor and sigma remain declared stand-ins, never proof acceptance.
+fn quota_custody_objects(
+    w: &VectorWorld,
+) -> (
+    KagemushaWalletQuotaRefreshWitnessV1,
+    KagemushaWalletRecoveryCapsuleV1,
+) {
+    let mut before = KagemushaWalletStateV1::bootstrap(w.payer(), field_value(0xc1)).unwrap();
+    let start = before.core.accepted_time_floor_ms.max(QUOTA_START_MS);
+    let span = before.core.time_anchor_max_response_ms.max(DAY_MS) + 1;
+    let windows: Vec<_> = (0..64)
+        .map(|i| {
+            let start = start + u64::try_from(i).unwrap() * span;
+            KagemushaWalletQuotaWindowV1 {
+                kind: KagemushaWalletQuotaWindowKindV1::Daily,
+                start_ms: start,
+                end_ms: start + span,
+                limit: 50_000,
+            }
+        })
+        .collect();
+    let usage = KagemushaWalletQuotaUsageArrayV1::from_slots(core::array::from_fn(|i| {
+        Some(KagemushaWalletQuotaUsageLeafV1::for_window(
+            &windows[i],
+            100 + u128::try_from(i).unwrap(),
+        ))
+    }))
+    .unwrap();
+    let witness = KagemushaWalletQuotaRefreshWitnessV1::from_usage(&usage).unwrap();
+    before.core.quota_usage_root = usage.root();
+    before.core.quota_windows_root = kagemusha_wallet_quota_windows_root_v1(&windows).unwrap();
+    before.core.quota_share_expires_at_ms = windows.last().unwrap().end_ms;
+    before.rest.quota_share_id = 1;
+    before.rest.quota_share = field_value(0xc2);
+    let body = KagemushaWalletQuotaShareBodyV1 {
+        version: 1,
+        scheme_id: w.scheme_id(),
+        asset_digest: w.payer().body.asset_digest,
+        wallet_id: w.payer().body.wallet_id,
+        share_id: 2,
+        issued_at_ms: start,
+        expires_at_ms: windows.last().unwrap().end_ms,
+        windows_root: before.core.quota_windows_root,
+        window_count: 64,
+        signer_certificate: w.f.regulator_certificate.certificate_digest(),
+    };
+    let share = KagemushaWalletQuotaShareV1::sign(
+        body,
+        windows,
+        &w.f.regulator_certificate,
+        raw_output(&w.f.regulator, &body.signing_message()),
+    )
+    .unwrap();
+    let changed = before
+        .refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
+            share: &share,
+            usage: &usage,
+        })
+        .unwrap();
+    let mut successor = KagemushaWalletStateV1 {
+        version: 1,
+        core: changed.core,
+        rest: changed.rest,
+    };
+    successor.core.sequence += 1;
+    successor.core.state_nonce = field_value(0xc3);
+    let statement = KagemushaWalletStatementV1 {
+        version: 1,
+        scheme_id: w.scheme_id(),
+        relation_id: w.scheme().relation_id,
+        credential_digest: w.payer().credential_digest(),
+        asset_digest: before.core.asset_digest,
+        lifecycle: successor.core.lifecycle,
+        sequence: successor.core.sequence,
+        next_load: successor.core.next_load,
+        enabled_controls: before.core.enabled_controls,
+        lineage_burned_total: 0,
+        lineage_pending_outgoing_root: [0; 32],
+        predecessor: before.commitment().unwrap(),
+        successor: successor.commitment().unwrap(),
+        effect: changed.effect,
+    };
+    let proof = stand_in_proof(VECTOR_PROOF_LEN);
+    let proof_digest = kagemusha_wallet_proof_digest_v1(
+        KagemushaWalletOperationKindV1::RefreshPolicy,
+        None,
+        &proof,
+    )
+    .unwrap();
+    let set = KagemushaWalletCertificateSetV1::new(vec![w.f.regulator_certificate]).unwrap();
+    let capsule = KagemushaWalletRecoveryCapsuleV1 {
+        version: 1,
+        scheme_id: w.scheme_id(),
+        wallet_id: w.payer().body.wallet_id,
+        operation_id: statement.operation_id(&w.payer().body.wallet_id).unwrap(),
+        kind: KagemushaWalletOperationKindV1::RefreshPolicy,
+        predecessor_capsule_digest: [0xc4; 32],
+        successor_state: successor,
+        statement,
+        predecessor_lineage: KagemushaWalletLineageSlotV1::None,
+        step_proof: proof,
+        payment_digest: [0; 32],
+        map_openings: vec![],
+        retained_inputs: vec![
+            KagemushaWalletRetainedInputV1 {
+                role: KagemushaWalletRetainedInputRoleV1::PolicyUpdate,
+                bytes: share.to_canonical_bytes().unwrap(),
+            },
+            KagemushaWalletRetainedInputV1 {
+                role: KagemushaWalletRetainedInputRoleV1::CertificateSet,
+                bytes: norito::encode_canonical(&set).unwrap(),
+            },
+            KagemushaWalletRetainedInputV1 {
+                role: KagemushaWalletRetainedInputRoleV1::QuotaRefreshWitness,
+                bytes: witness.to_canonical_bytes().unwrap(),
+            },
+        ],
+        output: KagemushaWalletOutputDescriptorV1::for_transition(
+            &statement,
+            &proof_digest,
+            &[0; 32],
+        )
+        .unwrap(),
+    };
+    capsule.validate().unwrap();
+    (witness, capsule)
+}
+
 /// One canonical frame of every framed object type other than the envelope (pinned by the
 /// envelope vectors), every marker state, and the unframed asset scope and anchored time.
 fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
@@ -2383,6 +2516,7 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
     let scheme_id = w.scheme_id();
     let receiver_wallet = w.receiver().body.wallet_id;
     let l = ledger_objects(w);
+    let (quota_witness, quota_capsule) = quota_custody_objects(w);
     let package_frame =
         encode_frame_v1(&w.receive, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1).expect("package frame");
     let decoded_package: KagemushaWalletPackageV1 =
@@ -2463,6 +2597,18 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
             &scheme_id,
             false
         ),
+        {
+            let frame = quota_witness.to_canonical_bytes().unwrap();
+            let decoded = KagemushaWalletQuotaRefreshWitnessV1::decode_canonical(&frame).unwrap();
+            object_pin(
+                "KagemushaWalletQuotaRefreshWitnessV1",
+                "64 occupied predecessor slots",
+                &quota_witness,
+                frame,
+                &decoded,
+                false,
+            )
+        },
         framed_pin!(
             KagemushaWalletTimeAnchorV1,
             "",
@@ -2528,6 +2674,13 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
             true
         ),
         framed_pin!(
+            KagemushaWalletRecoveryCapsuleV1,
+            "QuotaShare, 64 retained predecessor slots",
+            quota_capsule,
+            &scheme_id,
+            true
+        ),
+        framed_pin!(
             KagemushaWalletCompletionRecordV1,
             "Receive",
             w.completion,
@@ -2541,13 +2694,38 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
             &scheme_id,
             true
         ),
-        framed_pin!(
-            KagemushaWalletLoadVoucherV1,
-            "quoted",
-            w.voucher,
-            &scheme_id,
-            false
-        ),
+        {
+            let frame = w.load_receipt.to_canonical_bytes().unwrap();
+            let decoded = KagemushaWalletLoadReceiptV1::decode_canonical(&frame).unwrap();
+            object_pin(
+                "KagemushaWalletLoadReceiptV1",
+                "quoted ordinary transaction",
+                &w.load_receipt,
+                frame,
+                &decoded,
+                false,
+            )
+        },
+        {
+            let evidence = KagemushaWalletLoadFinalityV1 {
+                version: 1,
+                anchor_digest: field_value(0x95),
+                receipt_digest: w.load_receipt.receipt_digest().unwrap(),
+                proof: vec![0x5a; 9_856],
+                pallas_claim: [0; 544],
+                vesta_claim: [0; 544],
+            };
+            let frame = evidence.to_canonical_bytes().unwrap();
+            let decoded = KagemushaWalletLoadFinalityV1::decode_canonical(&frame).unwrap();
+            object_pin(
+                "KagemushaWalletLoadFinalityV1",
+                "shape-only proof stand-in",
+                &evidence,
+                frame,
+                &decoded,
+                true,
+            )
+        },
         framed_pin!(
             KagemushaWalletUnloadClaimV1,
             "quoted",
@@ -2657,7 +2835,7 @@ fn enum_tag_table(w: &VectorWorld) -> Vec<EnumTags> {
     };
     let effects = [
         ("Bootstrap", w.bootstrap.statement.effect),
-        ("Load", w.voucher.load_effect().expect("load effect")),
+        ("Load", w.load_receipt.load_effect().expect("load effect")),
         ("Send", payment.send.statement.effect),
         ("Receive", w.receive.statement.effect),
         (
@@ -2763,13 +2941,7 @@ fn enum_tag_table(w: &VectorWorld) -> Vec<EnumTags> {
         unit_tags(
             "KagemushaWalletSignerRoleV1",
             &KagemushaWalletSignerRoleV1::ALL,
-            &[
-                "Enrollment",
-                "LoadAuthorization",
-                "RegulatoryPolicy",
-                "TimeAnchor",
-                "Artifact",
-            ],
+            &["Enrollment", "RegulatoryPolicy", "TimeAnchor", "Artifact"],
             KagemushaWalletSignerRoleV1::tag,
         ),
         unit_tags(
@@ -2934,11 +3106,13 @@ fn enum_tag_table(w: &VectorWorld) -> Vec<EnumTags> {
                 "Request",
                 "Payment",
                 "Credited",
-                "LoadVoucher",
+                "LoadReceipt",
                 "ChargeQuote",
                 "PolicyUpdate",
                 "CertificateSet",
                 "Credential",
+                "LoadFinality",
+                "QuotaRefreshWitness",
             ],
             KagemushaWalletRetainedInputRoleV1::tag,
         ),
@@ -2993,7 +3167,6 @@ fn keys_json(w: &VectorWorld) -> Value {
         ("receiver_issuer", RECEIVER_ISSUER_SEED),
         ("payer_issuer", PAYER_ISSUER_SEED),
         ("regulator", REGULATOR_SEED),
-        ("load_authorizer", LOAD_SEED),
         ("time_anchor", TIME_SEED),
         ("artifact", ARTIFACT_SEED),
         ("renewal_attested_key", RENEWAL_KEY_SEED),
@@ -3001,7 +3174,6 @@ fn keys_json(w: &VectorWorld) -> Value {
         ("receiver_payment", RECEIVER_SEED),
     ];
     for (signer, certificate) in [
-        (&w.load_signer, &w.load_certificate),
         (&w.time_signer, &w.time_certificate),
         (&w.artifact_signer, &w.artifact_certificate),
     ] {
@@ -3136,6 +3308,14 @@ fn bounds_json() -> Value {
             json_number(KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1),
         ),
         (
+            "credited_receive_fixed_bytes",
+            json_number(KAGEMUSHA_WALLET_CREDITED_RECEIVE_FIXED_BYTES_V1),
+        ),
+        (
+            "credited_receive_proof_budget_bytes",
+            json_number(KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1),
+        ),
+        (
             "credited_status_fixed_bytes",
             json_number(KAGEMUSHA_WALLET_CREDITED_STATUS_FIXED_BYTES_V1),
         ),
@@ -3147,9 +3327,9 @@ fn bounds_json() -> Value {
             "proof_caps",
             json_text(
                 "the exact σ and Ω transport lengths of the frozen verifying-key allowlist, with \
-                 Ω + the largest σ_send <= payment_proof_budget_bytes and Ω <= \
-                 lineage_proof_cap_bytes; until the artifacts freeze only the carrying frames \
-                 bound them",
+                 Ω + the largest σ_send <= payment_proof_budget_bytes, σ_recv <= \
+                 credited_receive_proof_budget_bytes and Ω <= lineage_proof_cap_bytes; until \
+                 the artifacts freeze only the carrying frames bound them",
             ),
         ),
         (
@@ -3279,7 +3459,6 @@ fn signing_domain_use(domain: Domain) -> &'static str {
         Domain::Offer => "signing_offer",
         Domain::SessionControl => "signing_session_control",
         Domain::Request => "signing_request",
-        Domain::Voucher => "signing_voucher",
         Domain::LedgerControl => "signing_ledger_control",
     }
 }
@@ -3731,8 +3910,8 @@ fn poseidon_json(w: &VectorWorld) -> Value {
         .expect("nonzero fee");
     let load = KagemushaWalletLoadLeafV1 {
         ordinal: 0,
-        voucher_digest: w.voucher.voucher_digest(),
-        amount: w.voucher.body.amount,
+        receipt_digest: w.load_receipt.receipt_digest().expect("receipt digest"),
+        amount: w.load_receipt.amount,
     };
     let redeem = KagemushaWalletRedeemLeafV1 {
         ordinal: 0,
@@ -4002,10 +4181,10 @@ fn indexed_tree_json(
     let int = kagemusha_wallet_field_from_u128_v1;
     let sentinel = KagemushaWalletIndexedLeafV1::SENTINEL;
     let empty_root = kagemusha_wallet_empty_map_root_v1();
-    // This unsigned map KAT uses a canonical component stand-in, not a signed voucher.
+    // This unsigned map KAT uses a canonical component stand-in, not a finalized receipt.
     let next_load = KagemushaWalletLoadLeafV1 {
         ordinal: 1,
-        voucher_digest: field_value(0x9c),
+        receipt_digest: field_value(0x9c),
         amount: 2_500,
     };
     let mut recovery = KagemushaWalletIndexedTreeV1::new();
@@ -4423,6 +4602,26 @@ fn vectors_file_text(w: &VectorWorld) -> String {
         ("keys", keys_json(w)),
         ("digests", digest_vectors_json(&digests)),
         ("object_digests", object_digest_vectors_json(w)),
+        (
+            "ordinary_load_receipt",
+            json_object(vec![
+                (
+                    "transcript_hex",
+                    json_hex(&w.load_receipt.transcript().unwrap()),
+                ),
+                ("domain_ascii", json_text("kgwolod1")),
+                (
+                    "digest_hex",
+                    json_hex(&w.load_receipt.receipt_digest().unwrap()),
+                ),
+                (
+                    "packed_items",
+                    json_items(&kagemusha_wallet_packed_bytes_v1(
+                        &w.load_receipt.transcript().unwrap(),
+                    )),
+                ),
+            ]),
+        ),
         ("signatures", signature_vectors_json(&signature_vectors(w))),
         ("signature_boundaries", boundary_json()),
         ("envelopes", envelope_vectors_json(w)),
@@ -4679,7 +4878,7 @@ fn kagemusha_wallet_v1_quota_usage_vectors_open_and_charge_fixed_slots() {
 fn kagemusha_wallet_v1_signature_vectors_and_boundaries() {
     let world = vector_world();
     let vectors = signature_vectors(world);
-    assert_eq!(vectors.len(), 18);
+    assert_eq!(vectors.len(), 17);
     let Value::Array(rows) = signature_vectors_json(&vectors) else {
         panic!("array");
     };
@@ -5012,9 +5211,7 @@ fn kagemusha_wallet_v1_vector_world_objects_validate() {
     w.charge_quote
         .verify(&scheme, &w.f.regulator_certificate)
         .expect("charge quote");
-    w.voucher
-        .verify(&scheme, &w.load_certificate)
-        .expect("voucher");
+    w.load_receipt.validate().expect("receipt shape");
     w.renewal.verify(w.payer()).expect("renewal");
     w.control
         .verify(&w.payer().body.payment_key)
@@ -5308,15 +5505,18 @@ fn kagemusha_wallet_v1_flips_package() {
 }
 
 #[test]
-fn kagemusha_wallet_v1_flips_load_voucher() {
+fn kagemusha_wallet_v1_flips_ordinary_load_receipt() {
     let w = vector_world();
-    let scheme = w.scheme();
-    assert_flips(&w.voucher, w.voucher.voucher_digest(), |bytes| {
-        let voucher =
-            KagemushaWalletLoadVoucherV1::decode_canonical(bytes, &scheme.scheme_id()).ok()?;
-        voucher.verify(&scheme, &w.load_certificate).ok()?;
-        Some(voucher.voucher_digest())
-    });
+    assert_flips(
+        &w.load_receipt,
+        w.load_receipt.receipt_digest().unwrap(),
+        |bytes| {
+            KagemushaWalletLoadReceiptV1::decode_canonical(bytes)
+                .ok()?
+                .receipt_digest()
+                .ok()
+        },
+    );
 }
 
 #[test]

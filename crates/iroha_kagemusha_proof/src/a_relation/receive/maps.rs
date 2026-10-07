@@ -69,6 +69,25 @@ pub fn constrain_nonmembership(
     input: &ContextInputs<'_>,
     opening: &OpeningCells<Fp>,
 ) -> Result<(), Error> {
+    let valid = derive_nonmembership(chip, region, plan, stage, input, opening)?;
+    input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
+        region,
+        plan.receive_results().ok_or(Error::Synthesis)?,
+        stage,
+        ReceiveResultTag::Nonmembership,
+        &valid,
+    )
+}
+
+// Same native predicate, without interpreting a proposed result as authority.
+pub(crate) fn derive_nonmembership(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    plan: &ContextPlan,
+    stage: u32,
+    input: &ContextInputs<'_>,
+    opening: &OpeningCells<Fp>,
+) -> Result<Bit<Fp>, Error> {
     require_task(plan, stage, OperationTask::ReceiveNonmembership)?;
     if input.own_statement.variant() != plan.operation().frame().variant() {
         return Err(Error::Synthesis);
@@ -87,13 +106,7 @@ pub fn constrain_nonmembership(
         &transition,
         opening,
     )?;
-    input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
-        region,
-        plan.receive_results().ok_or(Error::Synthesis)?,
-        stage,
-        ReceiveResultTag::Nonmembership,
-        &valid,
-    )
+    Ok(valid)
 }
 
 impl ReceiveSignedObjects {
@@ -116,6 +129,27 @@ impl ReceiveSignedObjects {
         input: &ContextInputs<'_>,
         opening: &OpeningCells<Fp>,
     ) -> Result<(), Error> {
+        let valid = self.derive_blacklist(chip, region, plan, stage, input, opening)?;
+        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
+            region,
+            plan.receive_results().ok_or(Error::Synthesis)?,
+            stage,
+            ReceiveResultTag::Blacklist,
+            &valid,
+        )
+    }
+
+    // Same production predicate for native witness preparation. This returns assigned
+    // cells only; the fixed owning stage still binds and proves the result.
+    pub(crate) fn derive_blacklist(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+        opening: &OpeningCells<Fp>,
+    ) -> Result<Bit<Fp>, Error> {
         require_task(plan, stage, OperationTask::ReceiveBlacklist)?;
         self.bind_context(region, plan, input)?;
         let predecessor = input.predecessor.ok_or(Error::Synthesis)?;
@@ -132,13 +166,7 @@ impl ReceiveSignedObjects {
             .ok_or(Error::Synthesis)?;
         let actual = bounded_word(chip, region, own_index)?;
         GlueChip::assert_equal(region, &actual, &selector)?;
-        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
-            region,
-            plan.receive_results().ok_or(Error::Synthesis)?,
-            stage,
-            ReceiveResultTag::Blacklist,
-            &valid,
-        )
+        Ok(valid)
     }
 }
 
@@ -197,39 +225,48 @@ impl ReceiveEffectsCells {
     }
 }
 
-/// Consume all five fixed results and all four incoming modes, then apply OQ-3.
-///
-/// This runs only at the fixed terminal Effects stage. Result claims are not
-/// accepted from a caller-provided shortened slice. The exact Payment digest
-/// is copied from the Objects producer's committed context slot. Catalog
-/// admission must establish every preceding typed result owner and hard own
-/// authorization; intermediate W proofs are never final lineage proofs.
-///
+fn effect_verdict(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    plan: &ContextPlan,
+    input: &ContextInputs<'_>,
+) -> Result<Bit<Fp>, Error> {
+    let claims = input.receive_results.ok_or(Error::Synthesis)?;
+    bind_modes(
+        chip,
+        region,
+        plan.operation(),
+        claims.values(plan.receive_results().ok_or(Error::Synthesis)?)?,
+        input.modes,
+    )
+}
+
+/// Authenticate one fixed consumed/credit-map owner against the same complete
+/// context, all five results and all modes. Neither owner introduces a soft bit.
 /// # Errors
-/// Wrong stage/schema, incomplete results/modes or layout failure. Incorrect
-/// map effects, Payment substitution and a discretionary burn are unsatisfiable.
-pub fn constrain_effects(
+/// Wrong/missing owner, terminal placement, wrong Payment or unsatisfied map effect.
+pub fn constrain_map_effects(
     chip: &mut VerifierChip<Ep>,
     region: &mut Region<'_, Fp>,
     plan: &ContextPlan,
     stage: u32,
     input: &ContextInputs<'_>,
     witness: &ReceiveMapWitness,
-) -> Result<ReceiveEffectsCells, Error> {
-    require_task(plan, stage, OperationTask::ReceiveEffects)?;
-    if usize::try_from(stage).ok().and_then(|s| s.checked_add(1)) != Some(plan.stage_count())
+    task: OperationTask,
+) -> Result<(), Error> {
+    if !matches!(
+        task,
+        OperationTask::ReceiveConsumedEffects | OperationTask::ReceiveCreditEffects
+    ) || usize::try_from(stage)
+        .ok()
+        .and_then(|s| s.checked_add(1))
+        .is_none_or(|next| next >= plan.stage_count())
         || input.own_statement.variant() != plan.operation().frame().variant()
     {
         return Err(Error::Synthesis);
     }
-    let claims = input.receive_results.ok_or(Error::Synthesis)?;
-    let valid = bind_modes(
-        chip,
-        region,
-        plan.operation(),
-        claims.values(plan.receive_results().ok_or(Error::Synthesis)?)?,
-        input.modes,
-    )?;
+    require_task(plan, stage, task)?;
+    let valid = effect_verdict(chip, region, plan, input)?;
     GlueChip::assert_equal(
         region,
         &witness.payment_digest,
@@ -241,10 +278,48 @@ pub fn constrain_effects(
     )?;
     let transition = transition(input)?;
     let lanes = chip.operation_lanes()?;
-    MapEffectsChip::new(lanes.glue, lanes.range, lanes.hash).receive(
+    let mut maps = MapEffectsChip::new(lanes.glue, lanes.range, lanes.hash);
+    match task {
+        OperationTask::ReceiveConsumedEffects => {
+            maps.receive_consumed(region, &transition, witness, &valid)
+        }
+        OperationTask::ReceiveCreditEffects => {
+            maps.receive_credit(region, &transition, witness, &valid)
+        }
+        _ => Err(Error::Synthesis),
+    }
+}
+
+/// Consume all five fixed results and all modes, then finalize burn and preserved state.
+///
+/// This runs only at the fixed terminal Effects stage. Result claims are not
+/// accepted from a caller-provided shortened slice. The exact Payment digest
+/// and both map roots were hard-bound by the mandatory preceding consumed/credit
+/// owners. Catalog admission must establish every preceding typed result owner and hard own
+/// authorization; intermediate W proofs are never final lineage proofs.
+///
+/// # Errors
+/// Wrong stage/schema, incomplete results/modes or layout failure. Incorrect
+/// map effects, Payment substitution and a discretionary burn are unsatisfiable.
+pub fn constrain_effects(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    plan: &ContextPlan,
+    stage: u32,
+    input: &ContextInputs<'_>,
+) -> Result<ReceiveEffectsCells, Error> {
+    require_task(plan, stage, OperationTask::ReceiveEffects)?;
+    if usize::try_from(stage).ok().and_then(|s| s.checked_add(1)) != Some(plan.stage_count())
+        || input.own_statement.variant() != plan.operation().frame().variant()
+    {
+        return Err(Error::Synthesis);
+    }
+    let valid = effect_verdict(chip, region, plan, input)?;
+    let transition = transition(input)?;
+    let lanes = chip.operation_lanes()?;
+    MapEffectsChip::new(lanes.glue, lanes.range, lanes.hash).receive_burn_and_preserve(
         region,
         &transition,
-        witness,
         &valid,
     )?;
     Ok(ReceiveEffectsCells { valid })

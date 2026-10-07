@@ -650,7 +650,7 @@ class HttpClientTransport private constructor(
         getLedgerExecutedBlockWire(BigInteger.valueOf(height))
 
     /**
-     * Read one bounded, unverified Load issuance original with the existing account signer.
+     * Read one bounded, unverified unsigned Load receipt with the existing account signer.
      *
      * [requireCurrentOwner] must throw whenever the captured application actor/account or wallet
      * incarnation has changed. It is checked before signing, before dispatch and before delivery;
@@ -659,10 +659,11 @@ class HttpClientTransport private constructor(
      *
      * This performs one signed empty-body GET without compatibility probes, retries, redirects,
      * JSON fallback or monetary decoding. The expected payer and network remain immutable; server
-     * authentication and Native own canonical controller/signer admission and response binding.
-     * Native must bind request/payer/scheme/wallet and the original signed voucher, verify Load
-     * authorization and perform the complete proof/durable transition before any balance change.
-     * A nonempty malformed binary response is still unverified transport data, never completion.
+     * authentication owns canonical controller/signer admission. Before wallet admission, the
+     * consumer must bind the canonical receipt to the expected request/payer/scheme/wallet and
+     * independently authenticate the original successful transaction, ordinary chain finality and
+     * the complete recursive Load proof. This transport supplies no wallet admission or balance
+     * change. A nonempty malformed binary response remains unverified transport data.
      */
     fun getKagemushaWalletLoadIssuanceOriginalV1(
         selection: ToriiKagemushaWalletLoadSelectionV1,

@@ -522,3 +522,53 @@ fn aggregate_original_pins_each_scope_interval_and_fee_terms_without_changing_se
         retained
     );
 }
+
+#[test]
+fn completed_funding_projection_rejects_unfinished_reports_and_keeps_absent_pair() {
+    for step in [
+        super::super::provider_funding::FundingStep::Request,
+        super::super::provider_funding::FundingStep::Approval,
+        super::super::provider_funding::FundingStep::Credit,
+        super::super::provider_funding::FundingStep::Capacity,
+    ] {
+        let error = CompletedFunding::from_progress(ProviderFundingProgress::Unprepared {
+            step,
+            status: OperationStatus::Absent,
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("bootstrap funding history is not complete")
+        );
+    }
+    // Shape-only metadata, never passed to a native owner or used to mint completion.
+    let credit = ManagedTransactionFinality {
+        transaction_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"completed funding shape credit",
+        )),
+        block_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"completed funding shape block",
+        )),
+        height: 3,
+        block_time_ms: 100,
+    };
+    let capacity = ManagedTransactionFinality {
+        height: 4,
+        ..credit
+    };
+    let completed = CompletedFunding::from_progress(ProviderFundingProgress::Complete {
+        request: None,
+        approval: None,
+        credit,
+        capacity,
+    })
+    .unwrap();
+    assert!(completed.request.is_none());
+    assert!(completed.approval.is_none());
+    assert_eq!(completed.credit, credit);
+    assert_eq!(completed.capacity, capacity);
+    assert!(
+        std::mem::size_of::<CompletedFunding>() < std::mem::size_of::<ProviderFundingProgress>()
+    );
+}

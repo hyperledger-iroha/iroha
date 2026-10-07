@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct TestWallet {
     calls: Arc<AtomicUsize>,
     drops: Arc<AtomicUsize>,
+    expected_request: Option<state::OperationRequestV1>,
 }
 impl Drop for TestWallet {
     fn drop(&mut self) {
@@ -40,9 +41,19 @@ impl Wallet for TestWallet {
             }),
         })
     }
-    fn commit(&mut self, _: state::FrozenTransition) -> Result<Response> {
+    fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(expected) = &self.expected_request {
+            assert_eq!(&request, expected);
+        }
         Err(Failure::code(PROOF_REJECTED))
+    }
+    fn request_status(&mut self, _: &[u8; 32]) -> Result<Response> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Response {
+            kind: 11,
+            ..Response::default()
+        })
     }
     fn retry(&mut self, op: &[u8; 32]) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -78,6 +89,7 @@ fn installed() -> (u64, Arc<AtomicUsize>, Arc<AtomicUsize>) {
         Box::new(TestWallet {
             calls: calls.clone(),
             drops: drops.clone(),
+            expected_request: None,
         }),
         state::Scheduler::new(),
     )
@@ -129,7 +141,12 @@ fn c_calls_preserve_exact_retry_unknown_pending_loss_and_platform_failure() {
         }
     );
     assert_eq!(retry(id, &[0; 31]).unwrap_err().status, INVALID);
-    assert_eq!(commit(id, &[0; 5]).unwrap_err().status, INVALID);
+    assert_eq!(
+        requests::request(&[0; 5], 9, 0, [&[]; 3])
+            .unwrap_err()
+            .status,
+        INVALID
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 6);
     let mut result = WalletResult::default();
     assert_eq!(
@@ -146,7 +163,7 @@ fn c_calls_preserve_exact_retry_unknown_pending_loss_and_platform_failure() {
         (8, 7, 1 << 29, 3)
     );
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_commit_v1(id, std::ptr::null(), 10, &mut result) },
+        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, std::ptr::null(), &mut result) },
         INVALID
     );
     assert_eq!(
@@ -541,4 +558,136 @@ fn snapshot_pod_has_explicit_presence_for_a_valid_zero_folded_balance() {
     );
     assert_eq!(fail.flags, 0);
     assert_eq!(fail.owned_balance, WalletU128::default());
+}
+
+#[test]
+fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
+    let (id, calls, _) = installed();
+    let identity = [1; 32];
+    let mut request = WalletOperationRequest {
+        request_id: identity.as_ptr(),
+        selector: 9,
+        amount: WalletU128::default(),
+        first: std::ptr::null(),
+        first_length: 0,
+        second: std::ptr::null(),
+        second_length: 0,
+        third: std::ptr::null(),
+        third_length: 0,
+    };
+    let mut result = WalletResult::default();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        PROOF_REJECTED
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(result.status, PROOF_REJECTED);
+    assert!(result.bytes.is_null());
+    request.first_length = 1;
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        INVALID
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        unsafe {
+            connect_norito_kagemusha_wallet_request_status_v1(id, identity.as_ptr(), &mut result)
+        },
+        0
+    );
+    assert_eq!(result.status, 11);
+    assert_eq!(result.length, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    close(id).unwrap();
+}
+
+#[test]
+fn c_operation_request_layout_and_unsigned_amount_reach_the_exact_typed_owner() {
+    use std::mem::{align_of, offset_of, size_of};
+    // Derive the C field placement from primitive platform ABI alignment. In particular,
+    // the amount is two u64 limbs, not compiler-specific u128 or an opaque byte codec.
+    let align = |position: usize, alignment: usize| position.div_ceil(alignment) * alignment;
+    let pointer = size_of::<*const u8>();
+    let selector = align(pointer, align_of::<u32>());
+    let amount = align(selector + size_of::<u32>(), align_of::<WalletU128>());
+    let first = align(amount + size_of::<WalletU128>(), align_of::<*const u8>());
+    assert_eq!(offset_of!(WalletU128, low), 0);
+    assert_eq!(offset_of!(WalletU128, high), size_of::<u64>());
+    assert_eq!(size_of::<WalletU128>(), 2 * size_of::<u64>());
+    assert_eq!(offset_of!(WalletOperationRequest, request_id), 0);
+    assert_eq!(offset_of!(WalletOperationRequest, selector), selector);
+    assert_eq!(offset_of!(WalletOperationRequest, amount), amount);
+    assert_eq!(offset_of!(WalletOperationRequest, first), first);
+    assert_eq!(
+        offset_of!(WalletOperationRequest, first_length),
+        first + pointer
+    );
+    assert_eq!(
+        offset_of!(WalletOperationRequest, second),
+        first + 2 * pointer
+    );
+    assert_eq!(
+        offset_of!(WalletOperationRequest, second_length),
+        first + 3 * pointer
+    );
+    assert_eq!(
+        offset_of!(WalletOperationRequest, third),
+        first + 4 * pointer
+    );
+    assert_eq!(
+        offset_of!(WalletOperationRequest, third_length),
+        first + 5 * pointer
+    );
+    assert_eq!(
+        size_of::<WalletOperationRequest>(),
+        align(first + 6 * pointer, align_of::<WalletOperationRequest>())
+    );
+
+    let identity = [19; 32];
+    let quote = [1, 0, 255, 2];
+    let certificates = [2, 255, 0, 1];
+    let amount = (u128::from(0xfedc_ba98_7654_3210_u64) << 64) | 0x0123_4567_89ab_cdef;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handle = install(
+        Box::new(TestWallet {
+            calls: calls.clone(),
+            drops: Arc::new(AtomicUsize::new(0)),
+            expected_request: Some(state::OperationRequestV1 {
+                request_id: identity,
+                action: state::OperationActionV1::Unload {
+                    amount,
+                    charge: Some(state::ChargeOriginalsV1 {
+                        quote: quote.to_vec(),
+                        certificates: certificates.to_vec(),
+                    }),
+                },
+            }),
+        }),
+        state::Scheduler::new(),
+    )
+    .unwrap();
+    let request = WalletOperationRequest {
+        request_id: identity.as_ptr(),
+        selector: 8,
+        amount: WalletU128 {
+            low: amount as u64,
+            high: (amount >> 64) as u64,
+        },
+        first: quote.as_ptr(),
+        first_length: quote.len(),
+        second: certificates.as_ptr(),
+        second_length: certificates.len(),
+        third: std::ptr::null(),
+        third_length: 0,
+    };
+    let mut result = WalletResult::default();
+    // The stand-in owner deliberately rejects proof admission after asserting every field.
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_execute_v1(handle, &request, &mut result) },
+        PROOF_REJECTED
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(result.status, PROOF_REJECTED);
+    assert!(result.bytes.is_null());
+    close(handle).unwrap();
 }

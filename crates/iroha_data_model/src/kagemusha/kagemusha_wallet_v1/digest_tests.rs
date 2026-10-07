@@ -18,13 +18,15 @@ use crate::kagemusha::kagemusha_wallet_v1::poseidon::{
 /// Payment, lineage, credit-opening, credit-status and credited digests, every signing message,
 /// the trees and the quota-usage array) is a Poseidon value, not a SHA role (owner answers Q1,
 /// Q2, Q9, A1, A3 and B1).
-const ROLE_LABELS: [&str; 18] = [
+const ROLE_LABELS: [&str; 20] = [
     "scheme",
     "relation",
     "provider-contract",
     "asset-scope",
     "account",
     "enrollment-challenge",
+    "app-policy",
+    "enrollment-policy",
     "enrollment-id",
     "enrollment-key-binding",
     "wallet-id",
@@ -41,7 +43,7 @@ const ROLE_LABELS: [&str; 18] = [
 
 /// Object-digest domains in declaration order with the signing domain of their body (wire
 /// record §1, owner answer B1).
-const OBJECT_DOMAINS: [(&str, &str); 11] = [
+const OBJECT_DOMAINS: [(&str, &str); 10] = [
     ("kgwocrt1", "kgwcert1"),
     ("kgwocrd1", "kgwcred1"),
     ("kgworcp1", "kgwrcpt1"),
@@ -52,11 +54,10 @@ const OBJECT_DOMAINS: [(&str, &str); 11] = [
     ("kgwotim1", "kgwtanc1"),
     ("kgwochg1", "kgwchgq1"),
     ("kgworeq1", "kgwrqst1"),
-    ("kgwovch1", "kgwvchr1"),
 ];
 
 /// Signing domains in declaration order with their exact transcript lengths (wire record §1).
-const SIGNING_DOMAINS: [(&str, usize); 17] = [
+const SIGNING_DOMAINS: [(&str, usize); 16] = [
     ("kgwcert1", 108),
     ("kgwcred1", 476),
     ("kgwrnch1", 130),
@@ -72,7 +73,6 @@ const SIGNING_DOMAINS: [(&str, usize); 17] = [
     ("kgwoffr1", 194),
     ("kgwsctl1", 197),
     ("kgwrqst1", 458),
-    ("kgwvchr1", 250),
     ("kgwlctl1", 211),
 ];
 
@@ -290,7 +290,7 @@ fn kagemusha_wallet_v1_signing_domains_are_pinned_and_distinct() {
     for domain in KagemushaWalletObjectDigestDomainV1::ALL {
         assert!(words.insert(domain.domain()), "{}", domain.as_str());
     }
-    assert_eq!(words.len(), 60);
+    assert_eq!(words.len(), 59);
 }
 
 #[test]
@@ -340,7 +340,7 @@ fn kagemusha_wallet_v1_object_digest_domains_are_pinned_and_distinct() {
     for (name, word) in KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1 {
         assert!(words.insert(word), "{name}");
     }
-    assert_eq!(words.len(), 11 + 17 + 32);
+    assert_eq!(words.len(), 10 + 16 + 33);
 }
 
 #[test]

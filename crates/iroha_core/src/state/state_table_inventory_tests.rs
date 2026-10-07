@@ -1620,6 +1620,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         owner: UseOwner::Roots(&["execution_witness_roots"]),
     },
     ConstructionUse {
+        path: "crates/iroha_core/src/kagemusha_wallet_v1/event_evidence.rs",
+        uses: &[("MerkleTree", 7)],
+        owner: UseOwner::Other(
+            Use::BlockContent,
+            "Counted Merkle paths of the original pre-seal block event stream, retained by receipt identity and authenticated against R's event commitment; not a State-content root or independent finality authority",
+        ),
+    },
+    ConstructionUse {
         path: "crates/iroha_core/src/pipeline/zk_lane.rs",
         uses: &[("MerkleTree", 1)],
         owner: UseOwner::Other(Use::Test, "Root-typed fixture of the inline ZK-lane tests"),
@@ -2329,12 +2337,12 @@ const STATE_READER_TYPES: &[&str] = &[
     "CellBlock",
     "CellTransaction",
     "CellView",
+    "CommittedLoadReceipts",
     "DetachedBlockHashes",
     "DetachedSet",
     "DetachedStateTransactionDelta",
     "DetachedTransactionsBlock",
     "DetachedWorld",
-    "FinalizedLedger",
     "PreparedBlockHashes",
     "PreparedDetachedTransactionsBlock",
     "PreparedSet",

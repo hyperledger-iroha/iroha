@@ -58,6 +58,7 @@ class OfflinePackageSurfaceV1Test {
             "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletAndroidResultsV1.kt",
             "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletNativeReplyV1.kt",
             "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletV1.kt",
+            "$WALLET/main/java/$WALLET_PACKAGE/KagemushaWalletSnapshotV1.kt",
             "$WALLET/main/res/xml/kagemusha_wallet_v1_data_extraction_rules.xml",
             "$WALLET/main/res/xml/kagemusha_wallet_v1_full_backup_content.xml",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletAndroidBackupRulesV1Test.kt",
@@ -65,6 +66,8 @@ class OfflinePackageSurfaceV1Test {
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletAndroidPlatformV1Test.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletAndroidTestFakesV1.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletV1Test.kt",
+            "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletSnapshotV1Test.kt",
+            "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletHostNativeV1Test.kt",
             "$WALLET/androidTest/java/$WALLET_PACKAGE/KagemushaWalletAndroidPlatformDeviceV1Test.kt",
         )
 

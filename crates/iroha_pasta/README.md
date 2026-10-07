@@ -27,6 +27,10 @@ gadget or recursion code.
   x86_64 and at any thread count. Behaviour never depends on environment
   variables; kernels take explicit memory budgets.
 - Field elements are always fully reduced; no lazily reduced value is stored.
+  `PrimeFieldBits` uses `[u64; 4]` on 64-bit targets and `[u32; 8]` on other
+  targets, following `bitvec`'s supported storage widths. Both views expose the
+  same 256 canonical little-endian bits, including the modulus bits; the
+  four-u64 Montgomery arithmetic and 32-byte field encoding are unchanged.
   The Montgomery limbs are crate-private. Outside the crate, affine points
   come only from checked constructors (`PastaAffine::from_xy`, decoding) and
   the group law; the unchecked constructor needs a crate-private token.

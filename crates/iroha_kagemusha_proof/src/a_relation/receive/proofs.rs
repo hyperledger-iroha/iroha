@@ -2,7 +2,7 @@
 
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
-use iroha_plonk_gadgets::GlueChip;
+use iroha_plonk_gadgets::{Bit, GlueChip};
 use iroha_plonk_recursion::verifier::{VerifierChip, VerifierKeyCells};
 
 use crate::operation_relation::incoming_statement::StatementView;
@@ -18,7 +18,7 @@ use crate::a_relation::{
 /// Exact trusted key and own sigma source needed by the Receive Proofs owner.
 #[derive(Clone, Copy)]
 pub struct ReceiveProofInputs<'a> {
-    /// Same original active Omega and sigma tapes, without unrelated objects.
+    /// Original active Omega and the exact incoming sigma Q projection.
     pub sources: &'a ReceiveProofSources,
     /// Witness key whose digest is hard-bound to the carried normal Omega key.
     pub omega_key: &'a VerifierKeyCells<Ep>,
@@ -26,9 +26,12 @@ pub struct ReceiveProofInputs<'a> {
     pub own_sigma: &'a SigmaBindingCells,
 }
 
-/// Same-source total Omega view and incoming sigma binding. This projection
-/// avoids rehashing unrelated Payment/object tapes in the recursive Proofs owner.
-/// The fixed Objects owner separately derives the combined consuming digest.
+/// Same-source total Omega view and incoming sigma Q binding. The fixed Objects
+/// owner authenticates the original sigma tape, including its original LE32
+/// length and every descriptor-sized chunk, against the same Q0 instances.
+/// This owner reuses that hard context binding instead of allocating and hashing
+/// a second maximum-capacity sigma tape. `ProofDigest` separately derives the
+/// combined consuming digest; all fixed owners remain mandatory on false results.
 #[derive(Clone, Debug)]
 pub struct ReceiveProofSources {
     transport: IncomingTransportCells,
@@ -36,15 +39,19 @@ pub struct ReceiveProofSources {
 }
 
 impl ReceiveProofSources {
-    /// Retain only views derived from original active carriers.
+    /// Retain an original active Omega and the incoming sigma's Q-bound view.
+    ///
+    /// Sigma may be a field/chunk projection: `bind_context` hard-binds its
+    /// statement, selector and every original-length-prefixed chunk to Q0.
+    /// The required Objects owner independently binds those same Q0 cells to
+    /// its original active sigma bytes, even when Objects derives false.
     /// # Errors
-    /// A fixed padded component view or non-incoming sigma is rejected.
-    pub fn from_active(
+    /// A fixed padded Omega view or non-incoming sigma is rejected.
+    pub fn from_active_omega(
         transport: &IncomingTransportCells,
         sigma: &SigmaBindingCells,
     ) -> Result<Self, Error> {
         transport.active_carrier()?;
-        sigma.active_carrier()?;
         sigma.incoming_statement()?;
         Ok(Self {
             transport: transport.clone(),
@@ -87,30 +94,22 @@ impl ReceiveProofSources {
             self.transport.public().valid().word(),
             incoming.public.valid().word(),
         )?;
-        for (index, raw, digest) in [
-            // The Objects owner recomputes this combined digest; this owner
-            // authenticates the original Omega tape and its exact active length.
-            (
-                4,
-                self.transport.active_carrier()?,
-                input.objects[4].authenticated_digest(),
-            ),
-            (5, self.sigma.active_carrier()?, self.sigma.step_digest()?),
-        ] {
-            let actual = ContextObjectCells::from_active(
-                chip,
-                region,
-                plan.object_specs()[index],
-                digest,
-                raw,
-            )?;
-            for (a, b) in actual
-                .commitment_words()
-                .iter()
-                .zip(input.objects[index].commitment_words())
-            {
-                GlueChip::assert_equal(region, a, &b)?;
-            }
+        // ProofDigest derives the combined consuming digest. This owner
+        // authenticates the original Omega tape and exact active length; the
+        // sigma's raw source is hard-bound by Objects to the identical Q0 below.
+        let actual = ContextObjectCells::from_active(
+            chip,
+            region,
+            plan.object_specs()[4],
+            input.objects[4].authenticated_digest(),
+            self.transport.active_carrier()?,
+        )?;
+        for (a, b) in actual
+            .commitment_words()
+            .iter()
+            .zip(input.objects[4].commitment_words())
+        {
+            GlueChip::assert_equal(region, a, &b)?;
         }
         let columns = input.q_instances.first().ok_or(Error::Synthesis)?;
         let sigma_plan = &plan.operation().sigma;
@@ -161,6 +160,29 @@ impl ReceiveProofSources {
         input: &ContextInputs<'_>,
         proof: ReceiveProofInputs<'_>,
     ) -> Result<(), Error> {
+        let (valid, omega) = self.derive_proofs(chip, region, plan, stage, input, proof)?;
+        let claims = input.receive_results.ok_or(Error::Synthesis)?;
+        bind_claim(region, claims.opening()?, &omega.opening)?;
+        claims.bind_derived(
+            region,
+            plan.receive_results().ok_or(Error::Synthesis)?,
+            stage,
+            ReceiveResultTag::Proofs,
+            &valid,
+        )
+    }
+
+    // Extract the same complete total-verifier result and original opening for native
+    // witness preparation. No proposed opening or boolean supplies the result.
+    pub(crate) fn derive_proofs(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+        proof: ReceiveProofInputs<'_>,
+    ) -> Result<(Bit<Fp>, crate::a_relation::IncomingOmegaCells), Error> {
         let result_plan = plan.receive_results().ok_or(Error::Synthesis)?;
         if stage != result_plan.owner(ReceiveResultTag::Proofs) {
             return Err(Error::Synthesis);
@@ -179,16 +201,13 @@ impl ReceiveProofSources {
         // There is no separately assigned message proposal in this schema.
         // The actual verifier below consumes only this active tape's checked
         // decoder; bind_context authenticates its exact original commitment.
-        GlueChip::assert_equal(
+        let omega = self.transport.verify(
+            chip,
             region,
-            self.transport.public().omega_key_digest(),
+            plan.operation(),
+            proof.omega_key,
             input.successor.public.omega_key_digest(),
         )?;
-        let omega = self
-            .transport
-            .verify(chip, region, plan.operation(), proof.omega_key)?;
-        let claims = input.receive_results.ok_or(Error::Synthesis)?;
-        bind_claim(region, claims.opening()?, &omega.opening)?;
         let bindings = [proof.own_sigma.clone(), self.sigma.clone()];
         bind_statements(region, input, &bindings)?;
         let sigma = bind_sigma(
@@ -208,6 +227,6 @@ impl ReceiveProofSources {
             &omega.valid,
             sigma.incoming_valid.as_ref().ok_or(Error::Synthesis)?,
         )?;
-        claims.bind_derived(region, result_plan, stage, ReceiveResultTag::Proofs, &valid)
+        Ok((valid, omega))
     }
 }

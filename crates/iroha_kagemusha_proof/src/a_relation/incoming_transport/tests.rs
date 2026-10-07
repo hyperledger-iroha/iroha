@@ -1,5 +1,7 @@
 //! Fixed-view carrier integration; these tests do not qualify variable ingestion.
 
+mod verification;
+
 use super::*;
 use crate::{
     a_relation::context::{ContextObjectCells, ContextObjectSpec},

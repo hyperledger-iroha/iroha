@@ -13,8 +13,7 @@ use crate::{
 use base64::Engine as _;
 use iroha_crypto::{Hash, Signature};
 use iroha_data_model::{
-    NetworkId, isi::kagemusha_wallet::KagemushaWalletLoadIssuanceV1,
-    kagemusha::KagemushaWalletLoadVoucherV1,
+    NetworkId, isi::kagemusha_wallet::load_finality::KagemushaWalletLoadReceiptV1,
 };
 use std::{
     sync::{
@@ -28,33 +27,28 @@ const OP: &str = "kagemusha.wallet.load_issuance.read";
 const REQUEST: [u8; 32] = [3; 32];
 type Requests = Arc<Mutex<Vec<TransportRequest>>>;
 
-fn original(
-    payer: iroha_data_model::account::AccountId,
-    published: bool,
-) -> KagemushaWalletLoadIssuanceV1 {
-    // Maintained G1 codec fixture only. This test cannot install a NativeProofs owner or
-    // grant a wallet balance; production issuer/proof authentication stays mandatory.
-    let fixtures: norito::json::Value = norito::json::from_str(include_str!(
-        "../../../../fixtures/kagemusha/wallet_v1_vectors.json"
-    ))
-    .unwrap();
-    let row = fixtures["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["type"].as_str() == Some("KagemushaWalletLoadVoucherV1"))
-        .unwrap();
-    let bytes = hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap();
-    let voucher: KagemushaWalletLoadVoucherV1 = norito::decode_from_bytes(&bytes).unwrap();
-    KagemushaWalletLoadIssuanceV1 {
+fn original(payer: iroha_data_model::account::AccountId) -> KagemushaWalletLoadReceiptV1 {
+    // Transport DATA only; this fixture cannot establish consensus or authorize wallet value.
+    KagemushaWalletLoadReceiptV1 {
+        version: 1,
+        scheme_id: [1; 32],
+        asset_digest: [2; 32],
+        wallet_id: [4; 32],
         request_id: REQUEST,
-        payer,
-        body: voucher.body,
-        voucher: published.then_some(bytes),
+        ordinal: 0,
+        amount: 100,
+        online_charge: 0,
+        charge_quote: [0; 32],
+        transaction_hash: [5; 32],
+        block_height: 2,
+        payer_account_digest: iroha_data_model::kagemusha::kagemusha_wallet_account_digest_v1(
+            &payer,
+        )
+        .unwrap(),
     }
 }
 
-fn response(value: &KagemushaWalletLoadIssuanceV1) -> Response<Vec<u8>> {
+fn response(value: &KagemushaWalletLoadReceiptV1) -> Response<Vec<u8>> {
     Response::builder()
         .status(200)
         .header("content-type", "application/x-norito")
@@ -104,119 +98,117 @@ fn header<'a>(request: &'a TransportRequest, name: &str) -> &'a str {
 }
 
 #[tokio::test]
-async fn load_read_signs_exact_route_network_and_payer_and_preserves_publication_state() {
-    for published in [false, true] {
-        let initial = client_with_base_url(base_url());
-        let expected = original(initial.account.clone(), published);
-        let reply = response(&expected);
-        let (client, requests, _) = attach(
-            initial.clone(),
-            move |_| Ok(reply.clone()),
-            Duration::ZERO,
-            Duration::ZERO,
+async fn load_read_signs_exact_route_network_and_payer_and_preserves_receipt() {
+    let initial = client_with_base_url(base_url());
+    let expected = original(initial.account.clone());
+    let reply = response(&expected);
+    let (client, requests, _) = attach(
+        initial.clone(),
+        move |_| Ok(reply.clone()),
+        Duration::ZERO,
+        Duration::ZERO,
+    );
+    for preference in [
+        WireFormatPreference::JsonOnly,
+        WireFormatPreference::NoritoOnly,
+    ] {
+        let mut builder = client.to_builder();
+        builder.wire_format_preference = preference;
+        let client = builder.build().unwrap();
+        let actual = client
+            .account_client()
+            .unwrap()
+            .kagemusha()
+            .load_issuance(&expected.scheme_id, &expected.wallet_id, &REQUEST)
+            .await
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests.iter() {
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(
+            request.url.path(),
+            format!(
+                "/v1/kagemusha/{}/wallets/{}/loads/{}",
+                hex::encode(expected.scheme_id),
+                hex::encode(expected.wallet_id),
+                hex::encode(REQUEST)
+            )
         );
-        for preference in [
-            WireFormatPreference::JsonOnly,
-            WireFormatPreference::NoritoOnly,
-        ] {
-            let mut builder = client.to_builder();
-            builder.wire_format_preference = preference;
-            let client = builder.build().unwrap();
-            let actual = client
-                .account_client()
-                .unwrap()
-                .kagemusha()
-                .load_issuance(&expected.body.scheme_id, &expected.body.wallet_id, &REQUEST)
-                .await
-                .unwrap();
-            assert_eq!(actual, expected);
-        }
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
-        for request in requests.iter() {
-            assert_eq!(request.method, Method::GET);
-            assert_eq!(
-                request.url.path(),
-                format!(
-                    "/v1/kagemusha/{}/wallets/{}/loads/{}",
-                    hex::encode(expected.body.scheme_id),
-                    hex::encode(expected.body.wallet_id),
-                    hex::encode(REQUEST)
-                )
-            );
-            assert!(request.url.query().is_none());
-            assert!(request.body.is_empty());
-            assert_eq!(request.max_response_bytes, MAX_RESPONSE_BYTES);
-            assert_eq!(header(request, "accept"), "application/x-norito");
-            assert_eq!(
-                header(request, "x-iroha-account"),
-                client.account.to_canonical_hex().unwrap()
-            );
-            assert!(
-                !request
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.as_str() == "content-type")
-            );
-            let signature = Signature::try_from_bytes(
-                &base64::engine::general_purpose::STANDARD
-                    .decode(header(request, "x-iroha-signature"))
-                    .unwrap(),
-            )
+        assert!(request.url.query().is_none());
+        assert!(request.body.is_empty());
+        assert_eq!(request.max_response_bytes, MAX_RESPONSE_BYTES);
+        assert_eq!(header(request, "accept"), "application/x-norito");
+        assert_eq!(
+            header(request, "x-iroha-account"),
+            client.account.to_canonical_hex().unwrap()
+        );
+        assert!(
+            !request
+                .headers
+                .iter()
+                .any(|(name, _)| name.as_str() == "content-type")
+        );
+        let signature = Signature::try_from_bytes(
+            &base64::engine::general_purpose::STANDARD
+                .decode(header(request, "x-iroha-signature"))
+                .unwrap(),
+        )
+        .unwrap();
+        let timestamp = header(request, "x-iroha-timestamp-ms").parse().unwrap();
+        let nonce = header(request, "x-iroha-nonce");
+        let message = Client::exact_network_request_message(
+            &client.network_id,
+            &request.method,
+            &request.url,
+            &request.body,
+            timestamp,
+            nonce,
+        )
+        .unwrap();
+        signature
+            .verify(client.key_pair.public_key(), &message)
             .unwrap();
-            let timestamp = header(request, "x-iroha-timestamp-ms").parse().unwrap();
-            let nonce = header(request, "x-iroha-nonce");
-            let message = Client::exact_network_request_message(
-                &client.network_id,
-                &request.method,
-                &request.url,
-                &request.body,
-                timestamp,
-                nonce,
-            )
-            .unwrap();
+        let foreign = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::new(b"foreign-wallet-network"),
+        ));
+        let message = Client::exact_network_request_message(
+            &foreign,
+            &request.method,
+            &request.url,
+            &request.body,
+            timestamp,
+            nonce,
+        )
+        .unwrap();
+        assert!(
             signature
                 .verify(client.key_pair.public_key(), &message)
-                .unwrap();
-            let foreign = NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"foreign-wallet-network")),
-            );
-            let message = Client::exact_network_request_message(
-                &foreign,
-                &request.method,
-                &request.url,
-                &request.body,
-                timestamp,
-                nonce,
-            )
-            .unwrap();
-            assert!(
-                signature
-                    .verify(client.key_pair.public_key(), &message)
-                    .is_err()
-            );
-            let mut altered = request.url.clone();
-            altered.set_path("/v1/kagemusha/other");
-            let message = Client::exact_network_request_message(
-                &client.network_id,
-                &request.method,
-                &altered,
-                &request.body,
-                timestamp,
-                nonce,
-            )
-            .unwrap();
-            assert!(
-                signature
-                    .verify(client.key_pair.public_key(), &message)
-                    .is_err()
-            );
-        }
-        assert_ne!(
-            header(&requests[0], "x-iroha-nonce"),
-            header(&requests[1], "x-iroha-nonce")
+                .is_err()
+        );
+        let mut altered = request.url.clone();
+        altered.set_path("/v1/kagemusha/other");
+        let message = Client::exact_network_request_message(
+            &client.network_id,
+            &request.method,
+            &altered,
+            &request.body,
+            timestamp,
+            nonce,
+        )
+        .unwrap();
+        assert!(
+            signature
+                .verify(client.key_pair.public_key(), &message)
+                .is_err()
         );
     }
+    assert_ne!(
+        header(&requests[0], "x-iroha-nonce"),
+        header(&requests[1], "x-iroha-nonce")
+    );
 }
 
 #[tokio::test]
@@ -227,11 +219,11 @@ async fn load_read_refuses_zero_ids_or_witness_authority_before_dispatch() {
         Duration::ZERO,
         Duration::ZERO,
     );
-    let value = original(client.account.clone(), false);
+    let value = original(client.account.clone());
     for (scheme, wallet, request) in [
-        ([0; 32], value.body.wallet_id, REQUEST),
-        (value.body.scheme_id, [0; 32], REQUEST),
-        (value.body.scheme_id, value.body.wallet_id, [0; 32]),
+        ([0; 32], value.wallet_id, REQUEST),
+        (value.scheme_id, [0; 32], REQUEST),
+        (value.scheme_id, value.wallet_id, [0; 32]),
     ] {
         assert!(matches!(
             client
@@ -253,7 +245,7 @@ async fn load_read_refuses_zero_ids_or_witness_authority_before_dispatch() {
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+            .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
             .await,
         Err(Error::InvalidRequest { operation: OP, .. })
     ));
@@ -261,25 +253,22 @@ async fn load_read_refuses_zero_ids_or_witness_authority_before_dispatch() {
 }
 
 #[tokio::test]
-async fn load_read_rejects_foreign_payer_request_wallet_and_original_voucher_body() {
+async fn load_read_rejects_foreign_payer_request_wallet_and_invalid_receipt_fields() {
     let initial = client_with_base_url(base_url());
-    let expected = original(initial.account.clone(), true);
-    for mutation in 0..9 {
-        let mut changed = expected.clone();
+    let expected = original(initial.account.clone());
+    for mutation in 0..10 {
+        let mut changed = expected;
         match mutation {
             0 => changed.request_id[0] ^= 1,
-            1 => {
-                changed.payer = iroha_data_model::account::AccountId::new(
-                    super::checked_random_keypair().public_key().clone(),
-                )
-            }
-            2 => changed.body.scheme_id[0] ^= 1,
-            3 => changed.body.wallet_id[0] ^= 1,
-            4 => changed.body.amount = 0,
-            5 => changed.body.block_height = 0,
-            6 => changed.body.ordinal += 1,
-            7 => changed.body.transaction_hash[0] ^= 1,
-            8 => changed.voucher = Some(vec![]),
+            1 => changed.payer_account_digest[0] ^= 1,
+            2 => changed.scheme_id[0] ^= 1,
+            3 => changed.wallet_id[0] ^= 1,
+            4 => changed.amount = 0,
+            5 => changed.block_height = 0,
+            6 => changed.asset_digest = [0; 32],
+            7 => changed.transaction_hash = [0; 32],
+            8 => changed.version = 0,
+            9 => changed.online_charge = 1,
             _ => unreachable!(),
         }
         let reply = response(&changed);
@@ -295,7 +284,7 @@ async fn load_read_rejects_foreign_payer_request_wallet_and_original_voucher_bod
                     .account_client()
                     .unwrap()
                     .kagemusha()
-                    .load_issuance(&expected.body.scheme_id, &expected.body.wallet_id, &REQUEST)
+                    .load_issuance(&expected.scheme_id, &expected.wallet_id, &REQUEST)
                     .await,
                 Err(Error::ResponseBinding { operation: OP, .. })
             ),
@@ -308,7 +297,7 @@ async fn load_read_rejects_foreign_payer_request_wallet_and_original_voucher_bod
 #[tokio::test]
 async fn load_read_requires_one_canonical_binary_frame_and_media_type() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone(), false);
+    let value = original(initial.account.clone());
     let mut replies = Vec::new();
     for types in [
         vec![],
@@ -346,7 +335,7 @@ async fn load_read_requires_one_canonical_binary_frame_and_media_type() {
                 .account_client()
                 .unwrap()
                 .kagemusha()
-                .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+                .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
                 .await,
             Err(Error::Decode { operation: OP, .. } | Error::CanonicalDecode { operation: OP, .. })
         ));
@@ -357,7 +346,7 @@ async fn load_read_requires_one_canonical_binary_frame_and_media_type() {
 #[tokio::test]
 async fn load_read_preserves_http_transport_and_capacity_failures_without_replaying() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone(), false);
+    let value = original(initial.account.clone());
     for status in [401, 403, 404, 429, 503] {
         let (client, requests, _) = attach(
             initial.clone(),
@@ -375,7 +364,7 @@ async fn load_read_preserves_http_transport_and_capacity_failures_without_replay
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+            .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
             .await
             .unwrap_err();
         assert!(
@@ -394,7 +383,7 @@ async fn load_read_preserves_http_transport_and_capacity_failures_without_replay
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+            .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
             .await,
         Err(Error::Transport {
             operation: OP,
@@ -420,7 +409,7 @@ async fn load_read_preserves_http_transport_and_capacity_failures_without_replay
                 .account_client()
                 .unwrap()
                 .kagemusha()
-                .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+                .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
                 .await,
             Err(Error::ResponseTooLarge {
                 maximum: MAX_RESPONSE_BYTES,
@@ -434,7 +423,7 @@ async fn load_read_preserves_http_transport_and_capacity_failures_without_replay
 #[tokio::test]
 async fn load_read_obeys_absolute_deadline_and_cancels_pending_async_dispatch() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone(), false);
+    let value = original(initial.account.clone());
     let reply = response(&value);
     let (client, requests, completed) = attach(
         initial.clone(),
@@ -447,7 +436,7 @@ async fn load_read_obeys_absolute_deadline_and_cancels_pending_async_dispatch() 
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+            .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
             .await,
         Err(Error::Timeout { operation: OP })
     ));
@@ -459,7 +448,7 @@ async fn load_read_obeys_absolute_deadline_and_cancels_pending_async_dispatch() 
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+            .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
             .await,
         Err(Error::Timeout { operation: OP })
     ));
@@ -469,7 +458,7 @@ async fn load_read_obeys_absolute_deadline_and_cancels_pending_async_dispatch() 
 #[test]
 fn blocking_load_read_reuses_owned_runtime_and_rejects_nested_async_entry() {
     let initial = client_with_base_url(base_url());
-    let value = original(initial.account.clone(), true);
+    let value = original(initial.account.clone());
     let reply = response(&value);
     let (client, requests, _) = attach(
         initial.clone(),
@@ -481,7 +470,7 @@ fn blocking_load_read_reuses_owned_runtime_and_rejects_nested_async_entry() {
     assert_eq!(
         account
             .kagemusha()
-            .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+            .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
             .unwrap(),
         value
     );
@@ -489,7 +478,7 @@ fn blocking_load_read_reuses_owned_runtime_and_rejects_nested_async_entry() {
         account
             .clone()
             .kagemusha()
-            .load_issuance(&value.body.scheme_id, &value.body.wallet_id, &REQUEST)
+            .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST)
             .unwrap(),
         value
     );
@@ -499,11 +488,9 @@ fn blocking_load_read_reuses_owned_runtime_and_rejects_nested_async_entry() {
         .unwrap();
     runtime.block_on(async {
         assert!(matches!(
-            account.kagemusha().load_issuance(
-                &value.body.scheme_id,
-                &value.body.wallet_id,
-                &REQUEST
-            ),
+            account
+                .kagemusha()
+                .load_issuance(&value.scheme_id, &value.wallet_id, &REQUEST),
             Err(Error::Blocking(_))
         ));
         drop(account);

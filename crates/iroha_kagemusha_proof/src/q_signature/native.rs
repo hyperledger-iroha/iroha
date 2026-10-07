@@ -20,7 +20,7 @@ use iroha_plonk::{
     DescriptorBinding, KeyError, ProverConfig, ProverError, ProverRandomness, ProvingKey,
     VerifyError, VerifyingKey, Witness, create_proof_owned,
     cs::{CurveV1, InstanceModeV1, ProofSuffixV1, TranscriptV2},
-    frontend::Error as LayoutError,
+    frontend::{Circuit, Error as LayoutError},
     keys::pk::artifact::{Error as ArtifactError, ReadConfig},
     pcs::ipa::PinnedParams,
     verifier::verify_full,
@@ -76,6 +76,25 @@ pub struct QSignatureProver {
     params: PinnedParams<Ep>,
     key: ProvingKey<Ep>,
 }
+impl QSignaturePlan {
+    /// Reconstruct the exact unknown signature-Q source for offline key tooling.
+    /// Slot order, hard/soft modes and fixed keys remain circuit constants;
+    /// digest/key/signature witnesses are unknown. This creates no accepted
+    /// signature verdict, prepared operation or catalog authority.
+    /// # Errors
+    /// Invalid fixed slot dimensions or source layout.
+    pub fn source_circuit(&self) -> Result<QSignatureCircuit, QSignatureError> {
+        let blank = SignatureWitness {
+            digest: Fp::ZERO,
+            key: [[0; 4]; 2],
+            signature: [[0; 4]; 2],
+        };
+        QSignatureCircuit::new(self.clone(), vec![blank; self.slots().len()])
+            .map(|source| source.without_witnesses())
+            .map_err(QSignatureError::Layout)
+    }
+}
+
 impl QSignatureProver {
     /// Import one original under the exact independently installed slot plan.
     /// No key generation, alternate profile or import fallback is performed.
@@ -83,7 +102,7 @@ impl QSignatureProver {
     /// The complete originals, scheme/catalog scope and resource policy must
     /// already be authenticated by the native installation owner. This method
     /// checks fixed source/key continuity; it grants no catalog admission,
-    /// NativeProofs implementation, wallet-open capability or enrollment identity.
+    /// `NativeProofs` implementation, wallet-open capability or enrollment identity.
     /// Original/domain bounds do not qualify total synthesis/prover memory.
     ///
     /// # Errors
@@ -130,13 +149,7 @@ impl QSignatureProver {
         VerifyingKey::<Ep>::read(installed_vk, &binding).map_err(|error| {
             QSignatureError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error)))
         })?;
-        let blank = SignatureWitness {
-            digest: Fp::ZERO,
-            key: [[0; 4]; 2],
-            signature: [[0; 4]; 2],
-        };
-        let circuit = QSignatureCircuit::new(plan.clone(), vec![blank; plan.slots().len()])
-            .map_err(QSignatureError::Layout)?;
+        let circuit = plan.source_circuit()?;
         let key = ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
             .map_err(QSignatureError::Artifact)?;
         if key.vk().to_bytes() != installed_vk {

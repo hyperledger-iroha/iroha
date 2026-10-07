@@ -2,7 +2,7 @@
 //!
 //! No specimen is a proof, an installed key, a signed inventory or a session.
 //! Genuine acceptance/round trips use the maintained Bootstrap originals in the
-//! ignored production_native_bootstrap_stages_preserve_the_genuine_installed_relation.
+//! ignored `production_native_bootstrap_stages_preserve_the_genuine_installed_relation`.
 
 use super::*;
 

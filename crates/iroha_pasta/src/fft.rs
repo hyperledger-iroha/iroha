@@ -80,6 +80,44 @@ pub struct FftDomain<F: PastaField> {
     inverse: Vec<Vec<F>>,
 }
 
+/// A validated coset transform plan borrowing the exact domain and caller powers.
+#[derive(Clone, Copy, Debug)]
+pub struct CosetFftPlan<'domain, 'scratch, F: PastaField> {
+    domain: &'domain FftDomain<F>,
+    powers: &'scratch [F],
+}
+
+impl<F: PastaField> CosetFftPlan<'_, '_, F> {
+    /// Evaluates columns in place using the immutable validated powers.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any wrong column length before mutating any input.
+    pub fn fft_many(&self, columns: &mut [&mut [F]]) -> Result<(), FftError> {
+        for column in columns.iter() {
+            self.domain.check(column)?;
+        }
+        let shift = Some(CosetShift::Prepared(self.powers));
+        if let [column] = columns {
+            dif::<_, true>(column, &self.domain.forward, shift);
+            bit_reverse_scale::<_, true>(column, self.domain.k, None);
+        } else {
+            columns.par_iter_mut().for_each(|column| {
+                dif::<_, false>(column, &self.domain.forward, shift);
+                bit_reverse_scale::<_, false>(column, self.domain.k, None);
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Exact first-pass coset scaling; all later passes have no shift.
+#[derive(Clone, Copy)]
+enum CosetShift<'a, F> {
+    Geometric(F),
+    Prepared(&'a [F]),
+}
+
 impl<F: PastaField> FftDomain<F> {
     /// Builds the domain of size `2^k` and its twiddle caches.
     ///
@@ -167,8 +205,8 @@ impl<F: PastaField> FftDomain<F> {
     /// [`FftError::WrongLength`] unless `a.len() == n`.
     pub fn fft(&self, a: &mut [F]) -> Result<(), FftError> {
         self.check(a)?;
-        dif(a, &self.forward, None);
-        bit_reverse_scale(a, self.k, None);
+        dif::<_, true>(a, &self.forward, None);
+        bit_reverse_scale::<_, true>(a, self.k, None);
         Ok(())
     }
 
@@ -179,8 +217,8 @@ impl<F: PastaField> FftDomain<F> {
     /// [`FftError::WrongLength`] unless `a.len() == n`.
     pub fn ifft(&self, a: &mut [F]) -> Result<(), FftError> {
         self.check(a)?;
-        dif(a, &self.inverse, None);
-        bit_reverse_scale(a, self.k, Some((self.n_inv, F::ONE)));
+        dif::<_, true>(a, &self.inverse, None);
+        bit_reverse_scale::<_, true>(a, self.k, Some((self.n_inv, F::ONE)));
         Ok(())
     }
 
@@ -196,9 +234,75 @@ impl<F: PastaField> FftDomain<F> {
     pub fn coset_fft(&self, a: &mut [F], shift: F) -> Result<(), FftError> {
         self.check(a)?;
         check_shift(&shift)?;
-        dif(a, &self.forward, Some(shift));
-        bit_reverse_scale(a, self.k, None);
+        dif::<_, true>(a, &self.forward, Some(CosetShift::Geometric(shift)));
+        bit_reverse_scale::<_, true>(a, self.k, None);
         Ok(())
+    }
+
+    /// Evaluates several coefficient columns on the same coset, in place.
+    ///
+    /// Multiple columns run independently across the caller's Rayon pool;
+    /// each uses the same butterfly arithmetic as [`Self::coset_fft`], without
+    /// nested parallel passes. One column retains the single-transform
+    /// scheduling. The domain's immutable twiddles are shared and no field
+    /// scratch buffers are allocated. Column order and worker count cannot
+    /// affect the output.
+    ///
+    /// # Errors
+    ///
+    /// [`FftError::WrongLength`] if any column's length differs from `n`, then
+    /// [`FftError::ZeroShift`] for `shift = 0`. All columns and the shift are
+    /// checked before any input is touched, including for an empty batch.
+    pub fn coset_fft_many(&self, columns: &mut [&mut [F]], shift: F) -> Result<(), FftError> {
+        for column in columns.iter() {
+            self.check(column)?;
+        }
+        check_shift(&shift)?;
+        if let [column] = columns {
+            return self.coset_fft(column, shift);
+        }
+        columns.par_iter_mut().for_each(|column| {
+            dif::<_, false>(column, &self.forward, Some(CosetShift::Geometric(shift)));
+            bit_reverse_scale::<_, false>(column, self.k, None);
+        });
+        Ok(())
+    }
+
+    /// Fills caller-owned powers and binds them immutably to this domain.
+    ///
+    /// The plan and its transforms allocate no field scratch. The caller must
+    /// retain and account for exactly `n` field elements for the plan lifetime.
+    /// Powers use the same exact arithmetic for every caller worker count.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a wrong scratch length or zero shift before touching scratch.
+    pub fn coset_plan<'domain, 'scratch>(
+        &'domain self,
+        scratch: &'scratch mut [F],
+        shift: F,
+    ) -> Result<CosetFftPlan<'domain, 'scratch, F>, FftError> {
+        self.check(scratch)?;
+        check_shift(&shift)?;
+        let fill = |(index, chunk): (usize, &mut [F])| {
+            let mut power = shift.pow_vartime([(index * PARALLEL_MIN) as u64]);
+            for value in chunk {
+                *value = power;
+                power *= shift;
+            }
+        };
+        if self.n >= PARALLEL_MIN {
+            scratch
+                .par_chunks_mut(PARALLEL_MIN)
+                .enumerate()
+                .for_each(fill);
+        } else {
+            fill((0, scratch));
+        }
+        Ok(CosetFftPlan {
+            domain: self,
+            powers: scratch,
+        })
     }
 
     /// Interpolates evaluations at `shift * omega^i` back to coefficients, in
@@ -214,8 +318,8 @@ impl<F: PastaField> FftDomain<F> {
         check_shift(&shift)?;
         // `shift` is nonzero, so the inverse exists.
         let shift_inv = shift.invert().unwrap_or(F::ZERO);
-        dif(a, &self.inverse, None);
-        bit_reverse_scale(a, self.k, Some((self.n_inv, shift_inv)));
+        dif::<_, true>(a, &self.inverse, None);
+        bit_reverse_scale::<_, true>(a, self.k, Some((self.n_inv, shift_inv)));
         Ok(())
     }
 }
@@ -251,7 +355,11 @@ fn stage_twiddles<F: PastaField>(omega: F, k: u32) -> Vec<Vec<F>> {
 ///
 /// With `shift`, coefficient `i` is multiplied by `shift^i` while the first
 /// pass loads it.
-fn dif<F: PastaField>(a: &mut [F], tw: &[Vec<F>], shift: Option<F>) {
+fn dif<F: PastaField, const PARALLEL: bool>(
+    a: &mut [F],
+    tw: &[Vec<F>],
+    shift: Option<CosetShift<'_, F>>,
+) {
     let n = a.len();
     if n <= 1 {
         // A single coefficient is its own evaluation; shift^0 = 1.
@@ -266,15 +374,18 @@ fn dif<F: PastaField>(a: &mut [F], tw: &[Vec<F>], shift: Option<F>) {
         let outer = &tw[s - 1]; // w_{4m}^j, j < 2m
         let inner = &tw[s - 2]; // w_{2m}^j, j < m
         let pass_shift = if first { shift } else { None };
-        dif_pass4(a, m, outer, inner, pass_shift);
+        dif_pass4::<_, PARALLEL>(a, m, outer, inner, pass_shift);
         first = false;
         s -= 2;
     }
     if s == 1 {
         // Final radix-2 stage with half size 1: twiddle 1.
-        if let (true, Some(sh)) = (first, shift) {
+        if let (true, Some(shift)) = (first, shift) {
             // k == 1: apply the shift to coefficient 1 before the stage.
-            a[1] *= sh;
+            a[1] *= match shift {
+                CosetShift::Geometric(value) => value,
+                CosetShift::Prepared(powers) => powers[1],
+            };
         }
         let body = |chunk: &mut [F]| {
             for pair in chunk.chunks_exact_mut(2) {
@@ -283,7 +394,7 @@ fn dif<F: PastaField>(a: &mut [F], tw: &[Vec<F>], shift: Option<F>) {
                 pair[1] = x - y;
             }
         };
-        if n >= PARALLEL_MIN {
+        if PARALLEL && n >= PARALLEL_MIN {
             a.par_chunks_mut(PARALLEL_MIN).for_each(body);
         } else {
             body(a);
@@ -292,16 +403,29 @@ fn dif<F: PastaField>(a: &mut [F], tw: &[Vec<F>], shift: Option<F>) {
 }
 
 /// One fused DIF pass over blocks of `4m`.
-fn dif_pass4<F: PastaField>(a: &mut [F], m: usize, outer: &[F], inner: &[F], shift: Option<F>) {
+fn dif_pass4<F: PastaField, const PARALLEL: bool>(
+    a: &mut [F],
+    m: usize,
+    outer: &[F],
+    inner: &[F],
+    shift: Option<CosetShift<'_, F>>,
+) {
     let n = a.len();
     let block = 4 * m;
     // The shift only occurs in the first pass, where the block is the whole
     // array, so element j + q*m sits at original index j + q*m.
-    let quarter_shift = shift.map(|sh| {
-        let sm = sh.pow_vartime([m as u64]);
-        let s2m = sm.square();
-        (sh, [F::ONE, sm, s2m, s2m * sm])
-    });
+    let quarter_shift = match shift {
+        Some(CosetShift::Geometric(sh)) => {
+            let sm = sh.pow_vartime([m as u64]);
+            let s2m = sm.square();
+            Some((sh, [F::ONE, sm, s2m, s2m * sm]))
+        }
+        _ => None,
+    };
+    let powers = match shift {
+        Some(CosetShift::Prepared(powers)) => Some(powers),
+        _ => None,
+    };
     let butterfly = |q0: &mut [F], q1: &mut [F], q2: &mut [F], q3: &mut [F], j0: usize| {
         let mut sj = quarter_shift.map(|(sh, _)| sh.pow_vartime([j0 as u64]));
         for (off, (((x0, x1), x2), x3)) in q0
@@ -319,6 +443,12 @@ fn dif_pass4<F: PastaField>(a: &mut [F], m: usize, outer: &[F], inner: &[F], shi
                 a2 *= *s * c[2];
                 a3 *= *s * c[3];
                 *s *= sh;
+            }
+            if let Some(powers) = powers {
+                a0 *= powers[j];
+                a1 *= powers[j + m];
+                a2 *= powers[j + 2 * m];
+                a3 *= powers[j + 3 * m];
             }
             // Outer stage (half 2m): pairs (j, j+2m) and (j+m, j+3m).
             let y0 = a0 + a2;
@@ -342,14 +472,14 @@ fn dif_pass4<F: PastaField>(a: &mut [F], m: usize, outer: &[F], inner: &[F], shi
         }
     };
     let blocks = n / block;
-    if n < PARALLEL_MIN || blocks >= rayon::current_num_threads() * 4 {
+    if !PARALLEL || n < PARALLEL_MIN || blocks >= rayon::current_num_threads() * 4 {
         let run = |blk: &mut [F]| {
             let (q0, rest) = blk.split_at_mut(m);
             let (q1, rest) = rest.split_at_mut(m);
             let (q2, q3) = rest.split_at_mut(m);
             butterfly(q0, q1, q2, q3, 0);
         };
-        if n < PARALLEL_MIN {
+        if !PARALLEL || n < PARALLEL_MIN {
             a.chunks_exact_mut(block).for_each(run);
         } else {
             a.par_chunks_exact_mut(block).for_each(run);
@@ -376,7 +506,11 @@ fn dif_pass4<F: PastaField>(a: &mut [F], m: usize, outer: &[F], inner: &[F], shi
 
 /// Bit-reverses the order of `a` (length `2^k`) and, with `scale = (c, s)`,
 /// multiplies the element at natural index `i` by `c * s^i`.
-fn bit_reverse_scale<F: PastaField>(a: &mut [F], k: u32, scale: Option<(F, F)>) {
+fn bit_reverse_scale<F: PastaField, const PARALLEL: bool>(
+    a: &mut [F],
+    k: u32,
+    scale: Option<(F, F)>,
+) {
     let n = a.len();
     if k > 0 {
         let shift = usize::BITS - k;
@@ -404,7 +538,7 @@ fn bit_reverse_scale<F: PastaField>(a: &mut [F], k: u32, scale: Option<(F, F)>) 
                 f *= s;
             }
         };
-        if n >= PARALLEL_MIN {
+        if PARALLEL && n >= PARALLEL_MIN {
             a.par_chunks_mut(PARALLEL_MIN).enumerate().for_each(body);
         } else {
             a.chunks_mut(PARALLEL_MIN).enumerate().for_each(body);
@@ -457,6 +591,90 @@ mod tests {
             d.coset_ifft(&mut c, shift).unwrap();
             assert_eq!(c, a);
         }
+    }
+
+    #[test]
+    fn batched_cosets_match_single_transforms_and_naive_dft() {
+        fn check<F: PastaField>() {
+            for workers in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    for k in [0, 1, 2, 3, 4, 7, 12, 13] {
+                        let domain = FftDomain::<F>::new(k).unwrap();
+                        for count in [0u64, 1, 3, 17] {
+                            let original: Vec<Vec<F>> = (0..count)
+                                .map(|index| random_vec(domain.n(), index + 97))
+                                .collect();
+                            for shift in [F::ONE, F::from(7)] {
+                                let mut batch = original.clone();
+                                let addresses: Vec<_> = batch.iter().map(Vec::as_ptr).collect();
+                                let mut columns: Vec<_> =
+                                    batch.iter_mut().map(Vec::as_mut_slice).collect();
+                                domain.coset_fft_many(&mut columns, shift).unwrap();
+                                for (index, (values, source)) in
+                                    batch.iter_mut().zip(&original).enumerate()
+                                {
+                                    let mut single = source.clone();
+                                    domain.coset_fft(&mut single, shift).unwrap();
+                                    assert_eq!(*values, single, "k={k} count={count}");
+                                    assert_eq!(values.as_ptr(), addresses[index]);
+                                    if k <= 4 {
+                                        assert_eq!(
+                                            *values,
+                                            naive_coset_dft(source, domain.omega(), shift)
+                                        );
+                                    }
+                                    domain.coset_ifft(values, shift).unwrap();
+                                    assert_eq!(values, source);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn batched_coset_errors_leave_every_column_untouched() {
+        fn check<F: PastaField>() {
+            let domain = FftDomain::<F>::new(3).unwrap();
+            let original = vec![random_vec::<F>(8, 1), random_vec(8, 2), random_vec(8, 3)];
+            for bad_index in 0..original.len() {
+                let mut batch = original.clone();
+                batch[bad_index].pop();
+                let before = batch.clone();
+                let mut columns: Vec<_> = batch.iter_mut().map(Vec::as_mut_slice).collect();
+                // Validate the entire batch before starting even the first transform.
+                assert_eq!(
+                    domain.coset_fft_many(&mut columns, F::ZERO),
+                    Err(FftError::WrongLength {
+                        expected: 8,
+                        actual: 7
+                    })
+                );
+                assert_eq!(batch, before);
+            }
+            let mut batch = original.clone();
+            let mut columns: Vec<_> = batch.iter_mut().map(Vec::as_mut_slice).collect();
+            assert_eq!(
+                domain.coset_fft_many(&mut columns, F::ZERO),
+                Err(FftError::ZeroShift)
+            );
+            assert_eq!(batch, original);
+            assert_eq!(
+                domain.coset_fft_many(&mut [], F::ZERO),
+                Err(FftError::ZeroShift)
+            );
+            assert_eq!(domain.coset_fft_many(&mut [], F::ONE), Ok(()));
+        }
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[test]
@@ -517,14 +735,14 @@ mod tests {
     #[test]
     fn bit_reverse_scale_permutes() {
         let mut a: Vec<Fp> = (0..8u64).map(Fp::from).collect();
-        bit_reverse_scale(&mut a, 3, None);
+        bit_reverse_scale::<_, true>(&mut a, 3, None);
         let expected: Vec<Fp> = [0u64, 4, 2, 6, 1, 5, 3, 7]
             .into_iter()
             .map(Fp::from)
             .collect();
         assert_eq!(a, expected);
         let mut b = vec![Fp::ONE; 4];
-        bit_reverse_scale(&mut b, 2, Some((Fp::from(3u64), Fp::from(2u64))));
+        bit_reverse_scale::<_, true>(&mut b, 2, Some((Fp::from(3u64), Fp::from(2u64))));
         assert_eq!(
             b,
             vec![
@@ -548,7 +766,11 @@ mod tests {
             x *= d.omega();
         }
         let mut b = vec![Fp::ONE; 8];
-        dif(&mut b, &stage_twiddles(d.omega(), 3), None);
+        dif::<_, true>(&mut b, &stage_twiddles(d.omega(), 3), None);
         assert_eq!(b[0], Fp::from(8u64));
     }
 }
+
+#[cfg(test)]
+#[path = "fft_plan_tests.rs"]
+mod plan_tests;

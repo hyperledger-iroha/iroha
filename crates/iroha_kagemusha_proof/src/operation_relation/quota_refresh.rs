@@ -33,6 +33,36 @@ pub struct QuotaRebuildCells {
     pub window_count: Word<Fp>,
 }
 
+/// Number of canonical field words bound across the split quota owners.
+pub const QUOTA_WITNESS_WORDS: usize = 578;
+
+impl QuotaRebuildCells {
+    /// Exact old/window/used arrays and signed issue/count in fixed field order.
+    /// A split owner must commit these same words in its recursive context;
+    /// independently assigned arrays do not establish a complete rebuild.
+    pub fn commitment_words(&self) -> Vec<Word<Fp>> {
+        self.old
+            .iter()
+            .flatten()
+            .chain(self.windows.iter().flatten())
+            .chain(&self.used)
+            .chain([&self.issued, &self.window_count])
+            .cloned()
+            .collect()
+    }
+}
+
+/// One fixed authenticated array root in the complete quota rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuotaRoot {
+    /// Old usage array bound to the predecessor state.
+    PreviousUsage,
+    /// New windows bound to the signed share and successor state.
+    ReplacementWindows,
+    /// New usage array aligned with the replacement windows.
+    ReplacementUsage,
+}
+
 // sort key, window key, end, used, start, origin (new=1), active.
 #[derive(Clone)]
 struct Entry([Word<Fp>; 7]);
@@ -182,6 +212,84 @@ pub fn constrain(
     transition: &MapTransition<'_>,
     witness: &QuotaRebuildCells,
 ) -> Result<(), Error> {
+    constrain_semantics(uint, region, transition, witness)?;
+    for root in [
+        QuotaRoot::PreviousUsage,
+        QuotaRoot::ReplacementWindows,
+        QuotaRoot::ReplacementUsage,
+    ] {
+        constrain_root(sponge, region, transition, witness, root)?;
+    }
+    Ok(())
+}
+
+/// Authenticate one exact fixed64 root without duplicating the matching owner.
+///
+/// This is one obligation of a split rebuild. The complete relation must also
+/// execute the other two root owners and [`constrain_semantics`], all over the
+/// same [`QuotaRebuildCells::commitment_words`] bound in the recursive context.
+/// Root equality alone does not establish canonical arrays or preserve charges.
+/// # Errors
+/// Wrong operation variant, failed root equality or synthesis failure.
+pub fn constrain_root(
+    sponge: &mut impl WordHasher<Fp>,
+    region: &mut Region<'_, Fp>,
+    transition: &MapTransition<'_>,
+    witness: &QuotaRebuildCells,
+    root: QuotaRoot,
+) -> Result<(), Error> {
+    if transition.statement.variant() != Variant::RefreshQuotaShare {
+        return Err(Error::Synthesis);
+    }
+    let (leaf_domain, node_domain, expected) = match root {
+        QuotaRoot::PreviousUsage => (
+            QUOTA_USAGE_DOMAIN,
+            QUOTA_USAGE_NODE_DOMAIN,
+            &transition.predecessor.state.core()[core::QUOTA_USAGE_ROOT],
+        ),
+        QuotaRoot::ReplacementWindows => (
+            QUOTA_WINDOW_DOMAIN,
+            QUOTA_NODE_DOMAIN,
+            &transition.successor.state.core()[core::QUOTA_WINDOWS_ROOT],
+        ),
+        QuotaRoot::ReplacementUsage => (
+            QUOTA_USAGE_DOMAIN,
+            QUOTA_USAGE_NODE_DOMAIN,
+            &transition.successor.state.core()[core::QUOTA_USAGE_ROOT],
+        ),
+    };
+    let mut leaves = Vec::with_capacity(64);
+    for i in 0..64 {
+        let fields = match root {
+            QuotaRoot::PreviousUsage => witness.old[i].clone(),
+            QuotaRoot::ReplacementWindows => witness.windows[i].clone(),
+            QuotaRoot::ReplacementUsage => [
+                witness.windows[i][0].clone(),
+                witness.windows[i][1].clone(),
+                witness.windows[i][2].clone(),
+                witness.used[i].clone(),
+            ],
+        };
+        leaves.push(sponge.hash_words(region, leaf_domain, &fields)?);
+    }
+    let actual = array_root(sponge, region, leaves, node_domain)?;
+    GlueChip::assert_equal(region, &actual, expected)
+}
+
+/// Constrain exact canonical arrays, window bounds and deterministic matching.
+///
+/// This retains all fixed64 semantic constraints, including preservation of
+/// matched usage and rejection of dropped live charges. A split circuit must
+/// execute all three [`constrain_root`] owners over these same context-bound
+/// witness words; semantic checks alone do not authenticate a state opening.
+/// # Errors
+/// Wrong operation variant, invalid semantic constraints or synthesis failure.
+pub fn constrain_semantics(
+    uint: &mut UintChip<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    transition: &MapTransition<'_>,
+    witness: &QuotaRebuildCells,
+) -> Result<(), Error> {
     if transition.statement.variant() != Variant::RefreshQuotaShare {
         return Err(Error::Synthesis);
     }
@@ -197,9 +305,6 @@ pub fn constrain(
     let mut window_count = uint.glue().constant(region, Fp::ZERO)?;
     let mut previous = Vec::with_capacity(64);
     let mut replacement = Vec::with_capacity(64);
-    let mut old_leaves = Vec::with_capacity(64);
-    let mut windows = Vec::with_capacity(64);
-    let mut new_leaves = Vec::with_capacity(64);
     for i in 0..64 {
         let a = entry(uint, region, &witness.old[i], &witness.old[i][3], false)?;
         gate_zero(uint, region, &first, &a.0[6])?;
@@ -215,15 +320,6 @@ pub fn constrain(
         let too_late = uint.lt(region, &expires, &end)?;
         gate_zero(uint, region, &active, too_early.word())?;
         gate_zero(uint, region, &active, too_late.word())?;
-        old_leaves.push(sponge.hash_words(region, QUOTA_USAGE_DOMAIN, &witness.old[i])?);
-        windows.push(sponge.hash_words(region, QUOTA_WINDOW_DOMAIN, &witness.windows[i])?);
-        let leaf = [
-            witness.windows[i][0].clone(),
-            witness.windows[i][1].clone(),
-            witness.windows[i][2].clone(),
-            witness.used[i].clone(),
-        ];
-        new_leaves.push(sponge.hash_words(region, QUOTA_USAGE_DOMAIN, &leaf)?);
         previous.push(a);
         replacement.push(b);
     }
@@ -231,12 +327,6 @@ pub fn constrain(
     uint.glue().assert_nonzero(region, &window_count)?;
     sorted_source(uint, region, &previous)?;
     sorted_source(uint, region, &replacement)?;
-    let old_root = array_root(sponge, region, old_leaves, QUOTA_USAGE_NODE_DOMAIN)?;
-    let window_root = array_root(sponge, region, windows, QUOTA_NODE_DOMAIN)?;
-    let new_root = array_root(sponge, region, new_leaves, QUOTA_USAGE_NODE_DOMAIN)?;
-    GlueChip::assert_equal(region, &old_root, &old.core()[core::QUOTA_USAGE_ROOT])?;
-    GlueChip::assert_equal(region, &window_root, &new.core()[core::QUOTA_WINDOWS_ROOT])?;
-    GlueChip::assert_equal(region, &new_root, &new.core()[core::QUOTA_USAGE_ROOT])?;
     previous.extend(replacement.into_iter().rev());
     let mut distance = 64;
     while distance > 0 {

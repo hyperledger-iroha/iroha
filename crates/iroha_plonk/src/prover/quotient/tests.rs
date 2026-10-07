@@ -56,6 +56,52 @@ fn coset_evaluation_reuses_storage_and_matches_the_allocating_reference() {
 }
 
 #[test]
+fn batched_coset_coefficients_validate_before_copying() {
+    fn check<F: PastaField>() {
+        let domain = FftDomain::<F>::new(3).unwrap();
+        let mut powers = vec![F::ZERO; domain.n()];
+        let plan = domain.coset_plan(&mut powers, F::ONE).unwrap();
+        let coefficients = vec![vec![F::ONE; 8], vec![F::from(2); 8]];
+        let mut values = vec![vec![F::ZERO; 8]; 2];
+        let before = values.clone();
+        let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
+        assert!(matches!(
+            evaluate_many(Some(&plan), &coefficients[..1], &mut columns),
+            Err(KeyError::Shape {
+                what: "coset columns",
+                ..
+            })
+        ));
+        assert_eq!(values, before);
+        let mut malformed = coefficients.clone();
+        malformed[1].pop();
+        let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
+        assert!(matches!(
+            evaluate_many(Some(&plan), &malformed, &mut columns),
+            Err(KeyError::Shape {
+                what: "coset coefficients",
+                ..
+            })
+        ));
+        assert_eq!(values, before);
+        let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
+        assert_eq!(
+            evaluate_many(None, &coefficients, &mut columns),
+            Err(KeyError::CosetIndex)
+        );
+        assert_eq!(values, before);
+        let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
+        evaluate_many(Some(&plan), &coefficients, &mut columns).unwrap();
+        for (actual, mut expected) in values.into_iter().zip(coefficients) {
+            domain.coset_fft(&mut expected, F::ONE).unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
 fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
     fn check<C: PastaCurve>() {
         let circuit = Arithmetic {
@@ -77,26 +123,49 @@ fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
                 (pk.fixed_polys(), fixed),
                 (pk.permutation_polys(), permutation),
             ] {
-                let mut values = (0..coefficients.len())
-                    .map(|index| pk.coset_values(polynomial(index), 0).unwrap())
-                    .collect::<Vec<_>>();
-                let addresses: Vec<_> = values.iter().map(|column| column.as_ptr()).collect();
-                for coset in 1..pk.quotient_domain().pieces() {
-                    refresh_key_cosets(&pk, coefficients, &mut values, polynomial, coset)
-                        .expect("refresh");
+                let elements = if pk.has_coset_cache() {
+                    0
+                } else {
+                    coefficients.len() * pk.domain().n()
+                };
+                let mut workspace = QuotientWorkspace::new(elements * size_of::<C::ScalarExt>());
+                let count = elements / pk.domain().n();
+                let lease = workspace.lease(pk.domain().n(), count).unwrap();
+                let mut columns = lease.columns.iter_mut().take(count).map(AsMut::as_mut);
+                let mut values =
+                    initial_key_cosets(&pk, coefficients, polynomial, &mut columns).unwrap();
+                let addresses: Vec<_> = values
+                    .iter()
+                    .map(|column| column.as_ref().as_ptr())
+                    .collect();
+                let mut powers = vec![C::ScalarExt::ZERO; pk.domain().n()];
+                for coset in 0..pk.quotient_domain().pieces() {
+                    let plan = pk
+                        .domain()
+                        .coset_plan(&mut powers, pk.quotient_domain().shift(coset).unwrap())
+                        .unwrap();
+                    refresh_key_cosets(
+                        &pk,
+                        coefficients,
+                        &mut values,
+                        polynomial,
+                        coset,
+                        Some(&plan),
+                    )
+                    .expect("refresh");
                     for (index, column) in values.iter().enumerate() {
                         let reference = pk
                             .coset_values(polynomial(index), coset)
                             .expect("reference");
-                        assert_eq!(column, &reference);
+                        assert_eq!(column.as_ref(), reference.as_ref());
                         match policy {
                             crate::keys::CosetCachePolicy::Eager => {
-                                assert!(matches!(column, Cow::Borrowed(_)));
-                                assert_eq!(column.as_ptr(), reference.as_ptr());
+                                assert!(matches!(column, KeyCoset::Cached(_)));
+                                assert_eq!(column.as_ref().as_ptr(), reference.as_ptr());
                             }
                             crate::keys::CosetCachePolicy::OnDemand => {
-                                assert!(matches!(column, Cow::Owned(_)));
-                                assert_eq!(column.as_ptr(), addresses[index]);
+                                assert!(matches!(column, KeyCoset::Workspace(_)));
+                                assert_eq!(column.as_ref().as_ptr(), addresses[index]);
                             }
                         }
                     }
@@ -107,12 +176,75 @@ fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
                         coefficients,
                         &mut values,
                         polynomial,
-                        pk.quotient_domain().pieces()
+                        pk.quotient_domain().pieces(),
+                        None,
                     ),
                     Err(KeyError::CosetIndex)
                 );
             }
         }
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
+#[test]
+fn evaluator_error_zeroizes_workspace_and_allows_reuse() {
+    fn check<C: PastaCurve>() {
+        let circuit = Arithmetic {
+            start: 3,
+            rows: 12,
+            tamper: None,
+        };
+        let setup = setup::<C, _>(&circuit, CHOICES[0]);
+        let mut config = crate::test_circuits::keygen_config(CHOICES[0]);
+        config.coset_cache = crate::keys::CosetCachePolicy::OnDemand;
+        let pk = crate::keys::keygen_pk(&setup.params, &circuit, &config).unwrap();
+        let protocol = Protocol::new(pk.binding().descriptor()).unwrap();
+        let shape = protocol.shape();
+        let compiled = CompiledExpressions::compile(pk.binding().descriptor(), true).unwrap();
+        let elements = workspace_elements(&pk, &protocol).unwrap();
+        let mut workspace = QuotientWorkspace::new(elements * size_of::<C::ScalarExt>());
+        let mut advice = vec![vec![C::ScalarExt::ONE; shape.n]; shape.num_advice];
+        advice[0].pop();
+        let instances = vec![vec![C::ScalarExt::ZERO; shape.n]; shape.num_instance];
+        let products = vec![vec![C::ScalarExt::ONE; shape.n]; shape.permutation_sets];
+        let inputs = QuotientInputs {
+            advice: &advice,
+            instance: &instances,
+            permutation_products: products.iter().map(Vec::as_slice).collect(),
+            lookups: Vec::new(),
+        };
+        let result = evaluate_with_workspace(
+            &pk,
+            &protocol,
+            &compiled,
+            &inputs,
+            Challenges {
+                theta: C::ScalarExt::ONE,
+                beta: C::ScalarExt::ONE,
+                gamma: C::ScalarExt::ONE,
+                y: C::ScalarExt::ONE,
+            },
+            &crate::protocol::AllTerms,
+            &mut workspace,
+        );
+        assert!(matches!(
+            result,
+            Err(ProverError::Key(KeyError::Shape {
+                what: "coset coefficients",
+                ..
+            }))
+        ));
+        assert_eq!(workspace.allocated_bytes(), workspace.maximum_bytes());
+        assert!(workspace.is_zeroized());
+        let lease = workspace.lease(shape.n, elements / shape.n).unwrap();
+        assert!(
+            lease
+                .columns
+                .iter()
+                .all(|column| column.iter().all(|value| *value == C::ScalarExt::ZERO))
+        );
     }
     check::<Ep>();
     check::<Eq>();
@@ -571,3 +703,6 @@ fn lookup_compression_matches_direct_folding() {
             .is_err()
     );
 }
+
+#[path = "streamed_tests.rs"]
+mod streamed;

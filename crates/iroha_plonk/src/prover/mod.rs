@@ -80,6 +80,7 @@ mod lookup;
 mod multiopen;
 mod permutation;
 pub mod quotient;
+pub use quotient::{QuotientWorkspace, WorkspaceError};
 #[cfg(test)]
 mod tests;
 mod vanishing;
@@ -163,6 +164,8 @@ pub enum ProverError {
     Descriptor(DescriptorError),
     /// A proving-key polynomial or coset was unavailable.
     Key(KeyError),
+    /// The caller-owned quotient workspace could not admit its buffers.
+    Workspace(WorkspaceError),
     /// An MSM failed (budget or size).
     Msm(MsmError),
     /// An FFT failed.
@@ -208,6 +211,7 @@ impl fmt::Display for ProverError {
             Self::Protocol(error) => write!(f, "protocol: {error}"),
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
             Self::Key(error) => write!(f, "key: {error}"),
+            Self::Workspace(error) => write!(f, "workspace: {error}"),
             Self::Msm(error) => write!(f, "MSM: {error}"),
             Self::Fft(error) => write!(f, "FFT: {error}"),
             Self::Transcript(error) => write!(f, "transcript: {error}"),
@@ -834,6 +838,7 @@ where
         mode,
         &mut lookup::VendoredPermutation,
         &AllTerms,
+        None,
     )
 }
 
@@ -907,6 +912,45 @@ where
         mode,
         &mut lookup::VendoredPermutation,
         &AllTerms,
+    )
+}
+
+/// Consumes a witness and reuses caller-owned quotient buffers across proofs.
+///
+/// Returns the same bytes and opening obligation as
+/// [`create_proof_owned_with_claim`]. Every lease is zeroized before returning,
+/// including on failure; only the bounded empty allocation remains reusable.
+/// The key and witness are checked afresh on every call. The workspace ceiling
+/// is independent of, and does not relax, the process-wide MSM scratch ceiling.
+///
+/// # Errors
+/// As [`create_proof_owned`], plus [`ProverError::Workspace`] if the explicit
+/// buffer ceiling is too small or the admitted allocation cannot be made.
+pub fn create_proof_owned_with_workspace<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    pk: &ProvingKey<C>,
+    witness: Witness<C::ScalarExt>,
+    randomness: ProverRandomness<'_>,
+    config: ProverConfig,
+    workspace: &mut QuotientWorkspace<C::ScalarExt>,
+) -> Result<ProverOutput<C>, ProverError>
+where
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+{
+    prove_output(
+        params,
+        pk,
+        WitnessInput::Owned(witness),
+        randomness,
+        config,
+        Mode {
+            oracle: false,
+            transcript_repr: *pk.vk().transcript_repr(),
+        },
+        &mut lookup::VendoredPermutation,
+        &AllTerms,
+        Some(workspace),
     )
 }
 
@@ -1009,6 +1053,7 @@ where
         mode,
         permutation,
         filter,
+        None,
     )?
     .proof)
 }
@@ -1023,6 +1068,7 @@ fn prove_output<C, P>(
     mode: Mode<C>,
     permutation: &mut P,
     filter: &(impl ConstraintFilter + Sync),
+    workspace: Option<&mut QuotientWorkspace<C::ScalarExt>>,
 ) -> Result<ProverOutput<C>, ProverError>
 where
     C: PastaCurve,
@@ -1037,6 +1083,12 @@ where
     }
     let protocol = Protocol::new(descriptor)?;
     let shape = *protocol.shape();
+    if let Some(workspace) = workspace.as_ref() {
+        let bytes = quotient::workspace_elements(pk, &protocol)?
+            .checked_mul(size_of::<C::ScalarExt>())
+            .ok_or(ProtocolError::Overflow)?;
+        workspace.check(bytes).map_err(ProverError::Workspace)?;
+    }
     // Re-check the witness against this key (it may come from another one).
     if witness.advice.len() != shape.num_advice {
         return Err(ProverError::WitnessShape {
@@ -1122,6 +1174,9 @@ where
         &mut transcript,
         budget,
     )?;
+    // Lookup inputs have been materialized. Do not retain this DAG while
+    // constructing the products or the larger quotient expression table.
+    drop(compiled_lookups);
     let beta = transcript.squeeze_challenge();
     let gamma = transcript.squeeze_challenge();
 
@@ -1162,31 +1217,35 @@ where
 
     // Row 6.
     let compiled = quotient::CompiledExpressions::compile(descriptor, true)?;
-    let h = quotient::evaluate(
-        pk,
-        &protocol,
-        &compiled,
-        &quotient::QuotientInputs {
-            advice: &advice.polys,
-            instance: &instance.polys,
-            permutation_products: products.iter().map(|set| set.poly.as_slice()).collect(),
-            lookups: lookups
-                .iter()
-                .map(|lookup| quotient::LookupPolys {
-                    product: &lookup.product_poly,
-                    input: &lookup.input_poly,
-                    table: &lookup.table_poly,
-                })
-                .collect(),
-        },
-        Challenges {
-            theta,
-            beta,
-            gamma,
-            y,
-        },
-        filter,
-    )?;
+    let inputs = quotient::QuotientInputs {
+        advice: &advice.polys,
+        instance: &instance.polys,
+        permutation_products: products.iter().map(|set| set.poly.as_slice()).collect(),
+        lookups: lookups
+            .iter()
+            .map(|lookup| quotient::LookupPolys {
+                product: &lookup.product_poly,
+                input: &lookup.input_poly,
+                table: &lookup.table_poly,
+            })
+            .collect(),
+    };
+    let challenges = Challenges {
+        theta,
+        beta,
+        gamma,
+        y,
+    };
+    let h = if let Some(workspace) = workspace {
+        quotient::evaluate_with_workspace(
+            pk, &protocol, &compiled, &inputs, challenges, filter, workspace,
+        )?
+    } else {
+        quotient::evaluate(pk, &protocol, &compiled, &inputs, challenges, filter)?
+    };
+    // The quotient evaluations are owned by `h`; no later phase reads the
+    // compiled DAG, including quotient commitments and the opening proof.
+    drop(compiled);
     let quotient =
         vanishing::commit_quotient(params, pk, &shape, h, &mut rng, &mut transcript, budget)?;
     let x = transcript.squeeze_challenge();

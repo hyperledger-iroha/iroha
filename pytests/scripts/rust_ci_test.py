@@ -1168,3 +1168,43 @@ def test_workspace_version_dependency_keeps_the_local_optional_feature(tmp_path:
     (root / "Cargo.toml").write_text((root / "Cargo.toml").read_text() +
                                     '[workspace.dependencies]\nlocal = "1"\n')
     assert rust_ci.workspace_check_features(root) == {"iroha_data_model": ("default", "local")}
+
+
+@pytest.mark.parametrize("raw", ("", " ", ",", ",,,", " , \t, "))
+def test_explicit_empty_package_selection_refuses_before_checks(raw, monkeypatch, capsys) -> None:
+    """A required explicit package selection cannot be reported as a skipped pass."""
+    calls = []
+    monkeypatch.setattr(rust_ci, "run_checks", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert rust_ci.main(["run", "--packages", raw, "--checks", "test"]) == 2
+    assert calls == []
+    assert "packages must select at least one Cargo package" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("raw", ("iroha_core", " iroha_core,iroha_data_model,iroha_core "))
+def test_explicit_valid_package_selection_preserves_exact_check_owners(raw, monkeypatch) -> None:
+    """Valid classifier CSVs retain their original unique sorted Cargo owners."""
+    calls = []
+    monkeypatch.setattr(rust_ci, "run_checks", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert rust_ci.main(["run", "--packages", raw, "--checks", "test"]) == 0
+    expected = tuple(sorted({package.strip() for package in raw.split(",")}))
+    assert calls == [((expected, ("test",)), {"dry_run": False, "workspace": False})]
+
+
+@pytest.mark.parametrize("raw", ("", " ", ","))
+def test_explicit_empty_check_selection_refuses_before_checks(raw, monkeypatch, capsys) -> None:
+    """The existing explicit check-selection refusal stays mandatory."""
+    calls = []
+    monkeypatch.setattr(rust_ci, "run_checks", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert rust_ci.main(["run", "--packages", "iroha_core", "--checks", raw]) == 2
+    assert calls == []
+    assert "checks must be a non-empty subset" in capsys.readouterr().err
+
+
+def test_inferred_empty_affected_packages_remain_a_legitimate_noop(monkeypatch, capsys) -> None:
+    """An empty classifier result is distinct from malformed explicit CSV input."""
+    monkeypatch.setattr(rust_ci, "workspace_check_features", lambda root: {"iroha_core": ()})
+    def refuse_child(*args, **kwargs):
+        raise AssertionError("an inferred empty affected set must not launch Cargo")
+    monkeypatch.setattr(rust_ci, "_run", refuse_child)
+    rust_ci.run_checks((), ("test",))
+    assert capsys.readouterr().out == "No affected Rust packages; Cargo validation is not required.\n"

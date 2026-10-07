@@ -112,7 +112,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     .err()
     .map_or(0, |error| error.status)
 }
-/// Typed call: 0 commit canonical FrozenTransition,1 retry op32,2 resume,3 fold,4 CreditStatus.
+/// Custody call: retry1, resume2, fold3, CreditStatus4, request-status5; selector0 is invalid.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call(
     mut env: JNIEnv<'_>,
@@ -123,27 +123,52 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     second: JByteArray<'_>,
 ) -> jobject {
     let result = wallet::run(|| {
-        let first = read(
-            &mut env,
-            &first,
-            if operation == 0 {
-                wallet::FROZEN_MAX
-            } else {
-                32
-            },
-        )?;
+        let first = read(&mut env, &first, 32)?;
         let second = read(&mut env, &second, 32)?;
         if operation != 4 && !second.is_empty() {
             return Err(wallet::Failure::code(wallet::INVALID));
         }
         match operation {
-            0 => wallet::commit(handle as u64, &first),
+            5 => wallet::request_status(handle as u64, &first),
             1 => wallet::retry(handle as u64, &first),
             2 if first.is_empty() => wallet::resume(handle as u64),
             3 if first.is_empty() => wallet::fold(handle as u64),
             4 => wallet::credit(handle as u64, &first, &second),
             _ => Err(wallet::Failure::code(wallet::INVALID)),
         }
+    });
+    response(&mut env, result)
+}
+
+/// Typed lifecycle request; bounds are checked before copying any original object.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_execute(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    request_id: JByteArray<'_>,
+    selector: jint,
+    amount_low: jlong,
+    amount_high: jlong,
+    first: JByteArray<'_>,
+    second: JByteArray<'_>,
+    third: JByteArray<'_>,
+) -> jobject {
+    let result = wallet::run(|| {
+        let selector =
+            u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+        let bounds = wallet::requests::bounds(selector)?;
+        let request_id = read(&mut env, &request_id, 32)?;
+        let first = read(&mut env, &first, bounds[0])?;
+        let second = read(&mut env, &second, bounds[1])?;
+        let third = read(&mut env, &third, bounds[2])?;
+        let request = wallet::requests::request(
+            &request_id,
+            selector,
+            u128::from(amount_low as u64) | (u128::from(amount_high as u64) << 64),
+            [&first, &second, &third],
+        )?;
+        wallet::execute(handle as u64, request)
     });
     response(&mut env, result)
 }

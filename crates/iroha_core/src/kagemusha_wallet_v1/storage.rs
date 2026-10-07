@@ -62,27 +62,19 @@ where
 /// enclosing snapshot must be authenticated against the finalized World state commitment.
 pub fn validate_row(key: &KagemushaWalletLedgerKeyV1, bytes: &[u8]) -> Result<()> {
     let (kind, scheme, owner, entry) = &key.components();
-    if *scheme == [0; 32]
-        || *owner == [0; 32]
-        || (!matches!(*kind, ISSUANCE | super::pending::KIND) && *entry != [0; 32])
-    {
+    if *scheme == [0; 32] || *owner == [0; 32] || (*kind != ISSUANCE && *entry != [0; 32]) {
         return Err(Error::Binding);
     }
     match *kind {
+        super::event_evidence::KIND => {
+            let value: super::event_evidence::KagemushaLoadEventPathV1 =
+                decode(bytes, super::event_evidence::CAP)?;
+            value.validate(key)
+        }
         super::artifacts::KIND => {
             let value: super::artifacts::VerifierInstallation =
                 decode(bytes, super::artifacts::CAP)?;
             value.validate(key)
-        }
-        super::pending::KIND => {
-            let value: PendingPublication = decode(bytes, super::pending::CAP)?;
-            if value.wallet == [0; 32]
-                || value.request == [0; 32]
-                || value.key(*scheme, *owner) != *key
-            {
-                return Err(Error::Binding);
-            }
-            Ok(())
         }
         REGISTRATION => {
             let value: Registration = decode(bytes, bytes.len())?;
@@ -109,15 +101,35 @@ pub fn validate_row(key: &KagemushaWalletLedgerKeyV1, bytes: &[u8]) -> Result<()
                 || value.body.scheme_id != *scheme
                 || value.body.wallet_id != *owner
                 || value.command.amount != value.body.amount
+                || value.command.asset != value.body.asset_digest
+                || value.command.ordinal != value.body.ordinal
+                || value.command.request_id != value.body.request_id
+                || kagemusha_wallet_account_digest_v1(&value.payer)?
+                    != value.body.payer_account_digest
             {
                 return Err(Error::Binding);
             }
-            if let Some(voucher) = value.voucher {
-                if KagemushaWalletLoadVoucherV1::decode_canonical(&voucher, scheme)?.body
-                    != value.body
-                {
-                    return Err(Error::Binding);
+            match &value.command.charge {
+                Some(charge) => {
+                    charge.quote.validate()?;
+                    charge.quote.require_terms(
+                        KagemushaWalletChargeKindV1::Load,
+                        &value.body.wallet_id,
+                        value.body.ordinal,
+                        value.body.amount,
+                        value.body.online_charge,
+                    )?;
+                    if charge.quote.body.scheme_id != *scheme
+                        || charge.quote.body.asset_digest != value.body.asset_digest
+                        || charge.quote.charge_quote_digest() != value.body.charge_quote
+                        || kagemusha_wallet_account_digest_v1(&charge.beneficiary)?
+                            != charge.quote.body.beneficiary_account_digest
+                    {
+                        return Err(Error::Binding);
+                    }
                 }
+                None if value.body.online_charge == 0 && value.body.charge_quote == [0; 32] => {}
+                None => return Err(Error::Binding),
             }
             Ok(())
         }
@@ -180,13 +192,6 @@ pub fn validate_row(key: &KagemushaWalletLedgerKeyV1, bytes: &[u8]) -> Result<()
             }
             Ok(())
         }
-        ACTIVE_AUTHORIZER => {
-            let certificate: Digest = decode(bytes, 128)?;
-            if certificate == [0; 32] {
-                return Err(Error::Binding);
-            }
-            Ok(())
-        }
         _ => Err(Error::Binding),
     }
 }
@@ -203,7 +208,6 @@ pub(super) const CREDENTIAL_CAP: usize =
 pub(super) const RESERVE: u8 = 9;
 pub(super) const RESERVE_ACCOUNT: u8 = 10;
 pub(super) const RESERVE_ASSET: u8 = 11;
-pub(super) const ACTIVE_AUTHORIZER: u8 = 12;
 
 #[derive(Clone, Copy, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kagemusha_wallet_v1::ReserveOwner")]
@@ -271,42 +275,29 @@ pub(crate) fn validate_snapshot<'a>(
             }
             ISSUANCE => {
                 let issuance: Issuance = decode(bytes, bytes.len())?;
-                let pending = PendingPublication::from_issuance(&issuance);
-                let pending_key = pending.key(scheme, issuance.body.authorizer_certificate);
-                match (issuance.voucher.is_none(), lookup(&pending_key)) {
-                    (true, Some(encoded)) => {
-                        validate_row(&pending_key, encoded)?;
-                        if decode::<PendingPublication>(encoded, super::pending::CAP)? != pending {
-                            return Err(Error::Binding);
-                        }
-                    }
-                    (false, None) => {}
-                    _ => return Err(Error::Binding),
+                let path_key = super::event_evidence::key(issuance.body.receipt_digest()?);
+                let path_bytes = lookup(&path_key).ok_or(Error::Unavailable)?;
+                validate_row(&path_key, path_bytes)?;
+                let path: super::event_evidence::KagemushaLoadEventPathV1 =
+                    decode(path_bytes, super::event_evidence::CAP)?;
+                if path.height() != issuance.body.block_height {
+                    return Err(Error::Binding);
                 }
-            }
-            super::pending::KIND => {
-                let pending: PendingPublication = decode(bytes, super::pending::CAP)?;
-                let original_key = issuance_key(scheme, pending.wallet, pending.request);
-                let encoded = lookup(&original_key).ok_or(Error::Unavailable)?;
-                validate_row(&original_key, encoded)?;
-                let issuance: Issuance = decode(encoded, encoded.len())?;
-                if issuance.voucher.is_some() || issuance.body.authorizer_certificate != asset {
+                let registration_key = key(REGISTRATION, scheme, issuance.body.asset_digest);
+                let encoded = lookup(&registration_key).ok_or(Error::Unavailable)?;
+                validate_row(&registration_key, encoded)?;
+                let wallet_key = key(WALLET, scheme, issuance.body.wallet_id);
+                let encoded = lookup(&wallet_key).ok_or(Error::Unavailable)?;
+                validate_row(&wallet_key, encoded)?;
+                let wallet: WalletRecord = decode(encoded, WALLET_CAP)?;
+                if wallet.asset != issuance.body.asset_digest
+                    || wallet.next_load <= issuance.body.ordinal
+                {
                     return Err(Error::Binding);
                 }
             }
             REGISTRATION => {
                 let registration: Registration = decode(bytes, bytes.len())?;
-                let active_key = key(ACTIVE_AUTHORIZER, scheme, asset);
-                let active: Digest = decode(lookup(&active_key).ok_or(Error::Unavailable)?, 128)?;
-                let certificate_key = key(CERTIFICATE, scheme, active);
-                let encoded = lookup(&certificate_key).ok_or(Error::Unavailable)?;
-                validate_row(&certificate_key, encoded)?;
-                let certificate: KagemushaWalletSignerCertificateV1 =
-                    decode(encoded, KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1)?;
-                certificate.verify_role(
-                    &registration.scheme,
-                    KagemushaWalletSignerRoleV1::LoadAuthorization,
-                )?;
                 let reserve = reserve_key(&super::custody::reserve_id(&registration))?;
                 let encoded = lookup(&reserve).ok_or(Error::Unavailable)?;
                 validate_row(&reserve, encoded)?;
@@ -330,11 +321,6 @@ pub(crate) fn validate_snapshot<'a>(
                 let registration: Registration = decode(encoded, encoded.len())?;
                 if reserve_key(&super::custody::reserve_id(&registration))? != *row_key {
                     return Err(Error::Binding);
-                }
-            }
-            ACTIVE_AUTHORIZER => {
-                if lookup(&key(REGISTRATION, scheme, asset)).is_none() {
-                    return Err(Error::Unavailable);
                 }
             }
             RESERVE_ACCOUNT | RESERVE_ASSET => {

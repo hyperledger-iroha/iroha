@@ -44,6 +44,10 @@ pub enum KagemushaWalletDigestRoleV1 {
     Account,
     /// `enrollment-challenge`: issuer enrollment challenge (§2.2).
     EnrollmentChallenge,
+    /// NEW first-release `app-policy`: explicit app identity selection.
+    AppPolicy,
+    /// NEW first-release `enrollment-policy`: exact verifier/regulatory selection.
+    EnrollmentPolicy,
     /// `enrollment-id`: enrollment incarnation identity (§2.2).
     EnrollmentId,
     /// `enrollment-key-binding`: App Attest enrollment assertion client data (§2.2).
@@ -73,13 +77,15 @@ pub enum KagemushaWalletDigestRoleV1 {
 
 impl KagemushaWalletDigestRoleV1 {
     /// Every role, in declaration order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Scheme,
         Self::Relation,
         Self::ProviderContract,
         Self::AssetScope,
         Self::Account,
         Self::EnrollmentChallenge,
+        Self::AppPolicy,
+        Self::EnrollmentPolicy,
         Self::EnrollmentId,
         Self::EnrollmentKeyBinding,
         Self::WalletId,
@@ -104,6 +110,8 @@ impl KagemushaWalletDigestRoleV1 {
             Self::AssetScope => "asset-scope",
             Self::Account => "account",
             Self::EnrollmentChallenge => "enrollment-challenge",
+            Self::AppPolicy => "app-policy",
+            Self::EnrollmentPolicy => "enrollment-policy",
             Self::EnrollmentId => "enrollment-id",
             Self::EnrollmentKeyBinding => "enrollment-key-binding",
             Self::WalletId => "wallet-id",
@@ -177,15 +185,13 @@ pub enum KagemushaWalletSigningDomainV1 {
     SessionControl,
     /// `kgwrqst1`: Request body, signed by the receiver payment key.
     Request,
-    /// `kgwvchr1`: load voucher body, signed by a LoadAuthorization-role key.
-    Voucher,
     /// `kgwlctl1`: ledger control body, signed by the payment key.
     LedgerControl,
 }
 
 impl KagemushaWalletSigningDomainV1 {
     /// Every signing domain, in declaration order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 16] = [
         Self::Certificate,
         Self::Credential,
         Self::RenewalChallenge,
@@ -201,7 +207,6 @@ impl KagemushaWalletSigningDomainV1 {
         Self::Offer,
         Self::SessionControl,
         Self::Request,
-        Self::Voucher,
         Self::LedgerControl,
     ];
 
@@ -224,7 +229,6 @@ impl KagemushaWalletSigningDomainV1 {
             Self::Offer => *b"kgwoffr1",
             Self::SessionControl => *b"kgwsctl1",
             Self::Request => *b"kgwrqst1",
-            Self::Voucher => *b"kgwvchr1",
             Self::LedgerControl => *b"kgwlctl1",
         }
     }
@@ -248,7 +252,6 @@ impl KagemushaWalletSigningDomainV1 {
             Self::Offer => "kgwoffr1",
             Self::SessionControl => "kgwsctl1",
             Self::Request => "kgwrqst1",
-            Self::Voucher => "kgwvchr1",
             Self::LedgerControl => "kgwlctl1",
         }
     }
@@ -278,7 +281,6 @@ impl KagemushaWalletSigningDomainV1 {
             Self::Offer => 194,
             Self::SessionControl => 197,
             Self::Request => 458,
-            Self::Voucher => 250,
             Self::LedgerControl => 211,
         }
     }
@@ -324,13 +326,11 @@ pub enum KagemushaWalletObjectDigestDomainV1 {
     ChargeQuote,
     /// `kgworeq1`: Request.
     Request,
-    /// `kgwovch1`: load voucher.
-    Voucher,
 }
 
 impl KagemushaWalletObjectDigestDomainV1 {
     /// Every object-digest domain, in declaration order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 10] = [
         Self::Certificate,
         Self::Credential,
         Self::Receipt,
@@ -341,7 +341,6 @@ impl KagemushaWalletObjectDigestDomainV1 {
         Self::TimeAnchor,
         Self::ChargeQuote,
         Self::Request,
-        Self::Voucher,
     ];
 
     /// Domain label as text, for example `kgwocrt1`.
@@ -358,7 +357,6 @@ impl KagemushaWalletObjectDigestDomainV1 {
             Self::TimeAnchor => "kgwotim1",
             Self::ChargeQuote => "kgwochg1",
             Self::Request => "kgworeq1",
-            Self::Voucher => "kgwovch1",
         }
     }
 
@@ -385,7 +383,6 @@ impl KagemushaWalletObjectDigestDomainV1 {
             Self::TimeAnchor => KagemushaWalletSigningDomainV1::TimeAnchor,
             Self::ChargeQuote => KagemushaWalletSigningDomainV1::ChargeQuote,
             Self::Request => KagemushaWalletSigningDomainV1::Request,
-            Self::Voucher => KagemushaWalletSigningDomainV1::Voucher,
         }
     }
 }

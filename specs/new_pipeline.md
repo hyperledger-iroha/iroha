@@ -771,9 +771,9 @@ Security and DoS
   system. Require declared size/curve in the envelope for constant‑time
   admission checks. Optionally fee‑gate large verifications based on scalar
   worst‑case cost to protect validator resources.
-  - Configuration: `zk_preverify_budget_ms`, `zk_preverify_tickets_per_peer`,
-    `zk_preverify_max_bytes`.
-  - Reject codes: `ProofTooBig`, `PreverifyBudgetExceeded`,
+  - Current byte limits: `zk.preverify_max_bytes` and `zk.preverify_budget_bytes`.
+    Native PIPA-R and STARK bind their curves through admitted proof profiles.
+  - Reject codes: `ProofTooBig`, `UnsupportedBackend`, `PreverifyBudgetExceeded`,
     `MalformedProof`. Stateless pre‑verify ordering is deterministic and does
     not affect proposal ordering.
 

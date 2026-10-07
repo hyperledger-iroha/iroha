@@ -248,3 +248,212 @@ fn attestation_checks_original_tip_certificate_before_status_instance_and_height
         );
     }
 }
+
+// These calls start with portable proofs emitted by the unchanged public producer.
+// The new tail must still acquire its own genuine current native source.
+fn capture_original_tail(
+    view: &impl StateReadOnly,
+    chain: &CertifiedTestChain,
+    original: &SumeragiFinalityAttestation,
+    status: SumeragiStatus,
+    challenge: [u8; 32],
+) -> Result<SumeragiFinalityAttestation, AttestationBuildError> {
+    let signer = installed_signer();
+    let identity = NodeIdentity {
+        node_id: iroha_model_base::peer::PeerId::new(signer.public_key().clone()),
+        config_fingerprint: original.body.config_fingerprint,
+    };
+    finish_attestation(
+        view,
+        status,
+        &identity,
+        original.body.build_fingerprint,
+        challenge,
+        &signer,
+        AttestationProofs {
+            committed: chain.height(),
+            genesis_block_hash: original.body.genesis_block_hash,
+            genesis: original.body.genesis_finality_proof.clone(),
+            tip: original.body.finality_proof.clone(),
+        },
+    )
+}
+
+#[test]
+fn attestation_tail_keeps_real_boundary_proofs_status_order_and_active_charges() {
+    // Use the ordinary test thread and real NPoS boundary, without a stack override.
+    with_chain_at(10, check_original_tail);
+}
+
+#[inline(never)]
+fn check_original_tail(chain: &CertifiedTestChain) {
+    let view = chain.state().view();
+    let budget = view.execution_budget();
+    let reserved = budget.reserved_bytes();
+    let original = capture(&view, chain, [46; 32], status(chain)).unwrap();
+    let limits = |bytes| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 64);
+    let (finished, usage) = norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+        capture_original_tail(&view, chain, &original, status(chain), [47; 32])
+    });
+    let finished = finished.unwrap();
+    assert_eq!(
+        finished.body.genesis_finality_proof,
+        original.body.genesis_finality_proof
+    );
+    assert_eq!(finished.body.finality_proof, original.body.finality_proof);
+    assert_eq!(finished.body.network_id, original.body.network_id);
+    assert_eq!(
+        finished.body.genesis_block_hash,
+        original.body.genesis_block_hash
+    );
+    assert_eq!(finished.body.node_id, original.body.node_id);
+    assert_eq!(
+        finished.body.config_fingerprint,
+        original.body.config_fingerprint
+    );
+    assert_eq!(
+        finished.body.build_fingerprint,
+        original.body.build_fingerprint
+    );
+    assert_eq!(finished.body.challenge, [47; 32]);
+    assert_ne!(finished.signature, original.signature);
+    finished.verify().unwrap();
+    assert_eq!(budget.reserved_bytes(), reserved);
+
+    let mut invalid_height = status(chain);
+    invalid_height.committed_height -= 1;
+    invalid_height.applied_height -= 1;
+    invalid_height.height -= 1;
+    let mut invalid_instance_and_height = invalid_height.clone();
+    invalid_instance_and_height.instance[0] ^= 1;
+    assert!(matches!(
+        capture_original_tail(
+            &view,
+            chain,
+            &original,
+            invalid_instance_and_height,
+            [48; 32]
+        ),
+        Err(AttestationBuildError::InvalidStatus)
+    ));
+    assert!(matches!(
+        capture_original_tail(&view, chain, &original, invalid_height, [48; 32]),
+        Err(AttestationBuildError::StatusHeightMismatch)
+    ));
+
+    let exact = usage.total_allocated_bytes();
+    assert!(exact > 1);
+    for bytes in [0, 1] {
+        let refused = norito::with_decode_limits_scope(limits(bytes), || {
+            capture_original_tail(&view, chain, &original, status(chain), [48; 32])
+        });
+        assert!(matches!(
+            refused,
+            Err(AttestationBuildError::FinalityProof(ProofError::Deferred(
+                _
+            )))
+        ));
+        assert_eq!(budget.reserved_bytes(), reserved);
+    }
+    let (retried, retry_usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+        capture_original_tail(&view, chain, &original, status(chain), [48; 32])
+    });
+    let retried = retried.unwrap();
+    assert_eq!(retry_usage, usage);
+    assert_eq!(
+        retried.body.genesis_finality_proof,
+        original.body.genesis_finality_proof
+    );
+    assert_eq!(retried.body.finality_proof, original.body.finality_proof);
+    assert_eq!(retried.body.challenge, [48; 32]);
+    retried.verify().unwrap();
+    assert_eq!(budget.reserved_bytes(), reserved);
+    assert_eq!(chain.height(), 10);
+}
+
+#[cfg(unix)]
+#[test]
+fn attestation_tail_refuses_changed_native_genesis_before_status_and_retries_original_inode() {
+    with_chain_at(2, check_tail_source_retry);
+}
+
+#[cfg(unix)]
+#[inline(never)]
+fn check_tail_source_retry(chain: &CertifiedTestChain) {
+    use std::os::unix::fs::MetadataExt as _;
+    let view = chain.state().view();
+    let original = capture(&view, chain, [49; 32], status(chain)).unwrap();
+    let source =
+        crate::kura::Kura::canonical_storage_path(&chain.kura().store_root()).join("blocks.data");
+    let saved = source.with_extension("attestation-tail-original");
+    let bytes = std::fs::read(&source).unwrap();
+    let original_identity = std::fs::metadata(&source).unwrap().ino();
+    let budget = view.execution_budget();
+    let reserved = budget.reserved_bytes();
+    struct RestoreJournal<'a> {
+        source: &'a std::path::Path,
+        saved: &'a std::path::Path,
+    }
+    impl Drop for RestoreJournal<'_> {
+        fn drop(&mut self) {
+            if std::fs::symlink_metadata(self.source).is_ok() {
+                std::fs::remove_file(self.source).unwrap();
+            }
+            std::fs::rename(self.saved, self.source).unwrap();
+        }
+    }
+    for kind in ["missing", "same-bytes-replacement", "symlink"] {
+        std::fs::rename(&source, &saved).unwrap();
+        let restore = RestoreJournal {
+            source: &source,
+            saved: &saved,
+        };
+        match kind {
+            "missing" => assert!(!source.exists()),
+            "same-bytes-replacement" => {
+                std::fs::copy(&saved, &source).unwrap();
+                assert_eq!(std::fs::read(&source).unwrap(), bytes);
+                assert_ne!(std::fs::metadata(&source).unwrap().ino(), original_identity);
+            }
+            "symlink" => std::os::unix::fs::symlink(&saved, &source).unwrap(),
+            _ => unreachable!(),
+        }
+        let expected = AttestationBuildError::FinalityProof(ProofError::from(
+            CertifiedChain::new(&view).unwrap_err(),
+        ));
+        for invalid_instance in [false, true] {
+            let mut invalid = status(chain);
+            invalid.committed_height -= 1;
+            invalid.applied_height -= 1;
+            invalid.height -= 1;
+            if invalid_instance {
+                invalid.instance[0] ^= 1;
+            }
+            let actual =
+                capture_original_tail(&view, chain, &original, invalid, [50; 32]).unwrap_err();
+            assert!(matches!(
+                actual,
+                AttestationBuildError::FinalityProof(ProofError::Chain(
+                    ChainReadError::NotInView { height: 1 }
+                ))
+            ));
+            assert_eq!(actual.to_string(), expected.to_string());
+            assert_eq!(budget.reserved_bytes(), reserved);
+        }
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+        drop(restore);
+        assert_eq!(std::fs::metadata(&source).unwrap().ino(), original_identity);
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        let retried =
+            capture_original_tail(&view, chain, &original, status(chain), [50; 32]).unwrap();
+        assert_eq!(
+            retried.body.genesis_finality_proof,
+            original.body.genesis_finality_proof
+        );
+        assert_eq!(retried.body.finality_proof, original.body.finality_proof);
+        assert_eq!(retried.body.challenge, [50; 32]);
+        retried.verify().unwrap();
+        assert_eq!(budget.reserved_bytes(), reserved);
+    }
+    assert_eq!(chain.height(), 2);
+}

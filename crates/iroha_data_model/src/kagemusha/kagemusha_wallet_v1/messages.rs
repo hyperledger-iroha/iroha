@@ -185,6 +185,7 @@ pub(super) fn verify_credential_with_set_v1(
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletOfferBodyV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletOfferBodyV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,
@@ -431,6 +432,7 @@ impl KagemushaWalletFeeScheduleSlotV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletRequestBodyV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletRequestBodyV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,

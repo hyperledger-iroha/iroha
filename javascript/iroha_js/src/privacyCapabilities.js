@@ -678,8 +678,8 @@ function requirePrivacyExact12NativeV1() {
       { cause },
     );
   }
-  if (abiVersion !== 25) {
-    manifestFailV1("requires exact ABI25", "native binding");
+  if (abiVersion !== 26) {
+    manifestFailV1("requires exact ABI26", "native binding");
   }
   for (const method of PRIVACY_EXACT12_NATIVE_METHODS_V1) {
     if (typeof native?.[method] !== "function") {

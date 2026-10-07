@@ -86,12 +86,30 @@ fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()
     Ok(())
 }
 #[test]
-fn default_genesis_source_template_is_not_a_raw_manifest() {
+fn default_genesis_source_template_requires_explicit_xor_materialization() {
     init_instruction_registry();
     let genesis_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../defaults/genesis.template.json");
-    let result = RawGenesisTransaction::from_path(&genesis_path);
-    assert!(result.is_err());
+    let unbound = RawGenesisTransaction::from_path(&genesis_path)
+        .expect("bounded source JSON must remain parseable before materialization");
+    assert_eq!(unbound.consensus_fingerprint(), None);
+    assert!(
+        unbound
+            .validate_mode_specific_consensus_parameters()
+            .is_err()
+    );
+    assert!(
+        GenesisSourceTemplate::from_path(&genesis_path)
+            .expect("read the original unbound source template")
+            .materialize(None)
+            .is_err()
+    );
+    let materialized = load_default_genesis_source_template_for_test()
+        .expect("materialize the original source with its explicit canonical XOR selection");
+    assert!(materialized.consensus_fingerprint().is_some());
+    materialized
+        .validate_mode_specific_consensus_parameters()
+        .expect("the explicit-XOR manifest must satisfy its original NPoS parameters");
 }
 #[test]
 fn completed_default_genesis_source_template_proposal_roundtrips() -> Result<()> {

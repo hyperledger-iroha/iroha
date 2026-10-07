@@ -130,6 +130,22 @@ pub fn consensus_configuration_fingerprint(
     genesis: &SignedBlock,
 ) -> Result<Hash, GenesisReadError> {
     let epoch = genesis_epoch(genesis)?;
+    let parameters = explicit_genesis_chain_parameters(genesis)?;
+    let encoded = norito::encode_canonical(&(crate::sumeragi::PROTOCOL_VERSION, epoch, parameters))
+        .map_err(|error| error.to_string())?;
+    Ok(Hash::new_from_chunks(&[
+        b"iroha:native-config:v1",
+        &encoded,
+    ]))
+}
+
+// Both callers have already authenticated this exact signed genesis: the
+// fingerprint authenticates it above and the verifier retains its original
+// validated root. Keep one explicit-parameter reader; results and mutable World
+// never supply these initial lag-two values.
+fn explicit_genesis_chain_parameters(
+    genesis: &SignedBlock,
+) -> Result<ChainParamsRecord, GenesisReadError> {
     let metadata = signed_genesis_consensus_metadata(genesis)?;
     let mut parameters = ExplicitParameters::new(metadata.block_cadence_ms);
     for transaction in genesis.external_transactions() {
@@ -144,13 +160,7 @@ pub fn consensus_configuration_fingerprint(
             }
         }
     }
-    let parameters = parameters.finish()?;
-    let encoded = norito::encode_canonical(&(crate::sumeragi::PROTOCOL_VERSION, epoch, parameters))
-        .map_err(|error| error.to_string())?;
-    Ok(Hash::new_from_chunks(&[
-        b"iroha:native-config:v1",
-        &encoded,
-    ]))
+    parameters.finish().map_err(Into::into)
 }
 
 struct ExplicitParameters {
@@ -836,6 +846,27 @@ impl SumeragiFinalityVerifier {
     pub fn instance(&self) -> Hash32 {
         self.instance
     }
+    /// Exact initial epoch reconstructed from this owner's authenticated signed
+    /// genesis, including its network, generation and original ordered key PoPs.
+    /// This does not authenticate any genesis execution result or later epoch.
+    /// The installation owner must independently select and pin the genesis root.
+    #[must_use]
+    pub const fn initial_epoch(&self) -> &crate::sumeragi::epoch::ValidatorEpochContextV1 {
+        &self.genesis_epoch
+    }
+    /// Initial lag-two chain parameters from the retained original signed body.
+    /// All seven explicit Sumeragi instructions remain mandatory and unique;
+    /// the block cadence comes from its unique signed consensus metadata. These
+    /// values seed the native Ready slots for heights two and three, never from
+    /// an unauthenticated genesis execution result or current mutable state.
+    ///
+    /// # Errors
+    /// Preserves the original signed-metadata decoder error and rejects missing,
+    /// duplicate or invalid explicit parameters. This never fills omitted fields
+    /// with local defaults, changes the selected root, or grants global scope.
+    pub fn initial_chain_parameters(&self) -> Result<ChainParamsRecord, GenesisReadError> {
+        explicit_genesis_chain_parameters(&self.genesis)
+    }
     /// Immutable root ownership from the original independently selected signed genesis.
     ///
     /// Parent-network services must require [`crate::block::consensus::SumeragiRootScope::Global`]
@@ -1332,6 +1363,7 @@ mod configuration_fingerprint_tests {
     fn signed_parameters(
         original: &SignedBlock,
         parameters: Vec<SumeragiParameter>,
+        cadence: Option<std::num::NonZeroU64>,
     ) -> SignedBlock {
         let mut instructions: Vec<crate::isi::InstructionBox> = original
             .external_transactions()
@@ -1350,6 +1382,23 @@ mod configuration_fingerprint_tests {
                     .cloned()
             })
             .collect();
+        if let Some(cadence) = cadence {
+            use crate::parameter::{CustomParameter, system::consensus_metadata};
+            let mut metadata = signed_genesis_consensus_metadata(original).unwrap();
+            metadata.block_cadence_ms = cadence;
+            instructions.retain(|instruction| {
+                !instruction.as_any().downcast_ref::<SetParameter>().is_some_and(|set| {
+                    matches!(set.inner(), Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id())
+                })
+            });
+            instructions.push(
+                SetParameter::new(Parameter::Custom(CustomParameter::new(
+                    consensus_metadata::handshake_meta_id(),
+                    iroha_primitives::json::Json::new(metadata),
+                )))
+                .into(),
+            );
+        }
         instructions.extend(
             parameters
                 .into_iter()
@@ -1377,25 +1426,29 @@ mod configuration_fingerprint_tests {
             expected,
             consensus_configuration_fingerprint(&signed_parameters(
                 fixture.genesis(),
-                parameters.clone()
+                parameters.clone(),
+                None,
             ))
             .unwrap()
         );
         for index in 0..parameters.len() {
             let mut missing = parameters.clone();
             missing.remove(index);
+            let missing = signed_parameters(fixture.genesis(), missing, None);
+            assert!(consensus_configuration_fingerprint(&missing).is_err());
             assert!(
-                consensus_configuration_fingerprint(&signed_parameters(fixture.genesis(), missing))
+                selected_verifier(&fixture, &missing)
+                    .initial_chain_parameters()
                     .is_err()
             );
             let mut repeated = parameters.clone();
             repeated.push(parameters[index]);
+            let repeated = signed_parameters(fixture.genesis(), repeated, None);
+            assert!(consensus_configuration_fingerprint(&repeated).is_err());
             assert!(
-                consensus_configuration_fingerprint(&signed_parameters(
-                    fixture.genesis(),
-                    repeated
-                ))
-                .is_err()
+                selected_verifier(&fixture, &repeated)
+                    .initial_chain_parameters()
+                    .is_err()
             );
         }
         assert!(
@@ -1403,6 +1456,146 @@ mod configuration_fingerprint_tests {
                 test_fixtures::NativeFinalityFixture::new().genesis()
             )
             .is_err()
+        );
+    }
+
+    fn selected_verifier(
+        fixture: &test_fixtures::NativeFinalityFixture,
+        genesis: &SignedBlock,
+    ) -> SumeragiFinalityVerifier {
+        SumeragiFinalityVerifier::new(
+            genesis,
+            fixture.chain_id(),
+            fixture.genesis_proof().committee.clone(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn initial_signed_values_seed_both_ready_slots_and_exact_fingerprint_bytes() {
+        let fixture = test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
+        let selected = selected_verifier(&fixture, fixture.genesis());
+        let epoch = genesis_epoch(fixture.genesis()).unwrap();
+        assert_eq!(selected.initial_epoch(), &epoch);
+        assert_eq!(epoch.network_id, fixture.network_id());
+        assert_eq!(epoch.authorization.epoch, 0);
+        assert_eq!(epoch.authorization.first_height, 1);
+        assert_eq!(
+            selected.root_scope().unwrap(),
+            crate::block::consensus::SumeragiRootScope::Global
+        );
+
+        let mut authored = SumeragiParameters::default();
+        authored.block_cadence_ms = std::num::NonZeroU64::new(1100).unwrap();
+        authored.payload_retry_interval_ms =
+            std::num::NonZeroU64::new(authored.payload_retry_interval_ms.get() + 1).unwrap();
+        authored.exec_budget_ms =
+            std::num::NonZeroU64::new(authored.exec_budget_ms.get() + 1).unwrap();
+        authored.apply_budget_ms =
+            std::num::NonZeroU64::new(authored.apply_budget_ms.get() + 1).unwrap();
+        authored.max_block_bytes =
+            std::num::NonZeroU32::new(authored.max_block_bytes.get() - 1).unwrap();
+        authored.epoch_length_blocks =
+            std::num::NonZeroU64::new(authored.epoch_length_blocks.get() + 1).unwrap();
+        let changed = signed_parameters(
+            fixture.genesis(),
+            authored.parameters().collect(),
+            Some(authored.block_cadence_ms),
+        );
+        let changed_owner = selected_verifier(&fixture, &changed);
+        let expected = ChainParamsRecord::from_parameters(&authored);
+        assert_eq!(changed_owner.initial_chain_parameters().unwrap(), expected);
+        let schedule =
+            ConsensusSchedule::from_genesis(changed_owner.initial_epoch().clone(), expected)
+                .unwrap();
+        for height in [2, 3] {
+            let slot = schedule.ready(height).unwrap();
+            assert_eq!(slot.height, height);
+            assert_eq!(slot.epoch, *changed_owner.initial_epoch());
+            assert_eq!(slot.params, expected);
+        }
+
+        // The fingerprint remains exactly the existing native tuple transcript,
+        // including its unchanged domain and canonical encoding. The new owner
+        // exposes fields; it introduces no alternate configuration wire layout.
+        for (genesis, owner, expected) in [
+            (
+                fixture.genesis(),
+                &selected,
+                ChainParamsRecord::from_parameters(&SumeragiParameters::default()),
+            ),
+            (&changed, &changed_owner, expected),
+        ] {
+            let bytes = norito::encode_canonical(&(
+                crate::sumeragi::PROTOCOL_VERSION,
+                genesis_epoch(genesis).unwrap(),
+                expected,
+            ))
+            .unwrap();
+            let owned_bytes = norito::encode_canonical(&(
+                crate::sumeragi::PROTOCOL_VERSION,
+                owner.initial_epoch().clone(),
+                owner.initial_chain_parameters().unwrap(),
+            ))
+            .unwrap();
+            assert_eq!(bytes, owned_bytes);
+            assert_eq!(
+                consensus_configuration_fingerprint(genesis).unwrap(),
+                Hash::new_from_chunks(&[b"iroha:native-config:v1", &bytes])
+            );
+        }
+        assert_eq!(
+            selected.initial_chain_parameters().unwrap(),
+            ChainParamsRecord::from_parameters(&SumeragiParameters::default())
+        );
+        assert_ne!(selected.instance(), changed_owner.instance());
+    }
+
+    #[test]
+    fn initial_readers_require_the_original_signature_and_roster_owner() {
+        let fixture = test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
+        let mut wrong_pop = fixture.genesis_proof().committee.clone();
+        wrong_pop[0].proof_of_possession[0] ^= 1;
+        assert!(
+            SumeragiFinalityVerifier::new(fixture.genesis(), fixture.chain_id(), wrong_pop)
+                .is_err()
+        );
+        let mut tampered = fixture.genesis().clone();
+        let foreign = KeyPair::from_seed(vec![0xA6; 32], Algorithm::Ed25519);
+        tampered
+            .replace_signatures(
+                crate::block::BlockSignatures::try_from_iter([crate::block::BlockSignature::new(
+                    0,
+                    SignatureOf::new(foreign.private_key(), &tampered.header()),
+                )])
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(
+            SumeragiFinalityVerifier::new(
+                &tampered,
+                fixture.chain_id(),
+                fixture.genesis_proof().committee.clone()
+            )
+            .is_err()
+        );
+        let private = test_fixtures::NativeFinalityFixture::start_with_scope(
+            fixture.chain_id(),
+            crate::block::consensus::SumeragiRootScope::Dataspace {
+                parent_network_id: fixture.network_id(),
+                dataspace_id: iroha_model_base::topology::DataSpaceId::new(9),
+            },
+        );
+        let owner = private.verifier();
+        assert!(matches!(
+            owner.root_scope().unwrap(),
+            crate::block::consensus::SumeragiRootScope::Dataspace { .. }
+        ));
+        assert_ne!(owner.initial_epoch().network_id, fixture.network_id());
+        assert_ne!(owner.instance(), fixture.verifier().instance());
+        assert!(
+            owner.initial_chain_parameters().is_err(),
+            "private roots also require explicit signed parameters; no defaults"
         );
     }
 
@@ -1416,7 +1609,7 @@ mod configuration_fingerprint_tests {
                 *value = std::num::NonZeroU64::new(value.get() + 1).unwrap();
             }
         }
-        let changed = signed_parameters(fixture.genesis(), parameters);
+        let changed = signed_parameters(fixture.genesis(), parameters, None);
         assert_ne!(
             original,
             consensus_configuration_fingerprint(&changed).unwrap()

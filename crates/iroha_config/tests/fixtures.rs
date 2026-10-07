@@ -1,7 +1,5 @@
 #![allow(clippy::assertions_on_constants)]
 //! Test fixtures exercising `iroha_config` parameter loading and validation.
-#[path = "publisher_config_fixture.rs"]
-mod publisher_config_fixture;
 use assertables::assert_contains;
 use error_stack::{Report, ResultExt};
 use expect_test::expect_file;
@@ -18,7 +16,6 @@ use iroha_config_base::{
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::account::AccountId;
-use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
 use soranet_pq::MlKemSuite;
 use std::{
     collections::{HashMap, HashSet},
@@ -103,19 +100,18 @@ impl Drop for AddressRuntimeGuard {
 #[error("failed to load config from fixtures")]
 struct FixtureConfigLoadError;
 // The streaming fixtures select this exact checked-in public tables artifact.
-// Keep it in the same explicit source as publisher parser bytes; no native fallback.
-struct PublisherAndBundleFixtureFiles;
-impl iroha_config_base::file_source::ConfigFileSource for PublisherAndBundleFixtureFiles {
+// This exact bounded source never falls back to native files.
+struct BundleFixtureFiles;
+impl iroha_config_base::file_source::ConfigFileSource for BundleFixtureFiles {
     fn read(
         &self,
         path: &Path,
         request: iroha_config_base::file_source::ConfigFileRequest,
     ) -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
-        use iroha_config_base::file_source::{ConfigFileAccess, ConfigFileSource};
-        if request.access == ConfigFileAccess::Private {
-            return ConfigFileSource::read(&ParserOnlyPublisherFiles, path, request);
-        }
-        if path != Path::new("codec/rans/tables/rans_seed0.toml") {
+        use iroha_config_base::file_source::ConfigFileAccess;
+        if request.access != ConfigFileAccess::Public
+            || path != Path::new("codec/rans/tables/rans_seed0.toml")
+        {
             return Err(std::io::ErrorKind::NotFound.into());
         }
         let bytes = include_bytes!("../../../codec/rans/tables/rans_seed0.toml");
@@ -136,10 +132,7 @@ fn bundle_fixture_source_keeps_the_exact_public_artifact_and_bound() {
         maximum: bytes.len(),
     };
     assert_eq!(
-        PublisherAndBundleFixtureFiles
-            .read(path, request)
-            .unwrap()
-            .as_slice(),
+        BundleFixtureFiles.read(path, request).unwrap().as_slice(),
         bytes
     );
     for (selected, request, error) in [
@@ -166,7 +159,7 @@ fn bundle_fixture_source_keeps_the_exact_public_artifact_and_bound() {
         ),
     ] {
         assert_eq!(
-            PublisherAndBundleFixtureFiles
+            BundleFixtureFiles
                 .read(selected, request)
                 .unwrap_err()
                 .kind(),
@@ -179,16 +172,14 @@ include!("fixtures/soranet_transport_identity_tests.rs");
 #[path = "fixtures/snapshot_read_buffer_tests.rs"]
 mod snapshot_read_buffer_tests;
 fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
-    let config = with_fixture_refs(
-        ConfigReader::new()
-            .without_env()
-            .read_toml_with_extends(fixtures_dir().join(path))
-            .change_context(FixtureConfigLoadError)?,
-    )
-    .read_and_complete::<UserConfig>()
-    .change_context(FixtureConfigLoadError)?
-    .parse_with_file_source(&PublisherAndBundleFixtureFiles)
-    .change_context(FixtureConfigLoadError)?;
+    let config = ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(fixtures_dir().join(path))
+        .change_context(FixtureConfigLoadError)?
+        .read_and_complete::<UserConfig>()
+        .change_context(FixtureConfigLoadError)?
+        .parse_with_file_source(&BundleFixtureFiles)
+        .change_context(FixtureConfigLoadError)?;
     Ok(config)
 }
 #[test]
@@ -314,20 +305,18 @@ routes = []
 rate_per_sec = 2
 burst = 4
 "#;
-    let explicit = with_fixture_refs(
-        ConfigReader::new()
-            .without_env()
-            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-            .expect("minimal node fixture")
-            .with_toml_source(TomlSource::inline(
-                overrides.parse().expect("rate overrides"),
-            )),
-    )
-    .read_and_complete::<UserConfig>()
-    .expect("explicit budgets")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("small operator-selected budgets remain valid")
-    .torii;
+    let explicit = ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("minimal node fixture")
+        .with_toml_source(TomlSource::inline(
+            overrides.parse().expect("rate overrides"),
+        ))
+        .read_and_complete::<UserConfig>()
+        .expect("explicit budgets")
+        .parse()
+        .expect("small operator-selected budgets remain valid")
+        .torii;
     for (configured, expected) in [
         (explicit.tx_rate_per_authority_per_sec, 3),
         (explicit.tx_burst_per_authority, 7),
@@ -893,19 +882,10 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .join("defaults/nexus/config.toml");
     let source = fs::read_to_string(&config_path).expect("read Nexus signing profile");
     let mut table: toml::Table = toml::from_str(&source).expect("parse Nexus signing profile");
-    let publisher = table
-        .get("kagemusha_load_authorizer")
-        .and_then(TomlValue::as_table)
-        .expect("Nexus profile declares required publisher custody references");
-    for name in ["keyring_file", "submitter_key_file"] {
-        assert!(
-            publisher
-                .get(name)
-                .and_then(TomlValue::as_str)
-                .is_some_and(|path| !path.is_empty()),
-            "Nexus profile declares a nonempty publisher {name} before test substitution"
-        );
-    }
+    assert!(
+        !table.contains_key("kagemusha_load_authorizer"),
+        "ordinary Nexus profile uses finalized transactions for wallet loads"
+    );
 
     let validator_private_key_file = table
         .remove("private_key_file")
@@ -981,16 +961,12 @@ fn nexus_profile_template_enables_multilane_defaults() {
                 .to_ascii_uppercase(),
         )),
     );
-    let config = with_fixture_refs(
-        ConfigReader::new().with_toml_source(iroha_config_base::toml::TomlSource::inline(table)),
-    )
-    .read_and_complete::<UserConfig>()
-    .change_context(FixtureConfigLoadError)
-    .and_then(|user| {
-        user.parse_with_file_source(&ParserOnlyPublisherFiles)
-            .change_context(FixtureConfigLoadError)
-    })
-    .expect("Nexus profile config should parse");
+    let config = ConfigReader::new()
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
+        .change_context(FixtureConfigLoadError)
+        .and_then(|user| user.parse().change_context(FixtureConfigLoadError))
+        .expect("Nexus profile config should parse");
     assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
     assert_eq!(
         config.nexus.configured_dataspace_catalog, config.nexus.dataspace_catalog,
@@ -1767,10 +1743,11 @@ fn full_envs_set_is_consumed() {
     let env = test_env_from_file(fixtures_dir().join("full.env"));
     // Read, complete, and fully parse into the actual config to ensure all
     // env-backed fields (including nested sections) are queried and consumed.
-    let config = with_fixture_refs(ConfigReader::new().with_env(env.clone()))
+    let config = ConfigReader::new()
+        .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("should be fine to read user view")
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .parse()
         .expect("should parse into actual config");
     assert_eq!(
         config.streaming.key_material.identity().algorithm(),
@@ -1786,16 +1763,14 @@ fn full_envs_set_is_consumed() {
 #[test]
 fn config_from_file_and_env() {
     let env = test_env_from_file(fixtures_dir().join("minimal_file_and_env.env"));
-    with_fixture_refs(
-        ConfigReader::new()
-            .with_env(env)
-            .read_toml_with_extends(fixtures_dir().join("minimal_file_and_env.toml"))
-            .expect("files are fine"),
-    )
-    .read_and_complete::<UserConfig>()
-    .expect("should be fine")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("should be fine, again");
+    ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_file_and_env.toml"))
+        .expect("files are fine")
+        .read_and_complete::<UserConfig>()
+        .expect("should be fine")
+        .parse()
+        .expect("should be fine, again");
 }
 #[test]
 fn full_config_parses_fine() {
@@ -2302,16 +2277,14 @@ fn crypto_section_respects_env_overrides() {
             "false"
         },
     );
-    let cfg = with_fixture_refs(
-        ConfigReader::new()
-            .with_env(env)
-            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-            .expect("base file should be valid"),
-    )
-    .read_and_complete::<UserConfig>()
-    .expect("user view with env overrides")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("actual config with env overrides");
+    let cfg = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("user view with env overrides")
+        .parse()
+        .expect("actual config with env overrides");
     let crypto = &cfg.crypto;
     assert_eq!(crypto.default_hash, default_hash);
     assert_eq!(crypto.sm2_distid_default, "CN12345678901234");
@@ -2375,31 +2348,27 @@ fn sumeragi_explicit_schema_parses() {
 }
 #[test]
 fn sumeragi_does_not_accept_retired_environment_toggles() {
-    let baseline = with_fixture_refs(
-        ConfigReader::new()
-            .with_env(MockEnv::new())
-            .read_toml_with_extends(fixtures_dir().join("base.toml"))
-            .expect("base file should be valid"),
-    )
-    .read_and_complete::<UserConfig>()
-    .expect("read user config")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("parse actual config");
-    let with_retired_env = with_fixture_refs(
-        ConfigReader::new()
-            .with_env(
-                MockEnv::new()
-                    .set("SUMERAGI_COLLECTORS_K", "99")
-                    .set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "1")
-                    .set("SUMERAGI_RBC_CHUNK_MAX_BYTES", "1"),
-            )
-            .read_toml_with_extends(fixtures_dir().join("base.toml"))
-            .expect("base file should be valid"),
-    )
-    .read_and_complete::<UserConfig>()
-    .expect("retired environment names are not schema inputs")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("retired environment names cannot alter the Sumeragi config");
+    let baseline = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("read user config")
+        .parse()
+        .expect("parse actual config");
+    let with_retired_env = ConfigReader::new()
+        .with_env(
+            MockEnv::new()
+                .set("SUMERAGI_COLLECTORS_K", "99")
+                .set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "1")
+                .set("SUMERAGI_RBC_CHUNK_MAX_BYTES", "1"),
+        )
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("retired environment names are not schema inputs")
+        .parse()
+        .expect("retired environment names cannot alter the Sumeragi config");
     assert_eq!(baseline.sumeragi.role, with_retired_env.sumeragi.role);
     assert_eq!(baseline.sumeragi.local, with_retired_env.sumeragi.local);
     assert_eq!(
@@ -2424,28 +2393,24 @@ fn pipeline_workers_env_parses() {
     use iroha_config_base::env::MockEnv;
     // Default: use minimal base file so required params are satisfied,
     // then ensure workers fall back to defaults (0 = auto)
-    let cfg = with_fixture_refs(
-        ConfigReader::new()
-            .with_env(MockEnv::new())
-            .read_toml_with_extends(fixtures_dir().join("base.toml"))
-            .expect("base file should be valid"),
-    )
-    .read_and_complete::<User>()
-    .expect("user view")
-    .parse_with_file_source(&ParserOnlyPublisherFiles);
+    let cfg = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user view")
+        .parse();
     assert!(cfg.is_ok());
     // Override via env
     let env = MockEnv::new().set("PIPELINE_WORKERS", "7");
-    let cfg2: Actual = with_fixture_refs(
-        ConfigReader::new()
-            .with_env(env)
-            .read_toml_with_extends(fixtures_dir().join("base.toml"))
-            .expect("base file should be valid"),
-    )
-    .read_and_complete::<User>()
-    .expect("read user config with env")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("parse actual config with env");
+    let cfg2: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("read user config with env")
+        .parse()
+        .expect("parse actual config with env");
     assert_eq!(cfg2.pipeline.workers, 7);
 }
 #[test]
@@ -2456,16 +2421,14 @@ fn logger_level_env_accepts_lowercase() {
     };
     use iroha_config_base::env::MockEnv;
     let env = MockEnv::new().set("LOG_LEVEL", "info");
-    let cfg: Actual = with_fixture_refs(
-        ConfigReader::new()
-            .with_env(env)
-            .read_toml_with_extends(fixtures_dir().join("base.toml"))
-            .expect("base file should be valid"),
-    )
-    .read_and_complete::<User>()
-    .expect("user config with env")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("actual config with lowercase log level env");
+    let cfg: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config with env")
+        .parse()
+        .expect("actual config with lowercase log level env");
     assert_eq!(cfg.logger.level, Level::INFO);
 }
 include!("fixtures/tls_fallback_defaults_test.rs");
@@ -2616,19 +2579,17 @@ fn sumeragi_local_overrides_parse_and_the_retired_seed_descriptor_is_unknown() {
     use iroha_config::parameters::user::Root as User;
 
     let read = |overrides: &str| {
-        with_fixture_refs(
-            ConfigReader::new()
-                .read_toml_with_extends(fixtures_dir().join("base.toml"))
-                .expect("base fixture")
-                .with_toml_source(TomlSource::inline(
-                    overrides.parse::<Table>().expect("sumeragi overrides"),
-                )),
-        )
-        .read_and_complete::<User>()
+        ConfigReader::new()
+            .read_toml_with_extends(fixtures_dir().join("base.toml"))
+            .expect("base fixture")
+            .with_toml_source(TomlSource::inline(
+                overrides.parse::<Table>().expect("sumeragi overrides"),
+            ))
+            .read_and_complete::<User>()
     };
     let config = read("[sumeragi]\nrole = \"validator\"\nview_timeout_base_ms = 250\n")
         .expect("user config")
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .parse()
         .expect("validator timing override");
     assert_eq!(
         config.sumeragi.local.t_base,
@@ -2646,15 +2607,13 @@ fn sumeragi_local_overrides_parse_and_the_retired_seed_descriptor_is_unknown() {
 #[test]
 fn credential_registry_memory_budget_is_configured_and_nonzero() {
     let parse = |extra: &str| {
-        with_fixture_refs(
-            ConfigReader::new()
-                .without_env()
-                .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-                .unwrap()
-                .with_toml_source(TomlSource::inline(extra.parse().unwrap())),
-        )
-        .read_and_complete::<UserConfig>()
-        .map(|user| user.parse_with_file_source(&ParserOnlyPublisherFiles))
+        ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(extra.parse().unwrap()))
+            .read_and_complete::<UserConfig>()
+            .map(|user| user.parse())
     };
     let default = parse("").unwrap().unwrap();
     assert_eq!(
@@ -2688,21 +2647,19 @@ fn standalone_credential_registry_policy_matches_root_and_is_strict() {
     );
     let table = "credential_max_memory_bytes = 123456\nendpoint_path = '/tmp/runtime-provider-broker-v1.sock'\n";
     let standalone = parse(table).expect("standalone broker policy");
-    let root = with_fixture_refs(
-        ConfigReader::new()
-            .without_env()
-            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-            .unwrap()
-            .with_toml_source(TomlSource::inline(
-                format!("[runtime_provider_broker]\n{table}")
-                    .parse()
-                    .unwrap(),
-            )),
-    )
-    .read_and_complete::<UserConfig>()
-    .unwrap()
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .unwrap();
+    let root = ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .unwrap()
+        .with_toml_source(TomlSource::inline(
+            format!("[runtime_provider_broker]\n{table}")
+                .parse()
+                .unwrap(),
+        ))
+        .read_and_complete::<UserConfig>()
+        .unwrap()
+        .parse()
+        .unwrap();
     assert_eq!(standalone, root.runtime_provider_broker);
     for invalid in [
         "credential_max_memory_bytes = 0",
@@ -2738,22 +2695,20 @@ fn broker_observer_operation_timeout_is_finite_and_shared_with_standalone_policy
     );
     for milliseconds in [1, 4_000, 15_000] {
         let standalone = parse(Some(milliseconds)).unwrap();
-        let root = with_fixture_refs(
-            ConfigReader::new()
-                .without_env()
-                .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-                .unwrap()
-                .with_toml_source(TomlSource::inline(
-                    format!(
-                        "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
-                    )
-                    .parse()
-                    .unwrap(),
-                ))
-        )
+        let root = ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(
+                format!(
+                    "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
+                )
+                .parse()
+                .unwrap(),
+            ))
             .read_and_complete::<UserConfig>()
             .unwrap()
-            .parse_with_file_source(&ParserOnlyPublisherFiles)
+            .parse()
             .unwrap();
         assert_eq!(standalone, root.runtime_provider_broker);
         assert_eq!(
@@ -2763,22 +2718,20 @@ fn broker_observer_operation_timeout_is_finite_and_shared_with_standalone_policy
     }
     for milliseconds in [0, 15_001, 9_223_372_036_854_775_807] {
         assert!(parse(Some(milliseconds)).is_err());
-        let parsed = with_fixture_refs(
-            ConfigReader::new()
-                .without_env()
-                .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-                .unwrap()
-                .with_toml_source(TomlSource::inline(
-                    format!(
-                        "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
-                    )
-                    .parse()
-                    .unwrap(),
-                ))
-        )
+        let parsed = ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(
+                format!(
+                    "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
+                )
+                .parse()
+                .unwrap(),
+            ))
             .read_and_complete::<UserConfig>()
             .unwrap()
-            .parse_with_file_source(&ParserOnlyPublisherFiles);
+            .parse();
         assert!(
             parsed.is_err(),
             "node policy accepted invalid operation bound {milliseconds}"
@@ -2806,17 +2759,15 @@ fn broker_observer_operation_timeout_ignores_environment_overrides() {
             4_000,
         ),
     ] {
-        let root = with_fixture_refs(
-            ConfigReader::new()
-                .with_env(env.clone())
-                .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-                .unwrap()
-                .with_toml_source(TomlSource::inline(table.parse().unwrap())),
-        )
-        .read_and_complete::<UserConfig>()
-        .unwrap()
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
-        .unwrap();
+        let root = ConfigReader::new()
+            .with_env(env.clone())
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(table.parse().unwrap()))
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse()
+            .unwrap();
         assert_eq!(
             root.runtime_provider_broker.observer_operation_timeout,
             Duration::from_millis(expected)

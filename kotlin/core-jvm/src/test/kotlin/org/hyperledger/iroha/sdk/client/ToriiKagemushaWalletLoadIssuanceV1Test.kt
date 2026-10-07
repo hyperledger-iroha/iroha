@@ -23,7 +23,7 @@ import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 
 /**
  * Transport-only tests: fake HTTP responses establish no server authentication or Native Load.
- * Valid canonical-account signing cases use the existing account-address ABI25 admission;
+ * Valid canonical-account signing cases use the existing account-address ABI26 admission;
  * missing that ordinary dependency must fail rather than manufacture an account controller.
  */
 class ToriiKagemushaWalletLoadIssuanceV1Test {

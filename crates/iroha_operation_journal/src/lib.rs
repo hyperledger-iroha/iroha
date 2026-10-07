@@ -420,8 +420,24 @@ impl Journal {
     }
 
     fn read_optional(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        use std::io::Read as _;
+        self.with_read_custody(|| self.read_optional_body(name))
+    }
+
+    // Every ordinary result retains the same journal and original lock through exit custody.
+    // Exit refusal takes precedence over absence, a body error, or completed evidence bytes.
+    // This is a Result boundary; it does not promise a custody check during unwinding.
+    fn with_read_custody<T>(&self, read: impl FnOnce() -> Result<T>) -> Result<T> {
         self.revalidate()?;
+        let result = read();
+        if let Err(error) = self.revalidate() {
+            drop(result);
+            return Err(error);
+        }
+        result
+    }
+
+    fn read_optional_body(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        use std::io::Read as _;
         let mut file = match self.directory.open_read(name) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -757,3 +773,6 @@ mod custody_anchor_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod read_exit_tests;

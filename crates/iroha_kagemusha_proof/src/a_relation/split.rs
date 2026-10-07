@@ -194,6 +194,13 @@ impl SplitPlan {
         if stage + 1 == context.stage_count() && context.operation().frame().has_incoming() {
             sources.extend([FoldSource::Incoming(16); 2]);
         }
+        if context
+            .operation_tasks(stage)
+            .ok_or(Error::Synthesis)?
+            .contains(&super::schedule::OperationTask::LoadFinality)
+        {
+            sources.extend([FoldSource::Fixed(16); 2]);
+        }
         sources.extend(vec![
             FoldSource::Fixed(16);
             context
@@ -226,91 +233,16 @@ impl SplitPlan {
         &self.wrap
     }
 }
-/// An exact prior accumulated P/V pair in the fixed continuation trace.
-/// This is committed by the intermediate A proof, not a new validity verdict.
-#[derive(Clone, Debug)]
-pub struct ContextLinkCells {
-    /// Prior carried full-length Pallas claim.
-    pub pallas: FoldInputCells<Ep>,
-    /// Vesta accumulator produced by that stage's hard W verification.
-    pub vesta: VestaClaimCells,
-}
-fn push_context_claim(words: &mut Vec<Word<Fp>>, pallas: &FoldInputCells<Ep>) -> Result<(), Error> {
-    if pallas.source() != FoldSource::Fixed(16) {
-        return Err(Error::Synthesis);
-    }
-    words.extend([
-        pallas.source_k().clone(),
-        pallas.g().x().clone(),
-        pallas.g().y().clone(),
-    ]);
-    for u in pallas.challenges() {
-        words.extend([u.lo().word().clone(), u.hi().word().clone()]);
-    }
-    Ok(())
-}
-fn next_context_digest(
-    chip: &mut VerifierChip<Ep>,
-    region: &mut Region<'_, Fp>,
-    context: &ContextPlan,
-    stage: usize,
-    previous: &Word<Fp>,
-    link: &ContextLinkCells,
-    current: &FoldInputCells<Ep>,
-) -> Result<Word<Fp>, Error> {
-    if stage == 0 || stage + 1 >= context.stage_count() || link.vesta.source_k() != 16 {
-        return Err(Error::Synthesis);
-    }
-    let variant = *context.schema().get(1).ok_or(Error::Synthesis)?;
-    let mut words = [
-        Fp::ONE,
-        variant,
-        Fp::from(u64::try_from(stage + 1).map_err(|_| Error::BoundsFailure)?),
-    ]
-    .into_iter()
-    .map(|v| chip.uint().glue().constant(region, v))
-    .collect::<Result<Vec<_>, _>>()?;
-    words.push(previous.clone());
-    push_context_claim(&mut words, &link.pallas)?;
-    words.extend(link.vesta.words());
-    push_context_claim(&mut words, current)?;
-    chip.hash_words(
-        region,
-        u64::from_le_bytes(super::context::CONTEXT_DOMAIN),
-        &words,
-    )
-}
-fn trace_digest(
-    chip: &mut VerifierChip<Ep>,
-    region: &mut Region<'_, Fp>,
-    context: &ContextPlan,
-    inputs: &ContextInputs<'_>,
-    history: &[ContextLinkCells],
-    current: &FoldInputCells<Ep>,
-) -> Result<Word<Fp>, Error> {
-    let first = history.first().map_or(current, |v| &v.pallas);
-    let mut digest = context.digest(chip, region, inputs, first)?;
-    for (index, link) in history.iter().enumerate() {
-        let next = history.get(index + 1).map_or(current, |v| &v.pallas);
-        digest = next_context_digest(chip, region, context, index + 1, &digest, link, next)?;
-    }
-    Ok(digest)
-}
 /// An internal stage's checked context digest, carried P claim and Vesta part.
 #[derive(Clone, Debug)]
 pub struct ContinuationCells {
     digest: Word<Fp>,
     pallas: FoldInputCells<Ep>,
     part: VestaClaimCells,
-    history: Vec<ContextLinkCells>,
+    source_vesta: Option<VestaClaimCells>,
 }
 impl ContinuationCells {
-    /// Exact ordered prior P/V trace to carry into the next stage.
-    pub fn history(&self) -> &[ContextLinkCells] {
-        &self.history
-    }
-
-    /// The internal context digest, using `kgwctx_1` rather than `kgwomg_1`.
+    /// The internal context digest, using `kgwlink1` rather than `kgwomg_1`.
     pub const fn digest(&self) -> &Word<Fp> {
         &self.digest
     }
@@ -335,7 +267,7 @@ impl ContinuationCells {
         ];
         words.extend(self.part.words());
         let trivial = VestaClaimCells::trivial(chip, region)?;
-        words.extend(trivial.words());
+        words.extend(self.source_vesta.as_ref().unwrap_or(&trivial).words());
         words.extend(trivial.words());
         for value in [Fp::ZERO, Fp::ONE, Fp::ZERO] {
             words.push(chip.uint().glue().constant(region, value)?);
@@ -429,12 +361,13 @@ pub fn close_first(
         )?;
         FoldInputCells::from_claim(chip, region, &output.claim)?
     };
-    let digest = context.digest(chip, region, inputs, &pallas)?;
+    let immutable = context.digest(chip, region, inputs)?;
+    let digest = context.stage_digest(chip, region, 0, &immutable, &pallas)?;
     Ok(ContinuationCells {
         digest,
         pallas,
         part: sigma.part,
-        history: Vec::new(),
+        source_vesta: None,
     })
 }
 #[derive(Clone, Debug)]
@@ -457,8 +390,7 @@ struct BoundIncoming {
 pub struct ResumedContextCells {
     schema: Vec<Fp>,
     stage: usize,
-    digest: Word<Fp>,
-    history: Vec<ContextLinkCells>,
+    immutable: Word<Fp>,
     pallas: FoldInputCells<Ep>,
     opening: FoldInputCells<Ep>,
     vesta: VestaClaimCells,
@@ -584,16 +516,16 @@ pub fn resume_context(
     region: &mut Region<'_, Fp>,
     plan: &SplitPlan,
     inputs: &ContextInputs<'_>,
-    history: &[ContextLinkCells],
     pallas: &FoldInputCells<Ep>,
     vesta: &VestaClaimCells,
     proof: &ProofMessageCells,
     sigma: &[SigmaBindingCells],
 ) -> Result<ResumedContextCells, Error> {
-    if history.len() != plan.stage - 1 {
-        return Err(Error::Synthesis);
-    }
-    let digest = trace_digest(chip, region, &plan.context, inputs, history, pallas)?;
+    let immutable = plan.context.digest(chip, region, inputs)?;
+    let previous = plan.stage.checked_sub(1).ok_or(Error::Synthesis)?;
+    let digest = plan
+        .context
+        .stage_digest(chip, region, previous, &immutable, pallas)?;
     let instances = omega_instances(chip, region, &digest, vesta)?;
     let key = chip.constant_key(region, &plan.wrap.verifier, &plan.wrap.key)?;
     let output = chip.verify(
@@ -620,8 +552,7 @@ pub fn resume_context(
     Ok(ResumedContextCells {
         schema: plan.context.schema().to_vec(),
         stage: plan.stage,
-        digest,
-        history: history.to_vec(),
+        immutable,
         pallas: pallas.clone(),
         opening: FoldInputCells::from_claim(chip, region, &output.claim)?,
         vesta: vesta.clone(),
@@ -707,6 +638,70 @@ pub fn close_stage(
     q: &[VerifiedQCells],
     fold: &ProofMessageCells,
 ) -> Result<StageOutput, Error> {
+    close_stage_inner(
+        chip,
+        region,
+        plan,
+        resumed,
+        predecessor,
+        incoming,
+        incoming_vesta,
+        q,
+        fold,
+        None,
+    )
+}
+/// Close Load's unique finality stage with both authenticated source obligations.
+/// Its Vesta carry enters the next mandatory W fold; it is never an incoming Omega.
+/// # Errors
+/// Wrong task/stage or any missing, invalid or reordered proof obligation.
+pub(crate) fn close_load_finality_stage(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    plan: &SplitPlan,
+    resumed: &ResumedContextCells,
+    source: &crate::finality::continuity::single::VerifiedSourceCells,
+    fold: &ProofMessageCells,
+) -> Result<StageOutput, Error> {
+    close_stage_inner(
+        chip,
+        region,
+        plan,
+        resumed,
+        None,
+        None,
+        None,
+        &[],
+        fold,
+        Some(source),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn close_stage_inner(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    plan: &SplitPlan,
+    resumed: &ResumedContextCells,
+    predecessor: Option<&PredecessorCells>,
+    incoming: Option<&SelectedPallasCells>,
+    incoming_vesta: Option<&IncomingVestaCells>,
+    q: &[VerifiedQCells],
+    fold: &ProofMessageCells,
+    source: Option<&crate::finality::continuity::single::VerifiedSourceCells>,
+) -> Result<StageOutput, Error> {
+    let owns_source = plan
+        .context
+        .operation_tasks(plan.stage)
+        .ok_or(Error::Synthesis)?
+        .contains(&super::schedule::OperationTask::LoadFinality);
+    if owns_source != source.is_some()
+        || (owns_source
+            && (plan.is_terminal()
+                || plan.context.operation().frame().variant()
+                    != iroha_plonk_recursion::obligation::ledger::Variant::Load))
+    {
+        return Err(Error::Synthesis);
+    }
     let operation = plan.context.operation();
     if resumed.schema != plan.context.schema()
         || resumed.stage != plan.stage
@@ -833,6 +828,9 @@ pub fn close_stage(
     if let Some(incoming) = incoming {
         claims.extend([incoming.pallas.clone(), incoming.opening.clone()]);
     }
+    if let Some(source) = source {
+        claims.extend([source.pallas().clone(), source.opening().clone()]);
+    }
     claims.extend(q.iter().map(|q| q.opening.clone()));
     let result = chip.verify_fold(
         region,
@@ -853,26 +851,14 @@ pub fn close_stage(
             frame: operation.frame(),
         })))
     } else {
-        let link = ContextLinkCells {
-            pallas: resumed.pallas.clone(),
-            vesta: resumed.vesta.clone(),
-        };
-        let digest = next_context_digest(
-            chip,
-            region,
-            &plan.context,
-            plan.stage,
-            &resumed.digest,
-            &link,
-            &pallas,
-        )?;
-        let mut history = resumed.history.clone();
-        history.push(link);
+        let digest =
+            plan.context
+                .stage_digest(chip, region, plan.stage, &resumed.immutable, &pallas)?;
         Ok(StageOutput::Continue(Box::new(ContinuationCells {
             digest,
             pallas,
             part: resumed.vesta.clone(),
-            history,
+            source_vesta: source.map(|value| value.vesta().clone()),
         })))
     }
 }

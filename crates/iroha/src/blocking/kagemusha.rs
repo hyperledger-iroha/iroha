@@ -2,7 +2,7 @@
 
 use super::{AccountClient, RuntimeOwner};
 use crate::Result;
-use iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadIssuanceV1;
+use iroha_data_model::isi::kagemusha_wallet::load_finality::KagemushaWalletLoadReceiptV1;
 
 /// Blocking access to the canonical account-authenticated wallet read capability.
 #[derive(Clone, Copy, Debug)]
@@ -23,7 +23,7 @@ impl AccountClient {
 }
 
 impl Kagemusha<'_> {
-    /// Retrieve one pending or published load issuance without granting balance authority.
+    /// Retrieve one original load transaction receipt without granting balance authority.
     ///
     /// # Errors
     /// Returns the canonical asynchronous failure or a typed blocking-runtime rejection.
@@ -32,7 +32,7 @@ impl Kagemusha<'_> {
         scheme: &[u8; 32],
         wallet: &[u8; 32],
         request: &[u8; 32],
-    ) -> Result<KagemushaWalletLoadIssuanceV1> {
+    ) -> Result<KagemushaWalletLoadReceiptV1> {
         self.runtime
             .block_on(self.inner.load_issuance(scheme, wallet, request))?
     }

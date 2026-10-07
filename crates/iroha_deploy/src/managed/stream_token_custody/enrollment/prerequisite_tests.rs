@@ -597,24 +597,36 @@ fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_
     // checkpoint; its successful carrier supplies H4 for the following renewal selection.
     let configured = fixture.owner.read_configuration(deadline).unwrap();
     assert_eq!(configured.carrier, initial_checkpoint);
-    assert_eq!(authority.test_checkpoint_import_attempts(), imports + 2);
+    assert_eq!(authority.test_checkpoint_import_attempts(), imports);
+    // The three distinct genuine paid originals are already warm in the fixed FIFO.
+    // Their exact heights and canonical bytes must reuse those imports independently.
+    for (bytes, height) in [
+        (configured.original.checkpoint.as_slice(), 2),
+        (initial_checkpoint.as_slice(), 3),
+        (carrier.as_slice(), 4),
+    ] {
+        let checkpoint = authority.decode_checkpoint(bytes).unwrap();
+        assert_eq!(checkpoint.checkpoint().height(), height);
+        assert_eq!(checkpoint_bytes(&checkpoint).unwrap().as_slice(), bytes);
+    }
+    assert_eq!(authority.test_checkpoint_import_attempts(), imports);
     let configure_carrier = configured.carrier.clone();
     let prerequisite = configured.into_initial_prerequisite(deadline).unwrap();
     assert_eq!(prerequisite.policy, expected.policy);
     assert_same(&prerequisite.enrollment, &expected.enrollment);
-    assert_eq!(authority.test_checkpoint_import_attempts(), imports + 3);
+    assert_eq!(authority.test_checkpoint_import_attempts(), imports);
     assert_eq!(
         checkpoint_bytes(&authority.decode_checkpoint(&carrier).unwrap()).unwrap(),
         carrier
     );
-    assert_eq!(authority.test_checkpoint_import_attempts(), imports + 3);
+    assert_eq!(authority.test_checkpoint_import_attempts(), imports);
 
     let retained = authority
         .retained_finality(&directory, &transaction)
         .unwrap()
         .unwrap();
     assert_eq!(&retained, expected.enrollment.finalized());
-    assert_eq!(authority.test_checkpoint_import_attempts(), imports + 3);
+    assert_eq!(authority.test_checkpoint_import_attempts(), imports);
     let standalone = crate::managed::native_operation::retained_carrier(
         &directory,
         authority.config.network_id,
@@ -624,7 +636,7 @@ fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_
     .unwrap()
     .unwrap();
     assert_eq!(standalone, retained);
-    assert_eq!(authority.test_checkpoint_import_attempts(), imports + 3);
+    assert_eq!(authority.test_checkpoint_import_attempts(), imports);
 
     // A valid warm checkpoint is not inclusion for a different original transaction.
     directory
@@ -661,7 +673,7 @@ fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_
             .unwrap(),
         Some(retained)
     );
-    assert_eq!(authority.test_checkpoint_import_attempts(), before + 1);
+    assert_eq!(authority.test_checkpoint_import_attempts(), before);
 
     // Actual changed and absent files still refuse independently of the warm original image.
     directory
@@ -675,7 +687,8 @@ fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_
     )
     .unwrap_err()
     .to_string();
-    for _ in 0..2 {
+    // A retained memo triggers one clear-all cold retry; the next refusal starts empty.
+    for expected_imports in [2, 1] {
         let before = authority.test_checkpoint_import_attempts();
         assert_eq!(
             authority
@@ -684,7 +697,10 @@ fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_
                 .to_string(),
             expected_error
         );
-        assert_eq!(authority.test_checkpoint_import_attempts(), before + 1);
+        assert_eq!(
+            authority.test_checkpoint_import_attempts(),
+            before + expected_imports
+        );
     }
     directory
         .write_atomic("carrier.nrt", &carrier, PublishMode::Replace)

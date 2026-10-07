@@ -100,6 +100,9 @@ mod model {
         /// Matches SCCP v1 cross-chain events.
         #[codec(index = 25)]
         Sccp(SccpEventFilter),
+        /// Ordinary Load execution events, optionally matching one receipt digest.
+        #[codec(index = 26)]
+        KagemushaLoadCommitted(Option<[u8; 32]>),
     }
     /// An event filter for [`crate::sccp::events::SccpEvent`] values (`specs/sccp.md` §4.17).
     #[derive(
@@ -1899,6 +1902,7 @@ impl DataEventFilter {
                 updated |= replace_selector(&mut filter.buyer_matcher);
             }
             Self::GameSession(_)
+            | Self::KagemushaLoadCommitted(_)
             | Self::Sccp(_)
             | Self::Any
             | Self::Peer(_)
@@ -2008,6 +2012,12 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::Sccp(filter), DataEvent::Sccp(sccp_event)) => {
                 filter.matches(sccp_event)
             }
+            (
+                DataEventFilter::KagemushaLoadCommitted(digest),
+                DataEvent::KagemushaLoadCommitted(event),
+            ) => digest
+                .as_ref()
+                .is_none_or(|digest| digest == &event.receipt_digest),
             (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
                 filter.matches(escrow_event)
             }

@@ -1,7 +1,10 @@
 //! Portable finality and challenged node statements from the current certified chain.
 
 mod cursor;
-pub use cursor::{NativeCurrentFinalityV1, NativeFinalityCursorErrorV1, NativeFinalityCursorV1};
+pub use cursor::{
+    NativeCurrentFinalityV1, NativeFinalityAtHeightV1, NativeFinalityCursorErrorV1,
+    NativeFinalityCursorV1,
+};
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -410,12 +413,52 @@ pub fn build_attestation(
         };
         (genesis, tip)
     };
+    finish_attestation(
+        view,
+        status,
+        identity,
+        build_fingerprint,
+        challenge,
+        signer,
+        AttestationProofs {
+            committed,
+            genesis_block_hash,
+            genesis: genesis_finality_proof,
+            tip: finality_proof,
+        },
+    )
+}
+
+// Only the two genuinely produced portable proofs and Copy source projections leave
+// the producer phase. No native prefix, authority or source guard crosses this seam.
+struct AttestationProofs {
+    committed: u64,
+    genesis_block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    // Match the original local proof drop order on an early tail refusal.
+    tip: SumeragiFinalityProof,
+    genesis: SumeragiFinalityProof,
+}
+
+// The fresh source/instance fence and its native owner retain their original lifetime
+// through body validation, signing and final verification. Their stack slots do not
+// exist while the independent proof producer is decoding its certificates.
+#[inline(never)]
+fn finish_attestation(
+    view: &impl StateReadOnly,
+    status: SumeragiStatus,
+    identity: &NodeIdentity,
+    build_fingerprint: Hash,
+    challenge: [u8; 32],
+    signer: &KeyPair,
+    proofs: AttestationProofs,
+) -> Result<SumeragiFinalityAttestation, AttestationBuildError> {
+    use AttestationBuildError as Error;
     let chain = CertifiedChain::new(view).map_err(|error| Error::FinalityProof(error.into()))?;
     if status.instance != chain.instance().0 {
         return Err(Error::InvalidStatus);
     }
     // Only a height mismatch after successful proof and identity validation is retryable.
-    if status.applied_height != committed || status.committed_height != committed {
+    if status.applied_height != proofs.committed || status.committed_height != proofs.committed {
         return Err(Error::StatusHeightMismatch);
     }
     let observed_at_unix_ms = std::time::SystemTime::now()
@@ -432,10 +475,10 @@ pub fn build_attestation(
         node_fingerprint: Hash::new(identity.node_id.encode()),
         build_fingerprint,
         config_fingerprint: identity.config_fingerprint,
-        genesis_block_hash,
-        genesis_finality_proof,
+        genesis_block_hash: proofs.genesis_block_hash,
+        genesis_finality_proof: proofs.genesis,
         status,
-        finality_proof,
+        finality_proof: proofs.tip,
     };
     body.validate_consistency().map_err(Error::InvalidBody)?;
     let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())

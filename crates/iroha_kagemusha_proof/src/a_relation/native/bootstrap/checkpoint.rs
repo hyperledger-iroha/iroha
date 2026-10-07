@@ -36,7 +36,7 @@ impl CheckpointKind {
 /// Construction is private and derives from this Prover's installed keys. The
 /// native installation owner must still authenticate the whole PK/source catalog;
 /// this metadata is not a signed artifact admission or a complete fold schedule.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckpointLayout {
     kind: CheckpointKind,
     descriptor_digest: [u8; 32],
@@ -166,7 +166,7 @@ impl Prover {
                 kind,
                 *self.first.binding().digest(),
                 self.first
-                    .vk()
+                    .key()
                     .kagemusha_digest(self.first.binding())
                     .map_err(|_| Error::Artifact)?
                     .to_repr(),
@@ -178,7 +178,7 @@ impl Prover {
                 kind,
                 *self.wrapper.binding().digest(),
                 self.wrapper
-                    .vk()
+                    .key()
                     .kagemusha_digest(self.wrapper.binding())
                     .map_err(|_| Error::Artifact)?
                     .to_repr(),
@@ -218,12 +218,12 @@ impl Session<'_> {
             return Err(Error::Input);
         }
         let checked = self.prepared.resume_first(
-            self.prover.first.vk(),
+            self.prover.first.key(),
             self.prover.first.binding(),
             checkpoint.clone(),
             budget,
         )?;
-        let source_context = self.prepared.context_digest()?.to_repr();
+        let source_context = self.prepared.immutable_context_digest()?.to_repr();
         Payload {
             version: 1,
             kind: layout.kind.tag(),
@@ -247,7 +247,11 @@ impl Session<'_> {
         budget: MemoryBudget,
     ) -> Result<FirstCheckpoint, Error> {
         let layout = self.prover.checkpoint_layout(CheckpointKind::First)?;
-        let payload = Payload::decode(bytes, &layout, self.prepared.context_digest()?.to_repr())?;
+        let payload = Payload::decode(
+            bytes,
+            &layout,
+            self.prepared.immutable_context_digest()?.to_repr(),
+        )?;
         self.restore_first(payload.proof, budget)
     }
 
@@ -268,7 +272,7 @@ impl Session<'_> {
         let checked = self
             .prepared
             .resume_wrapper(&self.prover.w, checkpoint.clone(), budget)?;
-        let source_context = self.prepared.context_digest()?.to_repr();
+        let source_context = self.prepared.immutable_context_digest()?.to_repr();
         Payload {
             version: 1,
             kind: layout.kind.tag(),
@@ -292,7 +296,11 @@ impl Session<'_> {
         budget: MemoryBudget,
     ) -> Result<WrapperCheckpoint, Error> {
         let layout = self.prover.checkpoint_layout(CheckpointKind::Wrapper)?;
-        let payload = Payload::decode(bytes, &layout, self.prepared.context_digest()?.to_repr())?;
+        let payload = Payload::decode(
+            bytes,
+            &layout,
+            self.prepared.immutable_context_digest()?.to_repr(),
+        )?;
         let vesta = payload.vesta.ok_or(Error::Input)?;
         self.restore_wrapper(payload.proof, &vesta, budget)
     }

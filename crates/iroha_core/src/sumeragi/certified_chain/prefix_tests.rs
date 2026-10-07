@@ -241,6 +241,22 @@ fn assert_streamed_prefix_checks_exact_native_quorum_at_retained_empty_epoch_bou
         assert_eq!(counts.frames, [10]);
         assert_eq!(prefix.prefix.tip.height(), 9);
     }
+    let (_, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();
+    for (signers, expected) in [
+        (Signers::BelowQuorum, CertError::TooFewSigners),
+        (Signers::All, CertError::TooManySigners),
+    ] {
+        let invalid = chain.commit_qc(10, qc.block_hash, qc.result, signers);
+        let tampered = with_parts(&original, |_, qc, _| *qc = invalid);
+        assert_eq!(
+            prefix.push(tampered).unwrap_err(),
+            ExecutionAttemptError::Rejected(ChainReadError::Certificate {
+                height: 10,
+                error: expected,
+            }),
+        );
+        assert_eq!(prefix.prefix.tip.height(), 9);
+    }
     let (boundary, genesis) = prefix.push(original.clone()).unwrap().into_parts();
     assert!(genesis.is_none());
 

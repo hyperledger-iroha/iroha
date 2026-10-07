@@ -132,6 +132,8 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
+#[cfg(unix)]
+mod first_device_auth_key_v1;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
 mod committed_transaction_inclusion;
 pub use committed_transaction_inclusion::{

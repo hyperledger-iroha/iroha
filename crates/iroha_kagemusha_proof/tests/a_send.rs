@@ -279,7 +279,7 @@ impl Circuit<Fp> for SendMaps {
 }
 fn fixture() -> SendMaps {
     let (bootstrap, _, _) = bootstrap_objects::enrollment();
-    let (load, _, _, _) = load_objects::authorized(&bootstrap);
+    let (load, _, _) = load_objects::funded(&bootstrap);
     SendMaps {
         witness: send_objects::from_load(&load.successor),
         known: true,
@@ -358,7 +358,7 @@ fn genuine_send_sigma_and_same_tape_depth32_maps() {
 #[test]
 fn send_held_fee_cannot_skip_or_replace_either_map_obligation() {
     let (bootstrap, _, _) = bootstrap_objects::enrollment();
-    let (load, _, _, _) = load_objects::authorized(&bootstrap);
+    let (load, _, _) = load_objects::funded(&bootstrap);
     let circuit = SendMaps {
         witness: send_objects::with_held_fee(&load.successor),
         known: true,
@@ -493,7 +493,7 @@ fn genuine_send_q_and_fixed_operation_stages_reject_drop_or_relabel() {
         AProofPlan, context::ContextPlan, schedule::OperationTask,
     };
     let (bootstrap, _, _) = bootstrap_objects::enrollment();
-    let (load, _, _, _) = load_objects::authorized(&bootstrap);
+    let (load, _, _) = load_objects::funded(&bootstrap);
     let source = genuine_send_source(&load.successor);
     let params = iroha_plonk::pcs::ipa::PinnedParams::<Ep>::derive(16).unwrap();
     // Only descriptor metadata is needed to exercise the operation partition.

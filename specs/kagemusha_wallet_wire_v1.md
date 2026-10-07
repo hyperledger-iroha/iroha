@@ -5,7 +5,11 @@ split-lineage design ([proposal](kagemusha_single_design_proposal.md) §§3, 3.1
 4.1, 5.1, 7 and 8; §10, G1). They are implemented in
 `iroha_data_model::kagemusha::kagemusha_wallet_v1`
 (`crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1.rs` and its child files).
-Their cross-language vectors are `fixtures/kagemusha/wallet_v1_vectors.json`. Kotlin
+Their cross-language vectors are `fixtures/kagemusha/wallet_v1_vectors.json`. The NEW
+first-release typed E1 policy pair additionally uses the unadmitted DATA
+`fixtures/kagemusha/wallet_enrollment_policy_v1_vectors.json`; that pair
+adds two SHA roles to the coordinated Model/Kotlin/Swift digest inventory; typed
+foreign policy carriers and issuer ownership still require migration. Kotlin
 `org.hyperledger.iroha.sdk.offline.KagemushaWalletWireV1` (`kotlin/core-jvm`) and Swift
 `KagemushaWalletWireV1` (`IrohaSwift`) consume the vectors (§5), the Swift and Kotlin
 peer carriers move envelope frames, the Lineage message included (§6), and the iPhone
@@ -70,11 +74,12 @@ chunk boundaries, and every value (§5).
 
 - **Transcripts.** A body is a fixed-layout transcript of the object's fields in
   declaration order: fixed-width integers, raw digests, keys and signatures, and
-  enums as a one-byte tag equal to the Norito tag. Where variants differ, the tag
-  is followed by the variant's fields and zero fill to a pinned union width. Nested
+  enums as a one-byte tag equal to the Norito tag. Existing fixed-union transcripts
+  zero fill to a pinned union width. The NEW policy preimages use their exact selected
+  arm and LE32-length-prefixed exact UTF8; see their separate contract. Nested
   fixed records are inlined. A reference to a signer certificate is its 32-byte
   certificate digest, a `P` value. Only the `account`, `evidence`,
-  `verifying-key-set`, `marker`, `capsule`, `completion` and `fold` roles, the
+  `verifying-key-set`, NEW `app-policy` and `enrollment-policy`, `marker`, `capsule`, `completion` and `fold` roles, the
   certificate-set digest and the lineage digest have variable-length inputs.
 - **Signing.** Every P-256 signature of the protocol signs, as its message,
   the 32-byte canonical (little-endian, §3.2) encoding `m` of `P_bytes(d, transcript)`, where `d` is the
@@ -101,7 +106,7 @@ chunk boundaries, and every value (§5).
   (96-byte body), an artifact digest that no relation recomputes. A signature confers only
   its signer role's authority; decoding or validating grants no monetary authority.
 
-Signed bodies (17; the transcript of each is in the section named, and the `-body`
+Signed bodies (16; the transcript of each is in the section named, and the `-body`
 SHA-256 roles do not exist):
 
 | Signed body | Signing domain `d` | Transcript bytes | Signer | Object digest |
@@ -121,10 +126,9 @@ SHA-256 roles do not exist):
 | offer (§3.4) | `kgwoffr1` | 194 | payer payment key | none |
 | session control (§3.4, when signed) | `kgwsctl1` | 197 | session payment key | none |
 | request (§3.4) | `kgwrqst1` | 458 | receiver payment key | `P(kgworeq1, ·)` |
-| load voucher (§3.6) | `kgwvchr1` | 250 | LoadAuthorization | `P(kgwovch1, ·)` |
 | ledger control (§3.6) | `kgwlctl1` | 211 | payment key | none |
 
-SHA-256 role table (all 18 labels of `KagemushaWalletDigestRoleV1`). `H` remains only for
+SHA-256 role table (all 20 labels of `KagemushaWalletDigestRoleV1`). `H` remains only for
 `scheme_id`, the identities fixed at enrollment that no relation recomputes (asset scope,
 wallet, enrollment), the enrollment and renewal transcripts given to platform
 attestation, `account`, the artifact digests, the evidence digest, the output descriptor
@@ -138,6 +142,8 @@ and the local custody records (B1):
 | `asset-scope` | asset scope transcript (§3.1) | 54 | fixed identity; ledger boundary |
 | `account` | complete canonical Norito frame of the domainless `AccountId` | var | ledger boundary; the ledger derives it from the `AccountId` |
 | `enrollment-challenge` | §3.1 | 194 | platform-attestation challenge, used only by the issuer |
+| `app-policy` | NEW [typed app identity](kagemusha_wallet_enrollment_policy_v1.md) | ≤334 | fixed initial selection; no approval implied |
+| `enrollment-policy` | NEW [typed platform/regulator/lifetime policy](kagemusha_wallet_enrollment_policy_v1.md) | 183 Android, 167 Apple | selected issuer inputs; no approval implied |
 | `enrollment-id`, `enrollment-key-binding` | `challenge_digest ‖ payment_key` | 97 | enrollment transcript; App Attest client data |
 | `wallet-id` | `scheme_id ‖ asset_digest ‖ payment_key ‖ enrollment_id` | 161 | fixed identity; carried, never recomputed in a relation |
 | `artifact-manifest` | `m ‖ sig` of the signed artifact manifest | 96 | artifact digest |
@@ -174,10 +180,16 @@ Canonical bytes are one complete `norito::encode_canonical` frame ([Norito](../n
   vectors pin the name and schema hash of all 26 framed types (envelope:
   `f03a9dc47142299cad9ffe0b2115fd42`).
 - `p` is a property of the type, never inferred from the bytes. It is 8 when a
-  `u128` is reachable without passing through a sequence (archived alignment 16;
-  the envelope payload starts at byte 48), and 0 otherwise. The table below lists
-  it per type. `armv7` is not an admitted native target: its `u128` alignment would
-  change the padding.
+  `u128` is reachable without passing through indirect Vec-backed storage (archived
+  alignment 16;
+  the envelope payload starts at byte 48), and 0 otherwise. The wallet model pins
+  every record or enum with a direct `u128` field to `repr(align(16))`; enclosing
+  records, enums and inline fixed arrays inherit that alignment, while indirect
+  Vec-backed storage does not inherit its elements' alignment. All 28 frame padding values below are compile-time
+  assertions. `armv7`, `aarch64` and `x86_64` use this one layout and the existing
+  canonical bytes, schemas, flags and payload encodings. There is no target-specific
+  decoder or alternate-padding acceptance. Native runtime and physical-device
+  qualification remain separate from the frame contract.
 - Payload (Norito derived layout under `COMPACT_LEN`): a record is its fields in
   declaration order, each `varint len ‖ payload`; integers are little-endian fixed
   width; a `bool` is one byte; a digest field is `0x20 ‖ 32 bytes`, a key
@@ -199,7 +211,7 @@ Canonical bytes are one complete `norito::encode_canonical` frame ([Norito](../n
   root. Payment, Credited and Lineage are validated structurally at decode; their
   full verification takes the session's inputs (§3.4).
 - Flipping any byte of a vector Credential, Certificate, Offer, Request, Payment,
-  Credited (both forms), Lineage, FoldRecord, Package, LoadVoucher, SchemePolicy,
+  Credited (both forms), Lineage, FoldRecord, Package, LoadReceipt, LoadFinality, SchemePolicy,
   FeeSchedule, Blacklist, QuotaShare, TimeAnchor, ChargeQuote, LedgerControl or
   ArtifactManifest frame fails decoding or validation, or changes the object digest
   (tested). The quota share and blacklist digests cover only body and signature;
@@ -234,17 +246,19 @@ Standalone frame caps (complete frame, checked before decoding) and padding:
 | `CredentialV1` | 1,024 | 0 | `MarkerV1` | 1,024 | 8 |
 | `RenewalRequestV1` | 73,728 | 0 | `RecoveryCapsuleV1` | 262,144 | 8 |
 | `ArtifactManifestV1` | 1,024 | 0 | `CompletionRecordV1` | 65,536 | 0 |
-| `VerifyingKeyAllowlistV1` | 2,048 | 0 | | | |
+| `VerifyingKeyAllowlistV1` | 2,048 | 0 | `LoadFinalityV1` | 16,384 | 0 |
 | `SchemePolicyV1` | 1,024 | 0 | `FoldRecordV1` | 10,000 | 8 |
-| `FeeScheduleV1` | 1,024 | 8 | `LoadVoucherV1` | 1,024 | 8 |
+| `FeeScheduleV1` | 1,024 | 8 | `LoadReceiptV1` | 512 | 8 |
 | `BlacklistV1` | 2,228,736 | 0 | `UnloadClaimV1` | 16,384 | 8 |
 | `QuotaShareV1` | 8,192 | 0 | `FeeClaimV1` | 16,384 | 8 |
 | `TimeAnchorV1` | 512 | 0 | `LedgerControlV1` | 1,024 | 8 |
 | `ChargeQuoteV1` | 1,024 | 8 | `ActivationV1` | 16,384 | 8 |
 | `EnvelopeV1` | per kind | 8 | `CloseLoadsV1` | 16,384 | 8 |
-| | | | `AbandonmentV1` | 1,024 | 8 |
+| `QuotaRefreshWitnessV1` | 8,192 | 8 | `AbandonmentV1` | 1,024 | 8 |
 
-Type names omit the `KagemushaWallet` prefix. The blacklist cap is
+Type names omit the `KagemushaWallet` prefix. `LoadReceiptV1` has the canonical
+`iroha_data_model::isi::kagemusha_wallet` namespace; the other wallet frames use
+`iroha_data_model::kagemusha::kagemusha_wallet_v1`. The blacklist cap is
 `65,536 × 34 + 512`: each canonical entry takes 34 bytes. The blacklist is not a
 peer message: a wallet downloads it only while online, from the issuer or ledger,
 as this standalone frame, and peers never relay it, so its size does not bear on
@@ -269,10 +283,10 @@ is the body's fields in the order shown.
 |---|---|---|
 | Scheme (`scheme`) | `LE16 version ‖ network_id ‖ scheme_root_key(key) ‖ relation_id ‖ provider_contract` | `scheme_id = H("scheme", ·)`. `network_id` is the raw genesis `NetworkId`, carries the Iroha hash marker (last byte odd) and is not the marked zero `00…01`; `relation_id` nonzero; `provider_contract` is the V1 constant. Decoding requires the recomputed `scheme_id`. The root key signs certificates only. |
 | Relation (`relation`) | `LE16 1 ‖ eq_protocol_digest ‖ ep_protocol_digest ‖ native_profile_digest ‖ verifying_key_set_digest ‖ artifact_inventory_digest` | Gives `relation_id`, fixed for the scheme's lifetime: one scheme-level identity that every statement and Ω carries. `verifying_key_set_digest` is the `verifying-key-set` digest of the verifying-key allowlist (below). |
-| Verifying-key allowlist (`verifying-key-set`) | `LE16 version ‖ LE32 n ‖ n × (tag kind ‖ LE32 enabled_controls ‖ verifying_key_digest ‖ LE32 proof_bytes) ‖ lineage_verifying_key_digest ‖ LE32 lineage_proof_bytes` | Frame `{version, steps: [{kind, enabled_controls, verifying_key_digest, proof_bytes}], lineage_verifying_key_digest, lineage_proof_bytes}`. One σ entry per selector, strictly ascending by `(tag, mask)`, at most 16: every operation with mask 0, Send also once per supported enabled-controls mask (defined bits only), and Receive also once with mask 1 (BLACKLIST) exactly when some Send mask has bit 0; digests nonzero; lengths at least 1, σ at most 10,000. `lineage_proof_bytes` plus the largest Send `proof_bytes` is at most `10,000 − F_payment` (R9; 8,277 with the B6 Request fields, §4), and `lineage_proof_bytes` is at most 7,812 (the Credited bound with the fixed opening, a derived envelope bound; §2, §4). A consumer selects σ's entry by the package's operation tag; for Send also by its mask (`Ω.enabled_controls`), and for Receive by the decision its Request records: selector `(Receive, 1)` iff `receiver_blacklist_version ≠ 0` (§3.4), whatever the receiver's current enabled-controls bits, so verifying a Receive package takes its Request. It requires σ and Ω(pred) to have exactly the listed lengths. The frame decodes only against a manifest body whose `verifying_key_set_digest` it recomputes. |
+| Verifying-key allowlist (`verifying-key-set`) | `LE16 version ‖ LE32 n ‖ n × (tag kind ‖ LE32 enabled_controls ‖ verifying_key_digest ‖ LE32 proof_bytes) ‖ lineage_verifying_key_digest ‖ LE32 lineage_proof_bytes` | Frame `{version, steps: [{kind, enabled_controls, verifying_key_digest, proof_bytes}], lineage_verifying_key_digest, lineage_proof_bytes}`. One σ entry per selector, strictly ascending by `(tag, mask)`, at most 16: every operation with mask 0, Send also once per supported enabled-controls mask (defined bits only), and Receive also once with mask 1 (BLACKLIST) exactly when some Send mask has bit 0; digests nonzero; lengths at least 1, σ at most 10,000, and Receive `proof_bytes` at most 9,321 (`10,000 − F_receive`, the complete Credited::Receive envelope budget; §4). `lineage_proof_bytes` plus the largest Send `proof_bytes` is at most `10,000 − F_payment` (R9; 8,277 with the B6 Request fields, §4), and `lineage_proof_bytes` is at most 7,812 (the Credited bound with the fixed opening, a derived envelope bound; §2, §4). A consumer selects σ's entry by the package's operation tag; for Send also by its mask (`Ω.enabled_controls`), and for Receive by the decision its Request records: selector `(Receive, 1)` iff `receiver_blacklist_version ≠ 0` (§3.4), whatever the receiver's current enabled-controls bits, so verifying a Receive package takes its Request. It requires σ and Ω(pred) to have exactly the listed lengths. The frame decodes only against a manifest body whose `verifying_key_set_digest` it recomputes. |
 | Provider contract | see §1 | Constant `52b501e3344547c36579684aafb2b15eb0caf3393e77aebdfbaa14ac57d0cc8d`. |
 | Asset scope (`asset-scope`) | `LE16 version ‖ asset UUID (16) ‖ asset_incarnation ‖ LE32 scale` | Frame `{version, asset: AssetDefinitionId, asset_incarnation, scale}`. UUIDv4 asset, valid `AxtAssetIncarnationV1`, `scale ≤ 28`. Gives `asset_digest`. |
-| Signer certificate (signed under `kgwcert1`) | `LE16 version ‖ scheme_id ‖ tag role ‖ key ‖ LE64 serial` | Signed by the scheme root. Roles: Enrollment 1, LoadAuthorization 2, RegulatoryPolicy 3, TimeAnchor 4, Artifact 5. Fixed depth one; no validity period or revocation is evaluated offline; the consumer requires the role it needs. Its digest `P(kgwocrt1, ·)` (§1) is what every `*_certificate` field names, a canonical σ-field value. |
+| Signer certificate (signed under `kgwcert1`) | `LE16 version ‖ scheme_id ‖ tag role ‖ key ‖ LE64 serial` | Signed by the scheme root. Roles: Enrollment 1, RegulatoryPolicy 3, TimeAnchor 4, Artifact 5. Tag 2 is invalid. Fixed depth one; no validity period or revocation is evaluated offline; the consumer requires the role it needs. Its digest `P(kgwocrt1, ·)` (§1) is what every `*_certificate` field names, a canonical σ-field value. |
 | Certificate set (`kgwcset1`) | `count`, then the certificate digests in set order (one element each) | Frame `{certificates}`: at most 3, unique, strictly ascending by certificate digest (unsigned byte order). Each carrier holds exactly the certificates it needs, with the required roles and scheme. Its digest is `P(kgwcset1, [count, digests…])`, one canonical σ-field value. |
 | Enrollment challenge (`enrollment-challenge`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ account_digest ‖ app_policy ‖ enrollment_policy ‖ issuer_nonce` | All nonzero. `challenge_digest` is the KeyMint attestation challenge and the App Attest attestation `clientDataHash`. The App Attest enrollment assertion `clientDataHash` is `H("enrollment-key-binding", challenge_digest ‖ payment_key)`. H values go to App Attest unchanged. |
 | Evidence digest (`evidence`) | `tag kind ‖ LE32 count ‖ (LE32 len ‖ bytes)…` | Kinds: AndroidKeyMintTee 1, AndroidKeyMintStrongBox 2, AppleAppAttest 3. Non-empty original items, never rewritten: Android KeyMint attestation DER chain leaf first, then the original enrollment-time Google HTTPS decoder response acquired by the issuer; Apple attestation object, then the fresh key-binding assertion. The issuer acquires and verifies the Play Integrity response separately; a mobile decoded verdict or signing input is never an evidence item. Renewal follows its separate evidence contract and does not add periodic Play Integrity requirements. |
@@ -350,7 +364,8 @@ originals are at most 16,777,216 bytes. The complete pack is at most
 finite loader limits, not phone memory qualification.
 
 Use the existing `H` framing for the additional artifact roles
-`eq-protocol`, `ep-protocol`, `native-profile` and `artifact-inventory`:
+`eq-protocol`, `ep-protocol`, `native-profile`, `artifact-inventory` and
+`producer-catalog`:
 `SHA256("iroha:kagemusha:wallet:v1:" ‖ ASCII role ‖ 00 ‖ LE64 len(body) ‖ body)`.
 The native owner constructs the protocol/profile bodies from compiled native
 constructors and constants; the pack has no fields that choose those bodies.
@@ -376,7 +391,7 @@ The Eq/Ep protocol body is, in order:
   Fp integer in Fq; one subtraction Fq→Fp); Ep is `02 00` (low128/high127
   Fq scalar pair in Fp; identity Fp→Fq).
 
-The fixed native verifier-profile body is `LE16 1 ‖ u8 family=1 ‖ LE32 16`,
+The sole native artifact-profile body starts `LE16 1 ‖ LE32 16`,
 then the sixteen `(u8 operation_tag ‖ LE32 mask)` selectors above. It then
 carries `frame(sigma_policy) ‖ frame(omega_policy)`, where each policy is a
 canonical Norito `iroha.core_zk.kagemusha.wallet.descriptor_policy.v1` frame
@@ -386,13 +401,38 @@ proof_suffix: ProofSuffixV1, instance_lengths: Vec<u32>,
 instance_types: Vec<InstanceType>}`. Both use version1,
 `KagemushaPoseidonRp57Base`, `Direct`, `FoldedGenerator`. Sigma uses Vesta,
 k12..16, lengths `[1]`, types `[Bounded]`; Omega uses Pallas, k16 only,
-lengths `[1,2,16]`, types `[Bounded,Field,Bounded]`. The body ends with
+lengths `[1,2,16]`, types `[Bounded,Field,Bounded]`. The body continues with
 `LE32 33 ‖ LE32 8 ‖ LE32 26 ‖ LE32 18 ‖ LE32 52 ‖ LE32 16 ‖ LE32 544 ‖
 LE32 1088 ‖ "kgwomg_1" ‖ 01 02 03 04`. These bind current core/rest/statement,
 lineage public and D_A element counts, accumulator rounds, claim and fold-body
 sizes, D_A domain, and the mandatory sigma opening, Omega opening, Pallas
 claim decision and Vesta claim decision. The decision codes are fixed native
-requirements; no caller supplies verdict bits.
+requirements; no caller supplies verdict bits. It ends with
+`frame(compiled_operation_schedules) ‖ frame(compiled_finality_leaf_schedules) ‖ frame(compiled_sigma_sources) ‖ frame(compiled_omega_layout)`.
+The sigma source frame is `LE16(1) ‖ LE32(16)` followed, in selector order,
+by `kind:u8 ‖ mask:LE32 ‖ family:u8 ‖ k:u8 ‖ lanes:u8 ‖ limb_bits:u8 ‖ prefix:u8`.
+Monetary sources use family1, one lane, folded prefix1 and `k - 1` range limbs;
+quota-enabled Send uses k14, other Send masks and both Receive selectors use k12.
+The six typed administrative sources use family0/k12 with zero lane/limb/prefix fields.
+The Omega layout frame is emitted by `omega::native::compiled_policy_transcript`:
+`ASCII "iroha-kagemusha-omega-layout-v1\0"`, followed by the LE32 words
+`[16,18,37,65530,32768,131072,262138,11,12,16,15,252,6,0,1,2,4,5,9,6,4,5,6,7,8,9,3]`,
+then `ASCII "SecondaryPlan::new/v1\0"`. These pin the proof/trace domains, reserved
+prefix, fixed spans, column/range limits, counted spare-port lists and direct-public
+columns. The k18 assignment measures only unknown-source occupancy; exact guarded
+replay and the final proof stay at k16. Failure never selects a larger domain.
+These fixed recipes are reconstructed by strict original imports; signed metadata
+alone cannot select another layout or confer producer readiness.
+The canonical Norito operation policy is generated by
+`a_relation::schedule::compiled` from the same fourteen fixed Q/task partitions
+used by native producers, plus all 52 logical own/incoming-selector routes.
+The finality leaf policy comes from the actual six source factories and records
+each program identity, semantic endpoint and class at every installed leaf
+position. Batched proof counts and semantic endpoints are distinct. Neither
+transcript establishes source qualification or assumes the final terminal-key
+count. Concrete graph/child-key and complete context-schema reconstruction remain
+mandatory at source installation. There is no separate verifier/producer family
+or retired profile fallback.
 
 The inventory body is `LE16 1 ‖ eq_protocol_digest ‖ ep_protocol_digest ‖
 native_profile_digest ‖ LE32 len(allowlist_original) ‖
@@ -406,19 +446,40 @@ The descriptor digest is its native V2-domain BLAKE2b value; the VK digest is
 its complete native base-field `P_B(kgwvkey1; …)` value. Proof bytes come from
 the actual descriptor; Omega includes both 544-byte transported claims.
 Each actual key digest and length must equal its signed allowlist entry.
+After the seventeenth entry, the body appends the mandatory nonzero
+`H(producer-catalog, canonical_producer_inventory)` commitment. Both the
+verifier-only view and full producer inventory use this same signed identity.
 Scheme/certificate/manifest originals are excluded from the inventory body:
 including them would create a cycle through relation_id. Their canonical
 frames, exact scheme identity, Artifact-role certificate/signature and exact
 manifest digest are checked separately against installation authority that
 is provisioned independently of received wallet objects.
 
-This pack authenticates the complete verifier inventory. It does not mount
-producer keys or establish complete operation preparation/folding. The
-producer inventory remains required: genuine importable Q/A/W/terminal
-proving keys and their fixed complete schedules must bind to the native
-profile before a wallet-open owner can enable monetary operations. No API
-boolean or caller-provided profile/verdict upgrades this verifier pack into
-that missing owner. The native implementation is
+The producer preimage is the canonical
+`iroha.core_zk.kagemusha.wallet.producer_inventory.v1` object implemented in
+`kagemusha_wallet_artifacts_v1::producer_inventory`. It binds the compiled native
+profile, exact descriptor/VK/PK lengths and SHA-256 references, all sixteen sigma
+entries, every required logical route, ordered Q/A/W source identities and full
+context words, deduplicated terminal descriptor/VK identities, the sole Omega
+original, and the ordinary-finality anchor and canonical source records. Its
+metadata cap is 16 MiB; it contains no proving tables. Reads enforce an explicit
+local PK cap before opening storage and exact length/hash equality for each
+original. Descriptor/VK-only reads require no PK custody.
+
+The authenticated inventory view checks the signed preimage and structural
+coverage. It cannot authorize monetary operations. Every wallet source still
+requires exact compiled-source reconstruction and original-key import; declared
+context words, classes or task metadata are not a proof of that relation. Wallet
+installation must also qualify the finality Receipt verifier and exact ancestry
+without requiring custody of the ledger server's entire finality proving-key
+inventory. `AuthenticatedProducerInventoryV1::qualify_finality` derives every
+anchor field from the independently selected native `SumeragiFinalityVerifier`,
+requires exact equality to signed inventory metadata, and rederives the complete
+compiled source/wrapper graph using bounded descriptor/VK originals. Its returned
+receipt-only owner retains the same scheme/manifest identity and no server PKs.
+Complete graph execution and the complete native wallet producer remain release
+gates. No API boolean or caller verdict upgrades a verifier or authenticated
+inventory into wallet readiness. The native owner is
 `iroha_core_zk::kagemusha_wallet_artifacts_v1`.
 
 ### 3.2 State, field encoding, statement, proofs, receipt, package
@@ -569,7 +630,7 @@ Payment digest):
 |---|---|---|---|
 | consumed credit (permanent map) | `kgwccrd1` | `credit_id` | `credit_id`, `amount`, `receive_sequence` (3) |
 | pending outgoing | `kgwpout1` | `credit_id` | `credit_id`, `receiver_wallet_id` (2), `send_ordinal`, `amount`, `fee`, `request_digest` (7) |
-| load (load/redeem map) | `kgwload1` | `1 · 2^128 + ordinal` | `ordinal`, `voucher_digest`, `amount` (3) |
+| load (load/redeem map) | `kgwload1` | `1 · 2^128 + ordinal` | `ordinal`, `receipt_digest`, `amount` (3) |
 | redeem (load/redeem map) | `kgwrdm_1` | `2 · 2^128 + ordinal` | `ordinal`, `nullifier`, `amount`, `online_charge` (4) |
 | fee claim | `kgwfee_1` | `credit_id` | `credit_id`, `fee`, `fee_schedule_digest` (3) |
 | blacklist history (rest) | `kgwbhst1` | `list_version` | `list_version`, `entries_root` (2) |
@@ -586,7 +647,7 @@ predecessor's lineage proof):
 | Tag | Kind | Effect fields (width) | Elements | `operation_id` input | Ω(pred) |
 |---:|---|---|---:|---|---|
 | 1 | Bootstrap | `enrollment_id ‖ enrollment_marker` (64) | 4 | `enrollment_id` (2 limbs) | no |
-| 2 | Load | `voucher ‖ LE128 load_ordinal ‖ LE128 amount ‖ LE128 online_charge` (80) | 4 | `voucher` | no |
+| 2 | Load | `receipt_digest ‖ LE128 load_ordinal ‖ LE128 amount ‖ LE128 online_charge` (80) | 4 | `receipt_digest` | no |
 | 3 | Send | `credit_id ‖ receiver_wallet_id ‖ LE128 send_ordinal ‖ LE128 amount ‖ LE128 fee ‖ request ‖ LE64 accepted_lower_ms ‖ LE64 accepted_upper_ms` (160) | 9 | `credit_id` | yes |
 | 4 | Receive | `credit_id ‖ payer_wallet_id ‖ LE128 amount` (80) | 4 | `credit_id` | no |
 | 5 | ArchiveSent | `credit_id ‖ credited` (64) | 2 | `credited` | no |
@@ -596,7 +657,7 @@ predecessor's lineage proof):
 
 Update kinds: Credential 1, SchemePolicy 2, Blacklist 3, QuotaShare 4, TimeAnchor 5;
 `update` is the applied object's digest (a `P` value). Effect rules: nonzero digests;
-`credit_id`, `voucher`, `request`, `credited`, `nullifier`, `charge_quote` and `update`
+`credit_id`, `receipt_digest`, `request`, `credited`, `nullifier`, `charge_quote` and `update`
 nonzero canonical σ-field values (`charge_quote` zero when absent); Send, Receive and
 Unload amounts positive; Send `amount + fee` fits `u128` and `accepted_lower_ms ≤
 accepted_upper_ms`; Unload `online_charge ≤ amount` and `charge_quote` nonzero iff
@@ -873,7 +934,8 @@ carries one byte.
 |---|---|---|
 | Marker (`marker` over the frame) | `{version, scheme_id, asset_digest, wallet_id, payment_key, LE128 generation, state}`; state Enrollment 1 `{challenge_digest, enrollment_id}`, Head 2 `{LE128 sequence, operation_id, head, capsule_digest, predecessor_capsule_digest}`, Terminal 3 `{reason, last_capsule_digest}` | Reasons Abandoned 1, CustodyDeleted 2. Generation 0 iff Enrollment, whose `enrollment_id` and `wallet_id` recompute. Head: complete `head`; zero predecessor capsule iff sequence 0. Terminal: zero last capsule iff Abandoned. Successors raise the generation by one: Enrollment → Head (sequence 0) or Terminal Abandoned; Head → Head (sequence + 1, linked capsule) or Terminal CustodyDeleted (last = capsule). The Bootstrap `enrollment_marker` is the generation-0 marker digest. |
 | Output descriptor | `{kind, digest}` | `digest = H("output", ·)` over the statement digest, `proof_digest` (a nonzero canonical σ-field value) and, for Receive, the Payment digest the receipt binds (a canonical σ-field value): receipt-free, so the capsule freezes before the receipt. Every other kind input is bound by the statement. |
-| Recovery capsule (`capsule` over the frame) | `{version, scheme_id, wallet_id, operation_id, kind, predecessor_capsule_digest, successor_state, statement, predecessor_lineage, step_proof, payment_digest, map_openings: [bytes], retained_inputs: [{role, bytes}], output}` | Retained roles: Request 1, Payment 2, Credited 3, LoadVoucher 4, ChargeQuote 5, PolicyUpdate 6, CertificateSet 7, Credential 8. State and statement agree on scheme, wallet, credential, asset, lifecycle, sequence and `next_load`; kind, effect kind and output kind agree; `operation_id` recomputes; zero predecessor capsule iff sequence 0; `predecessor_lineage` (the Ω recorded at fold time) is present exactly for Send, Unload and Retiring, passes the consumer checks for this wallet, and the successor's `burned_total` is its `burned_total`; the successor state's computed commitment is the statement's successor; `payment_digest` is a canonical σ-field value, nonzero exactly for Receive; the output rebuilds for every kind. Retained inputs are non-empty, and the fold witnesses (every consumed input `Λ` verifies for the step, proposal §4.1) are retained: Receive needs Request, Payment, CertificateSet and Credential; ArchiveSent Request, Payment and Credited; Send the Request (the Payment binds its fee schedule only by digest); Load LoadVoucher and CertificateSet (the voucher's LoadAuthorization certificate); RefreshPolicy PolicyUpdate and CertificateSet. The receipt signs `capsule_digest`. Each map opening is one §3.2 opening transcript, a leaf opening (1,124 bytes) or an empty-slot opening (1,028 bytes) with exactly 32 canonical siblings and a valid leaf; any other bytes are rejected. Which openings each kind retains is TODO(G3); the vectored Receive capsule retains its consumed-credit insertion witness (the low leaf's opening and the written slot's empty-slot opening). Third set: blacklist-history openings (a Receive's membership of a nonzero recorded pair, a Blacklist refresh's insertion) are ordinary depth-32 openings of this kind. A QuotaShare refresh's fold needs the 64 predecessor usage leaves, and the σ witnesses (depth-6 quota openings, depth-16 gap openings) are not indexed-map openings; their retained form (typed, per-operation witness bundles instead of length dispatch) is TODO(G3, third set). |
+| Recovery capsule (`capsule` over the frame) | `{version, scheme_id, wallet_id, operation_id, kind, predecessor_capsule_digest, successor_state, statement, predecessor_lineage, step_proof, payment_digest, map_openings: [bytes], retained_inputs: [{role, bytes}], output}` | Retained roles: Request 1, Payment 2, Credited 3, LoadReceipt 4, ChargeQuote 5, PolicyUpdate 6, CertificateSet 7, Credential 8, LoadFinality 9, QuotaRefreshWitness 10. State and statement agree on scheme, wallet, credential, asset, lifecycle, sequence and `next_load`; kind, effect kind and output kind agree; `operation_id` recomputes; zero predecessor capsule iff sequence 0; `predecessor_lineage` (the Ω recorded at fold time) is present exactly for Send, Unload and Retiring, passes the consumer checks for this wallet, and the successor's `burned_total` is its `burned_total`; the successor state's computed commitment is the statement's successor; `payment_digest` is a canonical σ-field value, nonzero exactly for Receive; the output rebuilds for every kind. Retained inputs are non-empty, and the fold witnesses (every consumed input `Λ` verifies for the step, proposal §4.1) are retained: Receive needs Request, Payment, CertificateSet and Credential; ArchiveSent Request, Payment, Credited, the historical payer Credential and its CertificateSet; Send the Request (the Payment binds its fee schedule only by digest); Load LoadReceipt and LoadFinality (the ordinary receipt and its original proof with both carried claims); RefreshPolicy PolicyUpdate and CertificateSet, plus exactly one QuotaRefreshWitness for QuotaShare and none for the other update kinds. The receipt signs `capsule_digest`. Each map opening is one §3.2 opening transcript, a leaf opening (1,124 bytes) or an empty-slot opening (1,028 bytes) with exactly 32 canonical siblings and a valid leaf; any other bytes are rejected. Which openings each kind retains is TODO(G3); the vectored Receive capsule retains its consumed-credit insertion witness (the low leaf's opening and the written slot's empty-slot opening). Third set: blacklist-history openings (a Receive's membership of a nonzero recorded pair, a Blacklist refresh's insertion) are ordinary depth-32 openings of this kind. A QuotaShare refresh retains the complete typed predecessor usage array below; its actual predecessor authenticates the array root before the native transition derives every successor slot. Remaining σ witnesses (depth-6 quota openings, depth-16 gap openings) are not indexed-map openings; their retained typed per-operation bundles remain TODO(G3, third set). |
+| Quota refresh witness (local retained input) | `{version, predecessor_usage: [Option<QuotaUsageLeaf>; 64]}` | Complete frame ≤8,192 bytes; version 1. Every occupied leaf is `{window_kind, window_start_ms, window_end_ms, used}`. Occupied slots form a strictly ordered prefix by `(kind, start)` with valid nonoverlapping windows per kind; every remaining slot is `None`. The named role selects this type, never its byte length. The capsule and receipt digest cover the exact frame; canonical decoding alone grants no predecessor-root or policy authority. |
 | Completion record (`completion` over the frame) | `{version, wallet_id, operation_id, capsule_digest, receipt, output: bytes}` | Decoded against the expected wallet. `output` is the canonical compact Payment for Send, whose payer key and credential digest are the wallet's, and the canonical Package frame otherwise. Its receipt equals the record's; its statement, Ω(pred), σ and receipt Payment digest are the capsule's; its receipt-free parts rebuild the capsule's output descriptor; the receipt verifies over `capsule_digest`. |
 | Fold record (`fold` over the frame) | `{version, scheme_id, wallet_id, LE128 first_sequence, LE128 sequence, head, capsule_digest, lineage: Ω}` | The self-verified Ω of one folded head covering the run `first_sequence..=sequence`. Nonzero identities and capsule digest; complete `head`; Ω valid with this scheme, wallet and head; `first_sequence ≤ sequence`. |
 
@@ -881,7 +943,8 @@ carries one byte.
 
 | Object | Frame and transcript | Interoperability rules |
 |---|---|---|
-| Load voucher (signed under `kgwvchr1`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ LE128 ordinal ‖ LE128 amount ‖ LE128 online_charge ‖ charge_quote ‖ transaction_hash ‖ LE64 block_height ‖ authorizer_certificate` | LoadAuthorization-role signer. `block_height ≥ 1`; `amount > 0`; `charge_quote` nonzero iff `online_charge > 0`, and then a Load quote with the same scheme, asset, wallet, ordinal, net amount and charge; `amount + online_charge` fits. A state absorbs it only at its `next_load`. |
+| Ordinary Load receipt (unsigned) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ request_id ‖ LE128 ordinal ‖ LE128 amount ‖ LE128 online_charge ‖ charge_quote ‖ transaction_hash ‖ LE64 block_height ‖ payer_account_digest` (282 bytes) | Digest `P_bytes(kgwolod1, transcript)`. Ordinary successful `IssueLoad` execution, authenticated by the installed genesis-rooted finality relation. `block_height ≥ 2`; `amount > 0`; nonzero request identity; `charge_quote` nonzero iff `online_charge > 0`, and then a Load quote with the same scheme, asset, wallet, ordinal, amount and charge; `amount + online_charge` and `ordinal + 1` fit. A state absorbs only its `next_load`. Decoding or recomputing the digest grants no authority. |
+| Load finality (local custody frame) | `{version, anchor_digest, receipt_digest, proof: bytes, pallas_claim: [u8;544], vesta_claim: [u8;544]}` | Complete frame ≤16,384 bytes. The installed owner pins the independently authenticated global genesis anchor and original terminal source key, reconstructs endpoints from the exact receipt, verifies the proof and decides both carried claims. No caller-provided endpoint or verdict exists. This local frame is not carried in each Payment; the 10,000-byte peer bound is unchanged. |
 | Unload claim | `{version, credential, package, account: AccountId, charge, certificates}`; charge None 0 or Quoted 1 `{quote, beneficiary: AccountId}` | Certificates exactly the issuer plus the quote signer when quoted. `H("account", account)` equals the credential's account digest. The package is a verified Unload carrying Ω(pred), which names the credential's wallet and payment key and passes the consumer checks; `charge` is Quoted iff the effect names a quote, which must be an Unload quote for the effect's exact terms, with `H("account", beneficiary)` as its beneficiary. Payout `amount − online_charge`. |
 | Fee claim | `{version, payment, beneficiary: AccountId}` | Structurally a valid Payment naming a fee schedule with `fee > 0`. The payout is checked against the historical schedule the Payment names (digest, scheme, asset, `fee = fee(amount)`), and `H("account", beneficiary)` equals its beneficiary. Full verification takes the schedule, the receiver's Request and the payer's credential and certificates from the ledger's records by the digests the Payment binds, and verifies the Payment as at Receive. |
 | Ledger control (signed under `kgwlctl1`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ tag action ‖ fields zero-filled to 80 ‖ nonce` | Actions Activate 1 `{package_digest}`, CloseLoads 2 `{package_digest, LE128 next_load}`, Abandon 3 `{enrollment_id, LE128 marker_generation, terminal_marker_digest}`. Signed by the wallet payment key; nonzero digests; `marker_generation ≥ 1`. |
@@ -895,13 +958,20 @@ Abandon) are ledger state: design only, TODO(G6).
 
 ## 4. Measured sizes
 
-Worst-case valid envelopes, printed by `size_tests.rs`. The Payment and Request carry
-a fee schedule and two Request certificates. The size test uses 3,296-byte σ_send and
-σ_recv stand-ins from the earlier measured single-lane `k = 12` shape, plus an explicit
-4,000-byte Ω placeholder. These lengths measure envelope framing; current proof relations
-and the final Ω transport still need artifact qualification (G3).
+Structurally valid complete envelopes, printed by `size_tests.rs`. The Payment and Request
+carry a fee schedule and two Request certificates. The current size test uses a 3,456-byte
+σ_send sample, the largest measured revision-4 Send proof, and a 4,800-byte Ω sample,
+the measured three-terminal compact transport. Receive uses a conservative 3,456-byte
+sample. The proof bytes are stand-ins: these tests establish encoding overhead and exact
+bounds, not cryptographic acceptance or a completed Payment. The fresh release size suite
+passes 2/2 (`target/qualification/payment-current-encoding-size.log`). The accepted ordinary
+transaction/finality Load relation and complete proof catalog still require qualification (G3).
 `F_payment` = 1,723 bytes and the joint proof budget is 8,277 bytes
 (`KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1`, `KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`).
+`F_receive` = 679 bytes and the `σ_recv` budget is 9,321 bytes
+(`KAGEMUSHA_WALLET_CREDITED_RECEIVE_FIXED_BYTES_V1`,
+`KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1`). Both Receive selectors must fit
+this complete-envelope budget; their frozen keys still select exact proof lengths.
 `F_status` = 2,188 bytes and the Ω cap is 7,812 bytes
 (`KAGEMUSHA_WALLET_CREDITED_STATUS_FIXED_BYTES_V1`, `KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1`).
 The size tests and verifying-key allowlist pin these constants for Ω and σ lengths of
@@ -912,46 +982,48 @@ The size tests and verifying-key allowlist pin these constants for Ω and σ len
 | Offer (credential frame 618 / 1,024) | 1,104 / 2,048 | — | — |
 | SessionControl (signed ReceiveDeferred) | 338 / 2,048 | — | — |
 | Request (fee schedule, 2 certificates) | 1,843 / 10,000 | — | — |
-| Payment (σ_send 3,296; Ω proof 4,000) | 9,019 / 10,000 | 1,723 + Ω proof + σ_send | Ω proof 4,981 with the selected σ_send; Ω proof + σ_send 8,277 |
-| Credited::Receive (σ_recv 3,296) | 3,975 / 10,000 | 679 + σ_recv | — |
-| Credited::Status (Ω(h) proof 4,000, 32 siblings; CreditStatus frame 6,133) | 6,188 / 10,000 | 2,188 + Ω(h) proof | Ω(h) proof 7,812 |
-| Lineage (Ω proof 4,000) | 4,413 / 10,000 | 413 + Ω proof | — |
+| Payment (σ_send 3,456; Ω proof 4,800) | 9,979 / 10,000 | 1,723 + Ω proof + σ_send | Ω proof 4,821 with the selected σ_send; Ω proof + σ_send 8,277 |
+| Credited::Receive (σ_recv 3,456 sample) | 4,135 / 10,000 | 679 + σ_recv | σ_recv 9,321 |
+| Credited::Status (Ω(h) proof 4,800, 32 siblings; CreditStatus frame 6,933) | 6,988 / 10,000 | 2,188 + Ω(h) proof | Ω(h) proof 7,812 |
+| Lineage (Ω proof 4,800) | 5,213 / 10,000 | 413 + Ω proof | — |
 | PolicyData certificates (3) | 698 / 10,000 | — | — |
 
-A Send package alone is 5,358 bytes with a 1,000-byte Ω proof and 8,358 with a
-4,000-byte one (1,062 bytes beyond the two proofs). Other measured frames: the
-largest Android renewal request (8 certificates totalling 65,536 DER bytes) is
+Other measured frames: the largest Android renewal request (8 certificates totalling 65,536 DER bytes) is
 66,021 of 73,728 bytes; a 64-window quota share is 2,941 bytes; the full
 65,535-entry blacklist, an online download rather than an envelope, is 2,228,433 of
 2,228,736 bytes. Vector frames with 48-byte stand-in σ and Ω proofs: envelopes
 Payment 1,816, Credited::Receive 725, Credited::Status 2,235 and Lineage 460;
 standalone scheme 208, certificate 222, credential 618, verifying-key allowlist (10
 entries) 581, Payment 1,805, fold record 616 and Receive recovery capsule 8,326 (with
-its two consumed-credit insertion openings).
+its two consumed-credit insertion openings). The canonical quota-refresh witness
+is 2,805 bytes with all 64 usage slots occupied and 181 bytes with all slots empty,
+under its 8,192-byte cap. Its generated recovery-capsule sample is 7,591 bytes and
+contains a labelled stand-in step proof; these private-frame measurements do not
+qualify a native proof or a payment envelope.
 
 **Canonical framing.** The B6 Request transcript is 458 bytes, including the blacklist
 version and root. Tests measure Request 1,843 bytes, `F_payment` 1,723 bytes and the
 joint budget `|Ω| + |σ_send| ≤ 8,277` bytes. B1 changes no field width,
 and B5, B7 and B8 change only private state, so `F_status` (2,188 bytes) and the Ω cap
-(7,812 bytes) stay. With the Λ/Ω estimate of 4,736 bytes for Ω, the largest σ_send must
-be at most 3,541 bytes: k12 (3,296 bytes) fits and the measured pre-B5 quota σ_send
-(3,584 bytes, k16) does not. With the B5 usage array the quota σ_send is estimated at
-about 309 permutations for the quota part and 346 with every control, a single-lane k14
-shape of about 3,424 bytes [C] (k13, about 3,360 bytes, if shared window and usage
-paths fit), to be measured.
+(7,812 bytes) stay. With a 4,800-byte Ω transport, σ_send must be at most 3,477 bytes;
+the measured 3,456-byte Send shape leaves 21 bytes in the complete envelope. The fixed64
+quota implementation has real k14 proofs at that size. Every admitted Send mask, both
+Receive variants and the complete uniform Ω catalog must retain their exact measured
+descriptors before artifact freeze. The ordinary-transaction/finality Load migration does
+not add a Payment evidence trail or relax the 10,000-byte bound.
 
 ## 5. Vectors
 
 `fixtures/kagemusha/wallet_v1_vectors.json` holds the prefix and digest rule, one
-digest vector per SHA-256 role (18: body, preimage, digest), 18 signature vectors, each
+digest vector per SHA-256 role (20: body, preimage, digest), 17 signature vectors, each
 with its transcript, signing domain and 32-byte message `m`, and their high-S twins
 (`codec_ok` false, `verify_ok` true), the low-S boundary scalars (`s = floor(n/2)`
 accepted; `floor(n/2) + 1`, `r` or `s` zero or `n` rejected), nine envelope vectors
-(header fields, padding, CRC, canonical bytes, `kgm1:` text and bound), the 26 frame
-identities and caps, 30 pinned object frames, the enum tag table, and:
+(header fields, padding, CRC, canonical bytes, `kgm1:` text and bound), the 27 frame
+identities and caps, 31 pinned object frames, the enum tag table, and:
 
-- `field_encodings`: the modulus, the element, Poseidon and packing rules, the 60
-  Poseidon domains (32 general domains, 17 signing domains and 11 object-digest domains), the element lists
+- `field_encodings`: the modulus, the element, Poseidon and packing rules, the 59
+  Poseidon domains (33 general domains, 16 signing domains and 10 object-digest domains), the element lists
   of every map value and the credit-digest value, a `send_chain` append from the empty
   chain and a `recv_chain` append with their chain values, a Send and a Receive
   statement with their σ digests, a Receive successor state's core and rest elements,
@@ -986,8 +1058,9 @@ to low S; stand-ins follow the labelled rules in `stand_ins`. The Rust test
 `kagemusha_wallet_v1_vectors_file_matches_the_generated_vectors` compares the file
 byte for byte; `IROHA_UPDATE_KAGEMUSHA_WALLET_VECTORS=1` rewrites it (test-only).
 The Kotlin (`KagemushaWalletVectorsV1Test`) and Swift (`KagemushaWalletVectorsV1Tests`)
-consumers recompute the 18 SHA-256 role digests with every retired role rejected, mirror
-the 17 signing domains with their transcript lengths, verify every signature vector over
+consumers recompute all 20 SHA-256 role digests, including the NEW policy identities,
+with every retired role rejected, and mirror
+the 16 signing domains with their transcript lengths, verify every signature vector over
 its pinned 32-byte message `m` after the low-S rule (and reject it over the transcript),
 validate envelope headers and per-kind bounds, and round-trip `kgm1:` text. They
 re-derive the element lists (statements, state core and rest with the named
@@ -1003,10 +1076,9 @@ and quota-window trees) and `iroha_plonk_gadgets` (`tests/statement_digest.rs`, 
 byte-linking tests of `src/bytes` for the packing, every large-input digest and every
 signing message) reproduce them natively and in circuit.
 
-**Canonical third-set coverage.** The vectors carry 18 SHA-256 role
-vectors (the consumers reject the 16 deleted roles), 60 Poseidon domains (the 17 signing and 26 base domains,
-the 11 object-digest domains of §1, and `kgwcset1`, `kgwpkg_1`, `kgwopid1`, `kgwnull1`,
-`kgwqusn1` and `kgwbhst1`), every object, certificate-set, package, operation and
+**Canonical third-set coverage.** The vectors carry 20 SHA-256 role
+vectors (the consumers reject retired roles), 59 Poseidon domains (33 general,
+16 signing and 10 signed-object domains), every object, certificate-set, package, operation and
 nullifier digest as a `P` vector, the 26-element statement and `credit_id` (with the
 recorded blacklist pair), the 33-element core and 8-element rest with their named
 positions, the new map-value element counts, the quota-usage padding leaf and
@@ -1152,8 +1224,7 @@ encryption and checksums never replace the wallet's verification.
 - TODO(owner), kept as is: a Send capsule retains the Request message (§8);
   `Λ_load` and `Λ_unload` do not verify ChargeQuote signatures; a Retiring wallet's
   refusal to issue Requests is wallet behaviour (TODO(G4)).
-- TODO(G5): `app_policy` and `enrollment_policy` preimages with the Torii
-  enrollment family; issuer verification of renewal evidence.
+- NEW first-release G5 preimages: [typed app/enrollment policy contract](kagemusha_wallet_enrollment_policy_v1.md). These domains and lifetime rules are new decisions, not owner-answer evidence or a mapping of existing opaque digests. Native policy approval/issuer admission and foreign policy carriers remain coordinated G5 work; issuer verification of renewal evidence remains TODO(G5).
 - TODO(G4/G6): JavaScript, Python and C# consumers when their wire copies migrate.
 - TODO(G6): the ledger instruction family; TODO(G3/G6): the release install path
   carrying the artifact manifest.
@@ -1171,9 +1242,14 @@ encryption and checksums never replace the wallet's verification.
 - The credit-opening siblings are one flat byte string of 32-byte values, not a
   sequence of 32-byte arrays: Norito would spend 65 bytes per array element inside
   the 10,000-byte Credited bound.
-- The ArchiveSent capsule also retains the Request, which the Payment binds only
-  by digest. A Send capsule retains the Request it consumed (its fee schedule) and a
-  Load capsule the voucher's certificate set, which the design's fold-witness list
-  omits although `Λ` verifies them (proposal §§3.2, 4.1).
+- The ArchiveSent capsule also retains the Request and historical payer Credential
+  with its CertificateSet, which the Payment binds only by digest. A later payer
+  renewal cannot substitute its successor credential for those Send originals. A Send capsule retains the Request it consumed (its fee schedule) and a
+  Load capsule retains its ordinary receipt and complete finality evidence. Those
+  originals are required to rebuild the Load fold (proposal §§3.2, 4.1).
+- A QuotaShare refresh retains all 64 predecessor usage slots as one canonical
+  `QuotaRefreshWitnessV1` under retained role 10. The native conversion authenticates
+  the root against the predecessor and derives the successor usage from the exact
+  signed share; no supplied successor array or untyped length dispatch exists.
 - Credited is verified against the payer's scheme as well as its Request and
   Payment, so a relation identity other than the scheme's is rejected natively.

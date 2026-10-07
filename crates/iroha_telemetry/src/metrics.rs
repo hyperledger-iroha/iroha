@@ -1637,8 +1637,6 @@ fields {
     pub zk_lane_pending_depth: gauge();
     /// Current number of tasks buffered in the ZK lane retry ring.
     pub zk_lane_retry_ring_depth: gauge();
-    /// Events emitted when verifier cache hits/misses occur (labels: cache,event).
-    pub zk_verifier_cache_events_total: int_counter_vec(&["cache", "event"]);
     /// Base gas charged when verifying a confidential proof.
     pub confidential_gas_base_verify: gauge();
     /// Gas charged per public input exposed by a confidential proof.
@@ -3272,7 +3270,7 @@ construct {
     [sm_openssl_preview zk_trace_enabled zk_trace_max_batch zk_trace_worker_threads zk_trace_queue_cap zk_lane_enqueue_wait_total zk_lane_enqueue_timeout_total
         zk_lane_drop_total zk_lane_retry_enqueued_total zk_lane_retry_replayed_total
         zk_lane_retry_exhausted_total zk_lane_pending_depth zk_lane_retry_ring_depth
-        zk_verifier_cache_events_total confidential_gas_base_verify
+        confidential_gas_base_verify
         confidential_gas_per_public_input confidential_gas_per_proof_byte
         confidential_gas_per_nullifier confidential_gas_per_commitment ivm_gas_schedule_hash_lo
         ivm_gas_schedule_hash_hi confidential_tree_commitments confidential_tree_depth
@@ -3926,7 +3924,7 @@ initialize (metrics) {
         zk_trace_enabled zk_trace_max_batch zk_trace_worker_threads zk_trace_queue_cap zk_lane_enqueue_wait_total zk_lane_enqueue_timeout_total
         zk_lane_drop_total zk_lane_retry_enqueued_total zk_lane_retry_replayed_total
         zk_lane_retry_exhausted_total zk_lane_pending_depth zk_lane_retry_ring_depth
-        zk_verifier_cache_events_total confidential_gas_base_verify
+        confidential_gas_base_verify
         confidential_gas_per_public_input confidential_gas_per_proof_byte
         confidential_gas_per_nullifier confidential_gas_per_commitment ivm_gas_schedule_hash_lo
         ivm_gas_schedule_hash_hi ivm_stack_bytes ivm_stack_clamped ivm_stack_gas_multiplier
@@ -4211,12 +4209,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 658;
-const METRIC_CATALOG_V2_REGISTERED: usize = 625;
-const METRIC_CATALOG_V2_BYTES: usize = 89_519;
+const METRIC_CATALOG_V2_ROWS: usize = 657;
+const METRIC_CATALOG_V2_REGISTERED: usize = 624;
+const METRIC_CATALOG_V2_BYTES: usize = 89_361;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "a223c3d27d89394845851a8247b2174b0cc45a96ec971902d309d88306d51c02";
+    "2c38e99479fb4ff1aca7f1cd3984f00f63395526673d8af9e38dddce19be68c0";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

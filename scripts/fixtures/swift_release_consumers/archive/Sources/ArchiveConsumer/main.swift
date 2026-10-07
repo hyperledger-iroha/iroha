@@ -51,7 +51,7 @@ func verify(message: [UInt8], publicKey: UnsafePointer<UInt8>, publicKeyLength: 
 }
 
 func runNativeSmoke() throws {
-    try require(connect_norito_bridge_abi_version() == 25, "The ZIP did not expose native ABI 25.")
+    try require(connect_norito_bridge_abi_version() == 26, "The ZIP did not expose native ABI 26.")
 
     // This deterministic seed is a public smoke fixture, never an operational signer.
     let seed = [UInt8](repeating: 0x71, count: 32)
@@ -135,7 +135,7 @@ func runNativeSmoke() throws {
 
 do {
     try runNativeSmoke()
-    print("PASS: SwiftPM ZIP Release native ABI 25, Ed25519 signing, BLAKE3 and Connect agreement")
+    print("PASS: SwiftPM ZIP Release native ABI 26, Ed25519 signing, BLAKE3 and Connect agreement")
 } catch {
     FileHandle.standardError.write(Data("FAIL: SwiftPM ZIP native smoke: \(error)\n".utf8))
     exit(1)

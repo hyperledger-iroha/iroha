@@ -128,7 +128,12 @@ fn request(body: &RequestBody) -> Signed {
     sign(ObjectKind::Request, bytes, 43, 59)
 }
 pub fn from_load(before: &StateWitness) -> SendFixture {
-    build(before, None)
+    build(before, None, &receiver_credential())
+}
+/// Exact quoted receiver credential used by renewed Receive source fixtures.
+#[allow(dead_code)] // Used only by renewed Receive consumers of this shared fixture.
+pub fn from_load_with_receiver_credential(before: &StateWitness, receiver: &Signed) -> SendFixture {
+    build(before, None, receiver)
 }
 /// Component-only prior installed fee policy; recursive use must prove its installation.
 pub fn with_held_fee(before: &StateWitness) -> SendFixture {
@@ -150,9 +155,9 @@ pub fn with_held_fee(before: &StateWitness) -> SendFixture {
     installed.core[30] = Fp::ONE;
     installed.lineage[13] += Fp::from(256);
     installed.lineage[5] = state(&installed).commitment();
-    build(&installed, Some(&schedule))
+    build(&installed, Some(&schedule), &receiver_credential())
 }
-fn build(before: &StateWitness, schedule: Option<&Signed>) -> SendFixture {
+fn build(before: &StateWitness, schedule: Option<&Signed>, receiver: &Signed) -> SendFixture {
     let predecessor = state(before);
     assert_eq!(predecessor.core.fields(), before.core);
     assert_eq!(predecessor.rest.fields::<Fp>(), before.rest);
@@ -178,7 +183,7 @@ fn build(before: &StateWitness, schedule: Option<&Signed>) -> SendFixture {
         receiver_wallet: small_id(71, 72).try_into().unwrap(),
         receiver_account: small_id(73, 74).try_into().unwrap(),
         send_ordinal: predecessor.core.next_send,
-        receiver_credential_digest: receiver_credential().digest().to_repr(),
+        receiver_credential_digest: receiver.digest().to_repr(),
         terms,
     };
     let request = request(&body);

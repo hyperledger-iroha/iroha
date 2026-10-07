@@ -1240,7 +1240,9 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
 
     def test_armv7_diagnostic_snapshot_cannot_verify_as_android_release(self) -> None:
         original = self.root / "armv7-diagnostic-seal.json"
-        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()), \
+             mock.patch.object(seal, "android_armv7_diagnostic_configuration",
+                               return_value={"fixture": "source-only diagnostic configuration; no authority"}):
             original.write_bytes(seal.snapshot_bytes(self.root, "android-armv7-diagnostic", self.root / "Cargo.lock"))
             seal.verify_snapshot(self.root, "android-armv7-diagnostic", original, self.root / "Cargo.lock")
             with self.assertRaisesRegex(RuntimeError, "source changed"):
@@ -1250,7 +1252,9 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         helper = self.root / "scripts/inspect_android_armv7_diagnostic.py"
         helper.write_text("# original inspection recipe\n", encoding="utf-8")
         original = self.root / "armv7-diagnostic-seal.json"
-        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()), \
+             mock.patch.object(seal, "android_armv7_diagnostic_configuration",
+                               return_value={"fixture": "source-only diagnostic configuration; no authority"}):
             original.write_bytes(seal.snapshot_bytes(self.root, "android-armv7-diagnostic", self.root / "Cargo.lock"))
             helper.write_text("# substituted inspection recipe\n", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "source changed"):

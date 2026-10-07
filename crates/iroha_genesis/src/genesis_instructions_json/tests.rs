@@ -824,9 +824,22 @@ fn assert_genesis_source_template_parses_structured_instructions(relative_path: 
         }
     }
     assert_eq!(parameter_blocks, 1, "one authoritative parameter block");
+    let unbound = super::RawGenesisTransaction::from_path(&path)
+        .expect("bounded structured source JSON must remain parseable before materialization");
+    assert_eq!(unbound.consensus_fingerprint(), None);
     assert!(
-        super::RawGenesisTransaction::from_path(&path).is_err(),
-        "{} must remain an incomplete source template until an operator materializes the validator topology and signed Sumeragi context",
+        unbound
+            .validate_mode_specific_consensus_parameters()
+            .is_err(),
+        "{} must require its explicit NPoS XOR selection",
+        path.display()
+    );
+    assert!(
+        super::super::GenesisSourceTemplate::from_path(&path)
+            .expect("read the original unbound source template")
+            .materialize(None)
+            .is_err(),
+        "{} must not materialize without its NPoS XOR selection",
         path.display()
     );
 }

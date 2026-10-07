@@ -672,6 +672,18 @@ fn kagemusha_wallet_v1_enum_tags_equal_norito_tags() {
     for role in KagemushaWalletSignerRoleV1::ALL {
         assert_eq!(norito_tag(&role), u32::from(role.tag()));
     }
+    let current = norito::encode_canonical(&KagemushaWalletSignerRoleV1::RegulatoryPolicy).unwrap();
+    let payload = super::super::codec_tests::payload_range(&current);
+    assert_eq!(
+        &current[payload.start..payload.start + 4],
+        &3_u32.to_le_bytes()
+    );
+    assert_eq!(
+        decode_frame_v1::<KagemushaWalletSignerRoleV1>(&current, 512).unwrap(),
+        KagemushaWalletSignerRoleV1::RegulatoryPolicy
+    );
+    let retired = super::super::codec_tests::flip_byte(&current, payload.start);
+    assert!(decode_frame_v1::<KagemushaWalletSignerRoleV1>(&retired, 512).is_err());
     for kind in KagemushaWalletEvidenceKindV1::ALL {
         assert_eq!(norito_tag(&kind), u32::from(kind.tag()));
     }

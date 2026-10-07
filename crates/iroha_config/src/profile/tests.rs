@@ -877,16 +877,12 @@ fn node_key_admission_follows_the_allowlist_and_tunables() {
 }
 
 #[test]
-fn publisher_custody_admission_is_exact_for_every_compiled_profile() {
+fn removed_publisher_keys_are_rejected_by_every_compiled_profile() {
     for id in ProfileId::ALL {
         let profile = Profile::compiled(id).unwrap();
-        for admitted in [
+        for rejected in [
             "kagemusha_load_authorizer.keyring_file",
             "kagemusha_load_authorizer.submitter_key_file",
-        ] {
-            assert!(profile.admits_node_key(admitted), "{id}: {admitted}");
-        }
-        for rejected in [
             "kagemusha_load_authorizer",
             "kagemusha_load_authorizer.enabled",
             "kagemusha_load_authorizer.keyring",

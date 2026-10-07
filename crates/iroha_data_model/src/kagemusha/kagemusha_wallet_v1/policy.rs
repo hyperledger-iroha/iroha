@@ -391,6 +391,7 @@ impl KagemushaWalletFeeRoundingV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletFeeScheduleBodyV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletFeeScheduleBodyV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`](super::KAGEMUSHA_WALLET_VERSION_V1).
     pub version: u16,
@@ -1533,6 +1534,7 @@ impl KagemushaWalletQuotaWindowKindV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletQuotaWindowV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletQuotaWindowV1 {
     /// Window kind.
     pub kind: KagemushaWalletQuotaWindowKindV1,
@@ -2146,6 +2148,7 @@ pub fn kagemusha_wallet_unload_account_payout_v1(
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletChargeQuoteBodyV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletChargeQuoteBodyV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`](super::KAGEMUSHA_WALLET_VERSION_V1).
     pub version: u16,
@@ -2244,9 +2247,9 @@ impl KagemushaWalletChargeQuoteBodyV1 {
 
 /// Signed load or unload charge quote (§6.2, design C7).
 ///
-/// An Unload effect names it by digest ([`Self::require_unload_effect`]); a load voucher names
+/// An Unload effect names it by digest ([`Self::require_unload_effect`]); an ordinary Load receipt names
 /// it by digest and must carry its exact terms
-/// (`KagemushaWalletLoadVoucherV1::require_charge_quote`).
+/// (`KagemushaWalletLoadReceiptV1::require_charge_quote`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletChargeQuoteV1"

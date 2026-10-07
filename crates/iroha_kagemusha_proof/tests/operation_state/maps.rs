@@ -98,9 +98,17 @@ impl<const N: usize> Tree<N> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ArchiveOwner {
+    Both,
+    Core,
+    Lineage,
+}
+
 #[derive(Clone)]
 struct MapCircuit<const N: usize = D> {
     split_send: bool,
+    archive_owner: ArchiveOwner,
     variant: Variant,
     before: StateCircuit,
     after: StateCircuit,
@@ -281,12 +289,25 @@ impl<const N: usize> Circuit<Fp> for MapCircuit<N> {
                         lineage: take_remove::<N>(&mut uint, &mut region, inputs, &mut at)?,
                     };
                     assert_eq!(at, inputs.len());
-                    MapEffectsChip::new(&mut glue, &mut range, &mut sponge).archive(
-                        &mut region,
-                        &transition,
-                        &witness,
-                        &valid,
-                    )?;
+                    let mut maps = MapEffectsChip::new(&mut glue, &mut range, &mut sponge);
+                    match self.archive_owner {
+                        ArchiveOwner::Both => {
+                            maps.archive(&mut region, &transition, &witness, &valid)?
+                        }
+                        ArchiveOwner::Core => maps.archive_core_pending(
+                            &mut region,
+                            &transition,
+                            &witness.descriptor,
+                            &witness.core,
+                        )?,
+                        ArchiveOwner::Lineage => maps.archive_lineage_pending(
+                            &mut region,
+                            &transition,
+                            &witness.descriptor,
+                            &witness.lineage,
+                            &valid,
+                        )?,
+                    }
                 } else {
                     let insert = uint.glue().assert_bool(&mut region, &inputs[3])?;
                     let other_soft = uint.glue().assert_bool(&mut region, &inputs[4])?;
@@ -351,6 +372,7 @@ impl<const N: usize> MapCircuit<N> {
         after.core[core::SEQUENCE] += Fp::ONE;
         Self {
             split_send: false,
+            archive_owner: ArchiveOwner::Both,
             variant,
             before,
             after,
@@ -786,17 +808,17 @@ fn archive_clears_core_and_only_valid_evidence_clears_lineage() {
         for valid in [true, false] {
             let c = archive_depth::<D>(variant, valid);
             c.assert_accept();
-            for index in [
-                core::BALANCE,
-                core::BURNED_TOTAL,
-                core::CONSUMED_CREDIT_ROOT,
-                core::PENDING_OUTGOING_ROOT,
-                core::LOAD_REDEEM_ROOT,
-                core::FEE_CLAIM_ROOT,
-                core::QUOTA_USAGE_ROOT,
-            ] {
+            for index in 0..CORE_FIELDS {
+                if index == core::STATE_NONCE {
+                    continue;
+                }
                 let mut wrong = c.clone();
                 wrong.after.core[index] += Fp::ONE;
+                wrong.reject_rebound();
+            }
+            for index in 0..REST_FIELDS {
+                let mut wrong = c.clone();
+                wrong.after.rest[index] += Fp::ONE;
                 wrong.reject_rebound();
             }
             for index in [14, 15, 16] {
@@ -813,6 +835,114 @@ fn archive_clears_core_and_only_valid_evidence_clears_lineage() {
                 wrong.inputs[i] += Fp::ONE;
                 assert!(!wrong.accepts(), "{variant:?} {valid} input{i}");
             }
+        }
+    }
+}
+
+#[test]
+fn archive_separate_owners_authenticate_descriptor_paths_and_exact_roots() {
+    for variant in [Variant::ArchiveReceive, Variant::ArchiveStatus] {
+        for valid in [true, false] {
+            for owner in [ArchiveOwner::Core, ArchiveOwner::Lineage] {
+                let mut c = archive_depth::<D>(variant, valid);
+                c.archive_owner = owner;
+                c.assert_accept();
+                let path_start = match owner {
+                    ArchiveOwner::Core => 8,
+                    ArchiveOwner::Lineage => 8 + 2 * (D + 4),
+                    ArchiveOwner::Both => unreachable!(),
+                };
+                // Every descriptor word and both openings of this owner bind,
+                // including the adjusted path when valid is false.
+                for i in (0..7).chain(path_start..path_start + 2 * (D + 4)) {
+                    let mut wrong = c.clone();
+                    wrong.inputs[i] += Fp::ONE;
+                    assert!(
+                        !wrong.accepts(),
+                        "{variant:?} {owner:?} valid={valid} input={i}"
+                    );
+                }
+                let mut root = c.clone();
+                match owner {
+                    ArchiveOwner::Core => root.after.core[core::PENDING_OUTGOING_ROOT] += Fp::ONE,
+                    ArchiveOwner::Lineage => root.after.lineage[15] += Fp::ONE,
+                    ArchiveOwner::Both => unreachable!(),
+                }
+                root.reject_rebound();
+                let mut old_root = c.clone();
+                match owner {
+                    ArchiveOwner::Core => {
+                        old_root.before.core[core::PENDING_OUTGOING_ROOT] += Fp::ONE
+                    }
+                    ArchiveOwner::Lineage => old_root.before.lineage[15] += Fp::ONE,
+                    ArchiveOwner::Both => unreachable!(),
+                }
+                old_root.reject_rebound();
+                let mut credit = c.clone();
+                credit.fields[17] += Fp::ONE;
+                assert!(!credit.accepts());
+                if matches!(owner, ArchiveOwner::Lineage) {
+                    let mut mode = c.clone();
+                    mode.inputs[7] = Fp::from(u64::from(!valid));
+                    assert!(!mode.accepts());
+                    let mut policy = c.clone();
+                    policy.after.rest[rest::PERMITTED] = Fp::from(7);
+                    policy.reject_rebound();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn archive_separate_production_owners_fit_and_have_fixed_unknown_layouts() {
+    for variant in [Variant::ArchiveReceive, Variant::ArchiveStatus] {
+        for owner in [ArchiveOwner::Core, ArchiveOwner::Lineage] {
+            let mut c = archive_depth::<32>(variant, false);
+            c.archive_owner = owner;
+            c.assert_accept();
+            let known = synthesize(&c, 16, Some(&[c.public()])).expect("known map owner");
+            let unknown = synthesize(&c.without_witnesses(), 16, None).expect("unknown map owner");
+            assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(known.tables.selectors(), unknown.tables.selectors());
+            assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+            assert_eq!(
+                known.tables.advice_assigned(),
+                unknown.tables.advice_assigned()
+            );
+            let max_rows = known
+                .tables
+                .advice_assigned()
+                .iter()
+                .map(|column| column.iter().rposition(|used| *used).map_or(0, |i| i + 1))
+                .max()
+                .expect("advice lanes");
+            eprintln!(
+                "ARCHIVE_MAP_OWNER variant={variant:?} owner={owner:?} max_rows={max_rows} depth=32 known_unknown_equal=true full_chain_qualified=false"
+            );
+            assert!(max_rows <= 65_529);
+        }
+    }
+}
+
+#[test]
+fn archive_cannot_change_credential_counters_or_held_policy() {
+    for variant in [Variant::ArchiveReceive, Variant::ArchiveStatus] {
+        for valid in [true, false] {
+            let c = archive_depth::<D>(variant, valid);
+            for index in [
+                core::CREDENTIAL,
+                core::NEXT_SEND,
+                core::NEXT_LOAD,
+                core::NEXT_REDEEM,
+            ] {
+                let mut wrong = c.clone();
+                wrong.after.core[index] += Fp::ONE;
+                wrong.reject_rebound();
+            }
+            let mut wrong = c.clone();
+            wrong.after.rest[rest::PERMITTED] = Fp::from(7);
+            wrong.reject_rebound();
         }
     }
 }

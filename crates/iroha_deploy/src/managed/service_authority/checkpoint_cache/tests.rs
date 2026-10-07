@@ -22,24 +22,51 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn attempts(authority: &ServiceAuthority) -> usize {
+pub(super) fn attempts(authority: &ServiceAuthority) -> usize {
     authority
         .checkpoint_cache
         .decode_attempts
         .load(Ordering::Relaxed)
 }
 
-fn assert_entry(authority: &ServiceAuthority, bytes: &[u8]) {
+pub(super) fn assert_entry(authority: &ServiceAuthority, bytes: &[u8]) {
     let slot = authority.checkpoint_cache.entry.try_lock().unwrap();
-    let entry = slot.as_ref().expect("one successful original");
+    let entry = slot
+        .slots
+        .iter()
+        .flatten()
+        .find(|entry| entry.bytes == bytes)
+        .expect("the exact successful original");
     assert_eq!(entry.bytes, bytes);
     assert_eq!(entry.network, authority.config.network_id);
     assert_eq!(entry.chain, authority.config.chain.as_str());
     assert_eq!(checkpoint_bytes(&entry.verifier).unwrap(), bytes);
     assert!(entry.bytes.len() <= MAX_CHECKPOINT_BYTES);
+    assert!(
+        slot.slots
+            .iter()
+            .flatten()
+            .map(|entry| entry.bytes.capacity())
+            .sum::<usize>()
+            <= MAX_CHECKPOINT_BYTES
+    );
+    assert!(
+        slot.slots
+            .iter()
+            .flatten()
+            .map(|entry| entry.retained_import_envelope)
+            .sum::<usize>()
+            <= retained_import_envelope(MAX_CHECKPOINT_BYTES).unwrap()
+    );
+    assert!(
+        slot.slots
+            .iter()
+            .flatten()
+            .all(|entry| entry.chain.capacity() <= MAX_CHAIN_CAPACITY)
+    );
 }
 
-fn assert_refused(authority: &ServiceAuthority, bytes: &[u8]) {
+pub(super) fn assert_refused(authority: &ServiceAuthority, bytes: &[u8], actual_imports: usize) {
     let expected = decode_checkpoint(
         bytes,
         authority.config.network_id,
@@ -52,14 +79,14 @@ fn assert_refused(authority: &ServiceAuthority, bytes: &[u8]) {
         authority.decode_checkpoint(bytes).unwrap_err().to_string(),
         expected
     );
-    assert_eq!(attempts(authority), before + 1);
+    assert_eq!(attempts(authority), before + actual_imports);
     assert!(
         authority
             .checkpoint_cache
             .entry
             .try_lock()
             .unwrap()
-            .is_none()
+            .is_empty()
     );
 }
 
@@ -121,25 +148,25 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
         NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
             iroha_crypto::Hash::new(b"foreign checkpoint cache network"),
         ));
-    assert_refused(&authority, &bytes);
+    assert_refused(&authority, &bytes, 2);
     authority.config.network_id = network;
     authority.decode_checkpoint(&bytes).unwrap();
     let chain = authority.config.chain.clone();
     authority.config.chain = "00000000-0000-0000-0000-000000000001".parse().unwrap();
     assert_ne!(authority.config.chain, chain);
-    assert_refused(&authority, &bytes);
+    assert_refused(&authority, &bytes, 2);
     authority.config.chain = chain;
 
     // Exact supplied bytes remain mandatory, even when an authenticated old image was warm.
     authority.decode_checkpoint(&bytes).unwrap();
     let mut changed = bytes.clone();
     changed.push(0);
-    assert_refused(&authority, &changed);
-    assert_refused(&authority, &changed);
+    assert_refused(&authority, &changed, 2);
+    assert_refused(&authority, &changed, 1);
     authority.decode_checkpoint(&bytes).unwrap();
-    assert_refused(&authority, &[]);
+    assert_refused(&authority, &[], 2);
     authority.decode_checkpoint(&bytes).unwrap();
-    assert_refused(&authority, &vec![0; MAX_CHECKPOINT_BYTES + 1]);
+    assert_refused(&authority, &vec![0; MAX_CHECKPOINT_BYTES + 1], 1);
 
     // A caller's genuine fresh observation advances only its returned verifier.
     let original_selected = authority.decode_checkpoint(&bytes).unwrap();
@@ -188,7 +215,7 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
     assert_eq!(attempts(&authority), before + 1);
     authority.decode_checkpoint(&bytes).unwrap();
     assert_entry(&authority, &bytes);
-    assert_eq!(attempts(&authority), before + 2);
+    assert_eq!(attempts(&authority), before + 1);
 
     // Historical import reuse supplies neither original file custody nor a current observation.
     authority
@@ -260,7 +287,7 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
         Err(TryLockError::Poisoned(poisoned)) => poisoned,
         _ => panic!("optional memo remains poisoned"),
     };
-    assert!(poisoned.into_inner().is_none());
+    assert!(poisoned.into_inner().is_empty());
     assert!(unavailable.requests.lock().unwrap().is_empty());
 }
 
@@ -353,7 +380,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
             .entry
             .try_lock()
             .unwrap()
-            .is_none()
+            .is_empty()
     );
     assert!(!norito::core::decode_limits_active());
     let cold_budget = DecodeBudgetContext::new(limits(usize::try_from(charge).unwrap()));
@@ -370,7 +397,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
             .entry
             .try_lock()
             .unwrap()
-            .is_none()
+            .is_empty()
     );
 
     // Derive a positive refusal from the real first allocation request. This is
@@ -427,7 +454,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
                 .entry
                 .try_lock()
                 .unwrap()
-                .is_none()
+                .is_empty()
         );
         assert!(!norito::core::decode_limits_active());
         // Preserve the original typed decoder provenance at the canonical input
@@ -480,7 +507,13 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
     );
     assert_eq!(attempts(&authority), before + 2);
     assert!(!std::ptr::eq(
-        held.as_ref().unwrap().verifier.checkpoint(),
+        held.slots
+            .iter()
+            .flatten()
+            .find(|entry| entry.bytes == bytes)
+            .unwrap()
+            .verifier
+            .checkpoint(),
         held_admitted.checkpoint(),
     ));
     drop(held);
@@ -510,7 +543,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
         Err(TryLockError::Poisoned(poisoned)) => poisoned,
         _ => panic!("original poisoned memo must remain poisoned"),
     };
-    assert!(poisoned.into_inner().is_none());
+    assert!(poisoned.into_inner().is_empty());
     assert_eq!(authority.decode_checkpoint(&bytes).unwrap(), original);
     assert!(unavailable.requests.lock().unwrap().is_empty());
     assert_eq!(native.chain.height(), 2);
@@ -590,7 +623,7 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
             .entry
             .try_lock()
             .unwrap()
-            .is_none()
+            .is_empty()
     );
     assert_eq!(
         crate::managed::native_operation::verify_carrier(&admitted, &signed)
@@ -647,7 +680,7 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
                 .entry
                 .try_lock()
                 .unwrap()
-                .is_none()
+                .is_empty()
         );
         let retry = imports.decode(&bytes).unwrap();
         assert_eq!(retry, original);
@@ -683,7 +716,7 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
         Err(TryLockError::Poisoned(poisoned)) => poisoned,
         _ => panic!("original optional memo remains poisoned"),
     };
-    assert!(poisoned.into_inner().is_none());
+    assert!(poisoned.into_inner().is_empty());
     drop(imports);
     drop(validation);
     let before = attempts(&authority);

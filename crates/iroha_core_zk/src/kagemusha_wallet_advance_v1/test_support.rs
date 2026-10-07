@@ -224,9 +224,15 @@ fn retained_for(kind: KagemushaWalletOperationKindV1) -> Vec<KagemushaWalletReta
         KagemushaWalletOperationKindV1::Receive => {
             &[R::Request, R::Payment, R::CertificateSet, R::Credential]
         }
-        KagemushaWalletOperationKindV1::ArchiveSent => &[R::Request, R::Payment, R::Credited],
+        KagemushaWalletOperationKindV1::ArchiveSent => &[
+            R::Request,
+            R::Payment,
+            R::Credited,
+            R::Credential,
+            R::CertificateSet,
+        ],
         KagemushaWalletOperationKindV1::Send => &[R::Request],
-        KagemushaWalletOperationKindV1::Load => &[R::LoadVoucher, R::CertificateSet],
+        KagemushaWalletOperationKindV1::Load => &[R::LoadReceipt, R::LoadFinality],
         KagemushaWalletOperationKindV1::RefreshPolicy => &[R::PolicyUpdate, R::CertificateSet],
         _ => &[],
     };

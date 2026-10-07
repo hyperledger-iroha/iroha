@@ -1039,6 +1039,9 @@ authorization headers in this repository.
   at `/Users/administrator/dev/iroha2-block-explorer-web/dist`; it does not
   proxy `/status` or `/v1`. Both Torii CORS and the public-edge CORS map admit
   the exact `https://taira-explorer.sora.org` browser origin.
+  The public Torii virtual host streams request bodies to its selected peer
+  with `proxy_request_buffering off`, so signed fee quotes and transaction
+  bodies do not depend on nginx client-body temporary-directory permissions.
 
 The edge renderer's `--validator-listeners-only` scope emits only the four peer
 upstreams and TLS listeners. It requires explicit `--validator-listen-address`

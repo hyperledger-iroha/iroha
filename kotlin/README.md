@@ -10,7 +10,7 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-Account and public-key admission requires the ABI-25 `connect_norito_bridge`
+Account and public-key admission requires the ABI-26 `connect_norito_bridge`
 native library, including `nativeValidateAccountAddressCanonical`. Address
 construction and parsing use Rust to validate every key and complete multisig
 policy, then require identical canonical bytes. The V1 identity catalog includes
@@ -41,7 +41,7 @@ choice-free conviction update to Kotlin and Java callers. It emits the registere
 transaction encoding reject direction fields, noncanonical selectors, account
 addresses, quantities, durations, and malformed frames. The focused
 `UpdatePlainConviction*` Kotlin/Java-source tests compiled on 2026-09-24, but
-execution still requires a same-source ABI-25 native bridge for account
+execution still requires a same-source ABI-26 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
 
@@ -342,10 +342,12 @@ Android native artifacts, StrongBox, or physical devices.
 It covers the software key manager, explicit chain-context codecs, and shared
 SoraFS reference validators through the current canonical Kotlin/native API.
 
-The wallet module currently declares managed platform, payment-key and backup-rule
-unit tests. They check the private platform-upcall descriptors and direct adapter
-behavior. The Rust `KagemushaWalletPlatformV1` JNI adapter and native provider-open
-call remain TODO, so the module has no host-JNI test task or native execution claim.
+The wallet module has separate managed platform, payment-key and backup-rule tests
+and `:kagemusha-wallet-android:testDebugHostNative`, using the same explicit host
+library requirement. Its native checks cover malformed intake, closed handles,
+exact failure results and refusal to open without authenticated proof artifacts.
+They do not establish a working monetary provider, successful wallet operation,
+Android native artifact or physical-device qualification.
 
 ### Java transaction metadata
 
@@ -551,7 +553,8 @@ Lane observations do not confer finality.
 ### KAGEMUSHA wallet peer transports
 
 `KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, domain-separated
-18 SHA-256 digest roles, 17 signing domains, envelope header validation and strict `kgm1:` text,
+20 SHA-256 digest roles, including the NEW unsigned app/enrollment policy identities,
+16 signing domains, the unsigned ordinary Load receipt, envelope header validation and strict `kgm1:` text,
 matching the Rust owner `iroha_data_model::kagemusha::kagemusha_wallet_v1`. Every
 signature is ECDSA-P256-SHA256 over the 32-byte Poseidon message of its body, which
 the native core computes; the SDK checks it only as a canonical σ-field value.
@@ -571,7 +574,7 @@ monetary authority. Public wire size and verification work are independent of
 balance history; no hop, input, origin, ancestry, fan-in, or proof-depth limit is
 encoded.
 
-### KAGEMUSHA online Load issuance original
+### KAGEMUSHA online Load receipt recovery
 
 `HttpClientTransport.getKagemushaWalletLoadIssuanceOriginalV1(selection, canonicalAuth,
 requireCurrentOwner)` performs one bounded account-signed GET to the current
@@ -584,16 +587,18 @@ or cancelling the returned future cancels its scoped call. The request requires
 HTTPS, a positive timeout, fresh canonical authentication and transport-owned
 encoding/cache headers; there is no redirect, retry, JSON or legacy route fallback.
 
-`ToriiKagemushaWalletLoadIssuanceOriginalV1` is transport data, including any
-nonempty malformed binary response pending Native validation. Its expected payer,
-network and selectors do not assert the response's identity or signer match.
-Native must decode the complete canonical issuance, bind its request/canonical
-payer/scheme/wallet to the enrolled owner, preserve and verify the exact original
-voucher and authenticate the complete Load relation before proof and durable
-Advance. An unsigned pending body or HTTP 200 never proves publication, finality,
-completion or offline balance. The bounded holder adds no monetary codec and
-exports no account key. Existing canonical request signing retains its ordinary
-account-address admission requirements; this fetch adds no account parser.
+`ToriiKagemushaWalletLoadIssuanceOriginalV1` retains unverified response bytes for
+an unsigned `KagemushaWalletLoadReceiptV1`, including any nonempty malformed binary
+response. Its expected payer, network and selectors do not assert the response's
+identity. Before wallet admission, the consumer must decode the canonical receipt,
+bind its request/payer/scheme/wallet to the expected owner, and independently
+authenticate the original successful transaction, ordinary chain finality and the
+complete recursive Load proof. The receipt and HTTP 200 alone never authorize
+offline value. This transport adds no monetary codec, finality verifier or Native
+wallet admission integration, and exports no account key. Existing canonical request
+signing retains its ordinary account-address admission requirements; this fetch adds
+no account parser. Receipt recovery uses the original request identity; submitting a
+newly signed Load transaction with that identity is rejected.
 
 ### Petal Stream optical transport
 

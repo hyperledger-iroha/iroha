@@ -77,6 +77,17 @@ impl SigmaClass {
     pub const fn verifier(&self) -> &VerifierPlan<Eq> {
         &self.verifier
     }
+    /// Actual complete native key digest authorized for this global sigma selector.
+    /// Installation uses this metadata to require every frozen operation/mask entry;
+    /// it is not a proof verdict or a witness-selected key.
+    #[must_use]
+    pub fn selector_key_digest(&self, selector: u8) -> Option<Fq> {
+        self.entries
+            .iter()
+            .find(|(index, _)| *index == selector)
+            .map(|(_, digest)| *digest)
+    }
+
     /// Number of exported 31-byte chunks, including the four-byte length.
     pub fn chunks(&self) -> usize {
         (4 + self.verifier.proof_length()).div_ceil(31)

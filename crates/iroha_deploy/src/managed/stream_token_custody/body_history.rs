@@ -83,6 +83,23 @@ impl RecordSnapshot {
         }
         Ok(())
     }
+    fn revalidate_in_scope(&self, reader: &mut iroha_fs::PrivateReadScope<'_>) -> Result<()> {
+        let observed = match reader.read(&self.name, self.maximum, |bytes| {
+            (bytes.len(), *Hash::new(bytes).as_ref())
+        }) {
+            Ok(observed) => Some(observed),
+            Err(error)
+                if self.observed.is_none() && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                None
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if observed != self.observed {
+            return Err(invalid("retained enrollment body material changed"));
+        }
+        Ok(())
+    }
 }
 /// Recheck outer-owned names without freezing the shared attempt state machine.
 struct NamesSnapshot {
@@ -119,23 +136,149 @@ struct Snapshot {
 }
 impl Snapshot {
     fn revalidate(&self) -> Result<()> {
+        match self.tree_root() {
+            Some(root) => root.read_tree_scope(|tree| self.revalidate_in_tree(Some(tree))),
+            None => self.revalidate_in_tree(None),
+        }
+    }
+    // Only the immutable layout produced below opts into a common-ancestry bracket.
+    // This selects a read strategy, never source validity or native ancestry eligibility.
+    // Rootless, custom and multiple-root chains retain the original full-read path.
+    fn tree_root(&self) -> Option<&PrivateDirectory> {
+        let mut snapshot = self;
+        let mut container: Option<&Arc<PrivateDirectory>> = None;
+        let mut bodies = 0usize;
+        while let Some(previous) = &snapshot.previous {
+            if snapshot.root.is_some() {
+                return None;
+            }
+            if previous.previous.is_none() {
+                // The existing container snapshot lies immediately after the sole base root.
+                if !snapshot.records.is_empty() || snapshot.names.len() > 1 {
+                    return None;
+                }
+                match snapshot.names.first() {
+                    Some(names)
+                        if names.maximum == usize::from(MAX_BODIES) * 3
+                            && container.is_none_or(|directory| {
+                                Arc::ptr_eq(directory, &names.directory)
+                            }) => {}
+                    None if bodies == 0 => {}
+                    _ => return None,
+                }
+            } else {
+                let [reserved, original, activation, unused] = snapshot.records.as_slice() else {
+                    return None;
+                };
+                if reserved.name != "reserved.nrt"
+                    || reserved.maximum != MAX_BODY_BYTES
+                    || reserved.observed.is_none()
+                    || original.name != "original.nrt"
+                    || original.maximum != journal::MAX_ORIGINAL_BYTES
+                    || activation.maximum != MAX_SELECTION_BYTES
+                    || unused.maximum != MAX_SELECTION_BYTES
+                    || !activation.name.ends_with("-activation.nrt")
+                    || !unused.name.ends_with("-unused.nrt")
+                    || !Arc::ptr_eq(&reserved.directory, &original.directory)
+                    || !Arc::ptr_eq(&activation.directory, &unused.directory)
+                    || Arc::ptr_eq(&reserved.directory, &activation.directory)
+                    || container
+                        .is_some_and(|directory| !Arc::ptr_eq(directory, &activation.directory))
+                    || snapshot.names.len() > 1
+                    || snapshot.names.first().is_some_and(|names| {
+                        names.maximum != 1 || !Arc::ptr_eq(&names.directory, &reserved.directory)
+                    })
+                {
+                    return None;
+                }
+                bodies += 1;
+                if bodies > usize::from(MAX_BODIES) {
+                    return None;
+                }
+                container = Some(&activation.directory);
+            }
+            snapshot = previous;
+        }
+        let root = snapshot.root.as_ref()?;
+        let [original, anchor, reference] = snapshot.records.as_slice() else {
+            return None;
+        };
+        if snapshot.names.is_empty()
+            && original.name == "original.nrt"
+            && original.maximum == MAX_SELECTION_BYTES
+            && original.observed.is_some()
+            && anchor.name == "anchor.nrt"
+            && anchor.maximum == MAX_BODY_BYTES
+            && anchor.observed.is_some()
+            && reference.name.ends_with("-selection.nrt")
+            && reference.maximum == MAX_SELECTION_BYTES
+            && Arc::ptr_eq(&original.directory, root)
+            && Arc::ptr_eq(&anchor.directory, root)
+            && !Arc::ptr_eq(&reference.directory, root)
+            && self.previous.is_some()
+        {
+            Some(root)
+        } else {
+            None
+        }
+    }
+    // The original traversal and source checks remain one producer. The optional borrowed
+    // tree only consolidates common native ancestry across this one complete read pass.
+    // Every original independent caller still opens a fresh bracket. Persistent anchor exit
+    // refusal wins ordinary body errors; a prefix changed and restored inside may be unseen.
+    fn revalidate_in_tree(
+        &self,
+        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    ) -> Result<()> {
         if let Some(root) = &self.root {
             root.revalidate()?;
             check_names(root, &["original.nrt", "anchor.nrt", "bodies", "epochs"], 4)?;
         }
         if let Some(previous) = &self.previous {
-            previous.revalidate()?;
+            previous.revalidate_in_tree(tree.as_deref_mut())?;
         }
-        for record in &self.records {
-            record.revalidate()?;
+        let mut index = 0;
+        while index < self.records.len() {
+            let mut end = index + 1;
+            while end < self.records.len()
+                && Arc::ptr_eq(&self.records[index].directory, &self.records[end].directory)
+            {
+                end += 1;
+            }
+            if end == index + 1 {
+                self.records[index].revalidate()?;
+            } else {
+                let read = |reader: &mut iroha_fs::PrivateReadScope<'_>| {
+                    for record in &self.records[index..end] {
+                        record.revalidate_in_scope(reader)?;
+                    }
+                    Ok::<_, crate::managed::Error>(())
+                };
+                // The base root and singleton external reference keep their full checks.
+                match (self.root.is_none(), tree.as_deref_mut()) {
+                    (true, Some(tree)) => tree
+                        .with_directory(&self.records[index].directory, |directory| {
+                            directory.read_scope(read)
+                        })?,
+                    _ => self.records[index].directory.read_scope(read)?,
+                }
+            }
+            index = end;
         }
         for names in &self.names {
-            names.revalidate()?;
+            match tree.as_deref_mut() {
+                Some(tree) => tree.with_directory(&names.directory, |directory| {
+                    if directory.entries(names.maximum)? != names.names {
+                        return Err(invalid("retained enrollment namespace changed"));
+                    }
+                    Ok::<_, crate::managed::Error>(())
+                })?,
+                None => names.revalidate()?,
+            }
         }
         Ok(())
     }
 }
-
 /// Only BodyHistory constructs this sealed evidence after its complete bounded outer census.
 pub(in crate::managed) struct ScopeEvidence {
     root: Arc<PrivateDirectory>,
@@ -1124,6 +1267,26 @@ impl BodyHistory {
         deadline: Instant,
         prerequisite: impl FnOnce() -> Result<enrollment::RetainedInitialPrerequisite>,
     ) -> Result<()> {
+        self.with_unsigned_renewal_context(|unsigned| {
+            owner.validate_unsigned_renewal_context_using(unsigned, deadline, prerequisite)
+        })
+    }
+
+    pub(super) fn validate_renewal_context_with_imports(
+        &self,
+        owner: &ManagedStreamTokenCustody,
+        deadline: Instant,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
+    ) -> Result<()> {
+        self.with_unsigned_renewal_context(|unsigned| {
+            owner.validate_unsigned_renewal_context_with_imports(unsigned, deadline, imports)
+        })
+    }
+
+    fn with_unsigned_renewal_context(
+        &self,
+        validate: impl FnOnce(&UnsignedEnrollment) -> Result<()>,
+    ) -> Result<()> {
         if !matches!(self.purpose, CustodyPurpose::Renewal(_)) {
             return Err(invalid("renewal context used for another purpose"));
         }
@@ -1134,7 +1297,7 @@ impl BodyHistory {
             .map(|r| &r.unsigned)
             .or_else(|| self.bodies.last().map(|b| &b.reservation.unsigned))
             .ok_or_else(|| invalid("renewal unsigned selection absent"))?;
-        owner.validate_unsigned_renewal_context_using(unsigned, deadline, prerequisite)
+        validate(unsigned)
     }
     /// Paid payload/signature phases retain their original recovery path even after body expiry.
     /// This result comes from the sole canonical wallet inspector after the complete history read.
@@ -1851,7 +2014,18 @@ impl ManagedStreamTokenCustody {
         &self,
         purpose: CustodyPurpose,
     ) -> Result<Selected<Original>> {
-        BodyHistory::open(self, purpose)?
+        self.required_enrollment_with_imports(
+            purpose,
+            &mut crate::managed::service_authority::CheckpointImports::new(&self.authority, None),
+        )
+    }
+
+    pub(super) fn required_enrollment_with_imports(
+        &self,
+        purpose: CustodyPurpose,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
+    ) -> Result<Selected<Original>> {
+        BodyHistory::open_with_imports(self, purpose, imports)?
             .ok_or(ManagedBootstrapFailure::RetainedMaterial)?
             .into_selected()
     }
@@ -1886,3 +2060,11 @@ mod parser_snapshot_tests;
 #[cfg(test)]
 #[path = "body_history/snapshot_native_tests.rs"]
 mod snapshot_native_tests;
+
+#[cfg(test)]
+#[path = "body_history/read_scope_tests.rs"]
+mod read_scope_tests;
+
+#[cfg(test)]
+#[path = "body_history/tree_snapshot_tests.rs"]
+mod tree_snapshot_tests;

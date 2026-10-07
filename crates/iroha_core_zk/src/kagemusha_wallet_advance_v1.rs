@@ -220,6 +220,9 @@ pub enum KagemushaWalletLostCustodyV1 {
 }
 
 /// Error of the provider.
+// Fixed retained-status digests stay inline so this bounded error remains Copy.
+// On 32-bit targets pointer-sized variants are smaller; no extra allocation is needed.
+#[cfg_attr(target_pointer_width = "32", allow(variant_size_differences))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KagemushaWalletProviderErrorV1 {
     /// Storage, the key store or the platform gave no definitive answer; retry.

@@ -39,8 +39,6 @@ mod p2p_hard_cut;
 mod pipeline_cycle_ceiling;
 #[path = "pipeline_signature_batch_alias_hard_cut.rs"]
 mod pipeline_signature_batch_alias_hard_cut;
-#[path = "publisher_config_fixture.rs"]
-mod publisher_config_fixture;
 #[path = "push_provider_credentials.rs"]
 mod push_provider_credentials;
 #[path = "queue_plan_retirement.rs"]

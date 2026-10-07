@@ -163,8 +163,9 @@ pub use pcs::{
 };
 pub use protocol::{Protocol, ProtocolError, Shape};
 pub use prover::{
-    ProverConfig, ProverError, ProverOutput, ProverRandomness, Witness, create_proof,
-    create_proof_owned, create_proof_owned_with_claim, prove_circuit,
+    ProverConfig, ProverError, ProverOutput, ProverRandomness, QuotientWorkspace, Witness,
+    WorkspaceError, create_proof, create_proof_owned, create_proof_owned_with_claim,
+    create_proof_owned_with_workspace, prove_circuit,
 };
 pub use transcript::{Transcript, TranscriptError, TranscriptRead, TranscriptWrite};
 pub use verifier::{

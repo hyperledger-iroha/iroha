@@ -166,7 +166,8 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_wallet_open_v1",
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
-    "connect_norito_kagemusha_wallet_commit_v1",
+    "connect_norito_kagemusha_wallet_execute_v1",
+    "connect_norito_kagemusha_wallet_request_status_v1",
     "connect_norito_kagemusha_wallet_retry_v1",
     "connect_norito_kagemusha_wallet_resume_v1",
     "connect_norito_kagemusha_wallet_fold_v1",
@@ -404,8 +405,8 @@ def _validate_root_identity(
         header.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if header_abis != ["25"]:
-        raise ValidationError("authoritative NoritoBridge header ABI is not exact 25")
+    if header_abis != ["26"]:
+        raise ValidationError("authoritative NoritoBridge header ABI is not exact 26")
 
     bridge_source = root / "crates/connect_norito_bridge/src/lib.rs"
     _regular_file(bridge_source, "authoritative NoritoBridge source")
@@ -426,8 +427,8 @@ def _validate_root_identity(
         protocol.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if protocol_abis != ["25"]:
-        raise ValidationError("authoritative privacy bridge ABI is not exact 25")
+    if protocol_abis != ["26"]:
+        raise ValidationError("authoritative privacy bridge ABI is not exact 26")
 
 
 def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_integration: bool = False) -> dict[str, object]:
@@ -454,8 +455,8 @@ def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_int
         or SEMVER.fullmatch(payload["version"]) is None
     ):
         raise ValidationError("artifact version is not canonical")
-    if payload["native_bridge_abi_version"] != 25:
-        raise ValidationError("artifact does not bind exact native bridge ABI 25")
+    if payload["native_bridge_abi_version"] != 26:
+        raise ValidationError("artifact does not bind exact native bridge ABI 26")
     if payload["privacy_production_enabled"] is not True:
         raise ValidationError("artifact must include mandatory privacy support")
     expected_features = ["privacy-production-enabled"]

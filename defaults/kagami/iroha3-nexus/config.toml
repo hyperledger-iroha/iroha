@@ -18,12 +18,6 @@ trusted_peers_pop = [
   { public_key = "ea0130A9DBBA9104C16C34C4293E68B9A999EE402705F9E7DFD889ED8326730EE7505A96641B1F88D4F93B0B3D0322D02A16FB", pop_hex = "a0dc9d607b933fb3e7dcca835e21b5c445da4d063ce6ea73fb48b576b6073a1c0771f965bb4eacc8e455a4c97b69b40b1045a2b783f6fb188abb92ce5249d687dc8e51eb43243ec188d3e4ce341d2f05773926fabeba2f1463a7b5037a0e1a2a" }
 ]
 
-# Required operator-owned Load-role keyring and ordinary ledger submitter.
-# Missing or unadmitted custody prevents validator startup; no enable switch exists.
-[kagemusha_load_authorizer]
-keyring_file = "/run/secrets/iroha/iroha3-nexus-peer-0-kagemusha-load-authorizer-keyring.nrt"
-submitter_key_file = "/run/secrets/iroha/iroha3-nexus-peer-0-kagemusha-load-authorizer-submitter-private-key"
-
 [network]
 address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:127.0.0.1:1337#8F78"

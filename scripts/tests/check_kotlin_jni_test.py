@@ -766,6 +766,7 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletNativeReplyV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletSnapshotV1.kt",
         f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletHostNativeV1Test.kt",
         f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletSnapshotV1Test.kt",
         *(
             f"{wallet}/main/java/{offline}/wallet/KagemushaWalletAndroid{name}V1.kt"

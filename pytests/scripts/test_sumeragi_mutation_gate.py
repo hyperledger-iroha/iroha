@@ -2329,25 +2329,26 @@ def test_mutation_cli_valid_counts_and_unique_selection_keep_exact_report(monkey
     assert report["fast"] is False
 
 
-def test_retired_halo2_curve_mutation_does_not_claim_current_native_admission():
-    assert "HC146" not in gate.index_mutations(gate.CORE_MUTATIONS)
-    assert not gate.has_switch("HC146", core=True)
+def test_native_key_mutation_owns_compiled_admission_without_retired_curve_dispatch():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC146"]
+    assert gate.has_switch("HC146", core=True)
     assert not gate.has_switch("HC146")
     assert not gate.has_switch("HC146", daemon=True)
+    assert not gate.has_switch("HC146", model=True)
     source = (gate.REPO / "crates/iroha_core/src/state.rs").read_text()
-    assert 'sumeragi_core_mutation = "HC146"' not in source
+    assert 'sumeragi_core_mutation = "HC146"' in source
     assert "self.zk.halo2" not in source
     assert "crate::zk::preverify_with_budget(" in source
+    assert "crate::zk::native_pipa_r::validate_key(" in source
     backend = (gate.REPO / "crates/iroha_data_model/src/zk.rs").read_text()
     assert "pub const ALL: [Self; 2] = [Self::NativePipaRPasta, Self::Stark]" in backend
     controls = (gate.REPO / "crates/iroha_core/src/state/state_preverify_backend_admission_tests.rs").read_text()
-    for name in (
-        "retired_and_unsupported_backends_fail_before_native_key_admission",
-        "stark_fri_profile_labels_require_enveloped_state_preverify_metadata",
-        "native_pipa_r_profile_labels_require_the_canonical_backend",
-        "native_backend_key_and_envelope_refusals_preserve_original_dedup_and_retry",
-    ):
-        assert f"fn {name}(" in controls
+    assert rule.tests == (
+        "state::state_preverify_backend_admission_tests::unsupported_retired_and_claimed_backends_fail_state_admission",
+        "state::state_preverify_backend_admission_tests::native_compiled_descriptor_refusal_preserves_key_admission_and_original_retry",
+    )
+    for name in rule.tests:
+        assert f"fn {name.rsplit('::', 1)[-1]}(" in controls
     assert "ZK_BACKEND_NATIVE_PIPA_R" in controls
     assert "ZK_BACKEND_STARK_FRI_V1" in controls
     assert "PreverifyResult::Duplicate" in controls

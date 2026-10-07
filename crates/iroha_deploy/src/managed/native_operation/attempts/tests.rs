@@ -1774,3 +1774,9 @@ pub(super) mod parse_digest_tests;
 
 #[path = "entry_fence_tests.rs"]
 mod entry_fence_tests;
+
+#[path = "read_scope_tests.rs"]
+mod read_scope_tests;
+
+#[path = "tree_scope_tests.rs"]
+mod tree_scope_tests;

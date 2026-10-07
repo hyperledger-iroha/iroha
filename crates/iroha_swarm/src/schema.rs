@@ -1,8 +1,7 @@
 //! Docker Compose schema.
 use crate::{
-    GenesisArtifactSettings, ImageSettings, KAGEMUSHA_LOAD_KEYRING_TARGET,
-    KAGEMUSHA_LOAD_SUBMITTER_TARGET, PeerSettings, PreparedRuntimeConfig, PreparedRuntimeSource,
-    base64_standard, path, peer,
+    GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
+    PreparedRuntimeSource, base64_standard, path, peer,
 };
 use norito::json::{self, Map, Value};
 use std::fmt::Write as _;
@@ -670,28 +669,16 @@ fn private_file_mount(source: String, target: &str) -> Value {
     mount.insert("read_only".into(), Value::Bool(true));
     Value::Object(mount)
 }
-fn publisher_file_mounts(runtime: Option<&PreparedRuntimeConfig>, peer_index: u16) -> Vec<Value> {
-    let (keyring, submitter) = runtime.map_or_else(
-        || (
-            format!("${{IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_KEYRING_FILE:?set IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_KEYRING_FILE to this nodes existing owner-0600 publisher keyring}}"),
-            format!("${{IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_SUBMITTER_FILE:?set IROHA_PEER{peer_index}_KAGEMUSHA_LOAD_SUBMITTER_FILE to this nodes existing owner-0600 publisher submitter key}}"),
-        ),
-        |runtime| (
-            compose_path_literal(&runtime.publisher.keyring.as_ref().display().to_string()),
-            compose_path_literal(&runtime.publisher.submitter.as_ref().display().to_string()),
-        ),
-    );
-    let mut mounts = vec![
-        private_file_mount(keyring, KAGEMUSHA_LOAD_KEYRING_TARGET),
-        private_file_mount(submitter, KAGEMUSHA_LOAD_SUBMITTER_TARGET),
-    ];
-    if runtime.is_none() {
-        mounts.push(private_file_mount(
-            format!("${{IROHA_PEER{peer_index}_CONFIG_FILE:?set IROHA_PEER{peer_index}_CONFIG_FILE to this nodes existing owner-0600 TOML naming both mounted publisher files}}"),
-            CONTAINER_PEER_CONFIG,
-        ));
+fn private_config_mounts(runtime: Option<&PreparedRuntimeConfig>, peer_index: u16) -> Vec<Value> {
+    if runtime.is_some() {
+        return Vec::new();
     }
-    mounts
+    vec![private_file_mount(
+        format!(
+            "${{IROHA_PEER{peer_index}_CONFIG_FILE:?set IROHA_PEER{peer_index}_CONFIG_FILE to this nodes existing owner-0600 TOML}}"
+        ),
+        CONTAINER_PEER_CONFIG,
+    )]
 }
 fn prepared_storage_name(runtime: &PreparedRuntimeConfig) -> String {
     format!("{}_data", runtime.compose_name_prefix)
@@ -830,16 +817,14 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
     // projected TOML to be native owner-0600 files for the actual daemon UID; never pretend
     // Compose secret uid/mode fields perform a cross-UID custody transfer.
     let custody_checks = format!(
-        r#"require_publisher_file() {{
+        r#"require_private_file() {{
         test -f \"$$1\" && test ! -L \"$$1\" && test -r \"$$1\" && test -s \"$$1\" &&
         test \"$$(stat -c '%u:%a:%h' \"$$1\")\" = \"$$(id -u):600:1\" &&
         test \"$$(wc -c < \"$$1\")\" -le \"$$2\" || {{
-            printf '%s\n' 'required publisher/config original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
+            printf '%s\n' 'required configuration original is absent or lacks native owner-0600 single-link custody' >&2; exit 1;
         }};
     }} &&
-    require_publisher_file /config/peer.toml 8388608 &&
-    require_publisher_file {KAGEMUSHA_LOAD_KEYRING_TARGET} 65536 &&
-    require_publisher_file {KAGEMUSHA_LOAD_SUBMITTER_TARGET} 4096 &&"#
+    require_private_file /config/peer.toml 8388608 &&"#
     );
     format!(
         r#"/bin/sh -eu -c "
@@ -920,7 +905,7 @@ where
             ),
         );
         let mut volumes = vec![signed_genesis_mount(self.genesis)];
-        volumes.extend(publisher_file_mounts(self.runtime, self.peer_index));
+        volumes.extend(private_config_mounts(self.runtime, self.peer_index));
         if let Some(runtime) = self.runtime {
             volumes.push(prepared_storage_mount(runtime));
         }
@@ -1242,52 +1227,8 @@ mod tests {
         }
         iroha_config::base::env::MockEnv::with_map(vars)
     }
-    #[cfg(unix)]
     #[test]
-    fn peer_env_with_explicit_test_custody_produces_exhaustive_config() {
-        use std::io::Write as _;
-        use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
-        struct ParserFixture(std::path::PathBuf);
-        impl Drop for ParserFixture {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let fixture_root = std::env::temp_dir().join(format!(
-            "iroha-swarm-publisher-TEST-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&fixture_root)
-            .unwrap();
-        let fixture = ParserFixture(fixture_root);
-        let submitter = include_str!("../../iroha_config/tests/fixtures/base.toml")
-            .lines()
-            .find_map(|line| line.strip_prefix("private_key = "))
-            .expect("existing authentic private TEST fixture")
-            .trim_matches('"');
-        for (name, bytes) in [
-            (
-                "keyring",
-                b"UNADMITTED parser TEST bytes; not canonical Service custody".as_slice(),
-            ),
-            ("submitter", submitter.as_bytes()),
-        ] {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(fixture.0.join(name))
-                .unwrap();
-            file.write_all(bytes).unwrap();
-        }
-        let publisher_toml = "[kagemusha_load_authorizer]\nkeyring_file = \"keyring\"\nsubmitter_key_file = \"submitter\"\n";
-
+    fn peer_env_produces_exhaustive_config() {
         let genesis_public_key = peer::generate_key_pair(None, &[])
             .expect("random genesis key generation should succeed")
             .0;
@@ -1366,18 +1307,13 @@ mod tests {
                 ),
             );
             let mock_env = mock_env_from_value(value);
-            let reader = iroha_config::base::read::ConfigReader::new()
-                .with_env(mock_env.clone())
-                .with_toml_source(iroha_config::base::toml::TomlSource::new(
-                    fixture.0.join("peer.toml"),
-                    publisher_toml.parse().unwrap(),
-                ));
+            let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
             let config = reader
                 .read_and_complete::<iroha_config::parameters::user::Root>()
                 .expect("config in env should be exhaustive");
-            let admitted = config.parse().expect(
-                "generated peer environment plus explicit TEST custody must pass config parsing",
-            );
+            let admitted = config
+                .parse()
+                .expect("generated peer environment must pass config parsing");
             assert_eq!(
                 admitted.streaming.key_material.identity().public_key(),
                 &streaming_identity.0,

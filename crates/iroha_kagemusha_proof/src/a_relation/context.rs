@@ -33,8 +33,11 @@ use iroha_plonk_recursion::{
 
 /// Separate digest domain for an internal split context, never a lineage head.
 pub const CONTEXT_DOMAIN: [u8; 8] = *b"kgwctx_1";
+/// Fixed-stage internal frame domain, distinct from context and final lineage.
+pub const STAGE_DOMAIN: [u8; 8] = *b"kgwlink1";
 const TAPE_DOMAIN: [u8; 8] = *b"kgwctap1";
 const ACTIVE_TAPE_DOMAIN: [u8; 8] = *b"kgwcact1";
+const INTERNAL_WORDS_DOMAIN: [u8; 8] = *b"kgwciw_1";
 
 #[cfg(test)]
 mod tests;
@@ -66,15 +69,37 @@ fn push_q_context(
     Ok(())
 }
 
-/// A circuit-fixed external object category and exact carrier capacity.
+/// Append an injective encoding of all256 message bits as two128-bit words.
+/// The verifier's bounded `(lo128, hi127, top1)` representation permits exact
+/// recomposition of its high half without a field reduction or byte assumption.
+fn push_message_context(
+    words: &mut Vec<Word<Fp>>,
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    message: &iroha_plonk_gadgets::bytes::element::LeElement<Fp>,
+) -> Result<(), Error> {
+    let high = chip.uint().glue().linear(
+        region,
+        &[
+            (Fp::ONE, message.hi().word()),
+            (Fp::from(2).pow_vartime([127]), message.top().word()),
+        ],
+        Fp::ZERO,
+    )?;
+    words.extend([message.lo().word().clone(), high]);
+    Ok(())
+}
+
+/// A circuit-fixed context category and exact carrier or canonical-word size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContextObjectSpec {
     /// Unique nonzero category within this context schema.
     pub tag: u32,
-    /// Fixed payload capacity, excluding its LE32 actual-length prefix.
+    /// Fixed payload capacity, excluding its LE32 actual-length prefix;
+    /// internal word commitments use exactly32 bytes per canonical native word.
     pub capacity: u32,
 }
-/// Exact object digest, actual length and byte commitment from one bound tape.
+/// Exact object digest, length and separately typed byte/word commitment.
 #[derive(Clone, Debug)]
 pub struct ContextObjectCells {
     spec: ContextObjectSpec,
@@ -83,6 +108,42 @@ pub struct ContextObjectCells {
     tape_digest: Word<Fp>,
 }
 impl ContextObjectCells {
+    /// Commit circuit-internal native field words under a separate typed domain.
+    ///
+    /// This carries proposed results or private arrays between fixed owners;
+    /// it does not authenticate their semantics or claim an original byte tape.
+    /// The schema's capacity is exactly32 times the fixed word count, using the
+    /// unique canonical field encoding as its size convention. Tags, count and
+    /// all words enter the hash. The owning tasks must derive or constrain every
+    /// proposed value against this same commitment before key admission.
+    /// # Errors
+    /// Zero tag/count, wrong fixed capacity, overflow or layout failure.
+    pub fn from_internal_words(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        spec: ContextObjectSpec,
+        words: &[Word<Fp>],
+    ) -> Result<Self, Error> {
+        let count = u32::try_from(words.len()).map_err(|_| Error::BoundsFailure)?;
+        if spec.tag == 0 || count == 0 || count.checked_mul(32) != Some(spec.capacity) {
+            return Err(Error::Synthesis);
+        }
+        let mut framed = [spec.tag, count]
+            .map(|v| chip.uint().glue().constant(region, Fp::from(u64::from(v))))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        framed.extend_from_slice(words);
+        let digest = chip.hash_words(region, u64::from_le_bytes(INTERNAL_WORDS_DOMAIN), &framed)?;
+        Ok(Self {
+            spec,
+            authenticated_digest: digest.clone(),
+            length: chip
+                .uint()
+                .constant::<32>(region, u128::from(spec.capacity))?,
+            tape_digest: digest,
+        })
+    }
+
     pub(super) fn commitment_words(&self) -> [Word<Fp>; 3] {
         [
             self.authenticated_digest.clone(),
@@ -358,6 +419,110 @@ impl ContextPlan {
         {
             return Err(Error::Synthesis);
         }
+        self.objects
+            .iter()
+            .zip(values)
+            .map(|(spec, values)| {
+                let [authenticated_digest, length, tape_digest] = chip
+                    .uint()
+                    .glue()
+                    .witnesses(region, values)?
+                    .try_into()
+                    .map_err(|_| Error::Synthesis)?;
+                let length = chip.uint().range_check::<32>(region, &length)?;
+                Ok(ContextObjectCells {
+                    spec: *spec,
+                    authenticated_digest,
+                    length,
+                    tape_digest,
+                })
+            })
+            .collect()
+    }
+
+    /// Assign proposed quota object triples under the complete fixed owner plan.
+    ///
+    /// These commitments retain proposed object digests, lengths and tape hashes;
+    /// they do not prove byte provenance. Every signed original is recomputed by
+    /// the mandatory Effects and authorization owners, while the mandatory merge
+    /// owner binds the signed issue time and window count. Root-only stages may
+    /// retain these claims without decoding all unrelated signed objects again.
+    ///
+    /// # Errors
+    /// Wrong variant, incomplete task set, different object schema or count,
+    /// or layout failure. Lengths outside `UInt32` are unsatisfiable.
+    pub fn assign_quota_object_claims(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        values: &[[Value<Fp>; 3]],
+    ) -> Result<Vec<ContextObjectCells>, Error> {
+        let variant = self.operation.frame().variant();
+        if variant != Variant::RefreshQuotaShare
+            || self.objects != super::refresh::RefreshObjects::context_specs(variant)?
+            || values.len() != self.objects.len()
+        {
+            return Err(Error::Synthesis);
+        }
+        OperationTask::validate(variant, &self.stage_tasks)?;
+        self.objects
+            .iter()
+            .zip(values)
+            .map(|(spec, values)| {
+                let [authenticated_digest, length, tape_digest] = chip
+                    .uint()
+                    .glue()
+                    .witnesses(region, values)?
+                    .try_into()
+                    .map_err(|_| Error::Synthesis)?;
+                let length = chip.uint().range_check::<32>(region, &length)?;
+                Ok(ContextObjectCells {
+                    spec: *spec,
+                    authenticated_digest,
+                    length,
+                    tape_digest,
+                })
+            })
+            .collect()
+    }
+
+    /// Retain proposed Archive source commitments under its complete owner plan.
+    ///
+    /// This is only a context assignment, never evidence of byte provenance.
+    /// The fixed Archive dispatcher requires the current authorization,
+    /// retained Payment, original proof, evidence and signature owners to
+    /// recompute each category before terminal mode and map closure. Every
+    /// continuation binds these same proposed triples through `D_ctx`.
+    /// # Errors
+    /// Wrong variant, incomplete task ownership, noncanonical source schema,
+    /// wrong value count, or layout failure. Lengths must fit `UInt32`.
+    pub fn assign_archive_object_claims(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        values: &[[Value<Fp>; 3]],
+    ) -> Result<Vec<ContextObjectCells>, Error> {
+        use super::archive::{results::ArchiveResultPlan, stage::ArchiveStagePlan};
+        use iroha_plonk_recursion::obligation::ledger::Variant;
+        let variant = self.operation.frame().variant();
+        let expected_count = match variant {
+            Variant::ArchiveReceive => 17,
+            Variant::ArchiveStatus => 19,
+            _ => return Err(Error::Synthesis),
+        };
+        if self.objects.len() != expected_count
+            || values.len() != expected_count
+            || self.objects
+                != ArchiveStagePlan::context_specs(
+                    variant,
+                    self.objects[9].capacity as usize,
+                    self.objects[10].capacity as usize,
+                    self.objects[13].capacity as usize,
+                )?
+        {
+            return Err(Error::Synthesis);
+        }
+        ArchiveResultPlan::new(self, expected_count - 1)?;
         self.objects
             .iter()
             .zip(values)
@@ -668,7 +833,7 @@ impl ContextPlan {
         3 * usize::from(self.operation.frame().has_incoming())
             + usize::from(self.operation.sigma.slot_count() == 2)
     }
-    /// Recompute the complete context and carried A1 Pallas claim.
+    /// Recompute the complete immutable operation context, excluding stage claims.
     /// The consumer must additionally bind the appropriate verified Q partition
     /// using [`Self::bind_q_partition`] and verify W or produce the A1 proof.
     ///
@@ -679,7 +844,6 @@ impl ContextPlan {
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
         input: &ContextInputs<'_>,
-        carried: &FoldInputCells<Ep>,
     ) -> Result<Word<Fp>, Error> {
         let incoming_sigma = self.operation.sigma.slot_count() == 2;
         let incoming_omega = self.operation.frame().has_incoming();
@@ -736,11 +900,7 @@ impl ContextPlan {
                 super::proof::IncomingProofBinding::Messages(proof) => {
                     words.push(proof.length().word().clone());
                     for message in proof.messages() {
-                        words.extend([
-                            message.lo().word().clone(),
-                            message.hi().word().clone(),
-                            message.top().word().clone(),
-                        ]);
+                        push_message_context(&mut words, chip, region, message)?;
                     }
                 }
                 super::proof::IncomingProofBinding::ReceiveActive(_) => {
@@ -812,8 +972,39 @@ impl ContextPlan {
                 words.extend([value.lo().word().clone(), value.hi().word().clone()]);
             }
         }
-        push_pallas(&mut words, carried)?;
         chip.hash_words(region, u64::from_le_bytes(CONTEXT_DOMAIN), &words)
+    }
+
+    /// Bind an immutable context and its exact carried Pallas claim to one
+    /// circuit-fixed internal A stage. The next stage recomputes this digest
+    /// before hard-verifying the immediately preceding W key. Earlier claims
+    /// remain in the P/V folds; no historical hash trace is required.
+    ///
+    /// # Errors
+    /// Terminal/out-of-range stage, non-k16 claim or synthesis failure.
+    pub fn stage_digest(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        stage: usize,
+        context: &Word<Fp>,
+        carried: &FoldInputCells<Ep>,
+    ) -> Result<Word<Fp>, Error> {
+        let ordinal = stage.checked_add(1).ok_or(Error::BoundsFailure)?;
+        if ordinal >= self.stage_count() {
+            return Err(Error::Synthesis);
+        }
+        let mut words = [
+            Fp::ONE,
+            *self.schema().get(1).ok_or(Error::Synthesis)?,
+            Fp::from(u64::try_from(ordinal).map_err(|_| Error::BoundsFailure)?),
+        ]
+        .into_iter()
+        .map(|value| chip.uint().glue().constant(region, value))
+        .collect::<Result<Vec<_>, _>>()?;
+        words.push(context.clone());
+        push_pallas(&mut words, carried)?;
+        chip.hash_words(region, u64::from_le_bytes(STAGE_DOMAIN), &words)
     }
 
     pub(super) fn incoming_proof_binding(

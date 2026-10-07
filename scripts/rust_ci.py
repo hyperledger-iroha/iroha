@@ -1041,9 +1041,12 @@ def build_binaries(
 
 
 def _parse_packages(raw: str) -> tuple[str, ...]:
-    """Parse a comma-separated package list from a trusted classifier result."""
+    """Require at least one package in an explicit comma-separated selection."""
 
-    return tuple(sorted({package.strip() for package in raw.split(",") if package.strip()}))
+    packages = tuple(sorted({package.strip() for package in raw.split(",") if package.strip()}))
+    if not packages:
+        raise ClassificationError("packages must select at least one Cargo package")
+    return packages
 
 
 def _parse_checks(raw: str) -> tuple[str, ...]:

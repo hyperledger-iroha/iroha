@@ -3,6 +3,7 @@
 use super::*;
 use crate::kagemusha_wallet_v1::{self as wallet, NativePackageVerifier, wsv::WsvLedger};
 use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
     isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1},
     kagemusha::*,
 };
@@ -57,6 +58,33 @@ pub(crate) fn execute_with_verifier(
     if scheme_id == [0; 32] {
         return Err(wallet::Error::Binding);
     }
+    if matches!(&instruction.action, Action::IssueLoad { .. }) {
+        state.require_direct_kagemusha_load(&instruction, authority)?;
+        // Receipt evidence authenticates the original global root, including work on
+        // its dataspace lanes. The current execution dataspace is not the root scope.
+        let scope = match crate::executor::root_scope::execution_root_scope(state) {
+            Ok(scope) => scope,
+            Err(_) => {
+                if let Some(original) = state.execution_deferral() {
+                    return Err(state
+                        .attempt_error_to_instruction_error(
+                            crate::execution_attempt::ExecutionAttemptError::Deferred(original),
+                        )
+                        .into());
+                }
+                return Err(Error::InvariantViolation(
+                    "KAGEMUSHA Load requires the original Global root".into(),
+                )
+                .into());
+            }
+        };
+        if scope != SumeragiRootScope::Global {
+            return Err(Error::InvariantViolation(
+                "KAGEMUSHA Load requires the original Global root".into(),
+            )
+            .into());
+        }
+    }
     let mut ledger = WsvLedger::new(state, authority)?;
     match instruction.action {
         Action::Register {
@@ -64,18 +92,14 @@ pub(crate) fn execute_with_verifier(
             asset,
             reserve,
             balance_scope,
-            load_authorizer,
         } => {
             let scheme = KagemushaWalletSchemeV1::decode_canonical(&scheme, &scheme_id)?;
-            let load_authorizer =
-                KagemushaWalletSignerCertificateV1::decode_canonical(&load_authorizer, &scheme)?;
             ledger.register(wallet::Registration {
                 scheme,
                 // AssetScope consists only of a version, UUID, digest and fixed-width scale.
                 asset: decode(&asset, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1)?,
                 reserve,
                 balance_scope,
-                load_authorizer,
             })
         }
         Action::InstallVerifierPack {
@@ -99,6 +123,8 @@ pub(crate) fn execute_with_verifier(
         }
         Action::IssueLoad {
             wallet: wallet_id,
+            asset,
+            ordinal,
             request_id,
             amount,
             charge,
@@ -116,6 +142,8 @@ pub(crate) fn execute_with_verifier(
                 &wallet::LoadCommand {
                     scheme: scheme_id,
                     wallet: wallet_id,
+                    asset,
+                    ordinal,
                     request_id,
                     amount,
                     charge,
@@ -164,21 +192,6 @@ pub(crate) fn execute_with_verifier(
                 return Err(wallet::Error::Binding);
             }
             ledger.retain_request(request)
-        }
-        Action::PublishVoucher {
-            request_id,
-            voucher,
-        } => {
-            let voucher = KagemushaWalletLoadVoucherV1::decode_canonical(&voucher, &scheme_id)?;
-            ledger.publish_voucher(request_id, &voucher)
-        }
-        Action::RotateLoadAuthorizer { asset, certificate } => {
-            let certificate: KagemushaWalletSignerCertificateV1 =
-                decode(&certificate, KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1)?;
-            if certificate.body.scheme_id != scheme_id {
-                return Err(wallet::Error::Binding);
-            }
-            ledger.rotate_load_authorizer(asset, certificate)
         }
     }
 }

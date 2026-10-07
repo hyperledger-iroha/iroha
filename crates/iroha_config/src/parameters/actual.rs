@@ -79,9 +79,7 @@ use std::{
 };
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
-mod kagemusha_load_authorizer;
 mod sccp;
-pub use kagemusha_load_authorizer::{KagemushaLoadAuthorizer, KagemushaLoadAuthorizerCustody};
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -120,7 +118,7 @@ macro_rules! impl_default {
 }
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
-pub struct Root {
+pub struct Root<G = Genesis> {
     /// Common options shared across components.
     pub common: Common,
     /// Authenticated local runtime-provider broker endpoint.
@@ -128,15 +126,13 @@ pub struct Root {
     /// Network configuration.
     pub network: Network,
     /// Genesis configuration.
-    pub genesis: Genesis,
+    pub genesis: G,
     /// Torii API configuration.
     pub torii: Torii,
     /// Embedded Soracloud runtime-manager configuration.
     pub soracloud_runtime: SoracloudRuntime,
     /// Non-secret local custody root for the injected private Musubi publisher.
     pub musubi_publication: MusubiPublication,
-    /// Required source-verified online load voucher publisher.
-    pub kagemusha_load_authorizer: KagemushaLoadAuthorizer,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
     /// Consensus (Sumeragi) configuration.
@@ -316,10 +312,6 @@ pub enum NodeSecretFile {
     Transport,
     /// Streaming identity Ed25519 private key.
     Streaming,
-    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
-    KagemushaLoadAuthorizerKeyring,
-    /// Required online KAGEMUSHA publisher's private transaction submitter key.
-    KagemushaLoadSubmitter,
     /// Soracloud runtime mutation-signer private key.
     RuntimeSigner,
     /// Global beacon partial-signer credential.
@@ -336,12 +328,10 @@ pub enum NodeSecretFile {
 }
 impl NodeSecretFile {
     /// Every fixed secret file, in a stable order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 8] = [
         Self::Validator,
         Self::Transport,
         Self::Streaming,
-        Self::KagemushaLoadAuthorizerKeyring,
-        Self::KagemushaLoadSubmitter,
         Self::RuntimeSigner,
         Self::BeaconCredential,
         Self::FaucetAuthority,
@@ -356,8 +346,6 @@ impl NodeSecretFile {
             Self::Validator => names::VALIDATOR_KEY,
             Self::Transport => names::TRANSPORT_KEY,
             Self::Streaming => names::STREAMING_KEY,
-            Self::KagemushaLoadAuthorizerKeyring => names::KAGEMUSHA_LOAD_AUTHORIZER_KEYRING,
-            Self::KagemushaLoadSubmitter => names::KAGEMUSHA_LOAD_SUBMITTER_KEY,
             Self::RuntimeSigner => names::RUNTIME_SIGNER_KEY,
             Self::BeaconCredential => names::BEACON_CREDENTIAL,
             Self::FaucetAuthority => names::FAUCET_AUTHORITY_KEY,
@@ -504,8 +492,6 @@ mod data_dir_tests {
                 "validator.key",
                 "transport.key",
                 "streaming.key",
-                "kagemusha_load_authorizer.keyring.norito",
-                "kagemusha_load_submitter.key",
                 "runtime_signer.key",
                 "beacon.cred",
                 "authority/faucet.key",
@@ -513,18 +499,6 @@ mod data_dir_tests {
                 "authority/sorafs_council.key",
             ]
         );
-        for (file, name) in [
-            (
-                NodeSecretFile::KagemushaLoadAuthorizerKeyring,
-                "kagemusha_load_authorizer.keyring.norito",
-            ),
-            (
-                NodeSecretFile::KagemushaLoadSubmitter,
-                "kagemusha_load_submitter.key",
-            ),
-        ] {
-            assert_eq!(data_dir.secret(file), data_dir.secrets_dir().join(name));
-        }
         assert_eq!(
             data_dir.secret(NodeSecretFile::OnboardingAuthority),
             PathBuf::from("/var/lib/iroha/taira/v1/secrets/authority/onboarding.key")
@@ -1022,6 +996,94 @@ impl Root {
             .parse()
             .change_context(FromTomlSourceError)
     }
+}
+impl<G> Root<G> {
+    fn map_genesis<H>(self, transform: impl FnOnce(G) -> H) -> Root<H> {
+        let Self {
+            common,
+            runtime_provider_broker,
+            network,
+            genesis,
+            torii,
+            soracloud_runtime,
+            musubi_publication,
+            kura,
+            sumeragi,
+            block_sync,
+            transaction_gossiper,
+            live_query_store,
+            logger,
+            queue,
+            nexus,
+            snapshot,
+            telemetry_profile,
+            telemetry,
+            telemetry_integrity,
+            dev_telemetry,
+            pipeline,
+            tiered_state,
+            compute,
+            content,
+            oracle,
+            ivm,
+            norito,
+            fraud_monitoring,
+            zk,
+            gov,
+            nts,
+            accel,
+            concurrency,
+            confidential,
+            crypto,
+            settlement,
+            streaming,
+            sccp,
+            data_dir,
+            lifecycle,
+        } = self;
+        Root {
+            common,
+            runtime_provider_broker,
+            network,
+            genesis: transform(genesis),
+            torii,
+            soracloud_runtime,
+            musubi_publication,
+            kura,
+            sumeragi,
+            block_sync,
+            transaction_gossiper,
+            live_query_store,
+            logger,
+            queue,
+            nexus,
+            snapshot,
+            telemetry_profile,
+            telemetry,
+            telemetry_integrity,
+            dev_telemetry,
+            pipeline,
+            tiered_state,
+            compute,
+            content,
+            oracle,
+            ivm,
+            norito,
+            fraud_monitoring,
+            zk,
+            gov,
+            nts,
+            accel,
+            concurrency,
+            confidential,
+            crypto,
+            settlement,
+            streaming,
+            sccp,
+            data_dir,
+            lifecycle,
+        }
+    }
     /// Check whether the configuration already enables Sora/Nexus-only features.
     #[cfg(test)]
     #[must_use]
@@ -1203,7 +1265,7 @@ pub(crate) struct NexusStorageConfiguredComponentCaps {
     sorafs_max_capacity_bytes: Bytes,
 }
 impl NexusStorageConfiguredComponentCaps {
-    fn capture(root: &Root) -> Self {
+    fn capture<G>(root: &Root<G>) -> Self {
         Self {
             kura_max_disk_usage_bytes: root.kura.max_disk_usage_bytes,
             wsv_cold_max_bytes: root.tiered_state.max_cold_bytes,
@@ -2861,6 +2923,87 @@ pub struct Genesis {
     ///
     /// Configuration normalization requires this value independently of the signed artifact.
     pub expected_hash: HashOf<BlockHeader>,
+}
+/// Complete validated node policy before a genesis identity exists.
+///
+/// This authoring context has no runtime decoder or implicit conversion to [`Root`]. Every
+/// ordinary schema, policy and required private-custody validator still runs. Binding requires
+/// an original signed genesis block; daemon startup independently authenticates its final
+/// expected hash against the prepared bundle.
+#[derive(Debug)]
+pub struct GenesisSigningContext {
+    policy: Root<GenesisForSigning>,
+}
+/// Genesis public identity in an unpublished signing context. No expected hash is fabricated.
+#[derive(Debug)]
+pub(crate) struct GenesisForSigning {
+    pub(crate) public_key: PublicKey,
+    pub(crate) file: Option<WithOrigin<PathBuf>>,
+    pub(crate) manifest_json: Option<WithOrigin<PathBuf>>,
+}
+impl GenesisSigningContext {
+    pub(crate) fn new(policy: Root<GenesisForSigning>) -> Self {
+        Self { policy }
+    }
+    /// Read complete unpublished policy with the canonical validators and native private files.
+    /// Ambient environment variables cannot replace these authoring inputs.
+    /// # Errors
+    /// Refuses a claimed runtime identity, invalid policy, or missing required private custody.
+    pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
+        ConfigReader::new()
+            .without_env()
+            .with_toml_source(src)
+            .read_and_complete::<user::Root>()
+            .change_context(FromTomlSourceError)?
+            .parse_for_genesis_signing()
+            .change_context(FromTomlSourceError)
+    }
+    /// Exact validated Nexus policy used by native genesis execution.
+    pub fn nexus(&self) -> &Nexus {
+        &self.policy.nexus
+    }
+    /// Exact validated confidential-verifier policy used by native genesis execution.
+    pub fn zk(&self) -> &Zk {
+        &self.policy.zk
+    }
+    /// Bind this authoring policy to a genuine signed genesis-header identity.
+    ///
+    /// A provisional block may be used only for local policy execution. The final generator
+    /// must parse every final config against the final network before publication; a
+    /// provisional context is never a deployment admission receipt.
+    /// # Errors
+    /// Refuses a non-genesis block, missing or extra signatures, a wrong signer, or invalid
+    /// original block and transaction signatures.
+    pub fn bind_signed_genesis(
+        self,
+        block: &iroha_data_model::block::SignedBlock,
+    ) -> core::result::Result<Root, &'static str> {
+        if block.header().height().get() != 1 {
+            return Err("signing context requires an original signed genesis block");
+        }
+        let mut signatures = block.signatures();
+        let signature = signatures
+            .next()
+            .ok_or("signing context genesis has no signature")?;
+        if signature.index() != 0 || signatures.next().is_some() {
+            return Err("signing context genesis must have one signature at index zero");
+        }
+        signature
+            .signature()
+            .verify_hash(&self.policy.genesis.public_key, block.hash())
+            .map_err(|_| "signing context genesis signature does not match its public key")?;
+        for transaction in block.external_transactions() {
+            transaction
+                .verify_signature()
+                .map_err(|_| "signing context genesis has an invalid transaction signature")?;
+        }
+        Ok(self.policy.map_genesis(|genesis| Genesis {
+            public_key: genesis.public_key,
+            file: genesis.file,
+            manifest_json: genesis.manifest_json,
+            expected_hash: block.hash(),
+        }))
+    }
 }
 /// Transaction queue settings.
 #[derive(Debug, Clone, Copy)]

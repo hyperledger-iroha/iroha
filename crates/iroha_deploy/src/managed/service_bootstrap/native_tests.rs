@@ -159,10 +159,69 @@ fn funding_finalities(report: ProviderFundingProgress) -> [ManagedTransactionFin
 }
 
 fn finalities(report: ServiceBootstrapProgress) -> Vec<ManagedTransactionFinality> {
-    let ServiceBootstrapProgress::Complete(history) = report else {
+    let ServiceBootstrapProgress::Complete(mut history) = report else {
         panic!("the parent must recover every original child independently");
     };
-    history.ordered_carriers().unwrap()
+    assert_completed_funding_history(&mut history)
+}
+
+// Exercise the exact opaque completed history produced by the genuine native child owners.
+// Refuse changed pair/source/order claims, then restore every original before returning it.
+fn assert_completed_funding_history(
+    history: &mut HistoricalServiceBootstrap,
+) -> Vec<ManagedTransactionFinality> {
+    let expected = history.ordered_carriers().unwrap();
+    let request = history.providers[0].funding.request.take().unwrap();
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("bootstrap funding history omits one original")
+    );
+    history.providers[0].funding.request = Some(request);
+    let approval = history.providers[0].funding.approval.take().unwrap();
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("bootstrap funding history omits one original")
+    );
+    history.providers[0].funding.approval = Some(approval);
+    let (first, rest) = history.providers.split_at_mut(1);
+    assert_ne!(
+        first[0].funding.request.as_ref().unwrap().movement_id(),
+        rest[0].funding.request.as_ref().unwrap().movement_id()
+    );
+    std::mem::swap(
+        &mut first[0].funding.approval,
+        &mut rest[0].funding.approval,
+    );
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("bootstrap funding histories differ")
+    );
+    let (first, rest) = history.providers.split_at_mut(1);
+    std::mem::swap(
+        &mut first[0].funding.approval,
+        &mut rest[0].funding.approval,
+    );
+    let capacity = history.providers[0].funding.capacity;
+    history.providers[0].funding.capacity.height = history.providers[0].funding.credit.height;
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("original service child carrier predates its prerequisite")
+    );
+    history.providers[0].funding.capacity = capacity;
+    assert_eq!(history.ordered_carriers().unwrap(), expected);
+    expected
 }
 
 #[test]

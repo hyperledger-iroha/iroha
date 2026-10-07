@@ -440,12 +440,28 @@ impl ManagedStreamTokenCustody {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
-        let (configured_policy, configured) = self.retained_configuration(deadline)?;
+        // Keep only the existing two pure epoch contexts across these independently read
+        // original phases. Current source custody and active decode admission stay fresh.
+        let mut validation = EpochValidationScope::new();
+        let mut imports = CheckpointImports::new(&self.authority, Some(&mut validation));
+        let (configured_policy, configured) =
+            self.retained_configuration_with_imports(deadline, &mut imports)?;
         if configured_policy != *policy {
             return Err(invalid("retained enrollment policy differs"));
         }
-        let original = self.required_enrollment(purpose)?;
-        self.verify_retained_enrollment(purpose, policy, interval, &configured, original, deadline)
+        let original = self.required_enrollment_with_imports(purpose, &mut imports)?;
+        let result = self.verify_retained_enrollment_with_imports(
+            purpose,
+            policy,
+            interval,
+            &configured,
+            original,
+            deadline,
+            &mut imports,
+        );
+        drop(imports);
+        drop(validation);
+        result
     }
 
     /// Consume one canonical initial selection after verifying Configure once. The same owned
@@ -455,14 +471,39 @@ impl ManagedStreamTokenCustody {
         &self,
         deadline: Instant,
     ) -> Result<RetainedInitialPrerequisite> {
-        require_deadline(deadline)?;
-        self.authority.validate_profile()?;
         let mut validation = EpochValidationScope::new();
         let mut imports = CheckpointImports::new(&self.authority, Some(&mut validation));
-        let (policy, configured) =
-            self.retained_configuration_with_imports(deadline, &mut imports)?;
-        // End every Configure source graph at the original phase boundary. Only the existing
-        // two pure epoch contexts stay owned by this one prerequisite, never its result.
+        let result = self.retained_initial_prerequisite_with_imports(deadline, &mut imports);
+        drop(imports);
+        drop(validation);
+        result
+    }
+
+    pub(super) fn retained_initial_prerequisite_with_imports(
+        &self,
+        deadline: Instant,
+        imports: &mut CheckpointImports<'_, '_>,
+    ) -> Result<RetainedInitialPrerequisite> {
+        require_deadline(deadline)?;
+        self.authority.validate_profile()?;
+        let (policy, configured) = self.retained_configuration_with_imports(deadline, imports)?;
+        // Each Configure source graph ends at the original phase boundary. Only the caller's
+        // bounded pure epoch workspace may remain live through the initial prerequisite.
+        self.initial_prerequisite_after_configuration_with_imports(
+            policy, configured, deadline, imports,
+        )
+    }
+
+    fn initial_prerequisite_after_configuration(
+        &self,
+        policy: SignerCustodyPolicyV1,
+        configured: ManagedTransactionFinality,
+        deadline: Instant,
+    ) -> Result<RetainedInitialPrerequisite> {
+        // Configure's source graph has already ended at the original handoff boundary.
+        // The initial body and its carrier share pure work only until this call returns.
+        let mut validation = EpochValidationScope::new();
+        let mut imports = CheckpointImports::new(&self.authority, Some(&mut validation));
         let result = self.initial_prerequisite_after_configuration_with_imports(
             policy,
             configured,
@@ -472,20 +513,6 @@ impl ManagedStreamTokenCustody {
         drop(imports);
         drop(validation);
         result
-    }
-
-    fn initial_prerequisite_after_configuration(
-        &self,
-        policy: SignerCustodyPolicyV1,
-        configured: ManagedTransactionFinality,
-        deadline: Instant,
-    ) -> Result<RetainedInitialPrerequisite> {
-        self.initial_prerequisite_after_configuration_with_imports(
-            policy,
-            configured,
-            deadline,
-            &mut CheckpointImports::new(&self.authority, None),
-        )
     }
 
     fn initial_prerequisite_after_configuration_with_imports(
@@ -510,6 +537,7 @@ impl ManagedStreamTokenCustody {
         Ok(RetainedInitialPrerequisite { policy, enrollment })
     }
 
+    #[cfg(test)]
     fn verify_retained_enrollment(
         &self,
         purpose: CustodyPurpose,
@@ -656,7 +684,7 @@ impl ManagedStreamTokenCustody {
         )
     }
 
-    fn retained_configuration_with_imports(
+    pub(super) fn retained_configuration_with_imports(
         &self,
         deadline: Instant,
         imports: &mut CheckpointImports<'_, '_>,
@@ -834,3 +862,7 @@ mod local_inspection_tests {
 #[cfg(test)]
 #[path = "enrollment/prerequisite_tests.rs"]
 mod prerequisite_tests;
+
+#[cfg(test)]
+#[path = "enrollment/route_scope_tests.rs"]
+mod route_scope_tests;

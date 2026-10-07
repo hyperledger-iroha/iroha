@@ -1,13 +1,12 @@
 //! Envelope sizes of the split-lineage layouts (§8, design §7).
 //!
-//! Every case is built from fully valid objects and asserted against its complete-frame bound.
-//! `σ_send` and `σ_recv` are measured (3,296 bytes each) for the §3 core without the blacklist
-//! non-membership, quota and lease checks; Ω is unmeasured, so this module names an explicit
-//! placeholder and reports, for each message, its fixed overhead and the largest proof that
-//! still fits. The credit-digest opening has exactly 32 siblings (owner answer A2), so
-//! `Credited::Status` is a fixed number of bytes plus `|Ω(h)|`.
-//! The proof bytes are stand-ins; only their lengths matter here. The signed blacklist is not
-//! a peer message (it is downloaded online from the issuer), so it has no envelope case here.
+//! Every case uses structurally valid objects and is checked against its complete-frame
+//! bound. The sample lengths cover the current 3,456-byte maximum Send proof and 4,800-byte
+//! three-terminal Omega transport. The bytes themselves are stand-ins: these tests qualify
+//! encoding overhead and exact size limits, not cryptographic proof acceptance or frozen keys.
+//! Receive uses the same conservative 3,456-byte sample. The credit-status opening has exactly
+//! 32 siblings, so its complete envelope has a fixed overhead plus the Omega proof length.
+//! The signed blacklist is downloaded online and has no peer-envelope case here.
 
 use super::{
     messages::messages_tests::MessageFixture,
@@ -15,21 +14,12 @@ use super::{
     *,
 };
 
-/// Measured `σ_send`, in bytes: the exact PIPA-v1 proof length of `sigma_send` of
-/// `iroha_kagemusha_proof` over the earlier measured §3 core and statement at its
-/// 3.5 KB budget shape (`k = 12`, one lane), with the empty mask and with the blacklist
-/// list-age control alike.
-// TODO(G3): re-measure once σ_send carries the blacklist non-membership, quota and lease checks
-// (spec §7); the R9 budget then bounds Ω by `8,277 − |σ_send|`.
-const MEASURED_SIGMA_SEND_BYTES: usize = 3_296;
-/// Placeholder Ω transport proof length; Ω is unbuilt and unmeasured (spec §11).
-// TODO(G3): replace with the exact transport length of the frozen verifying-key allowlist
-// (owner answer Q6).
-const PLACEHOLDER_OMEGA_PROOF_BYTES: usize = 4_000;
-/// Measured `σ_recv`, in bytes: the exact proof length of `sigma_recv` of
-/// `iroha_kagemusha_proof` at the same shape (`k = 12`, one lane).
-// TODO(G3): re-measure once σ_recv carries the blacklist non-membership of the receiver's list.
-const MEASURED_SIGMA_RECV_BYTES: usize = 3_296;
+/// Structural sample covering the currently measured largest Send proof.
+const SAMPLE_SIGMA_SEND_BYTES: usize = 3_456;
+/// Structural sample of the currently measured three-terminal Omega transport.
+const SAMPLE_OMEGA_PROOF_BYTES: usize = 4_800;
+/// Conservative Receive proof sample; acceptance remains a native-verifier obligation.
+const SAMPLE_SIGMA_RECV_BYTES: usize = 3_456;
 /// Other credits recorded in the worst-case `CreditStatus` tree; the opening has exactly 32
 /// siblings whatever the count.
 const STATUS_OTHER_CREDITS: usize = 5;
@@ -109,10 +99,11 @@ struct Sizes {
     request: usize,
     payment: usize,
     payment_overhead: usize,
-    largest_omega_with_measured_sigma: usize,
+    largest_omega_with_sample_sigma: usize,
     largest_joint_proof: usize,
     credited_receive: usize,
     credited_receive_overhead: usize,
+    largest_sigma_in_receive: usize,
     credited_status: usize,
     credited_status_overhead: usize,
     credit_status: usize,
@@ -122,13 +113,13 @@ struct Sizes {
     certificates: usize,
 }
 
-/// Validate every case at the measured σ and the placeholder Ω and measure it.
+/// Validate every structural sample and measure its exact canonical encoding.
 fn measure(f: &MessageFixture) -> Sizes {
     let message_max = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1;
     let (omega, sigma, sigma_recv) = (
-        PLACEHOLDER_OMEGA_PROOF_BYTES,
-        MEASURED_SIGMA_SEND_BYTES,
-        MEASURED_SIGMA_RECV_BYTES,
+        SAMPLE_OMEGA_PROOF_BYTES,
+        SAMPLE_SIGMA_SEND_BYTES,
+        SAMPLE_SIGMA_RECV_BYTES,
     );
     let request = f.request(true);
     let payment = f.payment_with(true, omega, sigma);
@@ -213,7 +204,7 @@ fn measure(f: &MessageFixture) -> Sizes {
         request: lengths[2],
         payment: lengths[3],
         payment_overhead: lengths[3] - omega - sigma,
-        largest_omega_with_measured_sigma: largest_fitting(message_max, SEARCH_LIMIT, |omega| {
+        largest_omega_with_sample_sigma: largest_fitting(message_max, SEARCH_LIMIT, |omega| {
             payment_len(omega, sigma)
         }),
         largest_joint_proof: largest_fitting(message_max, SEARCH_LIMIT, |joint| {
@@ -221,6 +212,7 @@ fn measure(f: &MessageFixture) -> Sizes {
         }),
         credited_receive: lengths[4],
         credited_receive_overhead: lengths[4] - sigma_recv,
+        largest_sigma_in_receive: largest_fitting(message_max, SEARCH_LIMIT, receive_len),
         credited_status: lengths[5],
         credited_status_overhead: lengths[5] - omega,
         credit_status: norito::encode_canonical(&status)
@@ -241,10 +233,10 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
     println!(
         "KAGEMUSHA wallet V1 split-lineage envelopes (bytes): Offer {} / {session_max} \
          (credential frame {} / {}), SessionControl {} / {session_max}, Request {} / \
-         {message_max}, Payment {} / {message_max} with σ_send {MEASURED_SIGMA_SEND_BYTES} and \
-         placeholder Ω proof {PLACEHOLDER_OMEGA_PROOF_BYTES}, Credited::Receive {} / \
-         {message_max} with σ_recv {MEASURED_SIGMA_RECV_BYTES}, Credited::Status \
-         {} / {message_max} with placeholder Ω(h) proof {PLACEHOLDER_OMEGA_PROOF_BYTES} and 32 \
+         {message_max}, Payment {} / {message_max} with σ_send {SAMPLE_SIGMA_SEND_BYTES} and \
+         sample Ω proof {SAMPLE_OMEGA_PROOF_BYTES}, Credited::Receive {} / \
+         {message_max} with σ_recv {SAMPLE_SIGMA_RECV_BYTES}, Credited::Status \
+         {} / {message_max} with sample Ω(h) proof {SAMPLE_OMEGA_PROOF_BYTES} and 32 \
          siblings (CreditStatus frame {}), Lineage {} / {message_max}, PolicyData \
          certificates (3) {} / {message_max}",
         sizes.offer,
@@ -262,14 +254,16 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
     println!(
         "KAGEMUSHA wallet V1 fixed overheads (bytes): Payment {} + |Ω proof| + |σ_send|, \
          Credited::Receive {} + |σ_recv|, Credited::Status {} + |Ω(h) proof| (32 siblings), \
-         Lineage {} + |Ω proof|; largest Ω proof in a Payment with the measured σ_send {}, \
-         largest |Ω proof| + |σ_send| {}, largest Ω(h) proof in Credited::Status {}",
+         Lineage {} + |Ω proof|; largest Ω proof in a Payment with the sample σ_send {}, \
+         largest |Ω proof| + |σ_send| {}, largest σ_recv in Credited::Receive {}, \
+         largest Ω(h) proof in Credited::Status {}",
         sizes.payment_overhead,
         sizes.credited_receive_overhead,
         sizes.credited_status_overhead,
         sizes.lineage_overhead,
-        sizes.largest_omega_with_measured_sigma,
+        sizes.largest_omega_with_sample_sigma,
         sizes.largest_joint_proof,
+        sizes.largest_sigma_in_receive,
         sizes.largest_omega_in_status,
     );
     for (name, len, bound) in [
@@ -291,8 +285,8 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
     }
     // A Lineage message is smaller than the Payment that carries the same Ω (§8).
     assert!(sizes.lineage < sizes.payment);
-    assert!(sizes.largest_omega_with_measured_sigma >= PLACEHOLDER_OMEGA_PROOF_BYTES);
-    assert!(sizes.largest_omega_in_status >= PLACEHOLDER_OMEGA_PROOF_BYTES);
+    assert!(sizes.largest_omega_with_sample_sigma >= SAMPLE_OMEGA_PROOF_BYTES);
+    assert!(sizes.largest_omega_in_status >= SAMPLE_OMEGA_PROOF_BYTES);
     // F_payment and the joint R9 budget of |Ω| + |σ_send| (owner answer Q6) are pinned.
     assert_eq!(
         sizes.payment_overhead,
@@ -303,8 +297,36 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
         KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1
     );
     assert_eq!(
-        sizes.largest_omega_with_measured_sigma,
-        KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1 - MEASURED_SIGMA_SEND_BYTES
+        sizes.largest_omega_with_sample_sigma,
+        KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1 - SAMPLE_SIGMA_SEND_BYTES
+    );
+    // Receive is bounded by its complete carrying envelope, independently of the sample
+    // proof length. The frozen key still selects one exact length within this budget.
+    assert_eq!(
+        sizes.credited_receive_overhead,
+        KAGEMUSHA_WALLET_CREDITED_RECEIVE_FIXED_BYTES_V1
+    );
+    assert_eq!(
+        sizes.largest_sigma_in_receive,
+        KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1
+    );
+    let f = &vector_world().f;
+    let credited = f.credited_receive(&f.payment(false, 32), 32);
+    let receive_at_cap =
+        credited_with(&credited, KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1);
+    assert_eq!(envelope_len(&receive_at_cap), message_max);
+    KagemushaWalletEnvelopeV1::new(receive_at_cap)
+        .to_canonical_bytes()
+        .expect("Receive at its complete envelope limit");
+    let receive_over_cap = credited_with(
+        &credited,
+        KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1 + 1,
+    );
+    assert_eq!(envelope_len(&receive_over_cap), message_max + 1);
+    assert!(
+        KagemushaWalletEnvelopeV1::new(receive_over_cap)
+            .to_canonical_bytes()
+            .is_err()
     );
     // F_status and the Ω cap of the verifying-key allowlist are pinned: with the fixed
     // 32-sibling opening the Credited::Status bound caps Ω at 10,000 − F_status.

@@ -123,6 +123,15 @@ impl Credited {
         self.valid = true;
         assert!(!self.accepts());
     }
+    fn rejects_preimage(mut self) {
+        for verdict in [false, true] {
+            self.valid = verdict;
+            assert!(
+                !self.accepts(),
+                "a substituted preimage cannot choose {verdict}"
+            );
+        }
+    }
 }
 #[test]
 fn credited_forms_match_native_vectors_and_bind_every_original_byte() {
@@ -152,12 +161,25 @@ fn credited_forms_match_native_vectors_and_bind_every_original_byte() {
         for i in 0..CreditedCells::BYTES {
             let mut wrong = c.clone();
             wrong.tape[i] ^= 1;
-            wrong.rejects();
+            let start = if i < 67 { 35 } else { 67 };
+            if i >= 35
+                && bool::from(
+                    Fp::from_repr(wrong.tape[start..start + 32].try_into().unwrap()).is_some(),
+                )
+            {
+                wrong.rejects_preimage();
+            } else {
+                wrong.rejects();
+            }
         }
         for i in 0..3 {
             let mut wrong = c.clone();
             wrong.expected[i] += Fp::ONE;
-            wrong.rejects();
+            if i == 0 {
+                wrong.rejects();
+            } else {
+                wrong.rejects_preimage();
+            }
         }
         for at in [3, 35, 67] {
             let mut wrong = c.clone();
@@ -183,6 +205,7 @@ struct Status {
     context: [Fp; 7], // provider halves, proof, lineage-byte digest, Payment, expected relation halves
     valid: bool,
     receive: bool,
+    decode_carried_proof: bool,
 }
 impl Circuit<Fp> for Status {
     type Config = Config;
@@ -309,6 +332,11 @@ impl Circuit<Fp> for Status {
                     &StatusCells::primary_segments(),
                     &StatusCells::secondary_segments(),
                 )?;
+                let carried = if self.decode_carried_proof {
+                    StatusCells::carried_proof_digest(&mut uint, &mut region, &tape)?
+                } else {
+                    context[2].clone()
+                };
                 let status = StatusCells::from_run(
                     &mut uint,
                     &mut hash,
@@ -319,7 +347,7 @@ impl Circuit<Fp> for Status {
                         receipt: &receipt,
                         lineage: &head,
                         lineage_digest: &context[3],
-                        proof_digest: &context[2],
+                        proof_digest: &carried,
                         opening: &opening,
                         provider: &[context[0].clone(), context[1].clone()],
                         relation: &[context[5].clone(), context[6].clone()],
@@ -363,6 +391,12 @@ impl Status {
         assert!(self.accepts(), "total {reason}");
         self.valid = true;
         assert!(!self.accepts(), "forged {reason}");
+    }
+    fn rejects_preimage(mut self, reason: &str) {
+        for verdict in [false, true] {
+            self.valid = verdict;
+            assert!(!self.accepts(), "preimage {reason}, verdict={verdict}");
+        }
     }
     fn rebuild_transcript(&mut self) {
         self.tape = 1u16.to_le_bytes().to_vec();
@@ -410,14 +444,17 @@ fn status() -> Status {
     let mut receiver = credential();
     receiver.bytes[66..130].copy_from_slice(&request.bytes[130..194]);
     let receiver_digest = receiver.public(Fp::ZERO)[1];
-    request.bytes[394..426].copy_from_slice(&receiver_digest.to_repr());
+    request.bytes[210..242].copy_from_slice(&receiver_digest.to_repr());
+    // The certificate-set digest is a different Request field. Replacing it
+    // with the credential digest would hide a wrong circuit field index.
+    assert_ne!(field_at(&request.bytes, 394), receiver_digest);
     let mut request_words = j["poseidon"]["credit_id"]["poseidon"]["items"]
         .as_array()
         .expect("request fields")
         .iter()
         .map(|v| field(v.as_str().expect("hex")))
         .collect::<Vec<_>>();
-    request_words[23] = receiver_digest;
+    request_words[14] = receiver_digest;
     let credit = hash_with_domain(u64::from_le_bytes(*b"kgwcrdt1"), &request_words);
     let mut receipt = cases()
         .into_iter()
@@ -484,6 +521,7 @@ fn status() -> Status {
         context,
         valid: true,
         receive: false,
+        decode_carried_proof: false,
     };
     c.head[16] = c.opening_root();
     c.rebuild_transcript();
@@ -510,7 +548,7 @@ fn receive_evidence_binds_retained_credit_amount_relation_and_exact_payment() {
         wrong.rejects(&format!("receipt field at{offset}"));
     }
     let mut wrong = c.clone();
-    wrong.request.bytes[394] ^= 1;
+    wrong.request.bytes[210] ^= 1;
     wrong.rejects("foreign quoted credential");
     let mut renewed = c.clone();
     renewed.statement[7] += Fp::ONE;
@@ -539,7 +577,16 @@ fn status_binds_folded_head_retained_payment_and_receiver_renewal_identity() {
     for i in 0..StatusCells::BYTES {
         let mut wrong = c.clone();
         wrong.tape[i] ^= 1;
-        wrong.rejects(&format!("transcript byte{i}"));
+        let start = 2 + i.saturating_sub(2) / 32 * 32;
+        if i >= 2
+            && bool::from(
+                Fp::from_repr(wrong.tape[start..start + 32].try_into().unwrap()).is_some(),
+            )
+        {
+            wrong.rejects_preimage(&format!("transcript byte{i}"));
+        } else {
+            wrong.rejects(&format!("transcript byte{i}"));
+        }
     }
     for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16] {
         let mut wrong = c.clone();
@@ -554,7 +601,7 @@ fn status_binds_folded_head_retained_payment_and_receiver_renewal_identity() {
     }
     let mut wrong = c.clone();
     wrong.context[3] += Fp::ONE;
-    wrong.rejects("foreign exact-lineage byte digest");
+    wrong.rejects_preimage("foreign exact-lineage byte digest");
     let mut foreign = c.clone();
     foreign.statement[1] += Fp::ONE;
     foreign.head[3] = foreign.statement[1];
@@ -594,6 +641,48 @@ fn status_binds_folded_head_retained_payment_and_receiver_renewal_identity() {
     );
     let known = synthesize(&c, 14, None).expect("known");
     let unknown = synthesize(&c.without_witnesses(), 14, None).expect("unknown");
+    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+}
+
+#[test]
+fn original_status_addresses_cannot_be_replaced_to_manufacture_noop() {
+    let c = status();
+    for component in 0..5 {
+        let mut changed = c.clone();
+        match component {
+            0 => changed.statement[1] += Fp::ONE,
+            1 => changed.context[2] += Fp::ONE,
+            2 => changed.receipt.bytes[ObjectKind::Receipt.body_len()] ^= 1,
+            3 => changed.context[3] += Fp::ONE,
+            _ => changed.opening[101] ^= 1,
+        }
+        // Keep the original transcript. Neither false nor true can excuse a
+        // different preimage of a canonical source address.
+        changed.rejects_preimage(&format!("component {component}"));
+    }
+    for component in 0..5 {
+        let mut malformed = c.clone();
+        let start = 2 + 32 * component;
+        malformed.tape[start..start + 32].fill(255);
+        malformed.rejects(&format!("noncanonical original address {component}"));
+    }
+}
+
+#[test]
+fn original_carried_status_proof_digest_remains_total_when_receipt_disagrees() {
+    let mut c = status();
+    c.decode_carried_proof = true;
+    assert!(c.accepts());
+    let mut wrong = c.clone();
+    let digest = field_at(&wrong.tape, 34) + Fp::ONE;
+    wrong.tape[34..66].copy_from_slice(&digest.to_repr());
+    wrong.rejects("original carried proof digest differs from receipt");
+    let mut malformed = c.clone();
+    malformed.tape[34..66].fill(255);
+    malformed.rejects("noncanonical original carried proof digest");
+    let known = synthesize(&c, 14, None).unwrap();
+    let unknown = synthesize(&c.without_witnesses(), 14, None).unwrap();
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.permutation(), unknown.tables.permutation());
 }

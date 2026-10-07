@@ -1,4 +1,4 @@
-//! Bootstrap's fixed scheme authorization and exact signed-object composition.
+//! Bootstrap's fixed trust roots and witness-bound scheme authorization.
 //!
 //! The caller hard-verifies Q sigma and Q signature proofs, retaining their
 //! opening obligations. This component joins their typed outputs to the same
@@ -27,10 +27,11 @@ use crate::{
     q_signature::SignatureKey,
 };
 
-/// Scheme artifact constants fixed into the Bootstrap relation key.
+/// Trust-root and provider constants fixed into the Bootstrap relation key.
+/// The scheme ID is carried by the constrained state/statement/lineage; fixing
+/// it here would make the A keys depend cyclically on their own Ω catalog.
 #[derive(Clone, Copy, Debug)]
 pub struct BootstrapPolicy {
-    scheme: [u128; 2],
     provider: [u128; 2],
     root: Affine,
 }
@@ -38,16 +39,12 @@ impl BootstrapPolicy {
     /// Validate fixed identities and the finite canonical P-256 root key.
     ///
     /// # Errors
-    /// Zero scheme/provider identity or invalid root point.
-    pub fn new(scheme: [u128; 2], provider: [u128; 2], root: Affine) -> Result<Self, Error> {
-        if scheme == [0; 2] || provider == [0; 2] || !root.is_valid() {
+    /// Zero provider identity or invalid root point.
+    pub fn new(provider: [u128; 2], root: Affine) -> Result<Self, Error> {
+        if provider == [0; 2] || !root.is_valid() {
             return Err(Error::Synthesis);
         }
-        Ok(Self {
-            scheme,
-            provider,
-            root,
-        })
+        Ok(Self { provider, root })
     }
 }
 
@@ -174,13 +171,9 @@ impl BootstrapObjects {
             return Err(Error::Synthesis);
         }
         let mut uint = chip.uint();
-        let scheme = policy
-            .scheme
-            .map(|v| uint.constant::<128>(region, v).map(|v| v.word().clone()))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_| Error::Synthesis)?;
+        // bootstrap below hard-joins state, statement and lineage scheme limbs.
+        // Certificate/credential scope must bind to those same carried cells.
+        let scheme = [lineage.fields()[1].clone(), lineage.fields()[2].clone()];
         let provider = policy
             .provider
             .map(|v| uint.constant::<128>(region, v).map(|v| v.word().clone()))

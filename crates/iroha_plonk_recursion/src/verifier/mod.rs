@@ -448,6 +448,28 @@ impl<C: PastaCurve> VerifierChip<C> {
     pub fn uint(&mut self) -> UintChip<'_, C::Base> {
         UintChip::new(&mut self.glue, &mut self.range)
     }
+
+    /// Borrow the existing integer and framed-hash lanes together, preserving
+    /// all row cursors. Framed hashing refuses an active verifier transcript.
+    /// This is for byte-linked source components, not transcript replacement.
+    /// # Errors
+    /// The duplex lane is temporarily owned by a verifier operation.
+    pub fn uint_and_hasher(
+        &mut self,
+    ) -> Result<(UintChip<'_, C::Base>, &mut DuplexChip<C::Base>), Error> {
+        let duplex = self.duplex.as_mut().ok_or(Error::Synthesis)?;
+        if !duplex.is_clear() || duplex.buffered() != 0 {
+            return Err(Error::Synthesis);
+        }
+        Ok((UintChip::new(&mut self.glue, &mut self.range), duplex))
+    }
+
+    /// BLS12-381 arithmetic sharing this verifier's existing glue and range
+    /// lanes and their row cursors. This grants arithmetic access only; the
+    /// caller must constrain its complete signature and source relation.
+    pub fn bls381(&mut self) -> iroha_plonk_gadgets::bls12_381::field::Bls381Chip<'_, C::Base> {
+        iroha_plonk_gadgets::bls12_381::field::Bls381Chip::new(&mut self.glue, &mut self.range)
+    }
     /// Assigns a witness key with finite curve commitments. The consuming
     /// relation must authorize the digest returned by [`Self::verify`].
     ///

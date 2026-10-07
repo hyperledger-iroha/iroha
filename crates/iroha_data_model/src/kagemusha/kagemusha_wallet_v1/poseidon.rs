@@ -82,6 +82,8 @@ pub const KAGEMUSHA_WALLET_CONSUMED_CREDIT_VALUE_DOMAIN_V1: u64 = domain_v1(*b"k
 pub const KAGEMUSHA_WALLET_PENDING_OUTGOING_VALUE_DOMAIN_V1: u64 = domain_v1(*b"kgwpout1");
 /// Poseidon domain of load values of the load/redeem recovery map.
 pub const KAGEMUSHA_WALLET_LOAD_VALUE_DOMAIN_V1: u64 = domain_v1(*b"kgwload1");
+/// Packed-byte domain of an ordinary finalized transaction's exact Load receipt transcript.
+pub const KAGEMUSHA_WALLET_LOAD_RECEIPT_DOMAIN_V1: u64 = domain_v1(*b"kgwolod1");
 /// Poseidon domain of redeem values of the load/redeem recovery map.
 pub const KAGEMUSHA_WALLET_REDEEM_VALUE_DOMAIN_V1: u64 = domain_v1(*b"kgwrdm_1");
 /// Poseidon domain of fee-claim map values.
@@ -135,7 +137,7 @@ pub const KAGEMUSHA_WALLET_CREDITED_DOMAIN_V1: u64 = domain_v1(*b"kgwcrdd1");
 /// Every Poseidon domain of the wallet other than the signing domains
 /// ([`super::KagemushaWalletSigningDomainV1`]) and the object-digest domains
 /// ([`super::KagemushaWalletObjectDigestDomainV1`]), by use, in table order (wire record §3.2).
-pub const KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1: [(&str, u64); 32] = [
+pub const KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1: [(&str, u64); 33] = [
     ("core", KAGEMUSHA_WALLET_CORE_DOMAIN_V1),
     ("rest", KAGEMUSHA_WALLET_REST_DOMAIN_V1),
     ("statement", KAGEMUSHA_WALLET_STATEMENT_DOMAIN_V1),
@@ -151,6 +153,7 @@ pub const KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1: [(&str, u64); 32] = [
         KAGEMUSHA_WALLET_PENDING_OUTGOING_VALUE_DOMAIN_V1,
     ),
     ("load_value", KAGEMUSHA_WALLET_LOAD_VALUE_DOMAIN_V1),
+    ("load_receipt", KAGEMUSHA_WALLET_LOAD_RECEIPT_DOMAIN_V1),
     ("redeem_value", KAGEMUSHA_WALLET_REDEEM_VALUE_DOMAIN_V1),
     (
         "fee_claim_value",

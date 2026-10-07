@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 25
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 26
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -1877,7 +1877,26 @@ uint32_t connect_norito_kagemusha_wallet_revision_v1(void);
 int32_t connect_norito_kagemusha_wallet_open_v1(const connect_norito_kagemusha_platform_v1*, const uint8_t* slot32, const uint8_t* scheme32, const uint8_t* wallet32, const uint8_t* artifact32, uint64_t* out_handle);
 int32_t connect_norito_kagemusha_wallet_close_v1(uint64_t handle);
 int32_t connect_norito_kagemusha_wallet_activity_v1(uint64_t handle, uint8_t foreground, uint8_t charging);
-int32_t connect_norito_kagemusha_wallet_commit_v1(uint64_t handle, const uint8_t* canonical_frozen_transition, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
+// Native lifecycle intent; no caller state, roots, proof, time or nonce. Selector meanings:
+// Load0(receipt,finality), Send1(Request), Receive2(Payment,credential,certificates),
+// Credential3/SchemePolicy4/Blacklist5/TimeAnchor6/QuotaShare7(update,certificates),
+// Unload8(optional quote+certificates, positive amount), Retire9(no originals).
+// Unused slots/amount are zero. request_id is a nonzero local retry identity.
+// Original bounds are selector-specific; Payment remains <=10,000 bytes.
+typedef struct {
+    const uint8_t* request_id;
+    uint32_t selector;
+    connect_norito_kagemusha_wallet_u128_v1 amount;
+    const uint8_t* first;
+    size_t first_length;
+    const uint8_t* second;
+    size_t second_length;
+    const uint8_t* third;
+    size_t third_length;
+} connect_norito_kagemusha_wallet_operation_request_v1;
+int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+// Result11=preparing (no Advance selected); result2=pending (irreversible Advance selected).
+int32_t connect_norito_kagemusha_wallet_request_status_v1(uint64_t handle, const uint8_t* request_id32, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_retry_v1(uint64_t handle, const uint8_t* operation32, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_resume_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_fold_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);

@@ -329,6 +329,7 @@ mod committed_hash_journal;
 mod committed_transaction_context;
 mod da_hydration;
 mod exec_witness_capture;
+mod kagemusha_load_entrypoint;
 /// Original local owners and completed errors from witness capture.
 pub use exec_witness_capture::WitnessCaptureError;
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -5701,6 +5702,10 @@ impl WorldBlock<'_> {
         } else {
             self.governance_locks.insert(referendum_id, locks);
         }
+    }
+    /// Borrow the original block-local event cut before publication adds its delivery event.
+    pub(crate) fn pending_external_events(&self) -> &[EventBox] {
+        &self.external_event_buf
     }
     /// Drain and return any events that were emitted into the external buffer during
     /// the current block application. Intended for tests and block-assembly paths.
@@ -13863,6 +13868,11 @@ pub struct StateTransaction<'block, 'state> {
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
     governance_ballot_entrypoint_binding: Option<GovernanceBallotEntrypointBindingV1>,
+    /// Immutable Load instructions from the exact external signed transaction.
+    kagemusha_load_entrypoint_binding:
+        Option<kagemusha_load_entrypoint::KagemushaLoadEntrypointBindingV1>,
+    /// Currently executing direct instruction ordinal; nested frames receive no Load authority.
+    pub(crate) current_direct_kagemusha_load_instruction_index: Option<usize>,
     /// Penalties that must be replayed after this transaction overlay is rejected.
     deferred_governance_ballot_penalties: Vec<DeferredGovernanceBallotPenaltyV1>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
@@ -37472,6 +37482,8 @@ impl<'state> StateBlock<'state> {
             genesis_execution_scope: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
+            kagemusha_load_entrypoint_binding: None,
+            current_direct_kagemusha_load_instruction_index: None,
             deferred_governance_ballot_penalties: Vec::new(),
             privacy_transaction_intent_binding: None,
             private_settlement_carrier_binding: None,
@@ -38144,17 +38156,59 @@ impl StateTransaction<'_, '_> {
         {
             return crate::zk::PreverifyResult::PreverifyBudgetExceeded;
         }
-        // Current native backend, key, envelope and dedup admission is owned by
-        // the shared pre-verifier after the original State size/budget guards.
-        crate::zk::preverify_with_budget(
+        // Preserve the current backend, activity, budget, commitment and
+        // canonical-envelope refusal order without publishing to the block
+        // cache until the original native key has passed compiled admission.
+        // The temporary admission cache holds one key; it never clones the
+        // growing block-local cache.
+        let mut admission = crate::zk::DedupCache::new();
+        let preflight = crate::zk::preverify_with_budget(
             proof,
             vk,
-            &mut self.zk_dedup,
+            &mut admission,
             self.zk.preverify_budget_bytes,
             vk_commitment,
             expected_vk_commitment,
             vk_active,
-        )
+        );
+        if preflight != crate::zk::PreverifyResult::Accepted {
+            return preflight;
+        }
+        if !cfg!(all(test, sumeragi_core_mutation = "HC146"))
+            && crate::zk::production_verify_backend_tag(proof.backend.as_str())
+                == Some(iroha_data_model::zk::BackendTag::NativePipaRPasta)
+            && let Some(native_key) = vk
+        {
+            // Preflight already authenticated this canonical envelope and
+            // its schema/hash bindings. Also pin the bounded descriptor and
+            // processed key to the compiled relation before dedup publication;
+            // a consistently rehashed foreign key remains foreign.
+            let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+                match norito::decode_canonical(&proof.bytes) {
+                    Ok(envelope) => envelope,
+                    Err(_) => return crate::zk::PreverifyResult::MalformedProof,
+                };
+            if crate::zk::native_pipa_r::validate_key(
+                proof.backend.as_str(),
+                &envelope.circuit_id,
+                native_key,
+            )
+            .is_err()
+            {
+                return crate::zk::PreverifyResult::VerifyingKeyMismatch;
+            }
+        }
+        // Accepted preflight establishes a nonzero matching commitment: the
+        // supplied original, or the expected original when none was supplied.
+        // Publish exactly the key preimage used by the existing CoreZK owner.
+        if self
+            .zk_dedup
+            .check_and_insert_with_commitment(proof, vk_commitment.or(expected_vk_commitment))
+        {
+            crate::zk::PreverifyResult::Accepted
+        } else {
+            crate::zk::PreverifyResult::Duplicate
+        }
     }
 }
 #[cfg(test)]
@@ -40571,6 +40625,34 @@ impl StateTransaction<'_, '_> {
     /// Returns [`Error`] if any confidential proof quota would be exceeded or counters overflow.
     pub fn register_confidential_proof(&mut self, proof_bytes: usize) -> Result<(), Error> {
         self.register_confidential_usage(proof_bytes, 1)
+    }
+    /// Reserve all native proof verification work for one KAGEMUSHA package.
+    ///
+    /// The actual package selects one sigma verification plus one Omega verification
+    /// when lineage is carried. Both fixed-width accumulator originals are included
+    /// in the lineage transport byte count. One package remains one confidential
+    /// operation, and all existing transaction/block/aggregate-byte ceilings apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] without changing accounting when any byte/count arithmetic
+    /// overflows or a confidential quota refuses the whole reservation. The existing
+    /// output owner retains completed-work accounting after later business rollback.
+    pub(crate) fn register_kagemusha_package_proof(
+        &mut self,
+        package: &iroha_data_model::kagemusha::KagemushaWalletPackageV1,
+    ) -> Result<(), Error> {
+        let lineage = package.lineage.lineage();
+        let proof_bytes = package
+            .step_proof
+            .bytes
+            .len()
+            .checked_add(lineage.map_or(0, |value| value.proof.len()))
+            .ok_or_else(|| {
+                Error::InvariantViolation("KAGEMUSHA package proof-byte count overflow".into())
+            })?;
+        let verify_calls = if lineage.is_some() { 2 } else { 1 };
+        self.register_confidential_usage(proof_bytes, verify_calls)
     }
     /// Return the exact index required by the next privacy proof in this transaction.
     #[must_use]

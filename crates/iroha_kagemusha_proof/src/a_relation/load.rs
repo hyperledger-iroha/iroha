@@ -1,8 +1,7 @@
-//! Load's signed authorization, receipt and recovery-map composition.
+//! Ordinary finalized Load receipt, own signatures and recovery-map composition.
 //!
-//! These constraints consume the exact state and Q outputs retained by the A
-//! frame. The `LoadAuthorization` issuer attests finalized ledger funding; this
-//! relation does not accept a caller-supplied finality height or boolean.
+//! The receipt terms come from one exact byte tape. A separate mandatory source
+//! stage authenticates its genesis-rooted consensus proof and both carried claims.
 
 use ff::Field;
 use iroha_pasta::{Ep, Fp};
@@ -16,23 +15,23 @@ use super::{
     own::{CurrentAuthorization, OwnPolicy, authenticate_current},
 };
 use crate::{
+    finality::LoadReceiptCells,
     operation_relation::{
         map_effects::{InsertCells, MapEffectsChip, MapState, MapTransition},
         objects::{
             ObjectKind, SignedObjectCells,
-            issuer::{self, IssuerAuthorization},
-            policy::PolicyCells,
             receipt::{self, ReceiptContext},
         },
     },
     q_signature::SignatureKey,
 };
 
-/// Load certificate, finalized voucher, own receipt, Enrollment certificate and current credential.
+/// Ordinary ledger receipt, own Advance receipt, Enrollment certificate and credential.
 #[derive(Clone, Debug)]
 pub struct LoadObjects {
-    objects: [SignedObjectCells; 5],
-    context: [ContextObjectCells; 5],
+    receipt: LoadReceiptCells,
+    objects: [SignedObjectCells; 3],
+    context: [ContextObjectCells; 4],
 }
 /// State and authenticated Q outputs consumed by Load's signed-object relation.
 #[derive(Clone, Copy)]
@@ -43,7 +42,7 @@ pub struct LoadInputs<'a> {
     pub successor: MapState<'a>,
     /// Own exact statement and sigma-only proof digest from the Q-bound tape.
     pub sigma: &'a SigmaBindingCells,
-    /// Slots for the owning task: receipt/voucher/Load certificate, or current credential/Enrollment certificate.
+    /// Own Advance receipt slot, or current credential/Enrollment certificate slots.
     pub signatures: &'a [SignatureProofCells],
 }
 impl LoadObjects {
@@ -51,14 +50,15 @@ impl LoadObjects {
     ///
     /// # Errors
     /// An impossible size conversion in the fixed schema.
-    pub fn context_specs() -> Result<[ContextObjectSpec; 5], Error> {
-        let mut out = Vec::new();
+    pub fn context_specs() -> Result<[ContextObjectSpec; 4], Error> {
+        let mut out = vec![ContextObjectSpec {
+            tag: 1,
+            capacity: u32::try_from(LoadReceiptCells::BYTES).map_err(|_| Error::BoundsFailure)?,
+        }];
         for (tag, kind) in [
-            (1, ObjectKind::Certificate),
-            (2, ObjectKind::Voucher),
-            (3, ObjectKind::Receipt),
-            (4, ObjectKind::Certificate),
-            (5, ObjectKind::Credential),
+            (2, ObjectKind::Receipt),
+            (3, ObjectKind::Certificate),
+            (4, ObjectKind::Credential),
         ] {
             out.push(ContextObjectSpec {
                 tag,
@@ -67,28 +67,40 @@ impl LoadObjects {
         }
         out.try_into().map_err(|_| Error::Synthesis)
     }
-    /// Parse each hard own object and commit the identical canonical byte tape.
-    ///
+    /// Parse the ordinary receipt and all three signed objects from their exact tapes.
     /// # Errors
-    /// A wrong fixed shape or layout error; malformed own objects are unsatisfiable.
+    /// Wrong fixed lengths, malformed canonical fields or circuit layout failure.
     pub fn decode(
         chip: &mut VerifierChip<Ep>,
         bytes: &mut BytesChip<Fp>,
         region: &mut Region<'_, Fp>,
-        source: [&[Value<u8>]; 5],
+        source: [&[Value<u8>]; 4],
     ) -> Result<Self, Error> {
+        let specs = Self::context_specs()?;
+        let run = bytes.run(
+            region,
+            source[0],
+            &LoadReceiptCells::primary_segments(),
+            &LoadReceiptCells::secondary_segments(),
+        )?;
+        let (mut uint, hash) = chip.uint_and_hasher()?;
+        let receipt = LoadReceiptCells::from_run(&mut uint, hash, region, &run)?;
+        let mut context = vec![ContextObjectCells::from_exact_run(
+            chip,
+            region,
+            specs[0],
+            receipt.digest(),
+            &run,
+        )?];
         let mut objects = Vec::new();
-        let mut context = Vec::new();
         for ((kind, source), spec) in [
-            ObjectKind::Certificate,
-            ObjectKind::Voucher,
             ObjectKind::Receipt,
             ObjectKind::Certificate,
             ObjectKind::Credential,
         ]
         .into_iter()
-        .zip(source)
-        .zip(Self::context_specs()?)
+        .zip(&source[1..])
+        .zip(&specs[1..])
         {
             let run = bytes.run(
                 region,
@@ -107,32 +119,69 @@ impl LoadObjects {
             context.push(ContextObjectCells::from_exact_run(
                 chip,
                 region,
-                spec,
+                *spec,
                 object.digest(),
                 &run,
             )?);
             objects.push(object);
         }
         Ok(Self {
+            receipt,
             objects: objects.try_into().map_err(|_| Error::Synthesis)?,
             context: context.try_into().map_err(|_| Error::Synthesis)?,
         })
     }
     /// Same-tape object commitments rebound by every split stage.
-    pub const fn context(&self) -> &[ContextObjectCells; 5] {
+    pub const fn context(&self) -> &[ContextObjectCells; 4] {
         &self.context
     }
+    /// Exact ordinary receipt parsed from the immutable stage context.
+    pub const fn receipt(&self) -> &LoadReceiptCells {
+        &self.receipt
+    }
 
-    /// Hard-authenticate the finalized voucher and exact own receipt.
-    ///
-    /// The separate recovery relation must also run in the composed A circuit.
-    /// The predecessor payment key is already authenticated by the hard lineage
-    /// proof; the voucher's delegated key is authorized only for role2.
-    /// `ChargeQuote` signatures are outside this adopted Load relation.
-    ///
+    /// Bind every monetary projection to the exact ordinary receipt.
+    /// The mandatory finality stage must additionally authenticate its digest.
     /// # Errors
-    /// Wrong variant, slot/root policy, missing same-tape digest or layout error.
-    /// Invalid own signatures, scope, amounts and receipt bindings are unsatisfiable.
+    /// Wrong operation or layout; any projected identity/amount mismatch is unsatisfied.
+    pub fn bind_finalized_terms(
+        &self,
+        region: &mut Region<'_, Fp>,
+        input: LoadInputs<'_>,
+    ) -> Result<(), Error> {
+        let statement = input.sigma.hard_statement()?;
+        if statement.variant() != Variant::Load {
+            return Err(Error::Synthesis);
+        }
+        let fields = statement.fields();
+        for (actual, expected) in self
+            .receipt
+            .scheme()
+            .iter()
+            .zip(&fields[3..5])
+            .chain(self.receipt.asset().iter().zip(&fields[5..7]))
+            .chain(
+                self.receipt
+                    .wallet()
+                    .iter()
+                    .zip(&input.successor.lineage.fields()[6..8]),
+            )
+        {
+            GlueChip::assert_equal(region, actual, expected)?;
+        }
+        for (actual, expected) in [
+            (self.receipt.digest(), &fields[17]),
+            (self.receipt.ordinal().word(), &fields[18]),
+            (self.receipt.amount().word(), &fields[19]),
+            (self.receipt.online_charge().word(), &fields[20]),
+        ] {
+            GlueChip::assert_equal(region, actual, expected)?;
+        }
+        Ok(())
+    }
+    /// Authenticate the own Advance receipt under the hard predecessor payment key.
+    /// # Errors
+    /// Wrong slot or operation; signature and exact sigma/statement bindings are hard.
     pub fn authenticate(
         &self,
         chip: &mut VerifierChip<Ep>,
@@ -141,21 +190,13 @@ impl LoadObjects {
         input: LoadInputs<'_>,
     ) -> Result<(), Error> {
         let statement = input.sigma.hard_statement()?;
-        let slots = input.signatures;
         if statement.variant() != Variant::Load
-            || slots.len() != 3
-            || slots[2].key_policy() != SignatureKey::Fixed(policy.root)
+            || input.signatures.len() != 1
+            || input.signatures[0].key_policy() != SignatureKey::Variable
         {
             return Err(Error::Synthesis);
         }
         let mut uint = chip.uint();
-        let scheme = policy
-            .scheme
-            .map(|v| uint.constant::<128>(region, v).map(|v| v.word().clone()))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_| Error::Synthesis)?;
         let provider = policy
             .provider
             .map(|v| uint.constant::<128>(region, v).map(|v| v.word().clone()))
@@ -163,29 +204,13 @@ impl LoadObjects {
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .map_err(|_| Error::Synthesis)?;
-        let valid = issuer::authenticate(
-            &mut uint,
-            region,
-            &self.objects[1],
-            &IssuerAuthorization {
-                certificate: &self.objects[0],
-                certificate_proof: &slots[2],
-                object_proof: &slots[1],
-                root_key: slots[2].key(),
-                scheme: &scheme,
-            },
-        )?;
-        GlueChip::assert_constant(region, valid.word(), Fp::ONE)?;
         let wallet = [
             input.successor.lineage.fields()[6].clone(),
             input.successor.lineage.fields()[7].clone(),
         ];
-        let policy = PolicyCells::check(&mut uint, region, &self.objects[1])?;
-        let valid = policy.bind_load_voucher(&mut uint, region, statement, &wallet)?;
-        GlueChip::assert_constant(region, valid.word(), Fp::ONE)?;
         let payment_key =
             core::array::from_fn(|i| input.predecessor.lineage.fields()[9 + i].clone());
-        let valid = self.objects[2].bind_signature(region, &slots[0], &payment_key)?;
+        let valid = self.objects[0].bind_signature(region, &input.signatures[0], &payment_key)?;
         GlueChip::assert_constant(region, valid.word(), Fp::ONE)?;
         let zero = uint.glue().constant(region, Fp::ZERO)?;
         let lanes = chip.operation_lanes()?;
@@ -193,7 +218,7 @@ impl LoadObjects {
             &mut UintChip::new(lanes.glue, lanes.range),
             lanes.hash,
             region,
-            &self.objects[2],
+            &self.objects[0],
             &ReceiptContext {
                 wallet: &wallet,
                 provider: &provider,
@@ -222,8 +247,8 @@ impl LoadObjects {
             region,
             policy,
             CurrentAuthorization {
-                credential: &self.objects[4],
-                certificate: &self.objects[3],
+                credential: &self.objects[2],
+                certificate: &self.objects[1],
                 credential_proof: &input.signatures[0],
                 certificate_proof: &input.signatures[1],
                 current: input.predecessor,
@@ -267,7 +292,7 @@ pub struct LoadStagePlan {
     context: super::context::ContextPlan,
 }
 impl LoadStagePlan {
-    /// Require recovery, voucher/receipt authorization and current-credential
+    /// Require recovery, finality, own receipt authorization and current-credential
     /// authorization exactly once, with hard signature Q slots1 and2 respectively.
     /// # Errors
     /// Wrong variant/task set, signature-Q count or stage assignment.
@@ -283,9 +308,27 @@ impl LoadStagePlan {
             .map(|i| context.operation_tasks(i).unwrap_or_default().to_vec())
             .collect::<Vec<_>>();
         OperationTask::validate(Variant::Load, &groups)?;
+        let required = vec![
+            vec![OperationTask::LoadRecovery],
+            vec![],
+            vec![OperationTask::LoadFinality],
+            vec![OperationTask::LoadReceipt],
+            vec![OperationTask::LoadCurrentAuthorization],
+        ];
+        let partitions = [vec![], vec![0], vec![], vec![1], vec![2]];
+        if groups != required
+            || context.predecessor_stage() != Some(0)
+            || partitions
+                .iter()
+                .enumerate()
+                .any(|(stage, expected)| context.q_partition(stage) != Some(expected.as_slice()))
+        {
+            return Err(Error::Synthesis);
+        }
+
         for (stage, tasks) in groups.iter().enumerate() {
             for (task, q) in [
-                (OperationTask::LoadAuthorization, 1),
+                (OperationTask::LoadReceipt, 1),
                 (OperationTask::LoadCurrentAuthorization, 2),
             ] {
                 if tasks.contains(&task)
@@ -327,7 +370,7 @@ impl LoadStagePlan {
         if tasks.contains(&OperationTask::LoadRecovery) != insertion.is_some() {
             return Err(Error::Synthesis);
         }
-        let owning_q = if tasks.contains(&OperationTask::LoadAuthorization) {
+        let owning_q = if tasks.contains(&OperationTask::LoadReceipt) {
             Some(1)
         } else if tasks.contains(&OperationTask::LoadCurrentAuthorization) {
             Some(2)
@@ -356,9 +399,8 @@ impl LoadStagePlan {
                 OperationTask::LoadRecovery => {
                     LoadObjects::recovery(chip, region, input, insertion.ok_or(Error::Synthesis)?)?
                 }
-                OperationTask::LoadAuthorization => {
-                    objects.authenticate(chip, region, policy, input)?
-                }
+                OperationTask::LoadFinality => objects.bind_finalized_terms(region, input)?,
+                OperationTask::LoadReceipt => objects.authenticate(chip, region, policy, input)?,
                 OperationTask::LoadCurrentAuthorization => {
                     objects.authenticate_current(chip, region, policy, input)?
                 }

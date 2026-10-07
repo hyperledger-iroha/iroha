@@ -14,7 +14,7 @@ import org.hyperledger.iroha.sdk.norito.Varint
 /**
  * Exact role label of one domain-separated KAGEMUSHA wallet V1 digest `H(role, body)`.
  *
- * Mirrors Rust `iroha_data_model::kagemusha::KagemushaWalletDigestRoleV1::ALL` (18 roles) in
+ * Mirrors Rust `iroha_data_model::kagemusha::KagemushaWalletDigestRoleV1::ALL` (20 roles, including the NEW unsigned E1 policy identities) in
  * declaration order. `H` remains only for values no relation recomputes: fixed identities,
  * ledger, platform-attestation and artifact boundaries, output descriptors and local custody
  * records (wire record section 1). Only the artifact manifest hashes `m || signature`; other signed-object digests
@@ -37,6 +37,10 @@ enum class KagemushaWalletDigestRoleV1(
     ASSET_SCOPE("asset-scope"),
     ACCOUNT("account"),
     ENROLLMENT_CHALLENGE("enrollment-challenge"),
+    /** NEW first-release typed app identity; unsigned selection, no approval implied. */
+    APP_POLICY("app-policy"),
+    /** NEW first-release typed enrollment inputs; unsigned selection, no approval implied. */
+    ENROLLMENT_POLICY("enrollment-policy"),
     ENROLLMENT_ID("enrollment-id"),
     ENROLLMENT_KEY_BINDING("enrollment-key-binding"),
     WALLET_ID("wallet-id"),
@@ -94,7 +98,6 @@ enum class KagemushaWalletSigningDomainV1(
     OFFER("kgwoffr1", 194),
     SESSION_CONTROL("kgwsctl1", 197),
     REQUEST("kgwrqst1", 458),
-    VOUCHER("kgwvchr1", 250),
     LEDGER_CONTROL("kgwlctl1", 211),
     ;
 
@@ -249,8 +252,9 @@ object KagemushaWalletWireV1 {
      *
      * σ and Ω byte caps are the exact proof lengths of the frozen σ verifying-key allowlist
      * (owner answer Q6), with Ω plus the largest σ_send at most [PAYMENT_PROOF_BUDGET_BYTES] and
-     * Ω at most [LINEAGE_PROOF_CAP_BYTES]. Until the artifacts freeze (TODO(G3)) only the carrying
-     * frame bounds them, which is all a structural carrier check enforces.
+     * σ_recv at most [CREDITED_RECEIVE_PROOF_BUDGET_BYTES] and Ω at most [LINEAGE_PROOF_CAP_BYTES].
+     * Until the artifacts freeze (TODO(G3)) only the carrying frame bounds them, which is all a
+     * structural carrier check enforces.
      */
     const val MESSAGE_MAX_BYTES: Int = 10_000
 
@@ -259,6 +263,12 @@ object KagemushaWalletWireV1 {
 
     /** Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`. */
     const val PAYMENT_PROOF_BUDGET_BYTES: Int = MESSAGE_MAX_BYTES - PAYMENT_FIXED_BYTES
+
+    /** Bytes of a Credited::Receive envelope other than its σ proof. */
+    const val CREDITED_RECEIVE_FIXED_BYTES: Int = 679
+
+    /** Available σ bytes in a complete Credited::Receive envelope. */
+    const val CREDITED_RECEIVE_PROOF_BUDGET_BYTES: Int = MESSAGE_MAX_BYTES - CREDITED_RECEIVE_FIXED_BYTES
 
     /**
      * `F_status`: the bytes of a Credited::Status envelope frame other than its Ω(h) transport

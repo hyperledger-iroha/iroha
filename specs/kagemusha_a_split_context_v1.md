@@ -6,15 +6,16 @@ Bootstrap now composes its genuine initial-state sigma, recursive proofs and
 authenticated signed objects. This record does not establish qualification of
 all operation variants, the final Omega artifacts, or native lineage acceptance.
 
-`D_ctx = P_Fp(kgwctx_1, items)` uses the ordinary RP57 domain/arity framing.
-`kgwctx_1` is distinct from the final lineage domain `kgwomg_1`.
+`C = P_Fp(kgwctx_1, items)` commits the immutable operation context with the
+ordinary RP57 domain/arity framing. Fixed-stage frames use the distinct
+`kgwlink1` domain below. Both differ from the final lineage domain `kgwomg_1`.
 `ContextPlan` fixes every presence flag, group length and ordering at keygen.
 No stage accepts a witness-supplied list of obligations or object kinds.
 
 The item order is:
 
 1. Version `1`, operation code (one-based order of `ledger::Variant::ALL`),
-   completed stage `1`, predecessor-verification stage (`0` absent, otherwise
+   initial-stage schema marker `1`, predecessor-verification stage (`0` absent, otherwise
    the one-based stage), total stage count, total Q count, object count.
    Each stage then contributes its Q count and ordered Q indices, then its
    operation-task count and ordered task codes. Every Q index occurs once.
@@ -46,7 +47,9 @@ The item order is:
 5. Incoming original public18, its constrained encoding/version/width validity,
    Pallas claim and Vesta claim, when incoming Omega exists. Non-Receive frames
    additionally retain actual LE32 proof length and every original Omega
-   message as low128/high127/top1, with count fixed by the admitted descriptor.
+   message as two exact little-endian128-bit halves, with count fixed by the
+   admitted descriptor. The high half is constrained as high127 + 2^127·top1;
+   both halves are below2^128<Fp, preserving all256 bits of malformed encodings.
    The mandatory Receive active-source schema instead binds the original tape
    through fixed object index4 in item7; only its Proofs owner decodes messages.
 6. Every Q instance, column-major in descriptor order. Non-Receive contexts
@@ -82,7 +85,6 @@ The item order is:
    in item5. Native correction coordinates follow for the first two, then foreign S6
    x/y coordinates for incoming Vesta. The sigma correction belongs to the hard
    Q relation and is not an unused A context field.
-9. A1's carried Pallas claim.
 
 For a complete Receive task plan, exactly five boolean proposed result values
 and the 35-word original incoming Omega opening follow the object commitments
@@ -120,20 +122,35 @@ mandatory in their assigned later stages. An intermediate A/W proof alone
 cannot accept a lineage.
 
 For stage indices starting at one, let `P_i` be A_i's accumulated Pallas claim,
-`V_i` be W_i's Vesta fold output, and `D_i` be A_i's context digest. `D_1` is the
-complete original context above. An intermediate A_i, for `i > 1`, emits:
+`V_i` be W_i's Vesta fold output, and `D_i` be A_i's internal digest. Every
+nonterminal A_i, including A_1, emits:
 
 ```
-D_i = P_Fp(kgwctx_1, [1, variant, i, D_(i-1),
-                    encode(P_(i-1)), encode(V_(i-1)), encode(P_i)])
+C   = P_Fp(kgwctx_1, complete immutable items above)
+D_i = P_Fp(kgwlink1, [1, variant, i, C, encode(P_i)])
 ```
 
-The continuation supplies the fixed-length trace of prior `(P_j,V_j)` pairs,
-recomputes `D_1` from the original inputs and `P_1`, then replays that recurrence.
-It hard-verifies the exact preceding W key against the resulting digest and
-current V accumulator. The trace is hash-bound data, never another validity
-verdict or an extra opening obligation. Every prior P and V remains retained
-by the current accumulators; the trace is not folded again.
+A_i for i>1 computes C once from its exact source cells and recomputes
+D_(i-1) using the carried P_(i-1). It hard-verifies the immediately preceding
+stage's complete W key against that digest and the supplied V_(i-1). The
+compiled schema and exact A/W key sequence fix every stage, Q partition and
+owner. After its hard fold, it reuses the same C cells to emit D_i. Terminal
+A instead emits the final lineage digest. Terminal, unknown and overflowing
+indices cannot create an internal digest; carried P claims must be full k16.
+
+By induction, collision resistance binds the same complete C and prior P to
+W_(i-1)'s authenticated A_(i-1). That A proof enforces its own hard inputs and
+fold. W_(i-1) folds its exact V part and A opening; A_i retains P_(i-1), the W
+opening and every assigned new obligation. Consequently prior P/V obligations
+remain in the two current accumulators. Rehashing a historical claim trace is
+unnecessary. The implementation removes that trace and its private persisted
+copies; there is no alternate legacy digest or decoder. The context-hash work
+is fixed per stage rather than increasing with the continuation index.
+
+This framing changes every staged source key. Captured prior proof results
+remain scoped to their executables; all current sources, original imports and
+proofs require fresh qualification. The uniform terminal frame and final
+lineage transport have unchanged semantics.
 
 Each internal A frame has the uniform69 layout with its `D_i`, current part and
 explicit trivial absent slots. W1 folds the original sigma part plus the A1
@@ -156,26 +173,25 @@ rebound at terminal closure. The proof source is explicit messages outside the
 complete Receive schema, and its exact active tape triple plus fixed-owner
 opening within that schema.
 
-The corrected Load schedule is A1 (hard predecessor and D32 recovery), W1,
-A2 (hard Q_sigma), W2, A3 (hard receipt/voucher/LoadAuthorization signature Q),
-W3, A4 (hard current-credential/Enrollment-certificate signature Q). It retains
-all three Q openings and all three W openings exactly once. The fixed operation
-tasks require C4 on every step; authenticating a predecessor does not replace it.
-Five original object tapes, all source keys/instances, state and statement enter
-the same context. The corrected four-stage component passes actual native
-proofs and decisions at k16: the canonical two-bus Q_sigma/four-bus A candidate
-has maxima 55,611/58,682/57,646/58,164 rows and 8,480-byte A proofs. The run includes
-hard-verifier forwarding, exact signature-Q context/index/shape bundles and
-full public-transcript byte binding with mutation checks. This is component
-evidence; final catalog, transport size, timing/RSS and artifact admission
-remain unqualified.
+The Load schedule is A1 (hard predecessor and D32 recovery), W1,
+A2 (hard Q_sigma), W2, A3 (hard ordinary receipt finality), W3,
+A4 (hard own receipt signature Q), W4, A5 (hard current-credential and
+Enrollment-certificate signature Q). Three signed object tapes and the exact
+282-byte ordinary Load receipt enter the same context. A3 retains the prior
+P carry/opening and finality P carry/opening in its four-input fold. W3 retains
+the prior and finality V claims alongside its actual A3 opening; neither claim
+is replaced by an acceptance flag. Every later stage retains that continuation.
+The finality key and complete global-genesis anchor are fixed by the installed
+Load plan. Its receipt digest, scheme, asset, wallet, ordinal, amount and charge
+are constrained to the exact Load effect. No dedicated Load signature Q exists.
+The fixed operation tasks still require current authorization on every step;
+authenticating the predecessor does not replace it. The complete ordinary-finality
+chain and current terminal catalog require fresh proof and envelope qualification.
 
-Earlier three-stage Load chains omitted the current credential/certificate
-re-verification. Their passing native proofs and four-bus occupancy are only
-partial-relation diagnostics and cannot authorize complete Load. Send likewise
+Send likewise
 requires a separate own 2V/1F Q in addition to Q_sigma and its map/object tasks.
 Its mandatory `SendProof` task binds `P_bytes(kgwprf_1, LE32||Ω||LE32||σ)`
-to field9 of the exact receipt body retained by `D_ctx`. Ω includes the full
+to field9 of the exact receipt body retained by `C`. Ω includes the full
 320-byte public transcript before `πΩ||accP||accV`. This task executes beside
 the hard predecessor and links all original proof messages and both full-k16
 claims. The separate signature-Q stage authenticates that same complete receipt
@@ -195,7 +211,7 @@ other control masks remain, and the generic Omega transport is oversized.
 Receive's task metadata defines eight mandatory groups, including five named
 soft results (proofs, objects, signatures, nonmembership and recorded blacklist).
 The private fixed five-owner plan rejects missing/doubled/relabelled groups;
-its schema, five original Boolean claims and incoming opening enter `D_ctx`.
+its schema, five original Boolean claims and incoming opening enter `C`.
 Typed producers now bind recursive proof verdicts/openings, exact active
 Payment sources, original signature objects, unique consumed-credit/history
 routes, own C4 and receipt authentication, and the terminal OQ-3/iff effects.
@@ -262,7 +278,7 @@ owner schema; an explicit message variant is rejected there. Proofs decodes and
 verifies only the retained active original tape and equates its total opening
 and verdict to the committed export, including on malformed inputs. Non-owner
 stages cannot propose an alternative message view: that argument no longer
-exists. W authenticates the exact unchanged root context and ordered history;
+exists. W authenticates the exact unchanged context and fixed-stage carried claim;
 terminal selection carries its active tape triple as provenance and consumes
 only the authenticated opening. A different Q input still fails its hard
 same-source digest/selector/chunk bindings and exact partition verification.

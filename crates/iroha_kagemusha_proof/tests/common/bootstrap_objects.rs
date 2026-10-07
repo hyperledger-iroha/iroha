@@ -119,7 +119,17 @@ pub fn enrollment() -> (BootstrapWitness, Signed, Signed) {
     enrollment_for(Identity::Payer)
 }
 pub fn enrollment_for(identity: Identity) -> (BootstrapWitness, Signed, Signed) {
+    enrollment_for_schemes(identity, [1, 2], [1, 2])
+}
+/// Signed test inputs; a differing certificate scope is deliberately invalid authorization.
+pub fn enrollment_for_schemes(
+    identity: Identity,
+    scheme: [u128; 2],
+    certificate_scheme: [u128; 2],
+) -> (BootstrapWitness, Signed, Signed) {
     let mut w = super::bootstrap::witness();
+    w.core[1..3].copy_from_slice(&scheme.map(Fp::from_u128));
+    super::bootstrap::rebind(&mut w);
     let (account, nonce) = match identity {
         Identity::Payer => (small_id(9, 10), 37),
         Identity::Receiver => {
@@ -129,7 +139,10 @@ pub fn enrollment_for(identity: Identity) -> (BootstrapWitness, Signed, Signed) 
         }
     };
     let mut body = 1u16.to_le_bytes().to_vec();
-    body.extend(id(w.core[1], w.core[2]));
+    body.extend(id(
+        Fp::from_u128(certificate_scheme[0]),
+        Fp::from_u128(certificate_scheme[1]),
+    ));
     body.push(1);
     body.extend(sec1(key(17)));
     body.extend(1u64.to_le_bytes());
@@ -199,7 +212,7 @@ pub fn receipt_for(w: &BootstrapWitness, sigma: &[u8], identity: Identity) -> Si
     sign(ObjectKind::Receipt, body, identity.secret(), 41)
 }
 pub fn policy() -> BootstrapPolicy {
-    BootstrapPolicy::new([1, 2], [31, 32], key(23)).unwrap()
+    BootstrapPolicy::new([31, 32], key(23)).unwrap()
 }
 pub fn signatures(objects: &[Signed; 3]) -> (QSignatureCircuit, [Vec<Fq>; 1]) {
     let slots = vec![

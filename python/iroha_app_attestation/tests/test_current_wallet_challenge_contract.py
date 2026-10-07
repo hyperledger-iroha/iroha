@@ -162,7 +162,9 @@ class CurrentWalletChallengeTests(unittest.TestCase):
             bytes.fromhex(self.vectors["enrollment-challenge"]["body_hex"]), GENERATOR)
         self.package = "test.wallet.current"
         self.signer = b"\x73" * 32
-        self.now = int(time.time() * 1000)
+        # Certificates are minted after setUp, potentially across a seconds boundary.
+        # Keep fixture trusted time within their real two-day validity window.
+        self.now = int(time.time() * 1000) + 60000
 
     def verify(self, fixture, leaf, root, **changes):
         selected = changes.pop("challenge", self.challenge)

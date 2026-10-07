@@ -6,12 +6,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    state::{State, World},
-};
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, state::World};
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountAddressErrorCode, AccountId},
@@ -19,7 +14,6 @@ use iroha_data_model::{
     domain::Domain,
 };
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::peer::PeerId;
 use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
@@ -1049,11 +1043,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
             .unwrap();
         let resp = app
             .clone()
-            .oneshot(fixtures::operator_signed_request(
-                &operator_key_pair,
-                request,
-                &[],
-            ))
+            .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
             .await
             .unwrap();
         assert!(
@@ -1077,11 +1067,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
         .unwrap();
     let resp = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &operator_key_pair,
-            request,
-            &[],
-        ))
+        .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1104,11 +1090,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
         .unwrap();
     let resp = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &operator_key_pair,
-            request,
-            &[],
-        ))
+        .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1132,11 +1114,7 @@ async fn kaigi_relay_detail_malformed_segment_increments_invalid_metric() {
         .unwrap();
     let resp = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &operator_key_pair,
-            request,
-            &[],
-        ))
+        .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1306,33 +1284,41 @@ async fn nexus_public_lane_stake_malformed_literal_increments_invalid_metric() {
     assert_eq!(invalid_counter.get(), invalid_before + 1);
     app.shutdown().await;
 }
-fn test_router() -> iroha_torii::TestApiRouterRuntime {
+fn test_router() -> fixtures::CommittedToriiRouterRuntime {
     build_test_router().0
 }
-fn test_router_with_metrics() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>) {
+fn test_router_with_metrics() -> (fixtures::CommittedToriiRouterRuntime, Arc<Metrics>) {
     let (router, metrics, _operator_key_pair) = build_test_router();
     (router, metrics)
 }
-fn test_router_with_operator_key() -> (iroha_torii::TestApiRouterRuntime, KeyPair) {
+fn test_router_with_operator_key() -> (fixtures::CommittedToriiRouterRuntime, KeyPair) {
     let (router, _metrics, operator_key_pair) = build_test_router();
     (router, operator_key_pair)
 }
-fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyPair) {
+fn build_test_router() -> (fixtures::CommittedToriiRouterRuntime, Arc<Metrics>, KeyPair) {
     use iroha_data_model::Registrable;
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account_id = AccountId::new(signatory);
     let account = Account::new(account_id.clone()).build(&account_id);
     let domain = Domain::new(domain_id).build(&account_id);
-    let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = State::new_for_testing(world, kura.clone(), query);
-    let state = Arc::new(state);
+    let world = World::with([domain], [account], Vec::<AssetDefinition>::new());
+    let native_chain = fixtures::commit_genesis_fixture(
+        world,
+        cfg.common.chain.clone(),
+        &cfg.common.key_pair,
+        Vec::new(),
+        None,
+        TimeSource::new_system(),
+    );
+    let state = native_chain.state().clone();
+    let kura = native_chain.kura().clone();
+    let network_id = native_chain.network_id();
+    let local_peer_id = native_chain.validators()[0].0.clone();
+    cfg.genesis.expected_hash = native_chain.genesis().hash();
+    cfg.genesis.public_key = cfg.common.key_pair.public_key().clone();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -1351,7 +1337,7 @@ fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyP
             kura.clone(),
             queue.clone(),
             peers_rx.clone(),
-            local_peer_id,
+            local_peer_id.clone(),
             ts,
             true,
         )
@@ -1361,8 +1347,8 @@ fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyP
     let operator_key_pair = cfg.common.key_pair.clone();
     let da_receipt_signer = operator_key_pair.clone();
     let torii = Torii::new_with_handle(
-        iroha_model_base::chain::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        cfg.common.chain.clone(),
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -1381,14 +1367,29 @@ fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyP
             ),
         ),
     )
-    .expect("valid Torii address-parsing fixture");
+    .expect("valid Torii address-parsing fixture")
+    .with_local_peer_id(local_peer_id);
     (
-        torii
-            .api_router_for_tests()
-            .expect("test Torii router initializes"),
+        fixtures::CommittedToriiRouterRuntime::new(
+            torii
+                .api_router_for_tests()
+                .expect("test Torii router initializes"),
+            native_chain,
+        ),
         metrics,
         operator_key_pair,
     )
+}
+#[tokio::test]
+async fn address_parsing_fixture_has_applied_global_root_authority() {
+    use iroha_core::state::StateReadOnly as _;
+    let app = test_router();
+    assert_eq!(app.state().view().height(), 1);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state().view().world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
+    );
+    app.shutdown().await;
 }
 fn account_segments() -> (String, String) {
     use iroha_crypto::PublicKey;

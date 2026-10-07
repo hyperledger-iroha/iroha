@@ -21,6 +21,7 @@ mod android;
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 pub use android::AndroidPlatform;
 mod exports;
+pub(crate) mod requests;
 pub use exports::*;
 #[cfg(test)]
 mod tests;
@@ -54,8 +55,6 @@ pub const TERMINAL: i32 = -13;
 /// Internal panic or poisoned owner; no outcome should be inferred.
 pub const INTERNAL: i32 = -100;
 
-pub(crate) const FROZEN_MAX: usize =
-    KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1 + KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1 + 1024;
 const MAX_OWNERS: usize = 32;
 
 /// Bridge failure. `reason` preserves platform tri-state errors instead of calling them absent.
@@ -122,7 +121,7 @@ impl From<state::Error> for Failure {
             ),
             E::Invalid(_) | E::Collected => Self::code(INVALID),
             E::WitnessLost(_) => Self::code(CUSTODY_LOST),
-            E::CreditConflict => Self::code(CONFLICT),
+            E::CreditConflict | E::OperationConflict => Self::code(CONFLICT),
             E::FoldRequired => Self::code(FOLD_REQUIRED),
             E::Pending => Self::code(UNCERTAIN),
             E::NoHead => Self::code(INVALID),
@@ -136,7 +135,7 @@ pub(crate) type Result<T> = std::result::Result<T, Failure>;
 #[derive(Debug, Default)]
 pub(crate) struct Response {
     // 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss;
-    // 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 canonical CreditStatus.
+    // 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 canonical CreditStatus, 11 uncommitted preparation.
     pub(crate) kind: i32,
     pub(crate) sequence: u128,
     pub(crate) detail: u32,
@@ -182,7 +181,8 @@ fn completion(value: Option<state::Completion>) -> Response {
 }
 trait Wallet: Send {
     fn snapshot(&mut self) -> Result<state::Snapshot>;
-    fn commit(&mut self, frozen: state::FrozenTransition) -> Result<Response>;
+    fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response>;
+    fn request_status(&mut self, request: &[u8; 32]) -> Result<Response>;
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response>;
     fn resume(&mut self) -> Result<Response>;
     fn fold(&mut self) -> Result<Response>;
@@ -196,13 +196,23 @@ impl<P, N> Wallet
     >
 where
     P: advance::KagemushaWalletPlatformV1,
-    N: state::NativeProofs + Send,
+    N: state::NativePreparation + Send,
 {
     fn snapshot(&mut self) -> Result<state::Snapshot> {
         Ok(state::Coordinator::snapshot(self)?)
     }
-    fn commit(&mut self, frozen: state::FrozenTransition) -> Result<Response> {
-        Ok(completion(Some(self.commit(frozen)?)))
+    fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response> {
+        Ok(completion(Some(self.execute(request)?)))
+    }
+    fn request_status(&mut self, request: &[u8; 32]) -> Result<Response> {
+        Ok(match self.retry_request(request)? {
+            state::RequestStatusV1::Unknown => Response::default(),
+            state::RequestStatusV1::Preparing => Response {
+                kind: 11,
+                ..Response::default()
+            },
+            state::RequestStatusV1::Outcome(value) => completion(Some(value)),
+        })
     }
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response> {
         Ok(completion(self.retry(operation)?))
@@ -296,7 +306,7 @@ pub fn retain_native_owner<P, N>(
 ) -> Result<u64>
 where
     P: advance::KagemushaWalletPlatformV1 + 'static,
-    N: state::NativeProofs + Send + 'static,
+    N: state::NativePreparation + Send + 'static,
 {
     let scheduler = wallet.scheduler();
     install(Box::new(wallet), scheduler)
@@ -348,20 +358,15 @@ pub(crate) fn snapshot(id: u64) -> Result<state::Snapshot> {
     // A view does not cancel a useful background fold. Call off the UI thread.
     with_wallet(id, false, |wallet| wallet.snapshot())
 }
-pub(crate) fn commit(id: u64, bytes: &[u8]) -> Result<Response> {
-    if bytes.len() > FROZEN_MAX {
+pub(crate) fn execute(id: u64, request: state::OperationRequestV1) -> Result<Response> {
+    with_wallet(id, true, |wallet| wallet.execute(request))
+}
+pub(crate) fn request_status(id: u64, request: &[u8]) -> Result<Response> {
+    let request: &[u8; 32] = request.try_into().map_err(|_| Failure::code(INVALID))?;
+    if *request == [0; 32] {
         return Err(Failure::code(INVALID));
     }
-    // Acquire payment priority before decoding a potentially large witness too.
-    with_wallet(id, true, |wallet| {
-        let frozen: state::FrozenTransition = norito::decode_canonical_with_limits(
-            bytes,
-            norito::canonical_decode_limits(bytes.len()),
-        )
-        .map_err(|_| Failure::code(INVALID))?;
-        frozen.validate()?;
-        wallet.commit(frozen)
-    })
+    with_wallet(id, true, |wallet| wallet.request_status(request))
 }
 pub(crate) fn retry(id: u64, operation: &[u8]) -> Result<Response> {
     let operation = operation.try_into().map_err(|_| Failure::code(INVALID))?;
