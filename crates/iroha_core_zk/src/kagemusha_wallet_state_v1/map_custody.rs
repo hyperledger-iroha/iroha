@@ -75,6 +75,9 @@ impl SourceMapsV1 {
         self.maps[PreparationMapV1::Pending.index()] = pending;
     }
     pub(super) fn require(&self, state: &KagemushaWalletStateV1) -> Result<(), Error> {
+        state
+            .validate()
+            .map_err(|_| Error::WitnessLost("source map state"))?;
         if self.version != 1 {
             return Err(Error::WitnessLost("source map version"));
         }
@@ -121,7 +124,7 @@ impl<'a> PreparationMapsV1<'a> {
     pub(super) fn snapshot(&self) -> SourceMapsV1 {
         self.draft.clone()
     }
-    pub(super) fn store(&mut self) -> &mut dyn ObjectStore {
+    pub(crate) fn store(&mut self) -> &mut dyn ObjectStore {
         self.store.0
     }
     pub(super) fn new(

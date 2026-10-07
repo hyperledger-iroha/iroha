@@ -15,6 +15,10 @@ use iroha_plonk_recursion::obligation::ledger::Variant;
 
 use super::*;
 
+#[path = "producer_inventory/directory.rs"]
+mod directory;
+pub use directory::DirectoryOriginalsV1;
+
 #[path = "producer_inventory/recipe.rs"]
 mod recipe;
 pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};
@@ -23,7 +27,8 @@ pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};
 mod compiler;
 pub use compiler::{
     CompilationErrorV1, CompilationPhaseV1, CompiledKeyV1, CompiledOmegaV1, CompiledOperationV1,
-    CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1, q_classes,
+    CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1,
+    WalletArtifactDraftV1, WalletArtifactOriginalsV1, q_classes,
 };
 
 #[path = "producer_inventory/finality.rs"]

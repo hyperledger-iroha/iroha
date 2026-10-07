@@ -154,9 +154,10 @@ pub struct PrivateDirectory {
 
 /// A borrowed read-only view inside one private-directory read transaction.
 ///
-/// This view exposes no pathname, descriptor, retention or mutation operation. Each read
-/// consumes its borrowed bytes before the original native file owners and zeroized buffer
-/// are dropped. It cannot leave the callback supplied to [`PrivateDirectory::read_scope`].
+/// This view exposes no pathname, descriptor, retention or mutation operation. [`Self::read`]
+/// consumes borrowed bytes before its original native owners and zeroized buffer drop.
+/// [`Self::read_admitted`] instead returns the caller's one original owned `Vec`, preserving
+/// its allocation and ownership semantics. The view cannot leave [`PrivateDirectory::read_scope`].
 pub struct PrivateReadScope<'scope> {
     directory: &'scope platform::Directory,
     // An actual mutable lexical lease makes this view non-Copy without a heap owner.
@@ -185,6 +186,103 @@ impl PrivateReadScope<'_> {
             .read_native(checked_name(name.as_ref())?, maximum, true, |bytes| {
                 Ok(consume(bytes.as_slice()))
             })
+    }
+
+    /// Freshly join one private name to the actual borrowed original file.
+    ///
+    /// Uses the original readonly-open native admission without a new ancestry pass. The
+    /// enclosing scope retains ancestry; this check returns no descriptor or identity verdict.
+    /// `changed` constructs the caller's original typed ownership-refusal error.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe native custody, missing names or different original identity.
+    pub fn require_same_file<E>(
+        &self,
+        name: impl AsRef<OsStr>,
+        original: &File,
+        changed: impl FnOnce() -> E,
+    ) -> Result<(), E>
+    where
+        E: From<io::Error>,
+    {
+        let current = self
+            .directory
+            .open_readonly_native(checked_name(name.as_ref())?, false)?
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        if FileIdentity::of(&current)? != FileIdentity::of(original)? {
+            return Err(changed());
+        }
+        Ok(())
+    }
+
+    /// Read one admitted record into the caller's original owned allocation.
+    ///
+    /// The admission tuple converts the fresh length then allocates exactly that many bytes;
+    /// both retain caller error types and allocation charging. The maximum independently bounds
+    /// the admitted length before allocation. `mid` runs after exact read/EOF/snapshot checks and
+    /// before the final named snapshot. The error tuple maps only initial-open errors and constructs
+    /// original changed-read (`false`) or changed-namespace (`true`) errors. These factories cannot
+    /// accept a failed native check. Only the first raw native open can yield `None`.
+    ///
+    /// This method returns the same single `Vec`, with no copy or zeroization change. The caller
+    /// must close per-record ownership before decoding these bytes. Enclosing directory scope
+    /// closes every ordinary result. No file, pathname, descriptor or writer is returned; callers
+    /// keep batches read-only, without signing, publication, network effects or a validation cache.
+    ///
+    /// # Errors
+    /// Preserves admission, allocation, original native I/O and caller custody errors. Refuses an
+    /// inadmissible length/buffer, truncation, extension, changed snapshots or changed named objects.
+    pub fn read_admitted<E>(
+        &mut self,
+        name: impl AsRef<OsStr>,
+        maximum: usize,
+        admission: (
+            impl FnOnce(u64) -> Result<usize, E>,
+            impl FnOnce(usize) -> Result<Vec<u8>, E>,
+        ),
+        mid: impl FnOnce(&Self) -> Result<(), E>,
+        errors: (impl FnOnce(io::Error) -> E, impl FnOnce(bool) -> E),
+    ) -> Result<Option<Vec<u8>>, E>
+    where
+        E: From<io::Error>,
+    {
+        let (initial_error, changed_error) = errors;
+        let mut file = match checked_name(name.as_ref())
+            .and_then(|name| self.directory.open_readonly_native(name, true))
+            .map_err(initial_error)?
+        {
+            Some(file) => file,
+            None => return Ok(None),
+        };
+        let before = FileSnapshot::of(&file, true)?;
+        let extent = file.metadata()?.len();
+        let (admit, allocate) = admission;
+        let length = admit(extent)?;
+        if length > maximum || u64::try_from(length).ok() != Some(extent) {
+            return Err(
+                io::Error::other("record length admission differs from its native extent").into(),
+            );
+        }
+        let mut bytes = allocate(length)?;
+        if bytes.len() != length {
+            return Err(
+                io::Error::other("record allocation differs from its admitted length").into(),
+            );
+        }
+        file.read_exact(&mut bytes)?;
+        let mut tail = [0_u8; 1];
+        if !(file.read(&mut tail)? == 0 && FileSnapshot::of(&file, true)? == before) {
+            return Err(changed_error(false));
+        }
+        mid(self)?;
+        let current = self
+            .directory
+            .open_readonly_native(checked_name(name.as_ref())?, false)?
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        if FileSnapshot::of(&current, true)? != before {
+            return Err(changed_error(true));
+        }
+        Ok(Some(bytes))
     }
 }
 
@@ -451,7 +549,8 @@ impl PrivateDirectory {
     /// Consume ordered private records inside one read-only directory transaction.
     ///
     /// The callback reads and validates records lazily through an opaque borrowed view.
-    /// Every leaf retains the same native checks as [`Self::read`]. Directory and ancestor
+    /// Every leaf retains fresh private native admission, snapshot, namespace and extent checks;
+    /// an admitted owned result also preserves the caller's allocation order. Directory and ancestor
     /// custody are checked at entry and unconditionally after every ordinary callback result;
     /// an exit refusal takes precedence over a semantic error, absence or completed result.
     /// This Result boundary does not promise an exit check during unwinding.
@@ -459,7 +558,7 @@ impl PrivateDirectory {
     /// Intermediate ancestry observations are intentionally replaced by the closed entry
     /// and exit observations. Changes completely restored inside the callback need not be
     /// detected; this is not an atomic multi-file snapshot. Callers must keep the callback
-    /// read-only, without signing, publication, network effects or retaining plaintext copies.
+    /// read-only, without signing, publication, network effects or retaining additional plaintext copies.
     /// The callback's captured values cannot be prevented from causing such effects by Rust's
     /// type system. Source inventories and later freshness boundaries remain caller-owned.
     ///
@@ -1542,3 +1641,6 @@ mod read_scope_tests;
 
 #[cfg(test)]
 mod tree_scope_tests;
+
+#[cfg(test)]
+mod admitted_read_tests;

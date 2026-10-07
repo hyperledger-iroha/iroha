@@ -169,22 +169,32 @@ impl SigmaClass {
         FoldInput::from_opening(*opening.g(), opening.challenges()).map_err(QSigmaError::Fold)
     }
 }
-fn proof_failure(error: &VerifyError) -> bool {
+/// Whether total incoming verification maps this witness failure to false.
+///
+/// This classification never accepts a proof or authorizes a burn. Descriptor,
+/// key, parameter, profile and resource failures remain hard errors. Native
+/// operation coordinators and Q preparation use the same classification as the
+/// total circuit's proof reader, including failures nested inside IPA/multiopen.
+#[must_use]
+pub fn incoming_proof_failure(error: &VerifyError) -> bool {
     match error {
         VerifyError::Transcript(error) => !matches!(error, TranscriptError::ProfileMismatch),
         VerifyError::DegenerateChallenge
+        | VerifyError::IdentityInstanceCommitment { .. }
         | VerifyError::ProofLength { .. }
         | VerifyError::Multiopen(
             MultiopenError::PointCollision
             | MultiopenError::ConflictingEvaluations { .. }
             | MultiopenError::DegenerateChallenge,
         ) => true,
-        VerifyError::Ipa(error) | VerifyError::Multiopen(MultiopenError::Ipa(error)) => matches!(
-            error,
+        VerifyError::Ipa(error) | VerifyError::Multiopen(MultiopenError::Ipa(error)) => match error
+        {
+            IpaError::Transcript(error) => !matches!(error, TranscriptError::ProfileMismatch),
             IpaError::ZeroChallenge { .. }
-                | IpaError::OpeningFailed
-                | IpaError::FoldedGeneratorMismatch
-        ),
+            | IpaError::OpeningFailed
+            | IpaError::FoldedGeneratorMismatch => true,
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -205,6 +215,39 @@ fn chunks(witness: &SigmaSlotWitness) -> Vec<Fq> {
         .collect()
 }
 impl QSigmaPlan {
+    /// Derive the exact incoming original opening before operation-wide mode selection.
+    /// The selected VK must occupy the source-derived global index in this plan's
+    /// installed incoming class. A malformed original proof is soft only under the
+    /// same failure partition used by Q preparation; profile/key/resource failures abort.
+    /// The original length is separate from its descriptor-sized safe verifier view.
+    /// No mode, proposed verdict, Q proof or deciding claim is accepted or produced.
+    ///
+    /// # Errors
+    /// Missing incoming class, wrong original class/key/index/view, or a hard verifier
+    /// resource/profile failure. An opening still retains its deferred generator equation.
+    pub fn incoming_original(
+        &self,
+        witness: &SigmaSlotWitness,
+        global_index: u8,
+        budget: MemoryBudget,
+    ) -> Result<Option<FoldInput<Eq>>, QSigmaError> {
+        let class = self.incoming.as_ref().ok_or(QSigmaError::UnauthorizedKey)?;
+        if class.index(witness)? != global_index {
+            return Err(QSigmaError::UnauthorizedKey);
+        }
+        if witness.proof.len() != class.verifier.proof_length() {
+            return Err(QSigmaError::Layout(LayoutError::Synthesis));
+        }
+        if usize::try_from(witness.length).ok() != Some(witness.proof.len()) {
+            return Ok(None);
+        }
+        match class.opening(witness, budget) {
+            Ok(original) => Ok(Some(original)),
+            Err(QSigmaError::Verify(error)) if incoming_proof_failure(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Prepares the exact local relation, including a fold when two sigmas are
     /// present. Own and Accept claims must decide. Corrected must change an
     /// undecidable original; Trivial uses the pinned k16 claim. The caller must
@@ -248,16 +291,7 @@ impl QSigmaPlan {
         let (incoming, part) = if let Some(input) = incoming {
             let class = self.incoming.as_ref().ok_or(QSigmaError::IncomingMode)?;
             let index = class.index(&input.sigma)?;
-            let original =
-                if usize::try_from(input.sigma.length).ok() == Some(input.sigma.proof.len()) {
-                    match class.opening(&input.sigma, config.kernel_budget) {
-                        Ok(claim) => Some(claim),
-                        Err(QSigmaError::Verify(error)) if proof_failure(&error) => None,
-                        Err(error) => return Err(error),
-                    }
-                } else {
-                    None
-                };
+            let original = self.incoming_original(&input.sigma, index, config.kernel_budget)?;
             let valid = original.is_some();
             let trivial =
                 AccumulatorT::trivial(params, config.kernel_budget).map_err(QSigmaError::Fold)?;
@@ -798,6 +832,75 @@ mod tests {
     }
 
     #[test]
+    fn pre_q_original_checks_exact_class_and_global_selector_before_soft_length() {
+        let (one, keys, params) = source_fixture();
+        let plan = QSigmaPlan::new(one.own.clone(), Some(one.own.clone()), &params).unwrap();
+        let length = plan.class(1).unwrap().verifier().proof_length();
+        let mut original = SigmaSlotWitness {
+            key: keys[0].clone(),
+            statement: Fp::from(7),
+            proof: vec![0; length],
+            length: 0,
+        };
+        assert!(
+            plan.incoming_original(&original, 0, MemoryBudget::DEFAULT)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            plan.incoming_original(&original, 1, MemoryBudget::DEFAULT),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+        original.key = keys[2].clone();
+        assert!(matches!(
+            plan.incoming_original(&original, 0, MemoryBudget::DEFAULT),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+        original.key = keys[3].clone();
+        assert!(matches!(
+            plan.incoming_original(&original, 0, MemoryBudget::DEFAULT),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+        original.key = keys[0].clone();
+        original.proof.pop();
+        assert!(matches!(
+            plan.incoming_original(&original, 0, MemoryBudget::DEFAULT),
+            Err(QSigmaError::Layout(_))
+        ));
+        assert!(matches!(
+            one.incoming_original(&original, 0, MemoryBudget::DEFAULT),
+            Err(QSigmaError::UnauthorizedKey)
+        ));
+    }
+
+    #[test]
+    fn pre_q_sigma_uses_q_preparation_failure_partition_without_resource_fallback() {
+        for error in [
+            VerifyError::Transcript(TranscriptError::ProofTruncated),
+            VerifyError::ProofLength {
+                expected: 32,
+                actual: 31,
+            },
+            VerifyError::Ipa(IpaError::OpeningFailed),
+        ] {
+            assert!(incoming_proof_failure(&error));
+        }
+        for error in [
+            VerifyError::KeyMismatch,
+            VerifyError::ParamsMismatch,
+            VerifyError::SuffixRequired,
+            VerifyError::Transcript(TranscriptError::ProfileMismatch),
+            VerifyError::Ipa(IpaError::Transcript(TranscriptError::ProfileMismatch)),
+            VerifyError::Ipa(IpaError::ParamsTooSmall {
+                needed: 16,
+                available: 12,
+            }),
+        ] {
+            assert!(!incoming_proof_failure(&error));
+        }
+    }
+
+    #[test]
     fn installed_q_source_rejects_missing_extra_or_unauthorized_members() {
         let (plan, keys, inner) = source_fixture();
         assert!(QSigmaSource::new(plan.clone(), keys[0].clone(), None).is_ok());
@@ -900,18 +1003,46 @@ mod tests {
 
     #[test]
     fn soft_failure_classification_retains_configuration_and_resource_errors() {
-        assert!(proof_failure(&VerifyError::Transcript(
+        assert!(incoming_proof_failure(&VerifyError::Transcript(
             TranscriptError::InvalidPoint
         )));
-        assert!(proof_failure(&VerifyError::Ipa(IpaError::OpeningFailed)));
-        assert!(proof_failure(&VerifyError::Multiopen(MultiopenError::Ipa(
-            IpaError::ZeroChallenge { round: 0 }
-        ))));
-        assert!(!proof_failure(&VerifyError::Transcript(
+        assert!(incoming_proof_failure(&VerifyError::Ipa(
+            IpaError::OpeningFailed
+        )));
+        assert!(incoming_proof_failure(&VerifyError::Multiopen(
+            MultiopenError::Ipa(IpaError::ZeroChallenge { round: 0 })
+        )));
+        assert!(!incoming_proof_failure(&VerifyError::Transcript(
             TranscriptError::ProfileMismatch
         )));
-        assert!(!proof_failure(&VerifyError::KeyMismatch));
-        assert!(!proof_failure(&VerifyError::Ipa(
+        for error in [
+            TranscriptError::ProofTruncated,
+            TranscriptError::TrailingBytes { remaining: 1 },
+            TranscriptError::NonCanonicalScalar,
+            TranscriptError::InvalidPoint,
+            TranscriptError::IdentityPoint,
+        ] {
+            assert!(incoming_proof_failure(&VerifyError::Transcript(
+                error.clone()
+            )));
+            assert!(incoming_proof_failure(&VerifyError::Ipa(
+                IpaError::Transcript(error.clone())
+            )));
+            assert!(incoming_proof_failure(&VerifyError::Multiopen(
+                MultiopenError::Ipa(IpaError::Transcript(error))
+            )));
+        }
+        assert!(incoming_proof_failure(
+            &VerifyError::IdentityInstanceCommitment { column: 0 }
+        ));
+        assert!(!incoming_proof_failure(&VerifyError::Ipa(
+            IpaError::Transcript(TranscriptError::ProfileMismatch)
+        )));
+        assert!(!incoming_proof_failure(&VerifyError::Multiopen(
+            MultiopenError::Ipa(IpaError::Transcript(TranscriptError::ProfileMismatch))
+        )));
+        assert!(!incoming_proof_failure(&VerifyError::KeyMismatch));
+        assert!(!incoming_proof_failure(&VerifyError::Ipa(
             IpaError::ParamsTooSmall {
                 needed: 16,
                 available: 12

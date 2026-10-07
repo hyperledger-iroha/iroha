@@ -26,6 +26,30 @@ provided spelling and reject missing native admission; this API does not normali
 Unicode input or provide a managed fallback.
 
 KAGEMUSHA canonical wallet objects are owned by
-`iroha_data_model::kagemusha::kagemusha_wallet_v1`. This bridge exposes no
-KAGEMUSHA coordinator or device runtime. Native wallet integration and device
+`iroha_data_model::kagemusha::kagemusha_wallet_v1`. The bridge retains one native
+runtime or admitted wallet per opaque handle. Trusted embedding-app initialization
+calls `kagemusha_wallet_ffi::start_native_wallet` with independently deployed
+`NativeInstallationConfigV1`, an authenticated native genesis owner, the signed
+verifier pack/inventory, the exclusive Advance provider and its sole original-key
+source. The loader qualifies the complete 52-route graph before registering a
+runtime; no default trust root or environment-selected installation exists.
+
+C/JNI `open_begin` accepts only bounded credential, Enrollment CertificateSet,
+AccountId and asset-scope originals. Native reconciles the actual enrolled slot and
+returns a fresh 32-byte account challenge. `open_finish` consumes that challenge
+and the existing Ed25519 account signature; errors retain unadmitted custody for a
+fresh begin. `open_cancel` abandons the challenge. Repeating finish after lost
+output returns the same still-live admitted handle; closing never resurrects it. Internal registration failure
+retains an initialized owner until promotion succeeds. No foreign digest, proof
+verdict or replacement payment key can open a wallet.
+
+Typed setup and lifecycle calls cover Bootstrap, Offer/Request, Credited archival,
+direct time exchanges, Load, Send, Receive, policy refresh, Unload and Retiring.
+Offer/Request setup outputs are canonical object frames; peer transports carry
+`KagemushaWalletEnvelopeV1` frames. Typed native `envelope`/`original` helpers wrap or
+extract Offer, Request, Payment and Credited with exact scheme/kind and full-frame
+bounds; they return no monetary verdict. Direct-time cancel only discards an opaque token.
+Exact retained Payment bytes and durable completion remain native responsibilities.
+The embedding app must provision signed complete artifacts/configuration; the
+unprovisioned runtime fails unavailable. Full real-wallet and physical-device
 qualification remain open.

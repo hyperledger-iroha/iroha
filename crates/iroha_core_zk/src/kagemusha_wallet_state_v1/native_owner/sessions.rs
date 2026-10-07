@@ -7,7 +7,7 @@ const ACTION_MAX: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 4096;
 
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::SetupActionV1")]
-enum Action {
+pub(in crate::kagemusha_wallet_state_v1) enum Action {
     Offer {
         amount: u128,
     },
@@ -23,11 +23,11 @@ enum Action {
 }
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::SetupPlanV1")]
-struct Plan {
-    source: [u8; 32],
+pub(in crate::kagemusha_wallet_state_v1) struct Plan {
+    pub(in crate::kagemusha_wallet_state_v1) source: [u8; 32],
     action: [u8; 32],
-    nonce: [u8; 32],
-    output: Option<[u8; 32]>,
+    pub(in crate::kagemusha_wallet_state_v1) nonce: [u8; 32],
+    pub(in crate::kagemusha_wallet_state_v1) output: Option<[u8; 32]>,
 }
 impl Plan {
     fn require(&self) -> Result<(), Error> {
@@ -99,30 +99,12 @@ fn retain_plan<A: ObjectStore>(
     index.set(store, id, &archive::encode(plan)?)
 }
 
-impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
-    Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
-{
-    /// Verify incoming delivery evidence and derive its private Archive intent from the
-    /// permanent local Send index. No caller supplies an Archive selector, pending path,
-    /// historical credential or Payment. Exact replay retains the original native intent.
-    ///
-    /// # Errors
-    /// Malformed, foreign or unverifiable evidence, unknown local Send, unavailable custody
-    /// or artifacts, and the ordinary preparation/Advance errors.
-    pub fn accept_credited(&mut self, bytes: &[u8]) -> Result<Completion, Error> {
-        if bytes.is_empty() || bytes.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
-            return Err(Error::Invalid("Credited input bound"));
-        }
-        let credited: KagemushaWalletCreditedV1 = archive::decode(bytes)?;
-        valid(credited.validate())?;
-        if credited.scheme_id != self.scheme_id {
-            return Err(Error::Invalid("Credited scheme"));
-        }
-        let credit = credited_credit(&credited)?;
-        self.archive_credited(&credit, bytes.to_vec())
-    }
-
-    fn setup(&mut self, id: [u8; 32], action: &Action) -> Result<Plan, Error> {
+impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    pub(in crate::kagemusha_wallet_state_v1) fn setup(
+        &mut self,
+        id: [u8; 32],
+        action: &Action,
+    ) -> Result<Plan, Error> {
         if id == [0; 32] {
             return Err(Error::Invalid("setup identity"));
         }
@@ -137,10 +119,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
         let source = self.indexed_step(&manifest, manifest.indexed.ok_or(Error::NoHead)?)?;
         self.source_custody(&manifest, &source)?;
-        if source.frozen.capsule.successor_state.core.lifecycle
-            != KagemushaWalletLifecycleV1::Active
+        // Retirement stops new receiving quotes. It preserves Send of remaining value,
+        // whose peer session still starts with an Offer (§6.3).
+        if matches!(action, Action::Request { .. })
+            && source.frozen.capsule.successor_state.core.lifecycle
+                != KagemushaWalletLifecycleV1::Active
         {
-            return Err(Error::Invalid("setup requires active wallet"));
+            return Err(Error::Invalid("new Request requires active wallet"));
         }
         let plan = Plan {
             source: manifest.capsule,
@@ -170,7 +155,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let snapshot = self.source_custody(&manifest, &source)?;
         Ok((source, snapshot))
     }
-    fn finish_setup(
+    pub(in crate::kagemusha_wallet_state_v1) fn finish_setup(
         &mut self,
         id: [u8; 32],
         action: &Action,
@@ -196,6 +181,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         {
             return Err(Error::WitnessLost("changed setup plan"));
         }
+        match (action, issued) {
+            (Action::Request { .. }, Some((request, _)))
+                if request.body.nonce == plan.nonce && archive::encode(request)? == bytes => {}
+            (Action::Offer { .. }, None) => {}
+            _ => return Err(Error::WitnessLost("setup output binding")),
+        }
         plan.output = Some(
             self.archive
                 .write_object(bytes, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?,
@@ -212,6 +203,32 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         self.publish_manifest(root, &manifest)?;
         Ok(())
     }
+    pub(in crate::kagemusha_wallet_state_v1) fn issued_setup_request(
+        &mut self,
+        request: &KagemushaWalletRequestV1,
+    ) -> Result<Vec<u8>, Error> {
+        // This read cannot recreate a missing recorded decision after a head change.
+        // Fresh output and its issued Request/gap were selected by the same publication.
+        let (_, manifest) = self.manifest()?;
+        let selected = manifest
+            .issued_requests
+            .get(&mut self.archive, &request.request_digest())?
+            .ok_or(Error::WitnessLost("setup issued Request custody"))?;
+        let record: super::super::preparation_custody::IssuedRequestCustodyV1 =
+            archive::decode(&selected)?;
+        let (original, retained) = record.read(
+            &mut self.archive,
+            &self.scheme_id,
+            &self.wallet_id,
+            &request.request_digest(),
+        )?;
+        record.gap(&mut self.archive, &original)?;
+        if retained != archive::encode(request)? {
+            return Err(Error::WitnessLost("setup Request original"));
+        }
+        Ok(retained)
+    }
+
     fn setup_certificates(
         &mut self,
         source: &ReleasedStep,
@@ -227,7 +244,32 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 .ok_or(Error::WitnessLost("setup issuer original"))?,
         )
     }
-    /// Sign and durably retain a native Offer for the selected active head.
+}
+
+impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
+    Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
+{
+    /// Verify incoming delivery evidence and derive its private Archive intent from the
+    /// permanent local Send index. No caller supplies an Archive selector, pending path,
+    /// historical credential or Payment. Exact replay retains the original native intent.
+    ///
+    /// # Errors
+    /// Malformed, foreign or unverifiable evidence, unknown local Send, unavailable custody
+    /// or artifacts, and the ordinary preparation/Advance errors.
+    pub fn accept_credited(&mut self, bytes: &[u8]) -> Result<Completion, Error> {
+        if bytes.is_empty() || bytes.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
+            return Err(Error::Invalid("Credited input bound"));
+        }
+        let credited: KagemushaWalletCreditedV1 = archive::decode(bytes)?;
+        valid(credited.validate())?;
+        if credited.scheme_id != self.scheme_id {
+            return Err(Error::Invalid("Credited scheme"));
+        }
+        let credit = credited_credit(&credited)?;
+        self.archive_credited(&credit, bytes.to_vec())
+    }
+
+    /// Sign and durably retain a native Offer for the selected Active or Retiring head.
     /// The caller identity is a retry key, never a signing message or monetary authority.
     ///
     /// # Errors
@@ -427,33 +469,17 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         {
             return Err(Error::WitnessLost("retained Request binding"));
         }
-        // This read cannot recreate a missing recorded decision after a head change.
-        // Fresh output and its issued Request/gap were selected by the same publication.
-        let (_, manifest) = self.manifest()?;
-        let selected = manifest
-            .issued_requests
-            .get(&mut self.archive, &request.request_digest())?
-            .ok_or(Error::WitnessLost("setup issued Request custody"))?;
-        let record: super::super::preparation_custody::IssuedRequestCustodyV1 =
-            archive::decode(&selected)?;
-        let (original, retained) = record.read(
-            &mut self.archive,
-            &self.scheme_id,
-            &self.wallet_id,
-            &request.request_digest(),
-        )?;
-        record.gap(&mut self.archive, &original)?;
-        if retained != bytes {
-            return Err(Error::WitnessLost("setup Request original"));
-        }
-        Ok(retained)
+        self.issued_setup_request(&request)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kagemusha_wallet_state_v1::tests::MemoryArchive;
+    use crate::kagemusha_wallet_state_v1::tests::{
+        MemoryArchive, bootstrap, enrollment_issuer, field, fixture, frozen, signer, wallet,
+    };
+    use p256::ecdsa::{Signature, signature::Signer as _};
     #[test]
     fn setup_index_retains_exact_choices_and_rejects_changed_input_or_lost_original() {
         let mut store = MemoryArchive::new();
@@ -517,5 +543,240 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    fn setup_quote(
+        source: &FrozenTransition,
+    ) -> (KagemushaWalletOfferV1, KagemushaWalletRequestV1) {
+        let template: KagemushaWalletRecoveryCapsuleV1 =
+            fixture("KagemushaWalletRecoveryCapsuleV1");
+        let original = template
+            .retained_inputs
+            .iter()
+            .find(|input| input.role == KagemushaWalletRetainedInputRoleV1::Request)
+            .unwrap();
+        let mut request: KagemushaWalletRequestV1 = archive::decode(&original.bytes).unwrap();
+        let remote = request.receiver_credential;
+        let issuer = *request
+            .certificates
+            .certificate(
+                &remote.body.issuer_certificate,
+                KagemushaWalletSignerRoleV1::Enrollment,
+            )
+            .unwrap();
+        let body = KagemushaWalletOfferBodyV1 {
+            version: 1,
+            scheme_id: remote.body.scheme_id,
+            asset_digest: remote.body.asset_digest,
+            payer_wallet_id: remote.body.wallet_id,
+            payer_credential_digest: remote.credential_digest(),
+            next_send: 0,
+            amount: 7,
+            session_nonce: [72; 32],
+        };
+        fn sign(
+            credential: &KagemushaWalletCredentialV1,
+            message: &[u8],
+        ) -> KagemushaDeviceSignatureV1 {
+            let signature: Signature = signer(credential).sign(message);
+            KagemushaDeviceSignatureV1::from_raw_bytes(
+                &signature.normalize_s().unwrap_or(signature).to_bytes(),
+            )
+            .unwrap()
+        }
+        let offer = KagemushaWalletOfferV1 {
+            body,
+            payer_credential: remote,
+            certificates: KagemushaWalletCertificateSetV1::new(vec![issuer]).unwrap(),
+            signature: sign(&remote, &body.signing_message()),
+        };
+        let scheme: KagemushaWalletSchemeV1 = fixture("KagemushaWalletSchemeV1");
+        offer.verify(&scheme).unwrap();
+        let local = source.credential;
+        let state = &source.capsule.successor_state;
+        let issuer = enrollment_issuer(&local);
+        request.receiver_credential = local;
+        request.certificates = KagemushaWalletCertificateSetV1::new(vec![issuer]).unwrap();
+        request.fee_schedule = KagemushaWalletFeeScheduleSlotV1::None;
+        request.body = KagemushaWalletRequestBodyV1 {
+            version: 1,
+            scheme_id: local.body.scheme_id,
+            asset_digest: local.body.asset_digest,
+            payer_wallet_id: remote.body.wallet_id,
+            payer_account_digest: remote.body.account_digest,
+            receiver_wallet_id: local.body.wallet_id,
+            receiver_account_digest: local.body.account_digest,
+            send_ordinal: offer.body.next_send,
+            receiver_credential_digest: local.credential_digest(),
+            amount: offer.body.amount,
+            fee_schedule: [0; 32],
+            fee: 0,
+            policy_epoch: state.core.policy_epoch,
+            scheme_policy: state.rest.scheme_policy,
+            receiver_accepted_time_ms: state.core.accepted_time_floor_ms,
+            receiver_blacklist_version: 0,
+            receiver_blacklist_root: [0; 32],
+            certificates: request.certificates.digest().unwrap(),
+            nonce: [73; 32],
+        };
+        request.signature = sign(&local, &request.body.signing_message());
+        request.verify(&scheme).unwrap();
+        (offer, request)
+    }
+
+    #[test]
+    fn request_publication_retry_is_exact_after_uncertainty_and_a_new_head() {
+        for selected_before_error in [false, true] {
+            let mut wallet = wallet();
+            let boot = bootstrap();
+            wallet.commit(boot.clone()).unwrap();
+            let (offer, mut request) = setup_quote(&boot);
+            let source = boot.capsule.capsule_digest().unwrap();
+            let id = [74; 32];
+            let action = Action::Request {
+                offer: archive::encode(&offer).unwrap(),
+                fee: None,
+            };
+            let mut plan = wallet.setup(id, &action).unwrap();
+            assert_eq!(plan.source, source);
+            request.body.nonce = plan.nonce;
+            let signature: Signature =
+                signer(&request.receiver_credential).sign(&request.body.signing_message());
+            request.signature = KagemushaDeviceSignatureV1::from_raw_bytes(
+                &signature.normalize_s().unwrap_or(signature).to_bytes(),
+            )
+            .unwrap();
+            let original = archive::encode(&request).unwrap();
+            let signatures = wallet.custody.signatures;
+            wallet.custody.fail_publication = Some(selected_before_error);
+            assert!(
+                wallet
+                    .finish_setup(id, &action, &mut plan, &original, Some((&request, None)))
+                    .is_err()
+            );
+            let (_, manifest) = wallet.manifest().unwrap();
+            assert_eq!(
+                manifest
+                    .issued_requests
+                    .get(&mut wallet.archive, &request.request_digest())
+                    .unwrap()
+                    .is_some(),
+                selected_before_error
+            );
+            assert_eq!(
+                read_plan(
+                    &mut wallet.archive,
+                    manifest.sessions,
+                    &id,
+                    &action_bytes(&action).unwrap(),
+                )
+                .unwrap()
+                .unwrap()
+                .output
+                .is_some(),
+                selected_before_error,
+                "output and issued Request become selected together",
+            );
+            let mut wallet = Coordinator::new(
+                wallet.custody,
+                wallet.archive,
+                wallet.proofs,
+                wallet.scheme_id,
+                wallet.wallet_id,
+            )
+            .unwrap();
+            let mut resumed = wallet.setup(id, &action).unwrap();
+            assert_eq!(resumed.nonce, plan.nonce);
+            if resumed.output.is_none() {
+                wallet
+                    .finish_setup(id, &action, &mut resumed, &original, Some((&request, None)))
+                    .unwrap();
+            }
+            assert_eq!(wallet.issued_setup_request(&request).unwrap(), original);
+            assert_eq!(wallet.custody.signatures, signatures);
+            let load = frozen(
+                Some(&boot),
+                KagemushaWalletEffectV1::Load {
+                    receipt_digest: field(90),
+                    load_ordinal: 0,
+                    amount: 1,
+                    online_charge: 0,
+                },
+            );
+            wallet.commit(load).unwrap();
+            let replay = wallet.setup(id, &action).unwrap();
+            assert_eq!(replay.source, source);
+            assert_eq!(replay.nonce, resumed.nonce);
+            assert_eq!(
+                wallet
+                    .archive
+                    .read_object(
+                        &replay.output.unwrap(),
+                        KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
+                    )
+                    .unwrap(),
+                original,
+            );
+            assert_eq!(wallet.issued_setup_request(&request).unwrap(), original);
+            // A missing selected original cannot be reconstructed from transport input.
+            let (_, manifest) = wallet.manifest().unwrap();
+            let record: super::super::super::preparation_custody::IssuedRequestCustodyV1 =
+                archive::decode(
+                    &manifest
+                        .issued_requests
+                        .get(&mut wallet.archive, &request.request_digest())
+                        .unwrap()
+                        .unwrap(),
+                )
+                .unwrap();
+            wallet
+                .archive
+                .remove(ArchiveKey::Object(record.request))
+                .unwrap();
+            assert!(matches!(
+                wallet.issued_setup_request(&request),
+                Err(Error::WitnessLost(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_new_request_cannot_be_published_from_a_different_selected_head() {
+        let mut wallet = wallet();
+        let boot = bootstrap();
+        wallet.commit(boot.clone()).unwrap();
+        let (offer, request) = setup_quote(&boot);
+        let id = [74; 32];
+        let action = Action::Request {
+            offer: archive::encode(&offer).unwrap(),
+            fee: None,
+        };
+        let mut plan = wallet.setup(id, &action).unwrap();
+        wallet
+            .commit(frozen(
+                Some(&boot),
+                KagemushaWalletEffectV1::Load {
+                    receipt_digest: field(90),
+                    load_ordinal: 0,
+                    amount: 1,
+                    online_charge: 0,
+                },
+            ))
+            .unwrap();
+        let (root, _) = wallet.manifest().unwrap();
+        let signatures = wallet.custody.signatures;
+        assert!(matches!(wallet.setup_source(&plan), Err(Error::Invalid(_))));
+        assert!(matches!(
+            wallet.finish_setup(
+                id,
+                &action,
+                &mut plan,
+                &archive::encode(&request).unwrap(),
+                Some((&request, None)),
+            ),
+            Err(Error::Invalid(_))
+        ));
+        assert_eq!(wallet.manifest().unwrap().0, root);
+        assert_eq!(wallet.custody.signatures, signatures);
     }
 }

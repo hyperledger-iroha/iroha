@@ -2260,14 +2260,19 @@ fn authenticated_bootstrap_for_schemes(
             .restore_terminal(
                 &restored_wrapper,
                 output.proof.clone(),
-                &output.pallas.to_bytes(),
+                Fp::from(32),
                 MemoryBudget::DEFAULT,
             )
             .unwrap();
         assert_eq!(terminal.instances, output.instances);
         assert_eq!(terminal.vesta, output.vesta_part);
         let terminal_payload = session
-            .encode_terminal_checkpoint(&restored_wrapper, &terminal, MemoryBudget::DEFAULT)
+            .encode_terminal_checkpoint(
+                &restored_wrapper,
+                &terminal,
+                Fp::from(32),
+                MemoryBudget::DEFAULT,
+            )
             .unwrap();
         assert_eq!(terminal_payload.len(), layouts[2].payload_bytes());
         let restored_terminal = session
@@ -2285,6 +2290,7 @@ fn authenticated_bootstrap_for_schemes(
                 .encode_terminal_checkpoint(
                     &restored_wrapper,
                     &restored_terminal,
+                    Fp::from(32),
                     MemoryBudget::DEFAULT
                 )
                 .unwrap(),
@@ -2314,21 +2320,45 @@ fn authenticated_bootstrap_for_schemes(
                     .is_err()
             );
         }
-        let mut changed = terminal.clone();
-        changed.instances[0] += Fp::ONE;
-        assert!(
-            session
-                .encode_terminal_checkpoint(&restored_wrapper, &changed, MemoryBudget::DEFAULT)
-                .is_err()
-        );
-        let mut wrong_claim = output.pallas.to_bytes();
-        wrong_claim[32..64].fill(0);
+        for mutation in 0..4 {
+            let mut changed = terminal.clone();
+            match mutation {
+                0 => changed.instances[0] += Fp::ONE,
+                1 => {
+                    let mut challenges = *changed.pallas.challenges();
+                    challenges[0] += Fq::ONE;
+                    changed.pallas = AccumulatorT::new(*changed.pallas.g(), challenges).unwrap();
+                }
+                2 => {
+                    let mut challenges = *changed.vesta.challenges();
+                    challenges[0] += Fp::ONE;
+                    changed.vesta = AccumulatorT::new(*changed.vesta.g(), challenges).unwrap();
+                }
+                _ => {
+                    let mut challenges = *changed.opening.challenges();
+                    challenges[0] += Fp::ONE;
+                    changed.opening =
+                        FoldInput::from_opening(*changed.opening.g(), &challenges).unwrap();
+                }
+            }
+            assert!(
+                session
+                    .encode_terminal_checkpoint(
+                        &restored_wrapper,
+                        &changed,
+                        Fp::from(32),
+                        MemoryBudget::DEFAULT,
+                    )
+                    .is_err(),
+                "terminal metadata mutation {mutation}"
+            );
+        }
         assert!(
             session
                 .restore_terminal(
                     &restored_wrapper,
                     output.proof.clone(),
-                    &wrong_claim,
+                    Fp::from(33),
                     MemoryBudget::DEFAULT
                 )
                 .is_err()
@@ -2340,7 +2370,7 @@ fn authenticated_bootstrap_for_schemes(
                 .restore_terminal(
                     &restored_wrapper,
                     wrong_proof,
-                    &output.pallas.to_bytes(),
+                    Fp::from(32),
                     MemoryBudget::DEFAULT
                 )
                 .is_err()

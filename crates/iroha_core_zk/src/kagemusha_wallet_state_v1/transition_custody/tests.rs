@@ -230,20 +230,49 @@ fn setup_quote(source: &FrozenTransition) -> (KagemushaWalletOfferV1, KagemushaW
     (offer, request)
 }
 
+fn begin_setup_request(
+    wallet: &mut Coordinator<TestCustody, MemoryArchive, TestProofs>,
+    source: &FrozenTransition,
+) -> (
+    native_owner::sessions::Action,
+    native_owner::sessions::Plan,
+    KagemushaWalletRequestV1,
+) {
+    let (offer, mut request) = setup_quote(source);
+    let action = native_owner::sessions::Action::Request {
+        offer: archive::encode(&offer).unwrap(),
+        fee: None,
+    };
+    let plan = wallet.setup([74; 32], &action).unwrap();
+    request.body.nonce = plan.nonce;
+    let signature: Signature = signer(&source.credential).sign(&request.body.signing_message());
+    request.signature = KagemushaDeviceSignatureV1::from_raw_bytes(
+        &signature.normalize_s().unwrap_or(signature).to_bytes(),
+    )
+    .unwrap();
+    request.validate().unwrap();
+    (action, plan, request)
+}
+
 #[test]
-fn request_publication_retry_is_exact_after_uncertainty_and_a_new_head() {
+fn request_and_setup_output_publish_together_and_replay_exactly_after_a_new_head() {
     for selected_before_error in [false, true] {
         let mut wallet = wallet();
         let boot = bootstrap();
         wallet.commit(boot.clone()).unwrap();
-        let (offer, request) = setup_quote(&boot);
-        let source = boot.capsule.capsule_digest().unwrap();
+        let (action, mut plan, request) = begin_setup_request(&mut wallet, &boot);
         let original = archive::encode(&request).unwrap();
         let signatures = wallet.custody.signatures;
         wallet.custody.fail_publication = Some(selected_before_error);
         assert!(
             wallet
-                .retain_issued_request(source, &offer, &request)
+                .finish_setup(
+                    [74; 32],
+                    &action,
+                    &mut plan,
+                    &original,
+                    Some((&request, None))
+                )
                 .is_err()
         );
         let (_, manifest) = wallet.manifest().unwrap();
@@ -255,6 +284,11 @@ fn request_publication_retry_is_exact_after_uncertainty_and_a_new_head() {
                 .is_some(),
             selected_before_error
         );
+        // The exact production helper can never select a signed output without the
+        // associated historical Request decision in the same manifest generation.
+        let recovered = wallet.setup([74; 32], &action).unwrap();
+        assert_eq!(recovered.output.is_some(), selected_before_error);
+        assert_eq!(recovered.nonce, plan.nonce);
         let mut wallet = Coordinator::new(
             wallet.custody,
             wallet.archive,
@@ -263,12 +297,19 @@ fn request_publication_retry_is_exact_after_uncertainty_and_a_new_head() {
             wallet.wallet_id,
         )
         .unwrap();
-        assert_eq!(
+        let mut plan = wallet.setup([74; 32], &action).unwrap();
+        if plan.output.is_none() {
             wallet
-                .retain_issued_request(source, &offer, &request)
-                .unwrap(),
-            original
-        );
+                .finish_setup(
+                    [74; 32],
+                    &action,
+                    &mut plan,
+                    &original,
+                    Some((&request, None)),
+                )
+                .unwrap();
+        }
+        assert_eq!(wallet.issued_setup_request(&request).unwrap(), original);
         assert_eq!(wallet.custody.signatures, signatures);
         let load = frozen(
             Some(&boot),
@@ -280,12 +321,11 @@ fn request_publication_retry_is_exact_after_uncertainty_and_a_new_head() {
             },
         );
         wallet.commit(load).unwrap();
-        assert_eq!(
-            wallet
-                .retain_issued_request(source, &offer, &request)
-                .unwrap(),
-            original
-        );
+        let replay = wallet.setup([74; 32], &action).unwrap();
+        assert_eq!(replay.source, plan.source);
+        assert_eq!(replay.nonce, plan.nonce);
+        assert_eq!(replay.output, plan.output);
+        assert_eq!(wallet.issued_setup_request(&request).unwrap(), original);
         // A missing selected original cannot be reconstructed from transport input.
         let (_, manifest) = wallet.manifest().unwrap();
         let record: preparation_custody::IssuedRequestCustodyV1 = archive::decode(
@@ -301,23 +341,107 @@ fn request_publication_retry_is_exact_after_uncertainty_and_a_new_head() {
             .remove(ArchiveKey::Object(record.request))
             .unwrap();
         assert!(matches!(
-            wallet.retain_issued_request(source, &offer, &request),
+            wallet.issued_setup_request(&request),
             Err(Error::WitnessLost(_))
         ));
     }
 }
 
 #[test]
-fn a_new_request_cannot_be_published_from_a_different_selected_head() {
+fn a_new_setup_request_cannot_be_published_from_a_different_selected_head() {
     let mut wallet = wallet();
     let boot = bootstrap();
     wallet.commit(boot.clone()).unwrap();
-    let (offer, request) = setup_quote(&boot);
+    let (action, mut plan, request) = begin_setup_request(&mut wallet, &boot);
+    let load = frozen(
+        Some(&boot),
+        KagemushaWalletEffectV1::Load {
+            receipt_digest: field(90),
+            load_ordinal: 0,
+            amount: 1,
+            online_charge: 0,
+        },
+    );
+    wallet.commit(load).unwrap();
     let (root, _) = wallet.manifest().unwrap();
     assert!(matches!(
-        wallet.retain_issued_request([87; 32], &offer, &request),
+        wallet.finish_setup(
+            [74; 32],
+            &action,
+            &mut plan,
+            &archive::encode(&request).unwrap(),
+            Some((&request, None))
+        ),
         Err(Error::Invalid(_))
     ));
     assert_eq!(wallet.manifest().unwrap().0, root);
-    assert_eq!(wallet.custody.signatures, 1);
+    assert_eq!(wallet.custody.signatures, 2);
+    assert!(wallet.setup([74; 32], &action).unwrap().output.is_none());
+    assert!(matches!(
+        wallet.issued_setup_request(&request),
+        Err(Error::WitnessLost(_))
+    ));
+}
+
+#[test]
+fn retiring_preserves_outgoing_offers_and_exact_requests_but_refuses_new_quotes() {
+    let mut wallet = wallet();
+    let boot = bootstrap();
+    wallet.commit(boot.clone()).unwrap();
+    snapshot_test_fold(&mut wallet);
+    let (request_action, mut request_plan, request) = begin_setup_request(&mut wallet, &boot);
+    let original = archive::encode(&request).unwrap();
+    wallet
+        .finish_setup(
+            [74; 32],
+            &request_action,
+            &mut request_plan,
+            &original,
+            Some((&request, None)),
+        )
+        .unwrap();
+    let (_, manifest) = wallet.manifest().unwrap();
+    let predecessor = wallet.indexed_step(&manifest, 0).unwrap();
+    let source = wallet.source_custody(&manifest, &predecessor).unwrap();
+    let fold = wallet.read_fold(&predecessor).unwrap().unwrap();
+    let mut retiring = frozen(Some(&boot), KagemushaWalletEffectV1::Retiring);
+    let c = &mut retiring.capsule;
+    c.predecessor_lineage = KagemushaWalletLineageSlotV1::Present {
+        lineage: fold.record.lineage.clone(),
+    };
+    c.statement.lineage_burned_total = fold.record.lineage.public.burned_total;
+    c.statement.lineage_pending_outgoing_root = fold.record.lineage.public.pending_outgoing_root;
+    c.successor_state.core.burned_total = c.statement.lineage_burned_total;
+    rebind_frozen_successor(&mut retiring);
+    retiring.validate().unwrap();
+    // The explicit mock relation preserves every map/original. Retain that exact snapshot
+    // so this test exercises the production setup guard under a selected Retiring source.
+    source
+        .require(&mut wallet.archive, &retiring.capsule.successor_state)
+        .unwrap();
+    wallet
+        .retain_source_custody(retiring.capsule.capsule_digest().unwrap(), &source)
+        .unwrap();
+    wallet.commit(retiring).unwrap();
+    let (_, manifest) = wallet.manifest().unwrap();
+    let retiring_head = manifest.capsule;
+    let offer = wallet
+        .setup(
+            [75; 32],
+            &native_owner::sessions::Action::Offer { amount: 7 },
+        )
+        .unwrap();
+    assert_eq!(offer.source, retiring_head);
+    assert!(offer.output.is_none());
+    assert_eq!(
+        wallet.setup([74; 32], &request_action).unwrap().output,
+        request_plan.output
+    );
+    assert_eq!(wallet.issued_setup_request(&request).unwrap(), original);
+    let (before, _) = wallet.manifest().unwrap();
+    assert!(matches!(
+        wallet.setup([76; 32], &request_action),
+        Err(Error::Invalid("new Request requires active wallet"))
+    ));
+    assert_eq!(wallet.manifest().unwrap().0, before);
 }

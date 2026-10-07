@@ -32,6 +32,51 @@ pub struct Directory {
     links: Vec<Arc<Link>>,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static READONLY_NAMED_HOOK: std::cell::RefCell<Option<(&'static str, Box<dyn FnOnce()>)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn before_readonly_named_open(name: &OsStr) {
+    let hook = READONLY_NAMED_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|(selected, _)| name == OsStr::new(selected))
+        {
+            slot.take().map(|(_, hook)| hook)
+        } else {
+            None
+        }
+    });
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+pub(super) fn with_readonly_named_hook<T>(
+    name: &'static str,
+    hook: impl FnOnce() + 'static,
+    read: impl FnOnce() -> T,
+) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            READONLY_NAMED_HOOK.with(|slot| {
+                slot.borrow_mut().take();
+            });
+        }
+    }
+    READONLY_NAMED_HOOK.with(|slot| {
+        assert!(slot.borrow().is_none(), "readonly hook must not overlap");
+        *slot.borrow_mut() = Some((name, Box::new(hook)));
+    });
+    let _reset = Reset;
+    read()
+}
+
 fn open_directory(path: &Path) -> io::Result<File> {
     Ok(File::from(rustix::fs::open(
         path,
@@ -423,12 +468,38 @@ impl Directory {
 
     pub(super) fn open_readonly(&self, name: &OsStr) -> io::Result<File> {
         self.revalidate()?;
-        let file = self.open_read(name)?;
+        let file = self
+            .open_readonly_native(name, false)?
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        self.revalidate()?;
+        Ok(file)
+    }
+
+    // Sole original readonly-open admission, with no ancestry observation. Only the initial
+    // native opener may yield optional absence; named admission and final-name errors remain errors.
+    pub(super) fn open_readonly_native(
+        &self,
+        name: &OsStr,
+        optional: bool,
+    ) -> io::Result<Option<File>> {
+        let file = match self.open_read(name) {
+            Ok(file) => file,
+            Err(error) if optional && error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        self.admit_readonly_file(name, file).map(Some)
+    }
+
+    // This is the original native admission after the first opened leaf exists. A missing
+    // second named open is an error, never the optional absence handled by the initial opener.
+    pub(super) fn admit_readonly_file(&self, name: &OsStr, file: File) -> io::Result<File> {
         validate_file(&file, true)?;
-        if identity(&file)? != identity(&self.open_read(name)?)? {
+        let original = identity(&file)?;
+        #[cfg(test)]
+        before_readonly_named_open(name);
+        if original != identity(&self.open_read(name)?)? {
             return Err(changed());
         }
-        self.revalidate()?;
         Ok(file)
     }
 

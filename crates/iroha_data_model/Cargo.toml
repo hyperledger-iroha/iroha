@@ -173,6 +173,11 @@ path = "tests/sccp_v1_governance.rs"
 name = "sccp_v1_roundtrip"
 path = "tests/sccp_v1_roundtrip.rs"
 
+# Public IssueLoad SDK wire parity, separate from the large internal unit harness.
+[[test]]
+name = "kagemusha_issue_load_sdk"
+path = "tests/kagemusha_issue_load_sdk.rs"
+
 # Public manual frame contracts compile separately from the large internal unit suite.
 [[test]]
 name = "manual_frame_identity"

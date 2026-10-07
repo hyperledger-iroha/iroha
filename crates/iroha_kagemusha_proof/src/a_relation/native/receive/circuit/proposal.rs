@@ -4,14 +4,13 @@
 use super::super::Plan;
 use super::*;
 use crate::{
-    a_relation::{
-        receive::{authorization::ReceiveSignatureInputs, maps},
-        results::ReceiveResultTag,
-    },
+    a_relation::receive::maps,
+    operation_relation::map_effects::{MapState, MapTransition},
     q_signature::SignatureWitness,
 };
 use ff::Field;
 use iroha_plonk::check::{CheckMode, check_circuit};
+use iroha_plonk_gadgets::GlueChip;
 use std::sync::Mutex;
 
 /// Original nonproof Receive witnesses, before Q or any operation-wide mode is chosen.
@@ -202,78 +201,6 @@ impl Circuit<Fp> for Proposal {
                             &mut region,
                             [&values[0], &values[1], &values[2]],
                         )?;
-                        let commitments =
-                            super::super::object_commitments(plan.object_specs(), &input.objects)
-                                .map_err(|_| Error::Synthesis)?;
-                        let context = plan.assign_receive_object_claims(
-                            &mut chip,
-                            &mut region,
-                            &commitments
-                                .iter()
-                                .map(|v| v.map(Value::known))
-                                .collect::<Vec<_>>(),
-                        )?;
-                        let pp = cells.pallas(
-                            &mut chip,
-                            &mut region,
-                            &input.predecessor_pallas.as_input(),
-                        )?;
-                        let pv = cells.vesta(&mut chip, &mut region, &input.predecessor_vesta)?;
-                        // These are native signature public values, not synthetic Q
-                        // originals. The actual Q is generated and verified later.
-                        let schemas =
-                            crate::a_relation::receive::ReceiveStagePlan::signature_schemas(
-                                plan.operation().frame().variant(),
-                                self.plan.policy,
-                            )?;
-                        let q2 = schemas[1]
-                            .native_instances(&input.signatures)
-                            .map_err(|_| Error::Synthesis)?;
-                        let q2 = q2
-                            .iter()
-                            .map(|column| {
-                                column
-                                    .iter()
-                                    .map(|value| {
-                                        cells.q_instance(
-                                            &mut chip,
-                                            &mut region,
-                                            *value,
-                                            InstanceType::Bounded,
-                                        )
-                                    })
-                                    .collect::<Result<Vec<_>, _>>()
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let own_index = cells.q_instance(
-                            &mut chip,
-                            &mut region,
-                            Fq::from(u64::from(input.own_selector)),
-                            InstanceType::Bounded,
-                        )?;
-                        let q_instances = vec![vec![vec![], vec![], vec![own_index]], vec![], q2];
-                        let source = ContextInputs {
-                            own_statement: &statement,
-                            incoming_statement: None,
-                            predecessor: Some(ContextPredecessor {
-                                state: &old,
-                                public: &pred_public,
-                                pallas: &pp,
-                                vesta: &pv,
-                            }),
-                            successor: ContextState {
-                                state: &new,
-                                public: &next_public,
-                            },
-                            incoming: None,
-                            q_instances: &q_instances,
-                            objects: &context,
-                            modes: &[],
-                            pallas_corrections: &[],
-                            vesta_corrections: &[],
-                            receive_results: None,
-                        };
-                        let results = plan.receive_results().ok_or(Error::Synthesis)?;
                         if matches!(self.group, Group::Signatures) {
                             let authorization = ReceiveAuthorizationObjects::decode(
                                 &mut chip,
@@ -287,27 +214,51 @@ impl Circuit<Fp> for Proposal {
                                     quoted: [&values[9], &values[10]],
                                 },
                             )?;
-                            let stage = results.owner(ReceiveResultTag::Signatures);
-                            let signatures = ReceiveSignatureQProjection::from_context(
+                            let schemas =
+                                crate::a_relation::receive::ReceiveStagePlan::signature_schemas(
+                                    plan.operation().frame().variant(),
+                                    self.plan.policy,
+                                )?;
+                            // Genuine native ECDSA exports for the exact installed Q2
+                            // schema. No Q0 column, proof or proposed verdict is present.
+                            let q2 = schemas[1]
+                                .native_instances(&input.signatures)
+                                .map_err(|_| Error::Synthesis)?;
+                            let q2 = q2
+                                .iter()
+                                .map(|column| {
+                                    column
+                                        .iter()
+                                        .map(|value| {
+                                            cells.q_instance(
+                                                &mut chip,
+                                                &mut region,
+                                                *value,
+                                                InstanceType::Bounded,
+                                            )
+                                        })
+                                        .collect::<Result<Vec<_>, _>>()
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let signatures = ReceiveSignatureQProjection::from_original_instances(
                                 &mut chip,
                                 &mut region,
-                                plan,
-                                stage,
-                                self.plan.policy,
-                                &source,
+                                plan.operation(),
+                                &schemas[1],
+                                &q2,
                             )?;
                             [
-                                authorization.derive_signatures(
+                                authorization.signature_predicate(
                                     &mut chip,
                                     &mut region,
-                                    plan,
-                                    stage,
-                                    &source,
-                                    ReceiveSignatureInputs {
-                                        policy: self.plan.policy,
-                                        objects: &objects,
-                                        incoming: &signatures,
+                                    self.plan.policy,
+                                    &statement,
+                                    MapState {
+                                        state: &old,
+                                        lineage: &pred_public,
                                     },
+                                    &objects,
+                                    signatures.slots(),
                                 )?,
                                 chip.uint()
                                     .glue()
@@ -318,24 +269,35 @@ impl Circuit<Fp> for Proposal {
                                 cells.insertion(&mut chip.uint(), &mut region, &input.consumed)?;
                             let history =
                                 cells.insertion(&mut chip.uint(), &mut region, &input.blacklist)?;
-                            [
-                                maps::derive_nonmembership(
-                                    &mut chip,
-                                    &mut region,
-                                    plan,
-                                    results.owner(ReceiveResultTag::Nonmembership),
-                                    &source,
-                                    &consumed.low,
-                                )?,
-                                objects.derive_blacklist(
-                                    &mut chip,
-                                    &mut region,
-                                    plan,
-                                    results.owner(ReceiveResultTag::Blacklist),
-                                    &source,
-                                    &history.low,
-                                )?,
-                            ]
+                            let nonmembership = maps::nonmembership_predicate(
+                                &mut chip,
+                                &mut region,
+                                &MapTransition {
+                                    statement: &statement,
+                                    predecessor: MapState {
+                                        state: &old,
+                                        lineage: &pred_public,
+                                    },
+                                    successor: MapState {
+                                        state: &new,
+                                        lineage: &next_public,
+                                    },
+                                },
+                                &consumed.low,
+                            )?;
+                            let (blacklist, selector) = objects.blacklist_predicate(
+                                &mut chip,
+                                &mut region,
+                                &old,
+                                &pred_public,
+                                &history.low,
+                            )?;
+                            let actual = chip
+                                .uint()
+                                .glue()
+                                .constant(&mut region, Fp::from(u64::from(input.own_selector)))?;
+                            GlueChip::assert_equal(&mut region, &actual, &selector)?;
+                            [nonmembership, blacklist]
                         }
                     }
                 };

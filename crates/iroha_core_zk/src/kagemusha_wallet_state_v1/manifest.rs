@@ -1,6 +1,9 @@
 //! Source-selected fixed manifests and bounded recovery of the unindexed committed tail.
 
 use super::*;
+
+#[path = "manifest/blacklists.rs"]
+mod blacklists;
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_checkpoint_digest_v1 as manifest_digest;
 
 #[derive(Debug, Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -16,10 +19,12 @@ pub(super) struct Manifest {
     pub folds: IndexRoot,
     pub claims: IndexRoot,
     pub preparations: IndexRoot,
+    pub blacklists: IndexRoot,
     pub capsule_plans: IndexRoot,
     pub capsule_sources: IndexRoot,
     pub issued_requests: IndexRoot,
     pub sessions: IndexRoot,
+    pub activation: Option<[u8; 32]>,
     pub direct_anchors: IndexRoot,
     pub fold_pending: IndexRoot,
     pub folded: Option<u128>,
@@ -52,10 +57,12 @@ impl Manifest {
             folds: IndexRoot::default(),
             claims: IndexRoot::default(),
             preparations: IndexRoot::default(),
+            blacklists: IndexRoot::default(),
             capsule_plans: IndexRoot::default(),
             capsule_sources: IndexRoot::default(),
             issued_requests: IndexRoot::default(),
             sessions: IndexRoot::default(),
+            activation: None,
             direct_anchors: IndexRoot::default(),
             fold_pending: IndexRoot::default(),
             folded: None,
@@ -258,6 +265,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 )?;
             }
             self.retain_fee_claim(&mut manifest, &step)?;
+            self.retain_blacklist_source(&mut manifest, &step)?;
             digest = c.predecessor_capsule_digest;
             head = c.statement.predecessor;
             if current == 0 {

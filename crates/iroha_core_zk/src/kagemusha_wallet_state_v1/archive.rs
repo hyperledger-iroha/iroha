@@ -341,3 +341,7 @@ impl<A: ArchiveStore> super::ObjectStore for A {
         Ok(digest)
     }
 }
+
+#[cfg(test)]
+#[path = "archive/tests.rs"]
+mod tests;

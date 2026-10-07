@@ -92,6 +92,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             slot,
         }
     }
+    pub(super) fn try_into_provider(self) -> Result<KagemushaWalletProviderV1<F, P>, Self> {
+        let Self { provider, slot } = self;
+        take_exclusive(provider).map_err(|provider| Self { provider, slot })
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, KagemushaWalletProviderV1<F, P>>, ProviderError> {
         self.provider.lock().map_err(|_| ProviderError::Invalid {
             field: "provider handle poisoned",
@@ -106,6 +111,15 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
     ) -> Result<KagemushaDeviceSignatureV1, ProviderError> {
         self.lock()?
             .sign_setup(&self.slot, source, key, domain, body)
+    }
+
+    pub(crate) fn sign_activation(
+        &self,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        body: &KagemushaWalletLedgerControlBodyV1,
+    ) -> Result<KagemushaDeviceSignatureV1, ProviderError> {
+        self.lock()?.sign_activation(&self.slot, source, key, body)
     }
 
     /// Share only native observations with the concrete proof/preparation owner.
@@ -125,6 +139,65 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             scheme_id,
             wallet_id,
         }
+    }
+}
+
+// Once Arc::try_unwrap succeeds no other thread can poison the mutex. Check poison
+// after that ownership transfer, retaining the exact poisoned cell until explicit close.
+fn take_exclusive<T>(shared: Arc<Mutex<T>>) -> Result<T, Arc<Mutex<T>>> {
+    match Arc::try_unwrap(shared) {
+        Ok(cell) if cell.is_poisoned() => Err(Arc::new(cell)),
+        Ok(cell) => Ok(cell.into_inner().unwrap_or_else(|error| error.into_inner())),
+        Err(shared) => Err(shared),
+    }
+}
+
+#[cfg(test)]
+mod exclusive_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Held(Arc<AtomicUsize>);
+    impl Drop for Held {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn extra_owner_retains_exact_custody_until_unique() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let original = Arc::new(Mutex::new(Held(Arc::clone(&drops))));
+        let other = Arc::clone(&original);
+        let retained = take_exclusive(original).err().expect("shared");
+        assert!(Arc::ptr_eq(&retained, &other));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(other);
+        let value = take_exclusive(retained).ok().expect("exclusive");
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(value);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn poisoned_unique_custody_is_retained_without_unpoisoning() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let original = Arc::new(Mutex::new(Held(Arc::clone(&drops))));
+        let other = Arc::clone(&original);
+        assert!(
+            std::thread::spawn(move || {
+                let _held = other.lock().expect("unpoisoned");
+                panic!("inject owner failure");
+            })
+            .join()
+            .is_err()
+        );
+        let retained = take_exclusive(original).err().expect("poisoned");
+        assert!(retained.is_poisoned());
+        let retained = take_exclusive(retained).err().expect("still poisoned");
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(retained);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 }
 

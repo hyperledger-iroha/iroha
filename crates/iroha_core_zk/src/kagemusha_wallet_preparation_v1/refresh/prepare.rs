@@ -156,10 +156,23 @@ impl PreparationV1<'_> {
         )?;
         self.statement_fields(owners.successor, &statement)?;
         authority(statement.validate_successor_of(&capsule.statement))?;
+        // Blacklists retain one explicit complete-original archive reference under
+        // their fixed update kind. Native publishes and authenticates that full
+        // original through the actual coordinator ObjectStore before proving.
+        let retained_update = if originals.kind == KagemushaWalletPolicyUpdateKindV1::Blacklist {
+            crate::kagemusha_wallet_state_v1::BlacklistOriginalReferenceV1::for_original(
+                &scheme.scheme_id(),
+                originals.update,
+            )
+            .and_then(|source| source.to_canonical_bytes())
+            .map_err(|_| Error::Authority)?
+        } else {
+            originals.update.to_vec()
+        };
         let mut retained = vec![
             KagemushaWalletRetainedInputV1 {
                 role: KagemushaWalletRetainedInputRoleV1::PolicyUpdate,
-                bytes: originals.update.to_vec(),
+                bytes: retained_update,
             },
             KagemushaWalletRetainedInputV1 {
                 role: KagemushaWalletRetainedInputRoleV1::CertificateSet,

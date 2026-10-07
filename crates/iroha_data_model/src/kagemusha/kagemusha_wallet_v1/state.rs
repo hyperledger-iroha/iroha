@@ -149,7 +149,7 @@ pub enum KagemushaWalletLifecycleV1 {
     /// Normal operation.
     #[codec(index = 1)]
     Active,
-    /// New setup and funding closed; existing claims are preserved.
+    /// New receiving quotes and funding closed; remaining value and existing claims persist.
     #[codec(index = 2)]
     Retiring,
 }
@@ -1910,7 +1910,7 @@ pub enum KagemushaWalletOperationKindV1 {
     /// Apply one authenticated policy update.
     #[codec(index = 7)]
     RefreshPolicy,
-    /// Close new setup and funding.
+    /// Close new receiving quotes and funding, preserving Send of remaining value.
     #[codec(index = 8)]
     Retiring,
 }
@@ -2106,7 +2106,7 @@ pub enum KagemushaWalletEffectV1 {
         /// Successor accepted time floor.
         accepted_time_floor_ms: u64,
     },
-    /// Close new setup and funding; `next_load` is in the statement.
+    /// Close new receiving quotes and funding; `next_load` is in the statement.
     #[codec(index = 8)]
     Retiring,
 }

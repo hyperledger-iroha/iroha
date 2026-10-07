@@ -3,7 +3,8 @@
 use super::super::{Plan, RetainedPayment};
 use super::*;
 use crate::{
-    a_relation::archive::evidence::derive_evidence, admin_sigma::ArchiveWitness,
+    a_relation::archive::evidence::{EvidencePredicateInputs, evidence_predicate},
+    admin_sigma::ArchiveWitness,
     q_signature::SignatureWitness,
 };
 use ff::Field;
@@ -123,17 +124,8 @@ impl Circuit<Fp> for Proposal {
                         .map(|v| v.map(Value::known))
                         .collect::<Vec<_>>(),
                 )?;
-                let pp = cells.pallas(
-                    &mut chip,
-                    &mut region,
-                    &source.predecessor_pallas.as_input(),
-                )?;
-                let pv = cells.vesta(&mut chip, &mut region, &source.predecessor_vesta)?;
                 let mut status_public = None;
-                let mut status_pallas = None;
-                let mut status_vesta = None;
-                let mut status_messages = None;
-                if let Evidence::Status { omega, witness, .. } = &source.evidence {
+                if let Evidence::Status { witness, .. } = &source.evidence {
                     let fields = cells.words(&mut chip, &mut region, &witness.public)?;
                     let valid = chip
                         .uint()
@@ -144,19 +136,6 @@ impl Circuit<Fp> for Proposal {
                         &mut region,
                         &fields,
                         &valid,
-                    )?);
-                    status_pallas =
-                        Some(cells.pallas(&mut chip, &mut region, &witness.pallas.as_input())?);
-                    status_vesta = Some(cells.vesta(&mut chip, &mut region, &witness.vesta)?);
-                    let count = plan
-                        .operation()
-                        .omega()
-                        .ok_or(Error::Synthesis)?
-                        .proof_length();
-                    status_messages = Some(cells.proof(
-                        &mut chip,
-                        &mut region,
-                        &super::original_proof_view(omega, count),
                     )?);
                 }
                 // Exact native signature instances only. No Q proof/capability is fabricated.
@@ -177,56 +156,14 @@ impl Circuit<Fp> for Proposal {
                             .collect()
                     })
                     .collect::<Result<Vec<Vec<_>>, _>>()?;
-                let mut selectors = vec![
-                    cells.scalar(
-                        &mut chip,
-                        &mut region,
-                        Fq::from(u64::from(
-                            crate::a_relation::schedule::sigma_selector(5, 0)
-                                .ok_or(Error::Synthesis)?,
-                        )),
-                    )?,
-                ];
-                if let Some(selector) = source.incoming_selector {
-                    selectors.push(cells.scalar(
-                        &mut chip,
-                        &mut region,
-                        Fq::from(u64::from(selector)),
-                    )?);
-                }
-                let q_instances = vec![vec![vec![], vec![], selectors], vec![], signature];
-                let input = ContextInputs {
-                    own_statement: &statement,
-                    incoming_statement: incoming_statement.as_ref(),
-                    predecessor: Some(ContextPredecessor {
-                        state: &old,
-                        public: &pred_public,
-                        pallas: &pp,
-                        vesta: &pv,
-                    }),
-                    successor: ContextState {
-                        state: &new,
-                        public: &next_public,
-                    },
-                    incoming: if variant == Variant::ArchiveStatus {
-                        Some(ContextIncoming {
-                            public: status_public.as_ref().ok_or(Error::Synthesis)?,
-                            pallas: status_pallas.as_ref().ok_or(Error::Synthesis)?,
-                            vesta: status_vesta.as_ref().ok_or(Error::Synthesis)?,
-                            proof: ContextIncomingProof::Messages(
-                                status_messages.as_ref().ok_or(Error::Synthesis)?,
-                            ),
-                        })
-                    } else {
-                        None
-                    },
-                    q_instances: &q_instances,
-                    objects: &context,
-                    modes: &[],
-                    pallas_corrections: &[],
-                    vesta_corrections: &[],
-                    receive_results: None,
-                };
+                // The real installed incoming selector is bound directly to the
+                // held Request by the shared predicate, without a synthetic Q0 frame.
+                let incoming_selector = source
+                    .incoming_selector
+                    .map(|selector| {
+                        cells.scalar(&mut chip, &mut region, Fq::from(u64::from(selector)))
+                    })
+                    .transpose()?;
                 let (receipt, credited) = match &source.evidence {
                     Evidence::Receive {
                         receipt, credited, ..
@@ -247,13 +184,14 @@ impl Circuit<Fp> for Proposal {
                     &mut region,
                     raw.each_ref().map(Vec::as_slice),
                 )?;
+                objects.bind_original_context(&mut region, plan, &statement, &context)?;
                 let valid = match self.group {
-                    Group::Signature => objects.derive_signature_projection(
+                    Group::Signature => objects.signature_projection(
                         &mut chip,
                         &mut region,
-                        plan,
-                        &input,
+                        plan.operation(),
                         schema,
+                        &signature,
                     )?,
                     Group::Evidence => {
                         let credited = cells.bytes(credited);
@@ -283,12 +221,18 @@ impl Circuit<Fp> for Proposal {
                                 opening: opening.as_ref().ok_or(Error::Synthesis)?,
                             }
                         };
-                        derive_evidence(
+                        evidence_predicate(
                             &mut chip,
                             &mut bytes,
                             &mut region,
                             plan,
-                            &input,
+                            EvidencePredicateInputs {
+                                own_statement: &statement,
+                                incoming_statement: incoming_statement.as_ref(),
+                                incoming_public: status_public.as_ref(),
+                                objects: &context,
+                                incoming_selector: incoming_selector.as_ref(),
+                            },
                             self.plan.policy(),
                             &objects,
                             evidence,

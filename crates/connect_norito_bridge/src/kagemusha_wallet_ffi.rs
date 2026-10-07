@@ -1,11 +1,9 @@
 //! Exclusive mobile ownership of the shared KAGEMUSHA state machine.
 //!
 //! The C/JNI boundary carries canonical Norito objects and exact retained output bytes.
-//! Only the Rust artifact owner can install a coordinator; a caller cannot supply a proof
-//! verdict or an arbitrary-sign request. Foreign open currently reports `ARTIFACTS_UNAVAILABLE`
-//! because the authenticated operation/Λ/Ω loader is not yet available.
-// TODO(G3/G4): connect the authenticated artifact loader to foreign open. Do not replace it
-// with structural verification, a caller-provided verdict, or a software payment key.
+//! Native startup qualifies its complete signed installation against independently deployed
+//! native trust and genesis. Foreign open supplies only bounded original owner frames and
+//! the existing account signature. Unprovisioned runtimes remain unavailable.
 
 use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::OriginalSourceV1;
 use iroha_core_zk::{kagemusha_wallet_advance_v1 as advance, kagemusha_wallet_state_v1 as state};
@@ -22,8 +20,11 @@ mod android;
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 pub use android::AndroidPlatform;
 mod exports;
+pub(crate) mod open;
+pub use open::{NativeStartupFailure, retain_native_runtime, start_native_wallet};
 pub(crate) mod requests;
 pub(crate) mod setup;
+mod transport;
 pub use exports::*;
 #[cfg(test)]
 mod tests;
@@ -139,7 +140,8 @@ pub(crate) type Result<T> = std::result::Result<T, Failure>;
 pub(crate) struct Response {
     // 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss;
     // 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing,
-    // 12 exact setup original, 13 time challenge (sequence=token, bytes=nonce32), 14 time retained.
+    // 12 exact setup original, 13 time challenge (sequence=token, bytes=nonce32), 14 time retained;
+    // 15 account challenge (sequence=runtime, bytes=challenge32), 16 admitted owner.
     pub(crate) kind: i32,
     pub(crate) sequence: u128,
     pub(crate) detail: u32,
@@ -274,14 +276,16 @@ struct Owner {
 struct Registry {
     next: u64,
     owners: BTreeMap<u64, Arc<Owner>>,
+    runtimes: BTreeMap<u64, Arc<open::RuntimeOwner>>,
 }
 fn registry() -> &'static Mutex<Registry> {
     static VALUE: OnceLock<Mutex<Registry>> = OnceLock::new();
     VALUE.get_or_init(|| Mutex::new(Registry::default()))
 }
+#[cfg(test)]
 fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> {
     let mut registry = registry().lock().map_err(|_| Failure::code(INTERNAL))?;
-    if registry.owners.len() >= MAX_OWNERS {
+    if registry.owners.len() + registry.runtimes.len() >= MAX_OWNERS {
         return Err(Failure::code(RESOURCE));
     }
     let id = registry
@@ -299,35 +303,6 @@ fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> 
     );
     Ok(id)
 }
-/// Transfer a fully constructed, authenticated native coordinator into one opaque handle.
-///
-/// Only the Rust artifact loader uses this entry. Construction requires the real `NativeProofs`
-/// implementation and source-bound `AdvanceHandle`/`ProviderArchive`; foreign callbacks cannot
-/// implement or replace proof verification. The bridge never constructs a software custody path.
-///
-/// # Errors
-/// Returns `RESOURCE` for exhausted handles/capacity or `INTERNAL` for a poisoned registry.
-pub fn retain_native_owner<P, S>(
-    wallet: state::Coordinator<
-        state::AdvanceHandle<advance::KagemushaWalletStdFsV1, P>,
-        state::ProviderArchive<advance::KagemushaWalletStdFsV1, P>,
-        state::NativeWalletProofsV1<advance::KagemushaWalletStdFsV1, P, S>,
-    >,
-) -> Result<u64>
-where
-    P: advance::KagemushaWalletPlatformV1 + 'static,
-    S: OriginalSourceV1 + Send + 'static,
-{
-    let scheduler = wallet.scheduler();
-    install(
-        Box::new(NativeWallet {
-            wallet,
-            times: BTreeMap::new(),
-            next_time: 0,
-        }),
-        scheduler,
-    )
-}
 fn owner(id: u64) -> Result<Arc<Owner>> {
     registry()
         .lock()
@@ -338,12 +313,14 @@ fn owner(id: u64) -> Result<Arc<Owner>> {
         .ok_or(Failure::code(CLOSED))
 }
 pub(crate) fn close(id: u64) -> Result<()> {
-    let owner = registry()
-        .lock()
-        .map_err(|_| Failure::code(INTERNAL))?
-        .owners
-        .remove(&id)
-        .ok_or(Failure::code(CLOSED))?;
+    let (owner, runtime) = {
+        let mut registry = registry().lock().map_err(|_| Failure::code(INTERNAL))?;
+        (registry.owners.remove(&id), registry.runtimes.remove(&id))
+    };
+    if let Some(runtime) = runtime {
+        return open::close(runtime);
+    }
+    let owner = owner.ok_or(Failure::code(CLOSED))?;
     owner.scheduler.set_activity(false, false);
     let _priority = owner.scheduler.payment();
     let wallet = owner

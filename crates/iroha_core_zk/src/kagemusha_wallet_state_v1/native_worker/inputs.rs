@@ -128,6 +128,18 @@ fn original(step: &ReleasedStep, role: KagemushaWalletRetainedInputRoleV1) -> Re
     }
     Ok(&first.bytes)
 }
+fn incoming_send_selector(payment: &KagemushaWalletPaymentV1) -> Result<u8, Error> {
+    let controls = payment
+        .send
+        .lineage
+        .lineage()
+        .ok_or(Error::Invalid("incoming Send lineage shape"))?
+        .public
+        .enabled_controls;
+    // This is exactly IncomingPaymentCells' total selector. Invalid control words select
+    // the fixed Send0 key while Objects records false; statement metadata is not authority.
+    Ok(2 + if controls <= 7 { controls as u8 } else { 0 })
+}
 fn selector(step: &ReleasedStep) -> Result<OperationRoute, Error> {
     use KagemushaWalletOperationKindV1 as K;
     use KagemushaWalletRetainedInputRoleV1 as R;
@@ -159,13 +171,7 @@ fn selector(step: &ReleasedStep) -> Result<OperationRoute, Error> {
             (
                 variant,
                 10 + u8::from(request.body.receiver_blacklist_version != 0),
-                Some(
-                    2_u8.checked_add(
-                        u8::try_from(payment.send.statement.enabled_controls)
-                            .map_err(|_| Error::Invalid("incoming Send mask"))?,
-                    )
-                    .ok_or(Error::Invalid("incoming Send mask"))?,
-                ),
+                Some(incoming_send_selector(&payment)?),
             )
         }
         K::ArchiveSent => {
@@ -551,16 +557,44 @@ impl NativeFoldWorkerV1 {
                     self.budget,
                 ))?)
             }
-            _ => Fields::Refresh(proof(preparation.refresh_fold_fields(
-                RefreshOwnersV1 {
-                    current: current.as_ref().ok_or(Error::NoHead)?,
-                    successor: &owner,
-                },
-                step,
-                folded.as_ref().ok_or(Error::FoldRequired)?,
-                &public,
-                self.budget,
-            ))?),
+            _ => {
+                let KagemushaWalletEffectV1::RefreshPolicy { update_kind, .. } =
+                    step.frozen.capsule.statement.effect
+                else {
+                    return Err(Error::Proof("Refresh update kind"));
+                };
+                let role = match update_kind {
+                    KagemushaWalletPolicyUpdateKindV1::Credential => {
+                        PreparationOriginalV1::CurrentCredential
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::SchemePolicy => {
+                        PreparationOriginalV1::SchemePolicy
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::Blacklist => {
+                        PreparationOriginalV1::Blacklist
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::QuotaShare => {
+                        PreparationOriginalV1::QuotaShare
+                    }
+                    KagemushaWalletPolicyUpdateKindV1::TimeAnchor => {
+                        PreparationOriginalV1::TimeAnchor
+                    }
+                };
+                let original = custody
+                    .successor_original(role)?
+                    .ok_or(Error::WitnessLost("Refresh successor original"))?;
+                Fields::Refresh(proof(preparation.refresh_fold_fields(
+                    RefreshOwnersV1 {
+                        current: current.as_ref().ok_or(Error::NoHead)?,
+                        successor: &owner,
+                    },
+                    step,
+                    folded.as_ref().ok_or(Error::FoldRequired)?,
+                    &public,
+                    &original,
+                    self.budget,
+                ))?)
+            }
         };
         let root = self.sources.scope().root();
         let own_key = self
@@ -633,6 +667,46 @@ impl NativeFoldWorkerV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incoming_send_selector_uses_carried_omega_and_total_invalid_mask() {
+        let vectors: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../../../fixtures/kagemusha/wallet_v1_vectors.json"
+        ))
+        .unwrap();
+        let row = vectors["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["type"].as_str() == Some("KagemushaWalletPaymentV1"))
+            .unwrap();
+        let bytes = hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap();
+        let mut payment: KagemushaWalletPaymentV1 = norito::decode_canonical_with_limits(
+            &bytes,
+            norito::canonical_decode_limits(bytes.len()),
+        )
+        .unwrap();
+        for statement_controls in [0, 7, 8, u32::MAX] {
+            payment.send.statement.enabled_controls = statement_controls;
+            for carried_controls in [0, 1, 7, 8, u32::MAX] {
+                let KagemushaWalletLineageSlotV1::Present { lineage } = &mut payment.send.lineage
+                else {
+                    panic!("fixture lineage");
+                };
+                lineage.public.enabled_controls = carried_controls;
+                assert_eq!(
+                    incoming_send_selector(&payment).unwrap(),
+                    2 + if carried_controls <= 7 {
+                        carried_controls as u8
+                    } else {
+                        0
+                    }
+                );
+            }
+        }
+        payment.send.lineage = KagemushaWalletLineageSlotV1::None;
+        assert!(incoming_send_selector(&payment).is_err());
+    }
 
     #[test]
     fn raw_signature_projection_preserves_integer_endianness_and_exact_schema() {

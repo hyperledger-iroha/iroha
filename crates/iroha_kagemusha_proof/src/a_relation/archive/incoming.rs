@@ -143,9 +143,20 @@ impl ArchiveIncomingObjects {
         plan: &ContextPlan,
         input: &ContextInputs<'_>,
     ) -> Result<(), Error> {
+        self.bind_original_context(region, plan, input.own_statement, input.objects)
+    }
+
+    // Original-only source binding shared with pre-Q witness evaluation.
+    pub(crate) fn bind_original_context(
+        &self,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        statement: &crate::operation_relation::statement::StatementCells,
+        objects: &[ContextObjectCells],
+    ) -> Result<(), Error> {
         super::require_variant(plan.operation().frame().variant())?;
-        if input.own_statement.variant() != plan.operation().frame().variant()
-            || input.objects.len() != plan.object_specs().len()
+        if statement.variant() != plan.operation().frame().variant()
+            || objects.len() != plan.object_specs().len()
         {
             return Err(Error::Synthesis);
         }
@@ -153,7 +164,7 @@ impl ArchiveIncomingObjects {
             if plan.object_specs().get(index) != Some(&spec) {
                 return Err(Error::Synthesis);
             }
-            let expected = input.objects.get(index).ok_or(Error::Synthesis)?;
+            let expected = objects.get(index).ok_or(Error::Synthesis)?;
             for (a, b) in actual
                 .commitment_words()
                 .iter()
@@ -228,15 +239,23 @@ impl ArchiveIncomingObjects {
     ) -> Result<Bit<Fp>, Error> {
         self.bind_context(region, plan, input)?;
         let instances = input.q_instances.get(2).ok_or(Error::Synthesis)?;
+        self.signature_projection(chip, region, plan.operation(), schema, instances)
+    }
+
+    // Q-free projection of genuine native signature exports, with no sigma frame.
+    // The staged adapter above still binds every original object and Q2 context.
+    pub(crate) fn signature_projection(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        operation: &crate::a_relation::AProofPlan,
+        schema: &QSignaturePlan,
+        instances: &[Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+    ) -> Result<Bit<Fp>, Error> {
         let projection = crate::a_relation::signature::project_signature_q(
-            chip,
-            region,
-            plan.operation(),
-            2,
-            schema,
-            instances,
+            chip, region, operation, 2, schema, instances,
         )?;
-        projection.bind_context(region, plan.operation(), 2, instances)?;
+        projection.bind_context(region, operation, 2, instances)?;
         self.bind_signature_slot(region, projection.slots())
     }
 
