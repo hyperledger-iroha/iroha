@@ -6,6 +6,41 @@ use iroha_data_model::{
     account::AccountId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1,
 };
 
+#[path = "issuer_worker_configuration_tests.rs"]
+mod configuration_tests;
+
+#[test]
+fn retained_evidence_rechecks_original_configuration_and_time() {
+    for apple in [false, true] {
+        let mut request = fixture(apple);
+        let original = json::to_vec(&projection(&request)).unwrap();
+        let checked = request.retained_evidence(&original).unwrap();
+        assert_eq!(checked.original_result, original);
+        assert_eq!(checked.evidence.time_ms, request.verification_time_ms);
+        assert_eq!(
+            request.retained_evidence(&[]).unwrap_err(),
+            Error("frame bound")
+        );
+        assert_eq!(
+            request
+                .retained_evidence(&vec![0; MAX_RESULT + 1])
+                .unwrap_err(),
+            Error("frame bound")
+        );
+        request.configuration[0] ^= 1;
+        assert_eq!(
+            request.retained_evidence(&original).unwrap_err(),
+            Error("evidence identity")
+        );
+        request.configuration[0] ^= 1;
+        request.verification_time_ms += 1;
+        assert_eq!(
+            request.retained_evidence(&original).unwrap_err(),
+            Error("evidence identity")
+        );
+    }
+}
+
 fn fixture(apple: bool) -> VerifierRequestV1 {
     let key = KeyPair::from_seed(vec![43; 32], Algorithm::Ed25519);
     let account = AccountId::new(key.public_key().clone());
@@ -399,8 +434,14 @@ fn private_decode_rejects_duplicate_fields_bad_numbers_and_noncanonical_binary()
     assert!(decode(b"", MAX_PACKET).is_err());
     assert!(decode(&[b' '; 9], 8).is_err());
     assert!(encode(&Value::from("too long"), 1).is_err());
-    for value in [Value::Bool(true), Value::from(-1_i64), norito::json!(1.0)] {
-        assert!(integer(&norito::json!({"version": (value)}), "version").is_err());
+    for raw in [
+        br#"{"version":true}"#.as_slice(),
+        br#"{"version":-1}"#.as_slice(),
+        br#"{"version":1.0}"#.as_slice(),
+        br#"{"version":1e0}"#.as_slice(),
+        br#"{"version":18446744073709551616}"#.as_slice(),
+    ] {
+        assert!(integer(&decode(raw, MAX_PACKET).unwrap(), "version").is_err());
     }
     for value in ["", "Zg", "Zh==", "Zg==\n"] {
         assert!(binary(value, 10).is_err());

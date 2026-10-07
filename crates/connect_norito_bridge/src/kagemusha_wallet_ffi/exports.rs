@@ -10,7 +10,9 @@ pub struct WalletResult {
     /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing;
     /// setup only: 12 original, 13 owned time challenge, 14 time exchange retained.
     /// Open: 15 account challenge,16 admitted handle;17 retained Activation.
-    /// Enrollment18..26 are typed challenge/evidence/retained-original/runtime statuses.
+    /// Enrollment18..28 are typed challenge/evidence/retained-original/runtime statuses.
+    /// CloseLoads30; FeeClaim31/absent32; selected ledger tip33/absent34; fee payout acknowledged35.
+    /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
     /// Negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
@@ -347,7 +349,15 @@ mod setup_boundary_tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(!self.panic, "contained setup boundary panic");
             let (kind, sequence, bytes) = match input {
+                setup::Setup::BackgroundStatus => panic!("status bypasses wallet lock"),
                 setup::Setup::Bootstrap => (1, 0, vec![0, 255, 1]),
+                setup::Setup::FeeClaim { .. } => (31, 0, vec![1; state::FEE_CLAIM_MAX_BYTES_V1]),
+                setup::Setup::FeeOriginal { original, .. } => (12, 0, original),
+                setup::Setup::LedgerFinality(_) | setup::Setup::LedgerStatus => {
+                    (33, u128::from(u64::MAX), vec![7; 32])
+                }
+                setup::Setup::FeePayout { .. } => (35, 0, vec![]),
+                setup::Setup::CloseLoads { .. } => (30, 0, vec![0xc1; 16_384]),
                 setup::Setup::Activation => (17, 0, vec![0xa1; 16_384]),
                 setup::Setup::Offer { id, amount } => {
                     assert_eq!(id, [7; 32]);
@@ -363,6 +373,10 @@ mod setup_boundary_tests {
                 setup::Setup::Credited(bytes) => {
                     assert_eq!(bytes, [0, 255, 7]);
                     (4, 0, vec![])
+                }
+                setup::Setup::CreditedOriginal { status, original } => {
+                    assert_eq!(original, [0, 255, 7]);
+                    (12, 0, vec![u8::from(status), 0, 255])
                 }
                 setup::Setup::BeginTime => (13, 19, vec![0, 255, 4]),
                 setup::Setup::CancelTime { token } => {
@@ -472,9 +486,12 @@ mod setup_boundary_tests {
             (3, 4, 0, vec![]),
             (4, 13, 19, vec![0, 255, 4]),
             (15, 17, 0, vec![0xa1; 16_384]),
+            (16, 12, 0, vec![0, 0, 255]),
+            (17, 12, 0, vec![1, 0, 255]),
+            (19, 30, 0, vec![0xc1; 16_384]),
         ] {
             let mut request = request(
-                if (1..=2).contains(&selector) {
+                if matches!(selector, 1 | 2 | 19) {
                     &id
                 } else {
                     &zero
@@ -487,7 +504,7 @@ mod setup_boundary_tests {
                     high: u64::MAX,
                 };
             }
-            if selector == 2 || selector == 3 {
+            if matches!(selector, 2 | 3 | 16 | 17) {
                 request.first = original.as_ptr();
                 request.first_length = original.len();
             }
@@ -511,10 +528,24 @@ mod setup_boundary_tests {
                 crate::connect_norito_free(out.bytes);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 9);
+        let mut status = WalletResult::default();
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_wallet_setup_v1(handle, &request(&zero, 18), &mut status)
+            },
+            0
+        );
+        assert_eq!((status.status, status.detail, status.length), (29, 0, 0));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            9,
+            "worker status does not acquire the wallet"
+        );
+        assert_failure(handle, &request(&zero, 19), INVALID);
         close(handle).unwrap();
         assert_failure(handle, &request(&zero, 0), CLOSED);
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 9);
     }
     #[test]
     fn setup_c_routes_cancellation_and_every_envelope_form_to_the_same_owner() {

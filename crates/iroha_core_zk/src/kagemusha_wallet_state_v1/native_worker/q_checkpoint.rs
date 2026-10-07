@@ -98,6 +98,7 @@ pub(super) struct Original {
 
 pub(super) fn encode(
     key: &KeyArtifact<Ep>,
+    params: &PinnedParams<Ep>,
     stage: usize,
     source: [u8; 32],
     original: &Original,
@@ -120,11 +121,8 @@ pub(super) fn encode(
             .collect(),
     };
     layout.check(&payload, source)?;
-    let params = proof(PinnedParams::derive(u32::from(
-        key.binding().descriptor().k,
-    )))?;
     proof(verify_full_cancellable(
-        &params,
+        params,
         key.binding(),
         key.key(),
         &original.instances,
@@ -139,8 +137,13 @@ pub(super) fn encode(
     Ok(bytes)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "exact checkpoint identity and borrowed installed verifier parameters remain explicit"
+)]
 pub(super) fn restore(
     key: &KeyArtifact<Ep>,
+    params: &PinnedParams<Ep>,
     stage: usize,
     source: [u8; 32],
     bytes: &[u8],
@@ -166,11 +169,8 @@ pub(super) fn restore(
     if instances != expected {
         return Err(Error::Proof("Q changed source instance"));
     }
-    let params = proof(PinnedParams::derive(u32::from(
-        key.binding().descriptor().k,
-    )))?;
     proof(verify_full_cancellable(
-        &params,
+        params,
         key.binding(),
         key.key(),
         &instances,
@@ -187,6 +187,203 @@ pub(super) fn restore(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn real_proof_checkpoint_uses_borrowed_parameters_and_refuses_foreign_context() {
+        use ff::Field;
+        use iroha_plonk::{
+            ProvingKey,
+            cs::{Column, ConstraintSystem, Instance, InstanceType},
+            frontend::{Circuit, Error as SynthesisError, Layouter, SimpleFloorPlanner},
+            keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2},
+            prover::{Witness, create_proof_owned},
+        };
+        use iroha_plonk_gadgets::{GlueChip, GlueConfig};
+
+        // An actual small PIPA-R proof exercises this storage boundary. It is
+        // neither the wallet's fixed Q relation nor an authenticated source grant.
+        #[derive(Clone)]
+        struct CircuitFixture;
+        impl Circuit<Fq> for CircuitFixture {
+            type Config = (GlueConfig, Column<Instance>);
+            type Params = ();
+            type FloorPlanner = SimpleFloorPlanner;
+            fn without_witnesses(&self) -> Self {
+                Self
+            }
+            fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
+                let advice = core::array::from_fn(|_| meta.advice_column());
+                let fixed = meta.fixed_column();
+                let glue = GlueConfig::configure(meta, advice, fixed);
+                let public = meta.instance_column(1);
+                meta.enable_equality(public);
+                (glue, public)
+            }
+            fn synthesize(
+                &self,
+                (glue, public): Self::Config,
+                mut layouter: impl Layouter<Fq>,
+            ) -> Result<(), SynthesisError> {
+                let cell = layouter.assign_region(
+                    || "checkpoint original",
+                    |mut region| GlueChip::new(glue).constant(&mut region, Fq::ONE),
+                )?;
+                layouter.constrain_instance(cell.cell(), public, 0)
+            }
+        }
+        let params = PinnedParams::<Ep>::derive(8).unwrap();
+        let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Field]);
+        config.coset_cache = CosetCachePolicy::OnDemand;
+        let generated = keygen_pk_v2(&params, &CircuitFixture, &config).unwrap();
+        let metadata =
+            KeyArtifact::new(generated.binding().clone(), generated.vk().clone()).unwrap();
+        let original = generated.artifact_bytes_v2().unwrap();
+        drop(generated);
+        let read = iroha_plonk::keys::pk::artifact::ReadConfig {
+            maximum_bytes: original.len(),
+            maximum_rows: 1 << 8,
+            coset_cache: CosetCachePolicy::OnDemand,
+            msm_budget: MemoryBudget::DEFAULT,
+        };
+        let imported = ProvingKey::from_artifact_v2(
+            &original,
+            metadata.binding(),
+            &params,
+            &CircuitFixture,
+            read,
+        )
+        .unwrap();
+        metadata.require_prover(&imported).unwrap();
+        let instances = vec![vec![Fq::ONE]];
+        let witness = Witness::from_circuit(&imported, &CircuitFixture, &instances).unwrap();
+        let proof = create_proof_owned(
+            &params,
+            &imported,
+            witness,
+            ProverRandomness::hedged(),
+            ProverConfig::default(),
+        )
+        .unwrap();
+        drop(imported);
+        let source = [0x21; 32];
+        let scheduler = crate::kagemusha_wallet_state_v1::Scheduler::new();
+        scheduler.set_activity(true, false);
+        let running = scheduler.start().unwrap();
+        let cancellation = running.token.clone();
+        let original = Original { proof, instances };
+        let bytes = encode(
+            &metadata,
+            &params,
+            0,
+            source,
+            &original,
+            MemoryBudget::DEFAULT,
+            &cancellation,
+        )
+        .unwrap();
+        let restored = restore(
+            &metadata,
+            &params,
+            0,
+            source,
+            &bytes,
+            &original.instances,
+            MemoryBudget::DEFAULT,
+            &cancellation,
+        )
+        .unwrap();
+        assert_eq!(restored.proof, original.proof);
+        assert_eq!(restored.instances, original.instances);
+        let foreign = PinnedParams::<Ep>::derive(7).unwrap();
+        assert!(
+            restore(
+                &metadata,
+                &foreign,
+                0,
+                source,
+                &bytes,
+                &original.instances,
+                MemoryBudget::DEFAULT,
+                &cancellation
+            )
+            .is_err()
+        );
+        assert!(
+            restore(
+                &metadata,
+                &params,
+                0,
+                [0x22; 32],
+                &bytes,
+                &original.instances,
+                MemoryBudget::DEFAULT,
+                &cancellation
+            )
+            .is_err()
+        );
+        assert!(
+            restore(
+                &metadata,
+                &params,
+                0,
+                source,
+                &bytes,
+                &[vec![Fq::from(2)]],
+                MemoryBudget::DEFAULT,
+                &cancellation
+            )
+            .is_err()
+        );
+        let mut changed = Layout::new(0, &metadata)
+            .unwrap()
+            .decode(&bytes, source)
+            .unwrap();
+        *changed.proof.last_mut().unwrap() ^= 1;
+        let changed = norito::encode_canonical(&changed).unwrap();
+        assert!(
+            restore(
+                &metadata,
+                &params,
+                0,
+                source,
+                &changed,
+                &original.instances,
+                MemoryBudget::DEFAULT,
+                &cancellation
+            )
+            .is_err()
+        );
+        scheduler.set_activity(false, false);
+        assert!(matches!(
+            restore(
+                &metadata,
+                &params,
+                0,
+                source,
+                &bytes,
+                &original.instances,
+                MemoryBudget::DEFAULT,
+                &cancellation
+            ),
+            Err(Error::Cancelled)
+        ));
+        drop(running);
+        scheduler.set_activity(true, false);
+        let retry_running = scheduler.start().unwrap();
+        let retry = restore(
+            &metadata,
+            &params,
+            0,
+            source,
+            &bytes,
+            &original.instances,
+            MemoryBudget::DEFAULT,
+            &retry_running.token,
+        )
+        .unwrap();
+        assert_eq!(retry.proof, original.proof);
+    }
+
     fn specimen() -> (Layout, Payload) {
         // Grammar-only unadmitted data; never accepted as a proof or key.
         let payload = Payload {

@@ -830,7 +830,7 @@ impl NativeProofs for TestProofs {
     }
 }
 
-type Wallet = Coordinator<TestCustody, MemoryArchive, TestProofs>;
+pub(super) type Wallet = Coordinator<TestCustody, MemoryArchive, TestProofs>;
 /// Synthetic already-indexed head for testing payout metadata publication, not a monetary
 /// transition or a native lineage proof. Finality is verified independently by the caller.
 pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: String) -> Wallet {
@@ -859,6 +859,9 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         issued_requests: IndexRoot::default(),
         sessions: IndexRoot::default(),
         activation: None,
+        close_loads: IndexRoot::default(),
+        ledger_checkpoint: None,
+        ledger_retired: None,
         direct_anchors: IndexRoot::default(),
         fold_pending: IndexRoot::default(),
         folded: None,

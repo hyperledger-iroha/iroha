@@ -54,7 +54,7 @@ def test_tool_alias_retargeting_is_detected_even_when_bytes_match(tmp_path):
 def test_inherited_compiler_overrides_are_not_silently_adopted(monkeypatch, tmp_path, name):
     monkeypatch.setenv(name, "unreviewed")
     with pytest.raises(emitter.unit.Refused, match="unreviewed inherited"):
-        emitter.build_environment(tmp_path / "rustc", tmp_path / "target", 2)
+        emitter.build_environment(tmp_path / "rustc", tmp_path / "target", 2, tmp_path)
 
 
 def test_run_text_preserves_natural_failure_without_signal(monkeypatch, tmp_path):
@@ -115,12 +115,26 @@ def test_default_build_environment_uses_native_jobserver(monkeypatch, tmp_path):
     for key in list(emitter.os.environ):
         if key.startswith(("CARGO_", "RUST", "CC", "CXX", "CPP", "LD", "AR", "RANLIB", "HOST_CC", "HOST_CXX", "TARGET_CC", "TARGET_CXX")):
             monkeypatch.delenv(key)
-    environment = emitter.build_environment(tmp_path / "rustc", tmp_path / "target", None)
+    environment = emitter.build_environment(tmp_path / "rustc", tmp_path / "target", None, tmp_path)
     assert "CARGO_BUILD_JOBS" not in environment
-    assert emitter.build_environment(tmp_path / "rustc", tmp_path / "target", 6)["CARGO_BUILD_JOBS"] == "6"
+    assert environment["TMPDIR"] == str(tmp_path)
+    assert emitter.build_environment(tmp_path / "rustc", tmp_path / "target", 6, tmp_path)["CARGO_BUILD_JOBS"] == "6"
     monkeypatch.setenv("CARGO_BUILD_JOBS", "1")
     with pytest.raises(emitter.unit.Refused, match="unreviewed inherited"):
-        emitter.build_environment(tmp_path / "rustc", tmp_path / "target", None)
+        emitter.build_environment(tmp_path / "rustc", tmp_path / "target", None, tmp_path)
+
+
+@pytest.mark.parametrize("change", ("public", "alias", "file", "missing"))
+def test_build_environment_requires_original_private_scratch(monkeypatch, tmp_path, change):
+    for key in list(emitter.os.environ):
+        if key.startswith(("CARGO_", "RUST", "CC", "CXX", "CPP", "LD", "AR", "RANLIB", "HOST_CC", "HOST_CXX", "TARGET_CC", "TARGET_CXX")):
+            monkeypatch.delenv(key)
+    temporary = tmp_path / "temporary"
+    if change == "public": temporary.mkdir(mode=0o755)
+    elif change == "alias": temporary.symlink_to(tmp_path, target_is_directory=True)
+    elif change == "file": temporary.write_bytes(b"not a directory")
+    with pytest.raises((RuntimeError, FileNotFoundError)):
+        emitter.build_environment(tmp_path / "rustc", tmp_path / "target", None, temporary)
 
 
 def test_lock_replacement_before_admission_never_reaches_admit(monkeypatch, tmp_path):

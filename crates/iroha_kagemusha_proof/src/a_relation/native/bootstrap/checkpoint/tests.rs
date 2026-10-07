@@ -181,7 +181,7 @@ fn terminal_data_carrier_binds_exact_source_key_salt_and_original_length() {
                 payload.proof.pop();
             }
             _ => payload.proof.push(0),
-        };
+        }
         let bytes = norito::encode_canonical(&payload).unwrap();
         assert!(
             TerminalPayload::decode(&bytes, &layout, context).is_err(),

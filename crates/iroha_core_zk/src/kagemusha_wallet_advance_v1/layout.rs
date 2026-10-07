@@ -12,6 +12,7 @@
 //!     intent.norito, abandoned.norito    create-new only
 //!     key-generation.norito              consumed fresh attempt, never grant authority
 //!     enrollment.norito, credential-<n>.norito, abandonment.norito
+//!     abandonment_selected.norito         exact retained signed-output selection
 //!     markers/m-<gen:032x>.mk            marker generations (marker.rs)
 //!     capsules/c-<gen:032x>-<digest:64x>.cap and .cap.r   (capsule.rs)
 //!     completion/<op:64x>.cr and .cr.r                      (completion.rs)
@@ -69,6 +70,9 @@ pub const KAGEMUSHA_WALLET_ABANDONED_NAME_V1: &str = "abandoned.norito";
 pub const KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1: &str = "enrollment.norito";
 /// Retained signed Abandon control of an abandoned enrollment (create-new only).
 pub const KAGEMUSHA_WALLET_ABANDONMENT_NAME_V1: &str = "abandonment.norito";
+/// Exact selected Abandon output; retained independently of its original bytes.
+pub(super) const KAGEMUSHA_WALLET_ABANDONMENT_SELECTION_NAME_V1: &str =
+    "abandonment_selected.norito";
 /// Marker generation directory name.
 pub const KAGEMUSHA_WALLET_MARKERS_DIR_NAME_V1: &str = "markers";
 /// Recovery capsule directory name.

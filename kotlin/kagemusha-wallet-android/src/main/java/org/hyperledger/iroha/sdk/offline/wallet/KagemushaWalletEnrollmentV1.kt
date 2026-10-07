@@ -46,20 +46,25 @@ class KagemushaWalletEnrollmentV1 internal constructor(handle: Long, private val
     }
     private fun call(selector: Int, first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf(), third: ByteArray = byteArrayOf(), certificates: List<ByteArray> = emptyList()): KagemushaWalletCallV1 {
         if (owner == 0L) throw KagemushaWalletExceptionV1(-2)
-        val limits = when (selector) { 0 -> listOf(1024,4096,1024); 1,5 -> listOf(64,0,0); 2,7 -> listOf(0,0,0); 3 -> listOf(65536,0,0); 4 -> listOf(32,65536,4096); 6 -> listOf(262144,0,0); else -> throw IllegalArgumentException("selector") }
+        val limits = when (selector) { 0 -> listOf(32,4096,1024); 1,5 -> listOf(64,0,0); 2,7,10 -> listOf(0,0,0); 3 -> listOf(65536,0,0); 4 -> listOf(32,65536,4096); 6 -> listOf(262144,0,0); 9 -> listOf(2048,0,0); else -> throw IllegalArgumentException("selector") }
         require(listOf(first,second,third).zip(limits).all { (bytes,bound) -> bytes.size <= bound })
         require((selector == 3 || certificates.isEmpty()) && certificates.size <= 8 && certificates.all { it.isNotEmpty() && it.size <= 16384 })
         val value = driver.call(owner,selector,first.copyOf(),second.copyOf(),third.copyOf(),certificates.map { it.copyOf() }.toTypedArray()) ?: throw KagemushaWalletExceptionV1(-100)
         if (value.status < 0) throw KagemushaWalletExceptionV1(value.status,value.reason,value.platformCode)
-        if (value.status !in 18..26 || value.sequenceLow != owner) throw KagemushaWalletExceptionV1(-100)
+        if (value.status !in 18..28 || value.sequenceLow != owner) throw KagemushaWalletExceptionV1(-100)
         return value
     }
     private fun exact(value: KagemushaWalletCallV1, status: Int): ByteArray {
         if (value.status != status) throw KagemushaWalletExceptionV1(-100)
         return value.bytes()
     }
-    /** Existing account signs these exact native bytes before any key is generated. */
-    @Synchronized fun begin(challenge: ByteArray, account: ByteArray, assetScope: ByteArray): ByteArray = exact(call(0,challenge,account,assetScope),18)
+    /** Native retains request identity and returns exact issuer dispatch DATA; this grants no key. */
+    @Synchronized fun begin(requestId: ByteArray, account: ByteArray, assetScope: ByteArray): ByteArray {
+        require(requestId.size == 32)
+        return exact(call(0,requestId,account,assetScope),27)
+    }
+    /** Native authenticates the signed issuer permit before returning the account challenge. */
+    @Synchronized fun acceptPermit(originalPermit: ByteArray): ByteArray = exact(call(9,originalPermit),18)
     private fun progress(value: KagemushaWalletCallV1): KagemushaWalletEnrollmentProgressV1 = when (value.status) {
         19 -> KagemushaWalletEnrollmentProgressV1.Evidence(KagemushaWalletEnrollmentTargetV1(value.bytes()))
         20 -> KagemushaWalletEnrollmentProgressV1.Pending
@@ -88,6 +93,9 @@ class KagemushaWalletEnrollmentV1 internal constructor(handle: Long, private val
         owner = 0
         return runtime
     }
+    /** Permanently abandon this unused enrollment; return exact native-retained ledger bytes.
+     * Native refuses after Bootstrap commits. This does not mean the ledger accepted them. */
+    @Synchronized fun abandon(): ByteArray = exact(call(10),28)
     @Synchronized override fun close() {
         val handle = owner; owner = 0
         if (handle != 0L) { val status = driver.close(handle); if (status != 0) throw KagemushaWalletExceptionV1(status) }

@@ -207,13 +207,9 @@ impl ProviderFundingBootstrap {
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
         let plan = self.plan()?;
-        let directory = match self.authority.directory.open_child("funding") {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.require_no_child_material()?;
-                return Ok(None);
-            }
-            Err(error) => return Err(error.into()),
+        let Some(directory) = self.authority.directory.open_child_optional("funding")? else {
+            self.require_no_child_material()?;
+            return Ok(None);
         };
         let Some(original) = original::read(&directory, &plan)? else {
             self.require_no_child_material()?;
@@ -731,10 +727,9 @@ impl ProviderFundingBootstrap {
                 "later funding purpose contains unknown retained material",
             ));
         }
-        match owner.directory.open_child(child) {
-            Ok(directory) => require_empty(&directory),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
+        match owner.directory.open_child_optional(child)? {
+            Some(directory) => require_empty(&directory),
+            None => Ok(()),
         }
     }
     fn plan(&self) -> Result<RetainedProviderServicePlan> {

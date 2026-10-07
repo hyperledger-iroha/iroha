@@ -30,6 +30,10 @@ WALLET_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
     for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "execute", "snapshot")
 ]
+LOAD_ORIGINAL_JNI_SYMBOLS = [
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",
+]
+KAGEMUSHA_JNI_SYMBOLS = [*WALLET_JNI_SYMBOLS, *LOAD_ORIGINAL_JNI_SYMBOLS]
 AUTH_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_" + method
     for method in ("reserve", "restore")
@@ -308,7 +312,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 exported = (
                     ["_" + symbol for symbol in current]
-                    if mode == "apple" else [*current, *WALLET_JNI_SYMBOLS]
+                    if mode == "apple" else [*current, *KAGEMUSHA_JNI_SYMBOLS]
                 )
                 result = self.check_mobile_binary_symbols(exported, mode)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -329,13 +333,13 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                     if mode == "apple":
                         exported = ["_" + symbol for symbol in exported]
                     else:
-                        exported += WALLET_JNI_SYMBOLS
+                        exported += KAGEMUSHA_JNI_SYMBOLS
                     result = self.check_mobile_binary_symbols(exported, mode)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"missing {missing}", result.stderr)
-        for missing in WALLET_JNI_SYMBOLS:
+        for missing in KAGEMUSHA_JNI_SYMBOLS:
             with self.subTest(missing=missing, mode="elf"):
-                exported = [*current, *(symbol for symbol in WALLET_JNI_SYMBOLS if symbol != missing)]
+                exported = [*current, *(symbol for symbol in KAGEMUSHA_JNI_SYMBOLS if symbol != missing)]
                 result = self.check_mobile_binary_symbols(exported, "elf")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(f"missing {missing}", result.stderr)
@@ -363,7 +367,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             for mode in ("apple", "elf"):
                 with self.subTest(symbol=symbol, mode=mode):
                     exported = "_" + symbol if mode == "apple" else symbol
-                    inventory = current if mode == "apple" else [*current, *WALLET_JNI_SYMBOLS]
+                    inventory = current if mode == "apple" else [*current, *KAGEMUSHA_JNI_SYMBOLS]
                     result = self.check_mobile_binary_symbols([*inventory, exported], mode)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("retired KAGEMUSHA", result.stderr)
@@ -390,7 +394,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeUnlistedV1",
         ):
             with self.subTest(symbol=symbol):
-                result = self.check_mobile_binary_symbols([*current, *WALLET_JNI_SYMBOLS, symbol], "elf")
+                result = self.check_mobile_binary_symbols([*current, *KAGEMUSHA_JNI_SYMBOLS, symbol], "elf")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("retired KAGEMUSHA JNI", result.stderr)
 

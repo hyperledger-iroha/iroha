@@ -2,7 +2,11 @@
 
 use super::*;
 mod activation;
+mod close_loads;
+mod ledger;
+pub use ledger::{LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, PAYOUT_RECORD_MAX_BYTES_V1};
 mod bootstrap;
+mod review;
 mod runtime;
 pub(super) mod sessions;
 use crate::{
@@ -21,6 +25,7 @@ use crate::{
 use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::keys::pk::artifact::ReadConfig;
+pub use review::{NativeOperationReviewV1, ReviewedOperationV1};
 use runtime::RuntimeCustodyV1;
 pub use runtime::{
     NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeStartupFailureV1,
@@ -39,6 +44,7 @@ pub struct NativeWalletProofsV1<F: KagemushaWalletFsV1, P, S> {
     read: ReadConfig,
     budget: MemoryBudget,
     chain: String,
+    genesis: Arc<SumeragiFinalityVerifier>,
     enrollment: KagemushaWalletCredentialV1,
     asset: KagemushaWalletAssetScopeV1,
     enrollment_certificates: Vec<u8>,
@@ -60,7 +66,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
     /// Changed installation/genesis, unavailable custody or inconsistent native state.
     fn into_coordinator<S: OriginalSourceV1 + Send>(
         self,
-        native_genesis: &SumeragiFinalityVerifier,
+        native_genesis: &Arc<SumeragiFinalityVerifier>,
         originals: S,
         read: ReadConfig,
         budget: MemoryBudget,
@@ -93,6 +99,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             read,
             budget,
             chain: native_genesis.chain_id().to_owned(),
+            genesis: Arc::clone(native_genesis),
             enrollment,
             asset,
             enrollment_certificates: certificates,

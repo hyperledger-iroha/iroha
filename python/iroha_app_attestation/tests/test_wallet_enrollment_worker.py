@@ -22,7 +22,7 @@ from unittest.mock import patch
 from iroha_app_attestation.attestation import AttestationRejected
 from iroha_app_attestation.wallet_enrollment_worker import (
     CONFIG_SCHEMA, SCHEMA, MAX_PACKET, MAX_REQUEST, MAX_ORIGINAL, EXCHANGE_WINDOW, VerifierOwner,
-    configured_policy, encode, exact_json, read_packet, serve,
+    E1CounterStore, configured_policy, encode, exact_json, read_packet, serve,
 )
 from test_wallet_enrollment import (GENERATOR, scope, assertion, apple_object,
                                     configured_policy as fixture_policy, policy_scope, synthetic_root)
@@ -40,7 +40,7 @@ class WorkerTests(unittest.TestCase):
             self.skipTest("OpenSSL3 unavailable")
         self.openssl = Path(binary).resolve()
 
-    def owner_fixture(self, directory, challenge_lifetime_ms=120000):
+    def owner_fixture(self, directory, challenge_lifetime_ms=120000, *, initialize=True):
         directory = directory.resolve(strict=True)
         os.chmod(directory, 0o700)
         fixture = SignedEnvelope(directory, self.openssl)
@@ -70,6 +70,8 @@ class WorkerTests(unittest.TestCase):
         crypto_fd = os.open(self.openssl, os.O_RDONLY)
         self.addCleanup(os.close, directory_fd)
         self.addCleanup(os.close, crypto_fd)
+        if initialize:
+            E1CounterStore.initialize(directory, directory_fd).close()
         def open_owner(original=config, **arguments):
             return VerifierOwner(original, directory_fd=directory_fd, crypto_fd=crypto_fd, **arguments)
         open_owner.config = config
@@ -148,6 +150,24 @@ class WorkerTests(unittest.TestCase):
             self.assertIsNotNone(restarted.perform(request, "recover"))
             restarted.close()
 
+    def test_unseen_recovery_is_unknown_and_never_verifies_or_inserts_an_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner()
+            self.addCleanup(owner.close)
+            packet = encode({"schema": SCHEMA, "version": 1, "exchange_id": "32" * 32,
+                             "action": "recover", "original_base64": base64.b64encode(request).decode()})
+            output = io.BytesIO()
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("recovery must not dispatch verification")):
+                serve(owner, io.BytesIO(len(packet).to_bytes(4, "little") + packet), output)
+            response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+            self.assertEqual(response["outcome"], "outcome_unknown")
+            self.assertIsNone(response["evidence_base64"])
+            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
+                self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (0,))
+
     def test_failed_apple_assertion_retains_attempt_without_counter_consumption(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, key_id = self.owner_fixture(Path(temporary))
@@ -195,6 +215,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_private_error_replies_preserve_storage_retry_and_never_expose_secrets(self):
         for error, expected in ((sqlite3.OperationalError("private bearer"), "unavailable"),
+                                (FileNotFoundError("private bearer"), "unavailable"),
                                 (sqlite3.IntegrityError("private bearer"), "rejected"),
                                 (AttestationRejected("private bearer"), "rejected"),
                                 (VerificationUnavailable("private bearer"), "unavailable")):
@@ -208,6 +229,29 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(response["outcome"], expected)
             self.assertIsNone(response["evidence_base64"])
             self.assertNotIn(b"private bearer", output.getvalue())
+
+    def test_lost_journal_cannot_restart_or_reverify_consumed_apple_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            open_owner, request, _, _ = self.owner_fixture(directory)
+            owner = open_owner()
+            self.addCleanup(owner.close)
+            original = owner.perform(request, "verify")
+            self.assertIsNotNone(original)
+            (directory / "wallet-e1.sqlite3").unlink()
+            packet = encode({"schema": SCHEMA, "version": 1, "exchange_id": "31" * 32,
+                             "action": "recover", "original_base64": base64.b64encode(request).decode()})
+            output = io.BytesIO()
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("lost custody must never reverify")):
+                serve(owner, io.BytesIO(len(packet).to_bytes(4, "little") + packet), output)
+                response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+                self.assertEqual(response["outcome"], "unavailable")
+                self.assertIsNone(response["evidence_base64"])
+                owner.close()
+                with self.assertRaises(FileNotFoundError):
+                    open_owner()
+            self.assertFalse((directory / "wallet-e1.sqlite3").exists())
 
     def test_request_cannot_select_policy_or_future_time(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -235,7 +279,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_private_configuration_projection_cannot_select_a_foreign_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
-            open_owner, _, _, _ = self.owner_fixture(Path(temporary))
+            open_owner, _, _, _ = self.owner_fixture(Path(temporary), initialize=False)
             source = exact_json(open_owner.config, MAX_PACKET)
             for change in (lambda v: v.update({"signer": "forbidden"}),
                            lambda v: v.update({"version": True}),
@@ -289,7 +333,7 @@ class WorkerTests(unittest.TestCase):
             path = Path(temporary) / "wallet-e1.sqlite3"
             replacement = Path(temporary) / "replacement.sqlite3"
             shutil.copyfile(path, replacement); replacement.chmod(0o600); replacement.replace(path)
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(VerificationUnavailable): owner.perform(request, "recover")
 
     def test_recovery_rejects_hardlinked_database_and_shared_permissions(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -297,9 +341,9 @@ class WorkerTests(unittest.TestCase):
             owner = open_owner(); self.addCleanup(owner.close); owner.perform(request, "verify")
             path = Path(temporary) / "wallet-e1.sqlite3"
             link = Path(temporary) / "other.sqlite3"; os.link(path, link)
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(VerificationUnavailable): owner.perform(request, "recover")
             link.unlink(); path.chmod(0o640)
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(VerificationUnavailable): owner.perform(request, "recover")
 
     def test_held_configuration_original_is_rechecked_before_recovery(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -309,7 +353,7 @@ class WorkerTests(unittest.TestCase):
             owner = open_owner(configuration_fd=fd); self.addCleanup(owner.close)
             owner.perform(request, "verify")
             path.write_bytes(open_owner.config + b" ")
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(VerificationUnavailable): owner.perform(request, "recover")
 
     def test_bound_exchanges_continue_past_4096_and_recent_tags_still_reject(self):
         class ReadOnlyProtocolOwner:
@@ -398,9 +442,11 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
         path = directory / "synthetic-oauth.json"; path.write_bytes(encode(credential)); path.chmod(0o600)
         return config, request, selected, now, path
 
-    def actual_owner(self, config, directory, credential, stack):
+    def actual_owner(self, config, directory, credential, stack, *, initialize=True):
         descriptors = [os.open(x, os.O_RDONLY) for x in (directory, self.openssl, credential)]
         for fd in descriptors: stack.callback(os.close, fd)
+        if initialize:
+            E1CounterStore.initialize(directory, descriptors[0]).close()
         stack.enter_context(patch.object(crypto, "_HeldRootCodeOriginal", SyntheticCodeOriginal))
         def synthetic_credential_admission(**kwargs):
             self.assertEqual(kwargs["credential_owner_uid"], 0)
@@ -501,7 +547,7 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
                 with self.assertRaises(AttestationRejected): configured_policy(value["policy"], "android")
             with ExitStack() as stack:
                 changed = json.loads(json.dumps(source)); changed["policy"]["google_policy_base64"] = "e30="
-                with self.assertRaises(AttestationRejected): self.actual_owner(encode(changed), directory, directory / "synthetic-oauth.json", stack)
+                with self.assertRaises(AttestationRejected): self.actual_owner(encode(changed), directory, directory / "synthetic-oauth.json", stack, initialize=False)
                 self.assertFalse((directory / "wallet-e1.sqlite3").exists())
 
 

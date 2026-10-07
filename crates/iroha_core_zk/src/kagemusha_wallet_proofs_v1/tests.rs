@@ -764,6 +764,20 @@ fn cancelled_verification_never_reports_acceptance_or_invalidity() {
     let installed =
         InstalledVerifierPackV1::load(&pack.to_canonical_bytes().unwrap(), installation).unwrap();
     let verifier = installed.verifier();
+    // Parameter ownership is installation-scoped, not a runtime generator cache.
+    for key in verifier.steps.values() {
+        let parameters = verifier.vesta_parameters(key.params.params().k()).unwrap();
+        assert!(Arc::ptr_eq(parameters, &key.params));
+    }
+    assert!(Arc::ptr_eq(
+        verifier.vesta_parameters(16).unwrap(),
+        &verifier.vesta
+    ));
+    assert!(Arc::ptr_eq(
+        verifier.pallas_parameters(),
+        &verifier.lineage.params
+    ));
+    assert!(matches!(verifier.vesta_parameters(1), Err(Error::Profile)));
     // These are unadmitted DATA originals from another scheme. This test proves only
     // cancellation precedence; none of their placeholder proof bytes is accepted.
     let (_, capsule, credential) = receive_capsule_data();

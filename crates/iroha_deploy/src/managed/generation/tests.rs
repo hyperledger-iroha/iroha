@@ -282,3 +282,55 @@ fn staged_service_authorities_publish_exact_identity_and_private_custody() {
         Some(manifest)
     );
 }
+
+#[test]
+fn optional_generation_requires_initial_absence_and_keeps_visible_manifest_refusal() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = PrivateDirectory::open_or_create(temporary.path().join("context")).unwrap();
+    assert!(read_optional(&root).unwrap().is_none());
+    assert!(
+        matches!(read(&root), Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+    );
+    let generation = root.create_child(DIRECTORY).unwrap();
+    generation
+        .write_atomic(
+            "owner.key",
+            b"published original custody",
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    assert!(matches!(read_optional(&root), Err(Error::Invalid(_))));
+    assert!(matches!(read(&root), Err(Error::Invalid(_))));
+    assert_eq!(
+        generation.read("owner.key", 64).unwrap().as_slice(),
+        b"published original custody"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn optional_generation_parent_refusal_cannot_authorize_preparation_and_original_retry() {
+    let _resources = super::super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, root, _) = super::super::tests::fixture(&temporary.path().join("managed"), "local");
+    let original = encode(&read(&root).unwrap()).unwrap();
+    assert_eq!(
+        encode(&read_optional(&root).unwrap().unwrap()).unwrap(),
+        original
+    );
+    let displaced = root.path().with_file_name("displaced");
+    std::fs::rename(root.path(), &displaced).unwrap();
+    assert!(read_optional(&root).is_err());
+    assert!(fresh_stage(&root).is_err());
+    let replacement = PrivateDirectory::open_or_create(root.path()).unwrap();
+    assert!(read_optional(&root).is_err());
+    assert!(fresh_stage(&root).is_err());
+    assert!(replacement.entries(1).unwrap().is_empty());
+    drop(replacement);
+    std::fs::remove_dir(root.path()).unwrap();
+    std::fs::rename(&displaced, root.path()).unwrap();
+    assert_eq!(
+        encode(&read_optional(&root).unwrap().unwrap()).unwrap(),
+        original
+    );
+}

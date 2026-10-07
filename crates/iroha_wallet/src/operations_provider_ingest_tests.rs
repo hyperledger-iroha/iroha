@@ -383,7 +383,7 @@ fn expired_original_can_be_verified_and_read_without_renewal_or_dispatch() {
             .resume_initial_provider_ingest_authority(&path, &request)
             .unwrap()
             .status,
-        OperationStatus::Absent
+        OperationStatus::Expired
     );
     assert_eq!(
         service

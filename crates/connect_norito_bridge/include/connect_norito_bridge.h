@@ -1802,7 +1802,7 @@ typedef struct {
 int32_t connect_norito_acceleration_state_get_v1(connect_norito_acceleration_state* out_state, size_t out_len);
 
 /* KAGEMUSHA wallet V1: opaque exclusive owner. No arbitrary-sign entry point.
- * Open returns -4 (ArtifactsUnavailable) until the authenticated native loader is complete.
+ * Open requires an authenticated native runtime; unprovisioned runtimes return -4 (ArtifactsUnavailable).
  * Callback contexts must be thread-safe and remain valid from retain through release.
  * Outputs own canonical Norito/exact retained bytes; free them with connect_norito_free.
  * Failure: -1 input, -2 closed, -3 capacity, -4 artifacts, -5 unavailable, -6 uncertain,
@@ -1876,6 +1876,18 @@ typedef struct {
 /* Fixed writable output, no allocated bytes to free. Call on a worker; it may verify Ω. */
 int32_t connect_norito_kagemusha_wallet_snapshot_v1(uint64_t handle, connect_norito_kagemusha_wallet_snapshot_v1_t* out);
 uint32_t connect_norito_kagemusha_wallet_revision_v1(void);
+
+/* Canonical Load transport DATA only. Does not verify finality/proofs or change value.
+ * Three selectors are exactly32 bytes; payer is strict canonical I105 UTF-8<=1024;
+ * unsigned canonical receipt<=512, canonical LoadFinality original<=16384.
+ * Zero means exact canonical data/selection/payer/receipt-digest binding only.
+ * No pointer is retained. Native wallet Load independently authorizes all value. */
+int32_t connect_norito_kagemusha_wallet_load_original_validate_v1(
+    const uint8_t *scheme, const uint8_t *wallet, const uint8_t *request,
+    const uint8_t *payer, size_t payer_length,
+    const uint8_t *receipt, size_t receipt_length,
+    const uint8_t *finality, size_t finality_length);
+
 /* Native startup supplies the runtime handle. Foreign originals do not select trust pins. */
 typedef struct {
     const uint8_t* credential;
@@ -1914,7 +1926,23 @@ typedef struct {
 // Bootstrap0(no originals), Offer1(positive amount), Request2(Offer, optional fee+certificate),
 // Credited3(Credited), BeginTime4(no originals), FinishTime5(TimeAnchor, certificate, owned token),
 // CancelTime6(owned token); envelope wrap7..10 / unwrap11..14 in Offer,Request,Payment,Credited order.
+// BackgroundStatus18(no inputs) returns kind29: detail bits0..1 phase (0 not started,
+// 1 parked,2 running), bit2 eligible,bit3 backlog known; sequence is last observed durable
+// backlog. No bytes or proof readiness. Terminal worker errors are returned unchanged and
+// remain parked until observed, followed by a later activity/payment wake. Activity starts
+// at most one native worker; close cancels and joins it before releasing custody.
+// FeeClaim20(nonzero credit id in setup_id, no originals): kind31 canonical retained pair <=21,024, or kind32 no pending claim.
+// ClaimPayment21/ClaimRequest22(first canonical pair <=21,024) return kind12 exact original DATA, not an admission verdict.
+// LedgerFinality23(first original SumeragiFinalityProof <=36MiB) verifies one contiguous native-rooted step;
+// LedgerStatus24(no inputs): kind33 sequence_low=u64 height, sequence_high/detail=0, bytes32 block hash, or kind34 absent.
+// FeePayout25(nonzero credit id, first World snapshot <=32MiB, second payout record <=1024) returns kind35 only after
+// native selected-tip authentication and durable exact payout acknowledgement. No caller checkpoints/verdicts accepted.
+// CloseLoads19(nonzero setup_id retry identity, no originals) returns kind30, exact durable signed closure frame <=16,384 bytes;
+// Reuse an id for exact retries; a fresh id selects current native source after a preissued Load.
+// It does not confirm ledger closure or authorize key retirement.
 // Activation15(no inputs) returns kind17, exact durable Activate frame <=16,384 bytes.
+// CreditedReceive16(first=Receive package), CreditedStatus17(first=CreditStatus) return
+// kind12 canonical Credited data after native shape/scheme/full-envelope bounds; no proof verdict.
 // setup_id is exactly32 bytes: nonzero only for Offer/Request and all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
@@ -1938,12 +1966,12 @@ typedef struct {
 int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 
 /* Enrollment originals only. Native startup selects approved policy/root and owns custody.
- * Actions:0 E1/account/asset,1 account signature,2 progress,3 Android(token+DER chain),
- * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6.
+ * Actions:0 requestId32/account/asset,1 account signature,2 progress,3 Android(token+DER chain),
+ * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6,9 signed pre-key permit<=2048,10 permanently abandon unused enrollment.
  * Unused buffers/count must be zero. Android chain2..8, each item1..16384 bytes.
  * Output:18 local challenge32,19 fixed FFI target161(slot32,key65,challenge32,binding32),
  * 20 pending,21 abandoned,22 Bootstrap selected,23 E5 challenge32,24 exact E5<=131072,
- * 25 exact E6<=262144,26 complete-source runtime ready. All carry the same handle in sequence.
+ * 25 exact E6<=262144,26 complete-source runtime ready,27 issuer dispatch DATA<=16384,28 exact signed Abandon<=1024. All carry the same handle in sequence.
  * E6 is not ledger activation. Payment bounds remain10000. */
 typedef struct connect_norito_kagemusha_wallet_enrollment_item_v1 {
     const uint8_t* bytes;

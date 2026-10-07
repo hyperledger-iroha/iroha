@@ -89,6 +89,7 @@ KAGEMUSHA_WALLET_C_EXPORTS = (
     "connect_norito_kagemusha_wallet_setup_v1",
     "connect_norito_kagemusha_wallet_enrollment_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
+    "connect_norito_kagemusha_wallet_load_original_validate_v1",
     "connect_norito_kagemusha_wallet_request_status_v1",
     "connect_norito_kagemusha_wallet_retry_v1",
     "connect_norito_kagemusha_wallet_resume_v1",
@@ -108,6 +109,9 @@ KAGEMUSHA_WALLET_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_enrollment",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_execute",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot",
+)
+KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS = (
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",
 )
 FIRST_DEVICE_AUTH_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve",
@@ -154,6 +158,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         *KAGEMUSHA_WALLET_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
         *KAGEMUSHA_WALLET_JNI_EXPORTS,
+        *KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS,
         *FIRST_DEVICE_AUTH_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
@@ -765,6 +770,7 @@ def is_retired_kagemusha_export(symbol: str) -> bool:
         symbol.startswith(RETIRED_KAGEMUSHA_EXPORT_PREFIXES)
         and symbol not in KAGEMUSHA_WALLET_C_EXPORTS
         and symbol not in KAGEMUSHA_WALLET_JNI_EXPORTS
+        and symbol not in KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
     )
 
 

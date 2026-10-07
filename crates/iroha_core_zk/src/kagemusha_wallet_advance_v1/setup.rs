@@ -23,10 +23,6 @@ impl<
         key: &KagemushaDevicePublicKeyV1,
         body: &KagemushaWalletLedgerControlBodyV1,
     ) -> Result<KagemushaDeviceSignatureV1, KagemushaWalletProviderErrorV1> {
-        body.validate()
-            .map_err(|_| KagemushaWalletProviderErrorV1::Invalid {
-                field: "activation.body",
-            })?;
         if !matches!(
             body.action,
             KagemushaWalletLedgerControlActionV1::Activate { .. }
@@ -35,9 +31,42 @@ impl<
                 field: "activation.action",
             });
         }
+        self.sign_ledger_control(slot, source, key, body)
+    }
+
+    /// Typed native closure signer; the coordinator derives the exact Retiring package.
+    pub(crate) fn sign_close_loads(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        body: &KagemushaWalletLedgerControlBodyV1,
+    ) -> Result<KagemushaDeviceSignatureV1, KagemushaWalletProviderErrorV1> {
+        if !matches!(
+            body.action,
+            KagemushaWalletLedgerControlActionV1::CloseLoads { .. }
+        ) {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "close_loads.action",
+            });
+        }
+        self.sign_ledger_control(slot, source, key, body)
+    }
+
+    fn sign_ledger_control(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        body: &KagemushaWalletLedgerControlBodyV1,
+    ) -> Result<KagemushaDeviceSignatureV1, KagemushaWalletProviderErrorV1> {
+        body.validate()
+            .map_err(|_| KagemushaWalletProviderErrorV1::Invalid {
+                field: "ledger_control.body",
+            })?;
         let KagemushaWalletSlotStatusV1::Released(marker) = self.status(slot)? else {
             return Err(KagemushaWalletProviderErrorV1::Invalid {
-                field: "activation.requires_released",
+                field: "ledger_control.requires_released",
             });
         };
         if marker.head().map(|(_, _, capsule)| capsule) != Some(source)
@@ -47,7 +76,7 @@ impl<
             || marker.marker().wallet_id != body.wallet_id
         {
             return Err(KagemushaWalletProviderErrorV1::Invalid {
-                field: "activation.source",
+                field: "ledger_control.source",
             });
         }
         self.require_storage()?;
@@ -169,6 +198,61 @@ mod tests {
         assert_eq!(device.platform.with(|p| p.sign_calls), before);
         provider
             .sign_activation(&slot, source, &fixture.payment_key, &body)
+            .unwrap();
+        assert_eq!(device.platform.with(|p| p.sign_calls), before + 1);
+    }
+
+    #[test]
+    fn closure_signer_rejects_foreign_identity_and_other_control_actions() {
+        let (device, fixture, slot, _) =
+            bootstrapped_device(KagemushaWalletAnchorPolicyV1::NotRequired, 0x39);
+        let mut provider = device.open();
+        let marker = provider.status(&slot).unwrap().marker().unwrap().clone();
+        let source = marker.head().unwrap().2;
+        let body = KagemushaWalletLedgerControlBodyV1 {
+            version: 1,
+            scheme_id: marker.marker().scheme_id,
+            asset_digest: marker.marker().asset_digest,
+            wallet_id: marker.marker().wallet_id,
+            action: KagemushaWalletLedgerControlActionV1::CloseLoads {
+                package_digest: {
+                    let mut f = [0; 32];
+                    f[0] = 7;
+                    f
+                },
+                next_load: 9,
+            },
+            nonce: [9; 32],
+        };
+        let before = device.platform.with(|p| p.sign_calls);
+        let mut wrong = body;
+        wrong.wallet_id = [8; 32];
+        assert!(
+            provider
+                .sign_close_loads(&slot, source, &fixture.payment_key, &wrong)
+                .is_err()
+        );
+        assert!(
+            provider
+                .sign_close_loads(&slot, [7; 32], &fixture.payment_key, &body)
+                .is_err()
+        );
+        wrong = body;
+        wrong.action = KagemushaWalletLedgerControlActionV1::Activate {
+            package_digest: {
+                let mut f = [0; 32];
+                f[0] = 7;
+                f
+            },
+        };
+        assert!(
+            provider
+                .sign_close_loads(&slot, source, &fixture.payment_key, &wrong)
+                .is_err()
+        );
+        assert_eq!(device.platform.with(|p| p.sign_calls), before);
+        provider
+            .sign_close_loads(&slot, source, &fixture.payment_key, &body)
             .unwrap();
         assert_eq!(device.platform.with(|p| p.sign_calls), before + 1);
     }

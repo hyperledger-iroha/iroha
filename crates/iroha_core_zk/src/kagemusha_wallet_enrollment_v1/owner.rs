@@ -4,7 +4,7 @@ use super::carrier::*;
 use crate::kagemusha_wallet_advance_v1::*;
 use iroha_crypto::{Algorithm, Signature};
 use iroha_data_model::{account::AccountId, kagemusha::*};
-use rand::rand_core::TryRngCore as _;
+mod prekey_owner;
 use sha2::{Digest as _, Sha256};
 
 /// Operator-owned native provisioning. Foreign enrollment calls cannot choose these policies.
@@ -18,6 +18,18 @@ pub struct EnrollmentConfigV1 {
     pub policy: KagemushaWalletEnrollmentPolicyV1,
     /// Exact independently approved root DER; a self-consistent pin is not approval.
     pub attestation_root_der: Vec<u8>,
+    /// Independently selected installed manifest, also required by the later source loader.
+    pub installation: crate::kagemusha_wallet_artifacts_v1::InstallationV1,
+    /// Exact rooted current Enrollment-role certificate.
+    pub enrollment_certificate: KagemushaWalletSignerCertificateV1,
+    /// Exact independently approved service-origin bytes.
+    pub service_origin: Vec<u8>,
+    /// Exact authenticated FI scope original.
+    pub fi: Vec<u8>,
+    /// Exact authenticated actor scope original.
+    pub actor: Vec<u8>,
+    /// Exact independently approved release-selection original.
+    pub release: Vec<u8>,
 }
 /// Refusal without converting unavailable custody to absence or issuer rejection.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
@@ -64,10 +76,6 @@ struct Scope {
     account: AccountId,
     asset: KagemushaWalletAssetScopeV1,
 }
-struct PendingAccount {
-    scope: Scope,
-    message: [u8; 32],
-}
 
 /// Native source-selected enrollment progress. It does not assert issuer approval.
 #[derive(Debug, Clone)]
@@ -101,7 +109,7 @@ pub enum RequestPreparationV1 {
 pub struct EnrollmentOwnerV1<F: KagemushaWalletFsV1, P> {
     provider: KagemushaWalletProviderV1<F, P>,
     config: EnrollmentConfigV1,
-    pending: Option<PendingAccount>,
+    pending: Option<prekey_owner::Pending>,
     selected: Option<(Scope, KagemushaWalletSlotIdV1)>,
     request: Option<RequestBodyV1>,
 }
@@ -114,6 +122,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     ) -> Result<Self, (KagemushaWalletProviderV1<F, P>, Error)> {
         let checked = (|| {
             original(config.scheme.validate())?;
+            config.verify_prekey()?;
             original(config.policy.validate_for_app(&config.app))?;
             let pinned_root = match config.policy.platform {
                 KagemushaWalletEnrollmentPlatformV1::Android {
@@ -185,100 +194,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         }
     }
 
-    /// Sample a local account challenge before touching hardware. This is distinct from issuer E5 authorization.
-    pub fn begin(
-        &mut self,
-        challenge: &[u8],
-        account: &[u8],
-        asset: &[u8],
-    ) -> Result<[u8; 32], Error> {
-        let challenge = decode(challenge, 1024)?;
-        original(
-            self.config
-                .policy
-                .verify_challenge(&self.config.app, &challenge),
-        )?;
-        let account: AccountId = decode(account, 4096)?;
-        let asset: KagemushaWalletAssetScopeV1 = decode(asset, 1024)?;
-        original(asset.validate())?;
-        if account
-            .try_signatory()
-            .is_none_or(|key| key.algorithm() != Algorithm::Ed25519)
-            || original(kagemusha_wallet_account_digest_v1(&account))? != challenge.account_digest
-            || asset.asset_digest() != challenge.asset_digest
-        {
-            return Err(Error::Original("account/asset binding"));
-        }
-        let mut nonce = [0; 32];
-        while nonce == [0; 32] {
-            rand::rngs::OsRng
-                .try_fill_bytes(&mut nonce)
-                .map_err(|_| Error::Original("native entropy unavailable"))?;
-        }
-        let scope = Scope {
-            challenge,
-            account,
-            asset,
-        };
-        let mut transcript = norito::encode_canonical(&(
-            scope.challenge,
-            scope.account.clone(),
-            scope.asset.clone(),
-        ))
-        .map_err(|_| Error::Original("local account transcript"))?;
-        transcript.extend_from_slice(&nonce);
-        let message = kagemusha_wallet_provider_digest_v1("enrollment-local-account", &transcript);
-        self.pending = Some(PendingAccount { scope, message });
-        Ok(message)
-    }
-    /// Consume local account authorization, recovering the same exact challenge slot before considering creation.
-    pub fn authorize(&mut self, signature: &[u8]) -> Result<EnrollmentProgressV1, Error> {
-        let pending = self.pending.take().ok_or(Error::Phase)?;
-        authorize(&pending.scope.account, &pending.message, signature)?;
-        let mut selected = None;
-        for slot in self.provider.slots()? {
-            if self
-                .provider
-                .read_intent(&slot)?
-                .is_some_and(|intent| intent.challenge == pending.scope.challenge)
-            {
-                if selected.replace(slot).is_some() {
-                    return Err(Error::Original("multiple challenge slots"));
-                }
-            }
-        }
-        let slot = match selected {
-            Some(slot) => slot,
-            None => {
-                let profile = match self.config.policy.platform {
-                    KagemushaWalletEnrollmentPlatformV1::Apple { .. }
-                    | KagemushaWalletEnrollmentPlatformV1::Android {
-                        hardware: KagemushaWalletAndroidHardwareV1::StrongBox,
-                        ..
-                    } => KagemushaWalletKeyProfileV1::SecureElement,
-                    KagemushaWalletEnrollmentPlatformV1::Android {
-                        hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
-                        ..
-                    } => KagemushaWalletKeyProfileV1::SecureElementOrTee,
-                    KagemushaWalletEnrollmentPlatformV1::Android {
-                        hardware: KagemushaWalletAndroidHardwareV1::Tee,
-                        ..
-                    } => KagemushaWalletKeyProfileV1::AndroidTee,
-                };
-                match self
-                    .provider
-                    .begin_enrollment(&pending.scope.challenge, profile)?
-                {
-                    KagemushaWalletEnrollmentStepV1::Enrolled { slot, .. }
-                    | KagemushaWalletEnrollmentStepV1::Pending { slot }
-                    | KagemushaWalletEnrollmentStepV1::SlotAbandoned { slot } => slot,
-                }
-            }
-        };
-        self.selected = Some((pending.scope, slot));
-        self.request = None;
-        self.progress()
-    }
     /// Recover source status without foreign liveness, client time or key-regeneration authority.
     pub fn progress(&mut self) -> Result<EnrollmentProgressV1, Error> {
         let (scope, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
@@ -294,10 +209,37 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             }
             KagemushaWalletSlotStatusV1::SlotAbandoned
             | KagemushaWalletSlotStatusV1::Terminal(_) => EnrollmentProgressV1::Abandoned,
-            KagemushaWalletSlotStatusV1::Empty => {
-                return Err(Error::Original("selected enrollment disappeared"));
-            }
+            // A selected pre-key slot may precede E2. It grants no generation authority.
+            KagemushaWalletSlotStatusV1::Empty => EnrollmentProgressV1::Pending,
         })
+    }
+    /// Permanently abandon this unused enrollment and retain exact signed ledger-control bytes.
+    /// The provider refuses once Bootstrap commits; retries never re-sign a selected output.
+    /// This is an explicit terminal action, distinct from closing the native handle.
+    /// # Errors
+    /// Unselected/foreign custody, committed Bootstrap, unavailable hardware or lost originals.
+    pub fn abandon(&mut self) -> Result<Vec<u8>, Error> {
+        self.pending = None;
+        self.request = None;
+        let (scope, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
+        let intent = self
+            .provider
+            .read_intent(slot)?
+            .ok_or(Error::Original("selected enrollment intent"))?;
+        if intent.challenge != scope.challenge {
+            return Err(Error::Original("selected enrollment intent"));
+        }
+        let bytes = self.provider.abandon_enrollment(slot)?;
+        let result = original(KagemushaWalletAbandonmentV1::decode_canonical(
+            &bytes,
+            &self.config.scheme.scheme_id(),
+        ))?;
+        if result.challenge_digest != scope.challenge.challenge_digest()
+            || result.control.body.wallet_id != scope.challenge.wallet_id(&result.payment_key)
+        {
+            return Err(Error::Original("selected abandonment"));
+        }
+        Ok(bytes)
     }
     fn selected_marker(&mut self) -> Result<KagemushaWalletMarkerV1, Error> {
         let (scope, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
@@ -446,61 +388,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     }
 
     fn verify_result(&self, request: &RequestV1, result: &ResultV1) -> Result<(), Error> {
-        let credential_value = original(KagemushaWalletCredentialV1::decode_canonical(
-            &result.credential,
-            self.provider.scheme_id(),
-        ))?;
-        let set: KagemushaWalletCertificateSetV1 =
-            decode(&result.certificates, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?;
-        let issuer = original(set.certificate(
-            &credential_value.body.issuer_certificate,
-            KagemushaWalletSignerRoleV1::Enrollment,
-        ))?;
-        original(credential_value.verify_enrollment(
-            &self.config.scheme,
-            issuer,
-            &request.body.challenge,
-            &request.body.marker.payment_key,
-        ))?;
-        let c = &credential_value.body;
-        let kind_matches = matches!(
-            (self.config.policy.platform, c.evidence_kind),
-            (
-                KagemushaWalletEnrollmentPlatformV1::Apple { .. },
-                KagemushaWalletEvidenceKindV1::AppleAppAttest
-            ) | (
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::Tee,
-                    ..
-                },
-                KagemushaWalletEvidenceKindV1::AndroidKeyMintTee
-            ) | (
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::StrongBox,
-                    ..
-                },
-                KagemushaWalletEvidenceKindV1::AndroidKeyMintStrongBox
-            ) | (
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
-                    ..
-                },
-                KagemushaWalletEvidenceKindV1::AndroidKeyMintTee
-                    | KagemushaWalletEvidenceKindV1::AndroidKeyMintStrongBox
+        result
+            .verify_for(
+                &self.config.scheme,
+                &self.config.enrollment_certificate,
+                request,
             )
-        );
-        if !kind_matches
-            || c.regulatory_policy != self.config.policy.regulatory_policy
-            || c.lease_expires_at_ms
-                != original(self.config.policy.lease_expires_at(c.issued_at_ms))?
-            || c.enrollment_evidence.digest
-                != result
-                    .evidence
-                    .digest(&request.body, c.evidence_kind)
-                    .map_err(Error::Original)?
-        {
-            return Err(Error::Original("issuer enrollment policy/evidence"));
-        }
-        Ok(())
+            .map(|_| ())
+            .map_err(Error::Original)
     }
 }

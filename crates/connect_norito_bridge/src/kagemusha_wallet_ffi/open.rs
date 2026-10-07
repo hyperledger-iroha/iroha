@@ -28,8 +28,8 @@ pub(super) trait Admission: Send {
     fn cancel(&mut self) -> Result<()>;
 }
 pub(super) enum Phase<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
-    Ready(state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>),
-    Pending(state::PendingNativeWalletOpenV1<advance::KagemushaWalletStdFsV1, P, S>),
+    Ready(Box<state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>>),
+    Pending(Box<state::PendingNativeWalletOpenV1<advance::KagemushaWalletStdFsV1, P, S>>),
 }
 pub(super) struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>(
     pub(super) Option<Phase<P, S>>,
@@ -48,12 +48,12 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
         match runtime.begin(credential, certificates, account, asset) {
             Ok(pending) => {
                 let challenge = pending.challenge().to_vec();
-                self.0 = Some(Phase::Pending(pending));
+                self.0 = Some(Phase::Pending(Box::new(pending)));
                 Ok(challenge)
             }
             Err(failure) => {
                 let (runtime, error) = failure.into_parts();
-                self.0 = Some(Phase::Ready(runtime));
+                self.0 = Some(Phase::Ready(Box::new(runtime)));
                 Err(error.into())
             }
         }
@@ -79,7 +79,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
             }
             Err(failure) => {
                 let (runtime, error) = failure.into_parts();
-                self.0 = Some(Phase::Ready(runtime));
+                self.0 = Some(Phase::Ready(Box::new(runtime)));
                 Err(error.into())
             }
         }
@@ -88,7 +88,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
         let phase = self.0.take().ok_or(Failure::code(CLOSED))?;
         match phase {
             Phase::Pending(pending) => {
-                self.0 = Some(Phase::Ready(pending.abandon()));
+                self.0 = Some(Phase::Ready(Box::new(pending.abandon())));
                 Ok(())
             }
             other => {
@@ -217,6 +217,7 @@ fn finish_with(
     selected.owners.insert(
         id,
         Arc::new(Owner {
+            background: background::Background::default(),
             scheduler,
             wallet: Mutex::new(Some(wallet)),
         }),
@@ -250,11 +251,11 @@ pub(super) fn close(owner: Arc<RuntimeOwner>) -> Result<()> {
 /// Native deployment startup failure; custody and original-store ownership remain recoverable.
 pub enum NativeStartupFailure<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     /// Signed artifact/source qualification failed before registration.
-    Load(state::NativeStartupFailureV1<advance::KagemushaWalletStdFsV1, P, S>),
+    Load(Box<state::NativeStartupFailureV1<advance::KagemushaWalletStdFsV1, P, S>>),
     /// The loaded runtime could not be registered; neither custody nor originals were dropped.
     Registration {
         /// Exact loaded native runtime, ready for registration retry.
-        runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+        runtime: Box<state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>>,
         /// Registry failure.
         failure: Failure,
     },
@@ -285,7 +286,7 @@ where
         producer_inventory,
         originals,
     )
-    .map_err(NativeStartupFailure::Load)?;
+    .map_err(|error| NativeStartupFailure::Load(Box::new(error)))?;
     retain_native_runtime(runtime)
 }
 /// Register one already loaded native runtime, including retry after registry unavailability.
@@ -302,14 +303,14 @@ where
         Ok(registry) => registry,
         Err(_) => {
             return Err(NativeStartupFailure::Registration {
-                runtime,
+                runtime: Box::new(runtime),
                 failure: Failure::code(INTERNAL),
             });
         }
     };
     if registry.owners.len() + registry.runtimes.len() >= MAX_OWNERS {
         return Err(NativeStartupFailure::Registration {
-            runtime,
+            runtime: Box::new(runtime),
             failure: Failure::code(RESOURCE),
         });
     }
@@ -319,7 +320,7 @@ where
         .filter(|id| *id <= i64::MAX as u64)
     else {
         return Err(NativeStartupFailure::Registration {
-            runtime,
+            runtime: Box::new(runtime),
             failure: Failure::code(RESOURCE),
         });
     };
@@ -327,7 +328,9 @@ where
     registry.runtimes.insert(
         id,
         Arc::new(RuntimeOwner {
-            admission: Mutex::new(Some(Box::new(Runtime(Some(Phase::Ready(runtime)))))),
+            admission: Mutex::new(Some(Box::new(Runtime(Some(Phase::Ready(Box::new(
+                runtime,
+            ))))))),
             finished: Mutex::new(None),
         }),
     );

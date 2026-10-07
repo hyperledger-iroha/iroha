@@ -217,12 +217,11 @@ fn census(
         ));
     }
     if later {
-        match directory.open_child(operation) {
-            Ok(child) => require_empty(&child).map_err(|_| {
+        match directory.open_child_optional(operation)? {
+            Some(child) => require_empty(&child).map_err(|_| {
                 invalid("later bootstrap material exists behind an incomplete prerequisite")
             })?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            None => {}
         }
     }
     if directory.entries(if custody { 131 } else { 66 })? != names {

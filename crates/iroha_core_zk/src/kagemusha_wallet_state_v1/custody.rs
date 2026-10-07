@@ -122,6 +122,15 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
         self.lock()?.sign_activation(&self.slot, source, key, body)
     }
 
+    pub(crate) fn sign_close_loads(
+        &self,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        body: &KagemushaWalletLedgerControlBodyV1,
+    ) -> Result<KagemushaDeviceSignatureV1, ProviderError> {
+        self.lock()?.sign_close_loads(&self.slot, source, key, body)
+    }
+
     /// Share only native observations with the concrete proof/preparation owner.
     pub(crate) fn observations(&self) -> NativeObservationsV1<F, P> {
         NativeObservationsV1 {

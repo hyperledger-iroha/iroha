@@ -1330,7 +1330,12 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 
 
 `KagemushaWalletEnrollmentV1` is the thin Android E2–E6 handle registered by trusted
-native startup. It supplies raw KeyMint DER and the opaque Play Integrity token;
+native startup. `begin` retains the retry identity and returns native-selected issuer dispatch
+DATA; `acceptPermit` verifies the rooted signed pre-key permit before returning the
+existing-account challenge. Native rechecks the same-boot elapsed deadline at hardware
+generation and preserves the original server attempt on retry. `KagemushaWalletAndroidPlatformV1.enrollmentCertificates(target)`
+exports the original DER for the exact native-selected payment key without a
+hardware verdict or signing operation. Enrollment supplies that chain and the opaque Play Integrity token;
 the issuer obtains and verifies its own Google response. Native creates/selects the
 hardware slot, binds existing-account authorization to exact E5 originals, and retains
 E5/E6 before returning bytes. TEE-only policy uses the TEE even on StrongBox devices.
@@ -1338,3 +1343,10 @@ E5/E6 before returning bytes. TEE-only policy uses the TEE even on StrongBox dev
 `KagemushaWalletRuntimeV1.beginEnrolled()` for a fresh account challenge. This does not
 establish issuer-service, ledger activation or phone qualification. `activation()`
 returns exact retained Activate bytes for ledger submission after Bootstrap.
+
+The enrollment handle's explicit `abandon` action permanently closes an unused enrollment
+before runtime handoff and returns its exact retained signed ledger control. Native refuses
+once Bootstrap commits. Closing the handle only releases ownership. Abandon output is published
+before an immutable digest selection, and nothing is returned until both are durable; a missing
+selected original is refused. Recovery may complete a missing selection for a present valid
+original. This local mechanism does not establish protection against complete filesystem rollback.

@@ -1,0 +1,68 @@
+name: Native prover instruction-target parity
+
+# Temporary M1a oracle. Remove with the retired stack only after M7 closes.
+# These correctness jobs do not qualify timing, RSS or physical phones.
+on:
+  pull_request:
+    paths:
+      - "crates/iroha_pasta/**"
+      - "crates/iroha_plonk/**"
+      - "crates/iroha_plonk_oracle/**"
+      - "crates/iroha_allocation/**"
+      - "crates/iroha_audio/**"
+      - "crates/iroha_derive*/**"
+      - "crates/iroha_schema*/**"
+      - "crates/norito*/**"
+      - "vendor/**"
+      - "fixtures/native_prover/**"
+      - "specs/plonk_ipa_v1.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - "ci/native_prover_oracle.py"
+      - "scripts/tests/native_prover_oracle_test.py"
+      - ".github/workflows/native_prover_parity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-prover-parity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  oracle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+          target: ${{ matrix.target }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Exercise complete-harness admission
+        run: python3 -I -B scripts/tests/native_prover_oracle_test.py
+      - name: Run every release correctness case, including large ignored cases
+        run: python3 -I -B ci/native_prover_oracle.py --target '${{ matrix.target }}'
+      - name: Retain source, toolchain, compiler and test records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-prover-parity-${{ matrix.target }}-${{ github.run_id }}
+          path: target/qualification/native-prover-oracle/${{ matrix.target }}/evidence
+          if-no-files-found: error
+          retention-days: 14

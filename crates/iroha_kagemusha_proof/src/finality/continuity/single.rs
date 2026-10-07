@@ -167,7 +167,7 @@ impl SourceVerifier {
     }
     /// Exact immutable wrapper verifier from this sealed source qualification.
     /// Reading metadata does not permit construction or substitution of a source owner.
-    pub const fn verifying_key(&self) -> &VerifyingKey<Ep> {
+    pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
         &self.key
     }
     /// Complete digest of the original qualified wrapper key.
@@ -180,7 +180,7 @@ impl SourceVerifier {
     }
     #[cfg(test)]
     pub(crate) fn layout_metadata(&self) -> (VerifierPlan<Ep>, VerifyingKey<Ep>) {
-        (self.verifier.clone(), self.key.clone())
+        ((*self.verifier).clone(), (*self.key).clone())
     }
     /// Hard verify the exact source endpoint/P binding and original V columns.
     pub(crate) fn verify_cells(

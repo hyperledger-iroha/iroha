@@ -31,11 +31,12 @@ struct KagemushaWalletEnrollmentInputV1 {
   init(_ selector: UInt32, _ first: Data = Data(), _ second: Data = Data(), _ third: Data = Data()) throws {
     let bounds: [Int]
     switch selector {
-    case 0: bounds = [1024,4096,1024]
+    case 0: bounds = [32,4096,1024]
     case 1,5: bounds = [64,0,0]
-    case 2,7,8: bounds = [0,0,0]
+    case 2,7,8,10: bounds = [0,0,0]
     case 4: bounds = [32,65536,4096]
     case 6: bounds = [262144,0,0]
+    case 9: bounds = [2048,0,0]
     default: throw KagemushaWalletErrorV1.invalidInput
     }
     let originals = [first,second,third]
@@ -67,7 +68,7 @@ public final class KagemushaWalletEnrollmentV1: @unchecked Sendable {
   private func call(_ input: KagemushaWalletEnrollmentInputV1) throws -> KagemushaWalletCallV1 {
     guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
     let reply = try driver.result { out in input.withRequest { driver.enrollment(owner, $0, out) } }
-    guard (18...26).contains(reply.status) && reply.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    guard (18...28).contains(reply.status) && reply.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return reply
   }
   private func exact(_ input: KagemushaWalletEnrollmentInputV1, _ status: Int32) throws -> Data {
@@ -75,10 +76,16 @@ public final class KagemushaWalletEnrollmentV1: @unchecked Sendable {
     guard reply.status == status else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return reply.bytes
   }
-  /// Existing account signs these exact native bytes before payment-key generation.
-  public func begin(challenge: Data, account: Data, assetScope: Data) throws -> Data {
+  /// Native retains request identity and returns exact issuer dispatch DATA, without a key grant.
+  public func begin(requestID: Data, account: Data, assetScope: Data) throws -> Data {
     lock.lock(); defer { lock.unlock() }
-    return try exact(KagemushaWalletEnrollmentInputV1(0,challenge,account,assetScope),18)
+    guard requestID.count == 32 else { throw KagemushaWalletErrorV1.invalidInput }
+    return try exact(KagemushaWalletEnrollmentInputV1(0,requestID,account,assetScope),27)
+  }
+  /// Authenticate the signed issuer permit before returning the existing-account challenge.
+  public func acceptPermit(originalPermit: Data) throws -> Data {
+    lock.lock(); defer { lock.unlock() }
+    return try exact(KagemushaWalletEnrollmentInputV1(9,originalPermit),18)
   }
   private func progress(_ reply: KagemushaWalletCallV1) throws -> KagemushaWalletEnrollmentProgressV1 {
     switch reply.status {
@@ -121,6 +128,12 @@ public final class KagemushaWalletEnrollmentV1: @unchecked Sendable {
     let runtime = try KagemushaWalletRuntimeV1(nativeRuntimeHandle: owner)
     owner = 0
     return runtime
+  }
+  /// Permanently abandon the unused enrollment and return exact retained signed ledger bytes.
+  /// Native refuses after Bootstrap commits. This is not a ledger acknowledgement.
+  public func abandon() throws -> Data {
+    lock.lock(); defer { lock.unlock() }
+    return try exact(KagemushaWalletEnrollmentInputV1(10),28)
   }
   public func close() throws {
     lock.lock(); defer { lock.unlock() }

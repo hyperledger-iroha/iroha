@@ -6,12 +6,14 @@ use iroha_core_zk::kagemusha_wallet_enrollment_v1 as native;
 pub(crate) enum Action<'a> {
     Begin([&'a [u8]; 3]),
     Authorize(&'a [u8]),
+    AcceptPermit(&'a [u8]),
     Progress,
     Prepare(native::PlatformEvidenceV1),
     RetainRequest(&'a [u8]),
     AcceptResult(&'a [u8]),
     Load,
     BeginOpen,
+    Abandon,
 }
 impl From<native::Error> for Failure {
     fn from(error: native::Error) -> Self {
@@ -40,15 +42,17 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     NativeEnrollmentRuntime<P, S>
 {
     /// Retain native deployment inputs before E2. Artifact qualification remains mandatory at handoff.
-    #[must_use]
+    /// # Errors
+    /// A mismatched enrollment/source installation returns every retained input unchanged.
     pub fn new(
         owner: native::EnrollmentOwnerV1<advance::KagemushaWalletStdFsV1, P>,
         config: state::NativeInstallationConfigV1,
         verifier_pack: Vec<u8>,
         inventory: Vec<u8>,
         originals: S,
-    ) -> Self {
-        Self {
+    ) -> std::result::Result<Self, Box<(Self, Failure)>> {
+        let valid = owner.installation() == config.installation;
+        let runtime = Self {
             owner: Some(owner),
             installed: None,
             config,
@@ -56,6 +60,11 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
             inventory,
             originals: Some(originals),
             open_originals: None,
+        };
+        if valid {
+            Ok(runtime)
+        } else {
+            Err(Box::new((runtime, Failure::code(INVALID))))
         }
     }
 }
@@ -138,7 +147,8 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
             match loaded {
                 Ok(runtime) => {
                     self.open_originals = Some(selected_originals);
-                    self.installed = Some(open::Runtime(Some(open::Phase::Ready(runtime))));
+                    self.installed =
+                        Some(open::Runtime(Some(open::Phase::Ready(Box::new(runtime)))));
                     Ok(response(26, Vec::new()))
                 }
                 Err((owner, (originals, error))) => {
@@ -150,10 +160,12 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
         } else {
             let owner = self.owner.as_mut().ok_or(Failure::code(CLOSED))?;
             match action {
-                Action::Begin([challenge, account, asset]) => Ok(response(
-                    18,
-                    owner.begin(challenge, account, asset)?.to_vec(),
-                )),
+                Action::Begin([request_id, account, asset]) => {
+                    Ok(response(27, owner.begin(request_id, account, asset)?))
+                }
+                Action::AcceptPermit(bytes) => {
+                    Ok(response(18, owner.accept_permit(bytes)?.to_vec()))
+                }
                 Action::Authorize(signature) => Ok(progress(owner.authorize(signature)?)),
                 Action::Progress => Ok(progress(owner.progress()?)),
                 Action::Prepare(evidence) => {
@@ -170,6 +182,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
                     Ok(response(24, owner.retain_request(signature)?))
                 }
                 Action::AcceptResult(bytes) => Ok(response(25, owner.accept_credential(bytes)?)),
+                Action::Abandon => Ok(response(28, owner.abandon()?)),
                 Action::BeginOpen => Err(Failure::code(ARTIFACTS_UNAVAILABLE)),
                 Action::Load => unreachable!("handled before borrowing owner"),
             }
@@ -197,26 +210,29 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
 /// Register native enrollment startup. Every registration failure returns the exact owner.
 /// # Errors
 /// Registry capacity or poison; no provider, key or original source is discarded on failure.
+/// Native enrollment registration failure retaining the actual sole runtime custody.
+pub type NativeEnrollmentRegistrationFailure<P, S> = Box<(NativeEnrollmentRuntime<P, S>, Failure)>;
+
 pub fn retain_native_enrollment<P, S>(
     runtime: NativeEnrollmentRuntime<P, S>,
-) -> std::result::Result<u64, (NativeEnrollmentRuntime<P, S>, Failure)>
+) -> std::result::Result<u64, NativeEnrollmentRegistrationFailure<P, S>>
 where
     P: advance::KagemushaWalletPlatformV1 + 'static,
     S: OriginalSourceV1 + Send + 'static,
 {
     let mut registry = match registry().lock() {
         Ok(value) => value,
-        Err(_) => return Err((runtime, Failure::code(INTERNAL))),
+        Err(_) => return Err(Box::new((runtime, Failure::code(INTERNAL)))),
     };
     if registry.owners.len() + registry.runtimes.len() >= MAX_OWNERS {
-        return Err((runtime, Failure::code(RESOURCE)));
+        return Err(Box::new((runtime, Failure::code(RESOURCE))));
     }
     let Some(id) = registry
         .next
         .checked_add(1)
         .filter(|id| *id <= i64::MAX as u64)
     else {
-        return Err((runtime, Failure::code(RESOURCE)));
+        return Err(Box::new((runtime, Failure::code(RESOURCE))));
     };
     registry.next = id;
     registry.runtimes.insert(
@@ -252,12 +268,13 @@ pub(crate) fn call(id: u64, action: Action<'_>) -> Result<Response> {
 
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        0 => [1024, 4096, 1024],
+        0 => [32, 4096, 1024],
         1 | 5 => [64, 0, 0],
-        2 | 7 | 8 => [0; 3],
+        2 | 7 | 8 | 10 => [0; 3],
         3 => [65_536, 0, 0],
         4 => [32, 65_536, 4096],
         6 => [native::RESULT_MAX_BYTES, 0, 0],
+        9 => [2048, 0, 0],
         _ => return Err(Failure::code(INVALID)),
     })
 }
@@ -281,7 +298,7 @@ pub(crate) fn request<'a>(
     }
     let [first, second, third] = originals;
     Ok(match selector {
-        0 if !first.is_empty() && !second.is_empty() && !third.is_empty() => {
+        0 if first.len() == 32 && !second.is_empty() && !third.is_empty() => {
             Action::Begin(originals)
         }
         1 => Action::Authorize(first),
@@ -303,6 +320,8 @@ pub(crate) fn request<'a>(
         6 if !first.is_empty() => Action::AcceptResult(first),
         7 => Action::Load,
         8 => Action::BeginOpen,
+        10 => Action::Abandon,
+        9 if !first.is_empty() => Action::AcceptPermit(first),
         _ => return Err(Failure::code(INVALID)),
     })
 }
@@ -312,7 +331,7 @@ mod tests {
     use super::*;
     #[test]
     fn original_enrollment_bounds_are_per_role_and_unused_fields_are_rejected() {
-        for selector in 0..=8 {
+        for selector in 0..=10 {
             let limits = bounds(selector).unwrap();
             for slot in 0..3 {
                 let long = vec![0; limits[slot] + 1];
@@ -321,7 +340,7 @@ mod tests {
                 assert!(request(selector, originals, &[]).is_err());
             }
         }
-        assert!(request(9, [&[]; 3], &[]).is_err());
+        assert!(request(11, [&[]; 3], &[]).is_err());
         assert!(request(2, [&[]; 3], &[b"foreign chain"]).is_err());
         assert!(request(3, [b"token", &[], &[]], &[b"leaf"]).is_err());
         assert!(request(3, [b"token", &[], &[]], &[b"leaf", b"ca"]).is_ok());

@@ -1366,3 +1366,131 @@ fn retained_directory_edges_retry_original_after_native_refusal_and_restoration(
         assert_eq!(retained.read("record", 8).unwrap().as_slice(), b"original");
     }
 }
+
+#[test]
+fn retained_private_publication_keeps_complete_identity_bounds_and_no_replace() {
+    let (_temporary, parent) = store();
+    let published = parent
+        .publish_private_child("ready", &[("lock", b""), ("record", b"original")])
+        .unwrap();
+    let directory_identity = published.identity().unwrap();
+    let record_identity = FileIdentity::of(&published.open_read("record").unwrap()).unwrap();
+    let reopened = parent.open_child("ready").unwrap();
+    assert_eq!(reopened.identity().unwrap(), directory_identity);
+    assert_eq!(
+        FileIdentity::of(&reopened.open_read("record").unwrap()).unwrap(),
+        record_identity
+    );
+    assert_eq!(reopened.read("record", 8).unwrap().as_slice(), b"original");
+    assert!(reopened.read("lock", 0).unwrap().is_empty());
+    let refused = parent.publish_private_child("ready", &[("record", b"replacement")]);
+    assert!(matches!(refused, Err(error) if error.kind() == io::ErrorKind::AlreadyExists));
+    assert_eq!(published.identity().unwrap(), directory_identity);
+    assert_eq!(
+        FileIdentity::of(&published.open_read("record").unwrap()).unwrap(),
+        record_identity
+    );
+    assert_eq!(published.read("record", 8).unwrap().as_slice(), b"original");
+    for (name, files) in [
+        ("../escape", vec![("record", b"bad".as_slice())]),
+        ("empty", vec![]),
+        (
+            "duplicate",
+            vec![("record", b"a".as_slice()), ("record", b"b".as_slice())],
+        ),
+        ("invalid-file", vec![("../record", b"bad".as_slice())]),
+    ] {
+        let refused = parent.publish_private_child(name, &files);
+        assert!(matches!(refused, Err(error) if error.kind() == io::ErrorKind::InvalidInput));
+    }
+    assert_eq!(
+        parent.entries(1).unwrap(),
+        [std::ffi::OsString::from("ready")]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_private_publication_refuses_replaced_parent_and_restores_original_retry() {
+    let (temporary, parent) = store();
+    let retained_identity = parent.identity().unwrap();
+    let original = parent
+        .publish_private_child("original", &[("record", b"original bytes")])
+        .unwrap();
+    let original_identity = original.identity().unwrap();
+    let file_identity = FileIdentity::of(&original.open_read("record").unwrap()).unwrap();
+    let displaced = temporary.path().join("original-parent");
+    fs::rename(parent.path(), &displaced).unwrap();
+    let missing = parent.publish_private_child("new", &[("record", b"new bytes")]);
+    assert!(matches!(missing, Err(error) if error.kind() == io::ErrorKind::NotFound));
+    let replacement = PrivateDirectory::open_or_create(parent.path()).unwrap();
+    let refused = parent.publish_private_child("new", &[("record", b"new bytes")]);
+    assert!(matches!(refused, Err(error) if error.kind() == io::ErrorKind::Other));
+    assert!(replacement.entries(0).unwrap().is_empty());
+    drop(replacement);
+    fs::remove_dir(parent.path()).unwrap();
+    fs::rename(displaced, parent.path()).unwrap();
+    assert_eq!(parent.identity().unwrap(), retained_identity);
+    assert_eq!(original.identity().unwrap(), original_identity);
+    assert_eq!(
+        FileIdentity::of(&original.open_read("record").unwrap()).unwrap(),
+        file_identity
+    );
+    assert_eq!(
+        original.read("record", 14).unwrap().as_slice(),
+        b"original bytes"
+    );
+    let published = parent
+        .publish_private_child("new", &[("record", b"new bytes")])
+        .unwrap();
+    assert_eq!(
+        parent.open_child("new").unwrap().identity().unwrap(),
+        published.identity().unwrap()
+    );
+    assert_eq!(
+        published.read("record", 9).unwrap().as_slice(),
+        b"new bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_private_publication_keeps_private_permissions_without_repair() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_temporary, parent) = store();
+    let permissions = fs::metadata(parent.path()).unwrap().permissions();
+    fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let refused = parent.publish_private_child("new", &[("record", b"original")]);
+    assert!(matches!(refused, Err(error) if error.kind() == io::ErrorKind::PermissionDenied));
+    assert_eq!(
+        fs::metadata(parent.path()).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    fs::set_permissions(parent.path(), permissions).unwrap();
+    let published = parent
+        .publish_private_child("new", &[("record", b"original")])
+        .unwrap();
+    assert_eq!(published.read("record", 8).unwrap().as_slice(), b"original");
+}
+
+#[cfg(windows)]
+#[test]
+fn retained_private_publication_keeps_native_rename_refusal_and_original_retry() {
+    let (temporary, parent) = store();
+    let identity = parent.identity().unwrap();
+    assert!(fs::rename(parent.path(), temporary.path().join("original-parent")).is_err());
+    let published = parent
+        .publish_private_child("new", &[("record", b"original")])
+        .unwrap();
+    assert_eq!(parent.identity().unwrap(), identity);
+    assert_eq!(
+        parent.open_child("new").unwrap().identity().unwrap(),
+        published.identity().unwrap()
+    );
+    assert_eq!(published.read("record", 8).unwrap().as_slice(), b"original");
+    assert!(
+        matches!(parent.publish_private_child("new", &[("record", b"replacement")]), Err(error) if error.kind() == io::ErrorKind::AlreadyExists)
+    );
+    assert_eq!(published.read("record", 8).unwrap().as_slice(), b"original");
+}

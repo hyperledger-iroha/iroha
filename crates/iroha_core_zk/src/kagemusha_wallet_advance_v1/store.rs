@@ -19,8 +19,8 @@
 //! - **removal** ([`KagemushaWalletDurableStoreV1::remove_file`]): unlink, then parent sync;
 //!   an already-absent name is synced as absent. Empty directories are removed the same way
 //!   ([`KagemushaWalletDurableStoreV1::remove_dir`]).
-//! - **reads and listings** never report an error as absence; only the OS's `NotFound` is
-//!   `Absent`, and a listing fails as a whole on any entry error.
+//! - **reads and listings** report only initial native-open absence as `Absent`;
+//!   later custody/read failures are unavailable, and any entry error fails a whole listing.
 //!
 //! The mutating primitives are private to the provider: other code gets custody only through
 //! the provider's operations.
@@ -655,9 +655,11 @@ mod std_fs {
                     held.revalidate().map_err(custody_changed)?;
                     current = Arc::clone(held);
                 } else {
-                    let opened = current.open_child(component);
-                    current.revalidate().map_err(custody_changed)?;
-                    let child = Arc::new(opened?);
+                    let child = current
+                        .open_child_optional(component)
+                        .map_err(custody_changed)?
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+                    let child = Arc::new(child);
                     cache.insert(prefix.clone(), Arc::clone(&child));
                     current = child;
                 }
@@ -784,15 +786,17 @@ mod std_fs {
             limit: usize,
         ) -> io::Result<Vec<u8>> {
             let directory = self.directory(dir)?;
-            let opened = directory.open_retained_private(name);
-            directory.revalidate().map_err(custody_changed)?;
-            let original = opened?;
+            let original = directory
+                .open_retained_private_optional(name)
+                .map_err(custody_changed)?
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
             let mut bytes = Vec::new();
-            original
+            let result = original
                 .file()
                 .take(u64::try_from(limit).unwrap_or(u64::MAX))
-                .read_to_end(&mut bytes)?;
+                .read_to_end(&mut bytes);
             original.revalidate().map_err(custody_changed)?;
+            result.map_err(custody_changed)?;
             Ok(bytes)
         }
         fn list(
@@ -800,20 +804,23 @@ mod std_fs {
             dir: &KagemushaWalletCustodyDirV1,
         ) -> io::Result<Vec<KagemushaWalletListedEntryV1>> {
             let directory = self.directory(dir)?;
-            let mut entries = Vec::new();
-            for name in directory.entries(usize::MAX)? {
-                let kind = match directory.custody_entry_kind(&name)? {
-                    CustodyEntryKind::File => KagemushaWalletEntryKindV1::File,
-                    CustodyEntryKind::Directory => KagemushaWalletEntryKindV1::Directory,
-                    CustodyEntryKind::Other => KagemushaWalletEntryKindV1::Other,
-                };
-                let name = name.into_string().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 custody entry")
-                })?;
-                entries.push(KagemushaWalletListedEntryV1 { name, kind });
-            }
-            directory.revalidate()?;
-            Ok(entries)
+            let result = (|| {
+                let mut entries = Vec::new();
+                for name in directory.entries(usize::MAX)? {
+                    let kind = match directory.custody_entry_kind(&name)? {
+                        CustodyEntryKind::File => KagemushaWalletEntryKindV1::File,
+                        CustodyEntryKind::Directory => KagemushaWalletEntryKindV1::Directory,
+                        CustodyEntryKind::Other => KagemushaWalletEntryKindV1::Other,
+                    };
+                    let name = name.into_string().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 custody entry")
+                    })?;
+                    entries.push(KagemushaWalletListedEntryV1 { name, kind });
+                }
+                Ok(entries)
+            })();
+            directory.revalidate().map_err(custody_changed)?;
+            result.map_err(custody_changed)
         }
         fn available_bytes(&self) -> io::Result<u64> {
             self.root.available_bytes()

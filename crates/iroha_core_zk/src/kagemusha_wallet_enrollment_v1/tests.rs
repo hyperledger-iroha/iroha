@@ -81,8 +81,18 @@ fn fixture() -> Fixture {
         play_integrity_token: b"opaque token".to_vec(),
     })
     .unwrap();
+    let enrollment_certificate = enrollment_certificate(&scheme);
     Fixture {
         config: EnrollmentConfigV1 {
+            installation: crate::kagemusha_wallet_artifacts_v1::InstallationV1 {
+                scheme_id: scheme.scheme_id(),
+                manifest_digest: [29; 32],
+            },
+            enrollment_certificate,
+            service_origin: b"https://issuer.example".to_vec(),
+            fi: b"approved FI".to_vec(),
+            actor: b"authenticated account actor".to_vec(),
+            release: b"approved release".to_vec(),
             scheme,
             app,
             policy,
@@ -106,15 +116,82 @@ fn owner(f: &Fixture, d: &DeviceV1) -> Owner {
     EnrollmentOwnerV1::new(provider, f.config.clone())
         .unwrap_or_else(|(_, error)| panic!("{error}"))
 }
-fn begin(f: &Fixture, owner: &mut Owner) -> [u8; 32] {
-    owner
-        .begin(
-            &norito::encode_canonical(&f.challenge).unwrap(),
-            &norito::encode_canonical(&f.account).unwrap(),
-            &norito::encode_canonical(&f.asset).unwrap(),
+fn enrollment_certificate(scheme: &KagemushaWalletSchemeV1) -> KagemushaWalletSignerCertificateV1 {
+    use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
+    let body = KagemushaWalletSignerCertificateBodyV1 {
+        version: 1,
+        scheme_id: scheme.scheme_id(),
+        role: KagemushaWalletSignerRoleV1::Enrollment,
+        key: public_key(&signing_key(79)),
+        serial: 1,
+    };
+    let signature: P256Signature = signing_key(17).sign(&body.signing_message());
+    KagemushaWalletSignerCertificateV1::sign(
+        body,
+        scheme,
+        KagemushaWalletSignerOutputV1::Raw(signature.to_bytes().into()),
+    )
+    .unwrap()
+}
+fn permit(f: &Fixture, dispatch: &PreKeyDispatchV1) -> KagemushaEnrollmentPermitV1 {
+    use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
+    let previous = dispatch.previous_permit.as_ref().map(|bytes| {
+        KagemushaEnrollmentPermitV1::decode_canonical(
+            bytes,
+            &f.config.scheme,
+            &f.config.enrollment_certificate,
         )
         .unwrap()
+    });
+    let challenge = previous.as_ref().map_or(f.challenge, |p| p.body.challenge);
+    let body = KagemushaEnrollmentPermitBodyV1 {
+        version: 1,
+        platform: dispatch.platform,
+        purpose: dispatch.purpose,
+        challenge,
+        network_id: f.config.scheme.network_id,
+        manifest_digest: dispatch.manifest_digest,
+        release_digest: dispatch.release_digest,
+        service_origin_digest: dispatch.service_origin_digest,
+        fi_digest: dispatch.fi_digest,
+        actor_digest: dispatch.actor_digest,
+        attempt_id: previous.as_ref().map_or([31; 32], |p| p.body.attempt_id),
+        client_nonce: dispatch.client_nonce,
+        native_dispatch_nonce: dispatch.native_dispatch_nonce,
+        originals_digest: dispatch.originals_digest(&challenge).unwrap(),
+        enrollment_certificate: f.config.enrollment_certificate.certificate_digest(),
+        created_at_ms: 1000,
+        expires_at_ms: 1000 + f.config.policy.challenge_lifetime_ms,
+        observed_at_ms: 2000,
+    };
+    let signature: P256Signature = signing_key(79).sign(&body.signing_message().unwrap());
+    KagemushaEnrollmentPermitV1::from_issuer_der(
+        body,
+        &f.config.scheme,
+        &f.config.enrollment_certificate,
+        signature.to_der().as_bytes(),
+    )
+    .unwrap()
 }
+fn dispatch(f: &Fixture, owner: &mut Owner) -> PreKeyDispatchV1 {
+    PreKeyDispatchV1::decode(
+        &owner
+            .begin(
+                &[11; 32],
+                &norito::encode_canonical(&f.account).unwrap(),
+                &norito::encode_canonical(&f.asset).unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap()
+}
+fn begin(f: &Fixture, owner: &mut Owner) -> [u8; 32] {
+    let dispatch = dispatch(f, owner);
+    owner
+        .accept_permit(&permit(f, &dispatch).encode_canonical().unwrap())
+        .unwrap()
+}
+
 fn sign(f: &Fixture, message: &[u8]) -> Vec<u8> {
     Signature::try_new(f.account_key.private_key(), message)
         .unwrap()
@@ -196,6 +273,8 @@ fn enrollment_owner_retains_exact_e5_across_restart_and_refuses_changed_signatur
 fn enrollment_unavailable_never_becomes_absence_or_a_second_key_attempt() {
     let f = fixture();
     let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 67);
+    d.platform
+        .with(|s| s.generation_policy = KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly);
     let mut owner = owner(&f, &d);
     let message = begin(&f, &mut owner);
     d.platform.with(|s| s.generate_unavailable = Some(false));
@@ -203,8 +282,10 @@ fn enrollment_unavailable_never_becomes_absence_or_a_second_key_attempt() {
     d.platform.with(|s| s.generate_unavailable = None);
     let message = begin(&f, &mut owner);
     assert!(matches!(
-        owner.authorize(&sign(&f, &message)).unwrap(),
-        EnrollmentProgressV1::Pending
+        owner.authorize(&sign(&f, &message)),
+        Err(Error::Provider(
+            KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(10))
+        ))
     ));
     d.platform.with(|s| assert_eq!(s.generate_calls, 1));
     assert!(owner.prepare_request(&f.evidence).is_err());
@@ -348,6 +429,11 @@ fn enrollment_e6_retains_full_signed_result_and_never_recreates_lost_selected_or
     assert!(owner.accept_credential(&altered.encode().unwrap()).is_err());
     assert_eq!(owner.accept_credential(&bytes).unwrap(), bytes);
     assert_eq!(owner.accept_credential(b"wrong retry").unwrap(), bytes);
+    let originals = owner.open_originals().unwrap();
+    assert_eq!(originals[0], result.credential);
+    assert_eq!(originals[1], result.certificates);
+    assert_eq!(originals[2], norito::encode_canonical(&f.account).unwrap());
+    assert_eq!(originals[3], norito::encode_canonical(&f.asset).unwrap());
     let mut provider = owner.into_provider();
     let slot = provider.slots().unwrap()[0];
     let key = kagemusha_wallet_provider_digest_v1("enrollment-issuer-result", &request_bytes);
@@ -357,6 +443,7 @@ fn enrollment_e6_retains_full_signed_result_and_never_recreates_lost_selected_or
     drop(provider);
     let mut restored = enrolled(&f, &d);
     assert!(restored.accept_credential(&bytes).is_err());
+    assert!(restored.open_originals().is_err());
 }
 #[test]
 fn enrollment_approved_native_configuration_cannot_silently_replace_original_root() {
@@ -455,4 +542,504 @@ fn enrollment_failed_native_handoff_preserves_exact_private_selection_and_e5() {
     assert_eq!(error, "loader unavailable");
     assert_eq!(owner.retain_request(&[]).unwrap(), bytes);
     d.platform.with(|state| assert_eq!(state.generate_calls, 1));
+}
+
+fn resign_permit(
+    f: &Fixture,
+    body: KagemushaEnrollmentPermitBodyV1,
+) -> KagemushaEnrollmentPermitV1 {
+    use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
+    let signature: P256Signature = signing_key(79).sign(&body.signing_message().unwrap());
+    KagemushaEnrollmentPermitV1::from_issuer_der(
+        body,
+        &f.config.scheme,
+        &f.config.enrollment_certificate,
+        signature.to_der().as_bytes(),
+    )
+    .unwrap()
+}
+#[test]
+fn prekey_stable_selection_preserves_originals_and_excludes_only_dispatch_fields() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 101);
+    let mut owner = owner(&f, &d);
+    let first = dispatch(&f, &mut owner);
+    let original = permit(&f, &first).encode_canonical().unwrap();
+    owner.accept_permit(&original).unwrap();
+    let resume = dispatch(&f, &mut owner);
+    assert_eq!(resume.purpose, KagemushaEnrollmentPermitPurposeV1::Resume);
+    assert_eq!(resume.previous_permit.as_ref(), Some(&original));
+    assert_ne!(first.native_dispatch_nonce, resume.native_dispatch_nonce);
+    assert_eq!(first.client_nonce, resume.client_nonce);
+    assert_eq!(
+        first.stable_selection().unwrap(),
+        resume.stable_selection().unwrap()
+    );
+    for field in 0..7 {
+        let mut changed = first.clone();
+        match field {
+            0 => changed.request_id[0] ^= 1,
+            1 => changed.client_nonce[0] ^= 1,
+            2 => changed.manifest_digest[0] ^= 1,
+            3 => changed.release_digest[0] ^= 1,
+            4 => changed.service_origin_digest[0] ^= 1,
+            5 => changed.fi_digest[0] ^= 1,
+            _ => changed.actor_digest[0] ^= 1,
+        }
+        assert_ne!(
+            first.stable_selection().unwrap(),
+            changed.stable_selection().unwrap()
+        );
+    }
+    let mut invalid = resume;
+    invalid.previous_permit = Some(permit(&f, &invalid).encode_canonical().unwrap());
+    assert!(
+        invalid.validate().is_err(),
+        "Resume cannot replace first Fresh permit"
+    );
+}
+#[test]
+fn prekey_permit_rejects_wrong_scope_nonce_attempt_and_consumes_failed_dispatch() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 103);
+    let mut owner = owner(&f, &d);
+    for field in 0..8 {
+        let dispatch = dispatch(&f, &mut owner);
+        let mut body = permit(&f, &dispatch).body;
+        match field {
+            0 => body.native_dispatch_nonce[0] ^= 1,
+            1 => body.client_nonce[0] ^= 1,
+            2 => body.manifest_digest[0] ^= 1,
+            3 => body.release_digest[0] ^= 1,
+            4 => body.service_origin_digest[0] ^= 1,
+            5 => body.fi_digest[0] ^= 1,
+            6 => body.actor_digest[0] ^= 1,
+            _ => body.originals_digest[0] ^= 1,
+        }
+        let wrong = resign_permit(&f, body).encode_canonical().unwrap();
+        assert!(owner.accept_permit(&wrong).is_err());
+        assert!(
+            owner
+                .accept_permit(&permit(&f, &dispatch).encode_canonical().unwrap())
+                .is_err()
+        );
+    }
+    let first = dispatch(&f, &mut owner);
+    let signed = permit(&f, &first).encode_canonical().unwrap();
+    let message = owner.accept_permit(&signed).unwrap();
+    assert_eq!(owner.accept_permit(&signed).unwrap(), message);
+    let resume = dispatch(&f, &mut owner);
+    let mut wrong = permit(&f, &resume).body;
+    wrong.attempt_id[0] ^= 1;
+    assert!(
+        owner
+            .accept_permit(&resign_permit(&f, wrong).encode_canonical().unwrap())
+            .is_err()
+    );
+    d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+}
+#[test]
+fn prekey_clock_deadline_is_checked_again_after_account_authorization() {
+    for (index, time) in [
+        Ok(120_000),
+        Ok(999),
+        Err(KagemushaWalletUnavailableV1::Busy),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let f = fixture();
+        let d = DeviceV1::new(
+            KagemushaWalletAnchorPolicyV1::NotRequired,
+            107 + index as u8,
+        );
+        let mut owner = owner(&f, &d);
+        let message = begin(&f, &mut owner);
+        d.platform.with(|state| state.monotonic = time);
+        assert!(owner.authorize(&sign(&f, &message)).is_err());
+        d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+    }
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 113);
+    let mut owner = owner(&f, &d);
+    let message = begin(&f, &mut owner);
+    d.platform.with(|state| state.boot = Ok([99; 32]));
+    assert!(owner.authorize(&sign(&f, &message)).is_err());
+    d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+}
+#[test]
+fn prekey_elapsed_expiry_after_durable_intent_cannot_reach_hardware_generation() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 127);
+    d.platform.with(|state| {
+        state.generation_policy = KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly
+    });
+    let mut owner = owner(&f, &d);
+    let message = begin(&f, &mut owner);
+    // Owner authorization, grant check, begin check, pre-intent check, actual key dispatch.
+    d.platform.with(|state| {
+        state.monotonic_script = [Ok(1000), Ok(1000), Ok(1000), Ok(1000), Ok(120000)].into()
+    });
+    assert!(owner.authorize(&sign(&f, &message)).is_err());
+    d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+    assert_eq!(
+        owner.into_provider().slots().unwrap().len(),
+        1,
+        "intent was actually retained"
+    );
+}
+#[test]
+fn prekey_restart_preserves_client_and_attempt_and_never_recreates_lost_selection() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 131);
+    let mut current = owner(&f, &d);
+    let first = dispatch(&f, &mut current);
+    let original = permit(&f, &first).encode_canonical().unwrap();
+    current.accept_permit(&original).unwrap();
+    drop(current.into_provider());
+    let mut current = owner(&f, &d);
+    let resume = dispatch(&f, &mut current);
+    assert_eq!(resume.client_nonce, first.client_nonce);
+    assert_eq!(resume.previous_permit, Some(original));
+    let message = current
+        .accept_permit(&permit(&f, &resume).encode_canonical().unwrap())
+        .unwrap();
+    current.authorize(&sign(&f, &message)).unwrap();
+    let root = KagemushaWalletCustodyDirV1::root();
+    let selected =
+        d.fs.visible_names(&root)
+            .into_iter()
+            .find(|name| name.starts_with("prekey-") && name.ends_with("-accepted.norito"))
+            .unwrap();
+    d.fs.unlink(&root, &selected).unwrap();
+    assert!(
+        current
+            .begin(
+                &[11; 32],
+                &norito::encode_canonical(&f.account).unwrap(),
+                &norito::encode_canonical(&f.asset).unwrap()
+            )
+            .is_err()
+    );
+    d.platform.with(|state| assert_eq!(state.generate_calls, 1));
+}
+#[test]
+fn prekey_corrupt_client_and_unavailable_storage_never_generate_replacement_identity() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 137);
+    let mut owner = owner(&f, &d);
+    let _ = dispatch(&f, &mut owner);
+    let root = KagemushaWalletCustodyDirV1::root();
+    let client =
+        d.fs.visible_names(&root)
+            .into_iter()
+            .find(|name| name.starts_with("prekey-") && name.ends_with("-client.norito"))
+            .unwrap();
+    d.fs.place_unsynced(&root, &client, b"corrupt selected client");
+    assert!(
+        owner
+            .begin(
+                &[11; 32],
+                &norito::encode_canonical(&f.account).unwrap(),
+                &norito::encode_canonical(&f.asset).unwrap()
+            )
+            .is_err()
+    );
+    d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+}
+
+#[test]
+fn prekey_uncertain_client_publication_adopts_exact_identity_before_new_dispatch() {
+    let f = fixture();
+    let baseline = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 139);
+    let mut current = owner(&f, &baseline);
+    let start = baseline.fs.steps();
+    let _ = dispatch(&f, &mut current);
+    let boundary = baseline
+        .fs
+        .trace_since(start)
+        .iter()
+        .rposition(|step| *step == KagemushaWalletSimStepV1::SyncDir)
+        .unwrap() as u64;
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 149);
+    let mut current = owner(&f, &d);
+    d.fs.inject(d.fs.steps() + boundary, KagemushaWalletSimFaultV1::Error);
+    let account = norito::encode_canonical(&f.account).unwrap();
+    let asset = norito::encode_canonical(&f.asset).unwrap();
+    assert!(current.begin(&[11; 32], &account, &asset).is_err());
+    let root = KagemushaWalletCustodyDirV1::root();
+    let name =
+        d.fs.visible_names(&root)
+            .into_iter()
+            .find(|name| name.starts_with("prekey-") && name.ends_with("-client.norito"))
+            .unwrap();
+    let original = d.fs.visible_file(&root, &name).unwrap();
+    let selected = PreKeyDispatchV1::decode(&original).unwrap();
+    d.fs.clear_faults();
+    let recovered = dispatch(&f, &mut current);
+    assert_eq!(
+        selected.stable_selection().unwrap(),
+        recovered.stable_selection().unwrap()
+    );
+    assert_ne!(
+        selected.native_dispatch_nonce,
+        recovered.native_dispatch_nonce
+    );
+    assert_eq!(d.fs.visible_file(&root, &name).unwrap(), original);
+    d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+}
+
+#[test]
+fn failed_new_dispatch_cannot_silently_use_previous_enrollment_selection() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 151);
+    let mut current = enrolled(&f, &d);
+    assert!(
+        current
+            .begin(&[0; 32], b"bad account", b"bad asset")
+            .is_err()
+    );
+    assert!(current.progress().is_err());
+    assert!(current.prepare_request(&f.evidence).is_err());
+    let message = begin(&f, &mut current);
+    assert!(matches!(
+        current.authorize(&sign(&f, &message)).unwrap(),
+        EnrollmentProgressV1::Evidence { .. }
+    ));
+    d.platform.with(|state| assert_eq!(state.generate_calls, 1));
+}
+
+#[test]
+fn enrollment_e6_requires_the_exact_prekey_selected_enrollment_certificate() {
+    use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 157);
+    let mut current = enrolled(&f, &d);
+    let request = RequestV1::decode(&request(&f, &mut current)).unwrap();
+    let expected = issuer_result(&f, &request);
+    let decoded = expected
+        .verify_for(&f.config.scheme, &f.config.enrollment_certificate, &request)
+        .unwrap();
+    let certificate_body = KagemushaWalletSignerCertificateBodyV1 {
+        version: 1,
+        scheme_id: f.config.scheme.scheme_id(),
+        role: KagemushaWalletSignerRoleV1::Enrollment,
+        key: public_key(&signing_key(83)),
+        serial: 2,
+    };
+    let signature: P256Signature = signing_key(17).sign(&certificate_body.signing_message());
+    let foreign = KagemushaWalletSignerCertificateV1::sign(
+        certificate_body,
+        &f.config.scheme,
+        KagemushaWalletSignerOutputV1::Raw(signature.to_bytes().into()),
+    )
+    .unwrap();
+    let mut body = decoded.body;
+    body.issuer_certificate = foreign.certificate_digest();
+    let signature: P256Signature = signing_key(83).sign(&body.signing_message());
+    let credential = KagemushaWalletCredentialV1::sign(
+        body,
+        &foreign,
+        KagemushaWalletSignerOutputV1::Raw(signature.to_bytes().into()),
+    )
+    .unwrap();
+    let altered = ResultV1 {
+        credential: credential.to_canonical_bytes().unwrap(),
+        certificates: norito::encode_canonical(
+            &KagemushaWalletCertificateSetV1::new(vec![foreign]).unwrap(),
+        )
+        .unwrap(),
+        ..expected.clone()
+    };
+    assert!(
+        altered
+            .verify_for(&f.config.scheme, &foreign, &request)
+            .is_ok(),
+        "independently valid same-scheme issuer"
+    );
+    assert!(
+        altered
+            .verify_for(&f.config.scheme, &f.config.enrollment_certificate, &request)
+            .is_err()
+    );
+    assert!(
+        current
+            .accept_credential(&altered.encode().unwrap())
+            .is_err()
+    );
+    let mut changed = request.clone();
+    changed.account_signature[0] ^= 1;
+    assert!(
+        expected
+            .verify_for(&f.config.scheme, &f.config.enrollment_certificate, &changed)
+            .is_err()
+    );
+    assert_eq!(
+        current
+            .accept_credential(&expected.encode().unwrap())
+            .unwrap(),
+        expected.encode().unwrap()
+    );
+}
+
+#[test]
+fn enrollment_signed_abandonment_is_explicit_terminal_and_exact_across_restart() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 163);
+    let mut current = enrolled(&f, &d);
+    let original = current.abandon().unwrap();
+    assert!(original.len() <= KAGEMUSHA_WALLET_ABANDONMENT_MAX_BYTES_V1);
+    let calls = d.platform.with(|state| state.sign_calls);
+    assert_eq!(current.abandon().unwrap(), original);
+    assert!(matches!(
+        current.progress().unwrap(),
+        EnrollmentProgressV1::Abandoned
+    ));
+    assert!(current.prepare_request(&f.evidence).is_err());
+    drop(current.into_provider());
+    let mut current = owner(&f, &d);
+    dispatch(&f, &mut current);
+    assert_eq!(current.abandon().unwrap(), original);
+    assert!(
+        current.authorize(&[0; 64]).is_err(),
+        "abandon consumes pending dispatch"
+    );
+    d.platform.with(|state| assert_eq!(state.sign_calls, calls));
+}
+#[test]
+#[ignore = "requires the independently pinned, complete generated wallet catalog and finality metadata"]
+fn persisted_complete_sources_open_real_bootstrap_and_reopen_exact_output() {
+    use crate::{
+        kagemusha_wallet_artifacts_v1::{
+            InstallationV1,
+            producer_inventory::{
+                DirectoryOriginalsV1, PROVING_KEY_MAX_BYTES_V1,
+                open_pinned_engineering_wallet_sources,
+            },
+        },
+        kagemusha_wallet_state_v1::{Completion, NativeWalletRuntimeV1},
+    };
+    use iroha_pasta::msm::MemoryBudget;
+    use iroha_plonk::keys::pk::{CosetCachePolicy, artifact::ReadConfig};
+    use std::{path::PathBuf, sync::Arc};
+
+    // These are engineering source artifacts and explicit simulated hardware. The complete
+    // grant, pinned native genesis, original keys and Bootstrap proof use production owners.
+    // This test establishes neither mobile attestation nor a phone performance qualification.
+    let output = PathBuf::from(
+        std::env::var_os("KAGEMUSHA_WALLET_NATIVE_OUTPUT").expect("fresh native owner output"),
+    );
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let parent = output.parent().unwrap().canonicalize().unwrap();
+    assert!(parent.starts_with(root.join("target/qualification")));
+    assert!(
+        !output.exists(),
+        "never replace retained qualification output"
+    );
+    let (installed, sources, genesis, originals) = open_pinned_engineering_wallet_sources(&output);
+    let genesis = Arc::new(genesis);
+    let mut f = fixture();
+    f.config.scheme = *installed.verifier().scheme();
+    assert_eq!(
+        f.config.scheme.scheme_root_key,
+        public_key(&signing_key(17))
+    );
+    let (scheme_id, manifest_digest) = sources.installation();
+    assert_eq!(scheme_id, f.config.scheme.scheme_id());
+    f.config.installation = InstallationV1 {
+        scheme_id,
+        manifest_digest,
+    };
+    f.config.app.scheme_id = scheme_id;
+    f.config.policy.scheme_id = scheme_id;
+    f.config.policy.app_policy = f.config.app.policy_digest().unwrap();
+    f.config.enrollment_certificate = enrollment_certificate(&f.config.scheme);
+    f.challenge.scheme_id = scheme_id;
+    f.challenge.app_policy = f.config.app.policy_digest().unwrap();
+    f.challenge.enrollment_policy = f.config.policy.policy_digest().unwrap();
+
+    let device = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 83);
+    let mut enrollment = enrolled(&f, &device);
+    let request = RequestV1::decode(&request(&f, &mut enrollment)).unwrap();
+    let result = issuer_result(&f, &request).encode().unwrap();
+    enrollment.accept_credential(&result).unwrap();
+    let frames = enrollment.open_originals().unwrap();
+    let read = ReadConfig {
+        maximum_bytes: PROVING_KEY_MAX_BYTES_V1,
+        maximum_rows: 1 << 16,
+        coset_cache: CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let runtime = NativeWalletRuntimeV1::new(
+        enrollment.into_provider(),
+        Arc::clone(&installed),
+        Arc::clone(&sources),
+        Arc::clone(&genesis),
+        originals,
+        read,
+        MemoryBudget::DEFAULT,
+    );
+    let pending = runtime
+        .begin(&frames[0], &frames[1], &frames[2], &frames[3])
+        .unwrap();
+    let first_challenge = pending.challenge().to_vec();
+    let failure = match pending.finish(&[0; 64]) {
+        Ok(_) => panic!("invalid account signature admitted"),
+        Err(failure) => failure,
+    };
+    let (runtime, _) = failure.into_parts();
+    let pending = runtime
+        .begin(&frames[0], &frames[1], &frames[2], &frames[3])
+        .unwrap();
+    assert_ne!(pending.challenge(), first_challenge);
+    let signature = sign(&f, pending.challenge());
+    let mut wallet = pending.finish(&signature).unwrap();
+    let before = device.platform.with(|state| state.sign_calls);
+    let completed = wallet.bootstrap().unwrap();
+    let Completion::Complete(bytes) = &completed else {
+        panic!("actual Bootstrap must reach durable completion");
+    };
+    assert!(!bytes.is_empty());
+    let signed = device.platform.with(|state| state.sign_calls);
+    assert_eq!(signed, before + 1);
+    assert_eq!(wallet.bootstrap().unwrap(), completed);
+    assert_eq!(device.platform.with(|state| state.sign_calls), signed);
+    let snapshot = wallet.snapshot().unwrap();
+    assert_eq!(snapshot.sequence, 0);
+    assert_eq!(snapshot.balance, 0);
+    assert_eq!(snapshot.fold_backlog, 1);
+    assert!(snapshot.folded_balance.is_none());
+    std::fs::write(output.join("bootstrap-original.norito"), bytes).unwrap();
+    drop(wallet);
+
+    let provider = KagemushaWalletProviderV1::open(
+        device.fs.clone(),
+        device.platform.clone(),
+        scheme_id,
+        test_options(),
+    )
+    .unwrap();
+    let originals =
+        DirectoryOriginalsV1::open_existing(output.join("originals"), PROVING_KEY_MAX_BYTES_V1)
+            .unwrap();
+    let runtime = NativeWalletRuntimeV1::new(
+        provider,
+        installed,
+        sources,
+        genesis,
+        originals,
+        read,
+        MemoryBudget::DEFAULT,
+    );
+    let pending = runtime
+        .begin(&frames[0], &frames[1], &frames[2], &frames[3])
+        .unwrap();
+    let signature = sign(&f, pending.challenge());
+    let mut recovered = pending.finish(&signature).unwrap();
+    assert_eq!(recovered.bootstrap().unwrap(), completed);
+    assert_eq!(recovered.snapshot().unwrap(), snapshot);
+    assert_eq!(device.platform.with(|state| state.sign_calls), signed);
 }

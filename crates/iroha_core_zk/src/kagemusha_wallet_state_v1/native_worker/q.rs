@@ -5,8 +5,6 @@ use iroha_kagemusha_proof::{
     q_sigma::{SigmaSlotWitness, native::IncomingSigma},
     q_signature::SignatureWitness,
 };
-use iroha_pasta::Eq;
-use iroha_plonk::pcs::ipa::PinnedParams;
 use iroha_plonk_gadgets::bytes::p_bytes_native;
 
 use super::*;
@@ -45,7 +43,8 @@ impl NativeFoldWorkerV1 {
         {
             return Err(Error::Proof("Q source schedule"));
         }
-        let params = proof(PinnedParams::<Eq>::derive(16))?;
+        let params = proof(self.installed.verifier().vesta_parameters(16))?;
+        let q_params = self.installed.verifier().pallas_parameters();
         // Repeating the same released capsule uses the same public local-fold
         // nonce. Proof hiding still uses fresh OS randomness; the retained exact
         // proof wins after checkpoint publication and is never regenerated there.
@@ -53,7 +52,7 @@ impl NativeFoldWorkerV1 {
         let sigma = proof(q.sigma().prepare(
             input.own.clone(),
             input.incoming.clone(),
-            &params,
+            params,
             salt,
             &self.fold_config(cancellation),
         ))?;
@@ -67,6 +66,7 @@ impl NativeFoldWorkerV1 {
             cancellation.check()?;
             checked.push(q_checkpoint::restore(
                 &q.keys()[stage],
+                q_params,
                 stage,
                 source,
                 bytes,
@@ -123,6 +123,7 @@ impl NativeFoldWorkerV1 {
         }
         let bytes = q_checkpoint::encode(
             &q.keys()[stage],
+            q_params,
             stage,
             source,
             &original,

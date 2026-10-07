@@ -43,9 +43,10 @@ cancellable_copy!(
     iroha_kagemusha_proof::omega::native::Error,
 );
 
-// These APIs decode fixed metadata or select pinned parameters without taking a
-// cancellation signal. Their failures are hard; new arithmetic error families
-// require an explicit cancellation review. Runtime installations prederive parameters.
+// These APIs decode fixed metadata or derive pinned parameters during trusted
+// installation without taking a cancellation signal. Active wallet imports and
+// folds borrow the installation's retained parameters. Their failures are hard;
+// new arithmetic error families require an explicit cancellation review.
 macro_rules! noncancellable {
     ($($ty:ty),+ $(,)?) => {$(
         impl NativeProofError for $ty {

@@ -174,7 +174,9 @@ original and recorded blacklist decision together. Offer/Request setup bytes are
 canonical object frames, while peer transports require an Envelope frame. Use
 `envelope(_:original:)` and `original(_:envelope:)` for native, bounded conversion
 with the expected kind and this wallet's scheme; conversion grants no authority.
-Direct-time tokens can be finished or cancelled; cancellation changes no anchor.
+Direct-time challenges are bound to the issuing wallet and can be finished or
+cancelled exactly once; cancellation changes no anchor. Invalid local response
+bounds leave the challenge usable, while native dispatch consumes it even on failure.
 Headers and rebuilt authenticated native artifacts are mandatory. An unprovisioned
 runtime reports `artifactsUnavailable`; full real-wallet and phone qualification
 remain open.
@@ -184,6 +186,10 @@ owner. Native configuration selects the genuine approved scheme/policy/root orig
 The existing account first authorizes local key creation, then signs the exact E5
 binding over that generated key and original evidence. Native retains E5 before
 returning network bytes, including the App Attest key identifier and first assertion.
+Enrollment begin returns native-retained issuer dispatch DATA for the selected request ID,
+account and asset. `acceptPermit` verifies the rooted signed pre-key permit before returning
+the existing-account challenge. Native checks the same-boot elapsed deadline again at actual
+key generation and preserves the original server attempt across retries.
 The issuer still owns live-challenge, account eligibility and platform verification.
 Native authenticates and retains its exact E6 evidence and signed credential before
 selecting credential zero. `loadRuntime` qualifies the complete proof-source graph;
@@ -1784,8 +1790,8 @@ Inspect verifying keys via the Torii helpers:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let detail = try await torii.getVerifyingKey(backend: "halo2/ipa", name: "payments_v1")
-    let current = try await torii.listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: "halo2/ipa"))
+    let detail = try await torii.getVerifyingKey(backend: "pipa-r/pasta", name: "payments_v1")
+    let current = try await torii.listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: "pipa-r/pasta"))
     print("vk status:", detail.record.status, "count:", current.count)
 }
 ```
@@ -1888,15 +1894,15 @@ routes.
 
 ### Verifying key registry
 
-Interact with the Torii verifying-key endpoints to inspect and monitor Halo2 verifier metadata:
+Interact with the Torii verifying-key endpoints to inspect and monitor native PIPA-R verifier metadata. Verifying-key lists use one JSON array format, including `ids_only` responses:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let detail = try await torii.getVerifyingKey(backend: "halo2/ipa", name: "vk_main")
+    let detail = try await torii.getVerifyingKey(backend: "pipa-r/pasta", name: "vk_main")
     print("vk status:", detail.record.status)
 
     let idsOnly = try await torii.listVerifyingKeys(
-        query: ToriiVerifyingKeyListQuery(backend: "halo2/ipa", idsOnly: true)
+        query: ToriiVerifyingKeyListQuery(backend: "pipa-r/pasta", idsOnly: true)
     )
     print("known ids:", idsOnly.map(\.id.name))
 }
@@ -1919,12 +1925,12 @@ if #available(iOS 15, macOS 12, *) {
     let draft = try await torii.registerVerifyingKey(
         ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            backend: "halo2/ipa",
+            backend: "pipa-r/pasta",
             name: "vk_main",
             version: 1,
-            circuitId: "halo2/ipa::transfer_v1",
+            circuitId: "pipa-r/pasta/confidential-transfer-v1",
             publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-            gasScheduleId: "halo2_default",
+            gasScheduleId: "native_pipa_r_default",
             verifyingKeyBytes: Data([1, 2, 3]),
             status: .active
         )
@@ -1970,7 +1976,7 @@ if #available(iOS 15, macOS 12, *) {
 
     // Proof outcomes, narrowed on Torii by backend and matched locally by proof hash.
     let proofs = torii.streamProofEvents(
-        filter: ToriiProofEventFilter(backend: "halo2/ipa", proofHashHex: String(repeating: "a", count: 64))
+        filter: ToriiProofEventFilter(backend: "pipa-r/pasta", proofHashHex: String(repeating: "a", count: 64))
     )
     Task.detached {
         do {
@@ -2596,3 +2602,10 @@ truncated records, malformed peer bindings, invalid withdrawal hash widths or ma
 retired reward-plan layouts, invalid fee custody and
 noncanonical quantity decimals. This structural codec
 does not verify signatures, custody, or committee activation.
+
+The enrollment handle's explicit `abandon` action permanently closes an unused enrollment
+before runtime handoff and returns its exact retained signed ledger control. Native refuses
+once Bootstrap commits. Closing the handle only releases ownership. Abandon output is published
+before an immutable digest selection, and nothing is returned until both are durable; a missing
+selected original is refused. Recovery may complete a missing selection for a present valid
+original. This local mechanism does not establish protection against complete filesystem rollback.

@@ -3,7 +3,8 @@
 //! This codec owns no issuer key and grants no platform or policy authority. The issuer must
 //! authenticate its worker/runtime/configuration, retain the original request before dispatch,
 //! enforce challenge single use and recover uncertain attempts without verifying them again.
-//! TODO: connect this boundary to the node's durable issuer journal and private process custody.
+//! The node journal retains these original requests and checked replies before signing.
+//! TODO: connect the node service's approved policy, private process custody and signer.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model::kagemusha::*;
@@ -11,6 +12,12 @@ use norito::json::{self, Value};
 use sha2::{Digest as _, Sha256};
 
 use super::{IssuerEvidenceV1, PlatformEvidenceV1, RequestV1};
+
+#[path = "issuer_worker_configuration.rs"]
+mod configuration;
+pub use configuration::{
+    GoogleDecoderOriginalV1, VerifierConfigurationV1, VerifierRuntimeSelectionV1,
+};
 
 const SCHEMA: &str = "iroha.kagemusha.wallet-e1-verifier.v1";
 const MAX_REQUEST: usize = 320 * 1024;
@@ -126,7 +133,10 @@ fn binary(value: &str, maximum: usize) -> Result<Vec<u8>, Error> {
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| Error("binary encoding"))?;
-    if bytes.is_empty() || bytes.len() > maximum || STANDARD.encode(&bytes) != value {
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(Error("binary bound"));
+    }
+    if STANDARD.encode(&bytes) != value {
         return Err(Error("binary spelling"));
     }
     Ok(bytes)
@@ -279,6 +289,16 @@ impl VerifierRequestV1 {
             "rejected" => Ok(OutcomeV1::Rejected),
             _ => Err(Error("unknown outcome")),
         }
+    }
+
+    /// Recheck an exact evidence original retained by the issuer after an authenticated reply.
+    /// This proves the same request/configuration/time bindings as `response`; it does not
+    /// authenticate arbitrary caller-supplied evidence or grant credential-signing authority.
+    pub fn retained_evidence(&self, original: &[u8]) -> Result<EvidenceProjectionV1, Error> {
+        if original.is_empty() || original.len() > MAX_RESULT {
+            return Err(Error("frame bound"));
+        }
+        self.projection(original.to_vec())
     }
 
     fn projection(&self, original_result: Vec<u8>) -> Result<EvidenceProjectionV1, Error> {

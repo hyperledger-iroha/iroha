@@ -8,7 +8,18 @@ const STAGING: &str = ".preparing";
 
 /// A missing generation may be prepared; a visible generation without its manifest is corrupt.
 pub(super) fn read(directory: &PrivateDirectory) -> Result<RetainedLocalnet> {
-    let generation = directory.open_child(DIRECTORY)?;
+    read_generation(&directory.open_child(DIRECTORY)?)
+}
+
+/// Only definite initial child absence permits preparing a new generation.
+pub(super) fn read_optional(directory: &PrivateDirectory) -> Result<Option<RetainedLocalnet>> {
+    directory
+        .open_child_optional(DIRECTORY)?
+        .map(|generation| read_generation(&generation))
+        .transpose()
+}
+
+fn read_generation(generation: &PrivateDirectory) -> Result<RetainedLocalnet> {
     let bytes = generation.read(MANIFEST, MAX_METADATA).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             Error::Invalid("published managed generation is missing its immutable manifest".into())
@@ -21,13 +32,12 @@ pub(super) fn read(directory: &PrivateDirectory) -> Result<RetainedLocalnet> {
 
 /// Discard only a never-published stage while the caller exclusively owns the context operation.
 fn fresh_stage(directory: &PrivateDirectory) -> Result<PrivateDirectory> {
-    match directory.open_child(STAGING) {
-        Ok(stage) => {
+    match directory.open_child_optional(STAGING)? {
+        Some(stage) => {
             stage.clear_contents_preserving(&[])?;
             stage.remove_empty()?;
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+        None => {}
     }
     Ok(directory.create_child(STAGING)?)
 }

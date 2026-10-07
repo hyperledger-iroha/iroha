@@ -210,3 +210,7 @@ mod timing;
 #[cfg(iroha_plonk_oracle)]
 #[path = "vendored_goldens/verdict_parity.rs"]
 mod verdict_parity;
+
+#[cfg(iroha_plonk_oracle)]
+#[path = "vendored_goldens/succinct_parity.rs"]
+mod succinct_parity;

@@ -4,7 +4,25 @@ use super::*;
 
 pub(crate) enum Setup {
     Bootstrap,
+    FeeClaim {
+        credit: [u8; 32],
+    },
+    FeeOriginal {
+        request: bool,
+        original: Vec<u8>,
+    },
+    LedgerFinality(Vec<u8>),
+    LedgerStatus,
+    FeePayout {
+        credit: [u8; 32],
+        world: Vec<u8>,
+        payout: Vec<u8>,
+    },
+    BackgroundStatus,
     Activation,
+    CloseLoads {
+        id: [u8; 32],
+    },
     Transport {
         kind: u8,
         wrap: bool,
@@ -25,6 +43,10 @@ pub(crate) enum Setup {
         >,
     },
     Credited(Vec<u8>),
+    CreditedOriginal {
+        status: bool,
+        original: Vec<u8>,
+    },
     BeginTime,
     CancelTime {
         token: u64,
@@ -37,13 +59,20 @@ pub(crate) enum Setup {
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        0 | 1 | 4 | 6 | 15 => [0; 3],
+        0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 => [0; 3],
+        21 | 22 => [state::FEE_CLAIM_MAX_BYTES_V1, 0, 0],
+        23 => [state::LEDGER_PROOF_MAX_BYTES_V1, 0, 0],
+        25 => [
+            iroha_data_model::sumeragi_finality::MAX_WORLD_STATE_SNAPSHOT_BYTES_V1,
+            state::PAYOUT_RECORD_MAX_BYTES_V1,
+            0,
+        ],
         2 => [
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
         ],
-        3 | 7..=14 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
+        3 | 7..=14 | 16..=17 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
         5 => [
             KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
@@ -69,7 +98,7 @@ pub(crate) fn request(
 ) -> Result<Setup> {
     let id: [u8; 32] = id.try_into().map_err(|_| Failure::code(INVALID))?;
     let bounds = bounds(selector)?;
-    if ((1..=2).contains(&selector) != (id != [0; 32]))
+    if (matches!(selector, 1 | 2 | 19 | 20 | 25) != (id != [0; 32]))
         || ((selector == 1) != (amount != 0))
         || (matches!(selector, 5 | 6) != (token != 0))
         || originals
@@ -82,7 +111,21 @@ pub(crate) fn request(
     let [first, second, third] = originals;
     Ok(match selector {
         0 => Setup::Bootstrap,
+        20 => Setup::FeeClaim { credit: id },
+        21 | 22 if !first.is_empty() => Setup::FeeOriginal {
+            request: selector == 22,
+            original: first.to_vec(),
+        },
+        23 if !first.is_empty() => Setup::LedgerFinality(first.to_vec()),
+        24 => Setup::LedgerStatus,
+        25 if !first.is_empty() && !second.is_empty() => Setup::FeePayout {
+            credit: id,
+            world: first.to_vec(),
+            payout: second.to_vec(),
+        },
         15 => Setup::Activation,
+        18 => Setup::BackgroundStatus,
+        19 => Setup::CloseLoads { id },
         1 => Setup::Offer { id, amount },
         2 if !first.is_empty() && second.is_empty() == third.is_empty() => Setup::Request {
             id,
@@ -94,6 +137,10 @@ pub(crate) fn request(
             },
         },
         3 if !first.is_empty() => Setup::Credited(first.to_vec()),
+        16..=17 if !first.is_empty() => Setup::CreditedOriginal {
+            status: selector == 17,
+            original: first.to_vec(),
+        },
         4 => Setup::BeginTime,
         6 => Setup::CancelTime { token },
         7..=14 if !first.is_empty() => Setup::Transport {
@@ -128,6 +175,20 @@ fn take_time_response<T>(
     let exchange = take_time(times, token)?;
     Ok((exchange, decode(anchor)?, decode(certificate)?))
 }
+fn ledger_progress(progress: Option<state::LedgerProgressV1>) -> Response {
+    match progress {
+        Some(progress) => Response {
+            kind: 33,
+            sequence: u128::from(progress.height),
+            bytes: progress.block_hash.to_vec(),
+            ..Response::default()
+        },
+        None => Response {
+            kind: 34,
+            ..Response::default()
+        },
+    }
+}
 impl<P, S> NativeWallet<P, S>
 where
     P: advance::KagemushaWalletPlatformV1,
@@ -135,6 +196,49 @@ where
 {
     pub(super) fn setup_inner(&mut self, input: Setup) -> Result<Response> {
         let bytes = match input {
+            Setup::FeeClaim { credit } => {
+                let original = self.wallet.fee_claim(credit)?;
+                return Ok(match original {
+                    None => Response {
+                        kind: 32,
+                        ..Response::default()
+                    },
+                    Some(original) => Response {
+                        kind: 31,
+                        bytes: original.to_canonical_bytes(&self.wallet.snapshot()?.scheme_id)?,
+                        ..Response::default()
+                    },
+                });
+            }
+            Setup::FeeOriginal { request, original } => {
+                let claim = state::RetainedFeeClaim::decode_canonical(
+                    &original,
+                    &self.wallet.snapshot()?.scheme_id,
+                )?;
+                if request {
+                    claim.request
+                } else {
+                    claim.payment
+                }
+            }
+            Setup::LedgerFinality(original) => {
+                return Ok(ledger_progress(Some(
+                    self.wallet.ingest_ledger_finality(&original)?,
+                )));
+            }
+            Setup::LedgerStatus => return Ok(ledger_progress(self.wallet.ledger_progress()?)),
+            Setup::FeePayout {
+                credit,
+                world,
+                payout,
+            } => {
+                self.wallet
+                    .acknowledge_fee_payout_originals(credit, &world, &payout)?;
+                return Ok(Response {
+                    kind: 35,
+                    ..Response::default()
+                });
+            }
             Setup::Transport {
                 kind,
                 wrap,
@@ -143,7 +247,19 @@ where
                 let scheme = self.wallet.snapshot()?.scheme_id;
                 transport::convert(kind, wrap, &original, &scheme)?
             }
+            Setup::CreditedOriginal { status, original } => {
+                let scheme = self.wallet.snapshot()?.scheme_id;
+                transport::credited(status, &original, &scheme)?
+            }
+            Setup::BackgroundStatus => return Err(Failure::code(INTERNAL)),
             Setup::Bootstrap => return Ok(completion(Some(self.wallet.bootstrap()?))),
+            Setup::CloseLoads { id } => {
+                return Ok(Response {
+                    kind: 30,
+                    bytes: self.wallet.close_loads(id)?,
+                    ..Response::default()
+                });
+            }
             Setup::Activation => {
                 return Ok(Response {
                     kind: 17,
@@ -213,8 +329,12 @@ mod tests {
     use super::*;
     #[test]
     fn setup_intake_rejects_unused_authority_fields_and_wrong_bounds() {
-        for selector in [0, 1, 3, 4, 15] {
-            let id = if selector == 1 { [1; 32] } else { [0; 32] };
+        for selector in [0, 1, 3, 4, 15, 18, 19] {
+            let id = if matches!(selector, 1 | 19) {
+                [1; 32]
+            } else {
+                [0; 32]
+            };
             let amount = if selector == 1 { u128::MAX } else { 0 };
             let first: &[u8] = if selector == 3 { &[7] } else { &[] };
             assert!(request(&id, selector, amount, 0, [first, &[], &[]]).is_ok());
@@ -231,11 +351,44 @@ mod tests {
         assert!(request(&[1; 32], 6, 0, 1, [&[]; 3]).is_err());
         assert!(request(&[0; 32], 6, 1, 1, [&[]; 3]).is_err());
         assert!(request(&[0; 32], 6, 0, 1, [&[7], &[], &[]]).is_err());
-        for selector in 7..=14 {
+        for selector in (7..=14).chain(16..=17) {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(16).is_err());
+        assert!(bounds(26).is_err());
+    }
+    #[test]
+    fn ledger_and_fee_setup_enforce_bounds_identity_and_progress_shape() {
+        let zero = [0; 32];
+        let credit = [7; 32];
+        assert!(request(&credit, 20, 0, 0, [&[]; 3]).is_ok());
+        assert!(request(&zero, 20, 0, 0, [&[]; 3]).is_err());
+        for selector in 21..=23 {
+            assert!(request(&zero, selector, 0, 0, [&[1], &[], &[]]).is_ok());
+            assert!(request(&credit, selector, 0, 0, [&[1], &[], &[]]).is_err());
+            assert!(request(&zero, selector, 0, 0, [&[]; 3]).is_err());
+        }
+        assert_eq!(bounds(21).unwrap()[0], 21_024);
+        assert_eq!(bounds(23).unwrap()[0], 36 * 1024 * 1024);
+        assert_eq!(bounds(25).unwrap(), [32 * 1024 * 1024, 1024, 0]);
+        assert!(request(&credit, 25, 0, 0, [&[1], &[2], &[]]).is_ok());
+        assert!(request(&zero, 25, 0, 0, [&[1], &[2], &[]]).is_err());
+        assert!(request(&credit, 25, 0, 0, [&[1], &[], &[]]).is_err());
+        assert!(request(&credit, 25, 0, 1, [&[1], &[2], &[]]).is_err());
+        assert!(request(&zero, 24, 0, 0, [&[]; 3]).is_ok());
+        let result = ledger_progress(Some(state::LedgerProgressV1 {
+            height: u64::MAX,
+            block_hash: [9; 32],
+        }));
+        assert_eq!(
+            (result.kind, result.sequence, result.detail, result.bytes),
+            (33, u128::from(u64::MAX), 0, vec![9; 32])
+        );
+        let absent = ledger_progress(None);
+        assert_eq!(
+            (absent.kind, absent.sequence, absent.detail, absent.bytes),
+            (34, 0, 0, vec![])
+        );
     }
     #[test]
     fn malformed_time_response_retires_only_its_owned_exchange_before_decoding() {

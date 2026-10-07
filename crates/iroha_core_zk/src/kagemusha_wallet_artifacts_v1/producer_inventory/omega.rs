@@ -80,10 +80,11 @@ impl QualifiedOmegaProgramV1 {
         cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<native::Prover, OmegaQualificationErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
-        let bytes = read(
+        let bytes = read_cancellable(
             originals,
             self.original,
             config.maximum_bytes.min(PROVING_KEY_MAX_BYTES_V1),
+            cancellation,
         )?;
         let owner = native::Prover::from_original_artifact_cancellable(
             self.program.clone(),

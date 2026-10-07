@@ -11,7 +11,9 @@ use crate::{
     provisioning::{ProvisioningProgress, ProvisioningStage, RemoteProvisioning},
 };
 use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
-use iroha_fs::{OwnerDirectory, PrivateDirectory, PublishMode};
+#[cfg(test)]
+use iroha_fs::OwnerDirectory;
+use iroha_fs::{PrivateDirectory, PublishMode};
 use iroha_model_base::topology::DataSpaceId;
 use iroha_wallet::operations::OperationStatus;
 use std::{
@@ -107,6 +109,7 @@ struct Activation {
     deadline_ms: u64,
 }
 
+#[cfg(test)]
 fn outer_path(store: &ManagedStore, name: &str) -> PathBuf {
     store.root().join("attachments").join(name)
 }
@@ -115,12 +118,10 @@ fn release_path(store: &ManagedStore, name: &str) -> PathBuf {
 }
 fn existing_outer(store: &ManagedStore, name: &str) -> Result<Option<PrivateDirectory>> {
     validate_name(name)?;
-    let path = outer_path(store, name);
-    match std::fs::symlink_metadata(&path) {
-        Ok(_) => Ok(Some(PrivateDirectory::open(path)?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
+    let Some(attachments) = store.attachments_directory()? else {
+        return Ok(None);
+    };
+    Ok(attachments.open_child_optional(name)?)
 }
 fn read_binding(directory: &PrivateDirectory) -> Result<Binding> {
     let binding: Binding = decode(&directory.read(BINDING, MAX_METADATA)?)?;
@@ -335,8 +336,8 @@ fn retain_prepared_activation(
 }
 
 fn attachment_turn_deadline(directory: &PrivateDirectory) -> Result<Instant> {
-    match directory.read(ACTIVATION, MAX_METADATA) {
-        Ok(bytes) => {
+    match directory.read_optional(ACTIVATION, MAX_METADATA)? {
+        Some(bytes) => {
             let activation: Activation = decode(&bytes)?;
             let milliseconds = activation.deadline_ms.saturating_sub(now_ms()?);
             if milliseconds > 0 {
@@ -345,10 +346,7 @@ fn attachment_turn_deadline(directory: &PrivateDirectory) -> Result<Instant> {
                 Ok(Instant::now() + RELAY_TURN)
             }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(Instant::now() + RELAY_TURN)
-        }
-        Err(error) => Err(error.into()),
+        None => Ok(Instant::now() + RELAY_TURN),
     }
 }
 
@@ -503,8 +501,7 @@ impl ManagedStore {
                     account_alias: request.account_alias.clone(),
                     context: None,
                 };
-                let parent = OwnerDirectory::open_or_create(self.root().join("attachments"))?;
-                parent.publish_private_child(
+                self.publish_attachment(
                     &request.name,
                     &[("request.lock", b""), (BINDING, &encode(&binding)?)],
                 )?
@@ -620,12 +617,9 @@ impl ManagedStore {
             }
             return Ok(Some(response));
         }
-        let mut attachment = match directory.read(PROGRESS, MAX_METADATA) {
-            Ok(bytes) => decode(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                connecting(binding.profile.name.clone())
-            }
-            Err(error) => return Err(error.into()),
+        let mut attachment = match directory.read_optional(PROGRESS, MAX_METADATA)? {
+            Some(bytes) => decode(&bytes)?,
+            None => connecting(binding.profile.name.clone()),
         };
         if attachment.network != binding.profile.name {
             return Err(Error::Invalid(

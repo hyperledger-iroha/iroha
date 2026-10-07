@@ -557,7 +557,7 @@ fn finish_enrollment(
             KagemushaWalletSlotStatusV1::Enrollment(_) => return slot,
             KagemushaWalletSlotStatusV1::IntentOnly => {
                 match provider
-                    .resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live)
+                    .test_resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live)
                     .expect(label)
                 {
                     KagemushaWalletEnrollmentStepV1::Enrolled { slot, .. } => return slot,
@@ -571,7 +571,7 @@ fn finish_enrollment(
     let next = seed.wrapping_add(0x80);
     device.platform.with(|state| state.next_key_seed = next);
     match provider
-        .begin_enrollment(&enrollment_challenge(next), PROFILE)
+        .test_begin_enrollment(&enrollment_challenge(next), PROFILE)
         .expect(label)
     {
         KagemushaWalletEnrollmentStepV1::Enrolled { slot, .. } => slot,
@@ -587,7 +587,7 @@ fn wallet_advance_v1_crash_matrix_enrollment() {
         let seed = 0x64 + u8::try_from(index).expect("index");
         let base = DeviceV1::new(policy, seed);
         let run = |provider: &mut SimProviderV1| {
-            let step = provider.begin_enrollment(&enrollment_challenge(seed), PROFILE);
+            let step = provider.test_begin_enrollment(&enrollment_challenge(seed), PROFILE);
             let request = match &step {
                 Ok(KagemushaWalletEnrollmentStepV1::Enrolled { slot, .. }) => {
                     let request = provider.retain_enrollment_request(slot, FIRST);
@@ -876,7 +876,7 @@ fn wallet_advance_v1_crash_matrix_read_errors_are_unavailable() {
             base.platform
                 .with(|state| state.generate_unavailable = Some(false));
             let mut provider = base.open();
-            let _ = provider.begin_enrollment(&enrollment_challenge(0x6b), PROFILE);
+            let _ = provider.test_begin_enrollment(&enrollment_challenge(0x6b), PROFILE);
             base.platform
                 .with(|state| state.generate_unavailable = None);
         }
@@ -1100,7 +1100,7 @@ fn wallet_advance_v1_crash_matrix_open() {
                         if name == "fresh" {
                             // Enroll on the reopened root before any power loss.
                             let _ = provider
-                                .begin_enrollment(&enrollment_challenge(seed), PROFILE)
+                                .test_begin_enrollment(&enrollment_challenge(seed), PROFILE)
                                 .expect(&label);
                         }
                         drop(provider);
@@ -1381,7 +1381,7 @@ fn wallet_advance_v1_crash_matrix_platform_faults_lifecycle() {
         // Enrollment.
         let fresh = DeviceV1::new(policy, seed);
         let enroll = |provider: &mut SimProviderV1| {
-            provider.begin_enrollment(&enrollment_challenge(seed), PROFILE)
+            provider.test_begin_enrollment(&enrollment_challenge(seed), PROFILE)
         };
         let (anchors, signs, probes, storage) = platform_counts(&fresh, &enroll);
         for fault in platform_faults(anchors, signs, probes, storage) {

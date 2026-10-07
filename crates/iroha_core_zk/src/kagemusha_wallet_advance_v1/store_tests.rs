@@ -1097,6 +1097,55 @@ mod std_fs {
     }
 
     #[test]
+    fn wallet_advance_v1_std_fs_optional_reads_preserve_prefix_oversized_and_absence() {
+        let (temp, store) = std_store();
+        assert_eq!(
+            store.read(&dir(), &name("missing"), 0),
+            KagemushaWalletReadV1::Absent
+        );
+        assert_eq!(
+            store.read(&dir().child(&name("missing-dir")), &name("f"), 8),
+            KagemushaWalletReadV1::Absent
+        );
+        assert_eq!(
+            store.write_new(&dir(), &name("bounded"), b"12345678"),
+            KagemushaWalletPublishOutcomeV1::Published
+        );
+        assert_eq!(store.fs().read(&dir(), "bounded", 3).unwrap(), b"123");
+        assert_eq!(
+            store.read(&dir(), &name("bounded"), 0),
+            KagemushaWalletReadV1::Oversized
+        );
+        assert_eq!(
+            store.read(&dir(), &name("bounded"), 7),
+            KagemushaWalletReadV1::Oversized
+        );
+        assert_eq!(
+            store.read(&dir(), &name("bounded"), 8),
+            KagemushaWalletReadV1::Present(b"12345678".to_vec())
+        );
+        assert_eq!(
+            store.write_new(&dir(), &name("empty"), b""),
+            KagemushaWalletPublishOutcomeV1::Published
+        );
+        assert_eq!(
+            store.read(&dir(), &name("empty"), 0),
+            KagemushaWalletReadV1::Present(Vec::new())
+        );
+        let root = temp.path().join("root/d");
+        std::fs::rename(&root, temp.path().join("retained-d")).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        assert!(matches!(
+            store.read(&dir(), &name("missing"), 8),
+            KagemushaWalletReadV1::Unavailable(_)
+        ));
+        assert!(matches!(
+            store.list(&dir()),
+            KagemushaWalletProbeV1::Unavailable(_)
+        ));
+    }
+
+    #[test]
     fn wallet_advance_v1_std_fs_lock_space_and_noreplace_probe() {
         let (temp, store) = std_store();
         let other = KagemushaWalletDurableStoreV1::new(

@@ -53,9 +53,10 @@ mod native_owner;
 mod native_worker;
 mod policy_custody;
 pub use native_owner::{
-    NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeStartupFailureV1,
+    LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, NativeInstallationConfigV1, NativeOpenErrorV1,
+    NativeOpenFailureV1, NativeOperationReviewV1, NativeStartupFailureV1,
     NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
-    PendingNativeWalletOpenV1,
+    PAYOUT_RECORD_MAX_BYTES_V1, PendingNativeWalletOpenV1, ReviewedOperationV1,
 };
 mod preparation_custody;
 mod scheduling;
@@ -67,7 +68,7 @@ pub use archive::{ArchiveKey, ArchiveStore, FsArchive};
 pub use collection::{CollectionStatus, OutgoingAbsent};
 pub(crate) use custody::NativeObservationsV1;
 pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
-pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
+pub use fee_claims::{FEE_CLAIM_MAX_BYTES_V1, FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use fold_custody::FoldCustodyV1;
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};

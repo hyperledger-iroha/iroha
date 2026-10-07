@@ -19,11 +19,12 @@ pub use platform::{CallbackPlatform, PlatformCallbacks, PlatformReply};
 mod android;
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 pub use android::AndroidPlatform;
-mod exports;
 pub(crate) mod enrollment;
+mod exports;
 pub use enrollment::{NativeEnrollmentRuntime, retain_native_enrollment};
 pub(crate) mod open;
 pub use open::{NativeStartupFailure, retain_native_runtime, start_native_wallet};
+mod background;
 pub(crate) mod requests;
 pub(crate) mod setup;
 mod transport;
@@ -198,11 +199,7 @@ trait Wallet: Send {
     fn credit(&mut self, credit: &[u8; 32], payment: &[u8; 32]) -> Result<Response>;
 }
 struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
-    wallet: state::Coordinator<
-        state::AdvanceHandle<advance::KagemushaWalletStdFsV1, P>,
-        state::ProviderArchive<advance::KagemushaWalletStdFsV1, P>,
-        state::NativeWalletProofsV1<advance::KagemushaWalletStdFsV1, P, S>,
-    >,
+    wallet: state::NativeWalletCoordinatorV1<advance::KagemushaWalletStdFsV1, P, S>,
     times: BTreeMap<u64, state::DirectTimeExchangeV1>,
     next_time: u64,
 }
@@ -269,6 +266,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     }
 }
 struct Owner {
+    background: background::Background,
     scheduler: state::Scheduler,
     // None is the closing linearization point. Lookups captured before close cannot perform
     // another operation once the current call returns. Drop releases exclusive filesystem custody.
@@ -299,6 +297,7 @@ fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> 
     registry.owners.insert(
         id,
         Arc::new(Owner {
+            background: background::Background::default(),
             scheduler,
             wallet: Mutex::new(Some(wallet)),
         }),
@@ -323,20 +322,26 @@ pub(crate) fn close(id: u64) -> Result<()> {
         return open::close(runtime);
     }
     let owner = owner.ok_or(Failure::code(CLOSED))?;
+    owner.background.stop();
     owner.scheduler.set_activity(false, false);
     let _priority = owner.scheduler.payment();
+    let joined = owner.background.join();
     let wallet = owner
         .wallet
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?
         .take();
     drop(wallet);
-    Ok(())
+    joined
 }
 pub(crate) fn activity(id: u64, foreground: bool, charging: bool) -> Result<()> {
     let owner = owner(id)?;
     // Do not acquire the wallet mutex: a running fold needs this cancellation signal.
     owner.scheduler.set_activity(foreground, charging);
+    if let Err(error) = owner.background.activity(&owner, foreground || charging) {
+        owner.scheduler.set_activity(false, false);
+        return Err(error);
+    }
     Ok(())
 }
 fn with_wallet<T>(
@@ -346,7 +351,7 @@ fn with_wallet<T>(
 ) -> Result<T> {
     let owner = owner(id)?;
     // Signal and join before the owner lock. Reversing these locks deadlocks against proving.
-    let _priority = payment.then(|| owner.scheduler.payment());
+    let _priority = payment.then(|| owner.background.payment(&owner.scheduler));
     let mut guard = owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?;
     action(guard.as_deref_mut().ok_or(Failure::code(CLOSED))?)
 }
@@ -355,6 +360,9 @@ pub(crate) fn snapshot(id: u64) -> Result<state::Snapshot> {
     with_wallet(id, false, |wallet| wallet.snapshot())
 }
 pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
+    if matches!(input, setup::Setup::BackgroundStatus) {
+        return owner(id)?.background.status();
+    }
     with_wallet(id, true, |wallet| wallet.setup(input))
 }
 pub(crate) fn execute(id: u64, request: state::OperationRequestV1) -> Result<Response> {

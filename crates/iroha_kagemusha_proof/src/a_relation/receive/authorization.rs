@@ -64,6 +64,16 @@ pub struct ReceiveSignatureInputs<'a> {
     pub incoming: &'a ReceiveSignatureQProjection,
 }
 
+/// Exact raw predicate inputs shared by staged verification and native preparation.
+#[derive(Clone, Copy)]
+pub(crate) struct ReceiveSignaturePredicateInputs<'a> {
+    pub policy: OwnPolicy,
+    pub own_statement: &'a crate::operation_relation::statement::StatementCells,
+    pub predecessor: MapState<'a>,
+    pub objects: &'a ReceiveSignedObjects,
+    pub slots: &'a [crate::a_relation::SignatureProofCells],
+}
+
 /// Exact context-bound incoming Q2 exports. Q2 remains a separately verified
 /// and folded hard obligation at its unique preceding (or same) fixed stage.
 #[derive(Clone, Debug)]
@@ -452,14 +462,16 @@ impl ReceiveAuthorizationObjects {
         self.signature_predicate(
             chip,
             region,
-            proof.policy,
-            input.own_statement,
-            MapState {
-                state: input.predecessor.ok_or(Error::Synthesis)?.state,
-                lineage: input.predecessor.ok_or(Error::Synthesis)?.public,
+            ReceiveSignaturePredicateInputs {
+                policy: proof.policy,
+                own_statement: input.own_statement,
+                predecessor: MapState {
+                    state: input.predecessor.ok_or(Error::Synthesis)?.state,
+                    lineage: input.predecessor.ok_or(Error::Synthesis)?.public,
+                },
+                objects: proof.objects,
+                slots: proof.incoming.slots(),
             },
-            proof.objects,
-            proof.incoming.slots(),
         )
     }
 
@@ -469,12 +481,15 @@ impl ReceiveAuthorizationObjects {
         &self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
-        policy: OwnPolicy,
-        own_statement: &crate::operation_relation::statement::StatementCells,
-        predecessor: MapState<'_>,
-        objects: &ReceiveSignedObjects,
-        slots: &[crate::a_relation::SignatureProofCells],
+        input: ReceiveSignaturePredicateInputs<'_>,
     ) -> Result<Bit<Fp>, Error> {
+        let ReceiveSignaturePredicateInputs {
+            policy,
+            own_statement,
+            predecessor,
+            objects,
+            slots,
+        } = input;
         let renewed = self.variant == Variant::ReceiveRenewed;
         if slots.len() != if renewed { 4 } else { 2 }
             || slots.iter().any(|slot| slot.mode() != VerifyMode::Soft)

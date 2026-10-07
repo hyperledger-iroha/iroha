@@ -16,6 +16,8 @@ let requiredBridgeAbiVersion = 26
 let repositoryDirectory = packageDirectory.deletingLastPathComponent().standardizedFileURL
 let localIntegrationArtifactDirectory = repositoryDirectory
     .appendingPathComponent("target/norito-bridge-local/artifacts", isDirectory: true).path
+let localUnitArtifactParent = repositoryDirectory
+    .appendingPathComponent("target/qualification", isDirectory: true).path
 let configuredArtifactDirectory = ProcessInfo.processInfo.environment[
     "MOBILE_SDK_APPLE_ARTIFACT_DIR"
 ]
@@ -105,24 +107,24 @@ if let configuredArtifactDirectory = selectedArtifactDirectory {
         fileURLWithPath: canonicalArtifactDirectory,
         isDirectory: true
     )
-    guard
-        resolvedURL.path != repositoryDirectory.path,
-        !resolvedURL.path.hasPrefix(repositoryDirectory.path + "/")
-            || (!requireExternalArtifact && resolvedURL.path == localIntegrationArtifactDirectory)
-    else {
-        fatalError(
-            "error: MOBILE_SDK_APPLE_ARTIFACT_DIR must be outside the reviewed Iroha source tree."
-        )
-    }
     if configuredLocalUnitArtifactDirectory != nil {
-        guard resolvedURL.path != repositoryDirectory.path,
-            !resolvedURL.path.hasPrefix(repositoryDirectory.path + "/"),
+        guard resolvedURL.path.hasPrefix(localUnitArtifactParent + "/"),
             let attributes = try? FileManager.default.attributesOfItem(atPath: resolvedURL.path),
             attributes[.type] as? FileAttributeType == .typeDirectory,
             (attributes[.ownerAccountID] as? NSNumber)?.intValue == Int(geteuid()),
             (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700
         else {
-            fatalError("error: local-unit artifact directory must be external, owned, canonical and mode 0700.")
+            fatalError("error: local-unit artifact directory must be below target/qualification, owned, canonical and mode 0700.")
+        }
+    } else {
+        guard
+            resolvedURL.path != repositoryDirectory.path,
+            !resolvedURL.path.hasPrefix(repositoryDirectory.path + "/")
+                || (!requireExternalArtifact && resolvedURL.path == localIntegrationArtifactDirectory)
+        else {
+            fatalError(
+                "error: MOBILE_SDK_APPLE_ARTIFACT_DIR must be outside the reviewed Iroha source tree."
+            )
         }
     }
     bridgeAbsolutePath = resolvedURL

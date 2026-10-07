@@ -68,8 +68,8 @@ use super::{
 
 /// Version of the enrollment-phase records.
 pub const KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1: u16 = 1;
-/// Intent codec including creation policy; older layouts are not silently reinterpreted.
-pub const KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1: u16 = 2;
+/// Sole first-release intent codec including the exact creation policy.
+pub const KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1: u16 = 1;
 /// Maximum encoded intent or abandoned-slot record.
 pub const KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1: usize = 1_024;
 /// Maximum retained credential request.
@@ -131,7 +131,7 @@ impl<'a> KagemushaWalletFreshGenerationV1<'a> {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::IntentV2")]
+#[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::IntentV1")]
 pub struct KagemushaWalletIntentV1 {
     /// Version; exactly [`KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1`].
     pub version: u16,
@@ -242,6 +242,7 @@ pub struct KagemushaWalletCredentialRecordV1 {
 
 /// Whether the issuer challenge of an interrupted enrollment is still usable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub enum KagemushaWalletChallengeLivenessV1 {
     /// The challenge is live; enrollment may continue on the same slot.
     Live,
@@ -371,10 +372,44 @@ where
     /// or the capability probe does not fit; `Unavailable` when storage, the key store or the
     /// keychain gives no answer (on iOS also when no device passcode is set). An unknown write
     /// outcome after the intent exists is `Ok(Pending)`.
-    pub fn begin_enrollment(
+    pub(crate) fn begin_enrollment_checked(
+        &mut self,
+        authorization: crate::kagemusha_wallet_enrollment_v1::GenerationAuthorizationV1,
+    ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        authorization.check(self)?;
+        let (challenge, profile, slot, generation_policy, fresh) = authorization.selection();
+        if !fresh && generation_policy == KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly
+        {
+            return Ok(KagemushaWalletEnrollmentStepV1::Pending { slot });
+        }
+        self.begin_enrollment_inner(&challenge, profile, slot, generation_policy, |provider| {
+            authorization.check(provider)
+        })
+    }
+
+    // Explicit provider simulator fixture. Production callers require the verified permit above.
+    #[cfg(test)]
+    pub(crate) fn test_begin_enrollment(
         &mut self,
         challenge: &KagemushaWalletEnrollmentChallengeV1,
         profile: KagemushaWalletKeyProfileV1,
+    ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        let slot = KagemushaWalletSlotIdV1::generate()
+            .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+        let policy = self
+            .platform
+            .key_generation_policy()
+            .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+        self.begin_enrollment_inner(challenge, profile, slot, policy, |_| Ok(()))
+    }
+
+    fn begin_enrollment_inner(
+        &mut self,
+        challenge: &KagemushaWalletEnrollmentChallengeV1,
+        profile: KagemushaWalletKeyProfileV1,
+        slot: KagemushaWalletSlotIdV1,
+        generation_policy: KagemushaWalletKeyGenerationPolicyV1,
+        check: impl Fn(&Self) -> Result<(), KagemushaWalletProviderErrorV1>,
     ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
         challenge
             .validate()
@@ -392,12 +427,17 @@ where
         if !self.ballast_present()? && !self.write_ballast()? {
             return Err(KagemushaWalletProviderErrorV1::NoSpace);
         }
-        let generation_policy = self
+        if self
             .platform
             .key_generation_policy()
-            .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
-        let slot = KagemushaWalletSlotIdV1::generate()
-            .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+            .map_err(KagemushaWalletProviderErrorV1::Unavailable)?
+            != generation_policy
+        {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "pre-key creation policy changed",
+            });
+        }
+        check(self)?;
         kagemusha_wallet_prepare_slot_dirs_v1(&self.store, &slot)?;
         kagemusha_wallet_create_anchor_v1(&self.platform, &slot)?;
         // The slot's anchor kind is fixed here, once; every marker of the slot carries it.
@@ -449,13 +489,36 @@ where
                 outcome => kagemusha_wallet_require_published_v1(outcome)?,
             }
             self.require_storage()?;
+            check(self)?;
             let grant = KagemushaWalletFreshGenerationV1::new(&self.platform, slot, request);
             let generated = self.platform.key_generate_fresh(grant);
             // A storage error after generation leaves this attempt consumed and uncertain.
             self.require_storage()?;
             return self.finish_enrollment(&slot, &intent, generated);
         }
-        self.continue_enrollment(&slot, &intent)
+        self.continue_enrollment(&slot, &intent, check)
+    }
+
+    pub(crate) fn resume_enrollment_checked(
+        &mut self,
+        authorization: crate::kagemusha_wallet_enrollment_v1::GenerationAuthorizationV1,
+    ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        authorization.check(self)?;
+        let (challenge, profile, slot, generation_policy, _) = authorization.selection();
+        let intent = self.read_intent(&slot)?.ok_or(
+            KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                object: "pre-key selected intent",
+            },
+        )?;
+        if intent.challenge != challenge
+            || intent.key_profile()? != profile
+            || intent.key_generation_policy()? != generation_policy
+        {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "pre-key retained intent",
+            });
+        }
+        self.resume_enrollment_inner(&slot, false, |provider| authorization.check(provider))
     }
 
     /// Resume an interrupted enrollment of `slot` (design E2a-E4b).
@@ -464,14 +527,28 @@ where
     ///
     /// `Invalid` for a slot without an intent or whose enrollment already advanced past the
     /// enrollment marker, and the reconcile and enrollment errors.
-    pub fn resume_enrollment(
+    #[cfg(test)]
+    pub(crate) fn test_resume_enrollment(
         &mut self,
         slot: &KagemushaWalletSlotIdV1,
         liveness: KagemushaWalletChallengeLivenessV1,
     ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        self.resume_enrollment_inner(
+            slot,
+            liveness == KagemushaWalletChallengeLivenessV1::Expired,
+            |_| Ok(()),
+        )
+    }
+
+    fn resume_enrollment_inner(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        expired: bool,
+        check: impl Fn(&Self) -> Result<(), KagemushaWalletProviderErrorV1>,
+    ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
         match self.reconcile_slot(slot, None)? {
             KagemushaWalletSlotStatusV1::IntentOnly => {
-                if liveness == KagemushaWalletChallengeLivenessV1::Expired {
+                if expired {
                     self.abandon_slot(slot, KagemushaWalletSlotAbandonReasonV1::ChallengeExpired)?;
                     return Ok(KagemushaWalletEnrollmentStepV1::SlotAbandoned { slot: *slot });
                 }
@@ -497,7 +574,7 @@ where
                     &bytes,
                 ));
                 self.guard(slot, adopted)?;
-                self.continue_enrollment(slot, &intent)
+                self.continue_enrollment(slot, &intent, check)
             }
             KagemushaWalletSlotStatusV1::SlotAbandoned => {
                 Ok(KagemushaWalletEnrollmentStepV1::SlotAbandoned { slot: *slot })
@@ -526,6 +603,7 @@ where
         &mut self,
         slot: &KagemushaWalletSlotIdV1,
         intent: &KagemushaWalletIntentV1,
+        check: impl Fn(&Self) -> Result<(), KagemushaWalletProviderErrorV1>,
     ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
         if intent.key_generation_policy()?
             != KagemushaWalletKeyGenerationPolicyV1::DefinitiveAbsence
@@ -550,6 +628,7 @@ where
                 return Err(KagemushaWalletProviderErrorV1::Unavailable(reason));
             }
         }
+        check(self)?;
         let generated = self.platform.key_generate(slot, &request);
         self.finish_enrollment(slot, intent, generated)
     }

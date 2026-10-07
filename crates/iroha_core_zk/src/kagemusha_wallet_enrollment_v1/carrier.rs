@@ -284,6 +284,90 @@ pub struct ResultV1 {
     pub evidence: IssuerEvidenceV1,
 }
 impl ResultV1 {
+    /// Authenticate E6 against the independently selected scheme/Enrollment certificate and
+    /// exact account-authorized E5. This checks bindings and signatures, not issuer eligibility
+    /// or provenance of its attestation-worker response; the server must verify those separately.
+    /// # Errors
+    /// Rejects foreign issuers, altered requests, signatures, policy, lease or evidence originals.
+    pub fn verify_for(
+        &self,
+        scheme: &KagemushaWalletSchemeV1,
+        selected_issuer: &KagemushaWalletSignerCertificateV1,
+        request: &RequestV1,
+    ) -> Result<KagemushaWalletCredentialV1, &'static str> {
+        self.shape()?;
+        request.validate()?;
+        selected_issuer
+            .verify_role(scheme, KagemushaWalletSignerRoleV1::Enrollment)
+            .map_err(|_| "selected enrollment issuer")?;
+        let credential_value =
+            KagemushaWalletCredentialV1::decode_canonical(&self.credential, &scheme.scheme_id())
+                .map_err(|_| "issuer credential")?;
+        let set: KagemushaWalletCertificateSetV1 = norito::decode_canonical_with_limits(
+            &self.certificates,
+            norito::canonical_decode_limits(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1),
+        )
+        .map_err(|_| "issuer certificate set")?;
+        let issuer = set
+            .certificate(
+                &credential_value.body.issuer_certificate,
+                KagemushaWalletSignerRoleV1::Enrollment,
+            )
+            .map_err(|_| "issuer certificate")?;
+        if issuer != selected_issuer {
+            return Err("issuer differs from selected pre-key permit");
+        }
+        credential_value
+            .verify_enrollment(
+                scheme,
+                selected_issuer,
+                &request.body.challenge,
+                &request.body.marker.payment_key,
+            )
+            .map_err(|_| "issuer enrollment credential")?;
+        let c = &credential_value.body;
+        let kind_matches = matches!(
+            (request.body.policy.platform, c.evidence_kind),
+            (
+                KagemushaWalletEnrollmentPlatformV1::Apple { .. },
+                KagemushaWalletEvidenceKindV1::AppleAppAttest
+            ) | (
+                KagemushaWalletEnrollmentPlatformV1::Android {
+                    hardware: KagemushaWalletAndroidHardwareV1::Tee,
+                    ..
+                },
+                KagemushaWalletEvidenceKindV1::AndroidKeyMintTee
+            ) | (
+                KagemushaWalletEnrollmentPlatformV1::Android {
+                    hardware: KagemushaWalletAndroidHardwareV1::StrongBox,
+                    ..
+                },
+                KagemushaWalletEvidenceKindV1::AndroidKeyMintStrongBox
+            ) | (
+                KagemushaWalletEnrollmentPlatformV1::Android {
+                    hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
+                    ..
+                },
+                KagemushaWalletEvidenceKindV1::AndroidKeyMintTee
+                    | KagemushaWalletEvidenceKindV1::AndroidKeyMintStrongBox
+            )
+        );
+        if !kind_matches
+            || c.regulatory_policy != request.body.policy.regulatory_policy
+            || c.lease_expires_at_ms
+                != request
+                    .body
+                    .policy
+                    .lease_expires_at(c.issued_at_ms)
+                    .map_err(|_| "issuer lease")?
+            || c.enrollment_evidence.digest
+                != self.evidence.digest(&request.body, c.evidence_kind)?
+        {
+            return Err("issuer enrollment policy/evidence");
+        }
+        Ok(credential_value)
+    }
+
     fn shape(&self) -> Result<(), &'static str> {
         if self.version != 1
             || self.credential.is_empty()

@@ -74,6 +74,33 @@ def test_inert_emitter_component_static_relationship_parser_positive(originals):
     assert type(actual['fresh']) is bool
 
 
+def test_child_environment_keeps_scratch_inside_original_private_capture(tmp_path, monkeypatch):
+    root = tmp_path / 'source'; output = root / 'target/qualification/capture'
+    output.mkdir(parents=True, mode=0o700); (output / 'temporary').mkdir(mode=0o700)
+    monkeypatch.setenv('TMPDIR', '/unrelated/temporary')
+    config = {'developer_dir': '/stock/Developer'}
+    selected = unit.child_environment(root, output, config)
+    assert selected == {'HOME': str(Path.home()), 'PATH': '/usr/bin:/bin',
+                        'TMPDIR': str(output / 'temporary'), 'LANG': 'C.UTF-8',
+                        'LC_ALL': 'C.UTF-8', 'DEVELOPER_DIR': '/stock/Developer'}
+
+
+@pytest.mark.parametrize('change', ('missing', 'public', 'alias', 'file', 'external-output'))
+def test_child_scratch_rejects_nonprivate_or_redirected_storage(tmp_path, change):
+    root = tmp_path / 'source'; output = root / 'target/qualification/capture'
+    output.mkdir(parents=True, mode=0o700); temporary = output / 'temporary'
+    if change == 'public': temporary.mkdir(mode=0o755)
+    elif change == 'alias':
+        other = output / 'other'; other.mkdir(mode=0o700)
+        temporary.symlink_to(other, target_is_directory=True)
+    elif change == 'file': temporary.write_bytes(b'not a directory')
+    elif change == 'external-output':
+        output = tmp_path / 'external'; output.mkdir(mode=0o700)
+        (output / 'temporary').mkdir(mode=0o700)
+    with pytest.raises((RuntimeError, FileNotFoundError)):
+        unit.child_environment(root, output, {'developer_dir': '/stock/Developer'})
+
+
 
 @pytest.mark.parametrize('role,key,value', (
     ('emitter', 'natural_exit', False), ('emitter', 'natural_exit', 1),
@@ -101,10 +128,13 @@ def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refu
 
 def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     policy = unit.native_policy(ROOT)
-    assert len(policy['c_jni']) == 68
-    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 15
+    assert len(policy['c_jni']) == 70
+    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 16
     assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 11
+    assert "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate" in policy["c_jni"]
     assert len(policy['privacy']) == 6
+    assert 'connect_norito_kagemusha_wallet_setup_v1' in policy['required']
+    assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup' in policy['required']
     assert 'connect_norito_kagemusha_wallet_snapshot_v1' in policy['required']
     assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot' in policy['required']
     assert set(policy['c_jni']) <= set(policy['required'])

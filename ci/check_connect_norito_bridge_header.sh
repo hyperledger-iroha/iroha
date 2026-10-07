@@ -107,6 +107,8 @@ rust += "\n" + Path(sys.argv[7]).read_text(encoding="utf-8")
 jni_path = Path(sys.argv[8])
 wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
+wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
+rust += "\n" + wallet_load_path.read_text(encoding="utf-8")
 native_sources = [jni_path, *sorted(
     source for source in jni_path.parent.rglob("*.rs") if source != jni_path
 )]
@@ -173,9 +175,10 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_open_cancel_v1",
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
-    "connect_norito_kagemusha_wallet_setup_v1",
     "connect_norito_kagemusha_wallet_enrollment_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
+    "connect_norito_kagemusha_wallet_setup_v1",
+    "connect_norito_kagemusha_wallet_load_original_validate_v1",
     "connect_norito_kagemusha_wallet_request_status_v1",
     "connect_norito_kagemusha_wallet_retry_v1",
     "connect_norito_kagemusha_wallet_resume_v1",
@@ -186,6 +189,9 @@ KAGEMUSHA_WALLET_EXPORTS = {
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
     for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "execute", "snapshot")
+}
+KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS = {
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_account_read_permission_multisig_signed_transaction",
@@ -442,6 +448,8 @@ exact("C KAGEMUSHA wallet", KAGEMUSHA_WALLET_EXPORTS, header_exports("connect_no
 native_jni_exports = set(re.findall(r"\b(Java_[A-Za-z0-9_]*)\s*\(", native_rust))
 exact("current JNI wallet", KAGEMUSHA_WALLET_JNI_EXPORTS,
       native_jni_exports & KAGEMUSHA_WALLET_JNI_EXPORTS)
+exact("current JNI Load original DATA", KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS,
+      native_jni_exports & KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS)
 exact("retired Rust offline cash", set(), {
     name for name in native_c_exports if name.startswith("connect_norito_offline_cash_")
 })
@@ -459,6 +467,7 @@ exact(
         name for name in native_jni_exports
         if ("kagemusha" in name.lower() or name.startswith(retired_jni_prefixes))
         and name not in KAGEMUSHA_WALLET_JNI_EXPORTS
+        and name not in KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
     },
 )
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
@@ -698,6 +707,8 @@ make_negative_workspace() {
   cp -R "${PLATFORM_JNI_RUST%.rs}" "${tmp}/platform_jni"
   cp "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs" "${tmp}/kagemusha_wallet_ffi.rs"
   cp -R "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_ffi" "${tmp}/kagemusha_wallet_ffi"
+  cp "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_load_original.rs" "${tmp}/kagemusha_wallet_load_original.rs"
+  cp -R "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_load_original" "${tmp}/kagemusha_wallet_load_original"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${RETAIL_MODEL}" "${tmp}/retail_fee_model.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"

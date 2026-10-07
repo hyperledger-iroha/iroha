@@ -102,4 +102,36 @@ class KagemushaWalletHostNativeV1Test {
             assertTrue(reply.bytes().isEmpty())
         }
     }
+
+    @Test
+    fun enrollmentOriginalsRequireNativeProvisioningAndBoundsPrecedeLookup() {
+        fun enrollment(selector: Int, first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf(),
+            third: ByteArray = byteArrayOf(), certificates: Array<ByteArray> = emptyArray()) =
+            assertNotNull(KagemushaWalletNativeV1.enrollment(Long.MAX_VALUE, selector, first, second, third, certificates))
+        val id = ByteArray(32) { 1 }
+        val originals = listOf(
+            enrollment(0, id, id, id), enrollment(1, ByteArray(64)), enrollment(2),
+            enrollment(3, byteArrayOf(1), certificates = arrayOf(byteArrayOf(2), byteArrayOf(3))),
+            enrollment(4, id, byteArrayOf(1), byteArrayOf(2)), enrollment(5, ByteArray(64)),
+            enrollment(6, byteArrayOf(1)), enrollment(7), enrollment(8), enrollment(9, byteArrayOf(1)), enrollment(10),
+        )
+        for (reply in originals) {
+            assertEquals(-4, reply.status)
+            assertEquals(-1, reply.reason)
+            assertEquals(0, reply.platformCode)
+            assertTrue(reply.bytes().isEmpty())
+        }
+        val malformed = listOf(
+            enrollment(0, ByteArray(33), id, id), enrollment(1, ByteArray(65)),
+            enrollment(2, byteArrayOf(1)), enrollment(3, ByteArray(65537)),
+            enrollment(3, byteArrayOf(1), certificates = Array(9) { byteArrayOf(1) }),
+            enrollment(3, byteArrayOf(1), certificates = arrayOf(ByteArray(16385))),
+            enrollment(4, id, byteArrayOf(1), ByteArray(4097)),
+            enrollment(10, byteArrayOf(1)), enrollment(9, ByteArray(2049)), enrollment(6, ByteArray(262145)), enrollment(7, byteArrayOf(1)), enrollment(99),
+        )
+        for (reply in malformed) {
+            assertEquals(-1, reply.status)
+            assertTrue(reply.bytes().isEmpty())
+        }
+    }
 }

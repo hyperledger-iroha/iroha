@@ -6,6 +6,8 @@
 //! decided by the terminal owner. Only source-qualified keys may be installed;
 //! this module does not infer a program's semantics from its public layout.
 
+use std::sync::Arc;
+
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Eq, Fp, PastaAffine, poseidon::hash_with_domain};
 use iroha_plonk::{
@@ -314,8 +316,10 @@ pub struct SourceChild<'a> {
 /// provenance inductively. It is neither proof evidence nor finality authority.
 #[derive(Clone, Debug)]
 pub struct SourceVerifier {
-    verifier: VerifierPlan<Ep>,
-    key: VerifyingKey<Ep>,
+    // Graph parents share these already-qualified immutable allocations. No interning or
+    // digest cache can substitute an unrelated decoded key or bypass source qualification.
+    verifier: Arc<VerifierPlan<Ep>>,
+    key: Arc<VerifyingKey<Ep>>,
 }
 
 /// Fixed two-child verifier programs and complete hard Pallas fold schedule.

@@ -14,7 +14,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 fn cancelled_msm_releases_scratch<C: PastaCurve>() {
-    let scalars = vec![C::ScalarExt::from(1234567); 1 << 16];
+    let scalars = vec![C::ScalarExt::from(1_234_567); 1 << 16];
     let bases = vec![C::generator().to_affine(); scalars.len()];
     let shared = SharedMemoryBudget::new(64 << 20);
     let token = CancellationToken::new();
@@ -58,7 +58,7 @@ fn cancelled_msm_releases_scratch<C: PastaCurve>() {
     assert!(shared.peak_bytes() <= shared.limit_bytes());
     let fresh = CancellationToken::new();
     let expected =
-        C::generator() * (C::ScalarExt::from(1234567) * C::ScalarExt::from(scalars.len() as u64));
+        C::generator() * (C::ScalarExt::from(1_234_567) * C::ScalarExt::from(scalars.len() as u64));
     assert_eq!(
         pool.install(|| msm_secret_cancellable::<C>(
             &scalars,

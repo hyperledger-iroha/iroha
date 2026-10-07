@@ -4,7 +4,7 @@ import XCTest
 
 final class KagemushaWalletEnrollmentV1Tests: XCTestCase {
   func testEnrollmentOutputBoundsAndShapesKeepPaymentLimit() throws {
-    for (status,count) in [(18,32),(19,161),(20,0),(21,0),(22,0),(23,32),(24,131072),(25,262144),(26,0)] {
+    for (status,count) in [(18,32),(19,161),(20,0),(21,0),(22,0),(23,32),(24,131072),(25,262144),(26,0),(27,16384),(28,1024)] {
       let reply = try KagemushaWalletCallV1(status:Int32(status),sequenceLow:7,sequenceHigh:0,detail:0,bytes:Data(repeating:5,count:count))
       XCTAssertEqual(reply.bytes.count,count)
       XCTAssertThrowsError(try reply.completion())
@@ -15,7 +15,7 @@ final class KagemushaWalletEnrollmentV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaWalletCallV1(status:19,sequenceLow:7,sequenceHigh:0,detail:0,bytes:Data(count:160)))
   }
   func testEnrollmentInputsAreBoundedAndKeepOnlyOriginals() throws {
-    for selector:UInt32 in [0,1,2,4,5,6,7,8] {
+    for selector:UInt32 in [0,1,2,4,5,6,7,8,9,10] {
       XCTAssertThrowsError(try KagemushaWalletEnrollmentInputV1(selector,Data(count:262145)))
     }
     XCTAssertThrowsError(try KagemushaWalletEnrollmentInputV1(3))

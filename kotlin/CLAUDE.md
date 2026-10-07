@@ -173,13 +173,15 @@ It runs the tagged Java software-key-manager and explicit-chain-context cases,
 plus the shared SoraFS reference-validator cases. Missing native artifacts or
 capabilities fail; host JNI execution is separate from Android/device qualification.
 
-The current wallet module declares managed platform, payment-key and backup-rule
-unit tests. Its Rust `KagemushaWalletPlatformV1` JNI adapter exists, while wallet
-open still returns `ARTIFACTS_UNAVAILABLE` (`-4`). Complete installed prover and
-typed preparation integration plus authenticated owner intake remain unfinished;
-the separate `:kagemusha-wallet-android:testDebugHostNative` task uses the explicit
-rebuilt host library to check native failure results, malformed intake, closed
-handles and artifact-unavailable open. It cannot qualify successful monetary
+The current wallet module declares managed platform, payment-key, backup-rule,
+setup and admission-contract unit tests. Its Rust `KagemushaWalletPlatformV1`
+JNI adapter provides platform custody. Native startup authenticates installed
+artifacts and retains custody; wallet opening requires original issuer/account
+frames and the existing account's signature over a fresh native challenge. An
+unavailable native runtime returns `ARTIFACTS_UNAVAILABLE` (`-4`). The separate
+`:kagemusha-wallet-android:testDebugHostNative` task uses the explicit rebuilt
+host library to check native failure results, malformed intake, closed handles
+and unavailable runtime admission. It cannot qualify successful monetary
 operations, Android artifacts or physical devices.
 
 ## Version Catalog

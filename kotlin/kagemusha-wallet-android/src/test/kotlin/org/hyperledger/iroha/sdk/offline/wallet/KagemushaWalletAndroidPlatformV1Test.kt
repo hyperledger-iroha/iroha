@@ -118,12 +118,16 @@ class KagemushaWalletAndroidPlatformV1Test {
         assertEquals(File(target.canonicalPath, "kagemusha-wallet-v1").path, root.path)
     }
 
-    @Test fun `the handle exposes no public operation to app code`() {
+    @Test fun `the handle exposes only creation and original certificate export to app code`() {
         val type = JvmApiInventory.read(KagemushaWalletAndroidPlatformV1::class.java)
         val declaredPublic = type.methods.filter { it.isPublic && !it.isSynthetic && it.name != "<init>" }
-        assertEquals(listOf("create"), declaredPublic.map { it.name })
-        assertEquals("(Landroid/content/Context;)L$JVM_OWNER/KagemushaWalletAndroidPlatformV1;", declaredPublic.single().descriptor)
-        assertTrue(declaredPublic.single().isStatic)
+        assertEquals(setOf("create", "enrollmentCertificates"), declaredPublic.map { it.name }.toSet())
+        val create = declaredPublic.single { it.name == "create" }
+        assertEquals("(Landroid/content/Context;)L$JVM_OWNER/KagemushaWalletAndroidPlatformV1;", create.descriptor)
+        assertTrue(create.isStatic)
+        val export = declaredPublic.single { it.name == "enrollmentCertificates" }
+        assertEquals("(L$JVM_OWNER/KagemushaWalletEnrollmentTargetV1;)Ljava/util/List;", export.descriptor)
+        assertEquals(false, export.isStatic)
         for ((name, signature) in UPCALLS) {
             val method = type.methods.single { it.name == name }
             assertTrue(method.flags and 0x0002 != 0, name)
@@ -132,6 +136,36 @@ class KagemushaWalletAndroidPlatformV1Test {
         assertEquals(UPCALLS.keys, type.methods.filter {
             it.flags and 0x0002 != 0 && !it.isSynthetic && it.name != "<init>"
         }.map { it.name }.toSet())
+    }
+
+    @Test fun `enrollment exports only the selected key originals and preserves unavailable`() {
+        val environment = TestEnvironmentV1(directory)
+        val keyStore = TestKeyStoreV1()
+        val slot = ByteArray(32) { 7 }
+        val entry = keyStore.seed(kagemushaWalletAndroidAliasV1(slot))
+        val target = KagemushaWalletEnrollmentTargetV1(slot + testSec1V1(entry.pair.public) + ByteArray(64) { 9 })
+        val platform = KagemushaWalletAndroidPlatformV1.create(environment, keyStore)
+        val expected = requireNotNull(entry.chain).map { it.encoded.toList() }
+        val originals = platform.enrollmentCertificates(target)
+        assertEquals(expected, originals.map { it.toList() })
+        originals.first().fill(0)
+        assertEquals(expected, platform.enrollmentCertificates(target).map { it.toList() })
+
+        val changed = KagemushaWalletEnrollmentTargetV1(slot + testSec1V1(TestAttestationV1.p256().public) + ByteArray(64) { 9 })
+        assertEquals(-7, assertFailsWith<KagemushaWalletExceptionV1> { platform.enrollmentCertificates(changed) }.status)
+        keyStore.getKeyFailure = java.security.ProviderException("unavailable")
+        assertEquals(-5, assertFailsWith<KagemushaWalletExceptionV1> { platform.enrollmentCertificates(target) }.status)
+        keyStore.getKeyFailure = null
+        environment.unlocked = false
+        val locked = assertFailsWith<KagemushaWalletExceptionV1> { platform.enrollmentCertificates(target) }
+        assertEquals(-5, locked.status)
+        assertEquals(KagemushaWalletAndroidUnavailableV1.BEFORE_FIRST_UNLOCK.kind.tag, locked.reason)
+        environment.unlocked = true
+        keyStore.entries.clear()
+        assertEquals(-13, assertFailsWith<KagemushaWalletExceptionV1> { platform.enrollmentCertificates(target) }.status)
+        assertEquals(0, keyStore.signCalls)
+        assertEquals(0, keyStore.deleteCalls)
+        assertTrue(keyStore.generated.isEmpty())
     }
 
     @Test fun `the consumer rules keep every upcall the bridge binds`() {

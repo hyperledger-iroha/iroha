@@ -693,3 +693,74 @@ fn freshly_validated_images_do_not_relax_exact_origin_ordinal_hash_or_parent_bin
         )
         .unwrap();
 }
+
+#[test]
+fn definite_initial_epoch_absence_keeps_explicit_history_and_requires_generated_references() {
+    let fixture = Fixture::new();
+    let mut reader = EpochReader::default();
+    fixture.validate(&mut reader).unwrap();
+    let absent = fixture.parent.create_child("without-epochs").unwrap();
+    reader
+        .validate_references(
+            &absent,
+            fixture.intent,
+            &fixture.fees,
+            fixture.scope,
+            std::iter::once(&Origin::Explicit),
+        )
+        .unwrap();
+    assert!(reader.records.is_empty());
+    assert!(
+        reader
+            .validate_references(
+                &absent,
+                fixture.intent,
+                &fixture.fees,
+                fixture.scope,
+                std::iter::once(&fixture.origin)
+            )
+            .is_err()
+    );
+    fixture.validate(&mut reader).unwrap();
+    assert_eq!(reader.records.len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn epoch_explicit_reference_refuses_parent_loss_and_replacement_then_original_retry() {
+    let fixture = Fixture::new();
+    let mut reader = EpochReader::default();
+    fixture.validate(&mut reader).unwrap();
+    let original = fixture.parent.path().to_owned();
+    let displaced = original.with_file_name("displaced");
+    std::fs::rename(&original, &displaced).unwrap();
+    assert!(
+        reader
+            .validate_references(
+                &fixture.parent,
+                fixture.intent,
+                &fixture.fees,
+                fixture.scope,
+                std::iter::once(&Origin::Explicit)
+            )
+            .is_err()
+    );
+    let replacement = PrivateDirectory::open_or_create(&original).unwrap();
+    assert!(
+        reader
+            .validate_references(
+                &fixture.parent,
+                fixture.intent,
+                &fixture.fees,
+                fixture.scope,
+                std::iter::once(&Origin::Explicit)
+            )
+            .is_err()
+    );
+    assert!(replacement.entries(1).unwrap().is_empty());
+    drop(replacement);
+    std::fs::remove_dir(&original).unwrap();
+    std::fs::rename(&displaced, &original).unwrap();
+    fixture.validate(&mut reader).unwrap();
+    assert_eq!(reader.records.len(), 2);
+}

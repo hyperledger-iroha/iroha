@@ -727,10 +727,8 @@ impl ManagedStreamTokenCustody {
                 Err(error) => return Err(error),
             }
         }
-        let directory = match self.authority.directory.open_child("configure") {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Some(directory) = self.authority.directory.open_child_optional("configure")? else {
+            return Ok(None);
         };
         let Some(original) = journal::read_intent(&directory)? else {
             return Ok(None);
@@ -1125,7 +1123,14 @@ impl ManagedStreamTokenCustody {
                 account.verify_stream_token_custody_enroll_journal(&path, &request)
             }
         }
-        .map_err(|_| invalid("custody wallet differs from original request"))
+        .map_err(|_error| {
+            #[cfg(test)]
+            crate::managed::native_operation::deadline_diagnostics::wallet_error(
+                "wallet signed journal verification",
+                &_error,
+            );
+            invalid("custody wallet differs from original request")
+        })
     }
 }
 

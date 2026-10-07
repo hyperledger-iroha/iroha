@@ -582,12 +582,12 @@ impl History {
             Ok::<_, crate::managed::Error>((dispatch, cumulative_reserved, closing, closed))
         })?;
         let root = match retained.and_then(|prior| prior.root.as_ref()) {
-            Some(root) => root.retain(),
-            None => operation.open_child("attempts"),
+            Some(root) => root.retain().map(Some),
+            None => operation.open_child_optional("attempts"),
         };
         let root = match root {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Some(value)) => value,
+            Ok(None) => {
                 if dispatch.as_ref().is_some_and(|value| {
                     value.state != ReservationState::Reserved || value.highest.ordinal != 1
                 }) {
@@ -1215,12 +1215,9 @@ impl History {
             None => operation.create_child("attempts")?,
         };
         let name = format!("{:04}", old.highest.ordinal);
-        let directory = match root.open_child(&name) {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                root.create_child(&name)?
-            }
-            Err(error) => return Err(error.into()),
+        let directory = match root.open_child_optional(&name)? {
+            Some(value) => value,
+            None => root.create_child(&name)?,
         };
         let names = directory.entries(1)?;
         if names.iter().any(|name| name != "authorization.nrt") {
@@ -1645,11 +1642,10 @@ fn read_record_in_scope<T: norito::NoritoSerialize + for<'a> norito::NoritoDeser
 ) -> Result<Option<T>> {
     #[cfg(test)]
     tests::parse_digest_tests::record_read();
-    let value = match reader.read(name, MAX_RECORD_BYTES, decode_record::<T>) {
-        Ok(value) => value?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+    let Some(value) = reader.read_optional(name, MAX_RECORD_BYTES, decode_record::<T>)? else {
+        return Ok(None);
     };
+    let value = value?;
     #[cfg(test)]
     tests::parse_digest_tests::record_decoded();
     Ok(Some(value))

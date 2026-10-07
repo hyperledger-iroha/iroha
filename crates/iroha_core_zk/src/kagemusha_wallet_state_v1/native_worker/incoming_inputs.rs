@@ -107,6 +107,8 @@ pub(super) fn receive(
     cancellation: &Cancellation,
 ) -> Result<(ReceiveFoldFieldsV1, Option<IncomingSigma>), Error> {
     cancellation.check()?;
+    let pallas_params = worker.installed.verifier().pallas_parameters();
+    let vesta_params = proof(worker.installed.verifier().vesta_parameters(16))?;
     let owner = prepared.owner();
     let monetary = prepared
         .monetary()
@@ -127,6 +129,8 @@ pub(super) fn receive(
         .candidate_omega()
         .ok_or(Error::Proof("Receive Omega source"))?;
     let incoming = super::incoming::transport(
+        pallas_params,
+        vesta_params,
         omega,
         &sources.objects[4],
         worker.budget,
@@ -178,6 +182,8 @@ pub(super) fn receive(
         bits[3],
     ];
     let (modes, pc, vc) = super::incoming::modes(
+        pallas_params,
+        vesta_params,
         results.iter().all(|v| *v),
         &incoming,
         sigma.as_ref(),
@@ -277,6 +283,8 @@ pub(super) fn archive(
     cancellation: &Cancellation,
 ) -> Result<(ArchiveFoldFieldsV1, Option<IncomingSigma>), Error> {
     cancellation.check()?;
+    let pallas_params = worker.installed.verifier().pallas_parameters();
+    let vesta_params = proof(worker.installed.verifier().vesta_parameters(16))?;
     let fixed = proof(worker.sources.route(route))?;
     let QualifiedOperationOwnerV1::Archive(prover) = fixed.owner() else {
         return Err(Error::Proof("Archive source route"));
@@ -291,6 +299,8 @@ pub(super) fn archive(
     ))?;
     let transport = match &credited.evidence {
         KagemushaWalletCreditedEvidenceV1::Status { status } => Some(super::incoming::transport(
+            pallas_params,
+            vesta_params,
             fixed
                 .candidate_omega()
                 .ok_or(Error::Proof("Archive Omega source"))?,
@@ -302,6 +312,8 @@ pub(super) fn archive(
     };
     let initial = if let Some(t) = &transport {
         let (m, p, v) = super::incoming::status_modes(
+            pallas_params,
+            vesta_params,
             false,
             t,
             worker.budget,
@@ -372,6 +384,8 @@ pub(super) fn archive(
     let soft = results.iter().all(|v| *v);
     let (proposal, q_incoming, accepted) = if let Some(t) = transport {
         let (m, p, v) = super::incoming::status_modes(
+            pallas_params,
+            vesta_params,
             soft,
             &t,
             worker.budget,
@@ -384,6 +398,7 @@ pub(super) fn archive(
         )
     } else {
         let mode = super::incoming::sigma_mode(
+            vesta_params,
             soft,
             sigma_claim.as_ref(),
             worker.budget,

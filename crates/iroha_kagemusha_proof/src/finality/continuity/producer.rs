@@ -8,6 +8,7 @@
 //! quorum, signature and receipt sources before granting Load authority.
 
 use core::{fmt, marker::PhantomData};
+use std::sync::Arc;
 
 use ff::Field;
 use iroha_pasta::{CancellationToken, Ep, Eq, Fp, msm::MemoryBudget};
@@ -442,9 +443,11 @@ impl<C: SourceCircuit> Prover<C> {
     /// An invalid wrapper profile or parameter set.
     pub fn qualified_source(&self) -> Result<SourceVerifier, Error> {
         Ok(SourceVerifier {
-            verifier: VerifierPlan::new(self.binding().clone(), self.pallas.clone())
-                .map_err(|_| Error::Artifact)?,
-            key: self.verifying_key().clone(),
+            verifier: Arc::new(
+                VerifierPlan::new(self.binding().clone(), self.pallas.clone())
+                    .map_err(|_| Error::Artifact)?,
+            ),
+            key: Arc::new(self.verifying_key().clone()),
         })
     }
 

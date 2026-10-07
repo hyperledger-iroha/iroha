@@ -486,6 +486,8 @@ pub(super) struct FakeStateV1 {
     pub(super) boot: Result<[u8; 32], KagemushaWalletUnavailableV1>,
     /// Test-controlled sleep-inclusive clock result.
     pub(super) monotonic: Result<u64, KagemushaWalletUnavailableV1>,
+    pub(super) monotonic_script:
+        std::collections::VecDeque<Result<u64, KagemushaWalletUnavailableV1>>,
     /// Change the boot result during the next clock read to detect mixed observations.
     pub(super) boot_after_monotonic: Option<Result<[u8; 32], KagemushaWalletUnavailableV1>>,
     /// Storage state answer.
@@ -558,6 +560,7 @@ impl FakePlatformV1 {
                 anchor_write: AnchorWriteV1::Normal,
                 boot: Ok(BOOT_A),
                 monotonic: Ok(1_000),
+                monotonic_script: std::collections::VecDeque::new(),
                 boot_after_monotonic: None,
                 storage: Ok(()),
                 storage_lock_after: None,
@@ -893,7 +896,10 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
             if let Some(boot) = state.boot_after_monotonic.take() {
                 state.boot = boot;
             }
-            state.monotonic
+            state
+                .monotonic_script
+                .pop_front()
+                .unwrap_or(state.monotonic)
         })
     }
 }
@@ -1182,7 +1188,7 @@ pub(super) fn enrolled_device(
     let f = wallet_fixture(seed);
     let mut provider = device.open();
     let super::KagemushaWalletEnrollmentStepV1::Enrolled { slot, marker } = provider
-        .begin_enrollment(&enrollment_challenge(seed), PROFILE)
+        .test_begin_enrollment(&enrollment_challenge(seed), PROFILE)
         .expect("begin")
     else {
         panic!("not enrolled");

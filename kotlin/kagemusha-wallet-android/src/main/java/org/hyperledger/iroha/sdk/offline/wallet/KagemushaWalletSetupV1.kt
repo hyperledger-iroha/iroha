@@ -35,9 +35,12 @@ internal class KagemushaWalletSetupInputV1(
     private val c: ByteArray
     init {
         val limits = when (selector) {
-            0, 1, 4, 6, 15 -> intArrayOf(0, 0, 0)
+            0, 1, 4, 6, 15, 18, 19, 20, 24 -> intArrayOf(0, 0, 0)
+            21, 22 -> intArrayOf(21_024, 0, 0)
+            23 -> intArrayOf(36 * 1024 * 1024, 0, 0)
+            25 -> intArrayOf(32 * 1024 * 1024, 1024, 0)
             2 -> intArrayOf(10_000, 1_024, 512)
-            3, in 7..14 -> intArrayOf(10_000, 0, 0)
+            3, in 7..14, in 16..17 -> intArrayOf(10_000, 0, 0)
             5 -> intArrayOf(512, 512, 0)
             else -> throw IllegalArgumentException("unknown setup action")
         }
@@ -48,12 +51,12 @@ internal class KagemushaWalletSetupInputV1(
         a = first.copyOf()
         b = second.copyOf()
         c = third.copyOf()
-        require((selector in 1..2) == id.any { it != 0.toByte() }) { "setup identity" }
+        require((selector in listOf(1, 2, 19, 20, 25)) == id.any { it != 0.toByte() }) { "setup identity" }
         require((selector == 1) == (amount.low != 0L || amount.high != 0L)) { "Offer amount" }
         require(token >= 0 && ((selector == 5 || selector == 6) == (token != 0L))) { "native time token" }
         require(selector != 2 || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }
-        require((selector != 3 && selector !in 7..14) || a.isNotEmpty()) { "Credited original" }
-        require(selector != 5 || (a.isNotEmpty() && b.isNotEmpty())) { "time response originals" }
+        require((selector != 3 && selector !in 7..14 && selector !in 16..17 && selector !in 21..23) || a.isNotEmpty()) { "Credited original" }
+        require(selector !in listOf(5, 25) || (a.isNotEmpty() && b.isNotEmpty())) { "time response originals" }
     }
     fun identity(): ByteArray = id.copyOf()
     fun first(): ByteArray = a.copyOf()
@@ -65,4 +68,42 @@ internal class KagemushaWalletSetupInputV1(
 /** Exact peer-envelope kind; this cannot select proof keys or operation authority. */
 enum class KagemushaWalletTransportKindV1(internal val tag: Int) {
     OFFER(1), REQUEST(2), PAYMENT(3), CREDITED(4),
+}
+
+/** Worker scheduling state; use snapshot for the durable current backlog. */
+class KagemushaWalletBackgroundStatusV1 internal constructor(value: KagemushaWalletCallV1) {
+    enum class Phase { NOT_STARTED, PARKED, RUNNING }
+    val phase: Phase
+    val eligible: Boolean
+    /** Last durable backlog observed by the worker, or null before its first observation. */
+    val observedBacklog: KagemushaWalletUInt128V1?
+    init {
+        if (value.status != 29 || value.bytes().isNotEmpty() || value.detail and 15.inv() != 0 ||
+            value.detail and 3 == 3 || (value.detail and 8 == 0 && (value.sequenceLow != 0L || value.sequenceHigh != 0L))) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+        phase = Phase.values()[value.detail and 3]
+        eligible = value.detail and 4 != 0
+        observedBacklog = if (value.detail and 8 != 0) KagemushaWalletUInt128V1(value.sequenceLow, value.sequenceHigh) else null
+    }
+}
+
+/** Exact retained online claim originals; neither delivery nor payout acknowledgement. */
+class KagemushaWalletFeeClaimV1 internal constructor(payment: ByteArray, request: ByteArray) {
+    private val retainedPayment = payment.copyOf()
+    private val retainedRequest = request.copyOf()
+    fun payment(): ByteArray = retainedPayment.copyOf()
+    fun request(): ByteArray = retainedRequest.copyOf()
+    override fun toString(): String = "KagemushaWalletFeeClaimV1(originals=[REDACTED])"
+}
+/** Last durably selected native Global-chain decision; no payout permission is implied. */
+class KagemushaWalletLedgerProgressV1 internal constructor(result: KagemushaWalletCallV1) {
+    /** Unsigned u64 height carried as its exact Long bits. */
+    val heightBits: Long
+    private val hash: ByteArray
+    init {
+        if (result.status != 33) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        heightBits = result.sequenceLow; hash = result.bytes()
+    }
+    fun blockHash(): ByteArray = hash.copyOf()
 }

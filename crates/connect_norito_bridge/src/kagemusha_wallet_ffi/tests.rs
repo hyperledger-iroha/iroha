@@ -108,7 +108,7 @@ fn installed() -> (u64, Arc<AtomicUsize>, Arc<AtomicUsize>) {
 fn handles_never_repeat_close_releases_owner_and_stale_captures_cannot_act() {
     let (id, calls, drops) = installed();
     let stale = owner(id).unwrap();
-    activity(id, true, false).unwrap();
+    activity(id, false, false).unwrap();
     assert_eq!(retry(id, &[1; 32]).unwrap().bytes, [0, 255, 0, 7]);
     close(id).unwrap();
     assert!(stale.wallet.lock().unwrap().is_none());

@@ -185,3 +185,65 @@ fn acknowledgement_retries_reverify_and_never_delete_before_durable_payout() {
         assert!(wallet.acknowledge_fee_payout([9; 32], &evidence).is_err());
     }
 }
+
+// Shared only by native-ledger ingress tests; originals remain explicit synthetic custody.
+pub(in crate::kagemusha_wallet_state_v1) fn seed_ledger_acknowledgement(
+    wallet: &mut super::super::tests::Wallet,
+) {
+    let (root, mut manifest) = wallet.manifest().unwrap();
+    manifest.claims = manifest
+        .claims
+        .set(
+            &mut wallet.archive,
+            [2; 32],
+            &archive::encode(&claim()).unwrap(),
+        )
+        .unwrap();
+    wallet.publish_manifest(root, &manifest).unwrap();
+    wallet
+        .archive
+        .put(ArchiveKey::FeeClaim([2; 32]), b"retained originals")
+        .unwrap();
+}
+
+#[test]
+fn aggregate_fee_original_encoding_bound_and_canonical_projection() {
+    // At both permitted original byte limits the canonical carrier has its actual maximum
+    // encoding length. Payload DATA here is not a valid Payment; 1024 is a conservative
+    // metadata allowance, not a claim about valid monetary proof sizes.
+    let maximum = RetainedFeeClaim {
+        payment: vec![1; 10_000],
+        request: vec![2; 10_000],
+    };
+    let encoded = archive::encode(&maximum).unwrap();
+    println!(
+        "fee claim maximum original carrier encoding: {} bytes",
+        encoded.len()
+    );
+    assert!(encoded.len() <= FEE_CLAIM_MAX_BYTES_V1);
+    assert_eq!(FEE_CLAIM_MAX_BYTES_V1, 21_024);
+    assert!(
+        RetainedFeeClaim::decode_canonical(&vec![0; FEE_CLAIM_MAX_BYTES_V1 + 1], &[0; 32]).is_err()
+    );
+    let payment: KagemushaWalletPaymentV1 =
+        super::super::tests::fixture("KagemushaWalletPaymentV1");
+    let request: KagemushaWalletRequestV1 =
+        super::super::tests::fixture("KagemushaWalletRequestV1");
+    let claim = RetainedFeeClaim {
+        payment: payment.to_canonical_bytes().unwrap(),
+        request: archive::encode(&request).unwrap(),
+    };
+    let scheme = payment.send.statement.scheme_id;
+    let bytes = claim.to_canonical_bytes(&scheme).unwrap();
+    assert_eq!(
+        RetainedFeeClaim::decode_canonical(&bytes, &scheme).unwrap(),
+        claim
+    );
+    assert!(RetainedFeeClaim::decode_canonical(&bytes, &[9; 32]).is_err());
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(RetainedFeeClaim::decode_canonical(&trailing, &scheme).is_err());
+    let mut changed = claim;
+    changed.request.push(0);
+    assert!(changed.to_canonical_bytes(&scheme).is_err());
+}

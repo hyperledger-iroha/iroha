@@ -5,3 +5,7 @@
 
 pub mod kagemusha_wallet_v1;
 pub use kagemusha_wallet_v1::*;
+
+/// Issuer-authenticated pre-key authorization, separate from monetary wallet objects.
+pub mod kagemusha_enrollment_permit_v1;
+pub use kagemusha_enrollment_permit_v1::*;

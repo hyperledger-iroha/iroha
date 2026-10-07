@@ -997,6 +997,45 @@ where
         .verify_full(params, read.suffix.as_ref(), budget)?)
 }
 
+/// Deferred oracle verification with the vendored transcript framing.
+///
+/// This exposes the same unchecked generator obligation as
+/// [`accumulate_succinct`] solely for independent oracle comparisons. A returned
+/// claim must still be decided; it is never a proof acceptance.
+///
+/// # Errors
+/// As [`accumulate_succinct`], using the supplied vendored transcript scalar.
+#[cfg(any(test, iroha_plonk_oracle))]
+#[doc(hidden)]
+pub fn accumulate_succinct_oracle<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    binding: &DescriptorBinding,
+    vk: &VerifyingKey<C>,
+    instances: &[Vec<C::ScalarExt>],
+    proof: &[u8],
+    budget: MemoryBudget,
+    vendored_transcript_repr: C::ScalarExt,
+) -> Result<PendingAccumulator<C>, VerifyError>
+where
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+{
+    if binding.descriptor().proof_suffix != ProofSuffixV1::FoldedGenerator {
+        return Err(VerifyError::SuffixRequired);
+    }
+    let mode = Mode {
+        oracle: true,
+        transcript_repr: TranscriptRepr::Scalar(vendored_transcript_repr),
+    };
+    let read = read_proof(
+        params, binding, vk, instances, proof, mode, budget, &AllTerms, None,
+    )?;
+    let folded = read.suffix.ok_or(VerifyError::SuffixRequired)?;
+    Ok(read
+        .pending
+        .accumulate(params, &folded, &vendored_transcript_repr, budget)?)
+}
+
 /// [`verify_full`] with a constraint filter (malicious-prover tests only):
 /// a verifier that omits the filtered terms, used to show that a forgery is
 /// rejected exactly because of the terms it violates.

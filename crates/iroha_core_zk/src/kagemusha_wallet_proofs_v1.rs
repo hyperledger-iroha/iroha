@@ -442,6 +442,24 @@ impl ArtifactSet {
         &self.scheme
     }
 
+    /// Borrow the exact Vesta parameters derived by this installation, without
+    /// deriving generators in an active foreground or background operation.
+    pub(crate) fn vesta_parameters(&self, k: u32) -> Result<&Arc<PinnedParams<Eq>>, Error> {
+        if k == 16 {
+            return Ok(&self.vesta);
+        }
+        self.steps
+            .values()
+            .find(|key| key.params.params().k() == k)
+            .map(|key| &key.params)
+            .ok_or(Error::Profile)
+    }
+
+    /// Borrow this installation's exact k16 Pallas parameters for Q and Omega.
+    pub(crate) const fn pallas_parameters(&self) -> &Arc<PinnedParams<Ep>> {
+        &self.lineage.params
+    }
+
     /// Verify a package's sigma and carried Omega using its canonical selector.
     ///
     /// Receive selection requires its exact Request, including the historical blacklist

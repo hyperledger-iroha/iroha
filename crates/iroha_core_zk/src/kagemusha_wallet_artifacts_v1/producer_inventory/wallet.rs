@@ -1,6 +1,7 @@
 //! One complete authenticated source grant for native wallet proving.
 //!
-//! Metadata remains resident; each active import reads one exact signed original.
+//! Metadata and installed public generators remain resident; each active import
+//! reads one exact signed original.
 //! There is no constructor from an Omega-only grant, readiness flag or subset.
 
 use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
@@ -9,6 +10,7 @@ use iroha_kagemusha_proof::{
     finality::{catalog::VerifierLimits, native::Parameters},
 };
 use iroha_plonk::{ProvingKey, keys::pk::artifact::ReadConfig, pcs::ipa::PinnedParams};
+use std::sync::Arc;
 
 use super::*;
 
@@ -111,6 +113,8 @@ pub struct QualifiedWalletSourcesV1 {
     q: Vec<QualifiedQProgramV1>,
     routes: Vec<QualifiedOperationRouteV1>,
     omega: QualifiedOmegaProgramV1,
+    sigma_parameters: [Arc<PinnedParams<Eq>>; 2],
+    q_parameters: Arc<PinnedParams<Ep>>,
 }
 
 fn route_index(route: OperationRoute) -> Result<usize, Error> {
@@ -155,6 +159,13 @@ impl AuthenticatedProducerInventoryV1 {
             ),
         )?;
         let scope = SourceScopeV1::from_scheme(installed.verifier().scheme())?;
+        // These transparent generators already belong to the exact authenticated
+        // installation. Retain shared ownership for the grant's complete lifetime.
+        let sigma_parameters = [
+            Arc::clone(installed.verifier().vesta_parameters(12)?),
+            Arc::clone(installed.verifier().vesta_parameters(14)?),
+        ];
+        let q_parameters = Arc::clone(installed.verifier().pallas_parameters());
         // Native genesis binding happens before any source-original read.
         let finality =
             self.qualify_finality(native_finality, originals, finality_params, finality_limits)?;
@@ -192,6 +203,8 @@ impl AuthenticatedProducerInventoryV1 {
             q,
             routes,
             omega,
+            sigma_parameters,
+            q_parameters,
         })
     }
 }
@@ -272,16 +285,17 @@ impl QualifiedWalletSourcesV1 {
             .sigma
             .get(usize::from(selector))
             .ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
-        let k12 = PinnedParams::derive(12).map_err(|_| SigmaQualificationErrorV1::Parameters)?;
-        let k14 = PinnedParams::derive(14).map_err(|_| SigmaQualificationErrorV1::Parameters)?;
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
+        )?;
         let owner = sigma::import_prover(
             usize::from(selector),
             &original,
-            &k12,
-            &k14,
+            &self.sigma_parameters[0],
+            &self.sigma_parameters[1],
             config,
             cancellation,
         )?;
@@ -321,23 +335,40 @@ impl QualifiedWalletSourcesV1 {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let record = self.record(route)?;
         let index = *record.q.get(stage).ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
-        let (source, signatures) = q_source_recipe(
-            self.scope,
-            route.variant,
-            &record.own_class,
-            &record.incoming_class,
-            self.sigmas.metadata(),
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
         )?;
-        let pallas = PinnedParams::derive(16).map_err(|_| QQualificationErrorV1::Source)?;
+        let q = self.q(route)?;
+        // Reuse the source-qualified plan, including its exact generator owners.
+        // Reconstructing the offline recipe here would derive generators and the
+        // fixed trivial claim again without an operation cancellation boundary.
+        let representative = |selectors: &[u8]| {
+            selectors
+                .first()
+                .and_then(|selector| self.sigmas.key(*selector))
+                .map(|key| key.key().clone())
+                .ok_or(Error::Inventory)
+        };
+        let incoming = if record.incoming_class.is_empty() {
+            None
+        } else {
+            Some(representative(&record.incoming_class)?)
+        };
+        let source = iroha_kagemusha_proof::q_sigma::native::QSigmaSource::new(
+            q.sigma().clone(),
+            representative(&record.own_class)?,
+            incoming,
+        )
+        .map_err(QQualificationErrorV1::from)?;
         let owner = q::import(
             stage,
             &source,
-            &signatures,
+            q.signatures(),
             &original,
-            &pallas,
+            &self.q_parameters,
             config,
             cancellation,
         )?;
@@ -376,9 +407,12 @@ impl QualifiedWalletSourcesV1 {
     ) -> Result<ProvingKey<Eq>, WalletSourcesErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let index = *self.record(route)?.a.get(stage).ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
+        )?;
         Ok(self.route(route)?.owner().import_a(
             stage,
             &original.proving_key,
@@ -412,9 +446,12 @@ impl QualifiedWalletSourcesV1 {
     ) -> Result<ProvingKey<Ep>, WalletSourcesErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let index = *self.record(route)?.w.get(stage).ok_or(Error::Inventory)?;
-        let original = self
-            .authenticated
-            .read_original(index, originals, config.maximum_bytes)?;
+        let original = self.authenticated.read_original_cancellable(
+            index,
+            originals,
+            config.maximum_bytes,
+            cancellation,
+        )?;
         Ok(self.route(route)?.owner().import_w(
             stage,
             &original.proving_key,

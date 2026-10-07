@@ -58,10 +58,19 @@ qualification remain open.
 For initial enrollment, trusted native startup constructs CoreZK `EnrollmentOwnerV1`
 from the approved scheme, exact policy originals and pinned original root DER, then
 registers `NativeEnrollmentRuntime` through `retain_native_enrollment`. The typed
-C/JNI enrollment call accepts original account/challenge/evidence bytes. Android sends
+C/JNI enrollment begin accepts a retry ID and account/asset originals, returning native-selected
+issuer dispatch DATA. The signed pre-key permit must pass native scope, signature and elapsed-time
+checks before the existing-account challenge can authorize hardware generation. Android sends
 DER plus an opaque Play Integrity token; the issuer separately acquires Google's
 original response. Native retains the exact account-authorized E5 and issuer-signed E6
 before returning them. Complete-source loader handoff preserves the same opaque handle
 and exclusive provider on failures. `beginEnrolled` still requires a fresh existing-account
 signature through ordinary original admission. No foreign liveness or hardware verdict
 can substitute for issuer checks. The E6 transport bound is separate from Payment10KB.
+
+The enrollment handle's explicit `abandon` action permanently closes an unused enrollment
+before runtime handoff and returns its exact retained signed ledger control. Native refuses
+once Bootstrap commits. Closing the handle only releases ownership. Abandon output is published
+before an immutable digest selection, and nothing is returned until both are durable; a missing
+selected original is refused. Recovery may complete a missing selection for a present valid
+original. This local mechanism does not establish protection against complete filesystem rollback.

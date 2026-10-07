@@ -7937,10 +7937,6 @@ public struct ToriiVerifyingKeyListItem: Decodable, Sendable {
     }
 }
 
-private struct ToriiVerifyingKeyListResponse: Decodable {
-    let items: [ToriiVerifyingKeyListItem]
-}
-
 public struct ToriiVerifyingKeyListQuery: Sendable {
     public var backend: String?
     public var status: ToriiVerifyingKeyStatus?
@@ -22435,21 +22431,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return detail
     }
 
+    /// Decode Torii's canonical verifying-key list array, including its `ids_only` form.
     public func listVerifyingKeys(query: ToriiVerifyingKeyListQuery? = nil) async throws -> [ToriiVerifyingKeyListItem] {
         let request = try makeRequest(path: "/v1/zk/vk",
                                       queryItems: try query?.queryItems())
         let data = try await data(for: request)
-        let decoder = JSONDecoder()
-        do {
-            return try decoder.decode([ToriiVerifyingKeyListItem].self, from: data)
-        } catch let arrayError {
-            do {
-                let response = try decoder.decode(ToriiVerifyingKeyListResponse.self, from: data)
-                return response.items
-            } catch {
-                throw ToriiClientError.decoding(arrayError)
-            }
-        }
+        return try decodeJSON([ToriiVerifyingKeyListItem].self, from: data)
     }
 
     private func decodeVerifyingKeyTransactionDraft(

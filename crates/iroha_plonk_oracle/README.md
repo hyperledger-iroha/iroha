@@ -24,13 +24,17 @@ Rules:
   `RUSTFLAGS`, never as a Cargo feature (spec section 6.4). Tests that need it
   are compiled only under that cfg (`build.rs` declares it for check-cfg); run
   them in a separate target directory, because changing `RUSTFLAGS` rebuilds
-  everything. No CI job runs them yet: PR CI runs this crate's and
-  `iroha_plonk`'s ordinary tests through the affected-lane runner
-  (`ci/rust_lanes.toml`, `scripts/rust_ci.py`), but the oracle-mode run below
-  is manual. TODO: a path-filtered oracle job (x86_64 and aarch64) that runs
-  the oracle-build commands under "Validate".
+  everything. The path-filtered `native_prover_parity.yml` job runs all five
+  release correctness harnesses on native x86_64 and aarch64 runners through
+  `ci/native_prover_oracle.py`. It includes ignored large cases, excludes only
+  timing tests, and rejects absent oracle-mode tests or partial results.
+  Compiler messages, source hashes, executable hashes and natural test outcomes
+  are retained. This is correctness evidence, not a timing or phone gate. The
+  affected-lane runner (`ci/rust_lanes.toml`, `scripts/rust_ci.py`) also runs
+  ordinary tests. Hosted execution of the new parity job remains unobserved.
 - The vendored crates resolve through the workspace `[patch]` tables with the
-  same revisions and features as `iroha_core_zk`.
+  pinned revisions and features captured by the oracle. Shipping consumers
+  have migrated to the native crates and must not reach this dependency graph.
 - The crate, the vendored halo2 stack and the git dependencies are deleted
   together once every consumer has migrated to the native crates.
 

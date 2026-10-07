@@ -68,6 +68,26 @@ originals. All transaction/block proof limits are checked together before reserv
 counters change or native verification starts. Fixture verifiers remain test-only
 orchestration.
 
+The node enrollment journal retains the original E1, approved selection and deadline in
+an explicitly initialized private namespace. It validates account-signed E5 and derives
+the private verifier request from the retained issuer time before selecting its sole Verify
+dispatch. The original worker configuration pin is frozen with E5; recovery reconstructs and
+compares the exact private request under that same configuration. A reread `Verifying` attempt
+permits recovery only; unknown or unavailable worker outcomes do not restore a fresh attempt.
+Actual signed pre-key permits are authenticated
+and retained per native dispatch nonce, and Resume requires the previous exact original
+in the same journal. Worker replies are checked against the selected configuration, E5 and
+verification time. Their exact evidence originals precede a durable `Signing` selection that
+freezes the credential body and issue time. The returned E6 must contain that exact body,
+evidence and selected Enrollment certificate; its actual signature is checked before exact
+E6 bytes are retained for delivery. Retries do not refresh issue time or replace the original.
+Publication errors poison the live owner until reopening and reconciliation. Native reads
+distinguish initial absence from later custody failure. This local ordering component does
+not establish KYC, worker provenance, signer custody or protection from a privileged rollback
+of the entire filesystem. TODO: connect the journal to approved current eligibility,
+the authenticated verifier process, Enrollment-role signer and Torii service owner; retain
+the ledger's permanent activation claims at that boundary.
+
 TODO(G3/G6): implement and qualify the compact offline Load relation consuming ordinary consensus evidence,
 complete producer artifacts and the end-to-end device/network flow. The online receipt
 alone grants no foreign wallet-open or proof-acceptance capability.

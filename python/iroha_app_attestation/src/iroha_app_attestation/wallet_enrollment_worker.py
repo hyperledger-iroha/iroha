@@ -20,7 +20,7 @@ from collections import deque
 from pathlib import Path
 
 from .attestation import (
-    AttestationRejected, VerificationUnavailable, DurableAppleAssertionCounterStore,
+    AttestationRejected, VerificationUnavailable,
     _verify_apple_assertion_with_hash, require, verify_apple_wallet_attestation_raw,
 )
 from .wallet_enrollment import (
@@ -35,6 +35,7 @@ from .wallet_policy import (
 from .play_integrity import GooglePlayIntegrityVerifier, PlayIntegrityEnrollmentPolicy, _unique
 from .google_oauth import GoogleServiceAccountTokenProvider
 from .native_time_interval import NativeTimeInterval
+from .wallet_enrollment_store import E1CounterStore
 
 SCHEMA = "iroha.kagemusha.wallet-e1-verifier.v1"
 CONFIG_SCHEMA = "iroha.kagemusha.wallet-e1-verifier-config.v1"
@@ -188,80 +189,6 @@ def configured_policy(value: dict, platform: str) -> ConfiguredWalletEnrollmentP
     return ConfiguredWalletEnrollmentPolicyV1(app, enrollment, root)
 
 
-class E1CounterStore(DurableAppleAssertionCounterStore):
-    """Retain the existing actual Apple register with a protected E1 attempt journal.
-
-    One existing SQLite transaction commits the verified assertion counter, consumed
-    client-data hash and exact evidence result. There is no monetary state or signer here.
-    """
-    def __init__(self, directory: Path, directory_fd: int):
-        self.directory, self.directory_fd = directory, directory_fd
-        held = os.fstat(directory_fd)
-        self.directory_identity = (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_gid)
-        self.recheck_directory()
-        self.path = directory / "wallet-e1.sqlite3"
-        try:
-            created = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            os.fsync(created)
-            os.close(created)
-            os.fsync(self.directory_fd)
-        self.file_identity = self.database_identity()
-        super().__init__(self.path)
-        with closing(self._connect()) as connection:
-            connection.execute("""CREATE TABLE IF NOT EXISTS wallet_e1_attempts (
-                request_sha256 BLOB PRIMARY KEY NOT NULL,
-                key_binding BLOB UNIQUE NOT NULL,
-                config_sha256 BLOB NOT NULL,
-                original BLOB NOT NULL,
-                result BLOB
-            )""")
-            columns = connection.execute("PRAGMA table_info(wallet_e1_attempts)").fetchall()
-            require([(r[1], r[2], r[3], r[5]) for r in columns] == [
-                ("request_sha256", "BLOB", 1, 1), ("key_binding", "BLOB", 1, 0),
-                ("config_sha256", "BLOB", 1, 0), ("original", "BLOB", 1, 0),
-                ("result", "BLOB", 0, 0)], "invalid E1 attempt journal schema")
-        os.fsync(self.directory_fd)
-
-    def recheck_directory(self):
-        require(self.directory.is_absolute() and self.directory.resolve(strict=True) == self.directory,
-                "invalid private store path")
-        held, path = os.fstat(self.directory_fd), self.directory.stat()
-        require(stat.S_ISDIR(held.st_mode) and held.st_uid == os.getuid() and held.st_mode & 0o077 == 0
-                and (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_gid) == self.directory_identity
-                and (path.st_dev, path.st_ino, path.st_mode, path.st_uid, path.st_gid) == self.directory_identity,
-                "private store directory changed")
-
-    def database_identity(self):
-        value = self.path.lstat()
-        require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid()
-                and value.st_mode & 0o077 == 0 and value.st_nlink == 1,
-                "private E1 journal custody unavailable")
-        return value.st_dev, value.st_ino
-
-    def recheck(self):
-        self.recheck_directory()
-        require(self.database_identity() == self.file_identity, "private E1 journal replaced")
-        sidecar = self.path.with_name(self.path.name + "-journal")
-        if sidecar.exists() or sidecar.is_symlink():
-            value = sidecar.lstat()
-            require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid()
-                    and value.st_mode & 0o077 == 0 and value.st_nlink == 1,
-                    "private E1 journal sidecar custody unavailable")
-
-    def _connect(self):
-        self.recheck()
-        connection = super()._connect()
-        try:
-            self.recheck()
-            return connection
-        except Exception:
-            connection.close()
-            raise
-
-
 class VerifierOwner:
     """Actual private process owner; its only successful result comes from real verifiers."""
     def __init__(self, config_original: bytes, *, directory_fd: int = 17,
@@ -287,10 +214,10 @@ class VerifierOwner:
                 "private policy projection differs from Native pins")
         self.directory = Path(config["store_directory"])
         self.current_time: int | None = None
-        self.google, self.oauth = None, None
+        self.google, self.oauth, self.counters = None, None, None
         self.directory_fd = os.dup(directory_fd)
         try:
-            # Validate the actual protected directory before reading OAuth or creating a DB.
+            # Validate the protected directory before reading OAuth or opening retained storage.
             held, path = os.fstat(self.directory_fd), self.directory.stat()
             require(self.directory.is_absolute() and self.directory.resolve(strict=True) == self.directory
                     and stat.S_ISDIR(held.st_mode) and held.st_uid == os.getuid() and held.st_mode & 0o077 == 0
@@ -313,6 +240,8 @@ class VerifierOwner:
             self.counters = E1CounterStore(self.directory, self.directory_fd)
             self.recheck()
         except Exception:
+            if self.counters is not None:
+                self.counters.close()
             if self.oauth is not None:
                 self.oauth.close()
             os.close(self.directory_fd)
@@ -324,10 +253,14 @@ class VerifierOwner:
         return NativeTimeInterval(self.current_time, self.current_time)
 
     def recheck(self):
-        self.crypto.recheck()
-        if self.configuration is not None:
-            self.configuration.recheck()
-        self.counters.recheck()
+        try:
+            self.crypto.recheck()
+            if self.configuration is not None:
+                self.configuration.recheck()
+            self.counters.recheck()
+        except (AttestationRejected, OSError):
+            # A lost or substituted process original is not a platform-evidence rejection.
+            raise VerificationUnavailable("private verifier custody unavailable") from None
 
     def request(self, original: bytes):
         value = exact_json(original, MAX_REQUEST)
@@ -381,7 +314,16 @@ class VerifierOwner:
                     self.recheck()
                     return row[3]  # None means consumed/pending outcome unknown; never reverify.
                 raise AttestationRejected("private E1 verification already attempted")
-            require(action == "verify", "private E1 recovery original absent")
+            if action == "recover":
+                # Native may have retained Verifying before a worker crash prevented insertion.
+                # Absence is an unknown outcome, never a fabricated platform rejection. Keep
+                # recovery read-only; only Native's one-use dispatch may select a first Verify.
+                conflict = connection.execute(
+                    "SELECT 1 FROM wallet_e1_attempts WHERE key_binding=?",
+                    (scope.enrollment_key_binding(),)).fetchone()
+                require(conflict is None, "private E1 recovery original differs")
+                self.recheck()
+                return None
             connection.execute("INSERT INTO wallet_e1_attempts VALUES (?, ?, ?, ?, NULL)",
                                (digest, scope.enrollment_key_binding(), self.config_digest, original))
             self.recheck()
@@ -449,6 +391,8 @@ class VerifierOwner:
         return result
 
     def close(self):
+        if self.counters is not None:
+            self.counters.close()
         if self.oauth is not None:
             self.oauth.close()
         if self.directory_fd >= 0:
@@ -480,7 +424,7 @@ def serve(owner: VerifierOwner, input_stream, output_stream):
             response.update({"outcome": "unavailable", "evidence_base64": None})
         except (AttestationRejected, sqlite3.IntegrityError):
             response.update({"outcome": "rejected", "evidence_base64": None})
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             response.update({"outcome": "unavailable", "evidence_base64": None})
         write_packet(output_stream, response)
 

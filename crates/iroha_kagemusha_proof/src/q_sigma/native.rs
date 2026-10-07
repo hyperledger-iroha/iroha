@@ -1175,11 +1175,9 @@ mod tests {
             TranscriptError::InvalidPoint,
             TranscriptError::IdentityPoint,
         ] {
-            assert!(incoming_proof_failure(&VerifyError::Transcript(
-                error.clone()
-            )));
+            assert!(incoming_proof_failure(&VerifyError::Transcript(error)));
             assert!(incoming_proof_failure(&VerifyError::Ipa(
-                IpaError::Transcript(error.clone())
+                IpaError::Transcript(error)
             )));
             assert!(incoming_proof_failure(&VerifyError::Multiopen(
                 MultiopenError::Ipa(IpaError::Transcript(error))
