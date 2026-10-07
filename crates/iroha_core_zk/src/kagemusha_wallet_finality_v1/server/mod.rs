@@ -16,7 +16,11 @@ use iroha_data_model::{
     sumeragi_finality::{SumeragiFinalityVerifier, VerifiedSumeragiBlock},
 };
 use iroha_kagemusha_proof::finality::{
-    continuity::{SourceNodeEvidence, tree::NodeRandomness},
+    catalog::ArtifactRecord,
+    continuity::{
+        SourceNodeEvidence,
+        tree::{NodeRandomness, SourceIdentity},
+    },
     native::{HistoryPrefix, ImportLimits, InstalledFinality, Parameters, ProvingContext},
     receipt_finality::{CONTEXT_DOMAIN, PROGRAM_ID},
 };
@@ -101,6 +105,42 @@ impl ServerFinalityLimitsV1 {
     }
 }
 
+/// Reimport a complete offline server archive using the same original reader as serving.
+/// Records are unadmitted compiler DATA; success returns only the terminal source identity.
+/// It does not create a runtime, authenticate a release, sign an inventory or prove a Load.
+/// The serving owner separately requires its independently selected signed verifier pack
+/// and producer inventory. No key generation, fallback or repair occurs here.
+/// # Errors
+/// Wrong original identity/extent, incomplete graph, native genesis, source import or limits.
+pub fn qualify_server_archive(
+    verifier: &SumeragiFinalityVerifier,
+    records: &[ArtifactRecord],
+    path: &Path,
+    limits: ImportLimits,
+) -> Result<SourceIdentity> {
+    let imports = limits;
+    let anchor = derive_history_anchor(verifier).map_err(|_| ServerFinalityErrorV1::Binding)?;
+    let mut originals = artifacts::Originals::from_records(records, path, imports)?;
+    let installed = InstalledFinality::from_original_artifacts(
+        anchor,
+        &mut originals,
+        Parameters {
+            pallas: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
+            vesta: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
+        },
+        imports,
+    )?;
+    originals.require_complete()?;
+    let source = installed.qualified_source();
+    Ok(SourceIdentity {
+        descriptor: *source.binding().digest(),
+        key: source
+            .key_digest()
+            .map_err(|_| ServerFinalityErrorV1::Binding)?
+            .to_repr(),
+    })
+}
+
 /// Cooperative cancellation of genuine proof work; contains no proof authority.
 #[derive(Clone, Default)]
 pub struct ServerFinalityCancellationV1(iroha_pasta::CancellationToken);
@@ -179,8 +219,7 @@ impl ServerFinalityV1 {
         ) {
             return Err(ServerFinalityErrorV1::Binding);
         }
-        let mut originals =
-            artifacts::Originals::open(&inventory, server_originals, limits.maximum_key_bytes)?;
+        let mut originals = artifacts::Originals::open(&inventory, server_originals, imports)?;
         let params = Parameters {
             pallas: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
             vesta: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
@@ -205,6 +244,7 @@ impl ServerFinalityV1 {
             .map_err(|_| ServerFinalityErrorV1::Binding)?;
         let installed =
             InstalledFinality::from_original_artifacts(anchor, &mut originals, params, imports)?;
+        originals.require_complete()?;
         Ok(Self {
             installed,
             originals,

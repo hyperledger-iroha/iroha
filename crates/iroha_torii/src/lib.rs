@@ -37521,10 +37521,10 @@ impl Torii {
             SORAFS_RESERVE_POLICY_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy);
             SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
             SORAFS_RESERVE_ACCOUNT_PROOF_GET => canonical_signature_get(reserve_account_proof::handler);
-            KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler);
+            KAGEMUSHA_LOAD_ISSUANCE_GET => limited_canonical_account_get(kagemusha_wallet::handler, app_state, 0, 0);
             KAGEMUSHA_ENROLLMENT_POST => limited_canonical_signature_post(kagemusha_enrollment::handler, iroha_torii_shared::kagemusha_enrollment::ENROLLMENT_SERVICE_REQUEST_MAX_BYTES_V1);
-            KAGEMUSHA_LOAD_EVENT_PROOF_GET => canonical_signature_get(kagemusha_wallet::event_handler);
-            KAGEMUSHA_LOAD_FINALITY_PROOF_GET => canonical_signature_get(kagemusha_wallet::finality_handler);
+            KAGEMUSHA_LOAD_EVENT_PROOF_GET => limited_canonical_account_get(kagemusha_wallet::event_handler, app_state, 0, 0);
+            KAGEMUSHA_LOAD_FINALITY_PROOF_GET => limited_canonical_account_get(kagemusha_wallet::finality_handler, app_state, 0, 0);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
@@ -40172,13 +40172,19 @@ impl Torii {
         #[cfg(not(feature = "app_api"))]
         if config.kagemusha_load_finality.is_some() {
             return Err(ToriiBuildError::invalid_configuration(
-                "kagemusha_load_finality", "Load finality requires the shipping app_api surface"));
+                "kagemusha_load_finality",
+                "Load finality requires the shipping app_api surface",
+            ));
         }
         #[cfg(feature = "app_api")]
-        let kagemusha_load_finality = config.kagemusha_load_finality.clone()
+        let kagemusha_load_finality = config
+            .kagemusha_load_finality
+            .clone()
             .map(|selected| kagemusha_wallet_finality::FinalityService::open(state.clone(), selected))
             .transpose()
-            .map_err(|error| ToriiBuildError::component_initialization("kagemusha_load_finality", error))?
+            .map_err(|error| {
+                ToriiBuildError::component_initialization("kagemusha_load_finality", error)
+            })?
             .map(Arc::new);
         let torii = Self {
             build_identity,

@@ -85,13 +85,50 @@ The command derives the current anchor from the selected signed genesis and
 compiles the complete fixed source topology. It never selects a retired test
 fixture, substitutes an unproved descriptor, or issues a finality proof. The
 maintained compiler reconstructs and strictly imports its output graph before
-returning. Server PK bytes stay in a dedicated `server-originals` directory
-with bounded regeneration managed by the existing compiler. Only the completed
-canonical inventory and exact descriptor/VK originals are copied into
-`finality-inventory.norito` and `finality-originals`. They feed `--request`
-directly. Incomplete output is retained but has no completion record or wallet
-authority. Compilation must be executed for the actual fresh genesis; existing
-engineering graph outputs are not silently reused as production inputs.
+returning. Its bounded regenerable PK cache is `server-compiler-cache`. Each
+actual generated descriptor, VK and PK is also sealed in the separate immutable,
+content-addressed `server-originals` archive under the same finite complete-graph
+inventory limit. The source catalog creates private directories and files with
+explicit permissions; it does not change the process umask.
+
+Before completion, a fresh import reads every graph member exclusively from the
+server archive through the serving reader, requires that every selected record
+was consumed, and compares the genuine terminal source identity to the compiler's
+result. The archive is mandatory server material; it is never regenerated while
+serving a proof. The completed canonical inventory retains all three roles' hash
+and length commitments, while `finality-originals` copies only descriptor/VK
+originals. That verifier directory and `finality-inventory.norito` feed `--request`
+directly. No server PK enters wallet packaging. Incomplete output is retained but
+has no completion record or wallet authority. Compilation must be executed for
+the actual fresh genesis; existing engineering graph outputs are not silently
+reused as production inputs.
+
+## Terminal Load proof serving boundary
+
+The optional `torii.kagemusha_load_finality` configuration selects exact nonzero
+Scheme and signed manifest digests, the signed verifier pack, authenticated
+producer inventory, complete `server-originals` archive and an existing private
+immutable journal. Explicit finite bounds cover keys, total original bytes,
+artifact count, MSM scratch, journal files/bytes, worker queue, native allocation,
+per-height native deadline and maximum receipt height. Absence supplies no
+replacement finality provider. The runtime independently authenticates this
+installation against Core's actual configured signed genesis and verifies the
+complete graph before proving.
+
+`GET /v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality-proof`
+requires canonical payer authentication for the selected network, an empty body
+and `Accept: application/x-norito`. The worker independently reacquires the payer's
+committed receipt and native event; its original native cursor, installed proof
+graph and durable checkpoints produce the terminal LoadFinality frame (at most
+16,384 bytes). Responses are private/no-store. Pending, missing or refused proof
+material returns HTTP503 `kagemusha_load_finality_unavailable`, with no block-proof
+or decoded-receipt substitute. Completed queue entries may be evicted; retries
+reacquire and verify the exact retained proof. Pending work is never evicted.
+
+Source and custody/component tests do not establish a successful full signed
+installation or an actual financial proof response. Those executions and phone
+qualification remain open. Proof work observes cancellation; complete graph
+mounting does not currently provide mid-import cancellation.
 
 ## Shared packaging ownership
 
