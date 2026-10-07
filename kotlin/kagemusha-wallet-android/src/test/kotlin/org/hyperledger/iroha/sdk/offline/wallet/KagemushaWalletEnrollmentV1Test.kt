@@ -32,12 +32,33 @@ class KagemushaWalletEnrollmentV1Test {
         var calls = 0; var closes = 0; var lastSelector = -1; var original = byteArrayOf()
         var closeStatus = 0
         var retainedCertificates = emptyArray<ByteArray>()
+        var retainedFrames = emptyList<ByteArray>()
         override fun call(handle: Long, selector: Int, first: ByteArray, second: ByteArray, third: ByteArray, certificates: Array<ByteArray>): KagemushaWalletCallV1 {
+            retainedFrames = listOf(first, second, third).map { it.copyOf() }
             assertEquals(7,handle); lastSelector=selector; calls++; original=first.copyOf();first.fill(0)
             retainedCertificates = certificates.map { it.copyOf() }.toTypedArray()
             certificates.forEach { it.fill(0) }; return reply
         }
         override fun close(handle: Long): Int {assertEquals(7,handle);closes++;return closeStatus}
+    }
+    @Test fun `renewed session keeps exact originals and requires same owner nonmonetary acknowledgement`() {
+        val driver = Driver()
+        val owner = KagemushaWalletEnrollmentV1(7,driver,byteArrayOf(1,2),Any(),2)
+        val session = KagemushaWalletEnrollmentSessionOriginalsV1(byteArrayOf(1),byteArrayOf(2),byteArrayOf(3))
+        driver.reply = KagemushaWalletCallV1(39,-1,0,7,0,0,byteArrayOf())
+        owner.renewSession(session)
+        assertEquals(19,driver.lastSelector)
+        session.frames().zip(driver.retainedFrames).forEach { (expected,actual) -> assertContentEquals(expected,actual) }
+        assertTrue(driver.retainedCertificates.isEmpty())
+        assertEquals(0,driver.closes)
+        assertFailsWith<KagemushaWalletExceptionV1> { driver.reply.completion() }
+        for (reply in listOf(KagemushaWalletCallV1(39,-1,0,8,0,0,byteArrayOf()),
+            KagemushaWalletCallV1(20,-1,0,7,0,0,byteArrayOf()),
+            KagemushaWalletCallV1(-5,17,23,0,0,0,byteArrayOf()))) {
+            driver.reply = reply
+            assertFailsWith<KagemushaWalletExceptionV1> { owner.renewSession(session) }
+        }
+        owner.close()
     }
     @Test fun `enrollment projections never become payment completion and retain exact originals`() {
         for ((status,size) in listOf(18 to 32,19 to 161,20 to 0,21 to 0,22 to 0,23 to 32,24 to 131072,25 to 262144,26 to 0,27 to 16384,28 to 1024)) {

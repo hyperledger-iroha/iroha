@@ -548,6 +548,7 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
                     .expect("same State-pool decoder"),
                 decoded: None,
                 returned_refusal: None,
+                amx_legs: None,
             };
             let entries = attempt
                 .original_decoded(&budget)
@@ -757,6 +758,7 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                     .expect("actual original-pool signature decoder"),
                 decoded: None,
                 returned_refusal: None,
+                amx_legs: None,
             };
             let entries = attempt
                 .original_decoded(&budget)

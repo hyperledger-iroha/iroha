@@ -27,7 +27,7 @@ pub use load_session::LoadProofProgressV1;
 pub const LOAD_EVENT_PROOF_MAX_BYTES_V1: usize = 8192;
 /// One complete current ledger instruction, including its original signed transport.
 pub const LEDGER_INSTRUCTION_MAX_BYTES_V1: usize = 64 * 1024;
-const PREFIX_MAX: usize = 64 * 1024;
+pub(super) const PREFIX_MAX: usize = 64 * 1024;
 
 fn producer<T>(result: Result<T, FinalityProducerErrorV1>) -> Result<T, Error> {
     result.map_err(|error| match error {
@@ -77,7 +77,7 @@ impl From<SlotOriginal> for HistorySlot {
 }
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::FinalityPrefixOriginalV1")]
-struct PrefixOriginal {
+pub(super) struct PrefixOriginal {
     next_height: u64,
     current: SlotOriginal,
     following: SlotOriginal,
@@ -90,7 +90,7 @@ struct PrefixOriginal {
     vesta: Vec<u8>,
 }
 impl PrefixOriginal {
-    fn from_prefix(prefix: &HistoryPrefix) -> Self {
+    pub(super) fn from_prefix(prefix: &HistoryPrefix) -> Self {
         let state = prefix.state();
         let evidence = prefix.evidence();
         Self {
@@ -106,7 +106,7 @@ impl PrefixOriginal {
             vesta: evidence.vesta.to_bytes().to_vec(),
         }
     }
-    fn restore(
+    pub(super) fn restore(
         self,
         graph: &iroha_kagemusha_proof::finality::native::InstalledFinality,
         budget: MemoryBudget,
@@ -157,10 +157,106 @@ struct UnloadConfirmation {
     block_hash: [u8; 32],
 }
 
+// Inclusion is checked while each certified original is selected, before its cursor can move.
+// Absence is ordinary history; a located but foreign or unsuccessful input is an error.
+fn contains_successful_unload(
+    verified: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+    network: &iroha_data_model::NetworkId,
+    scheme: [u8; 32],
+    account: &iroha_data_model::account::AccountId,
+    transaction: &[u8; 32],
+    original: &[u8],
+) -> Result<bool, Error> {
+    use iroha_crypto::HashOf;
+    use iroha_data_model::{query::CommittedTransaction, transaction::TransactionEntrypoint};
+    let block = verified.block();
+    let Some(index) = block
+        .network_entrypoints()
+        .position(|input| input.hash().as_ref() == transaction)
+    else {
+        return Ok(false);
+    };
+    let input_index = u32::try_from(index).map_err(|_| Error::Invalid("Unload input index"))?;
+    let entrypoint = block
+        .network_entrypoint_at(index)
+        .ok_or(Error::Proof("Unload input"))?
+        .clone();
+    let TransactionEntrypoint::External(signed) = &entrypoint else {
+        return Err(Error::Invalid("Unload external input"));
+    };
+    if signed.authority() != account
+        || !signed
+            .instructions()
+            .explicit_instructions()
+            .any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<KagemushaWalletLedgerV1>()
+                    .is_some_and(|instruction| {
+                        instruction.scheme == scheme
+                            && matches!(&instruction.action,
+                    KagemushaWalletLedgerActionV1::Unload(bytes) if bytes == original)
+                    })
+            })
+    {
+        return Err(Error::Invalid("Unload exact original instruction"));
+    }
+    let (output_index, _) = block
+        .network_output_at(input_index)
+        .ok_or(Error::Proof("Unload execution output"))?;
+    let output = block
+        .execution_outputs()
+        .get(output_index as usize)
+        .ok_or(Error::Proof("Unload output index"))?
+        .clone();
+    let committed = CommittedTransaction {
+        block_hash: block.hash(),
+        entrypoint_hash: entrypoint.hash(),
+        entrypoint_proof: block
+            .network_input_proof(input_index)
+            .ok_or(Error::Proof("Unload input membership"))?,
+        entrypoint,
+        output_hash: HashOf::new(&output),
+        output_proof: block
+            .output_proof(output_index)
+            .ok_or(Error::Proof("Unload output membership"))?,
+        output,
+    };
+    verified
+        .verify_committed_transaction(network, &committed)
+        .map_err(|_| Error::Proof("Unload successful authenticated execution"))?;
+    Ok(true)
+}
+
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
 {
-    fn recursive_prefix(
+    pub(super) fn prove_recursive_successor(
+        &mut self,
+        prefix: Option<HistoryPrefix>,
+        block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+    ) -> Result<HistoryPrefix, Error> {
+        let sources = Arc::clone(&self.proofs.sources);
+        let graph = sources.finality_producer();
+        let next = {
+            let mut originals = self
+                .proofs
+                .originals
+                .lock()
+                .map_err(|_| Error::ArtifactsUnavailable("recursive original owner"))?;
+            match prefix {
+                None => producer(graph.genesis(&mut *originals, self.proofs.budget))?,
+                Some(prefix) => {
+                    let input =
+                        block_witness(graph.installed().anchor(), &self.proofs.chain, block)
+                            .map_err(|_| Error::Proof("native recursive block witness"))?;
+                    producer(graph.append(&mut *originals, &prefix, &input, self.proofs.budget))?
+                }
+            }
+        };
+        Ok(next)
+    }
+    pub(super) fn recursive_prefix(
         &mut self,
         manifest: &manifest::Manifest,
     ) -> Result<Option<HistoryPrefix>, Error> {
@@ -242,24 +338,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 .verify(&candidate)
                 .map_err(|_| Error::Proof("recursive ledger continuity"))?
         };
-        let sources = Arc::clone(&self.proofs.sources);
-        let graph = sources.finality_producer();
-        let prefix = {
-            let mut originals = self
-                .proofs
-                .originals
-                .lock()
-                .map_err(|_| Error::ArtifactsUnavailable("recursive original owner"))?;
-            match prefix {
-                None => producer(graph.genesis(&mut *originals, self.proofs.budget))?,
-                Some(prefix) => {
-                    let input =
-                        block_witness(graph.installed().anchor(), &self.proofs.chain, &block)
-                            .map_err(|_| Error::Proof("native recursive block witness"))?;
-                    producer(graph.append(&mut *originals, &prefix, &input, self.proofs.budget))?
-                }
-            }
-        };
+        let prefix = self.prove_recursive_successor(prefix, &block)?;
         let checkpoint = verifier
             .export_checkpoint(&candidate)
             .map_err(|_| Error::Proof("recursive native checkpoint"))?;
@@ -307,6 +386,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             return Err(Error::Invalid("ledger Load request"));
         }
         let (root, mut manifest) = self.sync_manifest()?;
+        self.require_ledger_activation(&manifest)?;
         if let Some(address) = manifest
             .ledger_load_plans
             .get(&mut self.archive, &request)?
@@ -401,7 +481,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             action,
         })
     }
-    /// Verify exact successful Unload input/output inclusion in the selected native block.
+    /// Return the durably retained exact successful Unload input/output inclusion.
     /// The transaction hash is a locator. The complete retained block, signature, execution
     /// result and original Unload claim independently authenticate the returned confirmation.
     /// # Errors
@@ -411,8 +491,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         transaction: [u8; 32],
         original: &[u8],
     ) -> Result<LedgerProgressV1, Error> {
-        use iroha_crypto::HashOf;
-        use iroha_data_model::{query::CommittedTransaction, transaction::TransactionEntrypoint};
         let claim = valid(KagemushaWalletUnloadClaimV1::decode_canonical(
             original,
             &self.scheme_id,
@@ -448,62 +526,18 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let verified = verifier
             .verify_retained_decision(checkpoint.tip())
             .map_err(|_| Error::Proof("Unload selected native decision"))?;
-        let block = verified.block();
-        let index = block
-            .network_entrypoints()
-            .position(|input| input.hash().as_ref() == &transaction)
-            .ok_or(Error::Invalid(
+        if !contains_successful_unload(
+            &verified,
+            &genesis.initial_epoch().network_id,
+            self.scheme_id,
+            &claim.account,
+            &transaction,
+            original,
+        )? {
+            return Err(Error::Invalid(
                 "Unload transaction absent from selected block",
-            ))?;
-        let input_index = u32::try_from(index).map_err(|_| Error::Invalid("Unload input index"))?;
-        let entrypoint = block
-            .network_entrypoint_at(index)
-            .ok_or(Error::Proof("Unload input"))?
-            .clone();
-        let TransactionEntrypoint::External(signed) = &entrypoint else {
-            return Err(Error::Invalid("Unload external input"));
-        };
-        if signed.authority() != &claim.account
-            || !signed
-                .instructions()
-                .explicit_instructions()
-                .any(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<KagemushaWalletLedgerV1>()
-                        .is_some_and(|instruction| {
-                            instruction.scheme == self.scheme_id
-                                && matches!(&instruction.action,
-                    KagemushaWalletLedgerActionV1::Unload(bytes) if bytes == original)
-                        })
-                })
-        {
-            return Err(Error::Invalid("Unload exact original instruction"));
+            ));
         }
-        let (output_index, _) = block
-            .network_output_at(input_index)
-            .ok_or(Error::Proof("Unload execution output"))?;
-        let output = block
-            .execution_outputs()
-            .get(output_index as usize)
-            .ok_or(Error::Proof("Unload output index"))?
-            .clone();
-        let committed = CommittedTransaction {
-            block_hash: block.hash(),
-            entrypoint_hash: entrypoint.hash(),
-            entrypoint_proof: block
-                .network_input_proof(input_index)
-                .ok_or(Error::Proof("Unload input membership"))?,
-            entrypoint,
-            output_hash: HashOf::new(&output),
-            output_proof: block
-                .output_proof(output_index)
-                .ok_or(Error::Proof("Unload output membership"))?,
-            output,
-        };
-        verified
-            .verify_committed_transaction(&genesis.initial_epoch().network_id, &committed)
-            .map_err(|_| Error::Proof("Unload successful authenticated execution"))?;
         if self.manifest()?.0 != selected {
             return Err(Error::WitnessLost("Unload confirmation source changed"));
         }

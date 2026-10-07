@@ -1,8 +1,9 @@
 //! Explicit issuer trust selection. Configuration is not a provider eligibility observation.
 
 use iroha_data_model::kagemusha::{
-    KagemushaEligibilityPolicyV1, KagemushaWalletAppPolicyV1, KagemushaWalletEnrollmentPolicyV1,
-    KagemushaWalletSchemeV1, KagemushaWalletSignerCertificateV1,
+    KagemushaEligibilityPolicyTemplateV1, KagemushaWalletAppPolicyV1,
+    KagemushaWalletEnrollmentPolicyTemplateV1, KagemushaWalletSchemeV1,
+    KagemushaWalletSignerCertificateV1,
 };
 use std::{path::PathBuf, time::Duration};
 use url::Url;
@@ -33,14 +34,14 @@ pub struct KagemushaEnrollmentIssuer {
 /// One exact approved provider/app route and its independently configured native service owners.
 #[derive(Clone, PartialEq, Eq)]
 pub struct KagemushaEnrollmentProvider {
-    /// Public unsigned eligibility policy; the authenticated issuer configuration selects it.
-    pub eligibility: KagemushaEligibilityPolicyV1,
+    /// Public unsigned asset-independent eligibility template; the authenticated issuer configuration selects it.
+    pub eligibility: KagemushaEligibilityPolicyTemplateV1,
     /// Exact Scheme original, also required to match current ledger registration.
     pub scheme: KagemushaWalletSchemeV1,
     /// Exact approved platform application original.
     pub app: KagemushaWalletAppPolicyV1,
-    /// Exact platform evidence and lease policy original.
-    pub enrollment: KagemushaWalletEnrollmentPolicyV1,
+    /// Exact asset-independent platform evidence and lease template original.
+    pub enrollment: KagemushaWalletEnrollmentPolicyTemplateV1,
     /// Rooted Enrollment-role public certificate, not private signing custody.
     pub certificate: KagemushaWalletSignerCertificateV1,
     /// Exact approved native artifact manifest identity.

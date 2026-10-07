@@ -53,10 +53,9 @@ pub(super) fn provider(path: PathBuf) -> KagemushaEnrollmentProvider {
             app_id: "TEAM.org.example.wallet".into(),
         },
     };
-    let enrollment = KagemushaWalletEnrollmentPolicyV1 {
+    let enrollment = KagemushaWalletEnrollmentPolicyTemplateV1 {
         version: 1,
         scheme_id: scheme.scheme_id(),
-        asset_digest: [5; 32],
         app_policy: app.policy_digest().unwrap(),
         platform: KagemushaWalletEnrollmentPlatformV1::Apple {
             attestation_root_sha256: [6; 32],
@@ -66,11 +65,10 @@ pub(super) fn provider(path: PathBuf) -> KagemushaEnrollmentProvider {
         attestation_lease_lifetime_ms: 0,
     };
     let observer = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
-    let eligibility = KagemushaEligibilityPolicyV1 {
+    let eligibility = KagemushaEligibilityPolicyTemplateV1 {
         version: 1,
         network_id: scheme.network_id,
         scheme_id: scheme.scheme_id(),
-        asset_digest: enrollment.asset_digest,
         revision: 1,
 
         authority: KagemushaEligibilityAuthorityV1::Bank { fi_digest: [8; 32] },
@@ -103,4 +101,20 @@ pub(super) fn provider(path: PathBuf) -> KagemushaEnrollmentProvider {
         },
         signer_private_key: path,
     }
+}
+
+/// Arbitrary canonical UUID asset DATA for deriving concrete test policies.
+pub(super) fn asset(seed: u8, scale: u32) -> KagemushaWalletAssetScopeV1 {
+    let mut id = [seed; 16];
+    id[6] = 0x40 | (id[6] & 15);
+    id[8] = 0x80 | (id[8] & 63);
+    KagemushaWalletAssetScopeV1::new(
+        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes(id).unwrap(),
+        &iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+            *iroha_crypto::Hash::new([seed; 32]).as_ref(),
+        )
+        .unwrap(),
+        scale,
+    )
+    .unwrap()
 }

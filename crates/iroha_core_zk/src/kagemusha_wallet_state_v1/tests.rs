@@ -1559,7 +1559,7 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
     w.commit(boot.clone()).unwrap();
     w.fold_once().unwrap();
     w.fold_once().unwrap();
-    let receive = frozen(
+    let mut receive = frozen(
         Some(&boot),
         KagemushaWalletEffectV1::Receive {
             credit_id: received_credit(),
@@ -1570,6 +1570,39 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
                 .amount,
         },
     );
+    // Dispatcher intake also decodes credential/certificates. Replace the general
+    // simulator's [1] placeholders with the genuine same-payer Offer originals.
+    let payer = vectors()["envelopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|row| {
+            let envelope: KagemushaWalletEnvelopeV1 =
+                archive::decode(&hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap())
+                    .unwrap();
+            match envelope.message {
+                KagemushaWalletMessageV1::Offer { offer } => Some(offer),
+                _ => None,
+            }
+        })
+        .unwrap();
+    let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
+    assert_eq!(
+        payer.payer_credential.credential_digest(),
+        payment.send.statement.credential_digest
+    );
+    payer.verify(&fixture("KagemushaWalletSchemeV1")).unwrap();
+    for input in &mut receive.capsule.retained_inputs {
+        match input.role {
+            KagemushaWalletRetainedInputRoleV1::Credential => {
+                input.bytes = payer.payer_credential.to_canonical_bytes().unwrap()
+            }
+            KagemushaWalletRetainedInputRoleV1::CertificateSet => {
+                input.bytes = archive::encode(&payer.certificates).unwrap()
+            }
+            _ => {}
+        }
+    }
     w.commit(receive.clone()).unwrap();
     let input = |role| {
         receive

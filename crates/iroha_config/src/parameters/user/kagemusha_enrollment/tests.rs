@@ -43,10 +43,9 @@ fn fixture() -> KagemushaEnrollmentIssuer {
             app_id: "TEAM.org.example.wallet".into(),
         },
     };
-    let enrollment = KagemushaWalletEnrollmentPolicyV1 {
+    let enrollment = KagemushaWalletEnrollmentPolicyTemplateV1 {
         version: 1,
         scheme_id: scheme.scheme_id(),
-        asset_digest: [8; 32],
         app_policy: app.policy_digest().unwrap(),
         platform: KagemushaWalletEnrollmentPlatformV1::Apple {
             attestation_root_sha256: [9; 32],
@@ -56,11 +55,10 @@ fn fixture() -> KagemushaEnrollmentIssuer {
         attestation_lease_lifetime_ms: 0,
     };
     let key = KeyPair::from_seed(vec![32; 32], Algorithm::Ed25519);
-    let eligibility = KagemushaEligibilityPolicyV1 {
+    let eligibility = KagemushaEligibilityPolicyTemplateV1 {
         version: 1,
         network_id: scheme.network_id,
         scheme_id: scheme.scheme_id(),
-        asset_digest: enrollment.asset_digest,
         revision: 1,
 
         authority: KagemushaEligibilityAuthorityV1::Bank {
@@ -76,10 +74,10 @@ fn fixture() -> KagemushaEnrollmentIssuer {
         request_timeout_ms: 5000,
         max_inflight: 16,
         providers: vec![KagemushaEnrollmentProvider {
-            eligibility_hex: hex::encode(eligibility.encode_canonical().unwrap()),
+            eligibility_template_hex: hex::encode(eligibility.encode_canonical().unwrap()),
             scheme_hex,
             app_hex: hex::encode(app.encode_canonical().unwrap()),
-            enrollment_hex: hex::encode(enrollment.encode_canonical().unwrap()),
+            enrollment_template_hex: hex::encode(enrollment.encode_canonical().unwrap()),
             certificate_hex: hex::encode(certificate.to_canonical_bytes().unwrap()),
             manifest_digest_hex: "11".repeat(32),
             release_digest_hex: "12".repeat(32),
@@ -151,11 +149,11 @@ fn complete_bank_route_preserves_exact_originals_and_runtime_selection() {
     );
     assert_eq!(
         hex::encode(provider.enrollment.encode_canonical().unwrap()),
-        expected.enrollment_hex
+        expected.enrollment_template_hex
     );
     assert_eq!(
         hex::encode(provider.eligibility.encode_canonical().unwrap()),
-        expected.eligibility_hex
+        expected.eligibility_template_hex
     );
     assert_eq!(
         hex::encode(provider.certificate.to_canonical_bytes().unwrap()),
@@ -178,19 +176,19 @@ fn source_bindings_and_role_are_mandatory() {
         match field {
             "scheme" => route.scheme_hex = "00".into(),
             "app" => route.app_hex = "00".into(),
-            "enrollment" => route.enrollment_hex = "00".into(),
+            "enrollment" => route.enrollment_template_hex = "00".into(),
             "certificate" => route.certificate_hex = "00".into(),
-            _ => route.eligibility_hex = "00".into(),
+            _ => route.eligibility_template_hex = "00".into(),
         }
         assert!(bad.checked().is_err(), "{field}");
     }
     let mut bad = base;
-    let mut policy = KagemushaEligibilityPolicyV1::decode_canonical(
-        &hex::decode(&bad.providers[0].eligibility_hex).unwrap(),
+    let mut policy = KagemushaEligibilityPolicyTemplateV1::decode_canonical(
+        &hex::decode(&bad.providers[0].eligibility_template_hex).unwrap(),
     )
     .unwrap();
-    policy.asset_digest = [55; 32];
-    bad.providers[0].eligibility_hex = hex::encode(policy.encode_canonical().unwrap());
+    policy.network_id = [55; 32];
+    bad.providers[0].eligibility_template_hex = hex::encode(policy.encode_canonical().unwrap());
     assert!(bad.checked().is_err());
 }
 
@@ -200,14 +198,14 @@ fn duplicate_routes_refuse_and_explicit_scheme_operator_routes_are_admitted() {
     input.providers.push(input.providers[0].clone());
     assert!(input.checked().is_err());
     let mut input = fixture();
-    let mut policy = KagemushaEligibilityPolicyV1::decode_canonical(
-        &hex::decode(&input.providers[0].eligibility_hex).unwrap(),
+    let mut policy = KagemushaEligibilityPolicyTemplateV1::decode_canonical(
+        &hex::decode(&input.providers[0].eligibility_template_hex).unwrap(),
     )
     .unwrap();
     policy.authority = KagemushaEligibilityAuthorityV1::SchemeOperator {
         operator_digest: [20; 32],
     };
-    input.providers[0].eligibility_hex = hex::encode(policy.encode_canonical().unwrap());
+    input.providers[0].eligibility_template_hex = hex::encode(policy.encode_canonical().unwrap());
     let selected = input.checked().unwrap();
     assert_eq!(
         selected.providers[0].eligibility.authority.scope_digest(),

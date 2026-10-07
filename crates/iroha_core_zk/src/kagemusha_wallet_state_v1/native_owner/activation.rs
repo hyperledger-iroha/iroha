@@ -1,6 +1,8 @@
 //! One durable Activate transport derived from the selected sequence-zero Bootstrap.
 
 use super::*;
+mod confirmation;
+pub use confirmation::ActivationFinalityProgressV1;
 
 const PLAN_MAX: usize = KAGEMUSHA_WALLET_ACTIVATION_MAX_BYTES_V1 + 4096;
 
@@ -16,6 +18,9 @@ struct Plan {
     bootstrap: KagemushaWalletPackageV1,
     nonce: [u8; 32],
     output: Option<[u8; 32]>,
+    confirmation: Option<[u8; 32]>,
+    cursor: Option<[u8; 32]>,
+    retired_cursor: Option<[u8; 32]>,
 }
 impl Plan {
     fn body(&self) -> Result<KagemushaWalletLedgerControlBodyV1, Error> {
@@ -42,6 +47,13 @@ impl Plan {
             || self.capsule == [0; 32]
             || self.completion == [0; 32]
             || self.output == Some([0; 32])
+            || self.confirmation == Some([0; 32])
+            || self.cursor == Some([0; 32])
+            || self.retired_cursor == Some([0; 32])
+            || (self.retired_cursor.is_some() && self.retired_cursor == self.cursor)
+            || (self.cursor.is_some() && self.output.is_none())
+            || (self.confirmation.is_some() && self.output.is_none())
+            || (self.confirmation.is_some() && self.cursor.is_some())
             || &self.credential.body.scheme_id != scheme
             || &self.credential.body.wallet_id != wallet
             || self.asset != *asset
@@ -101,6 +113,9 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             bootstrap: archive::decode(&source.retained.record.output)?,
             nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
             output: None,
+            confirmation: None,
+            cursor: None,
+            retired_cursor: None,
         };
         plan.require(&self.scheme_id, &self.wallet_id, asset)?;
         manifest.activation = Some(
@@ -127,6 +142,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     .read_object(&output, KAGEMUSHA_WALLET_ACTIVATION_MAX_BYTES_V1)?,
             )?;
         }
+        self.retained_activation_confirmation(&plan)?;
         Ok(())
     }
     fn retained_activation(&mut self, plan: &Plan) -> Result<Option<Vec<u8>>, Error> {
@@ -166,16 +182,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
 {
-    /// Return the exact durable Activate frame for ordinary signed ledger submission.
-    /// This transport result is not a ledger activation acknowledgement or permission to load.
-    /// Later heads and uncertain delivery preserve the original selected bytes.
-    /// # Errors
-    /// Unreleased/missing Bootstrap, lost selected originals, invalid installed proofs,
-    /// unavailable hardware/storage, or uncertain publication. No failure re-signs a selected output.
-    pub fn activation(&mut self) -> Result<Vec<u8>, Error> {
-        let _payment = self.scheduler.payment();
-        let asset = self.proofs.asset.clone();
-        let plan = self.activation_plan(&asset)?;
+    fn authenticate_activation_plan(&self, plan: &Plan) -> Result<(), Error> {
         if plan.credential.body.account_digest != self.proofs.enrollment.body.account_digest
             || plan.credential.body.payment_key != self.proofs.enrollment.body.payment_key
             || plan.credential.body.enrollment_id != self.proofs.enrollment.body.enrollment_id
@@ -193,6 +200,19 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             None,
             self.proofs.budget,
         ))?;
+        Ok(())
+    }
+    /// Return the exact durable Activate frame for ordinary signed ledger submission.
+    /// This transport result is not a ledger activation acknowledgement or permission to load.
+    /// Later heads and uncertain delivery preserve the original selected bytes.
+    /// # Errors
+    /// Unreleased/missing Bootstrap, lost selected originals, invalid installed proofs,
+    /// unavailable hardware/storage, or uncertain publication. No failure re-signs a selected output.
+    pub fn activation(&mut self) -> Result<Vec<u8>, Error> {
+        let _payment = self.scheduler.payment();
+        let asset = self.proofs.asset.clone();
+        let plan = self.activation_plan(&asset)?;
+        self.authenticate_activation_plan(&plan)?;
         if let Some(bytes) = self.retained_activation(&plan)? {
             return Ok(bytes);
         }

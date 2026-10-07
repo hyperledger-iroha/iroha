@@ -194,9 +194,18 @@ pub(crate) struct Session {
     token: Zeroizing<Vec<u8>>,
     proof: Zeroizing<Vec<u8>>,
     root: Vec<u8>,
+    // CBSI renewal cannot switch the signed registered device or its bound DPoP key.
+    // BPNG has its separately authenticated registered-device request proof at Core.
+    device_binding: Option<(String, String)>,
     pub(crate) config: iroha_core_zk::kagemusha_wallet_enrollment_v1::EnrollmentConfigV1,
 }
 impl Session {
+    pub(crate) fn require_renewal_identity(&self, renewed: &Self) -> Result<()> {
+        if self.device_binding != renewed.device_binding || self.root != renewed.root {
+            return Err(invalid());
+        }
+        Ok(())
+    }
     pub(crate) fn matches(&self, originals: [&[u8]; 3]) -> bool {
         originals
             == [
@@ -372,6 +381,7 @@ impl Selection {
             token: Zeroizing::new(token.to_vec()),
             proof: Zeroizing::new(proof.to_vec()),
             root: root.to_vec(),
+            device_binding: Some((text(claims, "device_id")?.to_owned(), jkt.to_owned())),
             config: iroha_core_zk::kagemusha_wallet_enrollment_v1::EnrollmentConfigV1 {
                 scheme: self.scheme,
                 app: app.clone(),

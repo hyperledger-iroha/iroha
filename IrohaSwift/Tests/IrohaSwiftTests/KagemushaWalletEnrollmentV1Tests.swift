@@ -65,7 +65,25 @@ final class KagemushaWalletEnrollmentV1Tests: XCTestCase {
     }
     _ = try KagemushaWalletEnrollmentInputV1(14,Data([1]))
     _ = try KagemushaWalletEnrollmentInputV1(15,Data([1]),Data([2]))
-    XCTAssertThrowsError(try KagemushaWalletEnrollmentInputV1(19))
+    XCTAssertThrowsError(try KagemushaWalletEnrollmentInputV1(20))
+  }
+  func testRenewedSessionUsesOnlyBoundedOriginalFramesAndNonmonetaryAcknowledgement() throws {
+    let session = try KagemushaWalletEnrollmentSessionOriginalsV1(accessToken: Data([1]), dpopProof: Data([2]), attestationRootDER: Data([3]))
+    let frames = session.originals
+    let input = try KagemushaWalletEnrollmentInputV1(19,frames[0],frames[1],frames[2])
+    input.withRequest { request in
+      XCTAssertEqual(request.pointee.selector,19)
+      XCTAssertEqual(request.pointee.first_length,1)
+      XCTAssertEqual(request.pointee.second_length,1)
+      XCTAssertEqual(request.pointee.third_length,1)
+      XCTAssertEqual(request.pointee.certificate_count,0)
+    }
+    for originals in [[Data(count:16_385),Data(),Data()], [Data(),Data(count:4097),Data()], [Data(),Data(),Data(count:16_385)]] {
+      XCTAssertThrowsError(try KagemushaWalletEnrollmentInputV1(19,originals[0],originals[1],originals[2]))
+    }
+    let reply = try KagemushaWalletCallV1(status:39,sequenceLow:7,sequenceHigh:0,detail:0,bytes:Data())
+    XCTAssertThrowsError(try reply.completion())
+    XCTAssertThrowsError(try KagemushaWalletCallV1(status:39,sequenceLow:0,sequenceHigh:0,detail:0,bytes:Data()))
   }
   func testAppleExplicitlyRefusesAndroidTeeProfile() {
     XCTAssertNil(KagemushaWalletAppleKeyProfileV1(rawValue:3))

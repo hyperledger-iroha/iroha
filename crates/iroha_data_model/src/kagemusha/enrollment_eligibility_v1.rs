@@ -13,6 +13,9 @@ use super::kagemusha_wallet_v1::{
     KagemushaWalletValidationErrorV1, decode_frame_v1, encode_frame_v1,
 };
 
+mod template;
+pub use template::{KagemushaEligibilityObservationV1, KagemushaEligibilityPolicyTemplateV1};
+
 /// Complete canonical Norito frame limit for each eligibility object, checked before decode.
 pub const KAGEMUSHA_ELIGIBILITY_MAX_BYTES_V1: usize = 2048;
 type Result<T> = core::result::Result<T, KagemushaWalletValidationErrorV1>;

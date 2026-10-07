@@ -57,18 +57,55 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
 {
     fn enrollment(&mut self, action: super::enrollment::Action<'_>) -> Result<Response> {
         use super::enrollment::Action;
+        if let Action::RenewSession(originals) = action {
+            if self.enrolled_originals.is_some() {
+                return Err(Failure::code(CONFLICT));
+            }
+            let binding = self.binding.as_ref().ok_or(Failure::code(INVALID))?;
+            let session = binding.enrollment_session(originals)?;
+            self.enrollment_session
+                .as_ref()
+                .ok_or(Failure::code(CONFLICT))?
+                .require_renewal_identity(&session)?;
+            let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
+                return Err(Failure::code(CONFLICT));
+            };
+            // Authenticate before touching the retained owner. No provider, platform,
+            // generation reply or outstanding vendor dispatch moves or is reconstructed.
+            runtime
+                .enrollment()?
+                .renew_session(session.config.clone())?;
+            self.enrollment_session = Some(session);
+            return Ok(Response {
+                kind: 39,
+                ..Response::default()
+            });
+        }
         if let Action::Start(originals) = action {
             let binding = self.binding.as_ref().ok_or(Failure::code(INVALID))?;
             if let Some(session) = &self.enrollment_session {
-                return if session.matches(originals) {
-                    Ok(Response {
-                        kind: 37,
-                        bytes: binding.enrollment_projection(),
-                        ..Response::default()
-                    })
-                } else {
-                    Err(Failure::code(CONFLICT))
-                };
+                if self.enrolled_originals.is_some() {
+                    return Err(Failure::code(CONFLICT));
+                }
+                if !session.matches(originals) {
+                    // A prior successful Start reply may have been lost before the
+                    // foreign wrapper took ownership. Fresh genuine session originals
+                    // reauthenticate that same retained phase, never install another one.
+                    let renewed = binding.enrollment_session(originals)?;
+                    session.require_renewal_identity(&renewed)?;
+                    let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
+                        return Err(Failure::code(CONFLICT));
+                    };
+                    runtime
+                        .enrollment()?
+                        .renew_session(renewed.config.clone())?;
+                    self.enrollment_session = Some(renewed);
+                }
+                return Ok(Response {
+                    kind: 37,
+                    bytes: binding.enrollment_projection(),
+                    ..Response::default()
+                });
             }
             let session = binding.enrollment_session(originals)?;
             let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;

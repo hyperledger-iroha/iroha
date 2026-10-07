@@ -8,7 +8,9 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
         session: &EnrollmentIssuerSessionV1,
         provider: &KagemushaEnrollmentProvider,
     ) -> Result<VerifierConfigurationV1> {
-        let config = self.runtime.worker_configuration(provider)?;
+        let config = self
+            .runtime
+            .worker_configuration(provider, &session.dispatch.asset)?;
         config
             .preparation(
                 &session.dispatch,

@@ -4,8 +4,9 @@
 //! observations, private worker channels and rooted signer custody. Public request DATA cannot select
 //! any of these owners. Every monetary-authority boundary consumes a fresh signed provider
 //! observation retained in the attempt journal before performing its one bound operation.
-//! TODO: install the daemon's concrete authenticated runtimes and Torii routes; this owner alone
-//! is not a deployed service or an attestation qualification.
+//! The Torii adapter installs concrete authenticated runtimes and a supervised service thread.
+//! TODO: qualify the complete Linux deployment with real platform evidence; component tests
+//! do not establish device or deployed-service attestation.
 
 use super::enrollment_journal::{
     EnrollmentAttemptV1, EnrollmentJournalErrorV1, EnrollmentJournalPhaseV1 as Phase,

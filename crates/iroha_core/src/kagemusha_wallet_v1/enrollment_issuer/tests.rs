@@ -82,18 +82,17 @@ impl EnrollmentIssuerRuntimeV1 for Runtime {
     fn observe_eligibility(
         &mut self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
         original: &[u8],
         _: std::time::Duration,
     ) -> Result<Vec<u8>> {
+        let policy = provider.eligibility.for_asset(asset).map_err(|_| Invalid)?;
         self.bank_calls += 1;
-        let request =
-            KagemushaEligibilityRequestV1::decode_canonical(original, &provider.eligibility)
-                .map_err(|_| Invalid)?;
+        let request = KagemushaEligibilityRequestV1::decode_canonical(original, &policy)
+            .map_err(|_| Invalid)?;
         let body = KagemushaEligibilityResponseBodyV1 {
             version: 1,
-            request_digest: request
-                .request_digest(&provider.eligibility)
-                .map_err(|_| Invalid)?,
+            request_digest: request.request_digest(&policy).map_err(|_| Invalid)?,
             decision: if request.account_digest != self.bank_account
                 || request.actor_digest != self.bank_actor
             {
@@ -122,13 +121,14 @@ impl EnrollmentIssuerRuntimeV1 for Runtime {
     fn worker_configuration(
         &mut self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
     ) -> Result<VerifierConfigurationV1> {
         if self.fail_worker {
             return Err(Unavailable);
         }
         VerifierConfigurationV1::from_selected(
             &provider.app,
-            &provider.enrollment,
+            &provider.enrollment.for_asset(asset).map_err(|_| Invalid)?,
             ROOT_DATA,
             None,
             VerifierRuntimeSelectionV1 {
@@ -213,7 +213,14 @@ fn fixture() -> (
     EnrollmentIssuerV1<Runtime>,
     PreKeyDispatchV1,
 ) {
-    let temp = tempfile::tempdir().unwrap();
+    let temporary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target/qualification/enrollment-issuer-tests");
+    std::fs::create_dir_all(&temporary).unwrap();
+    let temp = tempfile::tempdir_in(temporary).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -235,11 +242,10 @@ fn fixture() -> (
     };
     drop(journal);
     let bank_key = KeyPair::from_seed(vec![32; 32], Algorithm::Ed25519);
-    let eligibility = KagemushaEligibilityPolicyV1 {
+    let eligibility = KagemushaEligibilityPolicyTemplateV1 {
         version: 1,
         network_id: dispatch.scheme.network_id,
         scheme_id: dispatch.scheme.scheme_id(),
-        asset_digest: dispatch.asset.asset_digest(),
         revision: 1,
 
         authority: KagemushaEligibilityAuthorityV1::Bank {
@@ -258,7 +264,15 @@ fn fixture() -> (
             eligibility,
             scheme: dispatch.scheme,
             app: dispatch.app.clone(),
-            enrollment: dispatch.policy,
+            enrollment: KagemushaWalletEnrollmentPolicyTemplateV1 {
+                version: dispatch.policy.version,
+                scheme_id: dispatch.policy.scheme_id,
+                app_policy: dispatch.policy.app_policy,
+                platform: dispatch.policy.platform,
+                regulatory_policy: dispatch.policy.regulatory_policy,
+                challenge_lifetime_ms: dispatch.policy.challenge_lifetime_ms,
+                attestation_lease_lifetime_ms: dispatch.policy.attestation_lease_lifetime_ms,
+            },
             certificate: dispatch.enrollment_certificate,
             manifest_digest: dispatch.manifest_digest,
             release_digest: dispatch.release_digest,
@@ -611,4 +625,105 @@ fn selected_scheme_operator_can_issue_permit_without_a_bank_or_parliament_gate()
     .unwrap();
     assert_eq!(owner.runtime.signatures, 1);
     assert_eq!(owner.runtime.bank_calls, 1);
+}
+
+#[test]
+fn one_template_binds_two_registered_assets_and_retains_each_attempt_configuration() {
+    let (_temp, mut owner, a) = fixture();
+    let mut b = a.clone();
+    b.asset.asset = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+        0x90, 0x21, 0x31, 0x42, 0x53, 0x64, 0x45, 0x86, 0x97, 0xa8, 0xb9, 0xca, 0xdb, 0xec, 0xfd,
+        0x0e,
+    ])
+    .unwrap();
+    b.asset.asset_incarnation = [83; 32];
+    b.asset.scale = 28;
+    b.request_id = [84; 32];
+    b.client_nonce = [85; 32];
+    b.native_dispatch_nonce = [86; 32];
+    let provider = owner.runtime.config.providers[0].clone();
+    b.policy = provider.enrollment.for_asset(&b.asset).unwrap();
+    let original = b.encode().unwrap();
+    // A valid template is not registration authority.
+    assert!(owner.authenticate(&original, &original).is_err());
+    {
+        let state = Arc::get_mut(&mut owner.state).unwrap();
+        state.world.asset_definitions.insert(
+            b.asset.asset.clone(),
+            AssetDefinition::new(
+                b.asset.asset.clone(),
+                "second arbitrary issuer test DATA",
+                NumericSpec::fractional(b.asset.scale),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&b.account),
+        );
+        state.world.axt_asset_incarnations.insert(
+            b.asset.asset.clone(),
+            AxtAssetIncarnationV1::try_from_bytes(b.asset.asset_incarnation).unwrap(),
+        );
+        state.world.kagemusha_wallet_ledger.insert(
+            storage::key(
+                storage::REGISTRATION,
+                b.scheme.scheme_id(),
+                b.asset.asset_digest(),
+            ),
+            storage::encode(&Registration {
+                scheme: b.scheme,
+                asset: b.asset.clone(),
+                reserve: b.account.clone(),
+                balance_scope: AssetBalanceScope::Global,
+            })
+            .unwrap(),
+        );
+    }
+    assert_eq!(owner.runtime.config.providers.len(), 1);
+    let mut first = authenticate(&mut owner, &a);
+    let permit_a = owner.pre_key_permit(&mut first).unwrap();
+    let config_a = first.attempt.worker_configuration().unwrap();
+    let request_a = permit_tests::account_request(&a, &first.attempt)
+        .encode()
+        .unwrap();
+    assert!(matches!(
+        owner.verify_evidence(&mut first, &request_a),
+        Err(Pending)
+    ));
+    let mut second = authenticate(&mut owner, &b);
+    owner.runtime.fail_worker = true;
+    assert!(owner.pre_key_permit(&mut second).is_err());
+    assert_eq!(second.attempt.phase(), Phase::Selected);
+    assert_eq!(first.attempt.phase(), Phase::Verifying);
+    assert_eq!(first.attempt.worker_configuration().unwrap(), config_a);
+    owner.runtime.fail_worker = false;
+    let permit_b = owner.pre_key_permit(&mut second).unwrap();
+    let config_b = second.attempt.worker_configuration().unwrap();
+    assert_ne!(config_a, config_b);
+    assert_ne!(permit_a, permit_b);
+    assert!(owner.verify_evidence(&mut second, &request_a).is_err());
+    assert_eq!(second.attempt.phase(), Phase::Selected);
+    assert!(matches!(
+        owner.verify_evidence(&mut first, &request_a),
+        Err(Pending)
+    ));
+    assert_eq!(owner.runtime.worker_actions.last().unwrap(), "recover");
+    assert_eq!(first.attempt.worker_configuration().unwrap(), config_a);
+    assert_eq!(second.attempt.worker_configuration().unwrap(), config_b);
+    owner.runtime.clock = first.attempt.selection().expires_at_ms + 1;
+    assert!(matches!(
+        owner.verify_evidence(&mut first, &request_a),
+        Err(Pending)
+    ));
+    assert_eq!(owner.runtime.worker_actions.last().unwrap(), "inspect");
+    assert_eq!(
+        owner
+            .runtime
+            .worker_actions
+            .iter()
+            .filter(|s| *s == "prepare")
+            .count(),
+        2
+    );
+    assert!(owner.deliver_credential(&mut second).is_err());
+    assert!(owner.deliver_credential(&mut first).is_err());
 }

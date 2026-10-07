@@ -6,6 +6,7 @@
 //! this is component evidence, not a running four-validator network or device qualification.
 
 mod funding;
+mod registration;
 
 use super::*;
 use iroha_data_model::{

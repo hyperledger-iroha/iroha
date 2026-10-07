@@ -360,7 +360,7 @@ fn outer_transport_rejects_invalid_policy_and_foreign_request_before_network() {
         let mut invalid = selected.clone();
         match case {
             0 => invalid.eligibility.version = 0,
-            1 => invalid.eligibility.asset_digest = [0; 32],
+            1 => invalid.eligibility.scheme_id = [0; 32],
             2 => invalid.eligibility.public_key = [0; 32],
             _ => invalid.eligibility.maximum_response_ms = 0,
         }
@@ -370,7 +370,8 @@ fn outer_transport_rejects_invalid_policy_and_foreign_request_before_network() {
         ));
     }
     let owner = EligibilityObservationTransport::open(&selected).unwrap();
-    let mut foreign = selected.eligibility;
+    let asset = super::super::test_fixture::asset(5, 2);
+    let mut foreign = selected.eligibility.for_asset(&asset).unwrap();
     foreign.revision += 1;
     let foreign_request = KagemushaEligibilityRequestV1 {
         version: 1,
@@ -393,8 +394,57 @@ fn outer_transport_rejects_invalid_policy_and_foreign_request_before_network() {
         foreign_request,
     ] {
         assert!(matches!(
-            owner.observe(&selected, &original, Duration::from_secs(1)),
+            owner.observe(&selected, &asset, &original, Duration::from_secs(1)),
             Err(Error::Invalid)
         ));
     }
+}
+
+#[test]
+fn actual_tls_carries_canonical_asset_context_bound_to_selected_template() {
+    use iroha_data_model::kagemusha::{
+        KagemushaEligibilityObservationV1, KagemushaEligibilityPurposeV1,
+    };
+    let (_root, path) = credential(b"test-only-token");
+    let server = Server::start(ok(b"response DATA"), || {});
+    let mut provider = super::super::test_fixture::provider(path.with_file_name("unused.scalar"));
+    provider.observation_credential = path.clone();
+    provider.observation_endpoint = server.endpoint.clone();
+    let asset = super::super::test_fixture::asset(51, 28);
+    let policy = provider.eligibility.for_asset(&asset).unwrap();
+    let request = KagemushaEligibilityRequestV1 {
+        version: 1,
+        policy_digest: policy.policy_digest().unwrap(),
+        account_digest: [22; 32],
+        actor_digest: [23; 32],
+        attempt_id: [24; 32],
+        nonce: [25; 32],
+        operation_digest: [26; 32],
+        purpose: KagemushaEligibilityPurposeV1::VerifyEvidence,
+        requested_at_ms: 1000,
+        expires_at_ms: 2000,
+    };
+    let owner = EligibilityObservationTransport {
+        selected: provider.clone(),
+        http: server.open(&path),
+    };
+    assert_eq!(
+        owner
+            .observe(
+                &provider,
+                &asset,
+                &request.encode_canonical(&policy).unwrap(),
+                Duration::from_secs(3)
+            )
+            .unwrap(),
+        b"response DATA"
+    );
+    let sent = server.task.join().unwrap().unwrap();
+    let start = sent.windows(4).position(|x| x == b"\r\n\r\n").unwrap() + 4;
+    let decoded =
+        KagemushaEligibilityObservationV1::decode_canonical(&sent[start..], &provider.eligibility)
+            .unwrap();
+    assert_eq!(decoded.asset, asset);
+    assert_eq!(decoded.request, request);
+    assert_eq!(decoded.policy(&provider.eligibility).unwrap(), policy);
 }

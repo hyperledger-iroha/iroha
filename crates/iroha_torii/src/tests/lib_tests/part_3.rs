@@ -1051,7 +1051,15 @@ async fn identifier_policies_enforce_token_policy() {
 #[tokio::test]
 async fn identifier_resolve_requires_signed_policy_owner() {
     let (app, _, _, policy, _) = registered_hkdf_identifier_app(0x14);
-    let body = norito::json::to_vec(&norito::json!({"phase":"claim","policy_id":(policy.id.to_string()),"normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})).unwrap();
+    let body = norito::json::to_vec(&routing::IdentifierResolveRequestDto {
+        phase: "claim".to_owned(),
+        policy_id: policy.id.to_string(),
+        normalized_input: "alice".to_owned(),
+        input_nonce: "a".repeat(64),
+        output_opening: None,
+        phone_retail_canonicality: None,
+    })
+    .expect("encode the current typed owner request");
     let error = handler_identifier_resolve(
         State(app),
         axum::http::Method::POST,
@@ -1348,7 +1356,15 @@ async fn identifier_resolve_enforces_token_policy() {
 #[tokio::test]
 async fn identifier_claim_receipt_requires_signed_policy_owner() {
     let (app, owner, _, policy, _) = registered_hkdf_identifier_app(0x1c);
-    let body = norito::json::to_vec(&norito::json!({"phase":"prepare","policy_id":(policy.id.to_string()),"normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})).unwrap();
+    let body = norito::json::to_vec(&routing::IdentifierResolveRequestDto {
+        phase: "prepare".to_owned(),
+        policy_id: policy.id.to_string(),
+        normalized_input: "alice".to_owned(),
+        input_nonce: "a".repeat(64),
+        output_opening: None,
+        phone_retail_canonicality: None,
+    })
+    .expect("encode the current typed owner request");
     let uri = format!("/v1/accounts/{owner}/identifiers/claim-receipt")
         .parse()
         .unwrap();
@@ -1471,44 +1487,35 @@ async fn signed_owner_prepare_and_claim_retain_exact_native_opening() {
         .unwrap()
         .to_bytes();
     let receipt: routing::IdentifierResolveResponseDto = norito::json::from_slice(&bytes).unwrap();
+    let actual = &receipt.payload.opening;
     let original = &prepared.output_opening;
-    let projected = &receipt.payload.opening;
+    assert_eq!(actual.signature, hex::encode(original.signature.payload()));
     assert_eq!(
-        projected.payload.program_id,
+        actual.payload.program_id,
         original.payload.program_id.to_string()
     );
     assert_eq!(
-        projected.payload.input_ciphertext_hash,
+        actual.payload.input_ciphertext_hash,
         original.payload.input_ciphertext_hash.to_string()
     );
     assert_eq!(
-        projected.payload.output_ciphertext_hash,
+        actual.payload.output_ciphertext_hash,
         original.payload.output_ciphertext_hash.to_string()
     );
     assert_eq!(
-        projected.payload.parameter_digest,
+        actual.payload.parameter_digest,
         original.payload.parameter_digest.to_string()
     );
     assert_eq!(
-        projected.payload.evaluation_key_digest,
+        actual.payload.evaluation_key_digest,
         original.payload.evaluation_key_digest.to_string()
     );
     assert_eq!(
-        projected.payload.opened_output_hash,
+        actual.payload.opened_output_hash,
         original.payload.opened_output_hash.to_string()
     );
-    assert_eq!(
-        projected.payload.opened_at_ms,
-        original.payload.opened_at_ms
-    );
-    assert_eq!(
-        projected.payload.expires_at_ms,
-        original.payload.expires_at_ms
-    );
-    assert_eq!(
-        projected.signature,
-        hex::encode(original.signature.payload())
-    );
+    assert_eq!(actual.payload.opened_at_ms, original.payload.opened_at_ms);
+    assert_eq!(actual.payload.expires_at_ms, original.payload.expires_at_ms);
     assert_eq!(
         receipt.payload.execution.program_id,
         program.program_id.to_string()

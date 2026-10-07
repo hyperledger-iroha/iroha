@@ -11,8 +11,10 @@
 
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::kagemusha::{
-    KagemushaEligibilityDecisionV1, KagemushaEligibilityPolicyV1, KagemushaEligibilityRequestV1,
-    KagemushaEligibilityResponseBodyV1, KagemushaEligibilityResponseV1,
+    KagemushaEligibilityDecisionV1, KagemushaEligibilityObservationV1,
+    KagemushaEligibilityPolicyTemplateV1, KagemushaEligibilityPolicyV1,
+    KagemushaEligibilityRequestV1, KagemushaEligibilityResponseBodyV1,
+    KagemushaEligibilityResponseV1, KagemushaWalletAssetScopeV1,
 };
 
 /// One atomic observation supplied by the selected provider's current middleware.
@@ -56,11 +58,14 @@ type Result<T> = core::result::Result<T, EnrollmentEligibilityMiddlewareErrorV1>
 /// Construct one exact signed response after a fresh, scoped middleware read.
 ///
 /// `read_current` must independently bind the request's actor and canonical account to the
-/// selected bank or scheme operator and atomically read approval and freeze state.
+/// selected bank or scheme operator and atomically read approval and freeze state for the
+/// exact asset incarnation and scale. The configured template applies to registered assets;
+/// the envelope supplies asset DATA and never supplies authority or approval.
 /// Unknown subjects, unavailable records and authentication failures return `Unavailable`.
 /// The callback is invoked once, after canonical request admission and before signing. This
 /// function performs no network retry or cache lookup. The caller authenticates the transport
-/// before calling it; a client-provided policy is not an accepted authority configuration.
+/// before calling it. Select `template` from authenticated middleware configuration, never from
+/// this request. Its exact derived policy must match the enclosed request before any lookup.
 ///
 /// `clock` supplies genuine positive Unix milliseconds. `sign` may use authenticated software
 /// custody or an external signer; its actual signature is always verified before returning.
@@ -69,21 +74,27 @@ type Result<T> = core::result::Result<T, EnrollmentEligibilityMiddlewareErrorV1>
 /// Rejects invalid/foreign/stale requests, unavailable reads, time rollback, invalid revision,
 /// signing failure or foreign/malformed signer output. No response is emitted on these errors.
 pub fn answer_enrollment_eligibility_v1(
-    policy: &KagemushaEligibilityPolicyV1,
+    template: &KagemushaEligibilityPolicyTemplateV1,
     request_original: &[u8],
     mut clock: impl FnMut() -> Result<u64>,
     read_current: impl FnOnce(
+        &KagemushaWalletAssetScopeV1,
         &KagemushaEligibilityPolicyV1,
         &KagemushaEligibilityRequestV1,
     ) -> Result<CurrentEnrollmentEligibilityV1>,
     sign: impl FnOnce(&[u8; 32]) -> Result<[u8; 64]>,
 ) -> Result<Vec<u8>> {
     use EnrollmentEligibilityMiddlewareErrorV1 as Error;
-    let request = KagemushaEligibilityRequestV1::decode_canonical(request_original, policy)
+    let observation =
+        KagemushaEligibilityObservationV1::decode_canonical(request_original, template)
+            .map_err(|_| Error::InvalidRequest)?;
+    let policy = observation
+        .policy(template)
         .map_err(|_| Error::InvalidRequest)?;
+    let request = observation.request;
     let started = clock()?;
     require_live(&request, started, request.requested_at_ms)?;
-    let current = read_current(policy, &request)?;
+    let current = read_current(&observation.asset, &policy, &request)?;
     if current.revision == 0 {
         return Err(Error::InvalidObservation);
     }
@@ -102,7 +113,7 @@ pub fn answer_enrollment_eligibility_v1(
     let body = KagemushaEligibilityResponseBodyV1 {
         version: 1,
         request_digest: request
-            .request_digest(policy)
+            .request_digest(&policy)
             .map_err(|_| Error::InvalidRequest)?,
         decision,
         source_revision: current.revision,
@@ -118,7 +129,7 @@ pub fn answer_enrollment_eligibility_v1(
     let completed = clock()?;
     require_live(&request, completed, read_completed)?;
     response
-        .verify(policy, &request, completed)
+        .verify(&policy, &request, completed)
         .map_err(|_| Error::Signature)?;
     response.encode_canonical().map_err(|_| Error::Signature)
 }

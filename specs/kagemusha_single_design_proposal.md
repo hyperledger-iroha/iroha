@@ -147,8 +147,13 @@ to the canonical domainless `AccountId`, network, scheme, asset incarnation,
 wallet key, app identity and enrollment policy. A new incarnation always begins
 at zero; reenrollment never imports an old balance or resets its replay state.
 
-Any compatible fungible asset may opt into KAGEMUSHA through its authorized asset/scheme
-operator, with reserve accounting and the required enrollment and proof configuration.
+Every token on the universal dataspace is eligible for KAGEMUSHA offline payments. There
+is no Parliament approval, named-token allowlist or regulated/non-regulated asset-class gate.
+The canonical universal balance scope is `AssetBalanceScope::Global`, routed to
+`DataSpaceId::UNIVERSAL`. Its ordinary asset authorization, exact incarnation and scale,
+reserve backing, enrollment and proof requirements still apply. These setup requirements
+must be available to every universal asset through the shared registration and SDK paths;
+no special governance authority is required merely because a token is non-regulated.
 Current enrollment eligibility and freeze status use the
 [eligibility SDK contract](kagemusha_enrollment_eligibility_v1.md). Bank-required enrollment
 uses the user's bank middleware for KYC approval and freeze status. Other schemes select

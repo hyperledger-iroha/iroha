@@ -177,6 +177,36 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         self.provider
     }
 
+    /// Renew an independently authenticated session on this same exclusive owner.
+    /// Every installed identity/policy stays exact; only its verified interval changes.
+    /// Returned effects and durable E5/E6 remain retained. A fresh `begin` and signed
+    /// permit are required before another effect, within the original attempt dates.
+    pub fn renew_session(&mut self, config: EnrollmentConfigV1) -> Result<(), Error> {
+        if config.scheme != self.config.scheme
+            || config.app != self.config.app
+            || config.policy != self.config.policy
+            || config.attestation_root_der != self.config.attestation_root_der
+            || config.installation != self.config.installation
+            || config.enrollment_certificate != self.config.enrollment_certificate
+            || config.service_origin != self.config.service_origin
+            || config.fi != self.config.fi
+            || config.actor != self.config.actor
+            || config.release != self.config.release
+            || config.session_valid_from_ms >= config.session_expires_at_ms
+        {
+            return Err(Error::Original(
+                "renewed session changed enrollment selection",
+            ));
+        }
+        self.flush_apple_returned()?;
+        self.config.session_valid_from_ms = config.session_valid_from_ms;
+        self.config.session_expires_at_ms = config.session_expires_at_ms;
+        self.pending = None;
+        self.request = None;
+        self.apple_clock = None;
+        Ok(())
+    }
+
     /// Transfer the same exclusive provider to a native loader, restoring every private
     /// enrollment selection if that loader returns custody with an error. This grants no
     /// account or proof admission; the destination must perform its complete own checks.
@@ -298,8 +328,18 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     /// selected slot can establish request absence only from its actual pre-key records;
     /// this is not payment-key absence, freshness or permission to generate anything.
     pub fn retained_request(&mut self) -> Result<Option<Vec<u8>>, Error> {
-        if self.selected.is_some() {
-            return self.retained();
+        if let Some((_, slot)) = &self.selected {
+            match self.provider.status(slot)? {
+                KagemushaWalletSlotStatusV1::Empty => {
+                    self.require_unissued_prekey(false)?;
+                    return Ok(None);
+                }
+                KagemushaWalletSlotStatusV1::IntentOnly => {
+                    self.require_unissued_prekey(true)?;
+                    return Ok(None);
+                }
+                _ => return self.retained(),
+            }
         }
         let Some(prekey_owner::Pending::Dispatch { dispatch, .. }) = &self.pending else {
             return Err(Error::Phase);

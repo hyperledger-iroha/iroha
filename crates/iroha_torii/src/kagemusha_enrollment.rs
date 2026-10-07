@@ -16,7 +16,7 @@ use iroha_core_zk::kagemusha_wallet_enrollment_v1::{
     PreKeyDispatchV1,
     issuer_worker::{VerifierConfigurationV1, VerifierExchangeV1},
 };
-use iroha_data_model::account::AccountId;
+use iroha_data_model::{account::AccountId, kagemusha::KagemushaWalletAssetScopeV1};
 use iroha_torii_shared::kagemusha_enrollment::*;
 use std::sync::Arc;
 
@@ -121,18 +121,22 @@ impl EnrollmentIssuerRuntimeV1 for Runtime {
     fn observe_eligibility(
         &mut self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
         request: &[u8],
         timeout: std::time::Duration,
     ) -> Result<Vec<u8>> {
         self.selected(provider)?
             .observation
-            .observe(provider, request, timeout)
+            .observe(provider, asset, request, timeout)
     }
     fn worker_configuration(
         &mut self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
     ) -> Result<VerifierConfigurationV1> {
-        self.selected(provider)?.worker.configuration(provider)
+        self.selected(provider)?
+            .worker
+            .configuration(provider, asset)
     }
     fn worker_exchange(
         &mut self,

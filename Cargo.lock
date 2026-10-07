@@ -5111,6 +5111,7 @@ dependencies = [
  "iroha_plonk_recursion",
  "iroha_primitives",
  "iroha_sumeragi",
+ "iroha_version",
  "iroha_zkp_halo2",
  "iroha_zkp_poseidon",
  "ivm_abi",

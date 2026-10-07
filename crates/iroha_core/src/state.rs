@@ -13886,6 +13886,11 @@ pub struct StateTransaction<'block, 'state> {
         Option<kagemusha_load_entrypoint::KagemushaLoadEntrypointBindingV1>,
     /// Currently executing direct instruction ordinal; nested frames receive no Load authority.
     pub(crate) current_direct_kagemusha_load_instruction_index: Option<usize>,
+    /// Storage-only ordinal of a directly signed AMX instruction; grants no authority.
+    pub(crate) current_direct_amx_instruction_index: Option<usize>,
+    /// Borrow of the actual native Worker attempt, confined to this transaction.
+    pub(crate) native_amx_leg_execution:
+        Option<crate::sumeragi::amx::NativeAmxLegExecution<'block>>,
     /// Penalties that must be replayed after this transaction overlay is rejected.
     deferred_governance_ballot_penalties: Vec<DeferredGovernanceBallotPenaltyV1>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
@@ -37538,6 +37543,8 @@ impl<'state> StateBlock<'state> {
             governance_ballot_entrypoint_binding: None,
             kagemusha_load_entrypoint_binding: None,
             current_direct_kagemusha_load_instruction_index: None,
+            current_direct_amx_instruction_index: None,
+            native_amx_leg_execution: None,
             deferred_governance_ballot_penalties: Vec::new(),
             privacy_transaction_intent_binding: None,
             private_settlement_carrier_binding: None,

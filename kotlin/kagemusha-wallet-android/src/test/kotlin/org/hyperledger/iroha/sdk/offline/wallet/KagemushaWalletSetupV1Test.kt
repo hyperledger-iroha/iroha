@@ -8,24 +8,26 @@ import org.junit.jupiter.api.Test
 class KagemushaWalletSetupV1Test {
     @Test fun `Unload claim requires retained identity and preserves native DATA`() {
         val id = ByteArray(32) { 7 }
-        KagemushaWalletSetupInputV1(33, identity = id)
-        KagemushaWalletSetupInputV1(33, identity = id, first = ByteArray(16_384) { 1 })
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(33) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(33, identity = id, first = ByteArray(16_385)) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(33, identity = id, second = byteArrayOf(1)) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(33, identity = id, token = 1) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(33, identity = id, amount = KagemushaWalletUInt128V1(1, 0)) }
+        KagemushaWalletSetupInputV1(38, identity = id)
+        KagemushaWalletSetupInputV1(38, identity = id, first = ByteArray(16_384) { 1 })
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(38) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(38, identity = id, first = ByteArray(16_385)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(38, identity = id, second = byteArrayOf(1)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(38, identity = id, token = 1) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(38, identity = id, amount = KagemushaWalletUInt128V1(1, 0)) }
         val bytes = ByteArray(16_384) { -1 }
-        val result = KagemushaWalletCallV1(44, -1, 0, 0, 0, 0, bytes)
+        val result = KagemushaWalletCallV1(47, -1, 0, 0, 0, 0, bytes)
         val enrollment = KagemushaWalletCallV1(37, -1, 0, 1, 0, 0, byteArrayOf(1))
         assertFailsWith<KagemushaWalletExceptionV1> { enrollment.unloadClaimOriginal() }
+        val activation = KagemushaWalletCallV1(44, -1, 0, 2, 0, 0, ByteArray(32) { 1 })
+        assertFailsWith<KagemushaWalletExceptionV1> { activation.unloadClaimOriginal() }
         assertContentEquals(bytes, result.unloadClaimOriginal())
         result.unloadClaimOriginal().fill(0)
         assertContentEquals(bytes, result.unloadClaimOriginal())
         assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
         assertFailsWith<KagemushaWalletExceptionV1> { result.feeClaimOriginal() }
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(44, -1, 0, 1, 0, 0, byteArrayOf(1)) }
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(44, -1, 0, 0, 0, 0, ByteArray(16_385)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(47, -1, 0, 1, 0, 0, byteArrayOf(1)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(47, -1, 0, 0, 0, 0, ByteArray(16_385)) }
     }
 
     @Test fun `fee transport preserves native bytes and rejects authority fields`() {

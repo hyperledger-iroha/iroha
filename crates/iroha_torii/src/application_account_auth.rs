@@ -228,24 +228,27 @@ mod application_account_auth_tests {
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account),
         );
-        let mut builder = RouterBuilder::new(
-            app.clone(),
-            RouteCatalog::new(&[
-                SPACE_DIRECTORY_MANIFESTS_POST,
-                SPACE_DIRECTORY_MANIFESTS_REVOKE_POST,
-                RAM_LFE_PROGRAMS_BY_PROGRAM_ID_EXECUTE_POST,
-                RAM_LFE_RECEIPTS_VERIFY_POST,
-                ACCOUNTS_BY_ACCOUNT_ID_IDENTIFIERS_CLAIM_RECEIPT_POST,
-                IDENTIFIERS_RESOLVE_POST,
-            ]),
-            EnabledFeatures::new(&["app_api"]),
-        )
-        .expect("owner PRF route catalog");
-        add_authenticated_application_compute_routes(&mut builder, app.clone(), 16_384);
-        let (router, _) = builder
-            .finish()
-            .expect("exact production authentication policies");
-        let router = router.with_state(app.clone());
+        let router_for_body_limit = |max_body_bytes| {
+            let mut builder = RouterBuilder::new(
+                app.clone(),
+                RouteCatalog::new(&[
+                    SPACE_DIRECTORY_MANIFESTS_POST,
+                    SPACE_DIRECTORY_MANIFESTS_REVOKE_POST,
+                    RAM_LFE_PROGRAMS_BY_PROGRAM_ID_EXECUTE_POST,
+                    RAM_LFE_RECEIPTS_VERIFY_POST,
+                    ACCOUNTS_BY_ACCOUNT_ID_IDENTIFIERS_CLAIM_RECEIPT_POST,
+                    IDENTIFIERS_RESOLVE_POST,
+                ]),
+                EnabledFeatures::new(&["app_api"]),
+            )
+            .expect("owner PRF route catalog");
+            add_authenticated_application_compute_routes(&mut builder, app.clone(), max_body_bytes);
+            let (router, _) = builder
+                .finish()
+                .expect("exact production authentication policies");
+            router.with_state(app.clone())
+        };
+        let router = router_for_body_limit(32_768);
         let claim_uri = format!("/v1/accounts/{account}/identifiers/claim-receipt");
         let identifier_body = br#"{ "phase": "prepare", "policy_id": "string#retail", "normalized_input": "alice", "input_nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }"#.to_vec();
         let execute_body = br#"{ "normalized_input": "alice", "input_nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }"#.to_vec();
@@ -293,6 +296,10 @@ mod application_account_auth_tests {
                 .await
                 .expect("replayed request");
             assert_eq!(replay.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                replay.headers()[axum::http::header::CACHE_CONTROL],
+                "private, no-store"
+            );
         }
         let wrong_account_uri = format!("/v1/accounts/{}/identifiers/claim-receipt", *BOB_ID);
         for (signed_path, actual_path, tamper_body, expected) in [
@@ -309,7 +316,7 @@ mod application_account_auth_tests {
                 StatusCode::BAD_REQUEST,
             ),
             (
-                wrong_account_uri.clone(),
+                claim_uri.clone(),
                 wrong_account_uri,
                 false,
                 StatusCode::FORBIDDEN,
@@ -341,19 +348,41 @@ mod application_account_auth_tests {
                 .await
                 .expect("refused request");
             assert_eq!(response.status(), expected);
+            assert_eq!(
+                response.headers()[axum::http::header::CACHE_CONTROL],
+                "private, no-store"
+            );
         }
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(claim_uri)
-                    .extension(crate::loopback_connect_info())
-                    .body(Body::from(vec![b'x'; 16_385]))
-                    .expect("oversized request"),
-            )
-            .await
-            .expect("bounded body rejection");
-        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        for (configured_limit, effective_limit) in [(32_768, 16_384), (1_024, 1_024)] {
+            let router = router_for_body_limit(configured_limit);
+            for path in [
+                claim_uri.as_str(),
+                "/v1/identifiers/resolve",
+                "/v1/ram-lfe/programs/string_retail/execute",
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri(path)
+                            .extension(crate::loopback_connect_info())
+                            .body(Body::from(vec![b'x'; effective_limit + 1]))
+                            .expect("oversized request"),
+                    )
+                    .await
+                    .expect("bounded body rejection");
+                assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+                assert_eq!(
+                    response.headers()[axum::http::header::CACHE_CONTROL],
+                    "private, no-store"
+                );
+                assert_eq!(
+                    response.headers()[axum::http::header::VARY],
+                    crate::content::CANONICAL_CONTENT_AUTH_VARY
+                );
+            }
+        }
     }
     #[test]
     fn application_authority_binding_rejects_substitution() {

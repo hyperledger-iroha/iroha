@@ -39,7 +39,7 @@ object KagemushaEnrollmentEligibilityV1 {
     /** Positive genuine Unix time; callback exceptions are clock failures. */
     fun interface Clock { fun nowMs(): BigInteger }
     /** One authenticated atomic current-source read. Unknown/unavailable subjects must throw. */
-    fun interface CurrentLookup { fun read(policy: Policy, request: Request): Current }
+    fun interface CurrentLookup { fun read(asset: AssetScope, policy: Policy, request: Request): Current }
     /**
      * Sign the exact 32-byte message with ordinary Ed25519 using existing provider-owned custody.
      * Do not apply the transaction signer's additional IrohaHash prehash or Ed25519ph mode.
@@ -48,6 +48,65 @@ object KagemushaEnrollmentEligibilityV1 {
 
     /** Current read time is not a record's last-update time. Frozen takes precedence. */
     class Current(val approved: Boolean, val frozen: Boolean, val revision: BigInteger, val observedAtMs: BigInteger)
+
+    /** Authenticated by the middleware deployment owner; decoding this DATA confers no approval. */
+    class PolicyTemplate private constructor(original: ByteArray, private val fields: List<ByteArray>) {
+        private val original = original.copyOf()
+        private val network = identity(fields[1]); private val scheme = identity(fields[2])
+        val revision: BigInteger = positive(fields[3])
+        private val authorityFields = variant(fields[4])
+        val authority: Authority = when (authorityFields.first) { 1 -> Authority.BANK; 2 -> Authority.SCHEME_OPERATOR; else -> invalid() }
+        private val authorityId = identity(parseFields(authorityFields.second, 1)[0])
+        private val key = fixed(fields[5], 32)
+        val maximumResponseMs: BigInteger = positive(fields[6])
+        init { version(fields[0]); require(Ed25519PublicKeyAdmission.isValid(key)) }
+        fun originalBytes(): ByteArray = original.copyOf()
+        fun networkId(): ByteArray = network.copyOf()
+        fun schemeId(): ByteArray = scheme.copyOf()
+        fun scopeDigest(): ByteArray = authorityId.copyOf()
+        fun publicKey(): ByteArray = key.copyOf()
+        /** Exact policy DATA; the issuer still authenticates registration before dispatch. */
+        fun forAsset(asset: AssetScope): Policy = Policy.parse(frame("policy", listOf(
+            fields[0], fields[1], fields[2], asset.digest(), fields[3], fields[4], fields[5], fields[6])))
+        companion object {
+            internal fun parse(original: ByteArray): PolicyTemplate = PolicyTemplate(original, unframe(original, "policy_template", 7))
+        }
+    }
+
+    /** Exact canonical token/incarnation/scale DATA, without registration authority. */
+    class AssetScope private constructor(private val fields: List<ByteArray>) {
+        private val id = fixed(fields[1], 16)
+        private val incarnation = identity(fields[2])
+        val scale: Int = BigInteger(1, fixed(fields[3], 4).reversedArray()).intValueExact()
+        init {
+            version(fields[0]); require((id[6].toInt() and 0xf0) == 0x40 && (id[8].toInt() and 0xc0) == 0x80)
+            require((incarnation[31].toInt() and 1) == 1)
+            require(incarnation.take(31).any { it != 0.toByte() } || (incarnation[31].toInt() and 0xfe) != 0)
+            require(scale in 0..28)
+        }
+        fun assetDefinitionBytes(): ByteArray = id.copyOf()
+        fun incarnationBytes(): ByteArray = incarnation.copyOf()
+        fun originalBytes(): ByteArray = namedFrame(ASSET_SCHEMA, fields)
+        fun digest(): ByteArray = KagemushaWalletWireV1.digest(KagemushaWalletDigestRoleV1.ASSET_SCOPE,
+            byteArrayOf(1, 0) + id + incarnation + fields[3])
+        companion object {
+            private const val ASSET_SCHEMA = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletAssetScopeV1"
+            internal fun payload(original: ByteArray): AssetScope = AssetScope(parseFields(original, 4))
+        }
+    }
+
+    /** Bounded middleware envelope whose asset only supplies exact request-policy context. */
+    class Observation private constructor(original: ByteArray, fields: List<ByteArray>, template: PolicyTemplate) {
+        private val original = original.copyOf()
+        val asset: AssetScope = AssetScope.payload(fields[1])
+        val policy: Policy = template.forAsset(asset)
+        val request: Request = Request.parse(policy, frame("request", parseFields(fields[2], 10)))
+        init { version(fields[0]) }
+        fun originalBytes(): ByteArray = original.copyOf()
+        companion object {
+            internal fun parse(template: PolicyTemplate, original: ByteArray): Observation = Observation(original, unframe(original, "observation", 3), template)
+        }
+    }
 
     /** Canonical policy DATA; authority selection, routing and revocation remain caller duties. */
     class Policy private constructor(original: ByteArray, fields: List<ByteArray>) {
@@ -132,6 +191,12 @@ object KagemushaEnrollmentEligibilityV1 {
         }
     }
 
+    /** Decode template DATA; genuine middleware deployment selects and authenticates its authority. */
+    @JvmStatic fun decodeTemplate(original: ByteArray): PolicyTemplate = checked(FailureCode.INVALID_REQUEST) { PolicyTemplate.parse(boundedOriginal(original)) }
+    /** Decode the asset-bearing envelope against the independently selected template. */
+    @JvmStatic fun decodeObservation(template: PolicyTemplate, original: ByteArray): Observation =
+        checked(FailureCode.INVALID_REQUEST) { Observation.parse(template, boundedOriginal(original)) }
+
     /** Decode a bounded canonical policy. This never selects it as trusted authority. */
     @JvmStatic fun decodePolicy(original: ByteArray): Policy = checked(FailureCode.INVALID_REQUEST) { Policy.parse(boundedOriginal(original)) }
     @JvmStatic fun decodeRequest(policy: Policy, original: ByteArray): Request =
@@ -141,10 +206,11 @@ object KagemushaEnrollmentEligibilityV1 {
         checked(FailureCode.SIGNATURE) { Response.parse(boundedOriginal(original)).also { it.verify(policy, request, nowMs) } }
 
     /** One lookup, one signature and three genuine clock samples; no retry or cached approval. */
-    @JvmStatic fun answer(policy: Policy, requestOriginal: ByteArray, clock: Clock, lookup: CurrentLookup, signer: Signer): ByteArray {
-        val request = decodeRequest(policy, requestOriginal)
+    @JvmStatic fun answer(template: PolicyTemplate, observationOriginal: ByteArray, clock: Clock, lookup: CurrentLookup, signer: Signer): ByteArray {
+        val observation = decodeObservation(template, observationOriginal)
+        val policy = observation.policy; val request = observation.request
         val started = checked(FailureCode.CLOCK) { clock.nowMs().also { live(request, it, request.requestedAtMs) } }
-        val current = checked(FailureCode.UNAVAILABLE) { requireNotNull(lookup.read(policy, request)) }
+        val current = checked(FailureCode.UNAVAILABLE) { requireNotNull(lookup.read(observation.asset, policy, request)) }
         checked(FailureCode.INVALID_OBSERVATION) { positive(current.revision) }
         val readCompleted = checked(FailureCode.CLOCK) { clock.nowMs().also { live(request, it, started) } }
         checked(FailureCode.INVALID_OBSERVATION) {
@@ -214,9 +280,10 @@ object KagemushaEnrollmentEligibilityV1 {
         require(decoder.remaining() == 0 && fields(values).contentEquals(payload))
         return values
     }
-    private fun frame(kind: String, values: List<ByteArray>): ByteArray {
+    private fun frame(kind: String, values: List<ByteArray>): ByteArray = namedFrame("$PREFIX$kind.v1", values)
+    private fun namedFrame(schema: String, values: List<ByteArray>): ByteArray {
         val payload = fields(values)
-        val header = NoritoHeader(SchemaHash.hash16("$PREFIX$kind.v1"), payload.size, CRC64.compute(payload), FLAGS, NoritoHeader.COMPRESSION_NONE)
+        val header = NoritoHeader(SchemaHash.hash16(schema), payload.size, CRC64.compute(payload), FLAGS, NoritoHeader.COMPRESSION_NONE)
         return (header.encode() + payload).also { require(it.size <= MAX_FRAME_BYTES) }
     }
     private fun unframe(original: ByteArray, kind: String, count: Int): List<ByteArray> {

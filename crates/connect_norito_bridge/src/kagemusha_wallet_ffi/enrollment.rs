@@ -5,6 +5,7 @@ use iroha_core_zk::kagemusha_wallet_enrollment_v1 as native;
 /// Enrollment actions contain originals only; no policy, time, liveness or hardware verdict.
 pub(crate) enum Action<'a> {
     Start([&'a [u8]; 3]),
+    RenewSession([&'a [u8]; 3]),
     Begin([&'a [u8]; 3]),
     Authorize(&'a [u8]),
     AcceptPermit(&'a [u8]),
@@ -115,7 +116,11 @@ pub(super) fn perform<F: advance::KagemushaWalletFsV1, P: advance::KagemushaWall
             Some(bytes) => response(24, bytes),
             None => response(20, Vec::new()),
         },
-        Action::Start(_) | Action::Load | Action::BeginOpen | Action::BeginResult(_) => {
+        Action::Start(_)
+        | Action::RenewSession(_)
+        | Action::Load
+        | Action::BeginOpen
+        | Action::BeginResult(_) => {
             return Err(Failure::code(CONFLICT));
         }
     })
@@ -133,7 +138,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
         4 => [32, 65_536, 4096],
         6 => [native::RESULT_MAX_BYTES, 0, 0],
         9 => [2048, 0, 0],
-        11 => [16_384, 4096, 16_384],
+        11 | 19 => [16_384, 4096, 16_384],
         12 => [native::RESULT_MAX_BYTES, 4096, 0],
         13 | 16 | 17 | 18 => [0; 3],
         14 => [1, 0, 0],
@@ -167,6 +172,7 @@ pub(crate) fn request<'a>(
         // The authenticated product selection requires either genuine DPoP (CBSI)
         // or an empty proof frame (BPNG). This boundary only checks frame bounds.
         11 if !first.is_empty() && !third.is_empty() => Action::Start(originals),
+        19 if !first.is_empty() && !third.is_empty() => Action::RenewSession(originals),
         12 if !first.is_empty() && !second.is_empty() => Action::BeginResult([first, second]),
         13 => Action::AppleOriginals,
         14 if first.len() == 1 && (1..=3).contains(&first[0]) => Action::BeginAppleEffect(first[0]),
@@ -206,7 +212,7 @@ mod tests {
     use super::*;
     #[test]
     fn original_enrollment_bounds_are_per_role_and_unused_fields_are_rejected() {
-        for selector in 0..=18 {
+        for selector in 0..=19 {
             let limits = bounds(selector).unwrap();
             for slot in 0..3 {
                 let long = vec![0; limits[slot] + 1];
@@ -215,7 +221,16 @@ mod tests {
                 assert!(request(selector, originals, &[]).is_err());
             }
         }
+        assert!(request(20, [&[]; 3], &[]).is_err());
         assert!(request(19, [&[]; 3], &[]).is_err());
+        assert!(matches!(
+            request(19, [b"JWT", b"DPoP", b"root"], &[]).unwrap(),
+            Action::RenewSession(_)
+        ));
+        assert!(matches!(
+            request(19, [b"JWT", &[], b"root"], &[]).unwrap(),
+            Action::RenewSession(_)
+        ));
         assert!(matches!(
             request(16, [&[]; 3], &[]).unwrap(),
             Action::RetainedRequest

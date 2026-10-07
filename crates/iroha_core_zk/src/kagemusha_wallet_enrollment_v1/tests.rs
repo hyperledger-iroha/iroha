@@ -1518,3 +1518,317 @@ fn expired_authorize_recovers_actual_platform_return_before_refusing_live_author
         assert_eq!(state.delete_calls, 0);
     });
 }
+
+fn interrupted_prekey_before_marker(f: &Fixture, d: &DeviceV1, intent_only: bool) -> Owner {
+    let mut current = owner(f, d);
+    let message = begin(f, &mut current);
+    // Stop after the actual selected-slot publication, either before E2 or
+    // immediately before the hardware effect after its durable intent exists.
+    let successful_clocks = if intent_only { 4 } else { 1 };
+    d.platform.with(|state| {
+        state.monotonic_script = std::iter::repeat_n(Ok(1000), successful_clocks)
+            .chain([Err(KagemushaWalletUnavailableV1::Busy)])
+            .collect();
+    });
+    assert!(matches!(
+        current.authorize(&sign(f, &message)),
+        Err(Error::Provider(_))
+    ));
+    d.platform.with(|state| {
+        assert!(state.monotonic_script.is_empty());
+        assert_eq!(state.generate_calls, 0);
+    });
+    current
+}
+
+#[test]
+fn selected_pre_e5_absence_allows_same_id_authorized_retry_without_generating_on_read() {
+    for intent_only in [false, true] {
+        for restart in [false, true] {
+            let f = fixture();
+            let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 195);
+            let mut current = interrupted_prekey_before_marker(&f, &d, intent_only);
+            if restart {
+                drop(current.into_provider());
+                d.fs.restart();
+                current = owner(&f, &d);
+            }
+            let resumed = dispatch(&f, &mut current);
+            assert!(resumed.previous_permit.is_some());
+            assert!(current.retained_request().unwrap().is_none());
+            assert!(current.retained_result().unwrap().is_none());
+            assert!(matches!(
+                current.progress().unwrap(),
+                EnrollmentProgressV1::Pending
+            ));
+            d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+            let message = current
+                .accept_permit(&permit(&f, &resumed).encode_canonical().unwrap())
+                .unwrap();
+            assert!(matches!(
+                current.authorize(&sign(&f, &message)).unwrap(),
+                EnrollmentProgressV1::Evidence { .. }
+            ));
+            let original = request(&f, &mut current);
+            assert_eq!(current.retained_request().unwrap(), Some(original));
+            d.platform.with(|state| {
+                assert_eq!(state.generate_calls, 1);
+                assert_eq!(state.delete_calls, 0);
+            });
+        }
+    }
+}
+
+#[test]
+fn selected_pre_e5_absence_preserves_unavailable_storage_and_key_answers() {
+    for intent_only in [false, true] {
+        let f = fixture();
+        let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 197);
+        let mut current = interrupted_prekey_before_marker(&f, &d, intent_only);
+        dispatch(&f, &mut current);
+        d.platform.with(|state| state.probe_unavailable = true);
+        assert!(matches!(
+            current.retained_request(),
+            Err(Error::Provider(_))
+        ));
+        assert!(matches!(current.retained_result(), Err(Error::Provider(_))));
+        d.platform.with(|state| {
+            state.probe_unavailable = false;
+            state.storage = Err(KagemushaWalletUnavailableV1::Locked);
+        });
+        assert!(matches!(
+            current.retained_request(),
+            Err(Error::Provider(_))
+        ));
+        assert!(matches!(current.retained_result(), Err(Error::Provider(_))));
+        d.platform.with(|state| state.storage = Ok(()));
+        for result in [false, true] {
+            d.fs.inject(d.fs.steps(), KagemushaWalletSimFaultV1::Error);
+            let read = if result {
+                current.retained_result()
+            } else {
+                current.retained_request()
+            };
+            assert!(matches!(read, Err(Error::Provider(_))));
+            d.fs.clear_faults();
+        }
+        assert!(current.retained_result().unwrap().is_none());
+        d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+    }
+}
+
+#[test]
+fn selected_pre_e5_absence_requires_all_original_prekey_records() {
+    for intent_only in [false, true] {
+        for role in ["client", "accepted", "slot"] {
+            let f = fixture();
+            let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 199);
+            let mut current = interrupted_prekey_before_marker(&f, &d, intent_only);
+            dispatch(&f, &mut current);
+            let root = KagemushaWalletCustodyDirV1::root();
+            let name =
+                d.fs.visible_names(&root)
+                    .into_iter()
+                    .find(|name| {
+                        name.starts_with("prekey-") && name.ends_with(&format!("-{role}.norito"))
+                    })
+                    .unwrap();
+            d.fs.unlink(&root, &name).unwrap();
+            assert!(current.retained_request().is_err());
+            assert!(current.retained_result().is_err());
+            d.platform.with(|state| assert_eq!(state.generate_calls, 0));
+        }
+    }
+}
+
+#[test]
+fn session_renewal_reauthenticates_same_attempt_without_extending_its_permit_dates() {
+    let mut f = fixture();
+    f.config.session_expires_at_ms = 2001;
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 201);
+    let mut current = owner(&f, &d);
+    let selected = dispatch(&f, &mut current);
+    let first = permit(&f, &selected).encode_canonical().unwrap();
+    let message = current.accept_permit(&first).unwrap();
+    d.platform.with(|s| s.monotonic = Ok(1001));
+    assert!(current.authorize(&sign(&f, &message)).is_err());
+    let mut renewed = f.config.clone();
+    renewed.session_expires_at_ms = 600_000;
+    current.renew_session(renewed).unwrap();
+    assert!(matches!(
+        current.authorize(&sign(&f, &message)),
+        Err(Error::Phase)
+    ));
+    let resumed = dispatch(&f, &mut current);
+    assert_eq!(resumed.previous_permit, Some(first.clone()));
+    assert_eq!(resumed.client_nonce, selected.client_nonce);
+    assert_ne!(
+        resumed.native_dispatch_nonce,
+        selected.native_dispatch_nonce
+    );
+    let signed = permit(&f, &resumed);
+    let initial = KagemushaEnrollmentPermitV1::decode_canonical(
+        &first,
+        &f.config.scheme,
+        &f.config.enrollment_certificate,
+    )
+    .unwrap();
+    assert_eq!(signed.body.created_at_ms, initial.body.created_at_ms);
+    assert_eq!(signed.body.expires_at_ms, initial.body.expires_at_ms);
+    let message = current
+        .accept_permit(&signed.encode_canonical().unwrap())
+        .unwrap();
+    assert!(matches!(
+        current.authorize(&sign(&f, &message)).unwrap(),
+        EnrollmentProgressV1::Evidence { .. }
+    ));
+    // A new session never extends the immutable permit's final effect deadline.
+    let resumed = dispatch(&f, &mut current);
+    let message = current
+        .accept_permit(&permit(&f, &resumed).encode_canonical().unwrap())
+        .unwrap();
+    d.platform.with(|s| s.monotonic = Ok(500_000));
+    assert!(current.authorize(&sign(&f, &message)).is_err());
+    d.platform.with(|s| assert_eq!(s.generate_calls, 1));
+}
+
+#[test]
+fn session_renewal_rejects_every_changed_immutable_selection_without_consuming_challenge() {
+    let f = fixture();
+    let changes: &[fn(&mut EnrollmentConfigV1)] = &[
+        |c| c.scheme.network_id[0] ^= 1,
+        |c| c.app.version += 1,
+        |c| c.policy.version += 1,
+        |c| c.attestation_root_der.push(1),
+        |c| c.installation.manifest_digest[0] ^= 1,
+        |c| c.enrollment_certificate.body.serial += 1,
+        |c| c.service_origin.push(1),
+        |c| c.fi.push(1),
+        |c| c.actor.push(1),
+        |c| c.release.push(1),
+        |c| c.session_valid_from_ms = c.session_expires_at_ms,
+    ];
+    for change in changes {
+        let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 203);
+        let mut current = owner(&f, &d);
+        let message = begin(&f, &mut current);
+        let mut candidate = f.config.clone();
+        change(&mut candidate);
+        assert!(current.renew_session(candidate).is_err());
+        assert!(matches!(
+            current.authorize(&sign(&f, &message)).unwrap(),
+            EnrollmentProgressV1::Evidence { .. }
+        ));
+        d.platform.with(|s| assert_eq!(s.generate_calls, 1));
+    }
+}
+
+#[test]
+fn session_renewal_keeps_actual_generated_custody_across_storage_and_readback_failures() {
+    for readback in [false, true] {
+        let f = fixture();
+        let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 205);
+        let mut current = owner(&f, &d);
+        let message = begin(&f, &mut current);
+        d.platform.with(|s| {
+            s.lock_after_generation = !readback;
+            s.generation_readback_unavailable = readback;
+        });
+        assert!(matches!(
+            current.authorize(&sign(&f, &message)),
+            Err(Error::Provider(_))
+        ));
+        let original = d.platform.with(|s| {
+            assert_eq!(s.generate_calls, 1);
+            let (slot, key) = s.keys.iter().next().unwrap();
+            (*slot, public_key(key), s.last_generation.unwrap())
+        });
+        let mut renewed = f.config.clone();
+        renewed.session_expires_at_ms += 1000;
+        current.renew_session(renewed).unwrap();
+        d.platform.clear_faults();
+        d.platform.with(|s| {
+            s.generation_readback_unavailable = false;
+            s.lock_after_generation = false;
+        });
+        let resumed = dispatch(&f, &mut current);
+        assert!(current.retained_result().unwrap().is_none());
+        let message = current
+            .accept_permit(&permit(&f, &resumed).encode_canonical().unwrap())
+            .unwrap();
+        assert!(matches!(
+            current.authorize(&sign(&f, &message)).unwrap(),
+            EnrollmentProgressV1::Evidence { .. }
+        ));
+        let mut provider = current.into_provider();
+        assert!(!provider.has_retained_generation(&original.0));
+        let KagemushaWalletSlotStatusV1::Enrollment(marker) = provider.status(&original.0).unwrap()
+        else {
+            panic!("same generated original")
+        };
+        assert_eq!(*marker.payment_key(), original.1);
+        d.platform.with(|s| {
+            assert_eq!(s.generate_calls, 1);
+            assert_eq!(s.last_generation, Some(original.2));
+            assert_eq!(s.delete_calls, 0);
+        });
+    }
+}
+
+#[test]
+fn session_renewal_flushes_apple_returns_and_requires_new_live_authorization() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let f = apple_collection_fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 207);
+    let mut current = enrolled(&f, &d);
+    current.begin_apple_effect(1).unwrap();
+    let actual_return = STANDARD.encode([9; 32]).into_bytes();
+    d.fs.inject(d.fs.steps(), KagemushaWalletSimFaultV1::Error);
+    assert!(current.retain_apple_effect(1, &actual_return).is_err());
+    d.fs.clear_faults();
+    d.fs.inject(d.fs.steps(), KagemushaWalletSimFaultV1::Error);
+    assert!(current.renew_session(f.config.clone()).is_err());
+    d.fs.clear_faults();
+    current.renew_session(f.config.clone()).unwrap();
+    assert_eq!(
+        current.apple_collection_originals().unwrap()[0],
+        actual_return
+    );
+    assert!(current.begin_apple_effect(1).is_err());
+    assert!(current.begin_apple_effect(2).is_err());
+    let resumed = dispatch(&f, &mut current);
+    let message = current
+        .accept_permit(&permit(&f, &resumed).encode_canonical().unwrap())
+        .unwrap();
+    current.authorize(&sign(&f, &message)).unwrap();
+    assert!(current.begin_apple_effect(1).is_err());
+    current.begin_apple_effect(2).unwrap();
+    assert_eq!(
+        current.apple_collection_originals().unwrap()[0],
+        actual_return
+    );
+    d.platform.with(|s| assert_eq!(s.generate_calls, 1));
+}
+
+#[test]
+fn session_renewal_preserves_exact_retained_e5_and_e6() {
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 209);
+    let mut current = enrolled(&f, &d);
+    let e5 = request(&f, &mut current);
+    current.renew_session(f.config.clone()).unwrap();
+    dispatch(&f, &mut current);
+    assert_eq!(current.retained_request().unwrap(), Some(e5.clone()));
+    let e6 = issuer_result(&f, &RequestV1::decode(&e5).unwrap())
+        .encode()
+        .unwrap();
+    current.accept_credential(&e6).unwrap();
+    current.renew_session(f.config.clone()).unwrap();
+    dispatch(&f, &mut current);
+    assert_eq!(current.retained_request().unwrap(), Some(e5));
+    assert_eq!(current.retained_result().unwrap(), Some(e6));
+    d.platform.with(|s| {
+        assert_eq!(s.generate_calls, 1);
+        assert_eq!(s.delete_calls, 0);
+    });
+}

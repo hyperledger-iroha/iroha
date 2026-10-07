@@ -23,8 +23,7 @@ fn fixture() -> (Arc<CoreState>, PreKeyDispatchV1, KeyPair) {
     .unwrap();
     let key = KeyPair::from_seed(vec![67; 32], Algorithm::Ed25519);
     let account = AccountId::new(key.public_key().clone());
-    let mut policy = selected.enrollment;
-    policy.asset_digest = asset.asset_digest();
+    let policy = selected.enrollment.for_asset(&asset).unwrap();
     let dispatch = PreKeyDispatchV1 {
         version: 1,
         request_id: [21; 32],

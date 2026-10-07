@@ -126,6 +126,7 @@ pub(super) fn authenticate(
         token: Zeroizing::new(token.to_vec()),
         proof: Zeroizing::new(Vec::new()),
         root: root.to_vec(),
+        device_binding: None,
         config: iroha_core_zk::kagemusha_wallet_enrollment_v1::EnrollmentConfigV1 {
             scheme: selection.scheme,
             app: app.clone(),

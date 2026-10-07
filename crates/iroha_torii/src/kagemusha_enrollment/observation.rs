@@ -6,7 +6,8 @@
 use iroha_config::parameters::actual::KagemushaEnrollmentProvider;
 use iroha_core::kagemusha_wallet_v1::enrollment_issuer::EnrollmentIssuerErrorV1 as Error;
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_ELIGIBILITY_MAX_BYTES_V1, KagemushaEligibilityRequestV1,
+    KAGEMUSHA_ELIGIBILITY_MAX_BYTES_V1, KagemushaEligibilityObservationV1,
+    KagemushaEligibilityRequestV1, KagemushaWalletAssetScopeV1,
 };
 use iroha_fs::{FileSnapshot, RetainedFile};
 use reqwest::{
@@ -61,13 +62,25 @@ impl EligibilityObservationTransport {
     pub(super) fn observe(
         &self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
         original: &[u8],
         timeout: Duration,
     ) -> Result<Vec<u8>> {
         self.revalidate(provider)?;
-        KagemushaEligibilityRequestV1::decode_canonical(original, &provider.eligibility)
+        let policy = provider
+            .eligibility
+            .for_asset(asset)
             .map_err(|_| Error::Invalid)?;
-        let response = self.http.observe(original, timeout)?;
+        let request = KagemushaEligibilityRequestV1::decode_canonical(original, &policy)
+            .map_err(|_| Error::Invalid)?;
+        let observation = KagemushaEligibilityObservationV1 {
+            version: 1,
+            asset: asset.clone(),
+            request,
+        }
+        .encode_canonical(&provider.eligibility)
+        .map_err(|_| Error::Invalid)?;
+        let response = self.http.observe(&observation, timeout)?;
         self.revalidate(provider)?;
         Ok(response)
     }

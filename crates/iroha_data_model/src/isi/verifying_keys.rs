@@ -3,6 +3,7 @@ use crate::proof::{VerifyingKeyId, VerifyingKeyRecord};
 isi! {
     /// Register a new verifying key record into the WSV.
     #[norito_schema(name = "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey")]
+    #[derive(derive_more::Constructor)]
     pub struct RegisterVerifyingKey {
         /// Identifier of the verifying key (backend + name).
         pub id: VerifyingKeyId,

@@ -852,7 +852,7 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     let zero = [0; 32];
     let mut request = WalletSetupRequest {
         setup_id: id.as_ptr(),
-        selector: 33,
+        selector: 38,
         amount: WalletU128 { low: 0, high: 0 },
         token: 0,
         first: std::ptr::null(),

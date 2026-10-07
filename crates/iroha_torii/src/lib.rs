@@ -33131,6 +33131,8 @@ async fn handler_identifier_claim_receipt(
         &account_literal,
         "/v1/accounts/{account_id}/identifiers/claim-receipt",
     )?;
+    // The signed path selects the beneficiary. Authorization comes from both
+    // ledger policy owners below, which may differ from that beneficiary.
     let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(

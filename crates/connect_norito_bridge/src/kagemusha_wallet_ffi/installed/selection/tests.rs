@@ -973,7 +973,15 @@ fn session_selection() -> Value {
             "androidPlayIntegrityCloudProjectNumber":("123456789")}})
 }
 fn session_originals(android: bool) -> [Vec<u8>; 3] {
-    let proof_key = g1_key(31);
+    session_originals_for(android, 31, "00000000-0000-4000-8000-000000000001", 1500)
+}
+fn session_originals_for(
+    android: bool,
+    proof_seed: u8,
+    device: &str,
+    proof_iat: u64,
+) -> [Vec<u8>; 3] {
+    let proof_key = g1_key(proof_seed);
     let point = proof_key.verifying_key().to_encoded_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().unwrap());
     let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
@@ -984,7 +992,7 @@ fn session_originals(android: bool) -> [Vec<u8>; 3] {
     let claims = encode(
         norito::json!({"sub":("alice@example.test"), "dataspace_id":("anz.cbsi"), "roles":["RETAIL_USER"],
         "iat":(1000), "nbf":(1000), "exp":(2000), "iss":("cbsi-fi-core-anz"), "aud":("anz.cbsi"),
-        "device_id":("00000000-0000-4000-8000-000000000001"), "client_app":(if android { "com.soramitsu.bokolocash" } else { "jp.co.soramitsu.bokolo" }),
+        "device_id":(device), "client_app":(if android { "com.soramitsu.bokolocash" } else { "jp.co.soramitsu.bokolo" }),
         "cnf":{"jkt":(URL_SAFE_NO_PAD.encode(BlobV1::of(jwk.as_bytes()).sha256))}}),
     );
     let message = format!("{header}.{claims}");
@@ -995,12 +1003,40 @@ fn session_originals(android: bool) -> [Vec<u8>; 3] {
     );
     let claims = encode(
         norito::json!({"htm":("POST"),"htu":("https://bokolo-anz.soramitsu.io/api/v1/retail/kagemusha/enrollment/challenge"),
-        "iat":(1500),"jti":("00000000-0000-4000-8000-000000000002"),"ath":(URL_SAFE_NO_PAD.encode(BlobV1::of(&token).sha256))}),
+        "iat":(proof_iat),"jti":("00000000-0000-4000-8000-000000000002"),"ath":(URL_SAFE_NO_PAD.encode(BlobV1::of(&token).sha256))}),
     );
     let message = format!("{header}.{claims}");
     let signature: G1Signature = proof_key.sign(message.as_bytes());
     let proof = format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes())).into_bytes();
     [token, proof, SESSION_ROOT.to_vec()]
+}
+#[test]
+fn renewed_session_requires_the_same_signed_device_and_dpop_key() {
+    let selection = BaseFixture::new().load().unwrap();
+    for android in [true, false] {
+        let originals = session_originals(android);
+        let current = selection
+            .enrollment_session(android, originals.each_ref().map(Vec::as_slice))
+            .unwrap();
+        let renewed =
+            session_originals_for(android, 31, "00000000-0000-4000-8000-000000000001", 1600);
+        let renewed = selection
+            .enrollment_session(android, renewed.each_ref().map(Vec::as_slice))
+            .unwrap();
+        current.require_renewal_identity(&renewed).unwrap();
+        assert_eq!(renewed.config.session_expires_at_ms, 1_661_000);
+        for (seed, device) in [
+            (32, "00000000-0000-4000-8000-000000000001"),
+            (31, "00000000-0000-4000-8000-000000000003"),
+        ] {
+            let foreign = session_originals_for(android, seed, device, 1600);
+            let foreign = selection
+                .enrollment_session(android, foreign.each_ref().map(Vec::as_slice))
+                .unwrap();
+            // These are individually valid signed sessions, not malformed DATA.
+            assert!(current.require_renewal_identity(&foreign).is_err());
+        }
+    }
 }
 #[test]
 fn enrolled_session_requires_signed_fi_token_bound_proof_and_exact_root() {

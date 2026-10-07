@@ -29,14 +29,14 @@ pub struct KagemushaEnrollmentIssuer {
 /// Exact canonical originals and runtime routing for a provider-selected application.
 #[derive(Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct KagemushaEnrollmentProvider {
-    /// Complete canonical eligibility-policy frame, lowercase hex; unsigned selected DATA.
-    pub eligibility_hex: String,
+    /// Complete canonical eligibility-template frame, lowercase hex; unsigned selected DATA.
+    pub eligibility_template_hex: String,
     /// Complete canonical Scheme frame, lowercase hex.
     pub scheme_hex: String,
     /// Complete canonical app-policy frame, lowercase hex.
     pub app_hex: String,
-    /// Complete canonical enrollment-policy frame, lowercase hex.
-    pub enrollment_hex: String,
+    /// Complete canonical enrollment-template frame, lowercase hex.
+    pub enrollment_template_hex: String,
     /// Complete canonical rooted Enrollment certificate frame, lowercase hex.
     pub certificate_hex: String,
     /// Exact nonzero approved manifest identity, lowercase hex.
@@ -128,8 +128,8 @@ fn endpoint(text: &str) -> Result<url::Url, &'static str> {
 
 impl KagemushaEnrollmentProvider {
     fn checked(self) -> Result<actual::KagemushaEnrollmentProvider, &'static str> {
-        let eligibility = KagemushaEligibilityPolicyV1::decode_canonical(&bounded_hex(
-            &self.eligibility_hex,
+        let eligibility = KagemushaEligibilityPolicyTemplateV1::decode_canonical(&bounded_hex(
+            &self.eligibility_template_hex,
             KAGEMUSHA_ELIGIBILITY_MAX_BYTES_V1,
         )?)
         .map_err(|_| "invalid eligibility original")?;
@@ -146,9 +146,9 @@ impl KagemushaEnrollmentProvider {
             &eligibility.scheme_id,
         )
         .map_err(|_| "invalid selected app original")?;
-        let enrollment = KagemushaWalletEnrollmentPolicyV1::decode_canonical(
+        let enrollment = KagemushaWalletEnrollmentPolicyTemplateV1::decode_canonical(
             &bounded_hex(
-                &self.enrollment_hex,
+                &self.enrollment_template_hex,
                 KAGEMUSHA_WALLET_ENROLLMENT_POLICY_MAX_BYTES_V1,
             )?,
             &eligibility.scheme_id,
@@ -157,10 +157,8 @@ impl KagemushaEnrollmentProvider {
         enrollment
             .validate_for_app(&app)
             .map_err(|_| "app/enrollment selection differs")?;
-        if scheme.network_id != eligibility.network_id
-            || enrollment.asset_digest != eligibility.asset_digest
-        {
-            return Err("eligibility network or asset differs from selected originals");
+        if scheme.network_id != eligibility.network_id {
+            return Err("eligibility network differs from selected originals");
         }
         let certificate = KagemushaWalletSignerCertificateV1::decode_canonical(
             &bounded_hex(
@@ -214,14 +212,13 @@ impl KagemushaEnrollmentIssuer {
             let key = (
                 provider.eligibility.authority.scope_digest(),
                 provider.eligibility.scheme_id,
-                provider.eligibility.asset_digest,
                 provider
                     .app
                     .policy_digest()
                     .map_err(|_| "invalid app identity")?,
             );
             if !keys.insert(key) {
-                return Err("duplicate provider/scheme/asset/app route");
+                return Err("duplicate provider/scheme/app route");
             }
             providers.push(provider);
         }

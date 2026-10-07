@@ -19,6 +19,13 @@ enum Store {
 #[derive(Clone)]
 pub(super) struct CatalogOriginals {
     _selected: Arc<Selection>,
+    source: CatalogReader,
+}
+
+/// Original DATA routing only. The enclosing owner retains the independently authenticated
+/// selection; this reader cannot authenticate an inventory or qualify a wallet source.
+#[derive(Clone)]
+struct CatalogReader {
     metadata: Arc<PrivateDirectory>,
     wallet: Arc<DirectoryOriginalsV1>,
     finality: Arc<DirectoryOriginalsV1>,
@@ -95,6 +102,20 @@ impl CatalogOriginals {
             return Err(Failure::code(INVALID));
         }
         require_transport(inventory, &transport)?;
+        let source = CatalogReader::load(metadata, root, inventory)?;
+        Ok(Self {
+            _selected: selected,
+            source,
+        })
+    }
+}
+
+impl CatalogReader {
+    fn load(
+        metadata: PrivateDirectory,
+        root: &Path,
+        inventory: &ProducerInventoryV1,
+    ) -> Result<Self> {
         // The exact current financial roles are the only source directories. This
         // method creates no files and replaces no authority or old missing original.
         let wallet = DirectoryOriginalsV1::open_existing(
@@ -107,9 +128,9 @@ impl CatalogOriginals {
             PROVING_KEY_MAX_BYTES_V1,
         )
         .map_err(storage)?;
-        // Reauthenticate every whole offered original, including server finality PK
-        // tables transported as DATA. The native finality verifier imports only D/VK;
-        // this bounded pass establishes that the offered closed carrier is complete.
+        // Reauthenticate every whole offered original. The current wallet source graph
+        // mounts the complete finality producer as well as its verifier, so its original
+        // PK tables are required. Bounded streams keep this pass independent of PK size.
         for record in &inventory.originals {
             for blob in [record.descriptor, record.verifying_key, record.proving_key] {
                 wallet.verify_original(blob).map_err(storage)?;
@@ -132,9 +153,9 @@ impl CatalogOriginals {
             }
         }
         for record in &inventory.finality.originals {
-            // Finality's native wallet graph mounts only the descriptor/VK source; it
-            // never imports server receipt prover tables or stores those tables in RAM.
-            for i in 0..2 {
+            // QualifiedFinalityProducerV1 mounts each exact descriptor/VK/PK triple.
+            // Select all three addresses without retaining their table bytes in this owner.
+            for i in 0..3 {
                 insert(
                     &mut roles,
                     BlobV1 {
@@ -147,7 +168,6 @@ impl CatalogOriginals {
         }
         metadata.revalidate().map_err(storage)?;
         Ok(Self {
-            _selected: selected,
             metadata: Arc::new(metadata),
             wallet: Arc::new(wallet),
             finality: Arc::new(finality),
@@ -156,6 +176,11 @@ impl CatalogOriginals {
     }
 }
 impl OriginalSourceV1 for CatalogOriginals {
+    fn open(&mut self, sha256: [u8; 32]) -> std::result::Result<Box<dyn Read + '_>, OriginalError> {
+        self.source.open(sha256)
+    }
+}
+impl OriginalSourceV1 for CatalogReader {
     fn open(&mut self, sha256: [u8; 32]) -> std::result::Result<Box<dyn Read + '_>, OriginalError> {
         self.metadata
             .revalidate()

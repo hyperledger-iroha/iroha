@@ -47,7 +47,7 @@ from .wallet_enrollment_store import E1CounterStore
 
 SCHEMA = "iroha.kagemusha.wallet-e1-verifier.v1"
 CONFIG_SCHEMA = "iroha.kagemusha.wallet-e1-verifier-config.v1"
-PREPARATION_SCHEMA = "bpng.wallet-e1-worker-preparation.v1"
+PREPARATION_SCHEMA = "iroha.kagemusha.wallet-e1-worker-preparation.v1"
 MAX_PACKET = 768 * 1024
 MAX_REQUEST = 320 * 1024
 MAX_ORIGINAL = 360 * 1024

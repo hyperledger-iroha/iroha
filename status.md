@@ -398,7 +398,11 @@ passes.
   qualification remains open. The configured HTTPS provider, Enrollment signer,
   private worker and Torii route compile; concrete serving runtime and Linux
   worker launch still require qualification. Enrollment admits configured bank or asset/scheme-authorized
-  operator providers; Parliament is optional, with no special protocol role.
+  operator providers. Every universal-dataspace token is eligible: no Parliament
+  approval, named-token allowlist or legal asset-class gate. Exact asset authorization,
+  reserve backing and applicable controls remain required.
+  Installed CBSI/BPNG profiles still select one fixed asset; authenticated universal
+  asset selection through the installed SDK remains to be implemented and qualified.
   Bank-required policies retain bank KYC/freeze checks and never fall back after
   a bank failure. The generic provider wire/SDK migration passes Rust and JVM
   component checks; current configuration and route-catalog tests pass. Serving

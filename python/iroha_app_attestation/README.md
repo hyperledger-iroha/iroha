@@ -11,10 +11,10 @@ result records what the platform attested. The caller selects every scope value
 (challenge, release, profile, lane, app identity and roots) from its own
 authenticated policy, never from the evidence, and composes the separate checks
 below itself. The credential issuer and the enrollment and renewal routes of the
-wallet design (`specs/kagemusha_single_design_proposal.md` §2.2) are not
-implemented as a serving issuer in this package yet. `wallet_enrollment.py` now composes
-the retained real verifiers for current E1 enrollment; Native signing/HTTP/DATA ownership
-and the deployed private worker remain required before issuance is enabled.
+wallet design (`specs/kagemusha_single_design_proposal.md` §2.2) are owned by the
+native Core/Torii enrollment service. `wallet_enrollment.py` composes
+the retained real verifiers for current E1 enrollment; this package does not expose
+an issuer or signer. The complete private Linux deployment still requires qualification.
 
 ## Current E1 entry points
 
@@ -56,7 +56,7 @@ Once claimed, an unknown result stays `outcome_unknown`; no action repeats exter
 verification. Inspect reads an exact retained result without claiming a prepared row,
 even while E1 is live. An unclaimed Inspect returns `unavailable`; an already claimed row
 without a result returns `outcome_unknown`. The issuer uses Inspect for passive recovery
-after E1 expiry and requires fresh bank eligibility before any live Complete/Recover that
+after E1 expiry and requires fresh selected-provider eligibility before any live Complete/Recover that
 could claim a row. Missing prepared custody remains `unavailable`, never a definitive
 evidence rejection or permission to recreate a row. Native prohibits Prepare after E5
 selection, including during recovery.
@@ -67,21 +67,27 @@ original and storage identities are rechecked before exposure. These components 
 enable issuance: the genuine Native issuer, audited DATA and authenticated installed runtime
 must admit and retain every original.
 
-The worker opens only an already initialized E1 journal. Its separate installation operation
-`E1CounterStore.initialize` exclusively creates a durable generation original before creating
+The worker opens only an already initialized E1 journal. The separate installed command
+`iroha-wallet-e1-store-init --store-directory /absolute/private/empty/directory`
+(also `python -m iroha_app_attestation.wallet_enrollment_install`) invokes the sole
+`E1CounterStore.initialize` implementation. It requires an existing, empty, canonical,
+service-owned private directory and holds its descriptor throughout initialization.
+It never creates directories, follows aliases, replaces an existing store, or repairs a
+failed installation. The implementation exclusively creates a durable generation original before creating
 the database, and binds that generation in the database's exact first-release schema. Serving
 startup never initializes missing files or repairs missing tables. Database, generation or
 schema loss remains unavailable; interrupted initialization retains its originals for explicit
 operator reconciliation. SQLite connections use existing-only `mode=rw`, so a missing database
 between the custody check and open cannot become an empty replacement. Held descriptor/path
 checks reject substitution, and the counter/attempt tables and journal generation retain their original contents
-across restart. These checks do not detect privileged rollback of the entire store. Native
-installation/runtime admission and service dispatch still require integration.
+across restart. These checks do not detect privileged rollback of the entire store.
+The native Torii owner selects and rechecks the configured originals and retains the
+worker generation lock; complete Linux launch and real platform qualification remain open.
 
 `tools/build_wallet_e1_verifier_zipapp.py` packages an explicit current source inventory,
 including `wallet_policy.py`, into deterministic unsigned bytes. It does not authenticate a
-runtime. The private Linux owner uses OAuth13, archive15, Python16, protected directory17,
-configuration20 and OpenSSL21; requests and replies are length-framed on private standard
+runtime. The private Linux owner uses OAuth13, generation lock16, protected directory17,
+Python18, archive19, configuration20 and OpenSSL21; requests and replies are length-framed on private standard
 input/output with schema `iroha.kagemusha.wallet-e1-verifier.v1`. It has no listener or
 issuer-key input. The separate existing Ed25519 account ownership message remains Native's.
 
@@ -104,8 +110,11 @@ locations. It retains the exact configuration and derives subsequent requests un
 same policy/configuration pin. Construction checks consistency only; the process owner
 must still authenticate operator approval, installed runtime and descriptor custody.
 The separate governed Google decoder original has its own pin and the same selected app.
-OAuth accepts only the inherited Root-owned credential original and preserves the actual
-loaded OpenSSL/TLS custody checks. Enrollment-time Google verification creates no offline
+OAuth accepts only the inherited credential original owned by the effective service UID,
+matching native private-file admission, and preserves the actual loaded OpenSSL/TLS
+custody checks. Configured executable/archive pins do not attest the complete dependency
+closure: the OS, interpreter, standard library, dynamic loader and TLS roots remain trusted.
+Enrollment-time Google verification creates no offline
 payment prerequisite or periodic Integrity lease.
 
 ## Modules

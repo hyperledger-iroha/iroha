@@ -325,6 +325,83 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         }
         Ok(slot)
     }
+    /// Prove only E5/E6 absence for an interrupted, still-begun pre-E2/E3 selection.
+    /// Unknown key/storage answers remain errors; this never grants another key effect.
+    pub(super) fn require_unissued_prekey(&mut self, intent_only: bool) -> Result<(), Error> {
+        let Some(Pending::Dispatch { dispatch, .. }) = &self.pending else {
+            return Err(Error::Phase);
+        };
+        let dispatch = dispatch.clone();
+        let (scope, selected) = self.selected.clone().ok_or(Error::Phase)?;
+        let client = self
+            .provider
+            .prekey_read(&dispatch.request_id, PreKeyRecordV1::Client)?
+            .ok_or(Error::Original("selected pre-key client lost"))?;
+        let initial = PreKeyDispatchV1::decode(&client).map_err(Error::Original)?;
+        if initial.purpose != KagemushaEnrollmentPermitPurposeV1::Fresh
+            || initial.previous_permit.is_some()
+            || initial.stable_selection().map_err(Error::Original)?
+                != dispatch.stable_selection().map_err(Error::Original)?
+        {
+            return Err(Error::Original("pre-key request changed originals"));
+        }
+        let accepted = self
+            .provider
+            .prekey_read(&dispatch.request_id, PreKeyRecordV1::Accepted)?
+            .ok_or(Error::Original("selected pre-key permit lost"))?;
+        let slot = self
+            .provider
+            .prekey_read(&dispatch.request_id, PreKeyRecordV1::Slot)?
+            .ok_or(Error::Original("selected pre-key slot lost"))?;
+        if dispatch.previous_permit.as_deref() != Some(accepted.as_slice())
+            || self.decode_slot(&dispatch, &accepted, &slot)?.slot != selected.0
+        {
+            return Err(Error::Original("pre-key retained selection changed"));
+        }
+        let intent = self.provider.read_intent(&selected)?;
+        match &intent {
+            Some(intent)
+                if intent_only
+                    && intent.challenge == scope.challenge
+                    && intent.dates == scope.dates => {}
+            None if !intent_only => {}
+            _ => return Err(Error::Original("selected enrollment intent")),
+        }
+        if self.provider.enrollment_record(&selected)?.is_some()
+            || self.provider.credential(&selected, 0)?.is_some()
+        {
+            return Err(Error::Original(
+                "pre-key enrollment original without marker",
+            ));
+        }
+        // Each pre-key read brackets protected-storage availability. Reconciliation
+        // again catches changed marker/journal/key custody after the negative reads.
+        if self
+            .provider
+            .prekey_read(&dispatch.request_id, PreKeyRecordV1::Client)?
+            .as_deref()
+            != Some(client.as_slice())
+            || self
+                .provider
+                .prekey_read(&dispatch.request_id, PreKeyRecordV1::Accepted)?
+                .as_deref()
+                != Some(accepted.as_slice())
+            || self
+                .provider
+                .prekey_read(&dispatch.request_id, PreKeyRecordV1::Slot)?
+                .as_deref()
+                != Some(slot.as_slice())
+            || self.provider.read_intent(&selected)? != intent
+            || !matches!(
+                (self.provider.status(&selected)?, intent_only),
+                (KagemushaWalletSlotStatusV1::Empty, false)
+                    | (KagemushaWalletSlotStatusV1::IntentOnly, true)
+            )
+        {
+            return Err(Error::Original("pre-key retained selection changed"));
+        }
+        Ok(())
+    }
     /// Consume exact account authorization and recheck the permit at actual key generation.
     pub fn authorize(&mut self, signature: &[u8]) -> Result<EnrollmentProgressV1, Error> {
         let retained = self.pending.clone();

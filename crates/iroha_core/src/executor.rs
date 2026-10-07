@@ -5791,6 +5791,7 @@ impl Executor {
         skip_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
         state_transaction.current_direct_kagemusha_load_instruction_index = None;
+        state_transaction.current_direct_amx_instruction_index = None;
         if require_gas_limit && gas_limit_md.is_none() {
             return Err(ValidationFail::NotPermitted(
                 "missing gas limit in fee payment intent".to_owned(),
@@ -6106,6 +6107,14 @@ impl Executor {
                     state_transaction.current_direct_kagemusha_load_instruction_index =
                         (contract_runtime_context.is_none() && entrypoint_authorization.is_none())
                             .then_some(index);
+                    state_transaction.current_direct_amx_instruction_index =
+                        (contract_runtime_context.is_none()
+                            && entrypoint_authorization.is_none()
+                            && isi
+                                .as_any()
+                                .downcast_ref::<iroha_data_model::isi::sumeragi_amx::PrepareAmxV1>()
+                                .is_some())
+                        .then_some(index);
                     let result = self.execute_instruction_with_contract_runtime_context(
                         state_transaction,
                         authority,
@@ -6113,6 +6122,7 @@ impl Executor {
                         contract_runtime_context,
                     );
                     state_transaction.current_direct_kagemusha_load_instruction_index = None;
+                    state_transaction.current_direct_amx_instruction_index = None;
                     state_transaction.current_direct_stream_token_instruction_index = None;
                     state_transaction.current_direct_stream_token_gateway_instruction_index = None;
                     state_transaction.current_direct_stream_token_reputation_payload = None;
@@ -6257,6 +6267,7 @@ impl Executor {
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
         // A contract frame cannot inherit a native instruction's signed ordinal.
         state_transaction.current_direct_kagemusha_load_instruction_index = None;
+        state_transaction.current_direct_amx_instruction_index = None;
         state_transaction.current_direct_stream_token_gateway_instruction_index = None;
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;
@@ -6286,6 +6297,7 @@ impl Executor {
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
         // A contract frame cannot inherit a native instruction's signed ordinal.
         state_transaction.current_direct_kagemusha_load_instruction_index = None;
+        state_transaction.current_direct_amx_instruction_index = None;
         state_transaction.current_direct_stream_token_gateway_instruction_index = None;
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;

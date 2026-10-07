@@ -26,13 +26,14 @@ pub trait EnrollmentIssuerRuntimeV1 {
     ) -> Result<AccountId>;
     /// Actual UTC clock observation; failures and rollback abort the operation.
     fn now_ms(&mut self) -> Result<u64>;
-    /// Exchange one bounded canonical eligibility request through this exact configured HTTPS
+    /// Derive the exact asset policy from the selected template, then exchange one canonical eligibility request through this configured HTTPS
     /// endpoint and private credential. Disable redirects and cap the response before allocation.
     /// The selected provider independently verifies the account/actor/customer relationship and
     /// current eligibility. Configured routing and request DATA alone must never grant approval.
     fn observe_eligibility(
         &mut self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
         request: &[u8],
         timeout: std::time::Duration,
     ) -> Result<Vec<u8>>;
@@ -40,6 +41,7 @@ pub trait EnrollmentIssuerRuntimeV1 {
     fn worker_configuration(
         &mut self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
     ) -> Result<VerifierConfigurationV1>;
     /// Exchange an exact framed packet on that configuration's admitted private worker channel.
     /// Missing worker custody is unavailable; fabricated protocol-shaped replies are forbidden.

@@ -161,7 +161,18 @@ impl Process {
             (duplicate(owner.generation.file.file())?, 16),
             (duplicate(owner.python.file.file())?, 18),
             (duplicate(owner.archive.file.file())?, 19),
-            (duplicate(owner.configuration.file.file())?, 20),
+            (
+                duplicate(
+                    owner
+                        .configuration
+                        .as_ref()
+                        .ok_or(Error::Selection)?
+                        .0
+                        .file
+                        .file(),
+                )?,
+                20,
+            ),
             (duplicate(owner.openssl.file.file())?, 21),
         ];
         if let Some(oauth) = &owner.oauth {

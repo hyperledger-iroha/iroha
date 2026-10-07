@@ -12,6 +12,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation, PipelineTransactionStatus};
+use norito::json;
 use std::{cell::Cell, time::Duration};
 
 fn fixture(message: &str) -> (Config, SignedTransaction, PreparedOperation) {

@@ -772,6 +772,15 @@ CORE_MUTATIONS = [
     m("HC149", "native AMX leg decode: substitute a foreign pool for the actual execution owner",
       ["sumeragi::amx::native::tests::native_leg_decode_refuses_occupied_original_pool_before_any_copy_and_retries_exact_source"]),
 
+    m("HC150", "native AMX Worker retry: retire the completed original leg and decoder controls",
+      ["sumeragi::executor::amx_retry_tests::original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry"]),
+
+    m("HC151", "native AMX Worker retry: accept a physically replaced original SignedBlock graph",
+      ["sumeragi::executor::amx_retry_tests::completed_amx_worker_bank_refuses_replaced_source_parent_and_foreign_pool"]),
+
+    m("HC152", "native AMX Worker retry: collapse distinct equal Prepare instruction occurrences",
+      ["sumeragi::executor::amx_retry_tests::completed_amx_worker_bank_preserves_equal_occurrences_and_metadata_refusal"]),
+
 
 ]
 

@@ -37,7 +37,7 @@ struct KagemushaWalletEnrollmentInputV1 {
     case 4: bounds = [32,65536,4096]
     case 6: bounds = [KagemushaWalletEnrollmentV1.RESULT_MAX_BYTES,0,0]
     case 9: bounds = [KagemushaWalletEnrollmentV1.PERMIT_MAX_BYTES,0,0]
-    case 11: bounds = [16_384,4096,16_384]
+    case 11,19: bounds = [16_384,4096,16_384]
     case 12: bounds = [KagemushaWalletEnrollmentV1.RESULT_MAX_BYTES,4096,0]
     case 13,16,17,18: bounds = [0,0,0]
     case 14: bounds = [1,0,0]
@@ -110,7 +110,7 @@ public final class KagemushaWalletEnrollmentV1: KagemushaWalletCleanupResourceV1
     case 9: expected = [18]
     case 10: expected = [28]
     case 13: expected = [38]
-    case 14,15,17: expected = [39]
+    case 14,15,17,19: expected = [39]
     case 16: expected = [20,24]
     case 18: expected = [20,25]
     default: expected = []
@@ -142,7 +142,21 @@ public final class KagemushaWalletEnrollmentV1: KagemushaWalletCleanupResourceV1
   public func begin(requestID: Data, account: Data) throws -> Data {
     lock.lock(); defer { lock.unlock() }
     guard requestID.count == 32 else { throw KagemushaWalletErrorV1.invalidInput }
+    guard !appleCollectionActive else { throw KagemushaWalletErrorV1.closed }
+    // Keep a vendor return in the original selected slot before Native clears its
+    // per-dispatch account challenge. A failed publication preserves this owner.
+    try flushAppleReturned()
     return try exact(KagemushaWalletEnrollmentInputV1(0,requestID,account,assetScopeOriginal),27)
+  }
+  /// Reauthenticate a renewed FI session on this same provider and hardware owner.
+  /// Native keeps the original attempt/permit dates and returned evidence. Begin the
+  /// same request ID again before seeking a fresh signed permit or collecting effects.
+  public func renewSession(session: KagemushaWalletEnrollmentSessionOriginalsV1) throws {
+    lock.lock(); defer { lock.unlock() }
+    guard !appleCollectionActive else { throw KagemushaWalletErrorV1.closed }
+    try flushAppleReturned()
+    let values = session.originals
+    _ = try exact(KagemushaWalletEnrollmentInputV1(19,values[0],values[1],values[2]),39)
   }
   /// Authenticate the signed issuer permit before returning the existing-account challenge.
   public func acceptPermit(originalPermit: Data) throws -> Data {

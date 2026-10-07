@@ -46,6 +46,9 @@ use iroha_plonk_gadgets::{
 };
 use scalar::{Arithmetic, Scalar};
 
+/// Simultaneously borrowed integer and framed-hash lanes of one verifier.
+type IntegerHasherLanes<'a, F> = (UintChip<'a, F>, &'a mut DuplexChip<F>);
+
 #[cfg(test)]
 mod split_cache_tests;
 
@@ -454,9 +457,7 @@ impl<C: PastaCurve> VerifierChip<C> {
     /// This is for byte-linked source components, not transcript replacement.
     /// # Errors
     /// The duplex lane is temporarily owned by a verifier operation.
-    pub fn uint_and_hasher(
-        &mut self,
-    ) -> Result<(UintChip<'_, C::Base>, &mut DuplexChip<C::Base>), Error> {
+    pub fn uint_and_hasher(&mut self) -> Result<IntegerHasherLanes<'_, C::Base>, Error> {
         let duplex = self.duplex.as_mut().ok_or(Error::Synthesis)?;
         if !duplex.is_clear() || duplex.buffered() != 0 {
             return Err(Error::Synthesis);

@@ -12,6 +12,7 @@ use iroha_core_zk::kagemusha_wallet_enrollment_v1::issuer_worker::{
     GoogleDecoderOriginalV1, VerifierConfigurationV1, VerifierExchangeV1,
     VerifierRuntimeSelectionV1,
 };
+use iroha_data_model::kagemusha::KagemushaWalletAssetScopeV1;
 use iroha_fs::{FileSnapshot, PrivateDirectory, RetainedFile};
 use sha2::{Digest as _, Sha256};
 use std::{io, path::Path};
@@ -83,8 +84,7 @@ pub(super) struct PrivateVerifier {
     oauth: Option<Original>,
     directory: PrivateDirectory,
     generation: Original,
-    configuration: Original,
-    configuration_digest: [u8; 32],
+    configuration: Option<(Original, [u8; 32])>,
     #[cfg(unix)]
     process: Option<process::Process>,
 }
@@ -151,28 +151,6 @@ impl PrivateVerifier {
             .file()
             .try_lock()
             .map_err(|_| Error::Unavailable)?;
-        let config = derive_configuration(
-            provider,
-            &root_bytes,
-            google.as_ref().map(|(_, bytes)| bytes.as_slice()),
-        )?;
-        let name = format!("native-config-{}.json", hex::encode(config.digest()));
-        match directory
-            .read_optional(&name, 128 * 1024)
-            .map_err(|_| Error::Unavailable)?
-        {
-            Some(original) if original.as_slice() == config.original() => (),
-            Some(_) => return Err(Error::Selection),
-            None => directory
-                .write_atomic(&name, config.original(), iroha_fs::PublishMode::CreateNew)
-                .map_err(|_| Error::Unavailable)?,
-        }
-        let (configuration, _) = Original::open(
-            &selected.store_directory.join(name),
-            true,
-            128 * 1024,
-            Some(config.digest()),
-        )?;
         let owner = Self {
             selected: provider.clone(),
             python,
@@ -184,8 +162,7 @@ impl PrivateVerifier {
             oauth,
             directory,
             generation,
-            configuration,
-            configuration_digest: config.digest(),
+            configuration: None,
             #[cfg(unix)]
             process: None,
         };
@@ -205,8 +182,10 @@ impl PrivateVerifier {
             &self.openssl,
             &self.root,
             &self.generation,
-            &self.configuration,
         ] {
+            original.revalidate()?;
+        }
+        if let Some((original, _)) = &self.configuration {
             original.revalidate()?;
         }
         if let Some((original, _)) = &self.google {
@@ -218,17 +197,47 @@ impl PrivateVerifier {
         Ok(())
     }
     pub(super) fn configuration(
-        &self,
+        &mut self,
         provider: &KagemushaEnrollmentProvider,
+        asset: &KagemushaWalletAssetScopeV1,
     ) -> Result<VerifierConfigurationV1> {
         self.revalidate(provider)?;
         let config = derive_configuration(
             provider,
+            asset,
             &self.root_bytes,
             self.google.as_ref().map(|(_, bytes)| bytes.as_slice()),
         )?;
-        if config.digest() != self.configuration_digest {
-            return Err(Error::Selection);
+        if self
+            .configuration
+            .as_ref()
+            .is_none_or(|(_, digest)| *digest != config.digest())
+        {
+            // The sole issuer thread serializes all calls. Join the old exact child before
+            // replacing its configuration, while retaining the same generation lock/store.
+            #[cfg(unix)]
+            drop(self.process.take());
+            self.configuration = None;
+            let name = format!("native-config-{}.json", hex::encode(config.digest()));
+            match self
+                .directory
+                .read_optional(&name, 128 * 1024)
+                .map_err(|_| Error::Unavailable)?
+            {
+                Some(original) if original.as_slice() == config.original() => (),
+                Some(_) => return Err(Error::Selection),
+                None => self
+                    .directory
+                    .write_atomic(&name, config.original(), iroha_fs::PublishMode::CreateNew)
+                    .map_err(|_| Error::Unavailable)?,
+            }
+            let (original, _) = Original::open(
+                &provider.worker.store_directory.join(name),
+                true,
+                128 * 1024,
+                Some(config.digest()),
+            )?;
+            self.configuration = Some((original, config.digest()));
         }
         self.revalidate(provider)?;
         Ok(config)
@@ -244,7 +253,10 @@ impl PrivateVerifier {
             drop(self.process.take());
             return Err(error);
         }
-        if configuration.digest() != self.configuration_digest
+        if self
+            .configuration
+            .as_ref()
+            .is_none_or(|(_, digest)| configuration.digest() != *digest)
             || exchange.frame().len() > MAX_FRAME + 4
         {
             return Err(Error::Selection);
@@ -286,13 +298,17 @@ impl Drop for PrivateVerifier {
 }
 fn derive_configuration(
     provider: &KagemushaEnrollmentProvider,
+    asset: &KagemushaWalletAssetScopeV1,
     root: &[u8],
     google: Option<&[u8]>,
 ) -> Result<VerifierConfigurationV1> {
     let worker = &provider.worker;
     VerifierConfigurationV1::from_selected(
         &provider.app,
-        &provider.enrollment,
+        &provider
+            .enrollment
+            .for_asset(asset)
+            .map_err(|_| Error::Selection)?,
         root,
         google
             .zip(worker.google.as_ref())

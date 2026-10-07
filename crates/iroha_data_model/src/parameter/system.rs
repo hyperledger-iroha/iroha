@@ -1229,6 +1229,21 @@ impl JsonDeserialize for SumeragiConsensusMode {
 }
 // (Codecs are provided by derives and candidate decoders. Tests use wrappers where needed.)
 impl SumeragiParameters {
+    /// Maximum canonical block size in bytes.
+    #[must_use]
+    pub fn max_block_bytes(&self) -> NonZeroU32 {
+        self.max_block_bytes
+    }
+    /// Execution time budget in milliseconds.
+    #[must_use]
+    pub fn exec_budget_ms(&self) -> NonZeroU64 {
+        self.exec_budget_ms
+    }
+    /// Apply time budget in milliseconds.
+    #[must_use]
+    pub fn apply_budget_ms(&self) -> NonZeroU64 {
+        self.apply_budget_ms
+    }
     /// Signed, immutable block cadence in milliseconds.
     #[must_use]
     pub fn block_cadence_ms(&self) -> NonZeroU64 {

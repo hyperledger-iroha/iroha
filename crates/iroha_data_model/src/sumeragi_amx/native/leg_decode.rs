@@ -2,10 +2,10 @@
 //!
 //! Each concrete allocation is admitted where canonical traversal reaches it.
 //! There is no whole-frame preview, quota reset or unfunded token bank. Original
-//! input, diagnostic Strings and Worker retry handoff remain enclosing-owner
-//! obligations. This owner prepays the actual canonical counter controls and graph.
-//! TODO: retain prepared backing through the actual Worker retry owner and fund
-//! existing diagnostic Strings without changing their canonical error ordering.
+//! input and diagnostic Strings remain enclosing-owner obligations. The completed
+//! owner keeps the actual canonical counter controls and graph for a Worker borrow.
+//! TODO: resume partially decoded backing and fund existing diagnostic Strings
+//! without changing their canonical error ordering.
 
 use super::AmxTransferLegV1;
 use crate::{
@@ -137,6 +137,45 @@ impl AllocatedAmxTransferLegV1 {
     }
 }
 
+/// A completed canonical attempt with its original physical counter controls.
+///
+/// The graph is declared first so its actual nested values and ledgers retire
+/// before the workspace refunds either counter control. No extraction, clone,
+/// replacement or re-entry API separates these owners.
+pub struct CompletedAmxTransferLegDecodeV1 {
+    leg: AllocatedAmxTransferLegV1,
+    workspace: PreparedDecodeWorkspace,
+}
+impl fmt::Debug for CompletedAmxTransferLegDecodeV1 {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        output
+            .debug_tuple("CompletedAmxTransferLegDecodeV1")
+            .field(self.canonical())
+            .finish()
+    }
+}
+impl CompletedAmxTransferLegDecodeV1 {
+    /// Borrow the same completed canonical graph without decoder work.
+    #[must_use]
+    pub fn canonical(&self) -> &AmxTransferLegV1 {
+        self.leg.canonical()
+    }
+    /// Require all graph and workspace allocations to retain this original pool.
+    #[must_use]
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.leg.belongs_to(budget) && self.workspace.belongs_to(budget)
+    }
+    /// Exact retained graph and physical counter layouts, without retired scratch.
+    #[must_use]
+    pub fn allocation_bytes(&self) -> Option<usize> {
+        PreparedDecodeWorkspace::allocation_layouts()
+            .iter()
+            .try_fold(self.leg.allocation_bytes()?, |sum, layout| {
+                sum.checked_add(layout.size())
+            })
+    }
+}
+
 enum ControllerCustody {
     Single(AllocationCharge),
     Multisig {
@@ -218,6 +257,19 @@ impl<'source> PendingAmxTransferLegDecodeV1<'source> {
     /// Preserves parser, original-pool release and allocator causes. Existing
     /// `Error::Message` diagnostic Strings remain separately unfunded storage.
     pub fn try_decode(&self) -> Result<AllocatedAmxTransferLegV1, Error> {
+        let CompletedAmxTransferLegDecodeV1 { leg, workspace: _ } = self.try_decode_retained()?;
+        Ok(leg)
+    }
+
+    /// Decode once and keep the actual canonical controls with the completed graph.
+    ///
+    /// This move-only completion can survive an enclosing execution refusal. Borrowing
+    /// it does not enter another decoder scope, reset quotas or grant execution authority.
+    /// Failed partial destinations still retire normally; their resume is not implemented.
+    ///
+    /// # Errors
+    /// Preserves the same original parser, pool and allocator causes as `try_decode`.
+    pub fn try_decode_retained(&self) -> Result<CompletedAmxTransferLegDecodeV1, Error> {
         if self.source.is_empty() || self.source.len() > MAX_RESULT_PREIMAGE_BYTES {
             return Err(Error::Record(
                 "native AMX transfer payload exceeds its canonical bound",
@@ -242,7 +294,8 @@ impl<'source> PendingAmxTransferLegDecodeV1<'source> {
                 PreparedDecodeError::Destination(error) => error,
                 PreparedDecodeError::Scope(error) => Error::Scope(error),
             })?;
-        destination.finish()
+        let leg = destination.finish()?;
+        Ok(CompletedAmxTransferLegDecodeV1 { leg, workspace })
     }
 }
 

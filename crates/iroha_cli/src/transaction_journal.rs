@@ -24,7 +24,7 @@ use iroha_torii_shared::{
     FeeQuoteResponse, PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
 };
 use iroha_version::codec::DecodeVersioned as _;
-use norito::json::{self, JsonDeserialize, JsonSerialize};
+use norito::json::{JsonDeserialize, JsonSerialize};
 use std::{
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},

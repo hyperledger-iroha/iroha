@@ -20,6 +20,9 @@ pub(super) use native_edge::{
 #[path = "taira_public_reset_host_phases.rs"]
 mod phases;
 
+#[path = "taira_validator_config_retirement.rs"]
+pub(crate) mod config_retirement;
+
 #[path = "taira_stopped_owner_maintenance.rs"]
 pub(crate) mod maintenance;
 #[path = "taira_public_reset_stopped_runtime.rs"]

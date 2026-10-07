@@ -18,9 +18,9 @@ use super::{
 };
 
 /// A retained existing private directory of immutable content-addressed originals.
-/// Wallet source directories contain descriptor/VK/PK bytes; wallet finality
-/// directories contain only the exact descriptor/VK graph. Signed server PK
-/// hashes remain in the catalog and do not require server tables on a wallet.
+/// Wallet and finality producer directories contain exact descriptor/VK/PK bytes.
+/// The authenticated inventory selects the required roles; verifier-only consumers
+/// may read descriptor/VK originals without granting a complete producer graph.
 /// Every read retains actual no-follow native ancestry and a sealed original file.
 /// Opening never creates, hardens, cleans or replaces an existing directory/file.
 pub struct DirectoryOriginalsV1 {

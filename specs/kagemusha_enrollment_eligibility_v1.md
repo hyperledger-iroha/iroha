@@ -1,7 +1,10 @@
 # Enrollment eligibility authority and middleware contract
 
-Any compatible fungible token can opt into KAGEMUSHA through its authorized asset/scheme
-operator. Bank-required enrollment uses the user's bank middleware for current KYC approval
+Every token on the universal dataspace is eligible for KAGEMUSHA offline payments through
+its authorized asset/scheme setup. Universal balances use `AssetBalanceScope::Global`, routed
+to `DataSpaceId::UNIVERSAL`; no named-token allowlist, Parliament approval or legal asset-class
+arm may restrict that path. Exact asset identity, scale, reserve backing and applicable
+transfer controls remain enforced. Bank-required enrollment uses the user's bank middleware for current KYC approval
 and freeze status. Other schemes may use their issuer or another authorized operator. SORA
 Parliament is one optional provider for tokens it governs, not a protocol prerequisite.
 Explicit public-enrollment policy is permitted; missing or unavailable bank data never selects
@@ -18,11 +21,14 @@ no keys and neither stores nor logs secrets or KYC documents.
 
 ## Current authority selection
 
-The issuer must independently obtain the current policy from its authenticated configuration
-and check the actual ledger asset/scheme registration and rooted Enrollment-role certificate.
-The policy binds genesis network, scheme, exact asset incarnation/scale, positive revision,
-bank FI identity or scheme operator identity, one strong Ed25519 middleware key and a positive
-response-time bound. Both authority kinds must match the exact selected enrollment route.
+The issuer independently selects an asset-independent eligibility template and platform
+enrollment template from authenticated configuration, then checks current ledger registration
+and the rooted Enrollment-role certificate. The eligibility template binds genesis network,
+scheme, positive revision, bank FI or scheme operator identity, one strong Ed25519 middleware
+key and a positive response-time bound. Deriving the concrete policy adds the registered
+asset's exact identity, incarnation and scale. No wildcard enters a credential, proof or
+response digest; no new provider configuration is required for each token. Both authority
+kinds must match the exact selected enrollment route.
 Bank middleware must additionally check the subject's actual bank/account relationship.
 Neither token classification nor Parliament membership is a wire-format authority arm.
 There is no public caller-selected key or fallback to a different provider after a failure.
@@ -32,6 +38,13 @@ signature do not authenticate operator authorization, account routing or current
 revocation status. This policy is separate from the platform enrollment policy, so it changes
 neither E1 nor credential/circuit bytes. Its Ed25519 key authenticates a middleware observation;
 only the existing scheme-rooted Enrollment-role P-256 signer can issue a credential.
+
+Configuration names the canonical template originals as `eligibility_template_hex` and
+`enrollment_template_hex`; retired per-asset configuration fields have no decoder fallback.
+The private verifier keeps one exclusive store generation and the same attestation counters
+across token selections. It joins the old child before switching to the exact retained
+asset-specific configuration. Returning to an earlier token reopens that same configuration
+and attempt; it cannot reset counters, reuse another token's result or restart a consumed E1.
 
 ## Fresh requests and exact responses
 
@@ -54,6 +67,15 @@ within E1, bound to the exact retained request. After E1 expiry, the issuer may 
 private worker's passive `Inspect` action: return the exact retained result, report an unknown
 claimed outcome or report unavailable without starting verification. Inspect creates no
 credential authority; signing and E6 delivery keep their separate current eligibility checks.
+
+The sole middleware HTTP body is `KagemushaEligibilityObservationV1`: version, exact asset
+scope and the retained inner request. It carries no selected policy, key or authority. The
+middleware SDK decodes this bounded canonical envelope under its independently configured
+template, derives the asset policy and checks the inner policy digest before calling the
+clock or lookup. A different asset ID, incarnation, scale or policy revision refuses before
+lookup. The Rust callback receives the exact asset, derived policy and request; the shared
+inner request and signed-response protocol still provides nonce and operation binding. Bare
+inner requests are not a second middleware transport layout.
 
 Middleware authenticates the calling issuer and resolves actor/account/provider binding using
 its current authority records (the bank's customer directory for the bank route). It reads
@@ -82,8 +104,8 @@ offline Send/Receive.
 
 ## Encoding
 
-Every policy, request, response body and response has a unique first-release Norito schema.
-Complete policy/request/response frames are capped at 2,048 bytes before decoding under
+Every template, observation envelope, policy, request, response body and response has a unique
+first-release Norito schema. Complete frames are capped at 2,048 bytes before decoding under
 payload-derived resource limits. Enum discriminants are explicit positive indices; unknown
 arms and noncanonical frames reject. There are no extension maps, old-layout decoders or
 signature algorithm negotiation. The eight-field provider policy has explicit Bank and
@@ -120,6 +142,14 @@ remains 10,000 bytes.
 
 ## Component evidence and remaining integration
 
+TODO: the installed CBSI/BPNG profiles still select one authenticated `asset_original`;
+the shared ledger's generic asset support does not yet expose every universal token through
+the installed SDK. Replace that sole selection path with authenticated universal-dataspace
+asset/scheme registration selection. Keep app/release/platform trust separate from asset
+selection, and retain the exact asset incarnation, scale, global balance scope and reserve
+binding through enrollment, loading and wallet reopening. Caller-supplied token metadata is
+not an authenticated registration, and another fixed token allowlist would not meet the target.
+
 The actual Rust generator covers both authorities, four purposes and three decisions in
 [`enrollment_eligibility_v1_vectors.json`](../fixtures/kagemusha/enrollment_eligibility_v1_vectors.json).
 All 24 actual Rust-generated cases match Kotlin/JVM byte for byte, including frames, digests,
@@ -131,6 +161,12 @@ include current freezes, denied/unavailable sources, wrong keys, rotated policy,
 account/actor/attempt/operation, expiry, time rollback and a slow source read. Test keys and
 policies are unadmitted DATA. These results establish neither an actual bank integration nor
 current authority installation or a release candidate's complete source closure.
+
+The Rust account-authenticated HTTP client and its surrounding transport components pass
+29 cases with zero ignored (`target/qualification/sdk-enrollment-http-current`). An independent
+supplement checks the actual 45 local compiler depfiles and five build-script outputs: the
+eligibility-spec prose drift is not an input to that copied binary or these tests. The original
+broad source-inconclusive record remains retained; this is component evidence only.
 
 The node enrollment journal retains each complete request, selected Scheme/policy, signed
 response and consumption timestamp in its single atomic attempt record. The index is append-only

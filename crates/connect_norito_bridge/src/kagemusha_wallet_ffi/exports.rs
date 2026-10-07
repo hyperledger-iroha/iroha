@@ -13,7 +13,8 @@ pub struct WalletResult {
     /// Enrollment18..28 are typed challenge/evidence/retained-original/runtime statuses.
     /// CloseLoads30; FeeClaim31/absent32; selected ledger tip33/absent34; fee payout acknowledged35.
     /// FeeClaim transport36; enrollment selection37/Apple originals38/custody acknowledgement39.
-    /// Ledger instruction40/Load finality41/Unload confirmation42/Load proof progress43; UnloadClaim44.
+    /// Ledger instruction40/Load finality41/Unload confirmation42/Load proof progress43.
+    /// Activation confirmed44/verifying45/not started46; UnloadClaim47.
     /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
     /// Negative is failure.
     pub status: i32,
@@ -368,7 +369,7 @@ mod setup_boundary_tests {
                     assert_eq!(request_id, [7; 32]);
                     assert_eq!(beneficiary, Some(vec![0, 255, 7]));
                     (
-                        44,
+                        47,
                         0,
                         vec![0xf2; KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1],
                     )
@@ -447,6 +448,37 @@ mod setup_boundary_tests {
                     assert_eq!(receipt, [0, 255, 7]);
                     assert_eq!(original, [0, 255, 7]);
                     (43, 64, 42_u64.to_be_bytes().to_vec())
+                }
+                setup::Setup::UnloadProofProgress {
+                    transaction,
+                    original,
+                } => {
+                    assert_eq!(transaction, [7; 32]);
+                    assert_eq!(original, [0, 255, 7]);
+                    (34, 0, vec![])
+                }
+                setup::Setup::UnloadProofStep {
+                    transaction,
+                    original,
+                    finality,
+                } => {
+                    assert_eq!(transaction, [7; 32]);
+                    assert_eq!(original, [0, 255, 7]);
+                    assert_eq!(finality, [0, 255, 7]);
+                    (33, u128::from(u64::MAX), vec![9; 32])
+                }
+                setup::Setup::ConfirmActivation(signed) => {
+                    assert_eq!(signed, [0, 255, 7]);
+                    (44, u128::from(u64::MAX), vec![10; 32])
+                }
+                setup::Setup::ActivationProofProgress(signed) => {
+                    assert_eq!(signed, [0, 255, 7]);
+                    (46, 0, vec![])
+                }
+                setup::Setup::ActivationProofStep { signed, original } => {
+                    assert_eq!(signed, [0, 255, 7]);
+                    assert_eq!(original, [0, 255, 7]);
+                    (45, u128::from(u64::MAX), vec![11; 32])
                 }
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
             };
@@ -564,15 +596,20 @@ mod setup_boundary_tests {
             (30, 42, u64::MAX, vec![8; 32]),
             (31, 43, 64, 42_u64.to_be_bytes().to_vec()),
             (32, 43, 64, 42_u64.to_be_bytes().to_vec()),
+            (33, 34, 0, vec![]),
+            (34, 33, u64::MAX, vec![9; 32]),
+            (35, 44, u64::MAX, vec![10; 32]),
+            (36, 45, u64::MAX, vec![11; 32]),
+            (37, 46, 0, vec![]),
             (
-                33,
-                44,
+                38,
+                47,
                 0,
                 vec![0xf2; KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1],
             ),
         ] {
             let mut request = request(
-                if matches!(selector, 1 | 2 | 19 | 20 | 25 | 27 | 30 | 33) {
+                if matches!(selector, 1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 38) {
                     &id
                 } else {
                     &zero
@@ -585,11 +622,11 @@ mod setup_boundary_tests {
                     high: u64::MAX,
                 };
             }
-            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26 | 28..=33) {
+            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26 | 28..=38) {
                 request.first = original.as_ptr();
                 request.first_length = original.len();
             }
-            if matches!(selector, 25 | 26 | 28 | 32) {
+            if matches!(selector, 25 | 26 | 28 | 32 | 34 | 36) {
                 request.second = original.as_ptr();
                 request.second_length = original.len();
             }
@@ -616,7 +653,7 @@ mod setup_boundary_tests {
                 crate::connect_norito_free(out.bytes);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 23);
+        assert_eq!(calls.load(Ordering::SeqCst), 28);
         let mut status = WalletResult::default();
         assert_eq!(
             unsafe {
@@ -627,13 +664,13 @@ mod setup_boundary_tests {
         assert_eq!((status.status, status.detail, status.length), (29, 0, 0));
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            23,
+            28,
             "worker status does not acquire the wallet"
         );
         assert_failure(handle, &request(&zero, 19), INVALID);
         close(handle).unwrap();
         assert_failure(handle, &request(&zero, 0), CLOSED);
-        assert_eq!(calls.load(Ordering::SeqCst), 23);
+        assert_eq!(calls.load(Ordering::SeqCst), 28);
     }
     #[test]
     fn setup_c_routes_cancellation_and_every_envelope_form_to_the_same_owner() {

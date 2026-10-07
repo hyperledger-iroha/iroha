@@ -53,11 +53,10 @@ mod native_owner;
 mod native_worker;
 mod policy_custody;
 pub use native_owner::{
-    LoadProofProgressV1,
-    LOAD_EVENT_PROOF_MAX_BYTES_V1, LEDGER_INSTRUCTION_MAX_BYTES_V1,
-    LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, NativeInstallationConfigV1, NativeOpenErrorV1,
-    NativeOpenFailureV1, NativeOperationReviewV1, NativeStartupFailureV1,
-    NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
+    ActivationFinalityProgressV1, LEDGER_INSTRUCTION_MAX_BYTES_V1, LEDGER_PROOF_MAX_BYTES_V1,
+    LOAD_EVENT_PROOF_MAX_BYTES_V1, LedgerProgressV1, LoadProofProgressV1,
+    NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeOperationReviewV1,
+    NativeStartupFailureV1, NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
     PAYOUT_RECORD_MAX_BYTES_V1, PendingNativeWalletOpenV1, ReviewedOperationV1,
 };
 mod preparation_custody;

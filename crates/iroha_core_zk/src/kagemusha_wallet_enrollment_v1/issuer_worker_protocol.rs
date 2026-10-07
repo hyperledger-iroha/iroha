@@ -2,7 +2,7 @@
 
 use super::*;
 
-const PREPARATION_SCHEMA: &str = "bpng.wallet-e1-worker-preparation.v1";
+const PREPARATION_SCHEMA: &str = "iroha.kagemusha.wallet-e1-worker-preparation.v1";
 const MAX_PREPARATION: usize = 16 * 1024;
 
 /// Selected immutable pre-key originals retained before any payment key or E5 exists.

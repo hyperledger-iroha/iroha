@@ -35,7 +35,10 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
             provider.eligibility.authority.scope_digest() == dispatch.fi_digest
                 && provider.scheme == dispatch.scheme
                 && provider.app == dispatch.app
-                && provider.enrollment == dispatch.policy
+                && provider
+                    .enrollment
+                    .for_asset(&dispatch.asset)
+                    .is_ok_and(|p| p == dispatch.policy)
                 && provider.certificate == dispatch.enrollment_certificate
                 && provider.manifest_digest == dispatch.manifest_digest
                 && provider.release_digest == dispatch.release_digest
@@ -48,7 +51,6 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
         provider.eligibility.validate().map_err(|_| Invalid)?;
         if provider.eligibility.scheme_id != dispatch.scheme.scheme_id()
             || provider.eligibility.network_id != dispatch.scheme.network_id
-            || provider.eligibility.asset_digest != dispatch.asset.asset_digest()
         {
             return Err(Selection);
         }
@@ -145,7 +147,11 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
         self.require_session(session)?;
         let selected = self.current(&session.dispatch)?;
         let started = self.now()?;
-        let policy = selected.provider.eligibility;
+        let policy = selected
+            .provider
+            .eligibility
+            .for_asset(&session.dispatch.asset)
+            .map_err(|_| Invalid)?;
         let mut expires_at_ms = started
             .checked_add(policy.maximum_response_ms)
             .ok_or(Invalid)?;
@@ -177,6 +183,7 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
         )?;
         let response = self.runtime.observe_eligibility(
             &selected.provider,
+            &session.dispatch.asset,
             &request.encode_canonical(&policy).map_err(|_| Invalid)?,
             selected.config.request_timeout,
         )?;

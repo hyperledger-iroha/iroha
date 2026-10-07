@@ -3,7 +3,7 @@ use super::*;
 use crate::kagemusha_wallet_state_v1::tests::{bootstrap, field, fixture, frozen, signer, wallet};
 use p256::ecdsa::{Signature, signature::Signer as _};
 
-fn output(plan: &Plan) -> Vec<u8> {
+pub(super) fn output(plan: &Plan) -> Vec<u8> {
     let body = plan.body().unwrap();
     let raw: Signature = signer(&plan.credential).sign(&body.signing_message());
     let control = KagemushaWalletLedgerControlV1::sign(
