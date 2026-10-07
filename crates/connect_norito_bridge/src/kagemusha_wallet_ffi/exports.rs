@@ -13,6 +13,7 @@ pub struct WalletResult {
     /// Enrollment18..28 are typed challenge/evidence/retained-original/runtime statuses.
     /// CloseLoads30; FeeClaim31/absent32; selected ledger tip33/absent34; fee payout acknowledged35.
     /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
+    /// CreditProjection47: exact typed header92 plus receiver original up to10000 bytes.
     /// Negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
@@ -390,6 +391,10 @@ mod setup_boundary_tests {
                     (12, 0, vec![u8::from(status), 0, 255])
                 }
                 setup::Setup::BeginTime => (13, 19, vec![0, 255, 4]),
+                setup::Setup::BoundCredited { .. } => panic!("unexpected bound Credited fixture"),
+                setup::Setup::CreditProjection { .. } => {
+                    panic!("unexpected credit projection fixture")
+                }
                 setup::Setup::CancelTime { token } => {
                     assert_eq!(token, 19);
                     (6, 0, vec![])
@@ -403,17 +408,35 @@ mod setup_boundary_tests {
                     (12, 0, vec![kind, u8::from(wrap), 0, 255])
                 }
                 setup::Setup::LedgerLoad { .. } => panic!("unexpected ledger load fixture"),
-                setup::Setup::LoadFinality { .. } => panic!("unexpected load finality fixture"),
-                setup::Setup::LedgerInstruction { .. } => panic!("unexpected ledger instruction fixture"),
-                setup::Setup::ConfirmUnload { .. } => panic!("unexpected unload confirmation fixture"),
-                setup::Setup::LoadProofProgress(_) => panic!("unexpected load proof progress fixture"),
-                setup::Setup::LoadProofStep { .. } => panic!("unexpected load proof step fixture"),
-                setup::Setup::UnloadProofProgress { .. } => panic!("unexpected unload proof progress fixture"),
-                setup::Setup::UnloadProofStep { .. } => panic!("unexpected unload proof step fixture"),
-                setup::Setup::ConfirmActivation(_) => panic!("unexpected activation confirmation fixture"),
-                setup::Setup::ActivationProofProgress(_) => panic!("unexpected activation progress fixture"),
-                setup::Setup::ActivationProofStep { .. } => panic!("unexpected activation step fixture"),
+                setup::Setup::LedgerInstruction { .. } => {
+                    panic!("unexpected ledger instruction fixture")
+                }
+                setup::Setup::ConfirmUnload { .. } => {
+                    panic!("unexpected unload confirmation fixture")
+                }
+                setup::Setup::UnloadProofProgress { .. } => {
+                    panic!("unexpected unload proof progress fixture")
+                }
+                setup::Setup::UnloadProofStep { .. } => {
+                    panic!("unexpected unload proof step fixture")
+                }
+                setup::Setup::ConfirmActivation(_) => {
+                    panic!("unexpected activation confirmation fixture")
+                }
+                setup::Setup::ActivationProofProgress(_) => {
+                    panic!("unexpected activation progress fixture")
+                }
+                setup::Setup::ActivationProofStep { .. } => {
+                    panic!("unexpected activation step fixture")
+                }
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
+                setup::Setup::RequestFeeSelection => panic!("unexpected fee selection fixture"),
+                setup::Setup::ValidateRequestFeePolicy { .. } => {
+                    panic!("unexpected fee validation fixture")
+                }
+                setup::Setup::RequestWithFeePolicy { .. } => {
+                    panic!("unexpected fee PolicyData Request fixture")
+                }
             };
             Ok(Response {
                 kind,

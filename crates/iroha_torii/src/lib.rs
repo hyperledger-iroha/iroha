@@ -33124,7 +33124,9 @@ async fn handler_identifier_claim_receipt(
         &account_literal,
         "/v1/accounts/{account_id}/identifiers/claim-receipt",
     )?;
-    require_runtime_governance_account(&account_id, &caller, "identifier claim receipt")?;
+    // The path identifies the enrolled receipt beneficiary, which may differ
+    // from the authenticated owner. The active identifier/program policies below
+    // authorize the caller; the ledger account and its UAID bind the beneficiary.
     let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(

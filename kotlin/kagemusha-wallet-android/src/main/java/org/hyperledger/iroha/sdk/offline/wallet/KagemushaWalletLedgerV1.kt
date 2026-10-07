@@ -19,20 +19,6 @@ class KagemushaWalletUnloadConfirmationV1 internal constructor(result: Kagemusha
     fun blockHash(): ByteArray = block.copyOf()
 }
 
-/** Native-selected receipt height and verified contiguous per-Load history, as unsigned u64 bits. */
-class KagemushaWalletLoadProofProgressV1 internal constructor(result: KagemushaWalletCallV1) {
-    val receiptHeightBits: Long
-    val verifiedHeightBits: Long
-    init {
-        if (result.status != KagemushaWalletCallV1.LOAD_PROOF_PROGRESS) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-        receiptHeightBits = result.sequenceLow
-        var value = 0L
-        for (byte in result.bytes()) value = (value shl 8) or (byte.toLong() and 255)
-        if (java.lang.Long.compareUnsigned(value, receiptHeightBits) > 0) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-        verifiedHeightBits = value
-    }
-}
-
 /** Native-verified successful inclusion of the account's exact retained signed Activate. */
 class KagemushaWalletActivationConfirmationV1 internal constructor(result: KagemushaWalletCallV1) {
     val heightBits: Long

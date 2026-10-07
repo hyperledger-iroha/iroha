@@ -127,6 +127,7 @@ private object NativeBridgeBuildContract {
         val cargoLock: java.nio.file.Path,
         val cargoHome: java.nio.file.Path,
         val cargoInvocationDirectory: java.nio.file.Path,
+        val cargoConfiguration: ByteArray?,
         val diagnosticConfiguration: ByteArray?,
         val walletRuntimeAuthority: String,
         val walletRuntimeTrustPublicKeyHex: String,
@@ -626,37 +627,49 @@ private object NativeBridgeBuildContract {
         ) {
             "Iroha root must be one absolute canonical non-symbolic directory"
         }
-        val diagnosticConfiguration = if (armv7Diagnostic) {
-            val cache = System.getenv("MOBILE_SDK_CARGO_HOME")
-                ?: throw GradleException("Armv7 diagnostics require explicit MOBILE_SDK_CARGO_HOME")
-            val invocation = System.getenv("MOBILE_SDK_CARGO_INVOCATION_DIR")
-                ?: throw GradleException("Armv7 diagnostics require explicit MOBILE_SDK_CARGO_INVOCATION_DIR")
+        val selectedCargoHome = System.getenv("MOBILE_SDK_CARGO_HOME")
+        val selectedCargoInvocation = System.getenv("MOBILE_SDK_CARGO_INVOCATION_DIR")
+        require((selectedCargoHome == null) == (selectedCargoInvocation == null)) {
+            "MOBILE_SDK_CARGO_HOME and MOBILE_SDK_CARGO_INVOCATION_DIR must be paired"
+        }
+        require(!armv7Diagnostic || selectedCargoHome != null) {
+            "Armv7 diagnostics require explicit Cargo cache and invocation directory"
+        }
+        val cargoConfiguration = if (selectedCargoHome != null) {
+            val invocation = requireNotNull(selectedCargoInvocation)
             val owner = canonicalIrohaRoot.resolve("scripts/norito_bridge_local_integration.py")
-            requireRegularFileInside(irohaRoot, owner.toFile(), "diagnostic configuration policy")
+            requireRegularFileInside(irohaRoot, owner.toFile(), "Cargo configuration policy")
+            val role = if (armv7Diagnostic) "android-armv7-diagnostic" else "android-cargo"
             commandOutput(
                 execOperations, irohaRoot,
                 baseToolEnvironment(home, temporaryDirectory, "${python.parent}:/usr/bin:/bin"),
                 listOf(python.toString(), "-I", "-S", owner.toString(),
-                    "--root", canonicalIrohaRoot.toString(), "--role", "android-armv7-diagnostic",
-                    "--path", invocation, "--cargo-home", cache, "--local-integration"),
-                "armv7 diagnostic configuration custody",
+                    "--root", canonicalIrohaRoot.toString(), "--role", role,
+                    "--path", invocation, "--cargo-home", selectedCargoHome) +
+                    if (armv7Diagnostic) listOf("--local-integration") else emptyList(),
+                "Android Cargo configuration custody",
             ).toByteArray(Charsets.UTF_8)
         } else null
-        val diagnostic = diagnosticConfiguration?.let {
+        val configuration = cargoConfiguration?.let {
             JsonSlurper().parse(it) as? Map<*, *>
-                ?: throw GradleException("Diagnostic configuration must be an object")
+                ?: throw GradleException("Cargo configuration must be an object")
         }
-        if (diagnostic != null) {
-            require(diagnostic["schema"] == "iroha.android-armv7-diagnostic-configuration.v1" &&
-                diagnostic["artifact_scope"] == "android-local-diagnostic" &&
-                diagnostic["release_admitted"] == false &&
-                diagnostic["source_root"] == canonicalIrohaRoot.toString()) {
-                "Diagnostic configuration grants no release admission"
+        if (configuration != null) {
+            val expectedSchema = if (armv7Diagnostic) "iroha.android-armv7-diagnostic-configuration.v1"
+                else "iroha.android-cargo-configuration.v1"
+            val expectedScope = if (armv7Diagnostic) "android-local-diagnostic"
+                else "android-cargo-configuration"
+            require(configuration["schema"] == expectedSchema &&
+                configuration["artifact_scope"] == expectedScope &&
+                configuration["release_admitted"] == false &&
+                configuration["source_root"] == canonicalIrohaRoot.toString()) {
+                "Cargo configuration grants no release admission"
             }
         }
-        val cargoHome = diagnostic?.get("cargo_home")?.let { Path.of(it as String) }
+        val diagnosticConfiguration = if (armv7Diagnostic) cargoConfiguration else null
+        val cargoHome = configuration?.get("cargo_home")?.let { Path.of(it as String) }
             ?: home.resolve(".cargo").toPath()
-        val cargoInvocationDirectory = diagnostic?.get("cargo_invocation_directory")
+        val cargoInvocationDirectory = configuration?.get("cargo_invocation_directory")
             ?.let { Path.of(it as String) } ?: canonicalIrohaRoot
         val cargoLock = canonicalIrohaRoot.resolve("Cargo.lock")
         require(
@@ -835,6 +848,7 @@ private object NativeBridgeBuildContract {
             cargoLock = cargoLock,
             cargoHome = cargoHome,
             cargoInvocationDirectory = cargoInvocationDirectory,
+            cargoConfiguration = cargoConfiguration,
             diagnosticConfiguration = diagnosticConfiguration,
             walletRuntimeAuthority = runtimeAuthority,
             walletRuntimeTrustPublicKeyHex = walletRuntimeTrust,
@@ -922,7 +936,7 @@ private object NativeBridgeBuildContract {
             "NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR" to
                 tools.cargoTargetDirectory.toString(),
         ).apply {
-            if (tools.diagnosticConfiguration != null) {
+            if (tools.cargoConfiguration != null) {
                 put("NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR", tools.cargoInvocationDirectory.toString())
             }
         }
@@ -1171,10 +1185,11 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             capturedSeal["targets"] == NativeBridgeBuildContract.buildTargets(platform)) {
             "Native source seal target inventory differs from the selected build profile"
         }
-        if (tools.diagnosticConfiguration != null) {
-            require(capturedSeal["diagnostic_configuration"] ==
-                JsonSlurper().parse(tools.diagnosticConfiguration)) {
-                "Diagnostic source seal and build configuration differ before compilation"
+        if (tools.cargoConfiguration != null) {
+            val configurationField = if (tools.diagnosticConfiguration == null) "cargo_configuration"
+                else "diagnostic_configuration"
+            require(capturedSeal[configurationField] == JsonSlurper().parse(tools.cargoConfiguration)) {
+                "Android source seal and Cargo configuration differ before compilation"
             }
         }
         val buildEnvironment = NativeBridgeBuildContract.buildEnvironmentBytes(tools)
@@ -1246,7 +1261,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                             else "android-armv7-diagnostic-cargo",
                     ),
                 )
-                if (tools.diagnosticConfiguration != null) {
+                if (tools.cargoConfiguration != null) {
                     addAll(listOf("--working-directory", tools.cargoInvocationDirectory.toString()))
                 }
                 addAll(
@@ -1665,7 +1680,12 @@ abstract class StripNativeBridgeTask @Inject constructor(
             "source_status",
             "source_tree_dirty",
             "targets",
-        )
+        ) + if (tools.cargoConfiguration != null) setOf("cargo_configuration") else emptySet()
+        if (tools.cargoConfiguration != null) {
+            require(sourceSeal["cargo_configuration"] == JsonSlurper().parse(tools.cargoConfiguration)) {
+                "Android production source seal and Cargo configuration differ before promotion"
+            }
+        }
         require(sourceSeal.keys == expectedSealFields) {
             "Android source seal field inventory is not exact: ${sourceSeal.keys}"
         }

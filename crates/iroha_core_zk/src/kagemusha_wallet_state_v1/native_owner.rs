@@ -7,10 +7,9 @@ mod close_loads;
 mod ledger;
 mod ledger_producer;
 pub use ledger::{LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, PAYOUT_RECORD_MAX_BYTES_V1};
-pub use ledger_producer::{
-    LEDGER_INSTRUCTION_MAX_BYTES_V1, LOAD_EVENT_PROOF_MAX_BYTES_V1, LoadProofProgressV1,
-};
+pub use ledger_producer::LEDGER_INSTRUCTION_MAX_BYTES_V1;
 mod bootstrap;
+mod request_fee;
 mod review;
 mod runtime;
 pub(super) mod sessions;
@@ -307,6 +306,27 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             self.budget,
             cancellation.map(Cancellation::prover_token),
         ))
+    }
+    fn verify_credited(
+        &self,
+        credited: &KagemushaWalletCreditedV1,
+        request: &KagemushaWalletRequestV1,
+        payment: &KagemushaWalletPaymentV1,
+    ) -> Result<(), Error> {
+        valid(credited.verify_for(self.installed.verifier().scheme(), request, payment))?;
+        match &credited.evidence {
+            KagemushaWalletCreditedEvidenceV1::Receive { package } => {
+                proof(self.installed.verifier().verify_package_proofs_cancellable(
+                    package,
+                    Some(&request.body),
+                    self.budget,
+                    None,
+                ))
+            }
+            KagemushaWalletCreditedEvidenceV1::Status { status } => {
+                self.verify_lineage(&status.lineage, None)
+            }
+        }
     }
     fn fold_schedule(
         &self,

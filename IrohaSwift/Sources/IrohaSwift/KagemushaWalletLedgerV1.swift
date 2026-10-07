@@ -14,24 +14,6 @@ extension KagemushaWalletV1 {
         return result.bytes
     }
 
-    /// Read the actual receipt-bound cursor, independent of later global ledger activity.
-    public func loadFinalityProgress(receipt: Data) throws -> KagemushaWalletLoadProofProgressV1 {
-        try .init(setup(.init(selector: 31, first: receipt)))
-    }
-
-    /// Verify and prove exactly one next original block for this receipt's own durable cursor.
-    public func ingestLoadFinality(receipt: Data, original: Data) throws -> KagemushaWalletLoadProofProgressV1 {
-        try .init(setup(.init(selector: 32, first: receipt, second: original)))
-    }
-
-    /// Produce the complete recursive proof from the selected Native history and actual originals.
-    /// Receipt data, HTTP status and ordinary finality alone cannot credit the wallet.
-    public func proveLoadFinality(receipt: Data, eventProof: Data) throws -> Data {
-        let result = try setup(.init(selector: 28, first: receipt, second: eventProof))
-        guard result.status == 41 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        return result.bytes
-    }
-
     /// Canonical instruction framing only; ledger execution still validates every authority.
     public func ledgerInstruction(kind: KagemushaWalletLedgerTransportV1, original: Data) throws -> Data {
         let result = try setup(.init(selector: 29, token: kind.rawValue, first: original))
@@ -63,18 +45,4 @@ extension KagemushaWalletV1 {
 public struct KagemushaWalletUnloadConfirmationV1: Sendable {
     public let height: UInt64
     public let blockHash: Data
-}
-
-/// Native-selected per-request proving progress. Receipt height is a DATA locator until completion.
-public struct KagemushaWalletLoadProofProgressV1: Sendable {
-    public let receiptHeight: UInt64
-    public let verifiedHeight: UInt64
-    init(_ result: KagemushaWalletCallV1) throws {
-        guard result.status == 43, result.bytes.count == 8,
-            result.sequenceLow > 1, result.sequenceHigh == 0, result.detail == 0
-        else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        let verified = result.bytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
-        guard verified <= result.sequenceLow else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        receiptHeight = result.sequenceLow; verifiedHeight = verified
-    }
 }

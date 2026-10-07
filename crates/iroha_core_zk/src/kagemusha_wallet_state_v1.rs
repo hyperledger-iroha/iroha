@@ -54,10 +54,10 @@ mod native_worker;
 mod policy_custody;
 pub use native_owner::{
     ActivationFinalityProgressV1, LEDGER_INSTRUCTION_MAX_BYTES_V1, LEDGER_PROOF_MAX_BYTES_V1,
-    LOAD_EVENT_PROOF_MAX_BYTES_V1, LedgerProgressV1, LoadProofProgressV1,
-    NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeOperationReviewV1,
-    NativeStartupFailureV1, NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
-    PAYOUT_RECORD_MAX_BYTES_V1, PendingNativeWalletOpenV1, ReviewedOperationV1,
+    LedgerProgressV1, NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1,
+    NativeOperationReviewV1, NativeStartupFailureV1, NativeWalletCoordinatorV1,
+    NativeWalletProofsV1, NativeWalletRuntimeV1, PAYOUT_RECORD_MAX_BYTES_V1,
+    PendingNativeWalletOpenV1, ReviewedOperationV1,
 };
 mod preparation_custody;
 mod scheduling;
@@ -75,8 +75,9 @@ pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
 pub(crate) use lifecycle::ArchiveIntentV1;
 pub use lifecycle::{
-    ChargeOriginalsV1, NativeIntentV1, NativePreparation, OperationActionV1, OperationRequestV1,
-    PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES, RequestStatusV1,
+    ChargeOriginalsV1, CreditProjectionV1, NativeIntentV1, NativePreparation, OperationActionV1,
+    OperationRequestV1, PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES,
+    RequestStatusV1,
 };
 pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub(crate) use native_worker::NativeFoldWorkerV1;
@@ -232,6 +233,18 @@ pub trait NativeProofs {
     /// # Errors
     /// Artifacts or their independently configured scheme/chain binding are unavailable.
     fn ledger_scope(&self) -> Result<(KagemushaWalletSchemeV1, String), Error>;
+
+    /// Verify exact delivery evidence against the original Request and Payment, including
+    /// every native signature/binding check and the installed package or lineage proof.
+    /// This read-only verdict cannot authorize Archive or replace its step and fold proofs.
+    /// # Errors
+    /// Invalid evidence, unavailable artifacts or cancelled verification yield no verdict.
+    fn verify_credited(
+        &self,
+        credited: &KagemushaWalletCreditedV1,
+        request: &KagemushaWalletRequestV1,
+        payment: &KagemushaWalletPaymentV1,
+    ) -> Result<(), Error>;
 
     /// Ordered intermediate proof layouts from the authenticated artifact schedule for this
     /// operation. The final Ω follows these checkpoints and keeps its separate wire bound.

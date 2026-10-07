@@ -237,7 +237,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
 {
-    /// Confirm the exact signed Activate transaction against the selected recursive ledger tip.
+    /// Confirm the exact signed Activate transaction against the selected native ledger tip.
     /// Successful return follows durable publication. Exact retry remains local after restart
     /// or later ledger advancement. HTTP receipts and caller transaction hashes are not authority.
     /// # Errors
@@ -278,22 +278,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         // no cursor exists, and cannot overwrite or skip a selected activation cursor.
         let (verifier, checkpoint) =
             if let Some(cursor) = self.retained_activation_cursor(&plan, signed_wire)? {
-                let (verifier, checkpoint, _) = self.restore_activation_cursor(&cursor)?;
+                let (verifier, checkpoint) = self.restore_activation_cursor(&cursor)?;
                 (verifier, checkpoint)
             } else {
                 let (verifier, checkpoint) = self.selected_ledger(&manifest, &genesis)?;
                 let checkpoint = checkpoint.ok_or(Error::Invalid("activation ledger absent"))?;
-                let prefix = self
-                    .recursive_prefix(&manifest)?
-                    .ok_or(Error::WitnessLost("activation recursive prefix"))?;
-                if prefix.state().next_height
-                    != checkpoint
-                        .height()
-                        .checked_add(1)
-                        .ok_or(Error::Invalid("activation height overflow"))?
-                {
-                    return Err(Error::WitnessLost("activation recursive height binding"));
-                }
                 (verifier, checkpoint)
             };
         let verified = verifier

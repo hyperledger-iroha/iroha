@@ -32,15 +32,14 @@ class KagemushaWalletCallV1 internal constructor(
     bytes: ByteArray,
 ) {
     init {
-        val carriesBytes = status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == LOAD_FINALITY || status == UNLOAD_CONFIRMATION || status == LOAD_PROOF_PROGRESS || status == ACTIVATION_CONFIRMATION || status == ACTIVATION_PROGRESS || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
-        if ((status >= 0 && status !in UNKNOWN..ACTIVATION_NOT_STARTED) || bytes.size > when (status) { ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, LOAD_FINALITY -> 16_384; LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_024; 33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS -> 32; LOAD_PROOF_PROGRESS -> 8; else -> 10_000 } ||
+        val carriesBytes = status == CREDIT_PROJECTION || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == UNLOAD_CONFIRMATION || status == ACTIVATION_CONFIRMATION || status == ACTIVATION_PROGRESS || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
+        if (status in listOf(41, 43) || (status >= 0 && status !in UNKNOWN..CREDIT_PROJECTION) || bytes.size > when (status) { CREDIT_PROJECTION -> 10_092; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36 -> 16_384; LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_024; 33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS -> 32; else -> 10_000 } ||
             (if (carriesBytes) bytes.isEmpty() else bytes.isNotEmpty()) ||
             ((status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE) && (bytes.size != 32 || sequenceLow <= 0 || sequenceHigh != 0L)) ||
-            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, ACTIVATION_NOT_STARTED, LEDGER_INSTRUCTION, LOAD_FINALITY) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
+            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, ACTIVATION_NOT_STARTED, LEDGER_INSTRUCTION) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
             (status == OPENED && (sequenceLow <= 0 || sequenceHigh != 0L)) ||
             ((status in 18..28 || status in 37..39) && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0)) ||
             (status == ACTIVATION_CONFIRMATION && java.lang.Long.compareUnsigned(sequenceLow, 2L) < 0) ||
-            (status == LOAD_PROOF_PROGRESS && (bytes.size != 8 || (sequenceLow in 0L..1L) || sequenceHigh != 0L || detail != 0)) ||
             (status in listOf(18, 23) && bytes.size != 32) || (status == 19 && bytes.size != 161) ||
             (status in listOf(33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS) && (sequenceLow == 0L || sequenceHigh != 0L || detail != 0 || bytes.size != 32 || bytes.all { it == 0.toByte() }))) {
             throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
@@ -110,12 +109,11 @@ class KagemushaWalletCallV1 internal constructor(
         const val BACKGROUND_STATUS = 29
         const val CLOSE_LOADS = 30
         const val LEDGER_INSTRUCTION = 40
-        const val LOAD_FINALITY = 41
         const val UNLOAD_CONFIRMATION = 42
-        const val LOAD_PROOF_PROGRESS = 43
         const val ACTIVATION_CONFIRMATION = 44
         const val ACTIVATION_PROGRESS = 45
         const val ACTIVATION_NOT_STARTED = 46
+        const val CREDIT_PROJECTION = 47
     }
 }
 
@@ -165,25 +163,12 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
         if (result.status != KagemushaWalletCallV1.LEDGER_INSTRUCTION) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         return result.bytes()
     }
-    /** Produce recursive finality from the selected Native history and actual originals.
-     * Receipt DATA and ordinary ledger finality alone cannot credit the wallet. */
-    fun proveLoadFinality(receipt: ByteArray, eventProof: ByteArray): ByteArray {
-        val result = setup(KagemushaWalletSetupInputV1(28, first = receipt, second = eventProof))
-        if (result.status != KagemushaWalletCallV1.LOAD_FINALITY) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-        return result.bytes()
-    }
     /** Canonical instruction framing; ledger execution still validates every authority. */
     fun ledgerInstruction(kind: KagemushaWalletLedgerTransportV1, original: ByteArray): ByteArray {
         val result = setup(KagemushaWalletSetupInputV1(29, token = kind.tag, first = original))
         if (result.status != KagemushaWalletCallV1.LEDGER_INSTRUCTION) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         return result.bytes()
     }
-    /** Receipt-bound Native proof progress; this never treats a server height as finality. */
-    fun loadFinalityProgress(receipt: ByteArray): KagemushaWalletLoadProofProgressV1 =
-        KagemushaWalletLoadProofProgressV1(setup(KagemushaWalletSetupInputV1(31, first = receipt)))
-    /** Verify the next original ordinary proof for this retained Load's independent history. */
-    fun ingestLoadFinality(receipt: ByteArray, original: ByteArray): KagemushaWalletLoadProofProgressV1 =
-        KagemushaWalletLoadProofProgressV1(setup(KagemushaWalletSetupInputV1(32, first = receipt, second = original)))
     /** Native authenticates this exact Unload in the selected committed block's successful transaction. */
     fun confirmLedgerUnload(transactionHash: ByteArray, original: ByteArray): KagemushaWalletUnloadConfirmationV1 =
         KagemushaWalletUnloadConfirmationV1(setup(KagemushaWalletSetupInputV1(30, identity = transactionHash, first = original)))
@@ -259,6 +244,21 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
         return setup(KagemushaWalletSetupInputV1(2, setupId, first = offer,
             second = feeSchedule ?: byteArrayOf(), third = feeCertificate ?: byteArrayOf())).original()
     }
+    /** Native-selected asset and fee digest for local original lookup; no operation authority. */
+    fun requestFeeSelection(): KagemushaWalletRequestFeeSelectionV1 =
+        KagemushaWalletRequestFeeSelectionV1(setup(KagemushaWalletSetupInputV1(38)))
+    /** Authenticate two full PolicyData envelopes against the currently selected fee policy. */
+    fun validateRequestFeePolicy(scheduleEnvelope: ByteArray, certificatesEnvelope: ByteArray): KagemushaWalletRequestFeeSelectionV1 =
+        KagemushaWalletRequestFeeSelectionV1(setup(KagemushaWalletSetupInputV1(40,
+            first = scheduleEnvelope, second = certificatesEnvelope)))
+    /** Exact signed fee DATA feeds the ordinary Native Request. Null is accepted only by
+     * Native's zero-fee rule; never retry a failed nonzero-fee Request with missing originals. */
+    fun requestWithFeePolicy(setupId: ByteArray, offer: ByteArray, scheduleEnvelope: ByteArray?, certificatesEnvelope: ByteArray?): ByteArray {
+        require((scheduleEnvelope == null) == (certificatesEnvelope == null)) { "fee PolicyData must be paired" }
+        if (scheduleEnvelope != null) require(scheduleEnvelope.isNotEmpty() && certificatesEnvelope!!.isNotEmpty())
+        return setup(KagemushaWalletSetupInputV1(39, setupId, first = offer,
+            second = scheduleEnvelope ?: byteArrayOf(), third = certificatesEnvelope ?: byteArrayOf())).original()
+    }
     /** Convert durable Receive/Status bytes to canonical peer evidence, without granting a proof verdict. */
     fun credited(received: KagemushaWalletCallV1): ByteArray {
         return setup(received.creditedInput()).original()
@@ -266,6 +266,21 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
     /** Native verifies delivery evidence and derives its private Archive operation. */
     fun acceptCredited(original: ByteArray): KagemushaWalletCallV1 =
         setup(KagemushaWalletSetupInputV1(3, first = original)).completion()
+    /** Verify delivery for this exact local Send; result belongs to its private Archive intent. */
+    fun acceptCreditedForSend(sendRequestId: ByteArray, original: ByteArray): KagemushaWalletCallV1 =
+        setup(KagemushaWalletSetupInputV1(41, identity = sendRequestId, first = original)).completion()
+    /** Read exact bound Archive completion, including after original Send witness collection. */
+    fun creditedStatusForSend(sendRequestId: ByteArray, original: ByteArray): KagemushaWalletCallV1 =
+        setup(KagemushaWalletSetupInputV1(42, identity = sendRequestId, first = original)).completion()
+    /** Observe one exact durable Receive, using fresh covering evidence before or after collection. */
+    fun receivedCredit(receiveRequestId: ByteArray): KagemushaWalletCreditProjectionV1 =
+        KagemushaWalletCreditProjectionV1(setup(KagemushaWalletSetupInputV1(43, identity = receiveRequestId))).requireReceiver()
+    /** Verify a later receipt against the exact completed Archive anchor, without another Advance. */
+    fun deliveredCredit(sendRequestId: ByteArray, anchor: ByteArray, newer: ByteArray? = null): KagemushaWalletCreditProjectionV1 {
+        require(newer == null || newer.isNotEmpty()) { "new Credited original" }
+        return KagemushaWalletCreditProjectionV1(setup(KagemushaWalletSetupInputV1(44,
+            identity = sendRequestId, first = anchor, second = newer ?: byteArrayOf()))).requirePayer()
+    }
     /** Only the native nonce leaves clock custody; this token has no serialized form. */
     fun beginTimeExchange(): KagemushaWalletTimeExchangeV1 =
         setup(KagemushaWalletSetupInputV1(4)).exchange(this)

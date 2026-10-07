@@ -135,7 +135,6 @@ impl NativeIntentV1 {
         certificates: Vec<u8>,
         credited: Vec<u8>,
     ) -> Result<Self, Error> {
-        use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
         if send.frozen.capsule.kind != KagemushaWalletOperationKindV1::Send {
             return Err(Error::Invalid("Archive requires retained Send"));
         }
@@ -154,12 +153,13 @@ impl NativeIntentV1 {
             return Err(Error::WitnessLost("Archive duplicate Send Request"));
         }
         let send_capsule = valid(send.frozen.capsule.capsule_digest())?;
-        let mut identity = send_capsule.to_vec();
-        identity.extend_from_slice(&send.frozen.capsule.wallet_id);
-        identity.extend_from_slice(&credited);
         Ok(Self {
             value: Intent::Archive(ArchiveIntentV1 {
-                request_id: digest("wallet-private-archive-intent", &identity),
+                request_id: Self::archive_identity(
+                    &send_capsule,
+                    &send.frozen.capsule.wallet_id,
+                    &credited,
+                ),
                 send_capsule,
                 request,
                 payment: send.retained.record.output.clone(),
@@ -168,5 +168,43 @@ impl NativeIntentV1 {
                 credited,
             }),
         })
+    }
+
+    pub(super) fn archive_identity(
+        capsule: &[u8; 32],
+        wallet: &[u8; 32],
+        credited: &[u8],
+    ) -> [u8; 32] {
+        use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
+        let mut identity = capsule.to_vec();
+        identity.extend_from_slice(wallet);
+        identity.extend_from_slice(credited);
+        digest("wallet-private-archive-intent", &identity)
+    }
+
+    #[cfg(test)]
+    pub(in crate::kagemusha_wallet_state_v1) fn retained_delivery_test_originals(
+        payment: &KagemushaWalletPaymentV1,
+        request: Vec<u8>,
+        credited: Vec<u8>,
+        credential: Vec<u8>,
+        certificates: Vec<u8>,
+    ) -> Self {
+        let capsule = payment.send.receipt.capsule_digest;
+        Self {
+            value: Intent::Archive(ArchiveIntentV1 {
+                request_id: Self::archive_identity(
+                    &capsule,
+                    &payment.request.body.payer_wallet_id,
+                    &credited,
+                ),
+                send_capsule: capsule,
+                request,
+                payment: payment.to_canonical_bytes().unwrap(),
+                credential,
+                certificates,
+                credited,
+            }),
+        }
     }
 }

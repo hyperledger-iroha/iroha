@@ -130,8 +130,8 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
                 "stopped validator artifact differs from transition plan",
             )?;
         }
-        // Executables may have been refreshed independently; the selected
-        // configuration and genesis must still be those of the sealed inventory.
+        // A takeover retains the loaded unit's independently captured configuration.
+        // Genesis remains bound to the selected predecessor in every path.
         for role in ["config", "genesis", "genesis_hash"] {
             let signed = old_validator
                 .artifacts
@@ -139,11 +139,11 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
                 .find(|artifact| artifact.role == role)
                 .ok_or_else(|| eyre!("retained validator omits {role}"))?;
             let selected = current.artifact(role)?;
-            need(
-                signed.sha256 == selected.sha256
-                    && signed.size == selected.size
-                    && signed.mode == selected.mode,
-                "sealed validator configuration or genesis differs from selected runtime",
+            bind_validator_artifact(
+                signed,
+                selected,
+                &current.release_root,
+                plan.predecessor.unresolved_journal.is_some(),
             )?;
         }
         let genesis_hash = current.artifact("genesis_hash")?;
@@ -158,6 +158,46 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
             "selected genesis-hash artifact differs from restored network identity",
         )?;
     }
+    bind_edge_predecessor(old, runtime, plan.predecessor.unresolved_journal.is_some())
+}
+
+/// Preserve genesis identity while admitting a takeover's captured native config lifecycle.
+#[cfg(any(target_os = "linux", test))]
+fn bind_validator_artifact(
+    signed: &reset::ArtifactV1,
+    selected: &reset::OccupiedArtifactV1,
+    release: &str,
+    deployment_proven_takeover: bool,
+) -> Result<()> {
+    need(
+        signed.role == selected.role,
+        "selected validator artifact role differs",
+    )?;
+    if deployment_proven_takeover && selected.role == "config" {
+        let name = reset::host::occupied::validator_config_name(Path::new(&selected.path))?;
+        return need(
+            selected.path == format!("{release}/config/{name}")
+                && selected.mode == 0o600
+                && selected.size > 0
+                && selected.size <= 1024 * 1024,
+            "captured validator configuration escaped its native lifecycle",
+        );
+    }
+    need(
+        signed.sha256 == selected.sha256
+            && signed.size == selected.size
+            && signed.mode == selected.mode,
+        "sealed validator configuration or genesis differs from selected runtime",
+    )
+}
+
+/// A takeover binds the current independently signed publication, retaining its actual owner.
+#[cfg(any(target_os = "linux", test))]
+fn bind_edge_predecessor(
+    old: &TerminalInventory,
+    runtime: &CurrentRuntime,
+    deployment_proven_takeover: bool,
+) -> Result<()> {
     runtime.hosts.validate_physical_binding(&old.hosts)?;
     let edge = &runtime.native_edge.claims.release;
     need(
@@ -165,6 +205,9 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
             && old.edge.endpoint.host_identity_sha256
                 == runtime.hosts.native_edge.endpoint.host_identity_sha256
             && edge.commit == old.revision.commit
+            && runtime.native_edge.claims.owner_uid == runtime.hosts.native_edge.owner_uid
+            && runtime.native_edge.claims.owner_gid == runtime.hosts.native_edge.owner_gid
+            && runtime.native_edge.claims.custody_root == runtime.hosts.native_edge.custody_root
             && edge.config_sha256
                 == runtime
                     .native_edge
@@ -172,9 +215,10 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
                     .owned_publication
                     .publication
                     .sha256
-            && old.edge.artifacts.iter().any(|artifact| {
-                artifact.role == "edge_config" && artifact.sha256 == edge.config_sha256
-            }),
+            && (deployment_proven_takeover
+                || old.edge.artifacts.iter().any(|artifact| {
+                    artifact.role == "edge_config" && artifact.sha256 == edge.config_sha256
+                })),
         "independently captured native edge differs from selected predecessor",
     )
 }
@@ -331,6 +375,118 @@ mod tests {
             bind_inventory_lineage(&selected, "different", &predecessor, &runtime, "a", false)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn takeover_accepts_captured_beacon_config_but_retains_genesis_identity() {
+        let fixture = terminal_fixture();
+        let validator = &fixture.validators[0];
+        let signed = validator
+            .artifacts
+            .iter()
+            .find(|v| v.role == "config")
+            .unwrap();
+        let release = format!(
+            "{}/releases/{}",
+            validator.service_root, fixture.revision.commit
+        );
+        let selected = reset::OccupiedArtifactV1 {
+            role: "config".into(),
+            path: format!("{release}/config/beacon.toml"),
+            sha256: if signed.sha256 == "a".repeat(64) {
+                "b".repeat(64)
+            } else {
+                "a".repeat(64)
+            },
+            size: signed.size + 1,
+            mode: 0o600,
+            source_commit: fixture.revision.commit.clone(),
+        };
+        assert!(bind_validator_artifact(signed, &selected, &release, false).is_err());
+        bind_validator_artifact(signed, &selected, &release, true).unwrap();
+        for case in 0..5 {
+            let mut changed = selected.clone();
+            match case {
+                0 => changed.path = format!("{release}/config/foreign.toml"),
+                1 => changed.path = format!("{release}/other/beacon.toml"),
+                2 => changed.mode = 0o644,
+                3 => changed.size = 0,
+                _ => changed.role = "genesis".into(),
+            }
+            assert!(bind_validator_artifact(signed, &changed, &release, true).is_err());
+        }
+        for role in ["genesis", "genesis_hash"] {
+            let signed = validator.artifacts.iter().find(|v| v.role == role).unwrap();
+            let mut changed = selected.clone();
+            changed.role = role.into();
+            changed.sha256 = if signed.sha256 == "a".repeat(64) {
+                "b".repeat(64)
+            } else {
+                "a".repeat(64)
+            };
+            changed.size = signed.size;
+            changed.mode = signed.mode;
+            assert!(bind_validator_artifact(signed, &changed, &release, true).is_err());
+            changed.sha256 = signed.sha256.clone();
+            bind_validator_artifact(signed, &changed, &release, true).unwrap();
+        }
+    }
+
+    #[test]
+    fn takeover_accepts_current_signed_edge_publication_with_original_owner() {
+        let (selected, _, mut runtime) = lineage_fixture();
+        runtime.native_edge.claims.release.commit = selected.revision.commit.clone();
+        let historical = selected
+            .edge
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.role == "edge_config")
+            .unwrap()
+            .sha256
+            .clone();
+        runtime.native_edge.claims.release.config_sha256 = historical.clone();
+        runtime
+            .native_edge
+            .claims
+            .owned_publication
+            .publication
+            .sha256 = historical;
+        bind_edge_predecessor(&selected, &runtime, false).unwrap();
+        let current = if runtime.native_edge.claims.release.config_sha256 == "a".repeat(64) {
+            "b".repeat(64)
+        } else {
+            "a".repeat(64)
+        };
+        runtime.native_edge.claims.release.config_sha256 = current.clone();
+        runtime
+            .native_edge
+            .claims
+            .owned_publication
+            .publication
+            .sha256 = current;
+        assert!(bind_edge_predecessor(&selected, &runtime, false).is_err());
+        bind_edge_predecessor(&selected, &runtime, true).unwrap();
+        for case in 0..5 {
+            let mut changed = runtime.clone();
+            match case {
+                0 => changed.native_edge.claims.release.commit = "0".repeat(40),
+                1 => {
+                    changed
+                        .native_edge
+                        .claims
+                        .owned_publication
+                        .publication
+                        .sha256 = "0".repeat(64)
+                }
+                2 => changed.native_edge.claims.owner_uid += 1,
+                3 => changed.native_edge.claims.owner_gid += 1,
+                _ => changed.hosts.native_edge.endpoint.hostname = "other-mac.example.org".into(),
+            }
+            assert!(
+                bind_edge_predecessor(&selected, &changed, true).is_err(),
+                "case {case}"
+            );
+        }
     }
 
     #[test]

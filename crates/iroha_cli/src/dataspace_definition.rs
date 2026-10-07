@@ -33,7 +33,7 @@ pub(crate) fn run(
         DataspaceCommand::Plan(args)
         | DataspaceCommand::Apply(args)
         | DataspaceCommand::Status(args) => args,
-        DataspaceCommand::ExportProfile(_) => {
+        DataspaceCommand::ExportProfile(_) | DataspaceCommand::VerifyAuthority(_) => {
             bail!("profile export must use the credential-free dispatcher")
         }
     };

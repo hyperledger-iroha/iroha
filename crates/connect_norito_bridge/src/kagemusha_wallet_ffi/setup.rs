@@ -4,6 +4,17 @@ use super::*;
 
 pub(crate) enum Setup {
     Bootstrap,
+    RequestFeeSelection,
+    ValidateRequestFeePolicy {
+        schedule: Vec<u8>,
+        certificates: Vec<u8>,
+    },
+    RequestWithFeePolicy {
+        id: [u8; 32],
+        offer: Vec<u8>,
+        schedule: Vec<u8>,
+        certificates: Vec<u8>,
+    },
     FeeClaim {
         credit: [u8; 32],
     },
@@ -19,21 +30,12 @@ pub(crate) enum Setup {
         id: [u8; 32],
         amount: u128,
     },
-    LoadFinality {
-        receipt: Vec<u8>,
-        event: Vec<u8>,
-    },
     LedgerInstruction {
         kind: u64,
         original: Vec<u8>,
     },
     ConfirmUnload {
         transaction: [u8; 32],
-        original: Vec<u8>,
-    },
-    LoadProofProgress(Vec<u8>),
-    LoadProofStep {
-        receipt: Vec<u8>,
         original: Vec<u8>,
     },
     UnloadProofProgress {
@@ -83,6 +85,16 @@ pub(crate) enum Setup {
         >,
     },
     Credited(Vec<u8>),
+    BoundCredited {
+        send_request: [u8; 32],
+        original: Vec<u8>,
+        query: bool,
+    },
+    CreditProjection {
+        id: [u8; 32],
+        anchor: Vec<u8>,
+        newer: Vec<u8>,
+    },
     CreditedOriginal {
         status: bool,
         original: Vec<u8>,
@@ -97,14 +109,6 @@ pub(crate) enum Setup {
         certificate: Vec<u8>,
     },
 }
-fn load_progress(value: state::LoadProofProgressV1) -> Response {
-    Response {
-        kind: 43,
-        sequence: u128::from(value.receipt_height),
-        bytes: value.verified_height.to_be_bytes().to_vec(),
-        ..Response::default()
-    }
-}
 fn activation_progress(value: state::ActivationFinalityProgressV1) -> Response {
     let (kind, progress) = match value {
         state::ActivationFinalityProgressV1::Confirmed(progress) => (44, Some(progress)),
@@ -117,16 +121,25 @@ fn activation_progress(value: state::ActivationFinalityProgressV1) -> Response {
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 | 27 => [0; 3],
-        28 => [512, state::LOAD_EVENT_PROOF_MAX_BYTES_V1, 0],
-        31 => [512, 0, 0],
+        43 => [0; 3],
+        44 => [
+            KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
+            KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
+            0,
+        ],
+        0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 | 27 | 38 => [0; 3],
+        39 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1; 3],
+        40 => [
+            KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
+            KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
+            0,
+        ],
         35 | 37 => [state::LEDGER_INSTRUCTION_MAX_BYTES_V1, 0, 0],
         36 => [
             state::LEDGER_INSTRUCTION_MAX_BYTES_V1,
             state::LEDGER_PROOF_MAX_BYTES_V1,
             0,
         ],
-        32 => [512, state::LEDGER_PROOF_MAX_BYTES_V1, 0],
         34 => [
             state::LEDGER_INSTRUCTION_MAX_BYTES_V1,
             state::LEDGER_PROOF_MAX_BYTES_V1,
@@ -150,7 +163,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
             KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
         ],
-        3 | 7..=14 | 16..=17 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
+        3 | 7..=14 | 16..=17 | 41..=42 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
         5 => [
             KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
@@ -176,7 +189,10 @@ pub(crate) fn request(
 ) -> Result<Setup> {
     let id: [u8; 32] = id.try_into().map_err(|_| Failure::code(INVALID))?;
     let bounds = bounds(selector)?;
-    if (matches!(selector, 1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34) != (id != [0; 32]))
+    if (matches!(
+        selector,
+        1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 39 | 41 | 42 | 43 | 44
+    ) != (id != [0; 32]))
         || (matches!(selector, 1 | 27) != (amount != 0))
         || (matches!(selector, 5 | 6 | 29) != (token != 0))
         || (selector == 29 && !(1..=3).contains(&token))
@@ -190,16 +206,25 @@ pub(crate) fn request(
     let [first, second, third] = originals;
     Ok(match selector {
         0 => Setup::Bootstrap,
+        38 => Setup::RequestFeeSelection,
+        39 if !first.is_empty() && second.is_empty() == third.is_empty() => {
+            Setup::RequestWithFeePolicy {
+                id,
+                offer: first.to_vec(),
+                schedule: second.to_vec(),
+                certificates: third.to_vec(),
+            }
+        }
+        40 if !first.is_empty() && !second.is_empty() => Setup::ValidateRequestFeePolicy {
+            schedule: first.to_vec(),
+            certificates: second.to_vec(),
+        },
         20 => Setup::FeeClaim { credit: id },
         21 | 22 if !first.is_empty() => Setup::FeeOriginal {
             request: selector == 22,
             original: first.to_vec(),
         },
         27 => Setup::LedgerLoad { id, amount },
-        28 if !first.is_empty() && !second.is_empty() => Setup::LoadFinality {
-            receipt: first.to_vec(),
-            event: second.to_vec(),
-        },
         29 if !first.is_empty() => Setup::LedgerInstruction {
             kind: token,
             original: first.to_vec(),
@@ -207,11 +232,6 @@ pub(crate) fn request(
         30 if !first.is_empty() => Setup::ConfirmUnload {
             transaction: id,
             original: first.to_vec(),
-        },
-        31 if !first.is_empty() => Setup::LoadProofProgress(first.to_vec()),
-        32 if !first.is_empty() && !second.is_empty() => Setup::LoadProofStep {
-            receipt: first.to_vec(),
-            original: second.to_vec(),
         },
         33 if !first.is_empty() => Setup::UnloadProofProgress {
             transaction: id,
@@ -253,6 +273,21 @@ pub(crate) fn request(
             },
         },
         3 if !first.is_empty() => Setup::Credited(first.to_vec()),
+        41..=42 if !first.is_empty() => Setup::BoundCredited {
+            send_request: id,
+            original: first.to_vec(),
+            query: selector == 42,
+        },
+        43 => Setup::CreditProjection {
+            id,
+            anchor: Vec::new(),
+            newer: Vec::new(),
+        },
+        44 if !first.is_empty() => Setup::CreditProjection {
+            id,
+            anchor: first.to_vec(),
+            newer: second.to_vec(),
+        },
         16..=17 if !first.is_empty() => Setup::CreditedOriginal {
             status: selector == 17,
             original: first.to_vec(),
@@ -312,6 +347,27 @@ where
 {
     pub(super) fn setup_inner(&mut self, input: Setup) -> Result<Response> {
         let bytes = match input {
+            Setup::RequestFeeSelection => {
+                let (asset, fee) = self.wallet.request_fee_selection()?;
+                [asset.as_slice(), fee.as_slice()].concat()
+            }
+            Setup::ValidateRequestFeePolicy {
+                schedule,
+                certificates,
+            } => {
+                let (asset, fee) = self
+                    .wallet
+                    .validate_request_fee_policy(&schedule, &certificates)?;
+                [asset.as_slice(), fee.as_slice()].concat()
+            }
+            Setup::RequestWithFeePolicy {
+                id,
+                offer,
+                schedule,
+                certificates,
+            } => self
+                .wallet
+                .request_with_fee_policy(id, &offer, &schedule, &certificates)?,
             Setup::FeeClaim { credit } => {
                 let original = self.wallet.fee_claim(credit)?;
                 return Ok(match original {
@@ -356,13 +412,6 @@ where
                     ..Response::default()
                 });
             }
-            Setup::LoadFinality { receipt, event } => {
-                return Ok(Response {
-                    kind: 41,
-                    bytes: self.wallet.prove_load_finality(&receipt, &event)?,
-                    ..Response::default()
-                });
-            }
             Setup::LedgerInstruction { kind, original } => {
                 return Ok(Response {
                     kind: 40,
@@ -379,14 +428,6 @@ where
                 ));
                 response.kind = 42;
                 return Ok(response);
-            }
-            Setup::LoadProofProgress(receipt) => {
-                return Ok(load_progress(self.wallet.load_finality_progress(&receipt)?));
-            }
-            Setup::LoadProofStep { receipt, original } => {
-                return Ok(load_progress(
-                    self.wallet.ingest_load_finality(&receipt, &original)?,
-                ));
             }
             Setup::UnloadProofProgress {
                 transaction,
@@ -478,6 +519,43 @@ where
             Setup::Credited(bytes) => {
                 return Ok(completion(Some(self.wallet.accept_credited(&bytes)?)));
             }
+            Setup::BoundCredited {
+                send_request,
+                original,
+                query,
+            } => {
+                return Ok(if query {
+                    match self
+                        .wallet
+                        .credited_status_for_send(&send_request, &original)?
+                    {
+                        state::RequestStatusV1::Unknown => Response::default(),
+                        state::RequestStatusV1::Preparing => Response {
+                            kind: 11,
+                            ..Response::default()
+                        },
+                        state::RequestStatusV1::Outcome(value) => completion(Some(value)),
+                    }
+                } else {
+                    completion(Some(
+                        self.wallet
+                            .accept_credited_for_send(&send_request, &original)?,
+                    ))
+                });
+            }
+            Setup::CreditProjection { id, anchor, newer } => {
+                return Ok(Response {
+                    kind: 47,
+                    bytes: if anchor.is_empty() {
+                        self.wallet.receive_credit_projection(&id)?.bytes()
+                    } else {
+                        self.wallet
+                            .delivery_credit_projection(&id, &anchor, &newer)?
+                            .bytes()
+                    },
+                    ..Response::default()
+                });
+            }
             Setup::BeginTime => {
                 if self.times.len() >= 32 {
                     return Err(Failure::code(RESOURCE));
@@ -532,6 +610,87 @@ where
 mod tests {
     use super::*;
     #[test]
+    fn credit_projection_intake_has_exact_role_bounds_and_no_foreign_authority() {
+        let id = [7; 32];
+        let zero = [0; 32];
+        let one: &[u8] = &[1];
+        let empty: &[u8] = &[];
+        assert!(request(&id, 43, 0, 0, [empty; 3]).is_ok());
+        assert!(request(&id, 44, 0, 0, [one, empty, empty]).is_ok());
+        assert!(request(&id, 44, 0, 0, [one, one, empty]).is_ok());
+        assert!(request(&id, 43, 0, 0, [one, empty, empty]).is_err());
+        assert!(request(&id, 44, 0, 0, [empty, one, empty]).is_err());
+        assert!(request(&id, 44, 0, 0, [one; 3]).is_err());
+        for selector in [43, 44] {
+            let inputs = if selector == 43 {
+                [empty; 3]
+            } else {
+                [one, one, empty]
+            };
+            assert!(request(&zero, selector, 0, 0, inputs).is_err());
+            assert!(request(&id, selector, 1, 0, inputs).is_err());
+            assert!(request(&id, selector, 0, 1, inputs).is_err());
+        }
+        for index in [0, 1] {
+            let oversized = vec![0; 10_001];
+            let mut inputs = [one, one, empty];
+            inputs[index] = &oversized;
+            assert!(request(&id, 44, 0, 0, inputs).is_err());
+        }
+    }
+    #[test]
+    fn bound_delivery_intake_requires_exact_send_identity_and_bounded_original() {
+        let id = [7; 32];
+        let zero = [0; 32];
+        let one: &[u8] = &[1];
+        let empty: &[u8] = &[];
+        for selector in [41, 42] {
+            let value = request(&id, selector, 0, 0, [one, empty, empty]).unwrap();
+            assert!(
+                matches!(value, Setup::BoundCredited { send_request, original, query } if send_request == id && original == one && query == (selector == 42))
+            );
+            assert!(request(&zero, selector, 0, 0, [one, empty, empty]).is_err());
+            assert!(request(&id, selector, 0, 0, [empty; 3]).is_err());
+            assert!(request(&id, selector, 1, 0, [one, empty, empty]).is_err());
+            assert!(request(&id, selector, 0, 1, [one, empty, empty]).is_err());
+            assert!(request(&id, selector, 0, 0, [one; 3]).is_err());
+            assert!(request(&id, selector, 0, 0, [&vec![0; 10_001], empty, empty]).is_err());
+        }
+    }
+    #[test]
+    fn fee_policy_intake_bounds_pairing_and_unused_authority_fields() {
+        let zero = [0; 32];
+        let id = [7; 32];
+        let one: &[u8] = &[1];
+        let empty: &[u8] = &[];
+        assert!(request(&zero, 38, 0, 0, [empty; 3]).is_ok());
+        for selector in [38, 40] {
+            let originals = if selector == 40 {
+                [one, one, empty]
+            } else {
+                [empty; 3]
+            };
+            assert!(request(&zero, selector, 0, 0, originals).is_ok());
+            assert!(request(&id, selector, 0, 0, originals).is_err());
+            assert!(request(&zero, selector, 1, 0, originals).is_err());
+            assert!(request(&zero, selector, 0, 1, originals).is_err());
+        }
+        assert!(request(&id, 39, 0, 0, [one, empty, empty]).is_ok());
+        assert!(request(&id, 39, 0, 0, [one; 3]).is_ok());
+        assert!(request(&id, 39, 0, 0, [one, one, empty]).is_err());
+        assert!(request(&id, 39, 0, 0, [one, empty, one]).is_err());
+        assert!(request(&zero, 39, 0, 0, [one; 3]).is_err());
+        assert!(request(&id, 39, 0, 0, [empty, one, one]).is_err());
+        assert!(request(&zero, 40, 0, 0, [one, empty, empty]).is_err());
+        assert!(request(&zero, 40, 0, 0, [one; 3]).is_err());
+        for index in 0..3 {
+            let oversized = vec![0; 10_001];
+            let mut inputs = [one; 3];
+            inputs[index] = &oversized;
+            assert!(request(&id, 39, 0, 0, inputs).is_err());
+        }
+    }
+    #[test]
     fn setup_intake_rejects_unused_authority_fields_and_wrong_bounds() {
         for selector in [0, 1, 3, 4, 15, 18, 19] {
             let id = if matches!(selector, 1 | 19) {
@@ -559,7 +718,7 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(38).is_err());
+        assert!(bounds(45).is_err());
     }
     #[test]
     fn activation_intake_and_progress_are_closed_and_exact() {
@@ -643,8 +802,10 @@ mod tests {
         let zero = [0; 32];
         assert!(request(&id, 27, 1, 0, [&[]; 3]).is_ok());
         assert!(request(&id, 27, 0, 0, [&[]; 3]).is_err());
-        for selector in [28, 32] {
-            assert!(request(&zero, selector, 0, 0, [&[1], &[2], &[]]).is_ok());
+        for selector in [28, 31, 32] {
+            assert!(bounds(selector).is_err());
+            assert!(request(&zero, selector, 0, 0, [&[]; 3]).is_err());
+            assert!(request(&zero, selector, 0, 0, [&[1], &[2], &[]]).is_err());
             assert!(request(&zero, selector, 0, 0, [&vec![1; 513], &[2], &[]]).is_err());
             assert!(request(&id, selector, 0, 0, [&[1], &[2], &[]]).is_err());
         }

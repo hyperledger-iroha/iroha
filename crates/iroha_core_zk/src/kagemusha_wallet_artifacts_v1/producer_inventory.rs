@@ -37,10 +37,6 @@ pub use compiler::{
 mod finality;
 pub use finality::{FinalityQualificationErrorV1, QualifiedReceiptSourceV1};
 
-#[path = "producer_inventory/finality_producer.rs"]
-mod finality_producer;
-pub use finality_producer::{FinalityProducerErrorV1, QualifiedFinalityProducerV1};
-
 #[path = "producer_inventory/sigma.rs"]
 mod sigma;
 pub(super) use sigma::compiled_sigma_policy;

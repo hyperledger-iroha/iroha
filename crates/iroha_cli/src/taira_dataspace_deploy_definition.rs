@@ -6,7 +6,7 @@ use iroha_deploy::definition::{DataspaceDefinition, Visibility};
 /// Semantic owner intent. Paths and formatting are deliberately not operation identity.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct DefinitionBinding {
+pub(super) struct DefinitionBinding {
     network_id: NetworkId,
     owner: AccountId,
     network_url: String,
@@ -60,7 +60,7 @@ impl DefinitionBinding {
         ))
     }
 
-    fn verify_manifest(&self, manifest: &ManifestV1) -> Result<()> {
+    pub(super) fn verify_manifest(&self, manifest: &ManifestV1) -> Result<()> {
         use iroha_data_model::nexus::LaneVisibility;
         manifest.validate()?;
         let aliases: Vec<_> = manifest
@@ -475,13 +475,32 @@ pub(super) fn run<C: RunContext>(
         Command::Plan(args) => (args, false, false),
         Command::Apply(args) => (args, true, false),
         Command::Status(args) => (args, false, true),
-        Command::ExportProfile(_) => eyre::bail!("profile export has no deployment definition"),
+        Command::ExportProfile(_) | Command::VerifyAuthority(_) => {
+            eyre::bail!("local authority tooling has no deployment definition")
+        }
     };
     let verification_origins = command.verification_origins(&trust)?;
     let runtime_update = args
         .verification_runtime_update
         .as_deref()
-        .map(|path| runtime_update::Verified::admit(path, &trust, context.config().network_id))
+        .map(|path| {
+            match (
+                &args.verification_source_commit,
+                &args.verification_source_version,
+            ) {
+                (Some(commit), Some(version)) => runtime_update::Verified::admit_target(
+                    path,
+                    &trust,
+                    context.config().network_id,
+                    commit,
+                    version,
+                ),
+                (None, None) => {
+                    runtime_update::Verified::admit(path, &trust, context.config().network_id)
+                }
+                _ => eyre::bail!("incomplete explicit target source selection"),
+            }
+        })
         .transpose()?;
     let deadline = operation_deadline(args.timeout_ms)?;
     let binding = DefinitionBinding::new(
@@ -613,6 +632,16 @@ pub(super) fn run<C: RunContext>(
         &verification_origins,
         runtime_update.as_ref(),
     )?;
+    if let Some(destination) = &args.export_authority {
+        authority::export(
+            &journal,
+            &plan,
+            &report,
+            &args.trust,
+            runtime_update.as_ref(),
+            destination,
+        )?;
+    }
     print_saved_report(&report, apply, |report| context.print_data(report))
 }
 

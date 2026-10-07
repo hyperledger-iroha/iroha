@@ -12,6 +12,7 @@ mod request;
 pub use request::{ChargeOriginalsV1, OperationActionV1, OperationRequestV1, REQUEST_MAX_BYTES};
 
 mod dispatch;
+pub use dispatch::CreditProjectionV1;
 mod intent;
 pub(crate) use intent::ArchiveIntentV1;
 pub use intent::NativeIntentV1;
