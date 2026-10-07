@@ -76,6 +76,14 @@ fn bindings(
 }
 
 impl NativeChoicesV1 {
+    pub(crate) fn fresh_nonce(previous: &[u8; 32]) -> Result<[u8; 32]> {
+        sample_nonce(previous, |bytes| {
+            rand::rngs::OsRng
+                .try_fill_bytes(bytes)
+                .map_err(|_| entropy_unavailable())
+        })
+    }
+
     pub(crate) fn fresh<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
         manifest: [u8; 32],
         request: &NativeIntentV1,
@@ -83,7 +91,7 @@ impl NativeChoicesV1 {
         observations: &state::NativeObservationsV1<F, P>,
     ) -> Result<Self> {
         let (source_digest, request_digest) = bindings(request, source)?;
-        let nonce = sample_nonce(
+        let nonce = Self::fresh_nonce(
             &source
                 .released()
                 .frozen
@@ -91,11 +99,6 @@ impl NativeChoicesV1 {
                 .successor_state
                 .core
                 .state_nonce,
-            |bytes| {
-                rand::rngs::OsRng
-                    .try_fill_bytes(bytes)
-                    .map_err(|_| entropy_unavailable())
-            },
         )?;
         let observation = if needs_time(request, source) {
             let now = observations.time()?;

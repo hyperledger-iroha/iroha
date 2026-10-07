@@ -42,15 +42,15 @@ mod collection;
 mod credit_tree;
 mod custody;
 mod fee_claims;
-mod folding;
 mod fold_custody;
+mod folding;
 mod index;
 mod lifecycle;
 mod manifest;
 mod map_custody;
 mod map_tree;
-mod native_worker;
 mod native_owner;
+mod native_worker;
 pub use native_owner::NativeWalletProofsV1;
 mod preparation_custody;
 mod scheduling;
@@ -63,21 +63,21 @@ pub use collection::{CollectionStatus, OutgoingAbsent};
 pub(crate) use custody::NativeObservationsV1;
 pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
 pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
-pub use folding::{FoldStatus, LineageCache};
 pub use fold_custody::FoldCustodyV1;
+pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
+pub(crate) use lifecycle::ArchiveIntentV1;
 pub use lifecycle::{
     ChargeOriginalsV1, NativeIntentV1, NativePreparation, OperationActionV1, OperationRequestV1,
     PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES, RequestStatusV1,
 };
-pub(crate) use lifecycle::ArchiveIntentV1;
 pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub(crate) use native_worker::NativeFoldWorkerV1;
 pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
-pub use transition_custody::TransitionCustodyV1;
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
 pub(crate) use session_custody::DirectTimeExchangeV1;
 pub use snapshot::{Snapshot, SnapshotFold};
+pub use transition_custody::TransitionCustodyV1;
 
 /// Errors distinguish uncertain custody from invalid input and missing retained witnesses.
 #[derive(Debug, thiserror::Error)]
@@ -212,7 +212,10 @@ pub trait NativeProofs {
     ///
     /// # Errors
     /// The owner has no matching admitted credential or its retained originals are unavailable.
-    fn enrollment_certificates(&self, credential: &KagemushaWalletCredentialV1) -> Result<Vec<u8>, Error>;
+    fn enrollment_certificates(
+        &self,
+        credential: &KagemushaWalletCredentialV1,
+    ) -> Result<Vec<u8>, Error>;
     /// Trusted scheme and Global chain label selected when the authenticated artifacts were
     /// loaded. Witnesses and payout evidence must never supply or override these identities.
     ///
@@ -615,20 +618,34 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         let prepared = self.transition_preparation(&manifest, &frozen)?;
         let selected_source = if let Some(prepared) = &prepared {
-            let previous = predecessor.as_ref().ok_or(Error::WitnessLost("prepared predecessor"))?;
+            let previous = predecessor
+                .as_ref()
+                .ok_or(Error::WitnessLost("prepared predecessor"))?;
             if prepared.source != valid(previous.frozen.capsule.capsule_digest())? {
                 return Err(Error::WitnessLost("prepared transition source"));
             }
             Some(self.preparation_source_custody(&manifest, previous, c.kind, folded.as_ref())?)
-        } else { None };
+        } else {
+            None
+        };
         let refresh = match c.statement.effect {
             KagemushaWalletEffectV1::RefreshPolicy { update_kind, .. } => Some(update_kind),
             _ => None,
         };
-        let view = selected_source.as_ref().map(|(source, state)| {
-            PreparationCustodyV1::new(&mut self.archive, source, state, c.kind, refresh,
-                manifest.issued_requests, manifest.direct_anchors)
-        }).transpose()?;
+        let view = selected_source
+            .as_ref()
+            .map(|(source, state)| {
+                PreparationCustodyV1::new(
+                    &mut self.archive,
+                    source,
+                    state,
+                    c.kind,
+                    refresh,
+                    manifest.issued_requests,
+                    manifest.direct_anchors,
+                )
+            })
+            .transpose()?;
         let mut context = TransitionCustodyV1::new(prepared, view)?;
         let advance_check = self.proofs.verify_transition(
             &frozen,
@@ -638,11 +655,16 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         )?;
         let mut next_custody = context.finish(&c.successor_state)?;
         if c.kind == KagemushaWalletOperationKindV1::Bootstrap {
-            if predecessor.is_some() { return Err(Error::Invalid("bootstrap predecessor")); }
+            if predecessor.is_some() {
+                return Err(Error::Invalid("bootstrap predecessor"));
+            }
             let certificates = self.proofs.enrollment_certificates(&frozen.credential)?;
             next_custody = Some(preparation_custody::SourceCustodyV1::bootstrap(
-                &mut self.archive, &c.successor_state,
-                &valid(frozen.credential.to_canonical_bytes())?, &certificates)?);
+                &mut self.archive,
+                &c.successor_state,
+                &valid(frozen.credential.to_canonical_bytes())?,
+                &certificates,
+            )?);
         }
         let digest = valid(c.capsule_digest())?;
         if let Some(source) = next_custody {

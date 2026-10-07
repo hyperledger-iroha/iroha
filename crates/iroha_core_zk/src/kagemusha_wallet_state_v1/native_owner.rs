@@ -1,6 +1,7 @@
 //! One admitted native wallet owner for preparation, proof imports and folding.
 
 use super::*;
+mod bootstrap;
 use crate::{
     kagemusha_wallet_advance_v1::{KagemushaWalletFsV1, KagemushaWalletPlatformV1},
     kagemusha_wallet_artifacts_v1::{
@@ -202,22 +203,30 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             {
                 return Err(Error::Proof("bootstrap native admission"));
             }
-            preparation.authenticate_credential_set(
+            let owner = preparation.authenticate_credential_set(
                 &valid(next.credential.to_canonical_bytes())?,
                 &self.enrollment_certificates,
             )?;
-            let expected = valid(KagemushaWalletStateV1::bootstrap(
-                &next.credential,
+            let KagemushaWalletEffectV1::Bootstrap {
+                enrollment_marker, ..
+            } = next.capsule.statement.effect
+            else {
+                return Err(Error::Proof("Bootstrap effect"));
+            };
+            let expected = proof(preparation.prepare_bootstrap(
+                &owner,
+                enrollment_marker,
                 next.capsule.successor_state.core.state_nonce,
             ))?;
-            if expected != next.capsule.successor_state {
-                return Err(Error::Proof("bootstrap derived state"));
-            }
-            proof(self.installed.verifier().verify_capsule_proofs(
-                &next.capsule,
-                &next.credential,
+            let frozen = proof(preparation.freeze_bootstrap(
+                &owner,
+                &expected,
+                next.capsule.step_proof.clone(),
                 self.budget,
             ))?;
+            if &frozen != next {
+                return Err(Error::Proof("Bootstrap derived capsule"));
+            }
             return Ok(NativeAdvanceCheckV1::without_time());
         }
         let source = PreparationSourceV1 {

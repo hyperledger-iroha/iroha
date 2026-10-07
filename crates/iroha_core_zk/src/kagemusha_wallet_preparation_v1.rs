@@ -44,6 +44,10 @@ mod archive;
 pub(crate) use archive::{ArchiveFoldFieldsV1, ArchiveStepV1};
 pub use archive::{ArchiveFoldWitnessV1, ArchiveIncomingWitnessV1};
 
+#[path = "kagemusha_wallet_preparation_v1/bootstrap.rs"]
+mod bootstrap;
+pub(crate) use bootstrap::BootstrapStepV1;
+
 #[path = "kagemusha_wallet_preparation_v1/load.rs"]
 mod load;
 pub use load::{LoadOriginalsV1, LoadStepV1};

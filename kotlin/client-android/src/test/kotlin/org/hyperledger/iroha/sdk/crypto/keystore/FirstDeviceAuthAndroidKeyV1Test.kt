@@ -25,6 +25,8 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import org.hyperledger.iroha.sdk.auth.FirstDeviceAuthProtocolV1 as Protocol
+import org.hyperledger.iroha.sdk.auth.FirstDeviceAuthRegistrationBridgeV1 as Bridge
+import org.hyperledger.iroha.sdk.auth.RegistrationBridgeFixtureV1 as BridgeFixture
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationResult.SecurityLevel
 import org.hyperledger.iroha.sdk.json.Json
 import org.junit.jupiter.api.Assertions.*
@@ -215,12 +217,57 @@ class FirstDeviceAuthAndroidKeyV1Test {
         assertEquals(0, access.signatures)
     }
 
+    @Test fun typedRegistrationSignerUsesWholeFrameAndActualOriginalKey() {
+        // Synthetic host KeyInfo/attestation DATA and genuine JCA; no hardware/Core admission.
+        val c = BridgeFixture.challenge(); val access = OriginalAccess(31, c)
+        val key = (FirstDeviceAuthAndroidKeyV1.openExistingWithAccess(ByteArray(32) { 13 }, c, {}, access)
+            as FirstDeviceAuthAndroidKeyV1.Lookup.Present).key
+        val raw = raw(c, access.chain)
+        val possession = key.signPossessionOriginal(raw)
+        val originals = BridgeFixture.originals(c, raw, possession)
+        val frame = Bridge.FrameOriginal.parseResponse(BridgeFixture.response(BridgeFixture.frame(originals)), originals)
+        var checks = 0
+        val signature = key.signRegistrationBridgeOriginal(frame) { checks++ }
+        assertTrue(checks >= 8)
+        verifyFirstDeviceAuthPossessionDerV1(access.chain.first(), frame.originalBytes(), signature)
+        assertThrows(IllegalArgumentException::class.java) {
+            verifyFirstDeviceAuthPossessionDerV1(access.chain.first(), frame.originalBytes().copyOf(32), signature)
+        }
+        assertEquals(2, access.signatures)
+    }
+
+    @Test fun differentOriginalKeyAndRetiredRegistrationGuardRefuseBeforeBridgeSigning() {
+        val c = BridgeFixture.challenge(); val access = OriginalAccess(31, c)
+        val key = (FirstDeviceAuthAndroidKeyV1.openExistingWithAccess(ByteArray(32) { 14 }, c, {}, access)
+            as FirstDeviceAuthAndroidKeyV1.Lookup.Present).key
+        val originals = BridgeFixture.originals(c, raw(c, access.chain))
+        val frame = Bridge.FrameOriginal.parseResponse(BridgeFixture.response(BridgeFixture.frame(originals)), originals)
+        assertThrows(IllegalStateException::class.java) { key.signRegistrationBridgeOriginal(frame) { error("Original registration retired") } }
+        val other = BridgeFixture.originals(c, raw(c, originalChain(keyPair(), c)))
+        val otherFrame = Bridge.FrameOriginal.parseResponse(BridgeFixture.response(BridgeFixture.frame(other)), other)
+        assertThrows(IllegalArgumentException::class.java) { key.signRegistrationBridgeOriginal(otherFrame) {} }
+        assertEquals(0, access.signatures)
+    }
+
+    @Test fun changedRegistrationOwnerDuringKeySigningCannotPublishBridgeSignature() {
+        val c = BridgeFixture.challenge(); val access = OriginalAccess(31, c)
+        val key = (FirstDeviceAuthAndroidKeyV1.openExistingWithAccess(ByteArray(32) { 15 }, c, {}, access)
+            as FirstDeviceAuthAndroidKeyV1.Lookup.Present).key
+        val originals = BridgeFixture.originals(c, raw(c, access.chain))
+        val frame = Bridge.FrameOriginal.parseResponse(BridgeFixture.response(BridgeFixture.frame(originals)), originals)
+        var owner = true
+        access.afterSign = { owner = false }
+        assertThrows(IllegalStateException::class.java) { key.signRegistrationBridgeOriginal(frame) { check(owner) } }
+        assertEquals(1, access.signatures)
+    }
+
     /** An explicit host-only provider double; genuine software JCA signing, never hardware evidence. */
     private inner class OriginalAccess(override val apiLevel: Int, c: Protocol.Challenge) : FirstDeviceAuthKeyAccessV1 {
         val pair = keyPair()
         var signingPair = pair
         var chain = originalChain(pair, c)
         var signatures = 0
+        var afterSign: () -> Unit = {}
         private val handle = object : PrivateKey {
             override fun getAlgorithm() = "EC"
             override fun getFormat(): String? = null
@@ -236,7 +283,7 @@ class FirstDeviceAuthAndroidKeyV1Test {
             signatures++
             return Signature.getInstance("SHA256withECDSA").run {
                 initSign(signingPair.private); update(message); sign()
-            }
+            }.also { afterSign() }
         }
     }
 

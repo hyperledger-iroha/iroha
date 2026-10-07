@@ -65,6 +65,14 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.test {
+    // Complete Kotlin-produced IssueLoad frames are independently compared by the Rust
+    // canonical registry test. Track both the external frozen identity and emitted output.
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file(
+        "crates/iroha_data_model/tests/fixtures/instruction_record_generated_identity_frames.json",
+    ))
+    val issueLoadParityOutput = layout.buildDirectory.file("kagemusha-issue-load-parity.properties")
+    outputs.file(issueLoadParityOutput)
+    systemProperty("kagemusha.issueLoad.parityOutput", issueLoadParityOutput.get().asFile.absolutePath)
     enableAssertions = true
     useJUnitPlatform {
         excludeTags("cuda-hardware")

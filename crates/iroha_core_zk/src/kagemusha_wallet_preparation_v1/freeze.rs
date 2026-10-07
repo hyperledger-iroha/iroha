@@ -126,6 +126,30 @@ impl PreparationV1<'_> {
         Ok(frozen)
     }
 
+    pub(crate) fn freeze_bootstrap(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &BootstrapStepV1,
+        proof: KagemushaWalletStepProofV1,
+        budget: MemoryBudget,
+    ) -> Result<FrozenTransition, Error> {
+        self.freeze(
+            owner,
+            CapsuleFields {
+                manifest: step.manifest,
+                source: [0; 32],
+                state: &step.state,
+                statement: &step.statement,
+                predecessor: None,
+                payment: [0; 32],
+                openings: Vec::new(),
+                retained: Vec::new(),
+            },
+            proof,
+            budget,
+        )
+    }
+
     /// Freeze a prepared Send or Receive with its actual installed sigma proof.
     /// Supply the exact opaque predecessor fold for Send and no fold for Receive.
     /// The recorded Request selects Receive's blacklist verifier, including after renewal.

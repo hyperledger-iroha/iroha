@@ -90,29 +90,57 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
         source: manifest.capsule,
         draft,
     };
-    let view = |store| {
+    fn view<'a>(
+        store: &'a mut MemoryArchive,
+        source: &SourceCustodyV1,
+        state: &KagemushaWalletStateV1,
+        manifest: &manifest::Manifest,
+    ) -> PreparationCustodyV1<'a> {
         PreparationCustodyV1::new(
             store,
-            &source,
-            &selected.frozen.capsule.successor_state,
+            source,
+            state,
             KagemushaWalletOperationKindV1::Retiring,
             None,
             manifest.issued_requests,
             manifest.direct_anchors,
         )
         .unwrap()
-    };
-    let custody =
-        TransitionCustodyV1::new(Some(plan(wrong)), Some(view(&mut wallet.archive))).unwrap();
+    }
+
+    let custody = TransitionCustodyV1::new(
+        Some(plan(wrong)),
+        Some(view(
+            &mut wallet.archive,
+            &source,
+            &selected.frozen.capsule.successor_state,
+            &manifest,
+        )),
+    )
+    .unwrap();
     assert!(matches!(custody.finish(&after), Err(Error::WitnessLost(_))));
-    let custody =
-        TransitionCustodyV1::new(Some(plan(source.clone())), Some(view(&mut wallet.archive)))
-            .unwrap();
+    let custody = TransitionCustodyV1::new(
+        Some(plan(source.clone())),
+        Some(view(
+            &mut wallet.archive,
+            &source,
+            &selected.frozen.capsule.successor_state,
+            &manifest,
+        )),
+    )
+    .unwrap();
     after.core.pending_outgoing_root = field(99);
     assert!(matches!(custody.finish(&after), Err(Error::WitnessLost(_))));
-    let custody =
-        TransitionCustodyV1::new(Some(plan(source.clone())), Some(view(&mut wallet.archive)))
-            .unwrap();
+    let custody = TransitionCustodyV1::new(
+        Some(plan(source.clone())),
+        Some(view(
+            &mut wallet.archive,
+            &source,
+            &selected.frozen.capsule.successor_state,
+            &manifest,
+        )),
+    )
+    .unwrap();
     assert_eq!(
         archive::encode(
             &custody
