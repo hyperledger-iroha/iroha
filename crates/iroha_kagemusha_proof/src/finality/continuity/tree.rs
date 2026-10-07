@@ -258,11 +258,22 @@ impl IntervalTree {
         fold_config: &FoldConfig,
         mut checkpoints: Option<&mut dyn ProofCheckpointStore>,
     ) -> Result<SourceNodeEvidence, Error> {
+        let proof_config = ProverConfig {
+            cancellation: proof_config
+                .cancellation
+                .or(fold_config.cancellation.as_ref()),
+            ..proof_config
+        };
+        iroha_pasta::CancellationToken::checkpoint(proof_config.cancellation)?;
+        let mut operation_fold = fold_config.clone();
+        operation_fold.cancellation = proof_config.cancellation.cloned();
+        let fold_config = &operation_fold;
         if leaves.len() != self.leaf_count {
             return Err(Error::Input);
         }
         let mut evidence = leaves.into_iter().map(Some).collect::<Vec<_>>();
         for (index, merge) in self.merges.iter().enumerate() {
+            iroha_pasta::CancellationToken::checkpoint(proof_config.cancellation)?;
             let [left, right] = merge.children;
             let children = [
                 evidence[left].take().ok_or(Error::Input)?,
@@ -276,27 +287,35 @@ impl IntervalTree {
                 entropy.inner_salt,
                 fold_config,
             )
-            .map_err(|_| Error::Proof)?;
+            .map_err(|error| {
+                if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
             if let Some(store) = &mut checkpoints
-                && let Some(proof) = checkpoint::restore(
+                && let Some(proof) = checkpoint::restore_cancellable(
                     *store,
                     &merge.source,
                     *circuit.endpoints(),
                     &self.vesta,
                     proof_config.msm_budget,
+                    proof_config.cancellation,
                 )?
             {
                 evidence.push(Some(proof));
                 continue;
             }
             let original = artifacts(merge.identity)?;
-            let prover = Prover::from_original_artifacts(
+            let prover = Prover::from_original_artifacts_cancellable(
                 &circuit,
                 original.source.borrowed(),
                 original.wrapper.borrowed(),
                 self.pallas.clone(),
                 self.vesta.clone(),
                 self.import,
+                proof_config.cancellation,
             )?;
             if SourceIdentity::of(&prover.qualified_source()?)?
                 != SourceIdentity::of(&merge.source)?
@@ -311,12 +330,13 @@ impl IntervalTree {
                 proof_config,
             )?;
             if let Some(store) = &mut checkpoints {
-                checkpoint::retain(
+                checkpoint::retain_cancellable(
                     *store,
                     &merge.source,
                     &proof,
                     &self.vesta,
                     proof_config.msm_budget,
+                    proof_config.cancellation,
                 )?;
             }
             evidence.push(Some(proof));

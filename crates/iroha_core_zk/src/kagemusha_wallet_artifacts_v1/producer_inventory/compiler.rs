@@ -706,3 +706,5 @@ mod tests;
 #[cfg(test)]
 #[path = "compiler/full_catalog.rs"]
 mod full_catalog;
+#[cfg(test)]
+pub(crate) use full_catalog::open_pinned_engineering_wallet_sources;

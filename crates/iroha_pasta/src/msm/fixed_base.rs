@@ -26,8 +26,10 @@
 //! Tables are built from public bases with exact arithmetic; MSM results equal
 //! the variable-base MSM bit for bit.
 
+use crate::CancellationToken;
 use group::prime::PrimeCurveAffine;
 use rayon::prelude::*;
+use zeroize::Zeroizing;
 
 use super::pippenger::{Buckets, Digits, MAX_WINDOW, bucket_bytes, num_windows};
 use super::{BudgetExceeded, MemoryBudget, MsmError, SharedMemoryBudget};
@@ -314,7 +316,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
     ) -> Result<C, MsmError> {
-        self.msm_impl::<false>(scalars, budget, shared)
+        self.msm_impl::<false>(scalars, budget, shared, None)
     }
 
     /// Secret table MSM charging an explicit shared scratch ceiling.
@@ -327,7 +329,36 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
     ) -> Result<C, MsmError> {
-        self.msm_impl::<true>(scalars, budget, shared)
+        self.msm_impl::<true>(scalars, budget, shared, None)
+    }
+
+    /// Public table MSM with explicit cancellation and shared scratch.
+    ///
+    /// # Errors
+    /// As [`Self::msm_public`], or [`MsmError::Cancelled`] after tasks join.
+    pub fn msm_public_cancellable(
+        &self,
+        scalars: &[C::ScalarExt],
+        budget: MemoryBudget,
+        shared: &SharedMemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<C, MsmError> {
+        self.msm_impl::<false>(scalars, budget, shared, cancellation)
+    }
+
+    /// Secret table MSM with explicit cancellation and shared scratch.
+    ///
+    /// # Errors
+    /// As [`Self::msm_secret`], or [`MsmError::Cancelled`]. Secret scratch is
+    /// wiped and all tasks have joined before the error is returned.
+    pub fn msm_secret_cancellable(
+        &self,
+        scalars: &[C::ScalarExt],
+        budget: MemoryBudget,
+        shared: &SharedMemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<C, MsmError> {
+        self.msm_impl::<true>(scalars, budget, shared, cancellation)
     }
 
     /// Scratch of one MSM: `(digit_bytes, bucket_bytes)` where the second is
@@ -365,7 +396,9 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         scalars: &[C::ScalarExt],
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<C, MsmError> {
+        CancellationToken::checkpoint(cancellation)?;
         if scalars.len() != self.n {
             return Err(MsmError::LengthMismatch(crate::LengthMismatch {
                 left: scalars.len(),
@@ -386,42 +419,49 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         let Some(_scratch) =
             shared.try_reserve(digits_bytes.saturating_add(tasks.saturating_mul(task_bytes)))
         else {
-            return Ok(scalars
-                .iter()
-                .enumerate()
-                .fold(C::identity(), |acc, (i, scalar)| {
-                    let point = self.points[i * self.nw].to_curve();
-                    // The public GLV path owns heap wNAF vectors; the complete
-                    // multiplier is stack-only even when admission is full.
-                    acc + point * *scalar
-                }));
+            let mut result = Zeroizing::new(C::identity());
+            for (i, scalar) in scalars.iter().enumerate() {
+                CancellationToken::checkpoint(cancellation)?;
+                *result += self.points[i * self.nw].to_curve() * *scalar;
+            }
+            CancellationToken::checkpoint(cancellation)?;
+            return Ok(*result);
         };
-        let digits = Digits::new(scalars, self.c, self.nw);
+        let digits = Digits::new_cancellable(scalars, self.c, self.nw, cancellation)?;
         let step = self.n.div_ceil(tasks);
-        let mut partial: Vec<C> = (0..tasks)
-            .into_par_iter()
-            .map(|t| {
-                let mut buckets = Buckets::<C, SECRET>::new(&self.points, nb);
-                let i1 = ((t + 1) * step).min(self.n);
-                for i in t * step..i1 {
-                    if self.skip[i] {
-                        continue;
+        let mut partial = Zeroizing::new(
+            (0..tasks)
+                .into_par_iter()
+                .map(|t| {
+                    if CancellationToken::checkpoint(cancellation).is_err() {
+                        return C::identity();
                     }
-                    for (w, &d) in digits.row(i).iter().enumerate() {
-                        if d != 0 {
-                            buckets.insert(
-                                usize::from(d.unsigned_abs()) - 1,
-                                i * self.nw + w,
-                                d < 0,
-                            );
+                    let mut buckets = Buckets::<C, SECRET>::new(&self.points, nb);
+                    let i1 = ((t + 1) * step).min(self.n);
+                    for i in t * step..i1 {
+                        if i % 256 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+                            return C::identity();
+                        }
+                        if self.skip[i] {
+                            continue;
+                        }
+                        for (w, &d) in digits.row(i).iter().enumerate() {
+                            if d != 0 {
+                                buckets.insert(
+                                    usize::from(d.unsigned_abs()) - 1,
+                                    i * self.nw + w,
+                                    d < 0,
+                                );
+                            }
                         }
                     }
-                }
-                buckets.flush();
-                // Dropping `buckets` wipes its scratch in secret mode.
-                buckets.reduce(0, nb)
-            })
-            .collect();
+                    buckets.flush();
+                    // Dropping `buckets` wipes its scratch in secret mode.
+                    buckets.reduce(0, nb)
+                })
+                .collect::<Vec<C>>(),
+        );
+        CancellationToken::checkpoint(cancellation)?;
         let result = partial.iter().fold(C::identity(), |acc, p| acc + p);
         if SECRET {
             zeroize::Zeroize::zeroize(&mut partial);

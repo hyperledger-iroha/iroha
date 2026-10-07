@@ -12,9 +12,15 @@ use iroha_fs::{FileSnapshot, PrivateDirectory, SealedPrivateFile};
 use rand::rand_core::TryRngCore as _;
 use sha2::{Digest as _, Sha256};
 
-use super::{BlobV1, Error, OriginalSinkV1, OriginalSourceV1, PROVING_KEY_MAX_BYTES_V1};
+use super::{
+    BlobV1, Error, OriginalCustodyFailure, OriginalSinkV1, OriginalSourceV1,
+    PROVING_KEY_MAX_BYTES_V1,
+};
 
-/// A retained existing private directory of immutable descriptor/VK/PK originals.
+/// A retained existing private directory of immutable content-addressed originals.
+/// Wallet source directories contain descriptor/VK/PK bytes; wallet finality
+/// directories contain only the exact descriptor/VK graph. Signed server PK
+/// hashes remain in the catalog and do not require server tables on a wallet.
 /// Every read retains actual no-follow native ancestry and a sealed original file.
 /// Opening never creates, hardens, cleans or replaces an existing directory/file.
 pub struct DirectoryOriginalsV1 {
@@ -50,10 +56,13 @@ impl StableOriginal {
 
 impl Read for StableOriginal {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        self.recheck()?;
-        let count = self.file.read(bytes)?;
-        self.recheck()?;
-        Ok(count)
+        let custody = |error| io::Error::other(OriginalCustodyFailure(error));
+        self.recheck().map_err(custody)?;
+        let result = self.file.read(bytes);
+        // Close custody even on a native read error. Integrity refusal takes
+        // precedence; ordinary read failures retain their availability category.
+        self.recheck().map_err(custody)?;
+        result
     }
 }
 
@@ -111,18 +120,29 @@ impl DirectoryOriginalsV1 {
     }
 
     fn reader(&self, digest: [u8; 32]) -> io::Result<StableOriginal> {
+        self.reader_optional(digest)?
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+
+    fn reader_optional(&self, digest: [u8; 32]) -> io::Result<Option<StableOriginal>> {
         self.directory.revalidate()?;
-        let file = self
-            .directory
-            .open_retained_read_only(name(digest)?, self.maximum_bytes)?;
-        if file.is_empty()? {
-            return Err(invalid("empty original"));
-        }
-        let snapshot = file.snapshot()?;
-        let original = StableOriginal { file, snapshot };
-        original.recheck()?;
+        let result = (|| {
+            let Some(file) = self
+                .directory
+                .open_retained_read_only_optional(name(digest)?, self.maximum_bytes)?
+            else {
+                return Ok(None);
+            };
+            if file.is_empty()? {
+                return Err(invalid("empty original"));
+            }
+            let snapshot = file.snapshot()?;
+            let original = StableOriginal { file, snapshot };
+            original.recheck()?;
+            Ok(Some(original))
+        })();
         self.directory.revalidate()?;
-        Ok(original)
+        result
     }
 
     fn require(&self, identity: BlobV1) -> io::Result<()> {
@@ -171,10 +191,9 @@ impl DirectoryOriginalsV1 {
             ));
         }
         let final_name = name(identity.sha256)?;
-        match self.reader(identity.sha256) {
-            Ok(_) => return self.require(identity),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        match self.reader_optional(identity.sha256)? {
+            Some(_) => return self.require(identity),
+            None => {}
         }
         let mut nonce = [0_u8; 16];
         rand::rngs::OsRng
@@ -199,9 +218,13 @@ impl DirectoryOriginalsV1 {
 
 impl OriginalSourceV1 for DirectoryOriginalsV1 {
     fn open(&mut self, sha256: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
-        self.reader(sha256)
+        // Only the initial native open can report absent reinstallable content.
+        // Failed custody/admission (including a later NotFound) remains integrity
+        // refusal; this conservative category never permits replacement material.
+        self.reader_optional(sha256)
+            .map_err(|_| Error::Inventory)?
+            .ok_or(Error::Unavailable)
             .map(|reader| -> Box<dyn Read> { Box::new(reader) })
-            .map_err(|_| Error::Inventory)
     }
 }
 
@@ -287,6 +310,54 @@ mod tests {
     }
 
     #[test]
+    fn missing_original_is_unavailable_and_exact_reinstallation_recovers() {
+        let (_temp, mut source) = directory();
+        let bytes = b"exact reinstallable proving original";
+        let identity = BlobV1::of(bytes);
+        assert_eq!(
+            super::super::read(&mut source, identity, 1024),
+            Err(Error::Unavailable)
+        );
+        assert!(matches!(source.open([0; 32]), Err(Error::Inventory)));
+        source.store_original(identity, bytes).unwrap();
+        assert_eq!(
+            super::super::read(&mut source, identity, 1024).unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn disappeared_retained_original_is_integrity_refusal_not_unavailable() {
+        struct RemoveAfterOpen {
+            source: DirectoryOriginalsV1,
+            path: std::path::PathBuf,
+        }
+        impl OriginalSourceV1 for RemoveAfterOpen {
+            fn open(&mut self, sha256: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
+                let reader = self.source.open(sha256)?;
+                std::fs::remove_file(&self.path).unwrap();
+                Ok(reader)
+            }
+        }
+        let (_temp, mut source) = directory();
+        let bytes = b"exact retained original";
+        let identity = BlobV1::of(bytes);
+        source.store_original(identity, bytes).unwrap();
+        let path = source.directory.path().join(name(identity.sha256).unwrap());
+        let mut changed = RemoveAfterOpen { source, path };
+        assert_eq!(
+            super::super::read(&mut changed, identity, 1024),
+            Err(Error::Inventory)
+        );
+        // A fresh open can observe actual absence. It cannot turn the failed
+        // retained read into acceptance or erase the earlier integrity refusal.
+        assert_eq!(
+            super::super::read(&mut changed.source, identity, 1024),
+            Err(Error::Unavailable)
+        );
+    }
+
+    #[test]
     fn changed_length_digest_empty_and_oversized_inputs_never_publish() {
         let (_temp, mut source) = directory();
         let bytes = b"original";
@@ -349,7 +420,8 @@ mod tests {
         let root = temp.path().join("originals");
         std::fs::rename(&root, temp.path().join("retained-old")).unwrap();
         std::fs::create_dir(&root).unwrap();
-        assert!(reader.read(&mut [0; 8]).is_err());
+        let failure = reader.read(&mut [0; 8]).unwrap_err();
+        assert!(failure.get_ref().unwrap().is::<OriginalCustodyFailure>());
     }
 
     #[cfg(unix)]
@@ -363,13 +435,19 @@ mod tests {
         let writable = root.join(name(identity.sha256).unwrap());
         std::fs::write(&writable, bytes).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(source.open(identity.sha256).is_err());
+        assert!(matches!(
+            source.open(identity.sha256),
+            Err(Error::Inventory)
+        ));
         std::fs::remove_file(&writable).unwrap();
         let target = root.join("unselected");
         std::fs::write(&target, bytes).unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o400)).unwrap();
         symlink(&target, &writable).unwrap();
-        assert!(source.open(identity.sha256).is_err());
+        assert!(matches!(
+            source.open(identity.sha256),
+            Err(Error::Inventory)
+        ));
         assert!(source.store_original(identity, bytes).is_err());
         assert!(
             writable

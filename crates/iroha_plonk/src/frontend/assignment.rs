@@ -81,6 +81,8 @@ impl fmt::Display for TableError {
 /// A synthesis error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// The caller cancelled synthesis before completing its assignment.
+    Cancelled,
     /// A value needed during synthesis is unknown (a witness value while
     /// proving, a fixed or table value at any time), or a circuit reported a
     /// synthesis failure.
@@ -141,6 +143,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("synthesis cancelled"),
             Self::LayoutConflict { column, row } => {
                 write!(f, "layout conflict at {column:?}, row {row}")
             }
@@ -191,6 +194,11 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+impl From<iroha_pasta::Cancelled> for Error {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
 
 impl From<TableError> for Error {
     fn from(error: TableError) -> Self {
@@ -354,15 +362,22 @@ impl RegionRecord {
 }
 
 /// A fraction waiting for batch inversion.
-#[derive(Clone, Copy, Debug)]
-struct PendingFraction<F> {
+#[derive(Clone, Debug)]
+struct PendingFraction<F: PastaField> {
     numerator: F,
     denominator: F,
+}
+impl<F: PastaField> Drop for PendingFraction<F> {
+    fn drop(&mut self) {
+        self.numerator.zeroize();
+        self.denominator.zeroize();
+    }
 }
 
 /// Records one synthesis run.
 #[derive(Clone, Debug)]
-pub struct Assembly<F> {
+pub struct Assembly<F: PastaField> {
+    cancellation: Option<iroha_pasta::CancellationToken>,
     k: u32,
     n: usize,
     usable_rows: usize,
@@ -373,7 +388,7 @@ pub struct Assembly<F> {
     fixed_pending: BTreeMap<(usize, usize), PendingFraction<F>>,
     fixed_expectations: BTreeMap<(usize, usize), F>,
     advice_reservations: BTreeSet<(usize, usize)>,
-    advice: Option<Vec<Vec<F>>>,
+    advice: Option<crate::secret::SecretColumns<F>>,
     advice_assigned: Vec<Vec<bool>>,
     advice_pending: BTreeMap<(usize, usize), PendingFraction<F>>,
     selectors: Vec<Vec<bool>>,
@@ -426,10 +441,11 @@ impl<F: PastaField> Assembly<F> {
                 Some(columns.to_vec())
             }
         };
-        let advice = instance
-            .as_ref()
-            .map(|_| vec![vec![F::ZERO; n]; cs.num_advice_columns()]);
+        let advice = instance.as_ref().map(|_| {
+            crate::secret::SecretColumns::new(vec![vec![F::ZERO; n]; cs.num_advice_columns()])
+        });
         Ok(Self {
+            cancellation: None,
             k,
             n,
             usable_rows,
@@ -451,6 +467,23 @@ impl<F: PastaField> Assembly<F> {
         })
     }
 
+    /// Creates a synthesis sink bound to one caller cancellation signal.
+    ///
+    /// # Errors
+    /// As [`Self::new`], or [`Error::Cancelled`].
+    pub fn new_cancellable(
+        cs: &ConstraintSystem<F>,
+        k: u32,
+        instances: Option<&[Vec<F>]>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        let mut result = Self::new(cs, k, instances)?;
+        result.cancellation = cancellation.cloned();
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        Ok(result)
+    }
+
     /// Whether this assembly records a witness.
     #[must_use]
     pub const fn is_witness(&self) -> bool {
@@ -459,6 +492,7 @@ impl<F: PastaField> Assembly<F> {
 
     /// Checks that `row` is usable.
     fn check_row(&self, row: usize) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(self.cancellation.as_ref())?;
         if row < self.usable_rows {
             Ok(())
         } else {
@@ -499,6 +533,7 @@ impl<F: PastaField> Assembly<F> {
     ///
     /// [`Error::RegionNesting`] when a region is still open.
     pub fn finish(mut self) -> Result<AssignedTables<F>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(self.cancellation.as_ref())?;
         if self.current_region.is_some() {
             return Err(Error::RegionNesting);
         }
@@ -522,6 +557,7 @@ impl<F: PastaField> Assembly<F> {
         if let Some(advice) = self.advice.as_mut() {
             resolve_fractions(advice, &self.advice_pending, false);
         }
+        iroha_pasta::CancellationToken::checkpoint(self.cancellation.as_ref())?;
         Ok(AssignedTables {
             k: self.k,
             n: self.n,
@@ -546,13 +582,14 @@ fn resolve_fractions<F: PastaField>(
     pending: &BTreeMap<(usize, usize), PendingFraction<F>>,
     public: bool,
 ) {
-    let mut denominators: Vec<F> = pending.values().map(|f| f.denominator).collect();
+    let mut denominators =
+        crate::secret::SecretPolynomial::new(pending.values().map(|f| f.denominator).collect());
     if public {
         batch_invert_vartime(&mut denominators);
     } else {
         batch_invert(&mut denominators);
     }
-    for (((column, row), fraction), inverse) in pending.iter().zip(denominators) {
+    for (((column, row), fraction), inverse) in pending.iter().zip(denominators.iter()) {
         if let Some(cell) = columns.get_mut(*column).and_then(|c| c.get_mut(*row)) {
             *cell = fraction.numerator * inverse;
         }
@@ -606,6 +643,7 @@ fn mark(flags: &mut [Vec<bool>], column: usize, row: usize) -> Result<(), Error>
 
 impl<F: PastaField> Assignment<F> for Assembly<F> {
     fn enter_region(&mut self, name: String) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(self.cancellation.as_ref())?;
         if self.current_region.is_some() {
             return Err(Error::RegionNesting);
         }
@@ -797,7 +835,7 @@ impl<F: PastaField> Assignment<F> for Assembly<F> {
 
 /// The tables of a finished synthesis run.
 #[derive(Clone, Debug)]
-pub struct AssignedTables<F> {
+pub struct AssignedTables<F: PastaField> {
     k: u32,
     n: usize,
     usable_rows: usize,
@@ -805,14 +843,14 @@ pub struct AssignedTables<F> {
     instance: Option<Vec<Vec<F>>>,
     fixed: Vec<Vec<F>>,
     fixed_assigned: Vec<Vec<bool>>,
-    advice: Option<Vec<Vec<F>>>,
+    advice: Option<crate::secret::SecretColumns<F>>,
     advice_assigned: Vec<Vec<bool>>,
     selectors: Vec<Vec<bool>>,
     permutation: PermutationAssembly,
     regions: Vec<RegionRecord>,
 }
 
-impl<F> AssignedTables<F> {
+impl<F: PastaField> AssignedTables<F> {
     /// `log2` of the domain size.
     #[must_use]
     pub const fn k(&self) -> u32 {
@@ -859,14 +897,16 @@ impl<F> AssignedTables<F> {
     /// are zero).
     #[must_use]
     pub fn advice(&self) -> Option<&[Vec<F>]> {
-        self.advice.as_deref()
+        self.advice.as_ref().map(|advice| advice.as_slice())
     }
 
     /// Moves the advice values out (`None` for key generation or when they
     /// were already taken), so a prover can own the secret witness without
     /// leaving an unzeroized copy behind.
     pub fn take_advice(&mut self) -> Option<Vec<Vec<F>>> {
-        self.advice.take()
+        self.advice
+            .take()
+            .map(crate::secret::SecretColumns::into_vec)
     }
 
     /// Moves the public key-generation inputs out and releases synthesis

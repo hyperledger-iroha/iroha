@@ -32,8 +32,9 @@ impl producer::sealed::Source for Increment {
         pallas: &PinnedParams<Ep>,
         vesta: &PinnedParams<Eq>,
         budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<producer::Exports, producer::Error> {
-        producer::leaf_exports(self.endpoints, pallas, vesta, budget)
+        producer::leaf_exports(self.endpoints, pallas, vesta, budget, cancellation)
     }
 }
 impl SourceCircuit for Increment {}
@@ -213,6 +214,20 @@ fn wrap<C: SourceCircuit>(
         verifying_key: key.vk().to_bytes(),
         proving_key: &wrapper_pk,
     };
+    let cancelled = iroha_pasta::CancellationToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        producer::Prover::from_original_artifacts_cancellable(
+            circuit,
+            source,
+            outer,
+            pparams.clone(),
+            vparams.clone(),
+            read,
+            Some(&cancelled),
+        ),
+        Err(producer::Error::Cancelled)
+    ));
     let imported = producer::Prover::from_original_artifacts(
         circuit,
         source,
@@ -494,4 +509,27 @@ fn genuine_source_merge_retains_both_curves_and_rejects_substitution() {
         "genuine source merge: k16, wrapper={} bytes, both carried claims decided",
         result.evidence.proof.len()
     );
+}
+
+#[test]
+fn cancelled_leaf_exports_do_not_derive_or_judge_invalid_parameters() {
+    let pallas = PinnedParams::derive(1).unwrap();
+    let vesta = PinnedParams::derive(1).unwrap();
+    let cancelled = iroha_pasta::CancellationToken::new();
+    cancelled.cancel();
+    let endpoints = [Fp::ONE; 6];
+    assert!(matches!(
+        producer::leaf_exports(
+            endpoints,
+            &pallas,
+            &vesta,
+            MemoryBudget::DEFAULT,
+            Some(&cancelled)
+        ),
+        Err(producer::Error::Cancelled)
+    ));
+    assert!(matches!(
+        producer::leaf_exports(endpoints, &pallas, &vesta, MemoryBudget::DEFAULT, None),
+        Err(producer::Error::Proof)
+    ));
 }

@@ -1,22 +1,32 @@
 //! Independent column inversions on the caller's worker pool.
 
-use iroha_pasta::{PastaField, field::batch_invert};
+use iroha_pasta::{PastaField, field::batch_invert_cancellable};
 use rayon::prelude::*;
 
 /// Invert each column entry, preserving zeros and the constant-time field
 /// inversion path. Chunk boundaries depend only on the public column length
 /// and worker count. Concurrent scratch lengths sum to the column length;
 /// each chunk releases its scratch before returning.
+#[cfg(test)]
 pub(super) fn invert_column<F: PastaField>(values: &mut [F]) {
+    invert_column_cancellable(values, None).unwrap();
+}
+pub(super) fn invert_column_cancellable<F: PastaField>(
+    values: &mut [F],
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<(), super::ProverError> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let workers = rayon::current_num_threads();
     if values.len() < 8192 || workers == 1 {
-        batch_invert(values);
-        return;
+        batch_invert_cancellable(values, cancellation)?;
+        return Ok(());
     }
     let chunk_len = values.len().div_ceil(workers).max(4096);
     values.par_chunks_mut(chunk_len).for_each(|chunk| {
-        batch_invert(chunk);
+        let _ = batch_invert_cancellable(chunk, cancellation);
     });
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+    Ok(())
 }
 
 #[cfg(test)]

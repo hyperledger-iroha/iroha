@@ -68,6 +68,31 @@ originals. All transaction/block proof limits are checked together before reserv
 counters change or native verification starts. Fixture verifiers remain test-only
 orchestration.
 
+The node enrollment journal retains the original E1, approved selection and deadline in
+an explicitly initialized private namespace. Before exposing E1 in a signed pre-key permit,
+it freezes the authenticated worker's configuration and journal incarnation, retains the exact
+preparation and checks the worker's durable acknowledgement. It validates account-signed E5
+and stores the private verifier request before returning its sole Complete dispatch decision.
+A reread `Verifying` attempt permits Recover only. The worker may atomically claim the
+original prepared row once; a claimed row with an unknown result never repeats verification.
+After E5 selection the node cannot issue another Prepare, including after restart or worker
+storage loss. Unknown or unavailable outcomes do not restore a fresh attempt.
+Actual signed pre-key permits are authenticated and retained per native dispatch nonce, and
+Resume requires the previous exact original in the same journal. Worker replies bind the
+entire exchange packet, selected configuration, incarnation and E5. Evidence retains the
+actual first verification time, which may be later than the E5 selection time after recovery;
+retries cannot refresh it. Its exact original precedes a durable `Signing` selection that
+freezes the credential body and an issue time no earlier than that verification. The returned
+E6 must contain that exact body,
+evidence and selected Enrollment certificate; its actual signature is checked before exact
+E6 bytes are retained for delivery. Retries do not refresh issue time or replace the original.
+Publication errors poison the live owner until reopening and reconciliation. Native reads
+distinguish initial absence from later custody failure. This local ordering component does
+not establish KYC, worker provenance, signer custody or protection from a privileged rollback
+of the entire filesystem. TODO: connect the journal to approved current eligibility,
+the authenticated verifier process, Enrollment-role signer and Torii service owner; retain
+the ledger's permanent activation claims at that boundary.
+
 TODO(G3/G6): implement and qualify the compact offline Load relation consuming ordinary consensus evidence,
 complete producer artifacts and the end-to-end device/network flow. The online receipt
 alone grants no foreign wallet-open or proof-acceptance capability.

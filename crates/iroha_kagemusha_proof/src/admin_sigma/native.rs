@@ -21,7 +21,6 @@ use iroha_plonk::{
     frontend::Circuit,
     keys::pk::artifact::{Error as ArtifactError, ReadConfig},
     pcs::ipa::PinnedParams,
-    verifier::verify_full,
 };
 
 use super::{
@@ -60,6 +59,17 @@ impl fmt::Display for AdminSigmaError {
     }
 }
 impl std::error::Error for AdminSigmaError {}
+impl AdminSigmaError {
+    /// Whether this is cancellation, never an invalid incoming proof or burn witness.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Artifact(error) => error.is_cancelled(),
+            Self::Prover(error) => error.is_cancelled(),
+            Self::Verify(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
 
 // Only the typed public owners can select this helper's fixed native circuit.
 struct AdminProver {
@@ -67,14 +77,20 @@ struct AdminProver {
     key: ProvingKey<Eq>,
 }
 impl AdminProver {
-    fn from_original_artifact<C: Circuit<Fp>>(
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    fn from_original_artifact_cancellable<C: Circuit<Fp>>(
         circuit: &C,
         params: PinnedParams<Eq>,
         descriptor: &[u8],
         installed_vk: &[u8],
         original: &[u8],
         config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, AdminSigmaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| AdminSigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
         if params.k() != BOOTSTRAP_K {
             return Err(AdminSigmaError::Parameters);
         }
@@ -107,8 +123,15 @@ impl AdminProver {
         })?;
         // Witnessless import checks the operation's fixed tables, copy mapping,
         // selectors and commitments, not merely the shared descriptor class.
-        let key = ProvingKey::from_artifact_v2(original, &binding, &params, circuit, config)
-            .map_err(AdminSigmaError::Artifact)?;
+        let key = ProvingKey::from_artifact_v2_cancellable(
+            original,
+            &binding,
+            &params,
+            circuit,
+            config,
+            cancellation,
+        )
+        .map_err(AdminSigmaError::Artifact)?;
         if key.vk().to_bytes() != installed_vk {
             return Err(AdminSigmaError::UnauthorizedKey);
         }
@@ -122,17 +145,19 @@ impl AdminProver {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<AdminSigmaProof, AdminSigmaError> {
-        let witness = Witness::from_circuit(&self.key, circuit, &instances)
-            .map_err(AdminSigmaError::Prover)?;
+        let witness =
+            Witness::from_circuit_cancellable(&self.key, circuit, &instances, config.cancellation)
+                .map_err(AdminSigmaError::Prover)?;
         let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
             .map_err(AdminSigmaError::Prover)?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.params,
             self.key.binding(),
             self.key.vk(),
             &instances,
             &bytes,
             config.msm_budget,
+            config.cancellation,
         )
         .map_err(AdminSigmaError::Verify)?;
         Ok(AdminSigmaProof { bytes, instances })
@@ -226,15 +251,38 @@ macro_rules! admin_prover {
                 original: &[u8],
                 config: ReadConfig,
             ) -> Result<Self, AdminSigmaError> {
+                Self::from_original_artifact_cancellable(
+                    params,
+                    descriptor,
+                    installed_vk,
+                    original,
+                    config,
+                    None,
+                )
+            }
+            /// Import the same original with an explicit operation cancellation signal.
+            /// # Errors
+            /// As the ordinary import, or cancellation without a partial installed key.
+            pub fn from_original_artifact_cancellable(
+                params: PinnedParams<Eq>,
+                descriptor: &[u8],
+                installed_vk: &[u8],
+                original: &[u8],
+                config: ReadConfig,
+                cancellation: Option<&iroha_pasta::CancellationToken>,
+            ) -> Result<Self, AdminSigmaError> {
+                iroha_pasta::CancellationToken::checkpoint(cancellation)
+                    .map_err(|_| AdminSigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
                 let circuit = Self::source_circuit();
                 Ok(Self {
-                    inner: AdminProver::from_original_artifact(
+                    inner: AdminProver::from_original_artifact_cancellable(
                         &circuit,
                         params,
                         descriptor,
                         installed_vk,
                         original,
                         config,
+                        cancellation,
                     )?,
                 })
             }

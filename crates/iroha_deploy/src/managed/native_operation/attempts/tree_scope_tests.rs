@@ -150,7 +150,7 @@ fn retained_row_tree_preserves_late_active_allocation_refusal_and_exact_original
     for allocation in [0, 1] {
         let counter = parse_digest_tests::Counter::begin();
         let refused = root.read_tree_scope(|tree| {
-            tree.with_directory(&attempt.directory, |directory| {
+            tree.read_scope(&attempt.directory, |reader| {
                 let limits = norito::DecodeLimits::new(
                     MAX_RECORD_BYTES,
                     MAX_RECORD_BYTES,
@@ -159,9 +159,7 @@ fn retained_row_tree_preserves_late_active_allocation_refusal_and_exact_original
                     32,
                 );
                 norito::core::with_decode_limits_scope(limits, || {
-                    directory.read_scope(|reader| {
-                        read_record_in_scope::<Authorization>(reader, "authorization.nrt")
-                    })
+                    read_record_in_scope::<Authorization>(reader, "authorization.nrt")
                 })
             })
         });
@@ -184,11 +182,9 @@ fn retained_row_tree_preserves_late_active_allocation_refusal_and_exact_original
     );
     let restored = root
         .read_tree_scope(|tree| {
-            tree.with_directory(&attempt.directory, |directory| {
+            tree.read_scope(&attempt.directory, |reader| {
                 norito::core::with_decode_limits_scope(wide, || {
-                    directory.read_scope(|reader| {
-                        read_record_in_scope::<Authorization>(reader, "authorization.nrt")
-                    })
+                    read_record_in_scope::<Authorization>(reader, "authorization.nrt")
                 })
             })
         })

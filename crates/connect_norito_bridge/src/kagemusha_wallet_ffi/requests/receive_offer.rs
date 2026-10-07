@@ -64,19 +64,25 @@ mod tests {
             "../../../../../fixtures/kagemusha/wallet_v1_vectors.json"
         ))
         .unwrap();
-        let row = fixture["objects"]
+        let row = fixture["envelopes"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|row| row["type"].as_str() == Some(name))
+            .find(|row| row["kind"].as_str() == Some(name))
             .unwrap();
-        hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap()
+        let frame = hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap();
+        let scheme = hex::decode(row["scheme_id_hex"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let kind = u8::try_from(row["tag"].as_u64().unwrap()).unwrap();
+        crate::kagemusha_wallet_ffi::transport::convert(kind, false, &frame, &scheme).unwrap()
     }
 
     #[test]
     fn original_payment_and_offer_payer_are_preserved_without_proof_admission() {
-        let payment = original("KagemushaWalletPaymentV1");
-        let offer_bytes = original("KagemushaWalletOfferV1");
+        let payment = original("Payment");
+        let offer_bytes = original("Offer");
         let offer: KagemushaWalletOfferV1 = decode(&offer_bytes).unwrap();
         let state::OperationActionV1::Receive {
             payment: retained,
@@ -99,9 +105,8 @@ mod tests {
 
     #[test]
     fn every_foreign_payer_session_binding_is_refused() {
-        let payment: KagemushaWalletPaymentV1 =
-            decode(&original("KagemushaWalletPaymentV1")).unwrap();
-        let offer = original("KagemushaWalletOfferV1");
+        let payment: KagemushaWalletPaymentV1 = decode(&original("Payment")).unwrap();
+        let offer = original("Offer");
         for binding in 0..8 {
             let mut changed = payment.clone();
             match binding {
@@ -113,8 +118,7 @@ mod tests {
                 5 => changed.request.body.amount += 1,
                 6 => changed.payer_credential_digest[0] ^= 1,
                 _ => {
-                    let request: KagemushaWalletRequestV1 =
-                        decode(&original("KagemushaWalletRequestV1")).unwrap();
+                    let request: KagemushaWalletRequestV1 = decode(&original("Request")).unwrap();
                     changed.payer_payment_key = request.receiver_credential.body.payment_key;
                     assert_ne!(changed.payer_payment_key, payment.payer_payment_key);
                 }
@@ -126,8 +130,8 @@ mod tests {
 
     #[test]
     fn malformed_trailing_oversized_and_unsigned_originals_are_refused() {
-        let payment = original("KagemushaWalletPaymentV1");
-        let offer = original("KagemushaWalletOfferV1");
+        let payment = original("Payment");
+        let offer = original("Offer");
         for invalid in [vec![], vec![0], vec![0; 10_001]] {
             assert!(action(&invalid, &offer).is_err());
             assert!(action(&payment, &invalid).is_err());

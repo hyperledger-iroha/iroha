@@ -509,11 +509,11 @@ internal fun kagemushaWalletAndroidHardwarePlanV1(
 ): KagemushaWalletAndroidHardwarePlanV1 {
     val strongBox = apiLevel >= 28 && hasStrongBox
     return when (profile) {
+        KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE -> KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY
         KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT ->
             if (strongBox) KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_ONLY else KagemushaWalletAndroidHardwarePlanV1.REFUSE
         KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE ->
             if (strongBox) KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE else KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY
-        KagemushaWalletAndroidKeyProfileV1.TEE_ONLY -> KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY
     }
 }
 

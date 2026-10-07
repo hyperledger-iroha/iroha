@@ -24,13 +24,17 @@ Rules:
   `RUSTFLAGS`, never as a Cargo feature (spec section 6.4). Tests that need it
   are compiled only under that cfg (`build.rs` declares it for check-cfg); run
   them in a separate target directory, because changing `RUSTFLAGS` rebuilds
-  everything. No CI job runs them yet: PR CI runs this crate's and
-  `iroha_plonk`'s ordinary tests through the affected-lane runner
-  (`ci/rust_lanes.toml`, `scripts/rust_ci.py`), but the oracle-mode run below
-  is manual. TODO: a path-filtered oracle job (x86_64 and aarch64) that runs
-  the oracle-build commands under "Validate".
+  everything. The path-filtered `native_prover_parity.yml` job runs all five
+  release correctness harnesses on native x86_64 and aarch64 runners through
+  `ci/native_prover_oracle.py`. It includes ignored large cases, excludes only
+  timing tests, and rejects absent oracle-mode tests or partial results.
+  Compiler messages, source hashes, executable hashes and natural test outcomes
+  are retained. This is correctness evidence, not a timing or phone gate. The
+  affected-lane runner (`ci/rust_lanes.toml`, `scripts/rust_ci.py`) also runs
+  ordinary tests. Hosted execution of the new parity job remains unobserved.
 - The vendored crates resolve through the workspace `[patch]` tables with the
-  same revisions and features as `iroha_core_zk`.
+  pinned revisions and features captured by the oracle. Shipping consumers
+  have migrated to the native crates and must not reach this dependency graph.
 - The crate, the vendored halo2 stack and the git dependencies are deleted
   together once every consumer has migrated to the native crates.
 
@@ -225,3 +229,20 @@ RUSTFLAGS="--cfg iroha_plonk_oracle" cargo test --release \
     -p iroha_plonk_oracle --test vendored_goldens timing -- \
     --ignored --nocapture --test-threads=1
 ```
+
+### Independent succinct-verifier corpus
+
+The oracle-only `succinct_parity` module invokes the original
+`PlonkSuccinctVerifier<IpaAs<_, Bgh19>>` on both Sigma/Wide golden families and
+both Pasta curves, with two seeds per source. It compares all challenges against
+the original Halo2 verifier and compares the returned G/u obligation against the
+native oracle verifier, then requires both complete generator decisions. Five
+mutations per case preserve original parse errors, exact group-assertion panics
+and DEV-05 trailing-prefix acceptance; native verification rejects normally.
+
+`fixtures/native_prover/succinct_v1.json` retains eight complete proof/key/input
+records and their exact challenge/accumulator/mutation results. Native-only replay
+in `iroha_plonk::verifier::captured_succinct_tests` remains after this crate is
+removed. The path-filtered parity CI requires all four named oracle cases; this
+corpus does not qualify the current operation catalog or claim parity with the
+deliberately different PIPA-AS-v1 accumulation transcript.

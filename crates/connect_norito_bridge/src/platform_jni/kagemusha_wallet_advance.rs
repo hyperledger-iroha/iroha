@@ -3,7 +3,7 @@
 use crate::kagemusha_wallet_ffi as wallet;
 use jni::{
     JNIEnv,
-    objects::{JByteArray, JClass, JObject, JValue},
+    objects::{JByteArray, JClass, JObject, JObjectArray, JValue},
     sys::{jint, jlong, jobject},
 };
 
@@ -313,4 +313,51 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         )
     })();
     result.map_or(std::ptr::null_mut(), |object| object.into_raw())
+}
+
+/// Original enrollment actions; JNI copies bounded raw evidence, never a decoded verdict.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_enrollment(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    runtime: jlong,
+    selector: jint,
+    first: JByteArray<'_>,
+    second: JByteArray<'_>,
+    third: JByteArray<'_>,
+    certificates: JObjectArray<'_>,
+) -> jobject {
+    let result = wallet::run(|| {
+        let selector =
+            u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+        let bounds = wallet::enrollment::bounds(selector)?;
+        let count = env
+            .get_array_length(&certificates)
+            .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+        if !(0..=8).contains(&count) || (selector != 3 && count != 0) {
+            return Err(wallet::Failure::code(wallet::INVALID));
+        }
+        for (array, bound) in [&first, &second, &third].into_iter().zip(bounds) {
+            let length = env
+                .get_array_length(array)
+                .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+            if length < 0 || length as usize > bound {
+                return Err(wallet::Failure::code(wallet::INVALID));
+            }
+        }
+        let first = read(&mut env, &first, bounds[0])?;
+        let second = read(&mut env, &second, bounds[1])?;
+        let third = read(&mut env, &third, bounds[2])?;
+        let mut chain = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let item = env
+                .get_object_array_element(&certificates, index)
+                .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+            chain.push(read(&mut env, &JByteArray::from(item), 16_384)?);
+        }
+        let refs: Vec<_> = chain.iter().map(Vec::as_slice).collect();
+        let action = wallet::enrollment::request(selector, [&first, &second, &third], &refs)?;
+        wallet::enrollment::call(runtime as u64, action)
+    });
+    response(&mut env, result)
 }

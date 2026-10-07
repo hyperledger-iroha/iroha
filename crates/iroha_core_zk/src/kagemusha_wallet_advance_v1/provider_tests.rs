@@ -290,7 +290,7 @@ fn wallet_advance_v1_provider_open_after_a_lost_root_writeback_keeps_custody() {
         ));
         let mut provider = device.open();
         let slot = match provider
-            .begin_enrollment(
+            .test_begin_enrollment(
                 &super::super::test_support::enrollment_challenge(0x24),
                 super::super::test_support::PROFILE,
                 crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {

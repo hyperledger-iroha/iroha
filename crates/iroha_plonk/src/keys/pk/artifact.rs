@@ -43,6 +43,8 @@ pub struct ReadConfig {
 /// Original proving-key admission failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// The explicit operation signal cancelled admission.
+    Cancelled,
     /// Not an explicit V2 descriptor or a mismatching pinned curve/domain/profile.
     Profile,
     /// An original length, arithmetic or caller allocation bound failed.
@@ -59,6 +61,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("operation cancelled"),
             Self::Profile => f.write_str("proving-key artifact profile differs"),
             Self::Length => f.write_str("proving-key artifact length or allocation bound failed"),
             Self::Encoding => f.write_str("noncanonical proving-key artifact"),
@@ -71,7 +74,23 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 impl From<KeyError> for Error {
     fn from(error: KeyError) -> Self {
-        Self::Key(error)
+        if error.is_cancelled() {
+            Self::Cancelled
+        } else {
+            Self::Key(error)
+        }
+    }
+}
+
+impl Error {
+    /// Whether admission was cancelled rather than rejected as invalid material.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled) || matches!(self, Self::Key(error) if error.is_cancelled())
+    }
+}
+impl From<iroha_pasta::Cancelled> for Error {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
     }
 }
 
@@ -148,6 +167,22 @@ impl<C: PastaCurve> ProvingKey<C> {
         circuit: &Ci,
         config: ReadConfig,
     ) -> Result<Self, Error> {
+        Self::from_artifact_v2_cancellable(original, binding, params, circuit, config, None)
+    }
+
+    /// Import original key material with cooperative cancellation at synthesis,
+    /// decoding, commitment and transform boundaries. No partial key escapes.
+    /// # Errors
+    /// As [`Self::from_artifact_v2`], or explicit cancellation.
+    pub fn from_artifact_v2_cancellable<Ci: Circuit<C::ScalarExt>>(
+        original: &[u8],
+        binding: &DescriptorBinding,
+        params: &PinnedParams<C>,
+        circuit: &Ci,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let (vk_bytes, columns, expected) = dimensions(binding)?;
         if original.len() != expected
             || expected > config.maximum_bytes
@@ -179,7 +214,10 @@ impl<C: PastaCurve> ProvingKey<C> {
         let mut values = Vec::with_capacity(columns);
         for column in original[vk_end + COPY_BYTES..].chunks_exact(width) {
             let mut scalars = Vec::with_capacity(binding.n());
-            for bytes in column.chunks_exact(32) {
+            for (index, bytes) in column.chunks_exact(32).enumerate() {
+                if index % 1024 == 0 {
+                    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+                }
                 let mut repr = <C::ScalarExt as PrimeField>::Repr::default();
                 repr.as_mut().copy_from_slice(bytes);
                 scalars.push(
@@ -199,6 +237,7 @@ impl<C: PastaCurve> ProvingKey<C> {
             permutation,
             copy_digest,
             config,
+            cancellation,
         )
     }
 }

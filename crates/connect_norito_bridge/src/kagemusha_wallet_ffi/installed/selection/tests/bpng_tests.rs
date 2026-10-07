@@ -165,17 +165,30 @@ fn bpng_genuine_signed_originals_retain_the_exact_product_and_native_policy() {
         "839FV3NJC8NfgWQvghXU2hEFQm9a"
     );
     assert_eq!(selected.scheme.scheme_id(), fixture.0.scheme.scheme_id());
-    assert_eq!(
-        selected.android_enrollment_original,
-        raw(
-            object(&fixture.0.runtime).unwrap()["android"]
-                .as_object()
-                .unwrap(),
-            "enrollment_policy_original_base64",
-            1024
+    let retained_runtime = json(
+        &selected._originals._wallet_runtime,
+        WALLET_RUNTIME_MAX,
+        false,
+    )
+    .unwrap();
+    for name in ["android", "apple"] {
+        let retained = object(field(object(&retained_runtime).unwrap(), name).unwrap()).unwrap();
+        let offered = object(field(object(&fixture.0.runtime).unwrap(), name).unwrap()).unwrap();
+        let original = raw(retained, "enrollment_policy_original_base64", 1024).unwrap();
+        assert_eq!(
+            original,
+            raw(offered, "enrollment_policy_original_base64", 1024).unwrap()
+        );
+        let policy = KagemushaWalletEnrollmentPolicyV1::decode_canonical(
+            &original,
+            &fixture.0.scheme.scheme_id(),
         )
-        .unwrap()
-    );
+        .unwrap();
+        assert_eq!(
+            policy.policy_digest().unwrap(),
+            sha(text(retained, "enrollment_policy_hex").unwrap()).unwrap()
+        );
+    }
 }
 #[test]
 fn bpng_signature_authority_has_no_cross_product_or_key_fallback() {

@@ -1823,7 +1823,7 @@ typedef struct {
     void* context;
     void (*retain)(void* context);
     void (*release)(void* context);
-    /* op: 0 key probe, 1 generate (input32/aux profile1/2), 2 sign (input32),
+    /* op: 0 key probe, 1 generate (input32/aux profile1/2/3 (3 Android TEE-only; Apple refuses)), 2 sign (input32),
        3 key delete, 4 anchor read, 5 anchor create, 6 update, 7 storage state,
        8 boot UUID UTF8, 9 prepare non-backup custody root UTF8,
        10 complete ascending unique nonzero32 key slots (at most4096, no truncation).
@@ -1927,7 +1927,25 @@ typedef struct {
 // Bootstrap0(no originals), Offer1(positive amount), Request2(Offer, optional fee+certificate),
 // Credited3(Credited), BeginTime4(no originals), FinishTime5(TimeAnchor, certificate, owned token),
 // CancelTime6(owned token); envelope wrap7..10 / unwrap11..14 in Offer,Request,Payment,Credited order.
+// BackgroundStatus18(no inputs) returns kind29: detail bits0..1 phase (0 not started,
+// 1 parked,2 running), bit2 eligible,bit3 backlog known; sequence is last observed durable
+// backlog. No bytes or proof readiness. Terminal worker errors are returned unchanged and
+// remain parked until observed, followed by a later activity/payment wake. Activity starts
+// at most one native worker; close cancels and joins it before releasing custody.
+// FeeClaim20(nonzero credit id in setup_id, no originals): kind31 canonical retained pair <=21,024, or kind32 no pending claim.
+// ClaimPayment21/ClaimRequest22(first canonical pair <=21,024) return kind12 exact original DATA, not an admission verdict.
+// LedgerFinality23(first original SumeragiFinalityProof <=36MiB) verifies one contiguous native-rooted step;
+// LedgerStatus24(no inputs): kind33 sequence_low=u64 height, sequence_high/detail=0, bytes32 block hash, or kind34 absent.
+// FeePayout25(nonzero credit id, first World snapshot <=32MiB, second payout record <=1024) returns kind35 only after
+// native selected-tip authentication and durable exact payout acknowledgement. No caller checkpoints/verdicts accepted.
+// FeeClaimTransport26(first retained pair <=21,024, second canonical beneficiary AccountId <=16,384)
+// returns kind36 canonical FeeClaim <=16,384 after exact schedule/beneficiary binding; DATA only, not payout confirmation.
+// CloseLoads19(nonzero setup_id retry identity, no originals) returns kind30, exact durable signed closure frame <=16,384 bytes;
+// Reuse an id for exact retries; a fresh id selects current native source after a preissued Load.
+// It does not confirm ledger closure or authorize key retirement.
 // Activation15(no inputs) returns kind17, exact durable Activate frame <=16,384 bytes.
+// CreditedReceive16(first=Receive package), CreditedStatus17(first=CreditStatus) return
+// kind12 canonical Credited data after native shape/scheme/full-envelope bounds; no proof verdict.
 // setup_id is exactly32 bytes: nonzero only for Offer/Request and all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
@@ -1949,6 +1967,32 @@ typedef struct {
 // 14=direct time exchange retained. Token is valid only for the same open Native owner.
 // Neither 12,13,14 nor17 is monetary completion;17 is not ledger activation confirmation. Result bytes use connect_norito_free.
 int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+
+/* Enrollment originals only. Native startup selects approved policy/root and owns custody.
+ * Actions:0 requestId32/account/asset,1 account signature,2 progress,3 Android(token+DER chain),
+ * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6,9 signed pre-key permit<=2048,10 permanently abandon unused enrollment.
+ * Unused buffers/count must be zero. Android chain2..8, each item1..16384 bytes.
+ * Output:18 local challenge32,19 fixed FFI target161(slot32,key65,challenge32,binding32),
+ * 20 pending,21 abandoned,22 Bootstrap selected,23 E5 challenge32,24 exact E5<=131072,
+ * 25 exact E6<=262144,26 complete-source runtime ready,27 issuer dispatch DATA<=16384,28 exact signed Abandon<=1024. All carry the same handle in sequence.
+ * E6 is not ledger activation. Payment bounds remain10000. */
+typedef struct connect_norito_kagemusha_wallet_enrollment_item_v1 {
+    const uint8_t* bytes;
+    size_t length;
+} connect_norito_kagemusha_wallet_enrollment_item_v1;
+typedef struct connect_norito_kagemusha_wallet_enrollment_request_v1 {
+    uint32_t selector;
+    const uint8_t* first;
+    size_t first_length;
+    const uint8_t* second;
+    size_t second_length;
+    const uint8_t* third;
+    size_t third_length;
+    const connect_norito_kagemusha_wallet_enrollment_item_v1* certificates;
+    size_t certificate_count;
+} connect_norito_kagemusha_wallet_enrollment_request_v1;
+int32_t connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_enrollment_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+
 int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 // Result11=preparing (no Advance selected); result2=pending (irreversible Advance selected).
 int32_t connect_norito_kagemusha_wallet_request_status_v1(uint64_t handle, const uint8_t* request_id32, connect_norito_kagemusha_wallet_result_v1* out);
@@ -2023,33 +2067,6 @@ int32_t connect_norito_kagemusha_wallet_installation_register_v1(
     connect_norito_kagemusha_wallet_installation_attempt_v1** attempt, uint64_t* out_runtime);
 int32_t connect_norito_kagemusha_wallet_installation_close_v1(
     connect_norito_kagemusha_wallet_installation_attempt_v1** attempt);
-
-// Enrollment DATA in the existing installed runtime; no slot/profile/freshness selector.
-// Canonical E1/policy/account originals and original dates are retained before generation.
-typedef struct connect_norito_kagemusha_wallet_enrollment_request_v1 {
-    uint32_t selector; // 0 original begin/retry;1 existing-intent resume;2 whole request;3 credential.
-    const uint8_t* challenge; size_t challenge_length; // Canonical Norito E1,1..1024.
-    const uint8_t* policy; size_t policy_length; // Canonical signed-selection preimage,1..1024.
-    const uint8_t* account; size_t account_length; // Existing canonical AccountId,1..4096.
-    const uint8_t* original; size_t original_length; // Complete JSON <=524288 (2),credential<=1024 (3).
-    const uint8_t* certificates; size_t certificates_length; // Rooted CertificateSet<=10000 (3).
-    uint64_t issued_at_ms; // Exact original Core date,never renewed on retry.
-    uint64_t expires_at_ms; // issued < expires <= issued+600000.
-} connect_norito_kagemusha_wallet_enrollment_request_v1;
-typedef struct connect_norito_kagemusha_wallet_enrollment_result_v1 {
-    // 0 Enrolled;1 Pending;2 Abandoned;3 RequestRetained;4 CredentialStored;negative failure.
-    // These statuses confer no account admission or monetary authority.
-    int32_t status; int32_t reason; int32_t platform_code;
-    uint8_t payment_key[65]; size_t payment_key_length; // 65 only for0,otherwise0.
-    uint8_t account_frame[385]; size_t account_frame_length; // Exact existing Ed25519 original,0 only.
-    uint8_t binding[32]; size_t binding_length; // Exact enrollment-key-binding digest,0 only.
-    uint8_t* chain; size_t chain_length; // Canonical Norito Vec<Vec<u8>> leaf-first DER DATA (Android0).
-    uint8_t* bytes; size_t length; // Exact marker/request/credential for0/3/4.
-    // Free each nonnull chain/bytes separately with connect_norito_free.
-} connect_norito_kagemusha_wallet_enrollment_result_v1;
-int32_t connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime,
-    const connect_norito_kagemusha_wallet_enrollment_request_v1* request,
-    connect_norito_kagemusha_wallet_enrollment_result_v1* result);
 
 #ifdef __cplusplus
 } // extern "C"

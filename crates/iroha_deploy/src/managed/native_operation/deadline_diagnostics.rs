@@ -8,10 +8,51 @@ use iroha_data_model::NetworkId;
 use std::{
     backtrace::Backtrace,
     cell::{Cell, RefCell},
+    fmt::{self, Write as _},
     io::Write,
 };
 
 const MAX_KEYS: usize = 8;
+const MAX_ERROR_TEXT_BYTES: usize = 1024;
+const MAX_ERROR_CAUSES: usize = 8;
+
+// Render directly into a fixed requested-capacity diagnostic buffer, never a full Report dump.
+// Formatting refusal only ends observation; it cannot replace the original operation error.
+#[derive(Debug)]
+struct ErrorText {
+    text: String,
+    truncated: bool,
+}
+impl ErrorText {
+    fn new() -> Self {
+        Self {
+            text: String::with_capacity(MAX_ERROR_TEXT_BYTES),
+            truncated: false,
+        }
+    }
+}
+impl fmt::Write for ErrorText {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let mut end = value.len().min(MAX_ERROR_TEXT_BYTES - self.text.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.text.push_str(&value[..end]);
+        if end != value.len() {
+            self.truncated = true;
+            return Err(fmt::Error);
+        }
+        Ok(())
+    }
+}
+struct RawError {
+    seam: &'static str,
+    class: &'static str,
+    io: Option<(std::io::ErrorKind, Option<i32>)>,
+    causes: usize,
+    text: ErrorText,
+    point: Refusal,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
@@ -134,6 +175,7 @@ struct State {
     stages: [Totals; 3],
     counter_anomaly: bool,
     first_refusal: Option<Refusal>,
+    first_raw_error: Option<RawError>,
     backtrace: Option<Backtrace>,
 }
 impl State {
@@ -153,6 +195,7 @@ impl State {
             stages: [Totals::default(); 3],
             counter_anomaly: false,
             first_refusal: None,
+            first_raw_error: None,
             backtrace: None,
         }
     }
@@ -224,6 +267,37 @@ impl State {
         });
         true
     }
+    fn raw_error(
+        &mut self,
+        seam: &'static str,
+        class: &'static str,
+        io: Option<(std::io::ErrorKind, Option<i32>)>,
+        causes: usize,
+        text: ErrorText,
+    ) {
+        if self.first_raw_error.is_some() {
+            return;
+        }
+        let totals = self.snapshot();
+        let mut current_helper = Totals::default();
+        current_helper.add(self.stage_start, totals, &mut self.counter_anomaly);
+        self.first_raw_error = Some(RawError {
+            seam,
+            class,
+            io,
+            causes,
+            text,
+            point: Refusal {
+                phase: self.phase,
+                replacement_iteration: self.replacement_iteration,
+                stage: self.stage,
+                begin_phase: self.begin_phase,
+                inventory: self.inventory,
+                totals,
+                current_helper,
+            },
+        });
+    }
     fn dump(&self, output: &mut impl Write) -> std::io::Result<()> {
         writeln!(
             output,
@@ -265,6 +339,26 @@ impl State {
                 r.current_helper
             )?;
         }
+        if let Some(error) = &self.first_raw_error {
+            let point = error.point;
+            writeln!(
+                output,
+                "closed64 FIRST raw error before mapping: seam={} class={} native_io={:?} causes={} truncated={} phase={:?} replacement_iteration={} helper={:?} begin={:?} inventory={:?} total_counts={:?} current_helper_counts={:?} text={:?}",
+                error.seam,
+                error.class,
+                error.io,
+                error.causes,
+                error.text.truncated,
+                point.phase,
+                point.replacement_iteration,
+                point.stage,
+                point.begin_phase,
+                point.inventory,
+                point.totals,
+                point.current_helper,
+                error.text.text,
+            )?;
+        }
         if let Some(backtrace) = &self.backtrace {
             writeln!(
                 output,
@@ -294,6 +388,63 @@ fn observe(action: impl FnOnce(&mut State)) {
         {
             action(state);
         }
+    });
+}
+
+/// Observe a typed failure immediately before the original retained-material conversion.
+/// No owner, result or clock is retained; inactive/busy/previously observed calls do no rendering.
+pub(in crate::managed) fn retained_error(error: &crate::managed::Error) {
+    observe(|state| {
+        if state.first_raw_error.is_some() {
+            return;
+        }
+        use crate::managed::Error;
+        let (class, io) = match error {
+            Error::Io(error) => ("Io", Some((error.kind(), error.raw_os_error()))),
+            Error::Invalid(_) => ("Invalid", None),
+            Error::Bootstrap(_) => ("Bootstrap", None),
+            Error::NativeDeadline => ("NativeDeadline", None),
+            Error::NoSelection => ("NoSelection", None),
+            Error::ContractCall { .. } => ("ContractCall", None),
+            Error::Busy(_) => ("Busy", None),
+            Error::Timeout(_) => ("Timeout", None),
+            Error::WorkerFailure { .. } => ("WorkerFailure", None),
+            Error::ParentDeadline => ("ParentDeadline", None),
+            Error::ParentProgressDeadline { .. } => ("ParentProgressDeadline", None),
+        };
+        let mut text = ErrorText::new();
+        let _ = write!(&mut text, "{error}");
+        state.raw_error("retained material conversion", class, io, 1, text);
+    });
+}
+
+/// Observe the original wallet cause before its existing fixed-label conversion.
+/// Rendering is capped at 1024 UTF-8 bytes and eight causes; only the first active failure survives.
+pub(in crate::managed) fn wallet_error(seam: &'static str, error: &color_eyre::eyre::Report) {
+    observe(|state| {
+        if state.first_raw_error.is_some() {
+            return;
+        }
+        let mut text = ErrorText::new();
+        let mut io = None;
+        let mut causes = 0;
+        for (index, cause) in error.chain().take(MAX_ERROR_CAUSES + 1).enumerate() {
+            if index == MAX_ERROR_CAUSES {
+                text.truncated = true;
+                break;
+            }
+            causes += 1;
+            if io.is_none()
+                && let Some(error) = cause.downcast_ref::<std::io::Error>()
+            {
+                io = Some((error.kind(), error.raw_os_error()));
+            }
+            if !text.truncated {
+                let separator = if index == 0 { "" } else { "\ncaused by: " };
+                let _ = write!(&mut text, "{separator}{cause}");
+            }
+        }
+        state.raw_error(seam, "Wallet", io, causes, text);
     });
 }
 
@@ -585,5 +736,165 @@ mod tests {
         STATE.with(|state| assert!(state.borrow().is_none()));
         assert_eq!(profiles::snapshot(), None);
         assert!(!active());
+    }
+
+    #[derive(Debug)]
+    struct CountedError(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl fmt::Display for CountedError {
+        fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            output.write_str("counted original cause")
+        }
+    }
+    impl std::error::Error for CountedError {}
+
+    #[test]
+    fn inactive_raw_error_hooks_keep_state_absent_and_original_mapping() {
+        use crate::managed::{Error, ManagedBootstrapFailure};
+        assert!(!active());
+        let displays = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let report = color_eyre::eyre::Report::new(CountedError(displays.clone()));
+        let before = displays.load(std::sync::atomic::Ordering::Relaxed);
+        wallet_error("wallet preparation inspection", &report);
+        assert_eq!(displays.load(std::sync::atomic::Ordering::Relaxed), before);
+        let mapped = super::super::require_retained_material::<()>(Err(Error::Invalid(
+            "bad material".into(),
+        )));
+        assert!(matches!(
+            mapped,
+            Err(Error::Bootstrap(ManagedBootstrapFailure::RetainedMaterial))
+        ));
+        assert!(matches!(
+            super::super::require_retained_material::<()>(Err(Error::NativeDeadline)),
+            Err(Error::NativeDeadline)
+        ));
+        STATE.with(|slot| assert!(slot.borrow().is_none()));
+        assert!(!active());
+    }
+
+    #[test]
+    fn active_raw_error_keeps_first_native_class_phase_and_original_results() {
+        use crate::managed::{Error, ManagedBootstrapFailure};
+        let observer = Observer::begin();
+        observer.replacement();
+        let _stage = StageGuard::enter(Stage::Begin);
+        begin_phase(BeginPhase::Inventory);
+        inventory(2, InventoryPhase::Open);
+        assert_eq!(
+            super::super::require_retained_material(Ok(17_u32)).unwrap(),
+            17
+        );
+        assert!(matches!(
+            super::super::require_retained_material::<()>(Err(Error::NativeDeadline)),
+            Err(Error::NativeDeadline)
+        ));
+        assert!(matches!(
+            super::super::require_retained_material::<()>(Err(Error::Bootstrap(
+                ManagedBootstrapFailure::TransitionPending
+            ))),
+            Err(Error::Bootstrap(ManagedBootstrapFailure::TransitionPending))
+        ));
+        STATE.with(|slot| assert!(slot.borrow().as_ref().unwrap().first_raw_error.is_none()));
+        let native = std::io::Error::from_raw_os_error(24);
+        let kind = native.kind();
+        let mapped = super::super::require_retained_material::<()>(Err(Error::Io(native)));
+        assert!(matches!(
+            mapped,
+            Err(Error::Bootstrap(ManagedBootstrapFailure::RetainedMaterial))
+        ));
+        inventory(64, InventoryPhase::Context);
+        let later = super::super::require_retained_material::<()>(Err(Error::Invalid(
+            "later error".into(),
+        )));
+        assert!(matches!(
+            later,
+            Err(Error::Bootstrap(ManagedBootstrapFailure::RetainedMaterial))
+        ));
+        STATE.with(|slot| {
+            let state = slot.borrow();
+            let error = state.as_ref().unwrap().first_raw_error.as_ref().unwrap();
+            assert_eq!(error.seam, "retained material conversion");
+            assert_eq!(error.class, "Io");
+            assert_eq!(error.io, Some((kind, Some(24))));
+            assert_eq!(error.point.phase, Phase::Replacements);
+            assert_eq!(error.point.replacement_iteration, 1);
+            assert_eq!(error.point.stage, Stage::Begin);
+            assert_eq!(error.point.begin_phase, Some(BeginPhase::Inventory));
+            assert_eq!(error.point.inventory, Some((2, InventoryPhase::Open)));
+            assert!(error.text.text.len() <= MAX_ERROR_TEXT_BYTES);
+            assert!(!error.text.truncated);
+            let mut output = Vec::new();
+            state.as_ref().unwrap().dump(&mut output).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(
+                "FIRST raw error before mapping: seam=retained material conversion class=Io"
+            ));
+            assert!(output.contains("Some(24)"));
+        });
+    }
+
+    #[test]
+    fn wallet_raw_error_bounds_unicode_chain_and_wins_over_outer_conversion() {
+        use crate::managed::{Error, ManagedBootstrapFailure};
+        let _observer = Observer::begin();
+        let native = std::io::Error::from_raw_os_error(24);
+        let kind = native.kind();
+        let report = color_eyre::eyre::Report::from(native)
+            .wrap_err("a".to_owned() + &"α".repeat(MAX_ERROR_TEXT_BYTES));
+        wallet_error("wallet preparation inspection", &report);
+        let mapped = super::super::require_retained_material::<()>(Err(Error::Invalid(
+            "custody wallet preparation differs from original request".into(),
+        )));
+        assert!(matches!(
+            mapped,
+            Err(Error::Bootstrap(ManagedBootstrapFailure::RetainedMaterial))
+        ));
+        let displays = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let later = color_eyre::eyre::Report::new(CountedError(displays.clone()));
+        let before = displays.load(std::sync::atomic::Ordering::Relaxed);
+        wallet_error("wallet signed journal verification", &later);
+        assert_eq!(displays.load(std::sync::atomic::Ordering::Relaxed), before);
+        STATE.with(|slot| {
+            let state = slot.borrow();
+            let error = state.as_ref().unwrap().first_raw_error.as_ref().unwrap();
+            assert_eq!(error.seam, "wallet preparation inspection");
+            assert_eq!(error.class, "Wallet");
+            assert_eq!(error.io, Some((kind, Some(24))));
+            assert_eq!(error.causes, 2);
+            assert!(error.text.truncated);
+            assert_eq!(error.text.text.len(), MAX_ERROR_TEXT_BYTES - 1);
+            assert!(error.text.text.starts_with('a'));
+            assert!(error.text.text.chars().skip(1).all(|value| value == 'α'));
+        });
+    }
+
+    #[test]
+    fn wallet_raw_error_bounds_cause_count_and_busy_observation_never_changes_result() {
+        use crate::managed::{Error, ManagedBootstrapFailure};
+        let _observer = Observer::begin();
+        STATE.with(|slot| {
+            let _held = slot.borrow_mut();
+            let mapped = super::super::require_retained_material::<()>(Err(Error::Invalid(
+                "busy observation".into(),
+            )));
+            assert!(matches!(
+                mapped,
+                Err(Error::Bootstrap(ManagedBootstrapFailure::RetainedMaterial))
+            ));
+        });
+        STATE.with(|slot| assert!(slot.borrow().as_ref().unwrap().first_raw_error.is_none()));
+        let mut report = color_eyre::eyre::eyre!("terminal cause");
+        for _ in 0..MAX_ERROR_CAUSES + 2 {
+            report = report.wrap_err("outer cause");
+        }
+        wallet_error("wallet signed journal verification", &report);
+        STATE.with(|slot| {
+            let state = slot.borrow();
+            let error = state.as_ref().unwrap().first_raw_error.as_ref().unwrap();
+            assert_eq!(error.seam, "wallet signed journal verification");
+            assert_eq!(error.causes, MAX_ERROR_CAUSES);
+            assert!(error.text.truncated);
+            assert!(error.text.text.len() <= MAX_ERROR_TEXT_BYTES);
+        });
     }
 }

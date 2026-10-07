@@ -25,9 +25,94 @@ pub struct RetainedFeeClaim {
     /// certificates, so it can still be relayed to the ledger's immutable historical records.
     pub request: Vec<u8>,
 }
-const CLAIM_LIMIT: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
-    + KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1
+/// Maximum canonical retained fee claim: bounded Payment, full Request and frame metadata.
+pub const FEE_CLAIM_MAX_BYTES_V1: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
+    + KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
     + archive::METADATA_BOUND;
+
+impl RetainedFeeClaim {
+    /// Canonical bounded frame containing both exact retained originals.
+    /// # Errors
+    /// A malformed, foreign or inconsistent Payment/Request pair.
+    pub fn to_canonical_bytes(&self, scheme: &[u8; 32]) -> Result<Vec<u8>, Error> {
+        let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
+            &self.payment,
+            scheme,
+        ))?;
+        let digests = valid(payment.digests())?;
+        check_claim_original(
+            self,
+            scheme,
+            &digests.credit_id,
+            &digests.payment,
+            payment.request.body.fee,
+        )?;
+        let bytes = archive::encode(self)?;
+        if bytes.len() > FEE_CLAIM_MAX_BYTES_V1 {
+            return Err(Error::Invalid("fee claim frame bound"));
+        }
+        Ok(bytes)
+    }
+    /// Construct the canonical online claim from exact retained originals and a canonical
+    /// beneficiary account. Native checks the historical schedule's payout binding; this DATA
+    /// conversion does not verify proofs, submit a transaction or acknowledge payment.
+    /// # Errors
+    /// Changed Payment/Request, foreign scheme/beneficiary, zero fee or an oversized frame.
+    pub fn ledger_claim_bytes(
+        &self,
+        scheme: &[u8; 32],
+        beneficiary_original: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        self.to_canonical_bytes(scheme)?;
+        if beneficiary_original.is_empty()
+            || beneficiary_original.len() > KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1
+        {
+            return Err(Error::Invalid("fee beneficiary original bound"));
+        }
+        let beneficiary: iroha_data_model::account::AccountId =
+            archive::decode(beneficiary_original)
+                .map_err(|_| Error::Invalid("fee beneficiary canonical original"))?;
+        let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
+            &self.payment,
+            scheme,
+        ))?;
+        let request: KagemushaWalletRequestV1 = archive::decode(&self.request)
+            .map_err(|_| Error::Invalid("fee Request canonical original"))?;
+        let schedule = request
+            .fee_schedule
+            .schedule()
+            .ok_or(Error::Invalid("fee claim requires historical schedule"))?;
+        let claim = KagemushaWalletFeeClaimV1 {
+            version: KAGEMUSHA_WALLET_VERSION_V1,
+            payment,
+            beneficiary,
+        };
+        valid(claim.payout(schedule))?;
+        valid(claim.to_canonical_bytes())
+    }
+
+    /// Decode exact DATA originals under the native wallet's selected scheme. This is not
+    /// proof verification, earned-fee admission or a payout acknowledgement.
+    /// # Errors
+    /// Empty/oversized/noncanonical frames or changed original bindings.
+    pub fn decode_canonical(bytes: &[u8], scheme: &[u8; 32]) -> Result<Self, Error> {
+        if bytes.is_empty() || bytes.len() > FEE_CLAIM_MAX_BYTES_V1 {
+            return Err(Error::Invalid("fee claim frame bound"));
+        }
+        let value: Self =
+            archive::decode(bytes).map_err(|_| Error::Invalid("fee claim canonical frame"))?;
+        // This parser receives transport DATA. Lost selected archive originals are classified
+        // separately by read_fee_claim; malformed offered pairs never imply local custody loss.
+        if value
+            .to_canonical_bytes(scheme)
+            .map_err(|_| Error::Invalid("fee claim original bindings"))?
+            != bytes
+        {
+            return Err(Error::Invalid("fee claim canonical frame"));
+        }
+        Ok(value)
+    }
+}
 
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::FeeClaimEntry")]
@@ -77,6 +162,36 @@ fn verify_payout(
         .map_err(|_| Error::Invalid("finalized fee payout row"))
 }
 
+fn check_claim_original(
+    original: &RetainedFeeClaim,
+    scheme: &[u8; 32],
+    credit: &[u8; 32],
+    expected: &[u8; 32],
+    fee: u128,
+) -> Result<(), Error> {
+    if original.payment.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
+        || original.request.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
+    {
+        return Err(Error::WitnessLost("earned fee originals size"));
+    }
+    let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
+        &original.payment,
+        scheme,
+    ))?;
+    let request: KagemushaWalletRequestV1 = archive::decode(&original.request)?;
+    valid(request.validate())?;
+    let identity = valid(payment.digests())?;
+    if request.body.scheme_id != *scheme
+        || request.signed() != payment.request
+        || identity.payment != *expected
+        || identity.credit_id != *credit
+        || payment.request.body.fee != fee
+    {
+        return Err(Error::WitnessLost("earned fee originals binding"));
+    }
+    Ok(())
+}
+
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     pub(super) fn retain_fee_claim(
         &mut self,
@@ -117,7 +232,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             payment: bytes.clone(),
             request: request.bytes.clone(),
         };
-        Self::check_claim_original(
+        check_claim_original(
             &original,
             &self.scheme_id,
             &digests.credit_id,
@@ -125,7 +240,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             fee,
         )?;
         let bytes = archive::encode(&original)?;
-        if bytes.len() > CLAIM_LIMIT {
+        if bytes.len() > FEE_CLAIM_MAX_BYTES_V1 {
             return Err(Error::Invalid("fee claim size"));
         }
         let claim = FeeClaimEntry {
@@ -167,35 +282,6 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         Ok(())
     }
-    fn check_claim_original(
-        original: &RetainedFeeClaim,
-        scheme: &[u8; 32],
-        credit: &[u8; 32],
-        expected: &[u8; 32],
-        fee: u128,
-    ) -> Result<(), Error> {
-        if original.payment.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
-            || original.request.len() > KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1
-        {
-            return Err(Error::WitnessLost("earned fee originals size"));
-        }
-        let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
-            &original.payment,
-            scheme,
-        ))?;
-        let request: KagemushaWalletRequestV1 = archive::decode(&original.request)?;
-        valid(request.validate())?;
-        let identity = valid(payment.digests())?;
-        if request.body.scheme_id != *scheme
-            || request.signed() != payment.request
-            || identity.payment != *expected
-            || identity.credit_id != *credit
-            || payment.request.body.fee != fee
-        {
-            return Err(Error::WitnessLost("earned fee originals binding"));
-        }
-        Ok(())
-    }
     fn read_fee_claim(
         &mut self,
         claim: &FeeClaimEntry,
@@ -203,13 +289,13 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     ) -> Result<RetainedFeeClaim, Error> {
         let bytes = self
             .archive
-            .get(ArchiveKey::FeeClaim(credit), CLAIM_LIMIT)?
+            .get(ArchiveKey::FeeClaim(credit), FEE_CLAIM_MAX_BYTES_V1)?
             .ok_or(Error::WitnessLost("earned fee originals"))?;
         if digest("wallet-fee-claim", &bytes) != claim.content {
             return Err(Error::WitnessLost("earned fee originals digest"));
         }
         let original: RetainedFeeClaim = archive::decode(&bytes)?;
-        Self::check_claim_original(
+        check_claim_original(
             &original,
             &self.scheme_id,
             &credit,
@@ -273,4 +359,4 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

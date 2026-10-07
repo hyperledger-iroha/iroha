@@ -25,7 +25,7 @@ from collections import deque
 from pathlib import Path
 
 from .attestation import (
-    AttestationRejected, VerificationUnavailable, DurableAppleAssertionCounterStore,
+    AttestationRejected, VerificationUnavailable,
     _verify_apple_assertion_with_hash, require, verify_apple_wallet_attestation_raw,
 )
 from .wallet_enrollment import (
@@ -40,6 +40,7 @@ from .wallet_policy import (
 from .play_integrity import GooglePlayIntegrityVerifier, PlayIntegrityEnrollmentPolicy, _unique
 from .google_oauth import GoogleServiceAccountTokenProvider
 from .native_time_interval import NativeTimeInterval
+from .wallet_enrollment_store import E1CounterStore
 
 SCHEMA = "iroha.kagemusha.wallet-e1-verifier.v1"
 CONFIG_SCHEMA = "iroha.kagemusha.wallet-e1-verifier-config.v1"
@@ -195,130 +196,6 @@ def configured_policy(value: dict, platform: str) -> ConfiguredWalletEnrollmentP
     return ConfiguredWalletEnrollmentPolicyV1(app, enrollment, root)
 
 
-class E1CounterStore(DurableAppleAssertionCounterStore):
-    """Retain the existing actual Apple register with a protected E1 attempt journal.
-
-    One existing SQLite transaction commits the verified assertion counter, consumed
-    client-data hash and exact evidence result. There is no monetary state or signer here.
-    """
-    def __init__(self, directory: Path, directory_fd: int):
-        self.directory, self.directory_fd = directory, directory_fd
-        held = os.fstat(directory_fd)
-        self.directory_identity = (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_gid)
-        self.recheck_directory()
-        self.path = directory / "wallet-e1.sqlite3"
-        try:
-            created = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except FileExistsError:
-            new_database = False
-        else:
-            new_database = True
-            os.fsync(created)
-            os.close(created)
-            os.fsync(self.directory_fd)
-        self.file_identity = self.database_identity()
-        # Existing databases must already have an intact incarnation and exact schema.
-        # Never migrate a legacy/empty journal or infer freshness from missing metadata.
-        if not new_database:
-            with closing(self._connect()) as connection:
-                self.incarnation = self.read_incarnation(connection)
-                self.check_schema(connection)
-        super().__init__(self.path)
-        with closing(self._connect()) as connection:
-            if new_database:
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    self.incarnation = os.urandom(32)
-                    require(any(self.incarnation), "invalid journal incarnation")
-                    connection.execute("""CREATE TABLE wallet_e1_journal (
-                        singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
-                        incarnation BLOB NOT NULL CHECK(length(incarnation)=32))""")
-                    connection.execute("INSERT INTO wallet_e1_journal VALUES (1, ?)", (self.incarnation,))
-                    connection.execute("""CREATE TABLE wallet_e1_attempts (
-                        operation_id BLOB PRIMARY KEY NOT NULL,
-                        preparation BLOB NOT NULL,
-                        config_sha256 BLOB NOT NULL,
-                        request_sha256 BLOB UNIQUE,
-                        key_binding BLOB UNIQUE,
-                        original BLOB,
-                        account_signature BLOB,
-                        result BLOB,
-                        CHECK ((request_sha256 IS NULL AND key_binding IS NULL AND original IS NULL
-                                AND account_signature IS NULL AND result IS NULL)
-                            OR (length(request_sha256)=32 AND length(key_binding)=32
-                                AND original IS NOT NULL AND length(account_signature)=64)))""")
-                    connection.execute("COMMIT")
-                except Exception:
-                    if connection.in_transaction:
-                        connection.execute("ROLLBACK")
-                    raise
-            self.check_schema(connection)
-            require(self.read_incarnation(connection) == self.incarnation, "journal incarnation changed")
-        os.fsync(self.directory_fd)
-
-    @staticmethod
-    def read_incarnation(connection):
-        rows = connection.execute("SELECT singleton, incarnation FROM wallet_e1_journal").fetchall()
-        require(len(rows) == 1 and rows[0][0] == 1 and type(rows[0][1]) is bytes
-                and len(rows[0][1]) == 32 and any(rows[0][1]), "invalid journal incarnation")
-        return rows[0][1]
-
-    @staticmethod
-    def check_schema(connection):
-        for table, expected in (
-            ("apple_keys", [("key_id", "BLOB", 1, 1), ("point", "BLOB", 1, 0),
-                ("app_id", "TEXT", 1, 0), ("environment", "TEXT", 1, 0), ("counter", "INTEGER", 1, 0)]),
-            ("apple_client_data", [("client_data_sha256", "BLOB", 1, 1), ("key_id", "BLOB", 1, 0)]),
-            ("wallet_e1_journal", [("singleton", "INTEGER", 1, 1), ("incarnation", "BLOB", 1, 0)]),
-            ("wallet_e1_attempts", [("operation_id", "BLOB", 1, 1), ("preparation", "BLOB", 1, 0),
-                ("config_sha256", "BLOB", 1, 0), ("request_sha256", "BLOB", 0, 0),
-                ("key_binding", "BLOB", 0, 0), ("original", "BLOB", 0, 0),
-                ("account_signature", "BLOB", 0, 0), ("result", "BLOB", 0, 0)])):
-            columns = connection.execute("PRAGMA table_info(" + table + ")").fetchall()
-            require([(r[1], r[2], r[3], r[5]) for r in columns] == expected,
-                    "invalid E1 journal schema")
-
-    def require_incarnation(self, connection, incarnation):
-        require(type(incarnation) is bytes and incarnation == self.incarnation
-                and self.read_incarnation(connection) == incarnation, "journal incarnation differs")
-
-    def recheck_directory(self):
-        require(self.directory.is_absolute() and self.directory.resolve(strict=True) == self.directory,
-                "invalid private store path")
-        held, path = os.fstat(self.directory_fd), self.directory.stat()
-        require(stat.S_ISDIR(held.st_mode) and held.st_uid == os.getuid() and held.st_mode & 0o077 == 0
-                and (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_gid) == self.directory_identity
-                and (path.st_dev, path.st_ino, path.st_mode, path.st_uid, path.st_gid) == self.directory_identity,
-                "private store directory changed")
-
-    def database_identity(self):
-        value = self.path.lstat()
-        require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid()
-                and value.st_mode & 0o077 == 0 and value.st_nlink == 1,
-                "private E1 journal custody unavailable")
-        return value.st_dev, value.st_ino
-
-    def recheck(self):
-        self.recheck_directory()
-        require(self.database_identity() == self.file_identity, "private E1 journal replaced")
-        sidecar = self.path.with_name(self.path.name + "-journal")
-        if sidecar.exists() or sidecar.is_symlink():
-            value = sidecar.lstat()
-            require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid()
-                    and value.st_mode & 0o077 == 0 and value.st_nlink == 1,
-                    "private E1 journal sidecar custody unavailable")
-
-    def _connect(self):
-        self.recheck()
-        connection = super()._connect()
-        try:
-            self.recheck()
-            return connection
-        except Exception:
-            connection.close()
-            raise
-
-
 class VerifierOwner:
     """Actual private process owner; its only successful result comes from real verifiers."""
     def __init__(self, config_original: bytes, *, directory_fd: int = 17,
@@ -344,10 +221,10 @@ class VerifierOwner:
                 "private policy projection differs from Native pins")
         self.directory = Path(config["store_directory"])
         self.current_time: int | None = None
-        self.google, self.oauth = None, None
+        self.google, self.oauth, self.counters = None, None, None
         self.directory_fd = os.dup(directory_fd)
         try:
-            # Validate the actual protected directory before reading OAuth or creating a DB.
+            # Validate the protected directory before reading OAuth or opening retained storage.
             held, path = os.fstat(self.directory_fd), self.directory.stat()
             require(self.directory.is_absolute() and self.directory.resolve(strict=True) == self.directory
                     and stat.S_ISDIR(held.st_mode) and held.st_uid == os.getuid() and held.st_mode & 0o077 == 0
@@ -370,6 +247,8 @@ class VerifierOwner:
             self.counters = E1CounterStore(self.directory, self.directory_fd)
             self.recheck()
         except Exception:
+            if self.counters is not None:
+                self.counters.close()
             if self.oauth is not None:
                 self.oauth.close()
             os.close(self.directory_fd)
@@ -381,10 +260,14 @@ class VerifierOwner:
         return NativeTimeInterval(self.current_time, self.current_time)
 
     def recheck(self):
-        self.crypto.recheck()
-        if self.configuration is not None:
-            self.configuration.recheck()
-        self.counters.recheck()
+        try:
+            self.crypto.recheck()
+            if self.configuration is not None:
+                self.configuration.recheck()
+            self.counters.recheck()
+        except (AttestationRejected, OSError):
+            # A lost or substituted process original is not a platform-evidence rejection.
+            raise VerificationUnavailable("private verifier custody unavailable") from None
 
     def request(self, original: bytes):
         value = exact_json(original, MAX_REQUEST)
@@ -398,8 +281,10 @@ class VerifierOwner:
                 and scope.challenge_transcript[130:162] == self.enrollment_policy,
                 "E1 differs from selected private policy")
         issued, expires, now = (value[k] for k in ("issued_at_ms", "expires_at_ms", "trusted_time_ms"))
+        # The approved policy supplies the whole lifetime; no private process ceiling
+        # may narrow it. Preserve checked u64 endpoints and the half-open live interval.
         require(all(type(t) is int for t in (issued, expires, now))
-                and 0 < issued <= now < expires < 1 << 64 and expires - issued <= 600000,
+                and 0 < issued <= now < expires < 1 << 64,
                 "private E1 time outside original window")
         require(type(value["evidence"]) is dict, "invalid private platform evidence")
         require(expires == issued + self.policy.enrollment.challenge_lifetime_ms,
@@ -499,8 +384,12 @@ class VerifierOwner:
                 row = connection.execute("""SELECT preparation, config_sha256, request_sha256,
                     key_binding, original, account_signature, result
                     FROM wallet_e1_attempts WHERE operation_id=?""", (operation,)).fetchone()
-                require(row is not None and row[:2] == (preparation, self.config_digest),
-                        "private prepared original absent or differs")
+                # Missing custody cannot establish a definitive evidence rejection or
+                # authorize a new preparation: this row may have been claimed before loss.
+                if row is None:
+                    raise VerificationUnavailable("private prepared original unavailable")
+                require(row[:2] == (preparation, self.config_digest),
+                        "private prepared original differs")
                 if row[2] is not None:
                     require(row[2:6] == (digest, scope.enrollment_key_binding(), original, account_signature),
                             "private recovery scope differs")
@@ -590,6 +479,8 @@ class VerifierOwner:
         return result
 
     def close(self):
+        if self.counters is not None:
+            self.counters.close()
         if self.oauth is not None:
             self.oauth.close()
         if self.directory_fd >= 0:
@@ -644,7 +535,7 @@ def serve(owner: VerifierOwner, input_stream, output_stream):
             response.update({"outcome": "unavailable", "evidence_base64": None})
         except (AttestationRejected, sqlite3.IntegrityError):
             response.update({"outcome": "rejected", "evidence_base64": None})
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             response.update({"outcome": "unavailable", "evidence_base64": None})
         write_packet(output_stream, response)
 

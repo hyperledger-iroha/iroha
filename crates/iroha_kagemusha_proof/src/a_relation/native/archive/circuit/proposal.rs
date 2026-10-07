@@ -82,10 +82,8 @@ impl Circuit<Fp> for Proposal {
         layouter.assign_region(
             || "native Archive predicate proposal",
             |mut region| {
-                let (old, pred_public) =
-                    cells.state(&mut chip, &mut region, &source.state.predecessor)?;
-                let (new, next_public) =
-                    cells.state(&mut chip, &mut region, &source.state.successor)?;
+                cells.state(&mut chip, &mut region, &source.state.predecessor)?;
+                cells.state(&mut chip, &mut region, &source.state.successor)?;
                 let fields = cells.words(&mut chip, &mut region, &source.state.statement)?;
                 let statement = StatementCells::constrain_with_verifier(
                     &mut chip,
@@ -124,20 +122,21 @@ impl Circuit<Fp> for Proposal {
                         .map(|v| v.map(Value::known))
                         .collect::<Vec<_>>(),
                 )?;
-                let mut status_public = None;
-                if let Evidence::Status { witness, .. } = &source.evidence {
+                let status_public = if let Evidence::Status { witness, .. } = &source.evidence {
                     let fields = cells.words(&mut chip, &mut region, &witness.public)?;
                     let valid = chip
                         .uint()
                         .glue()
                         .boolean(&mut region, Value::known(witness.public_valid))?;
-                    status_public = Some(IncomingLineageCells::constrain(
+                    Some(IncomingLineageCells::constrain(
                         &mut chip.uint(),
                         &mut region,
                         &fields,
                         &valid,
-                    )?);
-                }
+                    )?)
+                } else {
+                    None
+                };
                 // Exact native signature instances only. No Q proof/capability is fabricated.
                 let schema = self
                     .plan
@@ -195,20 +194,21 @@ impl Circuit<Fp> for Proposal {
                     )?,
                     Group::Evidence => {
                         let credited = cells.bytes(credited);
-                        let mut status = None;
-                        let mut opening = None;
-                        let mut fields = None;
-                        if let Evidence::Status {
+                        let (status, opening, fields) = if let Evidence::Status {
                             status: original,
                             credit_opening,
                             statement,
                             ..
                         } = &source.evidence
                         {
-                            status = Some(cells.bytes(original));
-                            opening = Some(cells.bytes(credit_opening));
-                            fields = Some(cells.words(&mut chip, &mut region, statement)?);
-                        }
+                            (
+                                Some(cells.bytes(original)),
+                                Some(cells.bytes(credit_opening)),
+                                Some(cells.words(&mut chip, &mut region, statement)?),
+                            )
+                        } else {
+                            (None, None, None)
+                        };
                         let evidence = if variant == Variant::ArchiveReceive {
                             ArchiveEvidenceSource::Receive {
                                 credited: &credited,
@@ -268,11 +268,18 @@ impl Plan {
         }
         super::super::check_retained_sizes(input.retained.omega.len(), input.retained.sigma.len())?;
         let mut results = Vec::with_capacity(2);
+        let mut input = Some(input);
         for group in [Group::Evidence, Group::Signature] {
             let observed = Arc::new(Mutex::new(None));
+            // Preserve owned witness intake and move its buffers into the last assignment.
+            let input = if matches!(group, Group::Signature) {
+                input.take().ok_or(super::super::Error::Input)?
+            } else {
+                input.as_ref().ok_or(super::super::Error::Input)?.clone()
+            };
             let circuit = Proposal {
                 plan: self.clone(),
-                input: input.clone(),
+                input,
                 group,
                 observed: observed.clone(),
             };

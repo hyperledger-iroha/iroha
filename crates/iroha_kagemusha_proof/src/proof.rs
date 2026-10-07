@@ -145,6 +145,19 @@ impl fmt::Display for SigmaError {
 }
 
 impl std::error::Error for SigmaError {}
+impl SigmaError {
+    /// Whether this is cancellation, never an invalid incoming proof or burn witness.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Synthesis(error) => matches!(error, iroha_plonk::frontend::Error::Cancelled),
+            Self::Key(error) => error.is_cancelled(),
+            Self::Artifact(error) => error.is_cancelled(),
+            Self::Prover(error) => error.is_cancelled(),
+            Self::Verify(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
 
 /// Memory and speed choices of a proving key. They change neither the
 /// verifying key nor any proof byte.
@@ -263,7 +276,31 @@ where
         original: &[u8],
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
     ) -> Result<Self, SigmaError> {
+        Self::from_original_artifact_cancellable(
+            shape,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            None,
+        )
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn from_original_artifact_cancellable(
+        shape: SigmaShape,
+        params: PinnedParams<C>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: iroha_plonk::keys::pk::artifact::ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, SigmaError> {
         use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| SigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
         if params.k() != shape.k {
             return Err(SigmaError::ParamsK {
                 expected: shape.k,
@@ -284,12 +321,13 @@ where
             installed_vk,
         )?;
         let circuit = SigmaCircuit::<C::ScalarExt>::keygen(shape.params);
-        let pk = ProvingKey::from_artifact_v2(
+        let pk = ProvingKey::from_artifact_v2_cancellable(
             original,
             verifier.binding(),
             &verifier.params,
             &circuit,
             config,
+            cancellation,
         )
         .map_err(SigmaError::Artifact)?;
         if pk.vk().to_bytes() != installed_vk {

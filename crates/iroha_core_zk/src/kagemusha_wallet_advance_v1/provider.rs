@@ -400,6 +400,19 @@ where
         self.require_storage().and(answer)
     }
 
+    pub(crate) fn prekey_root_identity(&self) -> [u8; 32] {
+        self.sentinel.root_nonce
+    }
+
+    pub(crate) fn enrollment_generation_policy(
+        &self,
+    ) -> Result<super::KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletProviderErrorV1> {
+        self.require_storage()?;
+        self.platform
+            .key_generation_policy()
+            .map_err(KagemushaWalletProviderErrorV1::Unavailable)
+    }
+
     /// Current boot identity.
     pub(super) fn boot(&self) -> Result<[u8; 32], KagemushaWalletUnavailableV1> {
         self.platform.boot_id()

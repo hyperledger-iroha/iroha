@@ -187,16 +187,11 @@ pub(super) fn read_optional(
     name: &str,
     maximum: usize,
 ) -> Result<Option<Vec<u8>>> {
-    match directory.read(name, maximum) {
-        // The native reader already completed every custody/size fence. Move its sole
-        // allocation into the existing owned result; no second copy needs secret cleanup.
-        Ok(mut bytes) => Ok(Some(std::mem::take(&mut *bytes))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            directory.revalidate()?;
-            Ok(None)
-        }
-        Err(error) => Err(error.into()),
-    }
+    // Initial absence is admitted by the native owner, after its unconditional custody exit.
+    // Move the sole successful allocation; later native errors cannot become absence.
+    Ok(directory
+        .read_optional(name, maximum)?
+        .map(|mut bytes| std::mem::take(&mut *bytes)))
 }
 pub(super) fn require_empty(directory: &PrivateDirectory) -> Result<()> {
     if !directory.entries(0)?.is_empty() {
@@ -560,7 +555,11 @@ pub(super) fn checkpoint_bytes(verifier: &FinalityVerifier) -> Result<Vec<u8>> {
 pub(in crate::managed) fn require_retained_material<T>(value: Result<T>) -> Result<T> {
     value.map_err(|error| match error {
         Error::Bootstrap(_) | Error::NativeDeadline => error,
-        _ => super::ManagedBootstrapFailure::RetainedMaterial.into(),
+        _error => {
+            #[cfg(test)]
+            deadline_diagnostics::retained_error(&_error);
+            super::ManagedBootstrapFailure::RetainedMaterial.into()
+        }
     })
 }
 
@@ -600,3 +599,7 @@ mod deadline_tests;
 #[cfg(test)]
 #[path = "native_operation/optional_read_tests.rs"]
 mod optional_read_tests;
+
+#[cfg(test)]
+#[path = "native_operation/optional_admission_tests.rs"]
+mod optional_admission_tests;

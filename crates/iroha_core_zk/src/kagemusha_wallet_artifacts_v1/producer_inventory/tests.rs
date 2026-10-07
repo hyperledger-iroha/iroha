@@ -36,6 +36,99 @@ fn original_io_failure_remains_distinct_from_wrong_length_or_hash() {
     assert_eq!(read(&mut Bytes(vec![1, 2, 3]), blob, 3), Ok(vec![1, 2, 3]));
 }
 
+#[test]
+fn cancellation_during_original_read_discards_partial_bytes_and_allows_exact_retry() {
+    use std::cell::Cell;
+
+    struct Source {
+        bytes: Vec<u8>,
+        token: iroha_pasta::CancellationToken,
+        cancel_on_read: bool,
+        fail_read: bool,
+        reads: Cell<usize>,
+    }
+    struct Reader<'a> {
+        source: &'a Source,
+        cursor: Cursor<&'a [u8]>,
+    }
+    impl Read for Reader<'_> {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            self.source.reads.set(self.source.reads.get() + 1);
+            let count = self.cursor.read(output)?;
+            if self.source.cancel_on_read {
+                self.source.token.cancel();
+            }
+            if self.source.fail_read {
+                return Err(std::io::ErrorKind::PermissionDenied.into());
+            }
+            Ok(count)
+        }
+    }
+    impl OriginalSourceV1 for Source {
+        fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
+            Ok(Box::new(Reader {
+                source: self,
+                cursor: Cursor::new(self.bytes.as_slice()),
+            }))
+        }
+    }
+    let expected = vec![0x5a; 3 * 64 * 1024 + 17];
+    let blob = BlobV1::of(&expected);
+    let mut source = Source {
+        bytes: expected.clone(),
+        token: iroha_pasta::CancellationToken::new(),
+        cancel_on_read: true,
+        fail_read: false,
+        reads: Cell::new(0),
+    };
+    for fail_read in [false, true] {
+        source.token = iroha_pasta::CancellationToken::new();
+        source.fail_read = fail_read;
+        source.reads.set(0);
+        let token = source.token.clone();
+        assert_eq!(
+            read_cancellable(&mut source, blob, expected.len(), Some(&token)),
+            Err(Error::Cancelled)
+        );
+        assert_eq!(source.reads.get(), 1);
+    }
+    source.token = iroha_pasta::CancellationToken::new();
+    source.cancel_on_read = false;
+    source.fail_read = false;
+    source.reads.set(0);
+    let token = source.token.clone();
+    assert_eq!(
+        read_cancellable(&mut source, blob, expected.len(), Some(&token)),
+        Ok(expected)
+    );
+    assert!(source.reads.get() > 1);
+}
+
+#[test]
+fn cancelled_original_import_does_not_open_custody() {
+    let selected = AuthenticatedProducerInventoryV1 {
+        inventory: structural_inventory(),
+        scheme_id: [1; 32],
+        manifest_digest: [2; 32],
+    };
+    let mut source = memory();
+    let token = iroha_pasta::CancellationToken::new();
+    token.cancel();
+    assert!(matches!(
+        selected.read_original_cancellable(0, &mut source, 3, Some(&token)),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(source.opens, 0);
+    let fresh = iroha_pasta::CancellationToken::new();
+    let original = selected
+        .read_original_cancellable(0, &mut source, 3, Some(&fresh))
+        .unwrap();
+    assert_eq!(original.descriptor, [1]);
+    assert_eq!(original.verifying_key, [2]);
+    assert_eq!(original.proving_key, [3, 4, 5]);
+    assert_eq!(source.opens, 3);
+}
+
 fn finality_record() -> ArtifactRecord {
     use iroha_kagemusha_proof::finality::{
         catalog::{ArtifactSink, DirectoryCatalog},

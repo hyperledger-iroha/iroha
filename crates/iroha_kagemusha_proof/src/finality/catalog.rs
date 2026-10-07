@@ -52,6 +52,53 @@ pub struct CompileError {
     pub phase: &'static str,
     /// Original diagnostic, including bounded original sizes when relevant.
     pub detail: String,
+    cause: Failure,
+}
+impl CompileError {
+    /// Whether the actual typed lower-level error was cancellation, never inferred
+    /// from diagnostic text and never an invalid-source verdict.
+    pub fn is_cancelled(&self) -> bool {
+        self.cause.is_cancelled()
+    }
+}
+#[derive(Debug)]
+enum Failure {
+    Source(Error),
+    Key(iroha_plonk::keys::KeyError),
+    Diagnostic(String),
+}
+impl Failure {
+    fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Source(error) => error.is_cancelled(),
+            Self::Key(error) => error.is_cancelled(),
+            Self::Diagnostic(_) => false,
+        }
+    }
+}
+impl core::fmt::Display for Failure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Source(error) => error.fmt(f),
+            Self::Key(error) => error.fmt(f),
+            Self::Diagnostic(message) => message.fmt(f),
+        }
+    }
+}
+impl From<Error> for Failure {
+    fn from(error: Error) -> Self {
+        Self::Source(error)
+    }
+}
+impl From<iroha_plonk::keys::KeyError> for Failure {
+    fn from(error: iroha_plonk::keys::KeyError) -> Self {
+        Self::Key(error)
+    }
+}
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self::Diagnostic(message)
+    }
 }
 impl core::fmt::Display for CompileError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -68,15 +115,13 @@ impl From<Error> for CompileError {
         failure(None, "graph", error)
     }
 }
-fn failure(
-    node: Option<NodeId>,
-    phase: &'static str,
-    error: impl core::fmt::Display,
-) -> CompileError {
+fn failure(node: Option<NodeId>, phase: &'static str, error: impl Into<Failure>) -> CompileError {
+    let cause = error.into();
     CompileError {
         node,
         phase,
-        detail: error.to_string(),
+        detail: cause.to_string(),
+        cause,
     }
 }
 
@@ -272,3 +317,20 @@ impl Compiler<'_> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn exact_cancellation_survives_phase_wrapping_without_parsing_messages() {
+        let error = failure(None, "strict source import", Error::Cancelled);
+        assert!(error.is_cancelled());
+        assert!(CompileError::from(Error::Cancelled).is_cancelled());
+        assert!(failure(None, "source key", iroha_plonk::keys::KeyError::Cancelled).is_cancelled());
+        for error in [Error::Artifact, Error::Input, Error::Proof, Error::Prover] {
+            assert!(!CompileError::from(error).is_cancelled());
+        }
+        assert!(!failure(None, "diagnostic", "Cancelled".to_owned()).is_cancelled());
+    }
+}

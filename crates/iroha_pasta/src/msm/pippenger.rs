@@ -43,6 +43,8 @@ use zeroize::Zeroize;
 
 use crate::curve::{PastaAffine, PastaCurve};
 use crate::field::PastaField;
+use crate::{CancellationToken, Cancelled};
+use zeroize::Zeroizing;
 
 #[cfg(test)]
 #[path = "reduction_tests.rs"]
@@ -144,19 +146,35 @@ impl Drop for Digits {
 
 impl Digits {
     /// Recodes `scalars` in parallel on the caller's pool.
+    #[cfg(test)]
     pub(crate) fn new<F: PastaField>(scalars: &[F], c: usize, nw: usize) -> Self {
+        Self::new_cancellable(scalars, c, nw, None).expect("no cancellation signal")
+    }
+
+    pub(crate) fn new_cancellable<F: PastaField>(
+        scalars: &[F],
+        c: usize,
+        nw: usize,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Self, Cancelled> {
         use rayon::prelude::*;
+        CancellationToken::checkpoint(cancellation)?;
         let mut data = vec![0i16; scalars.len() * nw];
         data.par_chunks_mut(nw * 1024)
             .zip(scalars.par_chunks(1024))
             .for_each(|(out, chunk)| {
+                if CancellationToken::checkpoint(cancellation).is_err() {
+                    return;
+                }
                 for (s, o) in chunk.iter().zip(out.chunks_exact_mut(nw)) {
                     let mut limbs = s.to_canonical_limbs();
                     recode_into(&limbs, c, o);
                     limbs.zeroize();
                 }
             });
-        Self { data, nw }
+        let result = Self { data, nw };
+        CancellationToken::checkpoint(cancellation)?;
+        Ok(result)
     }
 
     /// The digits of scalar `i`.
@@ -548,6 +566,7 @@ pub(crate) fn min_plan_bytes(n: usize, bits: usize) -> usize {
 }
 
 /// Runs the bucket phase of one task and returns its per-window sums.
+#[cfg(test)]
 pub(crate) fn run_task<C: PastaCurve, const SECRET: bool>(
     bases: &[C::AffineExt],
     skip: &[bool],
@@ -556,10 +575,24 @@ pub(crate) fn run_task<C: PastaCurve, const SECRET: bool>(
     group: usize,
     chunk: usize,
 ) -> (usize, Vec<C>) {
+    let (start, sums) =
+        run_task_cancellable::<C, SECRET>(bases, skip, digits, plan, group, chunk, None);
+    (start, sums.to_vec())
+}
+
+pub(crate) fn run_task_cancellable<C: PastaCurve, const SECRET: bool>(
+    bases: &[C::AffineExt],
+    skip: &[bool],
+    digits: &Digits,
+    plan: &Plan,
+    group: usize,
+    chunk: usize,
+    cancellation: Option<&CancellationToken>,
+) -> (usize, Zeroizing<Vec<C>>) {
     let w0 = group * plan.per_group;
     let w1 = ((group + 1) * plan.per_group).min(plan.nw);
-    if w0 >= w1 {
-        return (w0, Vec::new());
+    if w0 >= w1 || CancellationToken::checkpoint(cancellation).is_err() {
+        return (w0, Zeroizing::new(Vec::new()));
     }
     let n = bases.len();
     let nb_per = 1usize << (plan.c - 1);
@@ -568,13 +601,13 @@ pub(crate) fn run_task<C: PastaCurve, const SECRET: bool>(
     let step = n.div_ceil(plan.chunks);
     let i0 = chunk * step;
     let i1 = ((chunk + 1) * step).min(n);
-    for (i, _) in skip
-        .iter()
-        .enumerate()
-        .take(i1)
-        .skip(i0)
-        .filter(|(_, s)| !**s)
-    {
+    for (i, _) in skip.iter().enumerate().take(i1).skip(i0) {
+        if i % 256 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+            return (w0, Zeroizing::new(Vec::new()));
+        }
+        if skip[i] {
+            continue;
+        }
         let row = &digits.row(i)[w0..w1];
         for (gw, &d) in row.iter().enumerate() {
             if d != 0 {
@@ -588,7 +621,7 @@ pub(crate) fn run_task<C: PastaCurve, const SECRET: bool>(
         .map(|gw| buckets.reduce(gw * nb_per, nb_per))
         .collect();
     // Dropping `buckets` wipes its scratch in secret mode.
-    (w0, sums)
+    (w0, Zeroizing::new(sums))
 }
 
 /// Combines per-window sums: `sum_w 2^(c w) * W_w`.

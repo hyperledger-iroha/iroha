@@ -527,7 +527,7 @@ fn expired_original_is_readable_but_fresh_prepare_and_dispatch_cannot_renew_it()
             .resume_reserve_account_registration(&path, &request)
             .unwrap()
             .status,
-        OperationStatus::Absent
+        OperationStatus::Expired
     );
     assert_eq!(
         service

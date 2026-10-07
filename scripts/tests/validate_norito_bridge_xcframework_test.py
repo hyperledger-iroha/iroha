@@ -28,12 +28,11 @@ sys.modules[SPEC.name] = validator
 SPEC.loader.exec_module(validator)
 WALLET_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "execute", "snapshot")
+    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "execute", "snapshot")
 ] + [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_closeInstallation",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletEnrollmentNativeV1_enroll",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_review",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_executeReviewed",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_discardReview",
@@ -746,10 +745,10 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_application_authority_is_exact_closed_build_data(self):
         environment = self.payload["build_environment"]
-        for authority in ["bpng-taira-v6", "cbsi-release-v1"]:
+        for authority in ["bpng-taira-v7", "cbsi-release-v1"]:
             environment["wallet_runtime_authority"] = authority
             validator._validate_build_environment(ROOT, environment)
-        for authority in [None, "", "bpng", "BPNG-TAIRA-V6", "bpng-taira-v6\n", 1, True, {}, []]:
+        for authority in [None, "", "bpng", "bpng-taira-v6", "BPNG-TAIRA-V7", "bpng-taira-v7\n", 1, True, {}, []]:
             environment["wallet_runtime_authority"] = authority
             with self.assertRaises(validator.ValidationError):
                 validator._validate_build_environment(ROOT, environment)

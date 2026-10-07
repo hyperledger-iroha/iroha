@@ -392,3 +392,128 @@ fn tree_leaf_consumer_keeps_native_deny_write_and_delete_ownership() {
             .is_ok()
     );
 }
+
+#[test]
+fn tree_comparison_reuses_standalone_lazy_names_bounds_empty_and_original_retry() {
+    let (_temporary, root, first, _second) = store();
+    let original = [PrivateFileComparison {
+        name: OsStr::new("record"),
+        maximum: 8,
+        expected: b"original",
+    }];
+    let lazy = [
+        PrivateFileComparison {
+            name: OsStr::new("record"),
+            maximum: 8,
+            expected: b"different",
+        },
+        PrivateFileComparison {
+            name: OsStr::new("missing"),
+            maximum: 1,
+            expected: b"x",
+        },
+    ];
+    assert!(!first.compare_files(&lazy).unwrap());
+    assert!(
+        !root
+            .read_tree_scope(
+                |tree| tree.with_directory(&first, |directory| directory.compare_files(&lazy))
+            )
+            .unwrap()
+    );
+    for inputs in [
+        vec![PrivateFileComparison {
+            name: OsStr::new("missing"),
+            maximum: 1,
+            expected: b"x",
+        }],
+        vec![PrivateFileComparison {
+            name: OsStr::new("record"),
+            maximum: 7,
+            expected: b"original",
+        }],
+        vec![PrivateFileComparison {
+            name: OsStr::new("../record"),
+            maximum: 8,
+            expected: b"original",
+        }],
+    ] {
+        let standalone = first.compare_files(&inputs).unwrap_err();
+        let scoped = root
+            .read_tree_scope(|tree| {
+                tree.with_directory(&first, |directory| directory.compare_files(&inputs))
+            })
+            .unwrap_err();
+        assert_eq!(standalone.kind(), scoped.kind());
+        assert_eq!(standalone.to_string(), scoped.to_string());
+    }
+    assert!(first.compare_files(&[]).unwrap());
+    assert!(
+        root.read_tree_scope(
+            |tree| tree.with_directory(&first, |directory| directory.compare_files(&[]))
+        )
+        .unwrap()
+    );
+    assert!(first.compare_files(&original).unwrap());
+    assert!(
+        root.read_tree_scope(
+            |tree| tree.with_directory(&first, |directory| directory.compare_files(&original))
+        )
+        .unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tree_comparison_closes_actual_boolean_error_and_empty_outcomes_before_anchor_retry() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for outcome in ["equal", "different", "missing", "empty"] {
+        let (_temporary, root, first, _second) = store();
+        let inputs = match outcome {
+            "equal" => vec![PrivateFileComparison {
+                name: OsStr::new("record"),
+                maximum: 8,
+                expected: b"original",
+            }],
+            "different" => vec![PrivateFileComparison {
+                name: OsStr::new("record"),
+                maximum: 8,
+                expected: b"different",
+            }],
+            "missing" => vec![PrivateFileComparison {
+                name: OsStr::new("missing"),
+                maximum: 1,
+                expected: b"x",
+            }],
+            _ => vec![],
+        };
+        let refused = root
+            .read_tree_scope(|tree| {
+                let body =
+                    tree.with_directory(&first, |directory| directory.compare_files(&inputs));
+                match outcome {
+                    "equal" | "empty" => assert!(*body.as_ref().unwrap()),
+                    "different" => assert!(!*body.as_ref().unwrap()),
+                    _ => assert_eq!(body.as_ref().unwrap_err().kind(), io::ErrorKind::NotFound),
+                }
+                std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+                body
+            })
+            .unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let restored = [PrivateFileComparison {
+            name: OsStr::new("record"),
+            maximum: 8,
+            expected: b"original",
+        }];
+        assert!(first.compare_files(&restored).unwrap());
+        assert!(
+            root.read_tree_scope(
+                |tree| tree.with_directory(&first, |directory| directory.compare_files(&restored))
+            )
+            .unwrap()
+        );
+    }
+}

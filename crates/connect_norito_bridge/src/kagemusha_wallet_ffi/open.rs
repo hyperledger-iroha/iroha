@@ -19,36 +19,35 @@ impl From<state::NativeOpenErrorV1> for Failure {
         }
     }
 }
-trait Admission: Send {
-    fn enrollment(&mut self, _input: enrollment::Input<'_>) -> Result<enrollment::Response> {
-        Err(Failure::code(ARTIFACTS_UNAVAILABLE))
+pub(super) trait Admission: Send {
+    fn enrollment(&mut self, _action: super::enrollment::Action<'_>) -> Result<Response> {
+        Err(Failure::code(INVALID))
     }
     fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>>;
     fn finish(&mut self, signature: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)>;
     fn cancel(&mut self) -> Result<()>;
 }
 enum Phase<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
-    Ready(state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>),
-    Pending(state::PendingNativeWalletOpenV1<advance::KagemushaWalletStdFsV1, P, S>),
+    Ready(Box<state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>>),
+    Pending(Box<state::PendingNativeWalletOpenV1<advance::KagemushaWalletStdFsV1, P, S>>),
 }
-struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
+pub(super) struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     phase: Option<Phase<P, S>>,
     binding: Option<super::installed::BoundOriginals>,
+}
+impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Runtime<P, S> {
+    pub(super) fn new(
+        runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+    ) -> Self {
+        Self {
+            phase: Some(Phase::Ready(Box::new(runtime))),
+            binding: None,
+        }
+    }
 }
 impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send + 'static>
     Admission for Runtime<P, S>
 {
-    fn enrollment(&mut self, input: enrollment::Input<'_>) -> Result<enrollment::Response> {
-        let binding = self
-            .binding
-            .as_ref()
-            .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
-        let scope = binding.enrollment(&input)?;
-        let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
-            return Err(Failure::code(CONFLICT));
-        };
-        enrollment::execute(runtime, input, scope)
-    }
     fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>> {
         validate(originals)?;
         if let Some(binding) = &self.binding {
@@ -69,12 +68,12 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
         match runtime.begin(credential, certificates, account, asset) {
             Ok(pending) => {
                 let challenge = pending.challenge().to_vec();
-                self.phase = Some(Phase::Pending(pending));
+                self.phase = Some(Phase::Pending(Box::new(pending)));
                 Ok(challenge)
             }
             Err(failure) => {
                 let (runtime, error) = failure.into_parts();
-                self.phase = Some(Phase::Ready(runtime));
+                self.phase = Some(Phase::Ready(Box::new(runtime)));
                 Err(error.into())
             }
         }
@@ -103,10 +102,10 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
             Err(failure) => {
                 let (runtime, error) = failure.into_parts();
                 self.phase = Some(match runtime.recover_pending() {
-                    Ok(pending) => Phase::Pending(pending),
+                    Ok(pending) => Phase::Pending(Box::new(pending)),
                     // Current later native coordinator failure remains an owned runtime;
                     // it cannot be fabricated into an account Pending here.
-                    Err(runtime) => Phase::Ready(runtime),
+                    Err(runtime) => Phase::Ready(Box::new(runtime)),
                 });
                 Err(error.into())
             }
@@ -116,7 +115,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
         let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;
         match phase {
             Phase::Pending(pending) => {
-                self.phase = Some(Phase::Ready(pending.abandon()));
+                self.phase = Some(Phase::Ready(Box::new(pending.abandon())));
                 Ok(())
             }
             other => {
@@ -128,8 +127,8 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
 }
 pub(super) struct RuntimeOwner {
     pub(super) closing: Arc<closing::CloseState>,
-    admission: Mutex<Option<Box<dyn Admission>>>,
-    finished: Mutex<Option<(Box<dyn Wallet>, state::Scheduler)>>,
+    pub(super) admission: Mutex<Option<Box<dyn Admission>>>,
+    pub(super) finished: Mutex<Option<(Box<dyn Wallet>, state::Scheduler)>>,
 }
 fn validate(originals: [&[u8]; 4]) -> Result<()> {
     if originals
@@ -250,6 +249,7 @@ fn finish_with(
     selected.owners.insert(
         id,
         Arc::new(Owner {
+            background: background::Background::default(),
             closing: Arc::clone(&owner.closing),
             scheduler,
             wallet: Mutex::new(Some(wallet)),
@@ -269,13 +269,12 @@ pub(crate) fn cancel(id: u64) -> Result<()> {
         .ok_or(Failure::code(CLOSED))?
         .cancel()
 }
-pub(super) fn enroll(id: u64, input: enrollment::Input<'_>) -> Result<enrollment::Response> {
-    enroll_with(runtime(id)?, input)
+pub(super) fn enroll(id: u64, input: enrollment::Action<'_>) -> Result<Response> {
+    let mut reply = enroll_with(runtime(id)?, input)?;
+    reply.sequence = u128::from(id);
+    Ok(reply)
 }
-fn enroll_with(
-    owner: Arc<RuntimeOwner>,
-    input: enrollment::Input<'_>,
-) -> Result<enrollment::Response> {
+fn enroll_with(owner: Arc<RuntimeOwner>, input: enrollment::Action<'_>) -> Result<Response> {
     let mut admission = owner
         .admission
         .lock()
@@ -320,7 +319,7 @@ pub struct NativeRegistrationRetry<
     S: OriginalSourceV1 + Send,
 > {
     originals: RegistrationOriginals<
-        state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+        Box<state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>>,
         Option<super::installed::BoundOriginals>,
     >,
 }
@@ -337,14 +336,14 @@ where
     /// # Errors
     /// Registry refusal returns the same runtime and binding in another retry owner.
     pub fn retry(self) -> std::result::Result<u64, NativeStartupFailure<P, S>> {
-        retain_runtime(self.originals.runtime, self.originals.binding)
+        retain_runtime(*self.originals.runtime, self.originals.binding)
     }
 }
 
 /// Native deployment startup failure; custody and original-store ownership remain recoverable.
 pub enum NativeStartupFailure<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     /// Signed artifact/source qualification failed before registration.
-    Load(state::NativeStartupFailureV1<advance::KagemushaWalletStdFsV1, P, S>),
+    Load(Box<state::NativeStartupFailureV1<advance::KagemushaWalletStdFsV1, P, S>>),
     /// The loaded runtime could not be registered; neither custody nor originals were dropped.
     Registration {
         /// Exact loaded native runtime AND authenticated binding, ready for consuming retry.
@@ -373,13 +372,13 @@ where
     S: OriginalSourceV1 + Send + 'static,
 {
     let runtime = state::NativeWalletRuntimeV1::load(
-        config,
+        &config,
         provider,
         verifier_pack,
         producer_inventory,
         originals,
     )
-    .map_err(NativeStartupFailure::Load)?;
+    .map_err(|error| NativeStartupFailure::Load(Box::new(error)))?;
     retain_native_runtime(runtime)
 }
 /// Register one already loaded native runtime, including retry after registry unavailability.
@@ -404,10 +403,10 @@ where
     P: advance::KagemushaWalletPlatformV1 + 'static,
     S: OriginalSourceV1 + Send + 'static,
 {
-    Arc::new(runtime_owner(runtime, Some(binding)))
+    Arc::new(runtime_owner(Box::new(runtime), Some(binding)))
 }
 fn runtime_owner<P, S>(
-    runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+    runtime: Box<state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>>,
     binding: Option<super::installed::BoundOriginals>,
 ) -> RuntimeOwner
 where
@@ -457,7 +456,10 @@ where
     P: advance::KagemushaWalletPlatformV1 + 'static,
     S: OriginalSourceV1 + Send + 'static,
 {
-    let originals = RegistrationOriginals { runtime, binding };
+    let originals = RegistrationOriginals {
+        runtime: Box::new(runtime),
+        binding,
+    };
     retain_registration(registry(), originals, |originals| {
         runtime_owner(originals.runtime, originals.binding)
     })
@@ -469,7 +471,7 @@ where
 
 // A refusal returns the whole move-only owner before any factory is invoked. Production
 // uses only the existing registry and a genuine loaded runtime; local tests use DATA owners.
-fn retain_registration<T>(
+pub(super) fn retain_registration<T>(
     selected_registry: &Mutex<Registry>,
     originals: T,
     admit: impl FnOnce(T) -> RuntimeOwner,
@@ -580,15 +582,15 @@ mod tests {
         barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
     }
     impl Admission for TestAdmission {
-        fn enrollment(&mut self, _: enrollment::Input<'_>) -> Result<enrollment::Response> {
+        fn enrollment(&mut self, _: enrollment::Action<'_>) -> Result<Response> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if let Some((entered, resume)) = &self.barriers {
                 entered.wait();
                 resume.wait();
             }
-            Ok(enrollment::Response {
-                kind: 1,
-                ..enrollment::Response::default()
+            Ok(Response {
+                kind: 20,
+                ..Response::default()
             })
         }
         fn begin(&mut self, _: [&[u8]; 4]) -> Result<Vec<u8>> {
@@ -831,17 +833,8 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
-    fn enrollment_input() -> enrollment::Input<'static> {
-        enrollment::Input {
-            selector: 0,
-            challenge: &[1],
-            policy: &[1],
-            account: &[1],
-            original: &[],
-            certificates: &[],
-            issued_at_ms: 1,
-            expires_at_ms: 2,
-        }
+    fn enrollment_input() -> enrollment::Action<'static> {
+        enrollment::Action::Progress
     }
     #[test]
     fn enrollment_captured_before_close_refuses_after_the_actual_admission_lock() {
@@ -907,7 +900,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
         resume.wait();
-        assert_eq!(enrolling.join().unwrap().unwrap().kind, 1);
+        assert_eq!(enrolling.join().unwrap().unwrap().kind, 20);
         closing.join().unwrap().unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 1);

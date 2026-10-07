@@ -237,7 +237,19 @@ impl Session<'_> {
         source: &ACheckpoint,
         budget: MemoryBudget,
     ) -> Result<Vec<u8>, Error> {
-        self.verify_a(source, budget)?;
+        self.encode_a_checkpoint_cancellable(source, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn encode_a_checkpoint_cancellable(
+        &self,
+        source: &ACheckpoint,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Vec<u8>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        self.verify_a_cancellable(source, budget, cancellation)?;
         let layout = self
             .prover
             .checkpoint_layout(CheckpointKind::A, source.stage)?;
@@ -263,9 +275,26 @@ impl Session<'_> {
         original: &[u8],
         budget: MemoryBudget,
     ) -> Result<ACheckpoint, Error> {
+        self.restore_first_checkpoint_cancellable(original, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_first_checkpoint_cancellable(
+        &self,
+        original: &[u8],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ACheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let layout = self.prover.checkpoint_layout(CheckpointKind::A, 0)?;
         let payload = Payload::decode(original, &layout)?;
-        let checked = self.restore_first(payload.proof, &payload.accumulator, budget)?;
+        let checked = self.restore_first_cancellable(
+            payload.proof,
+            &payload.accumulator,
+            budget,
+            cancellation,
+        )?;
         if context_digest(&checked.first)?.to_repr() != payload.source_context {
             return Err(Error::Input);
         }
@@ -283,6 +312,19 @@ impl Session<'_> {
         original: &[u8],
         budget: MemoryBudget,
     ) -> Result<ACheckpoint, Error> {
+        self.restore_a_checkpoint_cancellable(prior, original, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_a_checkpoint_cancellable(
+        &self,
+        prior: &WCheckpoint,
+        original: &[u8],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ACheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         self.require_source(&prior.source)?;
         let next = prior.source.stage.checked_add(1).ok_or(Error::Input)?;
         let layout = self.prover.checkpoint_layout(CheckpointKind::A, next)?;
@@ -290,7 +332,13 @@ impl Session<'_> {
         if context_digest(&prior.source.first)?.to_repr() != payload.source_context {
             return Err(Error::Input);
         }
-        self.restore_a(prior, payload.proof, &payload.accumulator, budget)
+        self.restore_a_cancellable(
+            prior,
+            payload.proof,
+            &payload.accumulator,
+            budget,
+            cancellation,
+        )
     }
 
     /// Retain the original W proof/full deciding claim after its real native restore.
@@ -302,11 +350,24 @@ impl Session<'_> {
         source: &WCheckpoint,
         budget: MemoryBudget,
     ) -> Result<Vec<u8>, Error> {
-        let checked = self.restore_wrapper(
+        self.encode_wrapper_checkpoint_cancellable(source, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn encode_wrapper_checkpoint_cancellable(
+        &self,
+        source: &WCheckpoint,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Vec<u8>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let checked = self.restore_wrapper_cancellable(
             &source.source,
             source.proof.clone(),
             &source.vesta.to_bytes(),
             budget,
+            cancellation,
         )?;
         let layout = self
             .prover
@@ -334,6 +395,19 @@ impl Session<'_> {
         original: &[u8],
         budget: MemoryBudget,
     ) -> Result<WCheckpoint, Error> {
+        self.restore_wrapper_checkpoint_cancellable(prior, original, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_wrapper_checkpoint_cancellable(
+        &self,
+        prior: &ACheckpoint,
+        original: &[u8],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<WCheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         self.require_source(prior)?;
         let layout = self
             .prover
@@ -342,7 +416,13 @@ impl Session<'_> {
         if context_digest(&prior.first)?.to_repr() != payload.source_context {
             return Err(Error::Input);
         }
-        self.restore_wrapper(prior, payload.proof, &payload.accumulator, budget)
+        self.restore_wrapper_cancellable(
+            prior,
+            payload.proof,
+            &payload.accumulator,
+            budget,
+            cancellation,
+        )
     }
 }
 

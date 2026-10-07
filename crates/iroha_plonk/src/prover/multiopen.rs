@@ -12,6 +12,7 @@
 //! Fixed, `sigma` and instance polynomials carry the default blind (one),
 //! as their commitments do. The IPA returns the folded generator `G'_0`.
 
+use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
 use rand_core_06::{CryptoRng, RngCore};
 
@@ -28,7 +29,7 @@ use crate::{
         ipa::{PinnedParams, evaluate_polynomial},
         multiopen::{
             Slot, SlotKind,
-            prover::{SlotPolynomial, create_proof_with_claim},
+            prover::{SlotPolynomial, create_proof_with_claim_cancellable},
         },
     },
     protocol::{Protocol, rotate},
@@ -192,6 +193,7 @@ impl<F: PastaField> Opened<'_, F> {
         rng: &mut R,
         transcript: &mut T,
         budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<crate::pcs::ipa::GeneratorClaim<C>, ProverError>
     where
         C: PastaCurve<ScalarExt = F>,
@@ -205,7 +207,7 @@ impl<F: PastaField> Opened<'_, F> {
             .iter()
             .map(|slot| self.slot_polynomial(pk, slot.slot))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(create_proof_with_claim(
+        Ok(create_proof_with_claim_cancellable(
             params.params(),
             plan,
             &points,
@@ -213,6 +215,7 @@ impl<F: PastaField> Opened<'_, F> {
             rng,
             transcript,
             budget,
+            cancellation,
         )?)
     }
 }

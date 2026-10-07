@@ -127,6 +127,7 @@ static NoritoBridgeExportReference volatile required_exports[] = {
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_activity_v1,
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_close_v1,
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_credit_status_v1,
+    (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_enrollment_v1,
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_execute_v1,
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_review_v1,
     (NoritoBridgeExportReference)connect_norito_kagemusha_wallet_execute_reviewed_v1,

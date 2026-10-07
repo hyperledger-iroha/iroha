@@ -330,7 +330,7 @@ fn wallet_advance_v1_platform_tags_and_message() {
     for profile in [
         KagemushaWalletKeyProfileV1::SecureElement,
         KagemushaWalletKeyProfileV1::SecureElementOrTee,
-        KagemushaWalletKeyProfileV1::TeeOnly,
+        KagemushaWalletKeyProfileV1::AndroidTee,
     ] {
         assert_eq!(
             KagemushaWalletKeyProfileV1::from_tag(profile.tag()),

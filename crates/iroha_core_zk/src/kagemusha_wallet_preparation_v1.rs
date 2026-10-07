@@ -166,6 +166,7 @@ fn retained_load_source(
 /// Immutable conversion context selected by the authenticated installation owner.
 pub struct PreparationV1<'a> {
     installed: &'a InstalledVerifierPackV1,
+    cancellation: Option<&'a iroha_pasta::CancellationToken>,
     omega_key_digest: [u8; 32],
     omega_proof_bytes: usize,
 }
@@ -310,9 +311,20 @@ impl<'a> PreparationV1<'a> {
             .ok_or(Error::Inventory)?;
         Ok(Self {
             installed,
+            cancellation: None,
             omega_key_digest: allowlist.lineage_verifying_key_digest,
             omega_proof_bytes,
         })
+    }
+
+    /// Bind background preparation to the same operation signal as its native proofs.
+    /// Cancellation supplies no proof verdict or authority to change monetary state.
+    pub(crate) fn with_cancellation(
+        mut self,
+        cancellation: &'a iroha_pasta::CancellationToken,
+    ) -> Self {
+        self.cancellation = Some(cancellation);
+        self
     }
 
     /// Authenticate exact canonical credential and issuer certificate before creating tapes.
@@ -517,7 +529,12 @@ impl<'a> PreparationV1<'a> {
         authority(retained.record.verify(&owner.credential, capsule))?;
         self.installed
             .verifier()
-            .verify_capsule_proofs(capsule, &owner.credential, budget)?;
+            .verify_capsule_proofs_cancellable(
+                capsule,
+                &owner.credential,
+                budget,
+                self.cancellation,
+            )?;
         let signer = authority(KagemushaWalletReceiptSignerV1::from_credential(
             &owner.credential,
         ))?;
@@ -551,9 +568,11 @@ impl<'a> PreparationV1<'a> {
             return Err(Error::Authority);
         }
         let witness = self.state_fields(owner, &capsule.successor_state, &fold.lineage.public)?;
-        self.installed
-            .verifier()
-            .verify_lineage(&fold.lineage, budget)?;
+        self.installed.verifier().verify_lineage_cancellable(
+            &fold.lineage,
+            budget,
+            self.cancellation,
+        )?;
         let expected_length = self
             .omega_proof_bytes
             .checked_add(2 * ACCUMULATOR_BYTES)

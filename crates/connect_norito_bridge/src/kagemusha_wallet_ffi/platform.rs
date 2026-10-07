@@ -53,7 +53,7 @@ pub struct PlatformCallbacks {
     pub retain: Option<unsafe extern "C" fn(*mut c_void)>,
     /// Release that reference after all calls have stopped.
     pub release: Option<unsafe extern "C" fn(*mut c_void)>,
-    /// Operations: 0 key probe, 1 key generate (input challenge32, auxiliary profile1/2),
+    /// Operations: 0 key probe, 1 key generate (input challenge32, auxiliary profile1/2/3 (3 Android TEE-only; Apple refuses)),
     /// 2 key sign (input exact domain-checked32), 3 delete key, 4 anchor read,
     /// 5 anchor create, 6 anchor update, 7 storage state, 8 boot UUID (UTF-8, 36 bytes), 9 prepared no-backup custody root (UTF-8, <=4096),
     /// 10 complete key-slot inventory (ascending unique nonzero32, <=4096 slots).

@@ -1,19 +1,16 @@
 //! Cooperative fold cancellation and exclusive payment priority.
 
-use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use super::Error;
 
 /// Cloneable cancellation token checked at proving task boundaries.
 #[derive(Debug, Clone)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(iroha_pasta::CancellationToken);
 
 impl Cancellation {
     fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self(iroha_pasta::CancellationToken::new())
     }
 
     /// Stop at a cooperative boundary, releasing the caller's proving allocations on return.
@@ -21,15 +18,16 @@ impl Cancellation {
     /// # Errors
     /// `Cancelled` after a payment interaction has requested priority.
     pub fn check(&self) -> Result<(), Error> {
-        if self.0.load(Ordering::Acquire) {
-            Err(Error::Cancelled)
-        } else {
-            Ok(())
-        }
+        self.0.check().map_err(|_| Error::Cancelled)
+    }
+
+    // This exact signal follows a fold into every proving task; no process-global flag.
+    pub(super) const fn prover_token(&self) -> &iroha_pasta::CancellationToken {
+        &self.0
     }
 
     fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancel();
     }
 }
 
@@ -141,5 +139,29 @@ impl Drop for FoldGuard {
     fn drop(&mut self) {
         self.scheduler.0.lock().running = None;
         self.scheduler.0.idle.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_and_prover_share_one_operation_signal() {
+        let scheduler = Scheduler::new();
+        scheduler.set_activity(true, false);
+        let fold = scheduler.start().unwrap();
+        let token = fold.token.prover_token().clone();
+        let unrelated = Cancellation::new();
+        token.check().unwrap();
+        scheduler.set_activity(false, false);
+        assert_eq!(token.check(), Err(iroha_pasta::Cancelled));
+        assert!(matches!(fold.token.check(), Err(Error::Cancelled)));
+        unrelated.check().unwrap();
+        drop(fold);
+        scheduler.set_activity(true, false);
+        let retry = scheduler.start().unwrap();
+        retry.token.prover_token().check().unwrap();
+        assert_eq!(token.check(), Err(iroha_pasta::Cancelled));
     }
 }

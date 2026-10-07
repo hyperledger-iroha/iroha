@@ -582,12 +582,12 @@ impl History {
             Ok::<_, crate::managed::Error>((dispatch, cumulative_reserved, closing, closed))
         })?;
         let root = match retained.and_then(|prior| prior.root.as_ref()) {
-            Some(root) => root.retain(),
-            None => operation.open_child("attempts"),
+            Some(root) => root.retain().map(Some),
+            None => operation.open_child_optional("attempts"),
         };
         let root = match root {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Some(value)) => value,
+            Ok(None) => {
                 if dispatch.as_ref().is_some_and(|value| {
                     value.state != ReservationState::Reserved || value.highest.ordinal != 1
                 }) {
@@ -653,56 +653,57 @@ impl History {
                     }
                     None => root.open_child(name)?,
                 };
-                let (inventory, row) = tree.with_directory(&directory, |directory| {
-                    let inventory = checked_attempt_inventory(directory.entries(7)?)?;
-                    let row = directory.read_scope(|reader| {
-                        let Some(authorization): Option<Authorization> =
-                            read_record_in_scope(reader, "authorization.nrt")?
-                        else {
-                            if index + 1 != names.len()
-                                || !inventory.is_empty()
-                                || !dispatch.as_ref().is_some_and(|value| {
-                                    value.state == ReservationState::Reserved
-                                        && usize::from(value.highest.ordinal) == index + 1
-                                })
-                            {
-                                return Err(invalid(
-                                    "dispatch material exists without its authorization",
-                                ));
-                            }
-                            return Ok(None);
-                        };
-                        authorization.terms.validate()?;
-                        scope.require_fees(&authorization.terms.fees)?;
-                        validate_origin(&authorization.origin)?;
-                        let previous = attempts
-                            .last()
-                            .map(|attempt| row_digest(attempt, &mut last_digest))
-                            .transpose()?;
-                        if attempts.len() == 1 {
-                            first_digest = last_digest;
-                        }
-                        if usize::from(authorization.ordinal) != index + 1
-                            || authorization.purpose != purpose
-                            || authorization.semantic != semantic
-                            || authorization.previous != previous
+                let (inventory, row) = tree.read_scope(&directory, |reader| {
+                    let inventory = checked_attempt_inventory(reader.entries(7)?)?;
+                    let Some(authorization): Option<Authorization> =
+                        read_record_in_scope(reader, "authorization.nrt")?
+                    else {
+                        if index + 1 != names.len()
+                            || !inventory.is_empty()
+                            || !dispatch.as_ref().is_some_and(|value| {
+                                value.state == ReservationState::Reserved
+                                    && usize::from(value.highest.ordinal) == index + 1
+                            })
                         {
                             return Err(invalid(
-                                "dispatch authorization changed its original purpose, intent or predecessor",
+                                "dispatch material exists without its authorization",
                             ));
                         }
-                        if let Some(prior) = attempts.last() {
-                            validate_successor(&prior.authorization, &authorization)?;
-                        }
-                        let observation: Option<Observation> = read_record_in_scope(reader, "observation.nrt")?;
-                        if let Some(observation) = observation {
-                            observation.validate(&authorization)?;
-                        }
-                        let commit: Option<Commit> = read_record_in_scope(reader, "committed.nrt")?;
-                        let retirement: Option<Retirement> = read_record_in_scope(reader, "retired.nrt")?;
-                        Ok::<_, crate::managed::Error>(Some((authorization, observation, commit, retirement)))
-                    })?;
-                    Ok::<_, crate::managed::Error>((inventory, row))
+                        return Ok((inventory, None));
+                    };
+                    authorization.terms.validate()?;
+                    scope.require_fees(&authorization.terms.fees)?;
+                    validate_origin(&authorization.origin)?;
+                    let previous = attempts
+                        .last()
+                        .map(|attempt| row_digest(attempt, &mut last_digest))
+                        .transpose()?;
+                    if attempts.len() == 1 {
+                        first_digest = last_digest;
+                    }
+                    if usize::from(authorization.ordinal) != index + 1
+                        || authorization.purpose != purpose
+                        || authorization.semantic != semantic
+                        || authorization.previous != previous
+                    {
+                        return Err(invalid(
+                            "dispatch authorization changed its original purpose, intent or predecessor",
+                        ));
+                    }
+                    if let Some(prior) = attempts.last() {
+                        validate_successor(&prior.authorization, &authorization)?;
+                    }
+                    let observation: Option<Observation> =
+                        read_record_in_scope(reader, "observation.nrt")?;
+                    if let Some(observation) = observation {
+                        observation.validate(&authorization)?;
+                    }
+                    let commit: Option<Commit> = read_record_in_scope(reader, "committed.nrt")?;
+                    let retirement: Option<Retirement> = read_record_in_scope(reader, "retired.nrt")?;
+                    Ok::<_, crate::managed::Error>((
+                        inventory,
+                        Some((authorization, observation, commit, retirement)),
+                    ))
                 })?;
                 let Some((authorization, observation, commit, retirement)) = row else {
                     empty_tail = true;
@@ -1015,9 +1016,10 @@ impl History {
                 }
                 root.read_tree_scope(|tree| {
                     for attempt in &self.attempts {
-                        tree.with_directory(&attempt.directory, |directory| {
-                            // The inventory preserves both native directory fences.
-                            let inventory = checked_attempt_inventory(directory.entries(7)?)?;
+                        tree.read_scope(&attempt.directory, |reader| {
+                            // Both native censuses and all lazy record reads share one closed
+                            // suffix bracket; persistent exit custody overrides every result.
+                            let inventory = checked_attempt_inventory(reader.entries(7)?)?;
                             attempt.validate_inventory(
                                 &inventory,
                                 self.dispatch.as_ref().is_some_and(|value| {
@@ -1025,27 +1027,23 @@ impl History {
                                         && value.highest.ordinal == attempt.ordinal()
                                 }),
                             )?;
-                            directory.read_scope(|reader| {
-                                attempt.verify_authorization_in_scope(reader)?;
-                                if read_record_in_scope::<Observation>(reader, "observation.nrt")?
-                                    != attempt.observation
-                                    || read_record_in_scope::<Commit>(reader, "committed.nrt")?
-                                        != attempt.commit
-                                    || read_record_in_scope::<Retirement>(reader, "retired.nrt")?
-                                        != attempt.retirement
-                                {
-                                    return Err(invalid(
-                                        "retained dispatch metadata changed during native operation",
-                                    ));
-                                }
-                                Ok::<_, crate::managed::Error>(())
-                            })?;
-                            if checked_attempt_inventory(directory.entries(7)?)? != inventory {
+                            attempt.verify_authorization_in_scope(reader)?;
+                            if read_record_in_scope::<Observation>(reader, "observation.nrt")?
+                                != attempt.observation
+                                || read_record_in_scope::<Commit>(reader, "committed.nrt")?
+                                    != attempt.commit
+                                || read_record_in_scope::<Retirement>(reader, "retired.nrt")?
+                                    != attempt.retirement
+                            {
                                 return Err(invalid(
                                     "retained dispatch metadata changed during native operation",
                                 ));
                             }
-                            directory.revalidate()?;
+                            if checked_attempt_inventory(reader.entries(7)?)? != inventory {
+                                return Err(invalid(
+                                    "retained dispatch metadata changed during native operation",
+                                ));
+                            }
                             Ok::<_, crate::managed::Error>(())
                         })?;
                     }
@@ -1215,12 +1213,9 @@ impl History {
             None => operation.create_child("attempts")?,
         };
         let name = format!("{:04}", old.highest.ordinal);
-        let directory = match root.open_child(&name) {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                root.create_child(&name)?
-            }
-            Err(error) => return Err(error.into()),
+        let directory = match root.open_child_optional(&name)? {
+            Some(value) => value,
+            None => root.create_child(&name)?,
         };
         let names = directory.entries(1)?;
         if names.iter().any(|name| name != "authorization.nrt") {
@@ -1645,11 +1640,10 @@ fn read_record_in_scope<T: norito::NoritoSerialize + for<'a> norito::NoritoDeser
 ) -> Result<Option<T>> {
     #[cfg(test)]
     tests::parse_digest_tests::record_read();
-    let value = match reader.read(name, MAX_RECORD_BYTES, decode_record::<T>) {
-        Ok(value) => value?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+    let Some(value) = reader.read_optional(name, MAX_RECORD_BYTES, decode_record::<T>)? else {
+        return Ok(None);
     };
+    let value = value?;
     #[cfg(test)]
     tests::parse_digest_tests::record_decoded();
     Ok(Some(value))

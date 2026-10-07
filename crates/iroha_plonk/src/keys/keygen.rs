@@ -361,8 +361,10 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     sigma: Vec<Vec<C::ScalarExt>>,
     copy_digest: [u8; 32],
     config: super::pk::artifact::ReadConfig,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<ProvingKey<C>, super::pk::artifact::Error> {
     use super::pk::artifact::Error;
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let descriptor = binding.descriptor();
     let profile = KeygenConfigV2 {
         transcript: descriptor.transcript,
@@ -374,8 +376,13 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         table_budget: None,
         msm_budget: config.msm_budget,
     };
-    let synthesized =
-        synthesize(&circuit.without_witnesses(), params.k(), None).map_err(KeyError::from)?;
+    let synthesized = crate::frontend::synthesize_cancellable(
+        &circuit.without_witnesses(),
+        params.k(),
+        None,
+        cancellation,
+    )
+    .map_err(KeyError::from)?;
     let (source_fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
     let source = prepare(
         params,
@@ -386,6 +393,7 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         &profile.layout_options(),
         Some(&profile),
     )?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     drop(permutation);
     if &source.binding != binding {
         return Err(Error::Profile);
@@ -403,12 +411,13 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
             .iter()
             .chain(vk.permutation_commitments()),
     ) {
-        let actual = commit_lagrange(
+        let actual = crate::pcs::ipa::commit::commit_lagrange_cancellable(
             params.params(),
             column,
             &blind,
             Secrecy::Public,
             config.msm_budget,
+            cancellation,
         )
         .map_err(KeyError::from)?
         .to_affine();
@@ -426,7 +435,7 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     } = source;
     // Retain one original table set while constructing coefficients and masks.
     drop((source_binding, source_fixed, source_sigma, vk_selectors));
-    ProvingKey::new(
+    ProvingKey::new_cancellable(
         vk,
         binding.clone(),
         constraint_system,
@@ -435,6 +444,7 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         copy_digest,
         config.coset_cache,
         CommitmentTables::none(),
+        cancellation,
     )
     .map_err(Error::from)
 }

@@ -746,7 +746,14 @@ impl NativeProofs for TestProofs {
         }
         Ok(())
     }
-    fn verify_lineage(&self, lineage: &KagemushaWalletLineageV1) -> Result<(), Error> {
+    fn verify_lineage(
+        &self,
+        lineage: &KagemushaWalletLineageV1,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<(), Error> {
+        if let Some(token) = cancellation {
+            token.check()?;
+        }
         self.verifies.fetch_add(1, Ordering::SeqCst);
         if self.reject || lineage.proof != [1, 2, 3] {
             return Err(Error::Proof("mock proof identity"));
@@ -823,7 +830,7 @@ impl NativeProofs for TestProofs {
     }
 }
 
-type Wallet = Coordinator<TestCustody, MemoryArchive, TestProofs>;
+pub(super) type Wallet = Coordinator<TestCustody, MemoryArchive, TestProofs>;
 /// Synthetic already-indexed head for testing payout metadata publication, not a monetary
 /// transition or a native lineage proof. Finality is verified independently by the caller.
 pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: String) -> Wallet {
@@ -852,6 +859,9 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         issued_requests: IndexRoot::default(),
         sessions: IndexRoot::default(),
         activation: None,
+        close_loads: IndexRoot::default(),
+        ledger_checkpoint: None,
+        ledger_retired: None,
         direct_anchors: IndexRoot::default(),
         fold_pending: IndexRoot::default(),
         folded: None,
@@ -1047,6 +1057,30 @@ fn missing_marker_bound_witness_is_loss_and_archive_cannot_invent_completion() {
             .expect("exact authority"),
         Some(Completion::Complete(_))
     ));
+}
+
+#[test]
+fn cancelled_fold_restoration_never_populates_the_verification_cache() {
+    let mut w = wallet();
+    w.commit(bootstrap()).expect("commit");
+    let scheduler = w.scheduler();
+    scheduler.set_activity(true, false);
+    w.fold_once().expect("checkpoint");
+    w.fold_once().expect("fold");
+    let step = w.released_steps().expect("steps").remove(0);
+    w.verified_folds.clear();
+    let before = w.proofs.verifies.load(Ordering::SeqCst);
+    let running = scheduler.start().expect("background permit");
+    scheduler.set_activity(false, false);
+    assert!(matches!(
+        w.read_fold_cancellable(&step, Some(&running.token)),
+        Err(Error::Cancelled)
+    ));
+    assert!(w.verified_folds.is_empty());
+    assert_eq!(w.proofs.verifies.load(Ordering::SeqCst), before);
+    drop(running);
+    assert!(w.read_fold(&step).expect("fresh read").is_some());
+    assert_eq!(w.proofs.verifies.load(Ordering::SeqCst), before + 1);
 }
 
 #[test]

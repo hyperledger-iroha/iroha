@@ -4986,6 +4986,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_file_mmap",
+ "iroha_fs",
  "iroha_futures",
  "iroha_genesis",
  "iroha_logger",
@@ -5742,6 +5743,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rayon",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]

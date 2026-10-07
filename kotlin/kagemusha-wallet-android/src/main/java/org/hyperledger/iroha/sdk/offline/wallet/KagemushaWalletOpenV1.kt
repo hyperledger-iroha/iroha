@@ -30,40 +30,22 @@ class KagemushaWalletRuntimeV1 internal constructor(nativeRuntimeHandle: Long) :
         if (result.status < 0) throw KagemushaWalletExceptionV1(result.status, result.reason, result.platformCode)
         return result
     }
-    private fun enroll(input:KagemushaWalletEnrollmentInputV1):KagemushaWalletEnrollmentReplyV1 {
-        val frames=input.frames()
-        val result=try{KagemushaWalletEnrollmentNativeV1.enroll(handle(),input.selector,
-            frames[0],frames[1],frames[2],frames[3],frames[4],input.issuedAtMs,input.expiresAtMs)}
-        catch(_:LinkageError){throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)}
-        return (result?:throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)).checked()
-    }
-    /** Native persists the original durable intent before its one-shot generation grant. */
-    @Synchronized fun beginEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1):KagemushaWalletEnrollmentProgressV1 =
-        enroll(KagemushaWalletEnrollmentInputV1(0,originals)).progress()
-    /** Locate/resume only the retained exact intent. Restore cannot create or regenerate. */
-    @Synchronized fun resumeEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1):KagemushaWalletEnrollmentProgressV1 =
-        enroll(KagemushaWalletEnrollmentInputV1(1,originals)).progress()
-    /** Native verifies and retains the complete request before authenticated HTTP dispatch.
-     * An earlier durable request wins over a newly offered PI request after interrupted delivery.
-     * Always dispatch these returned whole bytes; never replace or reassemble the retained original. */
-    @Synchronized fun retainEnrollmentRequest(originals:KagemushaWalletEnrollmentOriginalsV1,request:ByteArray):ByteArray {
-        val input=KagemushaWalletEnrollmentInputV1(2,originals,request)
-        return enroll(input).original(3)
-    }
-    /** Store the exact initial credential under the same actual Native intent/E1/issuer. */
-    @Synchronized fun storeEnrollmentCredential(originals:KagemushaWalletEnrollmentOriginalsV1,
-        credential:ByteArray,certificates:ByteArray):ByteArray {
-        val input=KagemushaWalletEnrollmentInputV1(3,originals,credential,certificates)
-        val retained=enroll(input).original(4)
-        if(!retained.contentEquals(input.frames()[3]))throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-        return retained
-    }
     /** Reconcile these originals, retaining the same challenge and pending owner on retry. */
     @Synchronized fun begin(originals: KagemushaWalletOpenOriginalsV1): KagemushaWalletPendingOpenV1 {
         val id = handle()
         val frames = originals.frames()
         val result = reply(KagemushaWalletNativeV1.openBegin(id, frames[0], frames[1], frames[2], frames[3]))
         if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size != 32 || result.bytes().all { it==0.toByte() }) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        val challenge = result.bytes()
+        return pending.select(challenge) { KagemushaWalletPendingOpenV1(this, challenge) }
+    }
+    /** Begin admission using exact native-retained E5/E6 originals after enrollment handoff. */
+    @Synchronized fun beginEnrolled(): KagemushaWalletPendingOpenV1 {
+        val id = handle()
+        val result = reply(KagemushaWalletNativeV1.enrollment(id, 8, byteArrayOf(), byteArrayOf(), byteArrayOf(), emptyArray()))
+        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size != 32 || result.bytes().all { it == 0.toByte() }) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
         val challenge = result.bytes()
         return pending.select(challenge) { KagemushaWalletPendingOpenV1(this, challenge) }
     }

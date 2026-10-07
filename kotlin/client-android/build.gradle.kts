@@ -62,8 +62,8 @@ private object NativeBridgeBuildContract {
     const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
     const val walletRuntimeAuthorityInput = "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY"
     fun validateWalletRuntimeAuthority(value: String?): String {
-        require(value == "bpng-taira-v6" || value == "cbsi-release-v1") {
-            "$walletRuntimeAuthorityInput must be bpng-taira-v6 or cbsi-release-v1"
+        require(value == "bpng-taira-v7" || value == "cbsi-release-v1") {
+            "$walletRuntimeAuthorityInput must be bpng-taira-v7 or cbsi-release-v1"
         }
         return value
     }

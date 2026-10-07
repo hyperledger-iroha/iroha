@@ -6,7 +6,9 @@
 //! RNG draws: the `q'` blind, then the IPA's (`BlindingScheduleV1` items 7
 //! and 8).
 
+use crate::secret::SecretPolynomial;
 use ff::Field;
+use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget, params::ParamsIpa};
 use rand_core_06::{CryptoRng, RngCore};
 use rayon::prelude::*;
@@ -14,9 +16,9 @@ use rayon::prelude::*;
 use super::{MultiopenError, OpeningPlan, ShapeItem};
 use crate::{
     pcs::ipa::{
-        commit::{Secrecy, commit},
+        commit::{Secrecy, commit_cancellable},
         evaluate_polynomial,
-        prover::create_proof_with_claim as ipa_create_proof,
+        prover::create_proof_with_claim_cancellable as ipa_create_proof,
     },
     transcript::TranscriptWrite,
 };
@@ -31,14 +33,32 @@ pub struct SlotPolynomial<'a, F> {
 }
 
 /// `acc <- acc * challenge + addend`, coefficient-wise.
+#[cfg(test)]
 fn fold_into<F: Field>(acc: &mut [F], challenge: F, addend: &[F]) {
+    fold_into_cancellable(acc, challenge, addend, None).unwrap();
+}
+fn fold_into_cancellable<F: Field>(
+    acc: &mut [F],
+    challenge: F,
+    addend: &[F],
+    cancellation: Option<&CancellationToken>,
+) -> Result<(), iroha_pasta::Cancelled> {
+    CancellationToken::checkpoint(cancellation)?;
     if acc.len().min(addend.len()) >= 4096 && rayon::current_num_threads() > 1 {
         acc.par_chunks_mut(1024)
             .zip(addend.par_chunks(1024))
-            .for_each(|(acc, addend)| fold_serial(acc, challenge, addend));
+            .for_each(|(acc, addend)| {
+                if !cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    fold_serial(acc, challenge, addend);
+                }
+            });
     } else {
-        fold_serial(acc, challenge, addend);
+        for (acc, addend) in acc.chunks_mut(1024).zip(addend.chunks(1024)) {
+            CancellationToken::checkpoint(cancellation)?;
+            fold_serial(acc, challenge, addend);
+        }
     }
+    CancellationToken::checkpoint(cancellation)
 }
 
 /// One sequential coefficient block; each coefficient keeps its Horner order.
@@ -50,7 +70,7 @@ fn fold_serial<F: Field>(acc: &mut [F], challenge: F, addend: &[F]) {
 
 /// Divides by `X - point` in place, dropping the remainder (the vendored
 /// Kate-division recurrence); the result has one coefficient fewer.
-pub(crate) fn divide_by_linear<F: Field>(values: &mut Vec<F>, point: F) {
+pub(crate) fn divide_by_linear<F: iroha_pasta::PastaField>(values: &mut Vec<F>, point: F) {
     let Some(mut original) = values.last().copied() else {
         return;
     };
@@ -63,19 +83,24 @@ pub(crate) fn divide_by_linear<F: Field>(values: &mut Vec<F>, point: F) {
         carry = lead * b;
         original = next_original;
     }
+    if let Some(last) = values.last_mut() {
+        last.zeroize();
+    }
     values.pop();
 }
 
 /// The set polynomial `q_t = sum_{slots in t} x_1^e p_slot` (Horner in slot
 /// order) and its blind.
-fn reconstruct<F: Field>(
+fn reconstruct_cancellable<F: iroha_pasta::PastaField>(
     plan: &OpeningPlan,
     polys: &[SlotPolynomial<'_, F>],
     set: usize,
     x_1: F,
     n: usize,
-) -> (Vec<F>, F) {
-    let mut q = vec![F::ZERO; n];
+    cancellation: Option<&CancellationToken>,
+) -> Result<(Vec<F>, F), iroha_pasta::Cancelled> {
+    CancellationToken::checkpoint(cancellation)?;
+    let mut q = SecretPolynomial::new(vec![F::ZERO; n]);
     let matching = || {
         plan.slots()
             .iter()
@@ -90,19 +115,37 @@ fn reconstruct<F: Field>(
         q.par_chunks_mut(1024)
             .enumerate()
             .for_each(|(chunk, values)| {
+                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    return;
+                }
                 let start = chunk * 1024;
                 let end = start + values.len();
                 for poly in matching() {
+                    if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                        return;
+                    }
                     fold_serial(values, x_1, &poly.coeffs[start..end]);
                 }
             });
     } else {
         for poly in matching() {
-            fold_serial(&mut q, x_1, poly.coeffs);
+            fold_into_cancellable(&mut q, x_1, poly.coeffs, cancellation)?;
         }
     }
     let blind = matching().fold(F::ZERO, |blind, poly| blind * x_1 + poly.blind);
-    (q, blind)
+    CancellationToken::checkpoint(cancellation)?;
+    Ok((q.into_vec(), blind))
+}
+
+#[cfg(test)]
+fn reconstruct<F: iroha_pasta::PastaField>(
+    plan: &OpeningPlan,
+    polys: &[SlotPolynomial<'_, F>],
+    set: usize,
+    x_1: F,
+    n: usize,
+) -> (Vec<F>, F) {
+    reconstruct_cancellable(plan, polys, set, x_1, n, None).unwrap()
 }
 
 /// Writes a multiopen proof for `plan` and returns the folded generator of
@@ -152,6 +195,33 @@ where
     T: TranscriptWrite<C> + ?Sized,
     R: RngCore + CryptoRng,
 {
+    create_proof_with_claim_cancellable(params, plan, points, polys, rng, transcript, budget, None)
+}
+
+/// Creates an opening with cooperative cancellation and no partial claim.
+/// On cancellation, discard the mutated transcript and random stream. Retry
+/// with freshly initialized owners and the original witness; a cancelled
+/// transcript is never a proof or a resumable transcript prefix.
+///
+/// # Errors
+/// As [`create_proof_with_claim`], or cancellation after kernel tasks join.
+#[allow(clippy::too_many_arguments)]
+pub fn create_proof_with_claim_cancellable<C, T, R>(
+    params: &ParamsIpa<C>,
+    plan: &OpeningPlan,
+    points: &[C::ScalarExt],
+    polys: &[SlotPolynomial<'_, C::ScalarExt>],
+    rng: &mut R,
+    transcript: &mut T,
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<crate::pcs::ipa::GeneratorClaim<C>, MultiopenError>
+where
+    C: PastaCurve,
+    T: TranscriptWrite<C> + ?Sized,
+    R: RngCore + CryptoRng,
+{
+    CancellationToken::checkpoint(cancellation)?;
     let n = params.n();
     plan.check_points(points)?;
     OpeningPlan::check_len(ShapeItem::Slots, plan.slots().len(), polys.len())?;
@@ -163,36 +233,56 @@ where
     let x_2 = transcript.squeeze_challenge();
 
     // q' = sum_t x_2^{n_s-1-t} floor(q_t / prod_{p in t} (X - p)).
-    let mut q_prime = vec![C::ScalarExt::ZERO; n];
+    let mut q_prime = SecretPolynomial::new(vec![C::ScalarExt::ZERO; n]);
     for (set, set_points) in plan.sets().iter().enumerate() {
-        let (mut q, _) = reconstruct(plan, polys, set, x_1, n);
+        CancellationToken::checkpoint(cancellation)?;
+        let (q, _) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
+        let mut q = SecretPolynomial::new(q);
         for point in set_points {
             divide_by_linear(&mut q, points[*point]);
         }
         q.resize(n, C::ScalarExt::ZERO);
-        fold_into(&mut q_prime, x_2, &q);
+        fold_into_cancellable(&mut q_prime, x_2, &q, cancellation)?;
     }
     let q_prime_blind = C::ScalarExt::random(&mut *rng);
-    let q_prime_commitment = commit(params, &q_prime, &q_prime_blind, Secrecy::Secret, budget)
-        .map_err(|error| MultiopenError::Ipa(error.into()))?
-        .to_affine();
+    let q_prime_commitment = commit_cancellable(
+        params,
+        &q_prime,
+        &q_prime_blind,
+        Secrecy::Secret,
+        budget,
+        cancellation,
+    )
+    .map_err(|error| MultiopenError::from(crate::pcs::ipa::IpaError::from(error)))?
+    .to_affine();
     transcript.write_point(&q_prime_commitment)?;
 
     let x_3 = transcript.squeeze_challenge();
     for set in 0..plan.sets().len() {
-        let (q, _) = reconstruct(plan, polys, set, x_1, n);
+        CancellationToken::checkpoint(cancellation)?;
+        let (q, _) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
+        let q = SecretPolynomial::new(q);
         transcript.write_scalar(&evaluate_polynomial(&q, x_3));
     }
 
     let x_4 = transcript.squeeze_challenge();
     let mut p_blind = q_prime_blind;
     for set in 0..plan.sets().len() {
-        let (q, blind) = reconstruct(plan, polys, set, x_1, n);
-        fold_into(&mut q_prime, x_4, &q);
+        CancellationToken::checkpoint(cancellation)?;
+        let (q, blind) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
+        let q = SecretPolynomial::new(q);
+        fold_into_cancellable(&mut q_prime, x_4, &q, cancellation)?;
         p_blind = p_blind * x_4 + blind;
     }
     Ok(ipa_create_proof(
-        params, rng, transcript, &q_prime, &p_blind, &x_3, budget,
+        params,
+        rng,
+        transcript,
+        &q_prime,
+        &p_blind,
+        &x_3,
+        budget,
+        cancellation,
     )?)
 }
 
@@ -223,7 +313,7 @@ mod tests {
         assert_eq!(acc, vec![Fq::from(13), Fq::from(24)]);
     }
 
-    fn check_blocked_folding<F: Field + From<u64>>() {
+    fn check_blocked_folding<F: iroha_pasta::PastaField + From<u64>>() {
         use super::super::{OpeningQuery, Slot, SlotKind};
 
         let slot = |index| Slot::new(SlotKind::Advice, index);

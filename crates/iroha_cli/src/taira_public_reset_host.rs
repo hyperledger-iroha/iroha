@@ -18302,6 +18302,10 @@ fn verify_remote_reservation_receipt(
     Ok(())
 }
 
+#[cfg(all(test, unix))]
+#[path = "taira_public_reset_host_checkpoint_load_tests.rs"]
+mod checkpoint_load_tests;
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -21792,7 +21796,7 @@ time.sleep(30)
         }
     }
 
-    fn admitted_reset_fixture() -> AdmittedReset {
+    pub(super) fn admitted_reset_fixture() -> AdmittedReset {
         let remote = progress_admission();
         let inventory_bytes = super::super::canonical_inventory_bytes(&remote.inventory)
             .expect("fixture inventory JSON");

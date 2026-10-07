@@ -546,22 +546,20 @@ fn genuine_signed_genesis_and_delegated_monetary_manifest_derive_installation_in
 fn signed_runtime_retains_canonical_enrollment_policy_preimages() {
     let fixture = BaseFixture::new();
     let selection = fixture.load().unwrap();
-    for (name, original, digest) in [
-        (
-            "android",
-            selection.android_enrollment_original,
-            selection.android_enrollment_policy,
-        ),
-        (
-            "apple",
-            selection.apple_enrollment_original,
-            selection.apple_enrollment_policy,
-        ),
-    ] {
-        let platform = object(field(object(&fixture.runtime).unwrap(), name).unwrap()).unwrap();
+    let retained = json(
+        &selection._originals._wallet_runtime,
+        WALLET_RUNTIME_MAX,
+        false,
+    )
+    .unwrap();
+    for name in ["android", "apple"] {
+        let platform = object(field(object(&retained).unwrap(), name).unwrap()).unwrap();
+        let original = raw(platform, "enrollment_policy_original_base64", 1024).unwrap();
+        let digest = sha(text(platform, "enrollment_policy_hex").unwrap()).unwrap();
+        let offered = object(field(object(&fixture.runtime).unwrap(), name).unwrap()).unwrap();
         assert_eq!(
             original,
-            raw(platform, "enrollment_policy_original_base64", 1024).unwrap()
+            raw(offered, "enrollment_policy_original_base64", 1024).unwrap()
         );
         let policy = KagemushaWalletEnrollmentPolicyV1::decode_canonical(
             &original,
@@ -1036,9 +1034,25 @@ fn renewed_issuer_original_is_left_to_genuine_intake_and_never_replaced_by_curre
         selected.android_app_policy,
         11,
     );
+    let retained = json(
+        &selected._originals._wallet_runtime,
+        WALLET_RUNTIME_MAX,
+        false,
+    )
+    .unwrap();
+    let certificate = KagemushaWalletSignerCertificateV1::decode_canonical(
+        &raw(
+            object(&retained).unwrap(),
+            "enrollment_certificate_original_base64",
+            KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
+        )
+        .unwrap(),
+        &selected.scheme,
+    )
+    .unwrap();
     assert_ne!(
         renewed.body.issuer_certificate,
-        selected.enrollment_certificate.certificate_digest()
+        certificate.certificate_digest()
     );
     let original = renewed.to_canonical_bytes().unwrap();
     let binding = BoundOriginals {

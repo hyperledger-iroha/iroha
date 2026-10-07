@@ -20,10 +20,11 @@ class KagemushaWalletInstalledHolderV1Test {
         e.frames().forEach { assertContentEquals(byteArrayOf(7, 7), it) }
         assertTrue(r.toString().contains("[REDACTED]"))
     }
-    @Test fun `complete financial originals are required before native installation`() {
-        assertFailsWith<IllegalArgumentException> {
-            runtime(listOf(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3), byteArrayOf(), byteArrayOf(), byteArrayOf(4)), "")
-        }
+    @Test fun `signed base without financial originals remains available for native authentication`() {
+        val originals = listOf(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3), byteArrayOf(), byteArrayOf(), byteArrayOf(4))
+        val retained = runtime(originals, "").frames()
+        originals.forEachIndexed { index, bytes -> assertContentEquals(bytes, retained[index]) }
+        assertTrue(retained[6].isEmpty())
     }
     @Test fun `required signed metadata cannot be absent`() {
         for (i in 0..5) {

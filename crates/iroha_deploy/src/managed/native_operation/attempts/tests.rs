@@ -1783,3 +1783,6 @@ mod tree_scope_tests;
 
 #[path = "parse_tree_tests.rs"]
 mod parse_tree_tests;
+
+#[path = "row_read_scope_tests.rs"]
+mod row_read_scope_tests;

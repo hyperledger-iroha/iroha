@@ -6,6 +6,92 @@ import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.Test
 
 class KagemushaWalletSetupV1Test {
+    @Test fun `fee transport preserves native bytes and rejects authority fields`() {
+        val retained = KagemushaWalletCallV1(31, -1, 0, 0, 0, 0, byteArrayOf(0, -1, 7))
+        val beneficiary = byteArrayOf(3, 0, -1)
+        val input = retained.feeClaimInput(beneficiary)
+        assertEquals(26, input.selector); assertContentEquals(retained.bytes(), input.first())
+        assertContentEquals(beneficiary, input.second()); beneficiary[0] = 8
+        assertEquals(3, input.second()[0].toInt())
+        assertFailsWith<IllegalArgumentException> { retained.feeClaimInput(byteArrayOf()) }
+        assertFailsWith<IllegalArgumentException> { retained.feeClaimInput(ByteArray(16_385)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(26, identity = ByteArray(32) { 1 }, first = retained.bytes(), second = beneficiary) }
+        val bytes = ByteArray(16_384) { -1 }
+        val result = KagemushaWalletCallV1(36, -1, 0, 0, 0, 0, bytes)
+        assertContentEquals(bytes, result.feeClaimOriginal())
+        assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
+        assertFailsWith<KagemushaWalletExceptionV1> { result.original() }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(36, -1, 0, 0, 0, 0, ByteArray(16_385)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(36, -1, 0, 1, 0, 0, byteArrayOf(1)) }
+    }
+
+    @Test fun `fee and ledger originals are bounded separate from payout acknowledgement`() {
+        val id = ByteArray(32) { 7 }
+        KagemushaWalletSetupInputV1(20, identity = id)
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(20) }
+        for (selector in 21..23) {
+            KagemushaWalletSetupInputV1(selector, first = byteArrayOf(1))
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector) }
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, identity = id, first = byteArrayOf(1)) }
+        }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(21, first = ByteArray(21_025)) }
+        KagemushaWalletSetupInputV1(24)
+        KagemushaWalletSetupInputV1(25, identity = id, first = byteArrayOf(1), second = byteArrayOf(2))
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(25, identity = id, first = byteArrayOf(1)) }
+        for (status in 31..35) {
+            val bytes = if (status == 31) ByteArray(21_024) { 1 } else if (status == 33) id else byteArrayOf()
+            val result = KagemushaWalletCallV1(status, -1, 0, if (status == 33) -1 else 0, 0, 0, bytes)
+            assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
+            if (status == 33) assertEquals(-1L, KagemushaWalletLedgerProgressV1(result).heightBits)
+        }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(31, -1, 0, 1, 0, 0, byteArrayOf(1)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(33, -1, 0, 0, 0, 0, id) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(35, -1, 0, 0, 0, 0, id) }
+        val claim = KagemushaWalletFeeClaimV1(id, byteArrayOf(2)); id[0] = 1
+        assertEquals(7, claim.payment()[0].toInt()); assertContentEquals(byteArrayOf(2), claim.request())
+    }
+
+    @Test fun `credited projection selects only Receive or Status bytes`() {
+        for ((status, selector) in listOf(1 to 16, 10 to 17)) {
+            val result = KagemushaWalletCallV1(status, -1, 0, 0, 0, 0, byteArrayOf(0, -1, 1))
+            val input = result.creditedInput()
+            assertEquals(selector, input.selector)
+            assertContentEquals(result.bytes(), input.first())
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector) }
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, first = ByteArray(10_001)) }
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, token = 1, first = result.bytes()) }
+        }
+        for (status in listOf(0, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12)) {
+            val call = KagemushaWalletCallV1(status, -1, 0, 0, 0, 0, if (status == 12) byteArrayOf(1) else byteArrayOf())
+            assertFailsWith<IllegalArgumentException> { call.creditedInput() }
+        }
+    }
+    @Test fun `background status is separate from completion with unsigned backlog`() {
+        KagemushaWalletSetupInputV1(18)
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(18, first = byteArrayOf(1)) }
+        for (phase in 0..2) {
+            val call = KagemushaWalletCallV1(29, -1, 0, -1, 2, phase or 12, byteArrayOf())
+            val status = KagemushaWalletBackgroundStatusV1(call)
+            assertEquals(phase, status.phase.ordinal)
+            assertEquals(true, status.eligible)
+            assertEquals(KagemushaWalletUInt128V1(-1, 2), status.observedBacklog)
+            assertFailsWith<KagemushaWalletExceptionV1> { call.completion() }
+        }
+        assertEquals(null, KagemushaWalletBackgroundStatusV1(KagemushaWalletCallV1(29, -1, 0, 0, 0, 0, byteArrayOf())).observedBacklog)
+        for (detail in listOf(3, 16)) {
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletBackgroundStatusV1(KagemushaWalletCallV1(29, -1, 0, 0, 0, detail, byteArrayOf())) }
+        }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletBackgroundStatusV1(KagemushaWalletCallV1(29, -1, 0, 1, 0, 0, byteArrayOf())) }
+    }
+    @Test fun `closure transport has no foreign body and separate result`() {
+        KagemushaWalletSetupInputV1(19, identity = ByteArray(32) { 1 })
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(19, identity = ByteArray(32) { 1 }, first = byteArrayOf(1)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(19) }
+        val valid = KagemushaWalletCallV1(30, -1, 0, 0, 0, 0, ByteArray(16_384))
+        assertFailsWith<KagemushaWalletExceptionV1> { valid.completion() }
+        for (count in listOf(0, 16_385)) assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(30, -1, 0, 0, 0, 0, ByteArray(count)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(30, -1, 0, 1, 0, 0, byteArrayOf(1)) }
+    }
     @Test fun `activation transport has its own bound and no foreign inputs`() {
         KagemushaWalletSetupInputV1(15)
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(15, token = 1) }

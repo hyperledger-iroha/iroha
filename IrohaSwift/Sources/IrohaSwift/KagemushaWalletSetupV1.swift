@@ -29,6 +29,18 @@ public final class KagemushaWalletTimeExchangeV1: @unchecked Sendable, CustomStr
 }
 
 extension KagemushaWalletCallV1 {
+  func feeClaimInput(beneficiary: Data) throws -> KagemushaWalletSetupInputV1 {
+    guard status == 31 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return try .init(selector: 26, first: bytes, second: beneficiary)
+  }
+  func feeClaimOriginal() throws -> Data {
+    guard status == 36 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return bytes
+  }
+  func creditedInput() throws -> KagemushaWalletSetupInputV1 {
+    guard status == 1 || status == 10 else { throw KagemushaWalletErrorV1.invalidInput }
+    return try .init(selector: status == 10 ? 17 : 16, first: bytes)
+  }
   func completion() throws -> Self {
     guard status <= 11 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return self
@@ -61,17 +73,21 @@ struct KagemushaWalletSetupInputV1 {
        first: Data = Data(), second: Data = Data(), third: Data = Data()) throws {
     let limits: [Int]
     switch selector {
-    case 0, 1, 4, 6, 15: limits = [0, 0, 0]
+    case 0, 1, 4, 6, 15, 18, 19, 20, 24: limits = [0, 0, 0]
+    case 21, 22: limits = [21_024, 0, 0]
+    case 23: limits = [36 * 1024 * 1024, 0, 0]
+    case 25: limits = [32 * 1024 * 1024, 1024, 0]
+    case 26: limits = [21_024, 16_384, 0]
     case 2: limits = [10_000, 1_024, 512]
-    case 3, 7...14: limits = [10_000, 0, 0]
+    case 3, 7...14, 16...17: limits = [10_000, 0, 0]
     case 5: limits = [512, 512, 0]
     default: throw KagemushaWalletErrorV1.invalidInput
     }
-    guard identity.count == 32, ((1...2).contains(selector)) == identity.contains(where: { $0 != 0 }),
+    guard identity.count == 32, ([1, 2, 19, 20, 25].contains(selector)) == identity.contains(where: { $0 != 0 }),
       (selector == 1) == (amount.low != 0 || amount.high != 0), ([5, 6].contains(selector)) == (token != 0),
       token <= UInt64(Int64.max), zip([first, second, third], limits).allSatisfy({ $0.count <= $1 }),
       selector != 2 || (!first.isEmpty && second.isEmpty == third.isEmpty),
-      (selector != 3 && !(7...14).contains(selector)) || !first.isEmpty, selector != 5 || (!first.isEmpty && !second.isEmpty)
+      (selector != 3 && !(7...14).contains(selector) && !(16...17).contains(selector) && !(21...23).contains(selector)) || !first.isEmpty, ![5, 25, 26].contains(selector) || (!first.isEmpty && !second.isEmpty)
     else { throw KagemushaWalletErrorV1.invalidInput }
     self.selector = selector; self.identity = kagemushaWalletSetupCopyV1(identity)
     self.amount = amount; self.token = token
@@ -106,4 +122,41 @@ private func kagemushaWalletSetupCopyV1(_ original: Data) -> Data {
 /// Exact peer-envelope kind; it cannot select proof keys or operation authority.
 public enum KagemushaWalletTransportKindV1: UInt32, Sendable {
   case offer = 1, request = 2, payment = 3, credited = 4
+}
+
+/// Native worker scheduling state; durable current backlog remains available in `snapshot()`.
+public struct KagemushaWalletBackgroundStatusV1: Sendable {
+  /// A parked worker retains no upgraded wallet reference or proof workspace.
+  public enum Phase: UInt32, Sendable { case notStarted = 0, parked = 1, running = 2 }
+  public let phase: Phase
+  public let eligible: Bool
+  /// Last durable backlog observed by the worker; nil until its first observation.
+  public let observedBacklog: KagemushaWalletUInt128V1?
+  init(_ value: KagemushaWalletCallV1) throws {
+    guard value.status == 29, value.bytes.isEmpty, value.detail & ~15 == 0,
+      let phase = Phase(rawValue: value.detail & 3),
+      value.detail & 8 != 0 || (value.sequenceLow == 0 && value.sequenceHigh == 0)
+    else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    self.phase = phase; self.eligible = value.detail & 4 != 0
+    self.observedBacklog = value.detail & 8 != 0 ? .init(low: value.sequenceLow, high: value.sequenceHigh) : nil
+  }
+}
+
+/// Exact retained online fee-claim originals. This is neither payment delivery nor payout acknowledgement.
+public struct KagemushaWalletFeeClaimV1: Sendable {
+  public let payment: Data
+  public let request: Data
+  init(payment: Data, request: Data) {
+    self.payment = kagemushaWalletSetupCopyV1(payment)
+    self.request = kagemushaWalletSetupCopyV1(request)
+  }
+}
+/// Last durably selected native Global-chain decision; it grants no claim acknowledgement by itself.
+public struct KagemushaWalletLedgerProgressV1: Sendable {
+  public let height: UInt64
+  public let blockHash: Data
+  init(_ result: KagemushaWalletCallV1) throws {
+    guard result.status == 33 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    self.height = result.sequenceLow; self.blockHash = kagemushaWalletSetupCopyV1(result.bytes)
+  }
 }

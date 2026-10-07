@@ -41,13 +41,30 @@ the exact E1 and originals with its audited DATA journal, and sign a compact cre
 its actual root-delegated Enrollment-role P256 key. Python request input exposes no signing
 authority. An interrupted external attempt retrieves its original; it never resets a counter
 or repeats a consumed assertion. `wallet_enrollment_worker.py` implements the current private
-verification/recovery channel. Its protected SQLite journal retains exact request and result
-originals with their configuration pin; Apple assertion counter/challenge consumption and the
-recoverable evidence result commit in one FULL-synchronous transaction. An unknown attempt
-can only recover, never dispatch another verification. The inherited configuration, crypto
+verification/recovery channel. Before exposing E1, Native retains the worker's actual journal
+incarnation, selects its immutable preparation and durably retains the worker acknowledgement.
+Complete or Recover can atomically claim that prepared row once. A delayed first claim uses
+fresh trusted Native dispatch time without changing its original request. Once claimed, an
+unknown result stays `outcome_unknown`; neither action repeats external verification. Missing
+prepared custody remains `unavailable`, never a definitive evidence rejection or permission
+to recreate a row. Native prohibits Prepare after E5 selection, including during recovery.
+The journal retains exact request/result originals and their configuration pin. Apple assertion
+counter/challenge consumption and the recoverable evidence result commit in one FULL-synchronous
+transaction. Changed retained originals are rejected. The inherited configuration, crypto
 original and storage identities are rechecked before exposure. These components do not alone
 enable issuance: the genuine Native issuer, audited DATA and authenticated installed runtime
 must admit and retain every original.
+
+The worker opens only an already initialized E1 journal. Its separate installation operation
+`E1CounterStore.initialize` exclusively creates a durable generation original before creating
+the database, and binds that generation in the database's exact first-release schema. Serving
+startup never initializes missing files or repairs missing tables. Database, generation or
+schema loss remains unavailable; interrupted initialization retains its originals for explicit
+operator reconciliation. SQLite connections use existing-only `mode=rw`, so a missing database
+between the custody check and open cannot become an empty replacement. Held descriptor/path
+checks reject substitution, and the counter/attempt tables and journal generation retain their original contents
+across restart. These checks do not detect privileged rollback of the entire store. Native
+installation/runtime admission and service dispatch still require integration.
 
 `tools/build_wallet_e1_verifier_zipapp.py` packages an explicit current source inventory,
 including `wallet_policy.py`, into deterministic unsigned bytes. It does not authenticate a
@@ -69,6 +86,11 @@ Apple adds `app_id`. Android adds `package_name`, `package_version`,
 `minimum_device_integrity`. Unknown, duplicate, mistyped and noncanonical fields are rejected.
 The worker rederives current Model app/enrollment policy digests from this projection and
 matches Native's exact pins and E1; it checks the selected lifetime without refreshing it.
+Rust's `issuer_worker::VerifierConfigurationV1` now constructs this exact projection from
+the selected typed Model policies, pinned root and decoder originals and private runtime
+locations. It retains the exact configuration and derives subsequent requests under the
+same policy/configuration pin. Construction checks consistency only; the process owner
+must still authenticate operator approval, installed runtime and descriptor custody.
 The separate governed Google decoder original has its own pin and the same selected app.
 OAuth accepts only the inherited Root-owned credential original and preserves the actual
 loaded OpenSSL/TLS custody checks. Enrollment-time Google verification creates no offline
@@ -141,10 +163,21 @@ and [Google's attestation revocation policy](https://developer.android.com/priva
 
 ## Tests
 
-Run the package tests with the selected Python/OpenSSL runtime:
+From this package directory, use Python 3.10+ and the selected OpenSSL 3 on `PATH`.
+Build the unsigned auth-only archive fixture before full discovery:
 
 ```sh
-PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+mkdir -p ../../target/qualification
+attestation_test_dir="$(mktemp -d "$(cd ../../target/qualification && pwd)/app-attestation.XXXXXX")"
+python3 -B tools/build_retail_auth_verifier_zipapp.py \
+  --generic-package "$PWD" --auth-package "$PWD" \
+  --output "$attestation_test_dir/iroha-retail-auth-verifier.pyz" \
+  --inventory "$attestation_test_dir/archive-inventory.json"
+BPNG_AUTH_TEST_BUILDER="$PWD/tools/build_retail_auth_verifier_zipapp.py" \
+BPNG_AUTH_TEST_ARCHIVE="$attestation_test_dir/iroha-retail-auth-verifier.pyz" \
+BPNG_AUTH_TEST_WORKER="$PWD/src/iroha_app_attestation/retail_auth_worker.py" \
+TMPDIR="$attestation_test_dir" PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -v
 ```
 
 Synthetic fixtures, Apple's published sample attestation and scripted Google

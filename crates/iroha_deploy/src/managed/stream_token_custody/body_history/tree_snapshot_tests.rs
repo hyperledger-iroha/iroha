@@ -416,3 +416,111 @@ fn snapshot_tree_exit_overrides_real_body_results_and_restores_original_ancestor
     // Fully restored common-prefix changes inside the bracket have the documented temporal limit.
     store.snapshot.revalidate().unwrap();
 }
+
+#[test]
+fn snapshot_closed_reader_keeps_native_count_bound_equal_count_census_and_original_retry() {
+    let store = Store::new();
+    assert!(store.snapshot.tree_root().is_some());
+    let original = store.first.read("reserved.nrt", MAX_BODY_BYTES).unwrap();
+    store
+        .first
+        .write_atomic("extra.nrt", b"extra", PublishMode::CreateNew)
+        .unwrap();
+    let native = store.first.entries(1).unwrap_err();
+    assert_eq!(native.kind(), io::ErrorKind::InvalidInput);
+    for result in [
+        store.snapshot.revalidate(),
+        store.snapshot.revalidate_in_tree(None),
+    ] {
+        match result {
+            Err(Error::Io(error)) => {
+                assert_eq!(error.kind(), native.kind());
+                assert_eq!(error.to_string(), native.to_string());
+            }
+            other => panic!("native inventory cap refusal changed: {other:?}"),
+        }
+    }
+    std::fs::remove_file(store.first.path().join("extra.nrt")).unwrap();
+    store.snapshot.revalidate().unwrap();
+    #[cfg(unix)]
+    {
+        let first_name = body_name(1).unwrap();
+        let moved = store.container.path().join("different-body");
+        // Keep the count unchanged. The earlier container census must still reject these names
+        // before a later body's retained suffix or required record is visited.
+        std::fs::rename(store.first.path(), &moved).unwrap();
+        for result in [
+            store.snapshot.revalidate(),
+            store.snapshot.revalidate_in_tree(None),
+        ] {
+            assert!(
+                matches!(result, Err(Error::Invalid(message)) if message == "retained enrollment namespace changed")
+            );
+        }
+        std::fs::rename(&moved, store.container.path().join(first_name)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let moved = store.container.path().join("different-body");
+        // Retained native directory handles deny DELETE sharing on Windows.
+        assert!(std::fs::rename(store.first.path(), &moved).is_err());
+        assert!(!moved.exists());
+    }
+    store.snapshot.revalidate().unwrap();
+    store.snapshot.revalidate_in_tree(None).unwrap();
+    assert_eq!(
+        store.first.read("reserved.nrt", MAX_BODY_BYTES).unwrap(),
+        original
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_closed_reader_suffix_exit_keeps_typed_body_refusal_and_restored_boundary() {
+    use std::{fs, os::unix::fs::PermissionsExt as _};
+    let store = Store::new();
+    let first = &store.snapshot.previous.as_ref().unwrap().records[0];
+    assert!(Arc::ptr_eq(&first.directory, &store.first));
+    let failure = store
+        .root
+        .read_tree_scope(|tree| {
+            tree.read_scope(&store.first, |reader| {
+                first.revalidate_in_scope(reader)?;
+                fs::set_permissions(store.first.path(), fs::Permissions::from_mode(0o755)).unwrap();
+                Err::<(), _>(invalid("typed snapshot consumer refusal"))
+            })
+        })
+        .unwrap_err();
+    assert!(matches!(failure, Error::Io(error) if error.kind() == io::ErrorKind::PermissionDenied));
+    fs::set_permissions(store.first.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let typed = store
+        .root
+        .read_tree_scope(|tree| {
+            tree.read_scope(&store.first, |reader| {
+                first.revalidate_in_scope(reader)?;
+                Err::<(), _>(invalid("typed snapshot consumer refusal"))
+            })
+        })
+        .unwrap_err();
+    assert!(
+        matches!(typed, Error::Invalid(message) if message == "typed snapshot consumer refusal")
+    );
+    store
+        .root
+        .read_tree_scope(|tree| {
+            tree.read_scope(&store.first, |reader| {
+                fs::set_permissions(store.first.path(), fs::Permissions::from_mode(0o755)).unwrap();
+                assert_eq!(
+                    store.first.revalidate().unwrap_err().kind(),
+                    io::ErrorKind::PermissionDenied
+                );
+                first.revalidate_in_scope(reader)?;
+                fs::set_permissions(store.first.path(), fs::Permissions::from_mode(0o700)).unwrap();
+                // This fully restored intermediate suffix change has the documented endpoint limit.
+                Ok::<_, Error>(())
+            })
+        })
+        .unwrap();
+    store.snapshot.revalidate().unwrap();
+    store.snapshot.revalidate_in_tree(None).unwrap();
+}

@@ -547,6 +547,7 @@ fn a_folded_generator_solved_from_the_equation_is_accumulated_but_never_accepted
             production(vk),
             BUDGET,
             &AllTerms,
+            None,
         )
         .expect("the messages are well formed");
         let (terms, neg_c, _) = read.pending.into_batch_terms(&setup.params);

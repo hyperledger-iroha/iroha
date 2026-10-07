@@ -9,7 +9,6 @@ use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
-    kagemusha::kagemusha_wallet_v1::*,
     sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, genesis_epoch},
 };
 use norito::json::{Map, Value};
@@ -118,21 +117,15 @@ pub(super) struct Selection {
     pub installation: InstallationV1,
     pub asset: KagemushaWalletAssetScopeV1,
     pub asset_original: Vec<u8>,
-    pub enrollment_certificate: KagemushaWalletSignerCertificateV1,
     pub android_app_policy: [u8; 32],
     pub apple_app_policy: [u8; 32],
-    pub android_enrollment_policy: [u8; 32],
-    pub apple_enrollment_policy: [u8; 32],
-    pub android_enrollment_original: Vec<u8>,
-    pub apple_enrollment_original: Vec<u8>,
-    pub regulatory_policy: KagemushaWalletRegulatoryPolicyV1,
     pub genesis: Arc<SumeragiFinalityVerifier>,
 }
 
 fn invalid() -> Failure {
     Failure::code(INVALID)
 }
-pub(super) fn bounded<'a>(bytes: &'a [u8], maximum: usize) -> Result<&'a [u8]> {
+pub(super) fn bounded(bytes: &[u8], maximum: usize) -> Result<&[u8]> {
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(invalid());
     }
@@ -144,7 +137,7 @@ fn safe_numbers(value: &Value) -> Result<()> {
             if !number
                 .as_i64()
                 .is_some_and(|v| (-9_007_199_254_740_991..=9_007_199_254_740_991).contains(&v))
-                && !number.as_u64().is_some_and(|v| v <= 9_007_199_254_740_991)
+                && number.as_u64().is_none_or(|v| v > 9_007_199_254_740_991)
             {
                 return Err(invalid());
             }
@@ -534,7 +527,7 @@ impl Selection {
             )
             .map_err(|_| invalid())?;
         regulatory_policy.validate().map_err(|_| invalid())?;
-        let platform_policy = |name| -> Result<([u8; 32], [u8; 32], Vec<u8>)> {
+        let platform_policy = |name| -> Result<[u8; 32]> {
             let mut fields = vec![
                 "app_policy_hex",
                 "enrollment_policy_hex",
@@ -579,7 +572,7 @@ impl Selection {
             {
                 return Err(invalid());
             }
-            Ok((app_digest, enrollment_digest, original))
+            Ok(app_digest)
         };
         let android = platform_policy("android")?;
         let apple = platform_policy("apple")?;
@@ -736,14 +729,8 @@ impl Selection {
             },
             asset,
             asset_original,
-            enrollment_certificate,
-            android_app_policy: android.0,
-            apple_app_policy: apple.0,
-            android_enrollment_policy: android.1,
-            apple_enrollment_policy: apple.1,
-            android_enrollment_original: android.2,
-            apple_enrollment_original: apple.2,
-            regulatory_policy,
+            android_app_policy: android,
+            apple_app_policy: apple,
             genesis: Arc::new(native),
         })
     }

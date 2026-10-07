@@ -165,6 +165,7 @@ iroha_crypto = { workspace = true, default-features = false, features = ["consen
 iroha_version = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
+iroha_fs = { workspace = true }
 iroha_panic_hook = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false }
 iroha_telemetry = { workspace = true }

@@ -48,6 +48,23 @@ impl HistoryProver {
         vesta: PinnedParams<Eq>,
         config: ReadConfig,
     ) -> Result<Self, Error> {
+        Self::from_original_artifacts_cancellable(
+            anchor, body, artifacts, pallas, vesta, config, None,
+        )
+    }
+    /// Import the exact finite history catalog with an operation cancellation signal.
+    /// # Errors
+    /// As [`Self::from_original_artifacts`], or cancellation without a source verdict.
+    pub fn from_original_artifacts_cancellable(
+        anchor: HistoryAnchor,
+        body: SourceVerifier,
+        artifacts: HistoryArtifacts<'_>,
+        pallas: PinnedParams<Ep>,
+        vesta: PinnedParams<Eq>,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         if artifacts.wrapper.descriptor.is_empty() || artifacts.wrapper.descriptor.len() > 1 << 20 {
             return Err(Error::Artifact);
         }
@@ -58,29 +75,41 @@ impl HistoryProver {
         let genesis_layout = GenesisSourceCircuit::for_source(anchor);
         let append_layout =
             HistoryAppendCircuit::for_source(append_plan.clone()).map_err(|_| Error::Artifact)?;
-        let genesis =
-            ImportedSource::from_original(&genesis_layout, artifacts.genesis, &vesta, config)?;
-        let append =
-            ImportedSource::from_original(&append_layout, artifacts.append, &vesta, config)?;
+        let genesis = ImportedSource::from_original_cancellable(
+            &genesis_layout,
+            artifacts.genesis,
+            &vesta,
+            config,
+            cancellation,
+        )?;
+        let append = ImportedSource::from_original_cancellable(
+            &append_layout,
+            artifacts.append,
+            &vesta,
+            config,
+            cancellation,
+        )?;
         if genesis.binding().encoded() != append.binding().encoded() {
             return Err(Error::Artifact);
         }
         let catalog = [genesis.catalog_key(), append.catalog_key()];
-        let genesis = Prover::from_qualified_catalog(
+        let genesis = Prover::from_qualified_catalog_cancellable(
             genesis,
             artifacts.wrapper,
             &catalog,
             pallas.clone(),
             vesta.clone(),
             config,
+            cancellation,
         )?;
-        let append = Prover::from_qualified_catalog(
+        let append = Prover::from_qualified_catalog_cancellable(
             append,
             artifacts.wrapper,
             &catalog,
             pallas,
             vesta.clone(),
             config,
+            cancellation,
         )?;
         let mounted_descriptor = genesis.binding().encoded();
         let required_descriptor = append_plan.wrapper_binding().encoded();
@@ -136,15 +165,28 @@ impl HistoryProver {
         config: ProverConfig,
         fold: &FoldConfig,
     ) -> Result<SourceNodeEvidence, Error> {
+        let config = ProverConfig {
+            cancellation: config.cancellation.or(fold.cancellation.as_ref()),
+            ..config
+        };
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation)?;
+        let mut fold = fold.clone();
+        fold.cancellation = config.cancellation.cloned();
         let circuit = HistoryAppendCircuit::prepare(
             self.append_plan.clone(),
             self.genesis.verifying_key().clone(),
             [previous, body],
             &self.vesta,
             entropy.inner_salt,
-            fold,
+            &fold,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         self.append.prove(
             &circuit,
             entropy.outer_salt,

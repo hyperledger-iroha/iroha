@@ -53,30 +53,13 @@ class KagemushaWalletInstalledRuntimeV1Test {
         }
     }
 
-    @Test fun `installed enrollment failures retain the same pre-admission sequence`() {
-        val failure = IllegalStateException("native unavailable")
-        val admission = KagemushaWalletInstalledAdmissionV1 { }
-        var calls = 0
-        assertEquals(failure, assertFailsWith<IllegalStateException> {
-            admission.enrollment { calls++; throw failure }
-        })
-        assertEquals("retained original", admission.enrollment { calls++; "retained original" })
-        assertEquals(2, calls)
-        admission.start(List(4) { byteArrayOf(1) })
-        assertFailsWith<IllegalStateException> { admission.enrollment { calls++ } }
-        assertEquals(2, calls)
-    }
-
-    @Test fun `admission attempt permanently closes installed enrollment access`() {
+    @Test fun `admission attempt blocks concurrent admission`() {
         val admission = KagemushaWalletInstalledAdmissionV1 { }
         admission.start(List(4) { byteArrayOf(1) })
         assertFailsWith<IllegalStateException> { admission.start(List(4) { byteArrayOf(1) }) }
-        var reachedNative = false
-        assertFailsWith<IllegalStateException> { admission.enrollment { reachedNative = true } }
-        assertEquals(false, reachedNative)
     }
 
-    @Test fun `ordinary refusal retries exact original frames without reopening enrollment`() {
+    @Test fun `ordinary refusal retries only exact original frames`() {
         val admission = KagemushaWalletInstalledAdmissionV1 { }
         val original = List(4) { byteArrayOf(it.toByte(), 7) }
         admission.start(original)
@@ -84,9 +67,6 @@ class KagemushaWalletInstalledRuntimeV1Test {
         admission.failed()
         val same = List(4) { byteArrayOf(it.toByte(), 7) }
         assertFailsWith<IllegalStateException> { admission.start(List(4) { byteArrayOf(2) }) }
-        var reachedNative = false
-        assertFailsWith<IllegalStateException> { admission.enrollment { reachedNative = true } }
-        assertEquals(false, reachedNative)
         admission.start(same)
         assertFailsWith<IllegalStateException> { admission.start(same) }
         admission.failed()
@@ -96,15 +76,11 @@ class KagemushaWalletInstalledRuntimeV1Test {
         assertFailsWith<IllegalStateException> { admission.failed() }
     }
 
-    @Test fun `retired installed owner cannot enroll or start admission`() {
+    @Test fun `retired installed owner cannot start admission`() {
         var retired = false
         val admission = KagemushaWalletInstalledAdmissionV1 { check(!retired) { "retired" } }
-        assertEquals(7, admission.enrollment { 7 })
         retired = true
-        var reachedNative = false
-        assertFailsWith<IllegalStateException> { admission.enrollment { reachedNative = true } }
         assertFailsWith<IllegalStateException> { admission.start(List(4) { byteArrayOf(1) }) }
-        assertEquals(false, reachedNative)
     }
 
     @Test fun `each role is bounded before originals are retained`() {

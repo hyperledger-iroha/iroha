@@ -3,7 +3,7 @@
 //! Recursive statements bind provenance through their obligation ledger and VK
 //! checks. This value alone is never a proof or an acceptance verdict.
 
-use super::{IpaError, PinnedParams, commit::msm_complete, fold_scalars};
+use super::{IpaError, PinnedParams, fold_scalars};
 use ff::Field;
 use group::prime::PrimeCurveAffine;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
@@ -52,9 +52,29 @@ impl<C: PastaCurve> GeneratorClaim<C> {
     /// # Errors
     /// Insufficient parameters or a false generator claim.
     pub fn decide(&self, params: &PinnedParams<C>, budget: MemoryBudget) -> Result<(), IpaError> {
+        self.decide_cancellable(params, budget, None)
+    }
+    /// Decides with explicit cooperative cancellation and no partial verdict.
+    ///
+    /// # Errors
+    /// As [`Self::decide`], or [`IpaError::Cancelled`].
+    pub fn decide_cancellable(
+        &self,
+        params: &PinnedParams<C>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), IpaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         params.require_k(self.k)?;
         let s = fold_scalars(&self.challenges, C::ScalarExt::ONE);
-        let expected = msm_complete::<C>(&s, &params.params().g()[..s.len()], budget).to_affine();
+        let expected = super::commit::msm_complete_cancellable::<C>(
+            &s,
+            &params.params().g()[..s.len()],
+            budget,
+            &iroha_pasta::msm::SharedMemoryBudget::process_default(),
+            cancellation,
+        )?
+        .to_affine();
         if expected == self.g {
             Ok(())
         } else {

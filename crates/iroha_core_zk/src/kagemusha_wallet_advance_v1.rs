@@ -112,7 +112,11 @@ mod enrollment;
 mod layout;
 mod marker;
 mod platform;
+mod prekey_custody;
 mod provider;
+#[cfg(test)]
+use enrollment::KagemushaWalletChallengeLivenessV1;
+pub(crate) use prekey_custody::{PreKeyPublicationV1, PreKeyRecordV1};
 mod reconcile;
 mod retained;
 mod setup;
@@ -140,9 +144,9 @@ pub use self::{
     capsule::{KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1, KagemushaWalletFrozenFrameV1},
     completion::KagemushaWalletCompletionFrameV1,
     enrollment::{
-        KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1, KagemushaWalletChallengeLivenessV1,
-        KagemushaWalletEnrollmentDatesV1, KagemushaWalletEnrollmentRecordV1,
-        KagemushaWalletEnrollmentStepV1, KagemushaWalletFreshGenerationV1, KagemushaWalletIntentV1,
+        KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1, KagemushaWalletEnrollmentDatesV1,
+        KagemushaWalletEnrollmentRecordV1, KagemushaWalletEnrollmentStepV1,
+        KagemushaWalletFreshGenerationV1, KagemushaWalletIntentV1,
     },
     layout::{
         KAGEMUSHA_WALLET_BALLAST_BYTES_V1, KAGEMUSHA_WALLET_ROOT_DIR_NAME_V1,
@@ -365,3 +369,7 @@ mod tests {
         assert!(decode_envelope_v1::<KagemushaWalletRootSentinelV1>(&corrupt, 1_024).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "kagemusha_wallet_enrollment_v1/tests.rs"]
+mod enrollment_owner_tests;

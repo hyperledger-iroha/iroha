@@ -83,21 +83,6 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
         accountSignatureOriginal?.fill(0)
         accountSignatureOriginal = null
     }
-    private fun <T> enrollment(action: () -> T): T = synchronized(gate) { admission.enrollment(action) }
-
-    /** Actual Native begin-or-resume of the same original intent; no app freshness flag or slot. */
-    fun beginEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1,requireCurrent:()->Unit):KagemushaWalletEnrollmentProgressV1 =
-        enrollment {requireNoUnreleasedAdmissions();requireCurrent();runtime.beginEnrollment(originals).also{requireCurrent()}}
-    /** Existing-intent-only restoration cannot create an original generation grant. */
-    fun resumeEnrollment(originals:KagemushaWalletEnrollmentOriginalsV1,requireCurrent:()->Unit):KagemushaWalletEnrollmentProgressV1 =
-        enrollment {requireNoUnreleasedAdmissions();requireCurrent();runtime.resumeEnrollment(originals).also{requireCurrent()}}
-    /** The first Native whole request wins over later offered PI DATA after interrupted delivery. */
-    fun retainEnrollmentRequest(originals:KagemushaWalletEnrollmentOriginalsV1,request:ByteArray,requireCurrent:()->Unit):ByteArray =
-        enrollment {requireCurrent();runtime.retainEnrollmentRequest(originals,request).also{requireCurrent()}}
-    fun storeEnrollmentCredential(originals:KagemushaWalletEnrollmentOriginalsV1,
-        credential:ByteArray,certificates:ByteArray,requireCurrent:()->Unit):ByteArray =
-        enrollment {requireCurrent();runtime.storeEnrollmentCredential(originals,credential,certificates).also{requireCurrent()}}
-
     /** Retry ordinary refusal using the same originals, Native challenge and account signature.
      * Explicit future cancellation retires custody; successful admission transfers it once.
      */
@@ -237,11 +222,7 @@ internal class KagemushaWalletInstalledAdmissionV1(private val requireLive: () -
     }
     fun failed() { check(active && !transferred); active = false }
     fun completed() { check(active && !transferred); transferred = true; active = false }
-    fun <T> enrollment(action: () -> T): T {
-        requireLive()
-        check(originalFrames == null) { "enrollment must finish before account admission" }
-        return action()
-    }
+
 }
 /** JNI returns one positive registry owner or a negative i32 Native failure, never a verdict. */
 internal fun installationRuntimeHandle(result: Long): Long {

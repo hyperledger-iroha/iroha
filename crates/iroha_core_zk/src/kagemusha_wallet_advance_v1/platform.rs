@@ -364,8 +364,8 @@ pub enum KagemushaWalletKeyProfileV1 {
     /// Android StrongBox when available, otherwise the TEE; iPhone Secure Enclave. A TEE key
     /// is generated only while the slot's probe is still definitively absent.
     SecureElementOrTee,
-    /// Android hardware TEE only, when that exact level is selected by signed policy.
-    TeeOnly,
+    /// Android TEE only, even when StrongBox exists; unsupported on Apple.
+    AndroidTee,
 }
 
 impl KagemushaWalletKeyProfileV1 {
@@ -375,7 +375,7 @@ impl KagemushaWalletKeyProfileV1 {
         match self {
             Self::SecureElement => 1,
             Self::SecureElementOrTee => 2,
-            Self::TeeOnly => 3,
+            Self::AndroidTee => 3,
         }
     }
 
@@ -385,7 +385,7 @@ impl KagemushaWalletKeyProfileV1 {
         match tag {
             1 => Some(Self::SecureElement),
             2 => Some(Self::SecureElementOrTee),
-            3 => Some(Self::TeeOnly),
+            3 => Some(Self::AndroidTee),
             _ => None,
         }
     }
@@ -398,7 +398,7 @@ impl KagemushaWalletKeyProfileV1 {
 /// `setIsStrongBoxBacked(true)` and, for [`KagemushaWalletKeyProfileV1::SecureElementOrTee`]
 /// only, a TEE retry after `StrongBoxUnavailableException`. A platform without definitive
 /// absence requires a new explicit enrollment and fresh slot for that retry. A signed
-/// [`KagemushaWalletKeyProfileV1::TeeOnly`] selection requests hardware TEE directly.
+/// [`KagemushaWalletKeyProfileV1::AndroidTee`] selection requests hardware TEE directly.
 /// Never any user-authentication,
 /// unlocked-device, usage-count or confirmation option. iPhone (C vtable): a Secure Enclave
 /// P-256 signing key with `.privateKeyUsage`; the challenge digest is the App Attest

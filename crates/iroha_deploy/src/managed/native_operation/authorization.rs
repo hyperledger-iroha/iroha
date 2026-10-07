@@ -385,16 +385,15 @@ impl EpochReader {
     ) -> Result<()> {
         // Open the child anew at every original census point. No old native directory or
         // file handle is used to replace the currently named custody observation.
-        self.records = match directory.open_child("epochs") {
-            Ok(root) => read_epochs(
+        self.records = match directory.open_child_optional("epochs")? {
+            Some(root) => read_epochs(
                 &root,
                 original_digest,
                 fees,
                 scope,
                 std::mem::take(&mut self.records),
             )?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error.into()),
+            None => Vec::new(),
         };
         Ok(())
     }

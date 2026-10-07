@@ -4,7 +4,7 @@
 use super::super::Plan;
 use super::*;
 use crate::{
-    a_relation::receive::maps,
+    a_relation::receive::{authorization::ReceiveSignaturePredicateInputs, maps},
     operation_relation::map_effects::{MapState, MapTransition},
     q_signature::SignatureWitness,
 };
@@ -251,14 +251,16 @@ impl Circuit<Fp> for Proposal {
                                 authorization.signature_predicate(
                                     &mut chip,
                                     &mut region,
-                                    self.plan.policy,
-                                    &statement,
-                                    MapState {
-                                        state: &old,
-                                        lineage: &pred_public,
+                                    ReceiveSignaturePredicateInputs {
+                                        policy: self.plan.policy,
+                                        own_statement: &statement,
+                                        predecessor: MapState {
+                                            state: &old,
+                                            lineage: &pred_public,
+                                        },
+                                        objects: &objects,
+                                        slots: signatures.slots(),
                                     },
-                                    &objects,
-                                    signatures.slots(),
                                 )?,
                                 chip.uint()
                                     .glue()
@@ -329,11 +331,19 @@ impl Plan {
         input: PredicateInputs,
     ) -> Result<[bool; 4], super::super::Error> {
         let mut values = Vec::with_capacity(4);
+        let mut input = Some(input);
         for group in [Group::Objects, Group::Signatures, Group::Maps] {
             let observed = Arc::new(Mutex::new(None));
+            // The last assignment consumes the caller's original buffers; earlier groups
+            // keep the same bounded per-assignment copies and constraint order.
+            let input = if matches!(group, Group::Maps) {
+                input.take().ok_or(super::super::Error::Input)?
+            } else {
+                input.as_ref().ok_or(super::super::Error::Input)?.clone()
+            };
             let circuit = Proposal {
                 plan: self.clone(),
-                input: input.clone(),
+                input,
                 group,
                 observed: observed.clone(),
             };

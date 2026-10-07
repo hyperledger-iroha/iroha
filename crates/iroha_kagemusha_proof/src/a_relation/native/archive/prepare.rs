@@ -6,7 +6,6 @@
 use ff::Field;
 use ff::PrimeField;
 use iroha_pasta::msm::MemoryBudget;
-use iroha_plonk::verifier::verify_full;
 use iroha_plonk_gadgets::bytes::p_bytes_native;
 use std::sync::Arc;
 
@@ -174,10 +173,26 @@ impl Prepared {
             salt.to_repr(),
             config,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         pallas
-            .decide(&self.plan.pallas, config.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(
+                &self.plan.pallas,
+                config.kernel_budget,
+                config.cancellation.as_ref(),
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(super::circuit::Stage {
             source: Arc::clone(self),
             continuation: None,
@@ -241,6 +256,18 @@ impl Plan {
     /// # Errors
     /// Wrong original shape, continuity key, hard proof or selected obligation.
     pub fn prepare(&self, input: Inputs, budget: MemoryBudget) -> Result<Prepared, Error> {
+        self.prepare_cancellable(input, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn prepare_cancellable(
+        &self,
+        input: Inputs,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Prepared, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         self.validate_original_shapes(&input)?;
         let program = self.context().operation();
         let omega = program.omega().ok_or(Error::Artifact)?;
@@ -252,11 +279,23 @@ impl Plan {
             return Err(Error::Input);
         }
         pallas
-            .decide(&self.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         vesta
-            .decide(&self.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let key = self
             .predecessor_key
             .kagemusha_digest(omega.binding())
@@ -268,46 +307,69 @@ impl Plan {
             support::terminal_digest(&input.state.predecessor.lineage, &pallas.as_input())?,
             &vesta,
         )?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.pallas,
             omega.binding(),
             &self.predecessor_key,
             &public,
             &input.predecessor.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
-        let predecessor_opening = support::opening_pallas(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+        let predecessor_opening = support::opening_pallas_cancellable(
             &self.pallas,
             omega.binding(),
             &self.predecessor_key,
             &public,
             &input.predecessor.proof,
             budget,
+            cancellation,
         )?;
         let mut q_openings = Vec::with_capacity(3);
         for (index, source) in input.q.iter().enumerate() {
             let fixed = program.q(index).ok_or(Error::Artifact)?;
-            verify_full(
+            iroha_plonk::verifier::verify_full_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &source.instances,
                 &source.proof,
                 budget,
+                cancellation,
             )
-            .map_err(|_| Error::Proof)?;
-            q_openings.push(support::opening_pallas(
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+            q_openings.push(support::opening_pallas_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &source.instances,
                 &source.proof,
                 budget,
+                cancellation,
             )?);
         }
         let part = support::q_sigma_part(&input.q[0].instances, &program.sigma)?;
-        part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
+        part.decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let selected_status = if let Evidence::Status { witness, .. } = &input.evidence {
             if witness.pallas.as_input().source_k() != 16
                 || witness.vesta.as_input().source_k() != 16
@@ -317,27 +379,30 @@ impl Plan {
             }
             Some((
                 [
-                    support::select_pallas(
+                    support::select_pallas_cancellable(
                         &self.pallas,
                         &witness.pallas.as_input(),
                         witness.modes[0],
                         witness.pallas_corrections[0],
                         budget,
+                        cancellation,
                     )?,
-                    support::select_pallas(
+                    support::select_pallas_cancellable(
                         &self.pallas,
                         &witness.opening,
                         witness.modes[1],
                         witness.pallas_corrections[1],
                         budget,
+                        cancellation,
                     )?,
                 ],
-                support::select_vesta(
+                support::select_vesta_cancellable(
                     &self.vesta,
                     &witness.vesta.as_input(),
                     witness.modes[2],
                     witness.vesta_correction,
                     budget,
+                    cancellation,
                 )?,
             ))
         } else {

@@ -265,10 +265,8 @@ impl ManagedReserveAccountRegistration {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
         self.validate_registration(policy, underwriting)?;
-        let directory = match self.authority.directory.open_child("register") {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Some(directory) = self.authority.directory.open_child_optional("register")? else {
+            return Ok(None);
         };
         let Some(original) = journal::read_intent(&directory)? else {
             return Ok(None);

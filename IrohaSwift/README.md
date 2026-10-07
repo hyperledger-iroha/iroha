@@ -181,12 +181,25 @@ Headers and rebuilt authenticated native artifacts are mandatory. An unprovision
 runtime reports `artifactsUnavailable`; full real-wallet and phone qualification
 remain open.
 
-The current bridge does not yet export enrollment E2–E6. The Native enrollment owner
-must retain the exact E5 request together with the App Attest key identifier and its
-consumed assertion counter before dispatch. It stores the issued credential create-new,
-then Bootstrap establishes the generation-1 head. E8 activation must retain and send
-that original Bootstrap completion. The Swift adapter alone does not complete these
-issuer, ledger or physical-device workflows (TODO(G4/G5)).
+`KagemushaWalletEnrollmentV1` drives E2–E6 under a native-provisioned exclusive
+owner. Native configuration selects the genuine approved scheme/policy/root originals.
+The existing account first authorizes local key creation, then signs the exact E5
+binding over that generated key and original evidence. Native retains E5 before
+returning network bytes, including the App Attest key identifier and first assertion.
+Enrollment begin returns native-retained issuer dispatch DATA for the selected request ID,
+account and asset. `acceptPermit` verifies the rooted signed pre-key permit before returning
+the existing-account challenge. Native checks the same-boot elapsed deadline again at actual
+key generation and preserves the original server attempt across retries.
+The issuer still owns live-challenge, account eligibility and platform verification.
+Native authenticates and retains its exact E6 evidence and signed credential before
+selecting credential zero. `loadRuntime` qualifies the complete proof-source graph;
+`beginEnrolled` then starts the separate account-admission challenge using those retained
+originals. Missing artifacts remain unavailable without losing enrollment custody.
+
+After Bootstrap, `activation()` returns the exact retained signed Activate frame for
+ledger submission. It does not confirm ledger activation. Bootstrap originals cannot
+be collected before the activation plan retains its complete source copies. Full
+issuer/ledger integration and real-device qualification remain separate gates.
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
@@ -2589,3 +2602,10 @@ truncated records, malformed peer bindings, invalid withdrawal hash widths or ma
 retired reward-plan layouts, invalid fee custody and
 noncanonical quantity decimals. This structural codec
 does not verify signatures, custody, or committee activation.
+
+The enrollment handle's explicit `abandon` action permanently closes an unused enrollment
+before runtime handoff and returns its exact retained signed ledger control. Native refuses
+once Bootstrap commits. Closing the handle only releases ownership. Abandon output is published
+before an immutable digest selection, and nothing is returned until both are durable; a missing
+selected original is refused. Recovery may complete a missing selection for a present valid
+original. This local mechanism does not establish protection against complete filesystem rollback.

@@ -330,6 +330,8 @@ pub struct TranscriptReader<'a, C: PastaCurve, H> {
     hash: H,
     proof: &'a [u8],
     position: usize,
+    #[cfg(any(test, iroha_plonk_oracle))]
+    challenges: Option<Vec<C::ScalarExt>>,
     _curve: PhantomData<C>,
 }
 
@@ -341,8 +343,22 @@ impl<'a, C: PastaCurve, H: TranscriptHash<C>> TranscriptReader<'a, C, H> {
             hash,
             proof,
             position: 0,
+            #[cfg(any(test, iroha_plonk_oracle))]
+            challenges: None,
             _curve: PhantomData,
         }
+    }
+
+    /// Record actual squeezes for independent oracle comparisons only.
+    #[cfg(any(test, iroha_plonk_oracle))]
+    pub(crate) fn record_challenges(&mut self) {
+        self.challenges = Some(Vec::new());
+    }
+
+    /// Transfer the recorded public challenge tape before strict completion.
+    #[cfg(any(test, iroha_plonk_oracle))]
+    pub(crate) fn take_challenges(&mut self) -> Vec<C::ScalarExt> {
+        self.challenges.take().unwrap_or_default()
     }
 
     /// The number of unread proof bytes.
@@ -392,7 +408,12 @@ impl<'a, C: PastaCurve, H: TranscriptHash<C>> TranscriptReader<'a, C, H> {
 
 impl<C: PastaCurve, H: TranscriptHash<C>> Transcript<C> for TranscriptReader<'_, C, H> {
     fn squeeze_challenge(&mut self) -> C::ScalarExt {
-        self.hash.squeeze()
+        let challenge = self.hash.squeeze();
+        #[cfg(any(test, iroha_plonk_oracle))]
+        if let Some(challenges) = &mut self.challenges {
+            challenges.push(challenge);
+        }
+        challenge
     }
 
     fn common_point(&mut self, point: &C::AffineExt) -> Result<(), TranscriptError> {

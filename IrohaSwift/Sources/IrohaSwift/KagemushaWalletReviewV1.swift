@@ -134,4 +134,3 @@ struct KagemushaWalletReviewInputV1 {
     }}
   }
 }
-

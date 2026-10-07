@@ -61,6 +61,7 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_close_v1
   connect_norito_kagemusha_wallet_activity_v1
   connect_norito_kagemusha_wallet_setup_v1
+  connect_norito_kagemusha_wallet_enrollment_v1
   connect_norito_kagemusha_wallet_execute_v1
   connect_norito_kagemusha_wallet_load_original_validate_v1
   connect_norito_kagemusha_wallet_request_status_v1
@@ -69,10 +70,19 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_fold_v1
   connect_norito_kagemusha_wallet_credit_status_v1
   connect_norito_kagemusha_wallet_snapshot_v1
+  connect_norito_kagemusha_wallet_review_v1
+  connect_norito_kagemusha_wallet_execute_reviewed_v1
+  connect_norito_kagemusha_wallet_discard_review_v1
+  connect_norito_kagemusha_wallet_installation_begin_v1
+  connect_norito_kagemusha_wallet_installation_register_v1
+  connect_norito_kagemusha_wallet_installation_close_v1
 )
 wallet_jni_symbols=()
-for method in revision openBegin openFinish openCancel close activity call setup execute snapshot; do
+for method in revision openBegin openFinish openCancel close activity call setup enrollment execute snapshot review executeReviewed discardReview; do
   wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
+done
+for method in beginInstallation registerInstallation closeInstallation; do
+  wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_${method}")
 done
 load_original_jni_symbols=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate
@@ -165,6 +175,9 @@ for mode in elf apple; do
     || fail "binary-symbol gate rejected the exact $mode protocol inventory"
 done
 for retired in \
+  "elf connect_norito_kagemusha_wallet_install_runtime_v1" \
+  "elf Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime" \
+  "elf Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletEnrollmentNativeV1_enroll" \
   "elf connect_norito_kagemusha_wallet_sign_v1" \
   "elf connect_norito_kagemusha_wallet_open_v2" \
   "elf Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_sign" \
@@ -195,18 +208,19 @@ if output="$(run_symbol_gate elf "${retired_jni_symbols[@]}")"; then
 fi
 grep -Fq 'retired KAGEMUSHA JNI namespace' <<<"$output" \
   || fail "binary-symbol gate did not identify the large retired JNI inventory"
-for missing in "${wallet_jni_symbols[@]}"; do
+complete_required_jni_symbols=("${required_jni_fixture_symbols[@]}")
+for missing in "${complete_required_jni_symbols[@]}"; do
   required_jni_fixture_symbols=()
-  for symbol in "${wallet_jni_symbols[@]}"; do
+  for symbol in "${complete_required_jni_symbols[@]}"; do
     [[ "$symbol" == "$missing" ]] || required_jni_fixture_symbols+=("$symbol")
   done
   if output="$(run_symbol_gate elf)"; then
-    fail "binary-symbol gate accepted missing wallet JNI export $missing"
+    fail "binary-symbol gate accepted missing JNI export $missing"
   fi
   grep -Fq "missing $missing" <<<"$output" \
-    || fail "binary-symbol gate did not identify missing wallet JNI export $missing"
+    || fail "binary-symbol gate did not identify missing JNI export $missing"
 done
-required_jni_fixture_symbols=("${wallet_jni_symbols[@]}" "${load_original_jni_symbols[@]}" "${auth_jni_symbols[@]}")
+required_jni_fixture_symbols=("${complete_required_jni_symbols[@]}")
 complete_required_symbols=("${required_fixture_symbols[@]}")
 required_fixture_symbols=("${complete_required_symbols[@]:1}")
 if run_symbol_gate elf >/dev/null; then

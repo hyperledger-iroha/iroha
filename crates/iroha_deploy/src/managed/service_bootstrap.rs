@@ -298,12 +298,11 @@ impl ManagedServiceBootstrap {
         authorization::require_active(&cancelled)?;
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
-        let existing = match self.authority.directory.open_child("initial") {
-            Ok(directory) => {
+        let existing = match self.authority.directory.open_child_optional("initial")? {
+            Some(directory) => {
                 read_original(&directory, &self.authority)?.map(|original| (directory, original))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
+            None => None,
         };
         let (directory, original) = match existing {
             Some((directory, original)) => {

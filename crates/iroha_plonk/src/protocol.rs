@@ -502,13 +502,28 @@ pub fn instance_commitment<C: PastaCurve>(
     values: &[C::ScalarExt],
     budget: MemoryBudget,
 ) -> C::AffineExt {
+    instance_commitment_cancellable(params, values, budget, None).expect("no cancellation signal")
+}
+/// The same public instance commitment with an explicit operation signal.
+/// # Errors
+/// Cancellation after complete-kernel workers join; no partial commitment escapes.
+pub fn instance_commitment_cancellable<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    values: &[C::ScalarExt],
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<C::AffineExt, iroha_pasta::Cancelled> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     let p = params.params();
     let mut msm = Msm::<C>::new();
-    for (value, base) in values.iter().zip(p.g_lagrange()) {
+    for (index, (value, base)) in values.iter().zip(p.g_lagrange()).enumerate() {
+        if index % 1024 == 0 {
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        }
         msm.push(*value, *base);
     }
     msm.push(C::ScalarExt::ONE, p.w());
-    msm.to_affine(budget)
+    Ok(msm.evaluate_cancellable(budget, cancellation)?.to_affine())
 }
 
 /// Evaluates a postfix descriptor expression on query evaluations with an

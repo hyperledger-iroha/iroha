@@ -477,6 +477,17 @@ anchor field from the independently selected native `SumeragiFinalityVerifier`,
 requires exact equality to signed inventory metadata, and rederives the complete
 compiled source/wrapper graph using bounded descriptor/VK originals. Its returned
 receipt-only owner retains the same scheme/manifest identity and no server PKs.
+The engineering full-route compiler takes a separate, explicitly unqualified
+metadata snapshot. It compares exact original identities and hashes across the
+snapshot, then reconstructs the entire fixed receipt graph before constructing
+wallet keys. Artifact counts or a snapshot marker never establish completeness;
+missing, unused or duplicate source records reject. Each descriptor keeps the
+1,048,576-byte bound and each VK the 262,144-byte bound. The current ordinary
+receipt graph's actual descriptor/VK encodings total 406,815,883 bytes. This
+compiler admits at most 512 MiB cumulatively and passes the checked exact sum to
+the graph qualifier, reading one original at a time. This engineering input
+ceiling is separate from the compact verifier pack above, the process-wide
+64 MiB MSM scratch budget, peak RSS and physical-phone qualification.
 Complete graph execution and the complete native wallet producer remain release
 gates. No API boolean or caller verdict upgrades a verifier or authenticated
 inventory into wallet readiness. The native owner is

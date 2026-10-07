@@ -84,16 +84,11 @@ impl RecordSnapshot {
         Ok(())
     }
     fn revalidate_in_scope(&self, reader: &mut iroha_fs::PrivateReadScope<'_>) -> Result<()> {
-        let observed = match reader.read(&self.name, self.maximum, |bytes| {
-            (bytes.len(), *Hash::new(bytes).as_ref())
-        }) {
-            Ok(observed) => Some(observed),
-            Err(error)
-                if self.observed.is_none() && error.kind() == std::io::ErrorKind::NotFound =>
-            {
-                None
-            }
-            Err(error) => return Err(error.into()),
+        let observe = |bytes: &[u8]| (bytes.len(), *Hash::new(bytes).as_ref());
+        let observed = if self.observed.is_some() {
+            Some(reader.read(&self.name, self.maximum, observe)?)
+        } else {
+            reader.read_optional(&self.name, self.maximum, observe)?
         };
         if observed != self.observed {
             return Err(invalid("retained enrollment body material changed"));
@@ -256,10 +251,7 @@ impl Snapshot {
                 };
                 // The base root and singleton external reference keep their full checks.
                 match (self.root.is_none(), tree.as_deref_mut()) {
-                    (true, Some(tree)) => tree
-                        .with_directory(&self.records[index].directory, |directory| {
-                            directory.read_scope(read)
-                        })?,
+                    (true, Some(tree)) => tree.read_scope(&self.records[index].directory, read)?,
                     _ => self.records[index].directory.read_scope(read)?,
                 }
             }
@@ -267,8 +259,8 @@ impl Snapshot {
         }
         for names in &self.names {
             match tree.as_deref_mut() {
-                Some(tree) => tree.with_directory(&names.directory, |directory| {
-                    if directory.entries(names.maximum)? != names.names {
+                Some(tree) => tree.read_scope(&names.directory, |reader| {
+                    if reader.entries(names.maximum)? != names.names {
                         return Err(invalid("retained enrollment namespace changed"));
                     }
                     Ok::<_, crate::managed::Error>(())
@@ -560,12 +552,13 @@ impl BodyHistory {
         owner.authority.directory.revalidate()?;
         let name = purpose.directory_name()?;
         let (reference, reference_snapshot) = read_reference(owner, purpose)?;
-        let root = match owner.authority.directory.open_child(&name) {
-            Ok(value) => Arc::new(value),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && reference.is_none() => {
+        let root = match owner.authority.directory.open_child_optional(&name) {
+            Ok(Some(value)) => Arc::new(value),
+            Ok(None) if reference.is_none() => {
                 reference_snapshot.revalidate()?;
                 return Ok(None);
             }
+            Ok(None) => return Err(ManagedBootstrapFailure::RetainedMaterial.into()),
             Err(error) => return require_retained_material(Err(error.into())),
         };
         let plan = owner.authority.provider_plan()?;
@@ -769,18 +762,10 @@ impl BodyHistory {
         let body_root = match retained.and_then(|prior| prior.body_root.as_ref()) {
             Some(container) => {
                 container.revalidate()?;
-                Ok(Arc::clone(container))
+                Some(Arc::clone(container))
             }
-            None => root.open_child("bodies").map(Arc::new),
-        };
-        let body_root = match body_root {
-            Ok(value) => Some(value),
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound && anchor.active.is_none() =>
-            {
-                None
-            }
-            Err(error) => return Err(error.into()),
+            None if anchor.active.is_none() => root.open_child_optional("bodies")?.map(Arc::new),
+            None => Some(Arc::new(root.open_child("bodies")?)),
         };
         let names = body_root
             .as_ref()
@@ -828,26 +813,23 @@ impl BodyHistory {
                 match retained.and_then(|prior| prior.bodies.get(usize::from(ordinal) - 1)) {
                     Some(body) => {
                         body.directory.revalidate()?;
-                        Ok(Some(Arc::clone(&body.directory)))
+                        Some(Arc::clone(&body.directory))
                     }
-                    None => body_root
-                        .as_ref()
-                        .map(|root| root.open_child(&name).map(Arc::new))
-                        .transpose(),
+                    None => match body_root.as_ref() {
+                        Some(root)
+                            if anchor
+                                .pending
+                                .as_ref()
+                                .is_some_and(|r| r.ordinal == ordinal) =>
+                        {
+                            root.open_child_optional(&name)?.map(Arc::new)
+                        }
+                        Some(root) => Some(Arc::new(root.open_child(&name)?)),
+                        None => None,
+                    },
                 };
-            let directory = match directory {
-                Ok(Some(value)) => value,
-                Ok(None) => break,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && anchor
-                            .pending
-                            .as_ref()
-                            .is_some_and(|r| r.ordinal == ordinal) =>
-                {
-                    break;
-                }
-                Err(error) => return Err(error.into()),
+            let Some(directory) = directory else {
+                break;
             };
             let body_names = checked_names(
                 &directory,
@@ -1748,20 +1730,19 @@ impl BodyHistory {
             let ordinal = pending.ordinal;
             turn.check(&self.selection, deadline)?;
             let body_root = self.root.ensure_child("bodies")?;
-            match body_root.open_child(body_name(ordinal)?) {
-                Ok(body) => {
+            match body_root.open_child_optional(body_name(ordinal)?)? {
+                Some(body) => {
                     if body.read("reserved.nrt", MAX_BODY_BYTES)?.as_slice() != bytes {
                         return Err(invalid("retained body reservation changed"));
                     }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                None => {
                     turn.check(&self.selection, deadline)?;
                     private_parent(&body_root)?.publish_private_child(
                         body_name(ordinal)?,
                         &[("reserved.nrt", bytes.as_slice())],
                     )?;
                 }
-                Err(error) => return Err(error.into()),
             }
             self = self.reopen(owner)?;
             let previous_retirement = if ordinal == 1 {
@@ -2080,3 +2061,7 @@ mod tree_snapshot_tests;
 #[cfg(test)]
 #[path = "body_history/handle_tree_tests.rs"]
 mod handle_tree_tests;
+
+#[cfg(test)]
+#[path = "body_history/optional_admission_tests.rs"]
+mod optional_admission_tests;

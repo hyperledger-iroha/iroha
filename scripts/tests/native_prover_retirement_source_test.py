@@ -38,6 +38,19 @@ MIGRATED_CONSUMERS = (
 class NativeProverRetirementSourceTest(unittest.TestCase):
     """Require one native consumer path without resurrecting retired dispatch."""
 
+    def test_shipping_relation_and_bridge_roots_forbid_oracle_mode(self) -> None:
+        guard = 'const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");'
+        for consumer in ("iroha_core_zk", "iroha_kagemusha_proof", "kaigi_zk",
+                         "sorafs_manifest", "connect_norito_bridge"):
+            with self.subTest(consumer=consumer):
+                source = (ROOT / "crates" / consumer / "src/lib.rs").read_text(encoding="utf-8")
+                self.assertEqual(source.count(guard), 1)
+                # The const is the first crate item, unconditional in shipping and test builds.
+                # Its actual rejection under an oracle-enabled dependency is compiled by CI.
+                prefix = source.split(guard, 1)[0]
+                self.assertIsNone(re.search(r"^\s*(?:pub\s+)?(?:mod|fn|use|struct|enum)\s", prefix, re.MULTILINE))
+                self.assertIsNone(re.search(r"^\s*#\[cfg\b", prefix, re.MULTILINE))
+
     def test_retired_sources_and_module_declarations_are_absent(self) -> None:
         source_dir = ROOT / "crates/iroha_core_zk/src"
         for name in RETIRED_SOURCES:

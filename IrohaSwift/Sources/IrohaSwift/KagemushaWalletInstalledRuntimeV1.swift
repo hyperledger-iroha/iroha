@@ -2,6 +2,8 @@ import Foundation
 import NoritoBridge
 
 /// Whole bounded DATA. Only Native compiled trust authenticates the installation.
+/// Four signed base originals are mandatory; financial originals are wholly present or absent.
+/// Native authenticates an absent financial selection before reporting artifacts unavailable.
 public struct KagemushaWalletRuntimeOriginalsV1: Sendable, CustomStringConvertible {
   public var description: String { "KagemushaWalletRuntimeOriginalsV1(originals=[REDACTED])" }
   let originals: [Data]
@@ -10,9 +12,14 @@ public struct KagemushaWalletRuntimeOriginalsV1: Sendable, CustomStringConvertib
     let inputs = [appManifest, envelope, walletRuntime, verifierPack, producerInventory, signedGenesis]
     let caps = [8_388_608, 2048, 131_072, 16_842_752, 16_777_216, 67_108_864]
     for (index, value) in inputs.enumerated() {
-      guard !value.isEmpty, value.count <= caps[index] else { throw KagemushaWalletErrorV1.invalidInput }
+      guard value.count <= caps[index] else { throw KagemushaWalletErrorV1.invalidInput }
     }
-    guard !originalsRoot.isEmpty, originalsRoot.hasPrefix("/"), !originalsRoot.utf8.contains(0),
+    guard [appManifest, envelope, walletRuntime, signedGenesis].allSatisfy({ !$0.isEmpty })
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    let financialAbsent = [verifierPack.isEmpty, producerInventory.isEmpty, originalsRoot.isEmpty]
+    guard financialAbsent.allSatisfy({ $0 }) || financialAbsent.allSatisfy({ !$0 })
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    guard (originalsRoot.isEmpty || originalsRoot.hasPrefix("/")), !originalsRoot.utf8.contains(0),
       originalsRoot.utf8.count <= 4096 else { throw KagemushaWalletErrorV1.invalidInput }
     originals = inputs.map { Data($0) } + [Data(originalsRoot.utf8)]
   }
@@ -50,7 +57,7 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
   private static var failedCleanup: [KagemushaWalletAdmissionCleanupErrorV1]=[]
   private init(runtime: KagemushaWalletRuntimeV1) { self.runtime=runtime }
   var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { runtime.cleanupLease }
-  /// All seven originals authenticate Native custody before registry registration.
+  /// Native authenticates the signed base and complete financial custody before registration.
   /// Retain the returned attempt and explicitly register/retry that same owner. Worker-only.
   public static func install(platform: KagemushaWalletApplePlatformV1, originals: KagemushaWalletRuntimeOriginalsV1) throws -> KagemushaWalletInstallationAttemptV1 {
     try requireNoUnreleasedAdmissions()

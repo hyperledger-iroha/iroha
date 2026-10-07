@@ -8,7 +8,6 @@ use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
         BlobV1, CATALOG_MAX_BYTES_V1, PROVING_KEY_MAX_BYTES_V1, QualifiedWalletSourcesV1,
     },
 };
-use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
 use iroha_kagemusha_proof::finality::{catalog::VerifierLimits, native::Parameters};
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::{
@@ -112,6 +111,17 @@ fn financial_offer(input: &RuntimeOriginals<'_>) -> Result<()> {
     }
     Ok(())
 }
+// The authenticated engineering source graph contains 406,815,883 encoded descriptor/VK
+// bytes. This cumulative intake ceiling is separate from per-original limits, live RSS and
+// the process-wide 64 MiB MSM scratch cap. It is not physical-phone qualification.
+const FINALITY_METADATA_MAX_BYTES: usize = 512 << 20;
+fn finality_limits() -> VerifierLimits {
+    VerifierLimits {
+        maximum_artifacts: 65_536,
+        maximum_verifier_bytes: FINALITY_METADATA_MAX_BYTES,
+        msm_budget: MemoryBudget::DEFAULT,
+    }
+}
 fn read_config() -> ReadConfig {
     ReadConfig {
         maximum_bytes: PROVING_KEY_MAX_BYTES_V1,
@@ -128,97 +138,6 @@ pub(super) struct BoundOriginals {
     android: bool,
 }
 impl BoundOriginals {
-    pub(super) fn enrollment(
-        &self,
-        input: &super::enrollment::Input<'_>,
-    ) -> Result<super::enrollment::Scope> {
-        input.validate()?;
-        let invalid = || Failure::code(INVALID);
-        let challenge: KagemushaWalletEnrollmentChallengeV1 = norito::decode_canonical_with_limits(
-            input.challenge,
-            norito::canonical_decode_limits(input.challenge.len()),
-        )
-        .map_err(|_| invalid())?;
-        challenge.validate().map_err(|_| invalid())?;
-        let policy = KagemushaWalletEnrollmentPolicyV1::decode_canonical(
-            input.policy,
-            &self.selected.scheme.scheme_id(),
-        )
-        .map_err(|_| invalid())?;
-        let account: iroha_data_model::account::AccountId = norito::decode_canonical_with_limits(
-            input.account,
-            norito::canonical_decode_limits(input.account.len()),
-        )
-        .map_err(|_| invalid())?;
-        let app = if self.android {
-            self.selected.android_app_policy
-        } else {
-            self.selected.apple_app_policy
-        };
-        let enrollment = if self.android {
-            self.selected.android_enrollment_policy
-        } else {
-            self.selected.apple_enrollment_policy
-        };
-        let retained_policy = if self.android {
-            &self.selected.android_enrollment_original
-        } else {
-            &self.selected.apple_enrollment_original
-        };
-        if input.expires_at_ms.checked_sub(input.issued_at_ms) != Some(policy.challenge_lifetime_ms)
-            || challenge.scheme_id != self.selected.scheme.scheme_id()
-            || input.policy != retained_policy
-            || challenge.asset_digest != self.selected.asset.asset_digest()
-            || challenge.app_policy != app
-            || challenge.enrollment_policy != enrollment
-            || policy.policy_digest().map_err(|_| invalid())? != enrollment
-            || policy.app_policy != app
-            || policy.asset_digest != challenge.asset_digest
-            || policy.regulatory_policy != self.selected.regulatory_policy
-            || account
-                .try_signatory()
-                .is_none_or(|key| key.algorithm() != iroha_crypto::Algorithm::Ed25519)
-            || kagemusha_wallet_account_digest_v1(&account).map_err(|_| invalid())?
-                != challenge.account_digest
-        {
-            return Err(invalid());
-        }
-        use advance::KagemushaWalletKeyProfileV1 as Profile;
-        let profile = match (self.android, policy.platform) {
-            (
-                true,
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::StrongBox,
-                    ..
-                },
-            ) => Profile::SecureElement,
-            (
-                true,
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
-                    ..
-                },
-            ) => Profile::SecureElementOrTee,
-            (
-                true,
-                KagemushaWalletEnrollmentPlatformV1::Android {
-                    hardware: KagemushaWalletAndroidHardwareV1::Tee,
-                    ..
-                },
-            ) => Profile::TeeOnly,
-            (false, KagemushaWalletEnrollmentPlatformV1::Apple { .. }) => Profile::SecureElement,
-            _ => return Err(invalid()),
-        };
-        Ok(super::enrollment::Scope {
-            challenge,
-            profile,
-            policy,
-            network: self.selected.scheme.network_id,
-            account_key: account.try_signatory().ok_or_else(invalid)?.clone(),
-            android: self.android,
-        })
-    }
-
     pub(super) fn require(&self, originals: [&[u8]; 4]) -> Result<()> {
         let [credential, _, _, asset] = originals;
         if asset != self.selected.asset_original {
@@ -304,11 +223,7 @@ impl PreparedInstallation {
                 &mut originals,
                 read_config(),
                 parameters,
-                VerifierLimits {
-                    maximum_artifacts: 65_536,
-                    maximum_verifier_bytes: 64 << 20,
-                    msm_budget: MemoryBudget::DEFAULT,
-                },
+                finality_limits(),
             )
             .map_err(|error| {
                 Failure::code(if error.is_unavailable() {
