@@ -18,6 +18,7 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
+iroha_allocation = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha = { workspace = true }
 iroha_contract_deploy = { workspace = true }
@@ -70,7 +71,6 @@ mv = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_version = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
-iroha_allocation = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_sumeragi = { workspace = true }
 kotodama_lang = { workspace = true }
